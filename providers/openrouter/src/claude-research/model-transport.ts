@@ -18,11 +18,18 @@ export class ClaudeModelResponseErrorV1 extends Error {
   }
 }
 
+/** Content-free network failure; the SDK may retry through fresh admission. */
+export class ClaudeModelTransportErrorV1 extends Error {
+  readonly diagnostic = { failure_class: 'adapter_transport' as const, http_status: null };
+  constructor() { super('Research provider transport failed'); }
+}
+
 /** Fixed upstream, no redirects; the service credential never enters the SDK child, logs or returned errors. */
 export function openRouterClaudeForwarderV1(credential: () => string, model: string): ClaudeModelForwarderV1 {
   return input => observeCoreRuntimeV1('model_call', async () => {
     observeCoreModelMetadataV1({ provider: 'openrouter', model });
     const result = await new Promise<ClaudeMessageMetadataV1>((resolve, reject) => {
+      const transportFailed = () => reject(input.signal.aborted ? input.signal.reason : new ClaudeModelTransportErrorV1());
       const headers: Record<string, string> = { authorization: `Bearer ${credential()}`, 'content-type': 'application/json',
         'content-length': String(input.body.length), 'accept-encoding': 'identity' };
       for (const key of ['anthropic-version', 'anthropic-beta']) {
@@ -39,10 +46,10 @@ export function openRouterClaudeForwarderV1(credential: () => string, model: str
           if (status >= 400) reject(new ClaudeModelResponseErrorV1(status));
           else resolve(usage.end());
         });
-        reply.on('error', () => reject(new Error('Research provider transport failed')));
-        reply.on('aborted', () => reject(new Error('Research provider response interrupted')));
+        reply.on('error', transportFailed);
+        reply.on('aborted', transportFailed);
       });
-      upstream.on('error', () => reject(new Error('Research provider transport failed')));
+      upstream.on('error', transportFailed);
       upstream.end(input.body);
     });
     observeCoreModelMetadataV1({ provider: 'openrouter', model, ...(result.usage === undefined ? {} : { usage: result.usage }), ...(result.finish_reason === undefined ? {} : { finish_reason: result.finish_reason }) });
@@ -83,6 +90,11 @@ export async function startClaudeModelTransportV1(input: {
       // A provider refusal has already been delivered to the SDK. A retry must
       // return through admission; it must not poison the permission fence.
       if (error instanceof ClaudeModelResponseErrorV1 && res.writableEnded) return;
+      if (error instanceof ClaudeModelTransportErrorV1 && !signal.aborted) {
+        if (!res.headersSent) { res.writeHead(502, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Research provider unavailable.' } })); }
+        else res.destroy();
+        return;
+      }
       stopped = true;
       if (!res.headersSent) { res.writeHead(403, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'permission_error', message: 'Research access stopped.' } })); }
       else res.destroy();

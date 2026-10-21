@@ -1,17 +1,23 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { request as httpRequest } from 'node:http';
-import { once } from 'node:events';
+import { request as httpRequest, type IncomingMessage } from 'node:http';
+import { PassThrough } from 'node:stream';
+import { EventEmitter, once } from 'node:events';
+import * as https from 'node:https';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Options, query } from '@anthropic-ai/claude-agent-sdk';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { runClaudeResearchV1 } from '../src/claude-research/sdk-client.js';
-import { ClaudeModelResponseErrorV1, startClaudeModelTransportV1 } from '../src/claude-research/model-transport.js';
+import { ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, openRouterClaudeForwarderV1, startClaudeModelTransportV1 } from '../src/claude-research/model-transport.js';
 import { createClaudeResearchDriverV1 } from '../src/claude-research/driver.js';
 import { messageUsageObserverV1 } from '../src/claude-research/message-usage.js';
 
-afterEach(() => vi.unstubAllEnvs());
+vi.mock('node:https', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:https')>();
+  return { ...actual, request: vi.fn(actual.request) };
+});
+afterEach(() => { vi.unstubAllEnvs(); vi.resetAllMocks(); });
 const model = 'anthropic/claude-sonnet-5.5';
 
 it('fences every exact request including retries and count_tokens, and closes on revocation', async () => {
@@ -140,11 +146,78 @@ it('classifies exhausted SDK provider retries for ECHO research fallback without
   await expect(pending).rejects.not.toThrow('private provider detail');
 });
 
-it.each(['revoked', 'process failure'] as const)('does not reinterpret %s as provider fallback after an earlier provider refusal', async failure => {
+it.each(['request error', 'response error', 'response aborted'] as const)('preserves fresh retries and fallback after an upstream %s', async failure => {
+  const request = vi.mocked(https.request).mockImplementation((...args: Parameters<typeof https.request>) => {
+    const receive = args.find(value => typeof value === 'function') as (reply: IncomingMessage) => void;
+    const upstream = Object.assign(new EventEmitter(), { end() {
+      queueMicrotask(() => {
+        if (failure === 'request error') { upstream.emit('error', new Error('private upstream socket detail')); return; }
+        const reply = Object.assign(new PassThrough(), { statusCode: 200, headers: { 'content-type': 'text/event-stream' } });
+        receive(reply as unknown as IncomingMessage);
+        reply.write('data: {');
+        queueMicrotask(() => { reply.emit(failure === 'response error' ? 'error' : 'aborted', new Error('private response detail')); reply.destroy(); });
+      });
+    } });
+    return upstream as unknown as ReturnType<typeof https.request>;
+  });
+  const errors: unknown[] = [];
+  const fake = (() => Object.assign((async function* () {
+    yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['private SDK detail'] };
+  })(), { close() {} })) as unknown as typeof query;
+  const driver = createClaudeResearchDriverV1({ model, forward: openRouterClaudeForwarderV1(() => 'synthetic credential', model),
+    run: async input => {
+      for (let i = 0; i < 2; i++) {
+        const response = fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
+        if (failure === 'request error') {
+          expect((await response).status).toBe(502);
+          expect(await (await response).text()).not.toContain('private');
+        } else await expect(response.then(value => value.text())).rejects.toThrow();
+      }
+      await runClaudeResearchV1(input, fake);
+    },
+  });
+  const pending = driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
+    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+      try { return (await send(new AbortController().signal)).value; }
+      catch (error) { errors.push(error); throw error; }
+    } });
+  await expect(pending).rejects.toMatchObject({ recovery: 'fallback' });
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(errors).toEqual(Array.from({ length: 2 }, () => expect.objectContaining({ diagnostic: { failure_class: 'adapter_transport', http_status: null } })));
+  await expect(pending).rejects.not.toThrow('private');
+});
+
+it('recovers on a successful SDK retry after a network failure', async () => {
+  let calls = 0, admissions = 0;
+  const driver = createClaudeResearchDriverV1({ model,
+    forward: async ({ res }) => {
+      if (++calls === 1) throw new ClaudeModelTransportErrorV1();
+      res.end('{}'); return {};
+    },
+    run: async input => {
+      const send = () => fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
+      expect((await send()).status).toBe(502);
+      expect((await send()).status).toBe(200);
+    },
+  });
+  await driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
+    remaining: () => 60_000, call: async () => ({}), model_request: async (_request, send) => {
+      admissions++; return (await send(new AbortController().signal)).value;
+    } });
+  expect(calls).toBe(2); expect(admissions).toBe(2);
+});
+
+it.each([
+  { failure: 'revoked', provider: 'http' }, { failure: 'process failure', provider: 'http' },
+  { failure: 'revoked', provider: 'network' }, { failure: 'process failure', provider: 'network' },
+] as const)('does not reinterpret $failure as fallback after an earlier $provider failure', async ({ failure, provider }) => {
   const terminal = new Error(failure);
   let requests = 0;
   const driver = createClaudeResearchDriverV1({ model,
-    forward: async ({ res }) => { res.writeHead(503); res.end('{}'); throw new ClaudeModelResponseErrorV1(503); },
+    forward: async ({ res }) => {
+      if (provider === 'network') throw new ClaudeModelTransportErrorV1();
+      res.writeHead(503); res.end('{}'); throw new ClaudeModelResponseErrorV1(503);
+    },
     run: async input => {
       const send = () => fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
       await send();

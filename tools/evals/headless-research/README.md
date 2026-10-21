@@ -291,7 +291,9 @@ are acquired before the access check, including SDK retries. HTTP refusals reach
 the SDK's retry policy and the shared background cooldown; authorization loss
 and cancellation stop the request. Temporary files and child processes are
 cleaned up after completion or failure.
-When those provider retries end in a reported SDK error, ECHO retains its normal
+Upstream network and interrupted-stream failures carry content-free transport
+diagnostics and remain retryable through fresh admission; aborts stay terminal.
+When provider or network retries end in a reported SDK error, ECHO retains its normal
 research fallback and can write from already released evidence. Unknown process
 errors and access failures remain terminal, and raw SDK error text is discarded.
 

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AgenticAskGenerationFailureV1, type AgenticResearchDriverV1, type AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { ClaudeResearchResultErrorV1, runClaudeResearchV1 } from './sdk-client.js';
-import { ClaudeModelResponseErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
+import { ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
 
 const SYSTEM = [
   'You are ECHO\'s internal researcher. Investigate the supplied goal with ECHO tools, then call finish with research notes and E/L evidence ids. ECHO writes the final user answer.',
@@ -33,7 +33,7 @@ export function createClaudeResearchDriverV1(options: {
     const stop = new AbortController();
     const signal = AbortSignal.any([session.signal, stop.signal]);
     let terminal: unknown;
-    let providerFailure: ClaudeModelResponseErrorV1 | undefined;
+    let providerFailure: ClaudeModelResponseErrorV1 | ClaudeModelTransportErrorV1 | undefined;
     const packets = new Map([[JSON.stringify(session.initial), canonicalSha256(session.initial)]]);
     const fail = (error: unknown) => { terminal ??= error; stop.abort(error); };
     const fence = await startClaudeModelTransportV1({ signal, forward: options.forward,
@@ -51,7 +51,7 @@ export function createClaudeResearchDriverV1(options: {
               user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0, timeout_ms: session.remaining() } } : {}),
           }, async admittedSignal => { const result = await forward(admittedSignal); providerFailure = undefined; return { ...result, value: result.content ?? null }; });
         } catch (error) {
-          if (error instanceof ClaudeModelResponseErrorV1) providerFailure = error;
+          if (error instanceof ClaudeModelResponseErrorV1 || error instanceof ClaudeModelTransportErrorV1) providerFailure = error;
           else fail(error);
           throw error;
         }
