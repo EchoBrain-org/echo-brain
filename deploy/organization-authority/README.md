@@ -949,6 +949,65 @@ provider reconciliation, exact image availability, or a terminal-green serving
 Authority. [Issue #20](https://github.com/EchoBrain-org/echo-brain/issues/20)
 remains open for that full recovery path.
 
+## Personal Claude staging research
+
+The optional personal route uses one authenticated ECHO member's own Claude
+account for interactive Ask research. The final writer, other members and
+background processing retain OpenRouter. The member is selected by the host
+operator and matched against the authenticated Person identity, never question
+text or a client-supplied provider choice.
+
+First install reviewed host tooling and stage its supporting image and matching
+runtime profile through the [release lane](../release/README.md#automated-current-host-staging-lane).
+The image includes the unmodified native Claude binary already pinned by the
+Agent SDK dependency. It provides the fixed non-root EC2 user identity and a
+`personal-claude-v1` capability label; older images cannot run this setup.
+Installing only the wrapper does not enable the feature.
+
+The human in Session Manager runs these installed commands, completing native
+Claude's browser sign-in before enabling the member from their authenticated
+`person status` output:
+
+```sh
+cd /srv/echo-authority-clean-v1
+sudo ./onboard-clean-v1.sh personal-claude login
+sudo ./onboard-clean-v1.sh personal-claude enable --member <your-mem-id>
+sudo ./onboard-clean-v1.sh personal-claude status
+```
+
+Login requires a human terminal and does not enable routing. It runs only the
+native binary in a temporary container of the exact running image, as the
+Authority's non-root UID. That container mounts only the owner-only native home,
+has no ECHO record or service-credential mounts, and disables container logging.
+Use Anthropic's own login prompts; do not paste login URLs, codes or credentials
+into chat. A laptop login does not sign this host in. No session is imported.
+
+`enable` first verifies native `claude.ai` sign-in, writes a non-secret member
+selection to `clean-data/private/personal-claude-research.json`, and restarts
+Authority and proxy. Finish current Ask requests first. The service derives the
+fixed home and executable; the selection cannot supply a token or executable.
+`status` reports only selection state, member ID and whether native subscription
+sign-in is available. It does not prove model quota or a successful Ask.
+
+The wrapper checks the exact running accepted/candidate image and profile,
+staging origin, operation locks, ownership and private modes. Failed native
+authentication never enables the route or changes its payer. A failed restart
+requires recovery through the operator playbook before continuing qualification.
+
+To stop using the account, or before signing in again:
+
+```sh
+sudo ./onboard-clean-v1.sh personal-claude disable
+```
+
+This removes the member binding and restarts the runtime. It preserves native
+Claude's sign-in files in `clean-data/private/claude-account`; it does not log
+the person out. The binding survives ordinary supporting-image updates.
+Rollback to an older runtime profile leaves the file unused. No configuration
+change promotes the candidate: after enabling, run fresh canary, authenticated
+read and cited Ask checks, including a different member's unchanged provider
+route, before the exact release decision.
+
 ## LangSmith staging tracing
 
 This optional exporter uses the unified runtime observer and its diagnostic

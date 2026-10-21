@@ -12,6 +12,7 @@ import {
   linkSync,
   lstatSync,
   readlinkSync,
+  realpathSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -242,6 +243,9 @@ if [[ "$1" == compose ]]; then
   exit 0
 fi
 if [[ "$1" == image && "$2" == inspect ]]; then
+  if [[ "$*" == *org.echobrain.authority.config-capability.personal-claude-v1* ]]; then
+    printf '%s\\n' "$ECHO_FAKE_PERSONAL_CLAUDE_CAPABILITY"; exit 0
+  fi
   if [[ "$*" == *org.echobrain.authority.config-capability.langsmith-persistent-v1* ]]; then
     if [[ "$*" == *sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ]]; then
       printf '%s\\n' "$ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY"
@@ -255,6 +259,10 @@ if [[ "$1" == image && "$2" == inspect ]]; then
   printf '%s\\n' sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   exit 0
 fi
+if [[ "$1" == run && "$*" == *claudeAccountEnvironmentV1* ]]; then
+  [[ "$ECHO_FAKE_PERSONAL_CLAUDE_SIGNED_IN" == true ]]; exit $?
+fi
+if [[ "$1" == run && "$*" == *"auth login --claudeai"* ]]; then exit 0; fi
 if [[ "$1" == inspect ]]; then
   if [[ "$*" == *io.echo-brain.release-id* ]]; then printf '%s\\n' "$ECHO_FAKE_RELEASE_ID"; exit 0; fi
   if [[ "$*" == *io.echo-brain.runtime-profile-sha256* ]]; then printf '%s\\n' "$ECHO_FAKE_RUNTIME_PROFILE_SHA256"; exit 0; fi
@@ -321,6 +329,8 @@ exec /usr/bin/install "$@"
     ECHO_FAKE_HEALTH: "healthy",
     ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY: "true",
     ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY: "true",
+    ECHO_FAKE_PERSONAL_CLAUDE_CAPABILITY: "true",
+    ECHO_FAKE_PERSONAL_CLAUDE_SIGNED_IN: "true",
     ECHO_FAKE_SETUP_STATUS: '{"next_step":"complete"}',
     ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE: "",
     ECHO_FAKE_SETUP_STATUS_AFTER_CREDENTIALS: "",
@@ -336,6 +346,7 @@ exec /usr/bin/install "$@"
       | "extraction-attempts"
       | "retry-extraction"
       | "langsmith-tracing"
+      | "personal-claude"
       | "replace-rehearsal"
       | "stage-rehearsal-inputs"
       | "prepare-rehearsal"
@@ -372,6 +383,21 @@ exec /usr/bin/install "$@"
     releaseId,
     run,
     spawnRun,
+    terminalLogin: () => spawnSync('python3', ['-c', `
+import errno, os, pty, sys
+pid, fd = pty.fork()
+if pid == 0: os.execvp('bash', ['bash', sys.argv[1], 'personal-claude', 'login'])
+while True:
+    try: chunk = os.read(fd, 4096)
+    except OSError as error:
+        if error.errno == errno.EIO: break
+        raise
+    if not chunk: break
+    os.write(1, chunk)
+os.close(fd)
+_, status = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(status))
+`, join(deploy, 'onboard-clean-v1.sh')], { encoding: 'utf8', env: environment({}), timeout: 20_000 }),
   };
 }
 
@@ -473,6 +499,122 @@ afterEach(() => {
 });
 
 describe("clean-v1 Organization Authority deployment profile", () => {
+  function personalClaudeFixture() {
+    const fixture = preparedStatusFixture();
+    const setup = join(fixture.privateDir, 'onboard-clean-v1.conf');
+    writeFileSync(setup, readFileSync(setup, 'utf8').replace('https://authority.example', 'https://authority-staging.echobrain.org'));
+    const home = join(fixture.privateDir, 'claude-account');
+    mkdirSync(home, { mode: 0o700 });
+    mkdirSync(join(home, '.claude'), { mode: 0o700 });
+    const credential = join(home, '.claude', 'synthetic-native-session');
+    writeFileSync(credential, 'native-owned-never-print', { mode: 0o600 });
+    return { ...fixture, home, credential, selection: join(fixture.privateDir, 'personal-claude-research.json') };
+  }
+
+  it('enables one hosted Claude member only after native auth proof and preserves native sign-in on disable', () => {
+    const fixture = personalClaudeFixture();
+    const enabled = fixture.run('personal-claude', {}, ['enable', '--member', 'mem_owner']);
+    expect(enabled.status, enabled.stderr).toBe(0);
+    expect(enabled.stdout).toContain('personal_claude_enabled=true');
+    expect(JSON.parse(readFileSync(fixture.selection, 'utf8'))).toEqual({ kind: 'echo-personal-claude-research-v1', membership_id: 'mem_owner' });
+    expect(statSync(fixture.selection).mode & 0o777).toBe(0o600);
+    const calls = readFileSync(fixture.calls, 'utf8');
+    expect(calls).toContain('--log-driver none --read-only --cap-drop ALL --security-opt no-new-privileges');
+    expect(calls).toContain(`src=${realpathSync(fixture.home)},dst=/echo-clean/private/claude-account`);
+    expect(calls.indexOf('claudeAccountEnvironmentV1')).toBeLessThan(calls.indexOf('stop -t 30 authority'));
+    expect(calls).not.toContain('native-owned-never-print');
+    const status = fixture.run('personal-claude', {}, ['status']);
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout).toContain('personal_claude_signed_in=true');
+    expect(status.stdout).toContain('personal_claude_member=mem_owner');
+    const disabled = fixture.run('personal-claude', {}, ['disable']);
+    expect(disabled.status, disabled.stderr).toBe(0);
+    expect(existsSync(fixture.selection)).toBe(false);
+    expect(readFileSync(fixture.credential, 'utf8')).toBe('native-owned-never-print');
+    expect(readFileSync(fixture.durableSentinel, 'utf8')).toBe('durable-work-must-survive');
+  });
+
+  it('refuses unavailable native auth or an implicit member switch without changing routing or restarting', () => {
+    for (const problem of ['signed-out', 'different-member']) {
+      const fixture = personalClaudeFixture();
+      writeFileSync(fixture.selection, JSON.stringify({ kind: 'echo-personal-claude-research-v1', membership_id: 'mem_previous' }), { mode: 0o600 });
+      const before = readFileSync(fixture.selection, 'utf8');
+      const result = fixture.run('personal-claude', { ECHO_FAKE_PERSONAL_CLAUDE_SIGNED_IN: String(problem !== 'signed-out') }, ['enable', '--member', 'mem_owner']);
+      expect(result.status, problem).toBe(1);
+      expect(readFileSync(fixture.selection, 'utf8')).toBe(before);
+      expect(readFileSync(fixture.calls, 'utf8')).not.toContain('stop -t');
+      expect(result.stdout + result.stderr).not.toContain('native-owned-never-print');
+    }
+  });
+
+  it('refuses non-staging, drift, release locks, unsupported images and unsafe native homes before auth', () => {
+    for (const problem of ['production', 'drift', 'guard', 'capability', 'symlink', 'public-home']) {
+      const fixture = personalClaudeFixture();
+      if (problem === 'production') {
+        const setup = join(fixture.privateDir, 'onboard-clean-v1.conf');
+        writeFileSync(setup, readFileSync(setup, 'utf8').replace('https://authority-staging.echobrain.org', 'https://authority.example'));
+      }
+      if (problem === 'drift') writeFileSync(join(fixture.deploy, '.env.clean-v1'), 'drift\n');
+      if (problem === 'guard') mkdirSync(join(fixture.deploy, '.staging-release-guard'), { mode: 0o700 });
+      if (problem === 'public-home') chmodSync(fixture.home, 0o755);
+      if (problem === 'symlink') { renameSync(fixture.home, `${fixture.home}-old`); symlinkSync(`${fixture.home}-old`, fixture.home); }
+      const result = fixture.run('personal-claude', { ECHO_FAKE_PERSONAL_CLAUDE_CAPABILITY: String(problem !== 'capability') }, ['enable', '--member', 'mem_owner']);
+      expect(result.status, problem).toBe(1);
+      expect(existsSync(fixture.selection)).toBe(false);
+      const calls = existsSync(fixture.calls) ? readFileSync(fixture.calls, 'utf8') : '';
+      expect(calls, problem).not.toContain('claudeAccountEnvironmentV1');
+      expect(calls, problem).not.toContain('stop -t');
+    }
+  });
+
+  it('requires a human terminal for native login and reports a missing profile without creating it', () => {
+    const fixture = personalClaudeFixture();
+    rmSync(fixture.home, { recursive: true });
+    const status = fixture.run('personal-claude', {}, ['status']);
+    expect(status.status, status.stderr).toBe(0);
+    expect(status.stdout).toContain('personal_claude_enabled=false');
+    expect(status.stdout).toContain('personal_claude_signed_in=false');
+    const login = fixture.run('personal-claude', {}, ['login']);
+    expect(login.status).toBe(1);
+    expect(login.stderr).toContain('native Claude sign-in requires a human terminal');
+    expect(existsSync(fixture.home)).toBe(false);
+    expect(readFileSync(fixture.calls, 'utf8')).not.toContain('auth login');
+  });
+
+  it('runs human login in the isolated native container without selecting a member or restarting ECHO', () => {
+    const fixture = personalClaudeFixture();
+    rmSync(fixture.home, { recursive: true });
+    const login = fixture.terminalLogin();
+    expect(login.status, login.stdout + login.stderr).toBe(0);
+    expect(login.stdout).toContain('personal_claude_login_complete=true');
+    expect(statSync(fixture.home).mode & 0o777).toBe(0o700);
+    expect(statSync(join(fixture.home, '.claude')).mode & 0o777).toBe(0o700);
+    expect(existsSync(fixture.selection)).toBe(false);
+    const calls = readFileSync(fixture.calls, 'utf8');
+    expect(calls).toContain('-it --entrypoint /usr/local/bin/echo-claude-native');
+    expect(calls).toContain('auth login --claudeai');
+    expect(calls).not.toContain('stop -t');
+  });
+
+  it('enables personal Claude on the exact staged tuple without promoting or changing the accepted release', () => {
+    const fixture = personalClaudeFixture();
+    const acceptedPath = join(fixture.releaseDir, 'current.clean-v1.json');
+    const acceptedBytes = readFileSync(acceptedPath, 'utf8');
+    const accepted = JSON.parse(acceptedBytes) as { authority_image: { reference: string } };
+    const profile = runtimeProfile('d'.repeat(40));
+    const releaseId = 'clean-v1-personal-claude-candidate';
+    writeFileSync(join(fixture.releaseDir, 'candidate.clean-v1.json'), releaseRecord({ image: accepted.authority_image.reference, profile, releaseId, source: 'd'.repeat(40) }));
+    writeFileSync(join(fixture.releaseDir, 'runtime-profiles', `${releaseId}.profile`), profile.bytes);
+    writeFileSync(join(fixture.releaseDir, 'runtime-profile.active'), profile.bytes);
+    const environment = readFileSync(join(fixture.deploy, '.env.clean-v1'), 'utf8').replace(fixture.releaseId, releaseId).replace(fixture.profile.digest, profile.digest);
+    writeFileSync(join(fixture.deploy, '.env.clean-v1'), environment);
+    writeFileSync(join(fixture.releaseDir, 'runtime-environments', `${releaseId}.env`), environment);
+    const result = fixture.run('personal-claude', { ECHO_FAKE_SOURCE: 'd'.repeat(40), ECHO_FAKE_RELEASE_ID: releaseId, ECHO_FAKE_RUNTIME_PROFILE_SHA256: profile.digest }, ['enable', '--member', 'mem_owner']);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(acceptedPath, 'utf8')).toBe(acceptedBytes);
+    expect(JSON.parse(readFileSync(fixture.selection, 'utf8')).membership_id).toBe('mem_owner');
+  });
+
   it('refuses persistent tracing before secret entry when the running or rollback image is incompatible', () => {
     for (const unsupported of ['ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY', 'ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY']) {
       const fixture = preparedStatusFixture();
