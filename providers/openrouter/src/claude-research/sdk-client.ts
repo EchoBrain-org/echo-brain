@@ -51,7 +51,9 @@ export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: 
         child = spawn(options.command, options.args, { cwd, env, signal: options.signal, stdio: ['pipe', 'pipe', 'pipe'] });
         // Drain stderr without retaining source content or SDK diagnostics in service logs.
         child.stderr.resume();
-        exited = new Promise(resolve => { child!.once('exit', () => resolve()); child!.once('error', () => resolve()); });
+        // Abort emits an error before a child has necessarily exited. Keep the
+        // cleanup timer until close, including a failed spawn's close event.
+        exited = new Promise(resolve => { child!.once('close', () => resolve()); child!.once('error', () => undefined); });
         return child;
       },
     } });

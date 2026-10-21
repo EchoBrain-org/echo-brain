@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
+import { once } from 'node:events';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Options, query } from '@anthropic-ai/claude-agent-sdk';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
@@ -57,6 +59,23 @@ it('isolates the packaged SDK environment and removes its temporary home after c
   expect(options!.pathToClaudeCodeExecutable).toBeUndefined();
   expect(options!.maxTurns).toBeUndefined(); expect(options!.maxBudgetUsd).toBeUndefined();
   expect(existsSync(options!.cwd!)).toBe(false);
+});
+
+it('waits for an aborted child to actually close before completing request cleanup', async () => {
+  const controller = new AbortController();
+  let closed = false;
+  const fake = ((input: Parameters<typeof query>[0]) => Object.assign((async function* () {
+    const child = input.options!.spawnClaudeCodeProcess!({ command: process.execPath,
+      args: ['-e', "process.on('SIGTERM',()=>{}); process.stdout.write('ready'); setTimeout(()=>process.exit(0),200)"],
+      env: {}, signal: input.options!.abortController!.signal }) as ChildProcessWithoutNullStreams;
+    child.once('close', () => { closed = true; });
+    await once(child.stdout, 'data');
+    controller.abort();
+    yield { type: 'result', subtype: 'success', is_error: false };
+  })(), { close() {} })) as unknown as typeof query;
+  await expect(runClaudeResearchV1({ prompt: 'synthetic', system: 'synthetic', model, base_url: 'http://127.0.0.1:1/fixture',
+    signal: controller.signal, servers: {}, tools: [] }, fake)).rejects.toMatchObject({ name: 'AbortError' });
+  expect(closed).toBe(true);
 });
 
 it('delivers provider errors to the SDK and freshly admits its retry without latching an access failure', async () => {
