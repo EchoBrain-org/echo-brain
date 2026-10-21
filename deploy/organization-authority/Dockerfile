@@ -32,6 +32,8 @@ COPY providers ./providers
 RUN npm run build --workspace @echo-brain/organization-authority \
   && npm ci --omit=dev --workspace @echo-brain/organization-authority --include-workspace-root=false
 RUN find packages services providers -type f \( -name '*.d.ts' -o -name '*.d.ts.map' -o -name '*.tsbuildinfo' \) -delete
+# Lockfiles record no libc, so npm also installs the SDK's musl CLI, which cannot run on this glibc image.
+RUN rm -rf node_modules/@anthropic-ai/claude-agent-sdk-*-musl
 
 FROM node:22.22.1-bookworm-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d
 
