@@ -1,7 +1,7 @@
 import { EvidenceDeskSnapshotChangedV1 } from "../../src/shared/evidence-desk-v1.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { describe, expect, it } from "vitest";
-import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskPostRevalidationNoTimeErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { describe, expect, it, vi } from "vitest";
+import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskDeadlineErrorV1, AgenticAskPostRevalidationNoTimeErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
@@ -103,6 +103,43 @@ describe("agentic model gate", () => {
     const { gate } = harness({ signal: controller.signal, desk_revalidate: async () => { controller.abort(); return { checked_at: 'now' }; } });
     await expect(gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('body'), operation: 'messages', timeout: () => 20_000 }, async () => { forwarded = true; return { value: true }; })).rejects.toMatchObject({ name: 'AbortError' });
     expect(forwarded).toBe(false);
+  });
+
+  it('keeps the writer available after an external request timeout', async () => {
+    const timer = new AbortController(), caller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
+    const { gate } = harness({ signal: caller.signal, replies: [{ answer: true }] });
+    const events: CoreRuntimeDiagnosticObservationV1[] = [];
+    try {
+      const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.external({
+        model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages', timeout: () => 4_000,
+        diagnostic_input: { model: 'claude-fixture', system_prompt: '', user_prompt: '', schema: {}, max_output_tokens: 100, timeout_ms: 4_000 },
+      }, signal => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        queueMicrotask(() => timer.abort(new DOMException('local timer', 'TimeoutError')));
+      })));
+      await expect(pending).rejects.toMatchObject({ recovery: 'fallback', diagnostic: { failure_class: 'adapter_timeout' } });
+      expect(caller.signal.aborted).toBe(false);
+      expect(gate.stats()).toMatchObject({ calls: 1, stopped: false, generations: [{ role: 'step', finish_reason: null }] });
+      expect(events.filter(event => event.kind === 'model_error')).toEqual([expect.objectContaining({ error_kind: 'adapter_timeout' })]);
+      await expect(gate.call(ANSWER, 'answer', {}, schema, () => 20_000)).resolves.toEqual({ answer: true });
+    } finally { timeout.mockRestore(); }
+  });
+
+  it.each(['caller', 'deadline'] as const)('keeps an overall %s abort terminal when the external timer also fires', async reason => {
+    const timer = new AbortController(), caller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
+    const { gate } = harness({ signal: caller.signal });
+    const failure = reason === 'caller' ? new DOMException('cancelled', 'AbortError') : new AgenticAskDeadlineErrorV1();
+    try {
+      const pending = gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('abort'), operation: 'messages', timeout: () => 4_000 },
+        signal => new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          queueMicrotask(() => { caller.abort(failure); timer.abort(new DOMException('local timer', 'TimeoutError')); });
+        }));
+      await expect(pending).rejects.toMatchObject({ name: failure.name });
+      expect(gate.stats().generations).toHaveLength(1);
+    } finally { timeout.mockRestore(); }
   });
 
   it("revalidates the desk once before every model call and reports the check time", async () => {

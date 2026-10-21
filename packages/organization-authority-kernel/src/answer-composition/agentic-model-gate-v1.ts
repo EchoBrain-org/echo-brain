@@ -396,6 +396,15 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
               ...(result.usage === undefined ? {} : { usage: result.usage }), finish_reason: result.finish_reason === 'end_turn' || result.finish_reason === 'tool_use' ? 'stop' : result.finish_reason === 'max_tokens' ? 'length' : 'other' });
             return result;
           } catch (error) {
+            // This request's timer spends only research time. Preserve the
+            // overall Ask signal and writer reserve; caller/deadline stops win.
+            if (timeoutSignal.aborted && !activeSignal.aborted) {
+              try {
+                assertLive();
+                error = Object.assign(new AgenticAskGenerationFailureV1('research model request timed out', 'fallback'),
+                  { diagnostic: { failure_class: 'adapter_timeout', http_status: null } });
+              } catch (stopped) { error = stopped; }
+            }
             if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: calls, role: 'step', error_kind: coreRuntimeDiagnosticErrorKindV1(error) });
             throw error;
           }

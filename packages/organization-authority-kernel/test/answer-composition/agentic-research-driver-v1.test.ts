@@ -27,12 +27,21 @@ function harness(run: (session: AgenticResearchDriverSessionV1) => Promise<void>
 }
 
 describe('native research harness shares the real ECHO tool state', () => {
-  it('keeps released evidence available to the writer when the native provider exhausts retries', async () => {
+  it.each(['provider retries', 'request timeout'] as const)('keeps released evidence available to the writer after native %s', async failure => {
     const h = harness(async session => {
       await admit(session);
       await session.call('search', { query: 'calibrate' });
       await admit(session, 'read');
-      throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
+      if (failure === 'provider retries') throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
+      const timer = new AbortController();
+      const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
+      try {
+        await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages', timeout: () => 4_000 },
+          signal => new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+            queueMicrotask(() => timer.abort(new DOMException('local timer', 'TimeoutError')));
+          }));
+      } finally { timeout.mockRestore(); }
     });
     let fallbackCorrections = 0;
     const output = await observeCoreRuntimeV1('research_run', h.ask, { observer: event => {
