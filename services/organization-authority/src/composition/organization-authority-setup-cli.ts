@@ -53,7 +53,6 @@ import {
   type AuthorityStateSeedV1,
 } from "./organization-authority-state-bootstrap.js";
 import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
-import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import {
   assertPersonAuthorityCallback,
@@ -988,17 +987,6 @@ function activeGenerationPointer(
   });
 }
 
-/** Derive the runtime's fixed projector contract without reading credentials. */
-function expectedSetupCanaryRetrievalContract() {
-  return readableSearchGenerationContractV1({
-    related_atom_projector: Object.freeze({
-      generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-      model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-      timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-    }),
-  });
-}
-
 function sameRecordHead(
   left: CurrentRecordHead,
   right: CurrentRecordHead,
@@ -1204,15 +1192,13 @@ function setupCanaryEvidence(
           LIMIT 1`,
       )
       .get() !== undefined;
-    const expectedRetrievalContract =
-      expectedSetupCanaryRetrievalContract();
     const activeGenerationCurrent = pointerMatchesHead(
       initialPointer,
       initialHead,
       manifest.organization_id,
     ) &&
       initialPointer.retrieval_contract_sha256 ===
-        expectedRetrievalContract.retrieval_contract_sha256;
+        readableSearchGenerationContractV1().retrieval_contract_sha256;
     const ownerLayer1ReadAfterHead =
       activeGenerationCurrent &&
       initialHead.receipt_issued_at !== null &&

@@ -10,7 +10,7 @@ while stable records are migrated here. Do not change their normative meaning
 during migration. The registry's implementation, deferred-work and
 approval-surface tables are pinned to the baselines it names (last revised
 2026-09-26) and do not describe current enforcement. For current Person content-release
-scope, including ADR-0010 related-atom expansion and the Layer 4 Ask boundary,
+scope, including the Layer 4 Ask boundary,
 see [INV-PERMISSIONS-015](INV-PERMISSIONS-015-layer-3-person-release-boundary.md);
 for provider-to-ECHO identity scope, see
 [INV-IDENTITY-005](INV-IDENTITY-005-adapter-to-echo-identity-chain.md).

@@ -86,7 +86,7 @@ async function open(state_directory) {
   const search = createReadableSearchGenerationReconcilerV1({
     state_directory, root, authority, record, signer,
     record_input_codecs,
-    policy_projectors: projectors, related_atom_projector: reads.related_atom_projector,
+    policy_projectors: projectors,
   });
   const source = new AdmittedMeetingProcessingCycleV1({
     source: input.source,

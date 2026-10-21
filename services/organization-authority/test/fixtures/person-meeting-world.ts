@@ -10,7 +10,7 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
 import type { OrganizationRecordDecisionBriefV1, OrganizationRecordMeetingTimeV1 } from "@echo-brain/organization-protocol";
 import { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { expandReadableSearchRelatedAtomsV1, type ReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
+import type { ReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
 import { COORDINATES, database as recordDatabase, protocolAuthority, type ProtocolAuthority } from "../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { SqlitePersonRecordReadAuditV1 } from "../../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
@@ -202,7 +202,7 @@ export async function meetingWorld(options: {
     state_directory, ...COORDINATES, retrieval_contract_sha256: RETRIEVAL_CONTRACT, sessions, authority, record,
     audit: new SqlitePersonRecordReadAuditV1(authority),
     capture_projects: createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(authority)),
-    expand_related_atoms: expandReadableSearchRelatedAtomsV1, record_input_codecs: SIGNED_APPROVAL_CODECS,
+    record_input_codecs: SIGNED_APPROVAL_CODECS,
     record_approver: SIGNED_APPROVAL_APPROVER, memberships, ...overrides,
   });
   const audits = (read_mode: "layer1" | "layer2" | "person_list" | "person_open") => (authority.prepare(

@@ -110,27 +110,6 @@ export class PersonRecordSearchSnapshotChangedV1 extends EvidenceDeskSnapshotCha
 }
 
 /**
- * The Layer 2 related-atom reader is injected here so the Authority boundary
- * remains independently testable while the disposable relationship plane is
- * rebuilt. Its shape intentionally matches expandReadableSearchRelatedAtomsV1.
- */
-export interface ExpandReadableSearchRelatedAtomsV1Input {
-  readonly state_directory: string;
-  readonly active_generation: ReadableSearchActiveGenerationV1;
-  readonly reader: ReadableSearchReaderV1;
-  readonly project_id?: string;
-  readonly anchor_atom_ids: readonly Sha256Digest[];
-  readonly include_anchor_records?: true;
-  readonly limit: number;
-  /** Authority-derived record narrowing (mine); never client input. */
-  readonly record_sha256s?: readonly Sha256Digest[];
-}
-
-export type ExpandReadableSearchRelatedAtomsV1 = (
-  input: ExpandReadableSearchRelatedAtomsV1Input,
-) => ReadableSearchResultV1;
-
-/**
  * In-process input for a bounded record search (the evidence desk and the
  * HTTP search route). This is not part of the Person HTTP contract: the
  * bearer remains server-side while the query runs under one reader tuple and
@@ -388,8 +367,6 @@ export interface CreatePersonRecordSearchRouteV1Options {
   readonly audit: SqlitePersonRecordReadAuditV1;
   readonly capture_projects?: CaptureRecordProjectsV1;
   readonly search_generation?: SearchGeneration;
-  /** Optional until the Layer 2 related-atom projector is installed. */
-  readonly expand_related_atoms?: ExpandReadableSearchRelatedAtomsV1;
   /** The Authority's record codecs; approval-decision records need them to parse. */
   readonly record_input_codecs?: RecordInputCodecRegistryV4;
   /** The composed approver projectors. Mine needs them; without them mine is unavailable, never global. */
@@ -1269,7 +1246,6 @@ export function createPersonRecordSearchRouteV1(
     readonly mine?: true;
     readonly anchor: Pick<ReadableSearchResultItemV1, "atom_id" | "record_sha256" | "record_position" | "envelope_sha256" | "atom_order" | "audience_project_count" | "item_kind" | "text" | "policy_id">;
   }): PersonRecordSearchBatchResultV1 {
-    if (options.expand_related_atoms === undefined) unavailable();
     const mine = input.mine === true ? mineRecordSet(input.current, input.projects, input.pointer) : undefined;
     const anchors = readGeneration(() => readReadableSearchGenerationAtomsV1({
       state_directory: options.state_directory,
@@ -1290,18 +1266,18 @@ export function createPersonRecordSearchRouteV1(
       resolvedAnchor.item_kind !== input.anchor.item_kind ||
       resolvedAnchor.text !== input.anchor.text ||
       resolvedAnchor.policy_id !== input.anchor.policy_id) unavailable();
-    const related = readGeneration(() => options.expand_related_atoms!({
+    // The anchor's record in its own order: decisions, actions, then rationales. The anchor read already admitted
+    // it, under mine too, and its first ten atoms always hold the nine that join the anchor.
+    const record = readGeneration(() => listReadableSearchGenerationV1({
       state_directory: options.state_directory,
       active_generation: activeGenerationAt(input.pointer),
       reader: readerOf(input.current, input.projects),
       ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-      ...(mine === undefined ? {} : { record_sha256s: mine }),
-      anchor_atom_ids: [resolvedAnchor.atom_id],
-      include_anchor_records: true,
-      limit: 9,
+      record_sha256s: [resolvedAnchor.record_sha256],
+      limit: 10,
     }));
-    assertGeneration(related, input.pointer);
-    const items = [resolvedAnchor, ...related.items.filter((item) => item.record_sha256 === resolvedAnchor.record_sha256)].slice(0, 10);
+    assertGeneration(record, input.pointer);
+    const items = [resolvedAnchor, ...record.items.filter((item) => item.atom_id !== resolvedAnchor.atom_id).slice(0, 9)];
     const released = options.sessions.authenticateAccess({ access_token: input.access_token });
     if (!samePersonReleaseAuthorizationV1(input.current, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== input.projects.grants_sha256) personDenied();
     assertCurrentSnapshot(input.pointer);

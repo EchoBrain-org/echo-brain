@@ -33,7 +33,6 @@ import {
   openOrganizationRecordDatabase,
   type RecordApproverProjectorV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { expandReadableSearchRelatedAtomsV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256,
@@ -148,8 +147,6 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
   /** Background-priority model port for trigger and sweep research; they use the Ask port when absent. */
   readonly answer_composition_background?: AnswerCompositionGenerationBindingV1["structured_output"];
-  /** Bound by the active rebuild runtime so serving accepts the same model profile. */
-  readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
 }
 
 /** Recover personal writes before search startup, then attach the API's authenticated sessions. */
@@ -340,15 +337,12 @@ export async function startOrganizationAuthorityApiRuntime(
       authority_id: metadata.authority_id,
       organization_id: metadata.organization_id,
       state_lineage_id: lineage.root.state_lineage_id,
-      retrieval_contract_sha256:
-        dependencies.readable_search_retrieval_contract_sha256 ??
-        readableSearchGenerationContractV1().retrieval_contract_sha256,
+      retrieval_contract_sha256: readableSearchGenerationContractV1().retrieval_contract_sha256,
       sessions,
       authority: database,
       record: recordDatabase,
       audit: readAudit,
       capture_projects: captureProjects,
-      expand_related_atoms: expandReadableSearchRelatedAtomsV1,
       // Mine needs the approver; the person list names it and offers a shared transcript.
       ...personMeetingReleaseOptionsV1({
         record_approver: dependencies.record_approver,

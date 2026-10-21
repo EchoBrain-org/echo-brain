@@ -93,13 +93,12 @@ describe("readable-search generation reconciliation", () => {
     const events: { stage: string; event: string; operation_id: string }[] = [];
     const current = head(2);
     const value = reconciler(database(), current, {
-      enrich_snapshot: async (snapshot) => snapshot,
       prepare_generation: () => undefined,
       observation: (event: { stage: string; event: string; operation_id: string }) => { events.push(event); },
     });
     await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published" });
     expect(events.filter((event) => event.event === "succeeded").map((event) => event.stage))
-      .toEqual(["search_snapshot", "search_enrichment", "search_build", "search_validation", "search_publication", "search_reconciliation"]);
+      .toEqual(["search_snapshot", "search_build", "search_validation", "search_publication", "search_reconciliation"]);
     expect(new Set(events.map((event) => event.operation_id)).size).toBe(1);
   });
 
@@ -185,110 +184,13 @@ describe("readable-search generation reconciliation", () => {
     expect(active(authority, "record_head_position")).toBe(1);
   });
 
-  it("enriches only a stale snapshot after capture and before the pure build", async () => {
-    const authority = database();
-    const current = head(2);
-    const order: string[] = [];
-    const captured = { record_head: current, related: [] as readonly string[] };
-    const enriched = { record_head: current, related: ["linked"] };
-    const enrich = vi.fn(async (snapshot: typeof captured, signal: AbortSignal) => {
-      order.push("enrich");
-      expect(snapshot).toBe(captured);
-      expect(signal.aborted).toBe(false);
-      return enriched;
-    });
-    const build = vi.fn((snapshot: typeof captured) => {
-      order.push("build");
-      expect(snapshot).toBe(enriched);
-      return generation(current);
-    });
-    const value = reconciler(authority, current, {
-      capture_snapshot: () => {
-        order.push("capture");
-        return captured;
-      },
-      enrich_snapshot: enrich,
-      build_generation: build,
-    });
-
-    await expect(
-      value.reconcile(new AbortController().signal),
-    ).resolves.toMatchObject({ status: "published" });
-    expect(order).toEqual(["capture", "enrich", "build"]);
-    expect(enrich).toHaveBeenCalledOnce();
-    expect(build).toHaveBeenCalledOnce();
-
-    await expect(
-      value.reconcile(new AbortController().signal),
-    ).resolves.toMatchObject({ status: "current" });
-    expect(enrich).toHaveBeenCalledOnce();
-  });
-
-  it("does not build or publish when asynchronous enrichment is cancelled", async () => {
-    const authority = database();
-    const current = head(1);
-    const controller = new AbortController();
-    const build = vi.fn();
-    const value = reconciler(authority, current, {
-      enrich_snapshot: async (snapshot) => {
-        controller.abort();
-        return snapshot;
-      },
-      build_generation: build as never,
-    });
-
-    await expect(value.reconcile(controller.signal)).rejects.toThrow();
-    expect(build).not.toHaveBeenCalled();
-    expect(active(authority)).toBe(0);
-  });
-
-  it("skips obsolete build work after held enrichment and publishes the newest head on retry", async () => {
-    const authority = database();
-    let current = head(2);
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    const build = vi.fn((snapshot: { record_head: ReadableSearchRecordHeadV1 }) => generation(snapshot.record_head));
-    // Both reads follow the mutable head, so the retry captures head(4).
-    const value = reconciler(authority, current, {
-      read_record_head: () => current,
-      capture_snapshot: () => ({ record_head: current }),
-      enrich_snapshot: async (snapshot) => { await held; return snapshot; },
-      build_generation: build,
-    });
-    const pending = value.reconcile(new AbortController().signal);
-    expect(build).not.toHaveBeenCalled();
-    expect(active(authority)).toBe(0);
-    current = head(4);
-    release();
-    await expect(pending).resolves.toEqual({ status: "superseded", captured_head: head(2), current_head: head(4) });
-    expect(build).not.toHaveBeenCalled();
-    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published", record_head: head(4) });
-    expect(build).toHaveBeenCalledOnce();
-    expect(active(authority, "record_head_position")).toBe(4);
-  });
-
-  it("rejects enrichment that changes the captured record head", async () => {
-    const authority = database();
-    const current = head(1);
-    const build = vi.fn();
-    const value = reconciler(authority, current, {
-      enrich_snapshot: async () => ({ record_head: head(2) }),
-      build_generation: build as never,
-    });
-
-    await expect(
-      value.reconcile(new AbortController().signal),
-    ).rejects.toThrow("enrichment changed its captured record head");
-    expect(build).not.toHaveBeenCalled();
-  });
-
   it("does not publish a completed generation when its captured head was superseded", async () => {
     const authority = database();
     const captured = head(2);
     const advanced = head(3);
     let reads = 0;
     const value = reconciler(authority, captured, {
-      read_record_head: () => (++reads < 3 ? captured : advanced),
+      read_record_head: () => (++reads < 2 ? captured : advanced),
     });
 
     await expect(

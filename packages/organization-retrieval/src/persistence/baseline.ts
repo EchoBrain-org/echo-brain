@@ -28,6 +28,12 @@ export interface ReadableSearchPlaneBaseline {
   readonly baseline_sql_url: URL;
 }
 
+/**
+ * Its SQL still creates `retrieval_related_atom_pair`, the table of the
+ * retired related-atom projection (ADR-0044). Nothing writes or reads it. The
+ * bytes stay frozen: the state-lineage guard checks every stored generation's
+ * facts plane against this file's digest, so an edit would refuse existing state.
+ */
 export const READABLE_SEARCH_FACTS_BASELINE_V3: ReadableSearchPlaneBaseline = {
   plane: 'facts', application_id: READABLE_SEARCH_FACTS_DATABASE.application_id,
   schema_version: 3,

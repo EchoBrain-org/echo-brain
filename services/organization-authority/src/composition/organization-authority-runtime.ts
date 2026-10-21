@@ -22,11 +22,7 @@ import {
   type OrganizationAuthorityProcessingCycleV1,
   type RunningOrganizationAuthorityServiceLifecycle,
 } from "./organization-authority-service-lifecycle.js";
-import {
-  createReadableSearchGenerationReconcilerV1,
-  readableSearchGenerationContractV1,
-  type ReadableSearchRelatedAtomProjectorBindingV1,
-} from "./readable-search-generation-composition.js";
+import { createReadableSearchGenerationReconcilerV1 } from "./readable-search-generation-composition.js";
 import type { ReadableSearchGenerationReconciliationV1 } from "./readable-search-generation-reconciler.js";
 import type { OrganizationAuthorityApiRuntimeConfig, OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
@@ -97,18 +93,6 @@ function stagingSyntheticCanaryHook(
   };
 }
 
-function relatedAtomProjectorBinding(
-  generation: AnswerCompositionGenerationBindingV1,
-): ReadableSearchRelatedAtomProjectorBindingV1 {
-  return Object.freeze({
-    structured_output: generation.structured_output,
-    profile: Object.freeze({
-      generation_adapter_id: generation.generation.generation_adapter_id,
-      model: generation.generation.planner_model,
-      timeout_ms: generation.generation.timeout_ms,
-    }),
-  });
-}
 /**
  * Narrow composition seams for deterministic local rehearsals. Production
  * callers leave this absent.
@@ -202,12 +186,8 @@ export async function openOrganizationAuthorityRuntime(
     const limiter = config.model_call_limiter ?? createModelCallLimiterV1();
     const limited = (priority: ModelCallPriorityV1): AnswerCompositionGenerationBindingV1 => Object.freeze({ ...answerGeneration,
       structured_output: limitStructuredGenerationPortV1(answerGeneration.structured_output, (signal, op) => limiter.run(priority, signal, op)) });
-    // Ask is interactive; notes, search maintenance and trigger research wait behind it.
+    // Ask is interactive; notes and trigger research wait behind it.
     const backgroundGeneration = limited("background");
-    const relatedAtomProjector = relatedAtomProjectorBinding(backgroundGeneration);
-    const readableSearchContract = readableSearchGenerationContractV1({
-      related_atom_projector: relatedAtomProjector.profile,
-    });
     const readableSearch = createReadableSearchGenerationReconcilerV1({
       state_directory: config.state_directory,
       root: lineage.root,
@@ -216,7 +196,6 @@ export async function openOrganizationAuthorityRuntime(
       signer,
       policy_projectors: config.record_policy_fact_projectors,
       record_input_codecs: config.record_input_codecs,
-      related_atom_projector: relatedAtomProjector,
     });
     const runtime = await startOrganizationAuthorityServiceLifecycle(
       { api, worker_interval_ms: config.worker_interval_ms },
@@ -237,8 +216,6 @@ export async function openOrganizationAuthorityRuntime(
           ...(preparedPerson === undefined ? {} : { person_http_runtime_factory: preparedPerson.attach }),
           answer_composition_generation: limited("interactive"),
           answer_composition_background: backgroundGeneration.structured_output,
-          readable_search_retrieval_contract_sha256:
-            readableSearchContract.retrieval_contract_sha256,
         },
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,
