@@ -155,6 +155,14 @@ describe("pull-request job selection", () => {
       "product/echo-desktop/test/e2e/projects.spec.ts",
     ], { ...EVERY_JOB, person_client_package: false }],
     ["a Person-client change selects every job", ["src/product/person-client/main.ts"], EVERY_JOB],
+    ["a shared release-validation change selects both package jobs", [
+      "deploy/release/release-artifact-validation.mjs",
+      "tools/clean-v1-release.mjs",
+    ], EVERY_JOB],
+    ["root test setup changes select the macOS package proof", [
+      "tests/support/isolated-home.ts",
+      "tests/support/isolated-home-global-setup.ts",
+    ], { ...EVERY_JOB, desktop_app: false }],
   ];
   it.each(pullRequestJobs)("%s", async (_name, changed, jobs) => {
     const merge = pullRequestMerge(changed);
@@ -178,6 +186,8 @@ describe("pull-request job selection", () => {
     [".github/workflows/ci.yml", true, true],
     ["tools/ci-select-jobs.mjs", true, true],
     ["tools/ci-runner-info.mjs", true, false],
+    ["tools/clean-v1-release.mjs", true, true],
+    ["deploy/release/release-artifact-validation.mjs", true, true],
     ["tests/fixtures/project-context-v1/operations.json", true, false],
     ["deploy/release/start-person-cli-kit-macos.sh", false, true],
     ["deploy/organization-authority/Caddyfile.clean-v1.ec2", false, true],
@@ -185,6 +195,8 @@ describe("pull-request job selection", () => {
     ["tests/person-client/client-update.test.ts", false, true],
     ["tests/support/clean-v1-release.ts", false, true],
     ["tests/support/test-canonical-json.ts", false, true],
+    ["tests/support/isolated-home.ts", false, true],
+    ["tests/support/isolated-home-global-setup.ts", false, true],
     ["vitest.config.ts", false, true],
     ["packages/organization-record/src/index.ts", false, false],
     ["providers/slack/server/src/index.ts", false, false],
@@ -525,6 +537,9 @@ describe("job input closures", () => {
     const packages = new Set<string>();
     for (const source of sources) {
       const text = readFileSync(join(REPO, source), "utf8");
+      for (const match of text.matchAll(/from ['"](\.[^'"]+)['"]/g)) {
+        expectCovered("desktop_app", posix.join(posix.dirname(source), match[1]!).replace(/\.js$/, ".ts"));
+      }
       for (const match of text.matchAll(/['"](@echo-brain\/[a-z-]+)/g)) packages.add(match[1]!);
       for (const match of text.matchAll(/join\(repository, '([^']+)'\)/g)) expectCovered("desktop_app", match[1]!);
       for (const match of text.matchAll(/\['(tools\/[^']+)'/g)) expectCovered("desktop_app", match[1]!);
@@ -566,6 +581,11 @@ describe("job input closures", () => {
       }
     }
     expectCovered("person_client_package", "vitest.config.ts");
+    const config = readFileSync(join(REPO, "vitest.config.ts"), "utf8");
+    const setupPaths = [...config.matchAll(/(?:globalSetup|setupFiles): \[([^\]]*)\]/g)]
+      .flatMap((match) => [...match[1]!.matchAll(/['"]([^'"]+)['"]/g)].map((path) => path[1]!));
+    expect(setupPaths.length).toBeGreaterThan(0);
+    for (const path of setupPaths) expectCovered("person_client_package", path);
     expectCovered("person_client_package", "tsconfig.json");
   });
 });
