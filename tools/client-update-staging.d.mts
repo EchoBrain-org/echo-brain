@@ -5,7 +5,7 @@ export type ClientUpdateStagingState =
   | 'succeeded'
   | 'unconfirmed';
 
-export type ClientUpdateStagingHosting = 'cloudfront' | 's3';
+export type ClientUpdateStagingHosting = 's3';
 export type ClientUpdateStagingKind = 'echo-client-update-staging-feed-operation-v1' | 'echo-client-update-staging-s3-feed-operation-v1';
 
 export type ClientUpdateStagingInventory = Readonly<{

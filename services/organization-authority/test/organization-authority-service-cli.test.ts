@@ -30,6 +30,7 @@ const { runtimeState, initialRuntimeState } = vi.hoisted(() => {
     processing: "active" as "active" | "idle_until_finalize",
     shutdown_events: [] as string[],
     runtime_close_gate: undefined as Promise<void> | undefined,
+    shutdown_error: undefined as Error | undefined,
   });
   return { runtimeState: initialRuntimeState(), initialRuntimeState };
 });
@@ -89,6 +90,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
       close: async () => {
         runtimeState.shutdown_events.push("runtime-close-started");
         await runtimeState.runtime_close_gate;
+        if (runtimeState.shutdown_error !== undefined) throw runtimeState.shutdown_error;
         runtimeState.shutdown_events.push("runtime-close-finished");
       },
     };
@@ -222,6 +224,29 @@ function stagingProfileDirectory(): string {
 }
 
 describe("admitted runtime CLI events", () => {
+  it.each(['SIGINT', 'SIGTERM'] as const)('removes both shutdown listeners after %s', async signal => {
+    const before = (['SIGINT', 'SIGTERM'] as const).map(name => process.listeners(name));
+    const serving = start({ stderr: () => undefined });
+    await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    process.emit(signal);
+    await expect(serving).resolves.toBe(0);
+    expect((['SIGINT', 'SIGTERM'] as const).map(name => process.listeners(name))).toEqual(before);
+    expect(runtimeState.shutdown_events.filter(event => event === 'runtime-close-started')).toHaveLength(1);
+  });
+
+  it('reports shutdown failure without an unhandled rejection or retained signal listener', async () => {
+    const before = (['SIGINT', 'SIGTERM'] as const).map(name => process.listeners(name));
+    runtimeState.shutdown_error = new Error('private shutdown detail');
+    const stderr: string[] = [];
+    const serving = start({ stderr: line => { stderr.push(line); } });
+    await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    process.emit('SIGTERM');
+    await expect(serving).resolves.toBe(1);
+    expect((['SIGINT', 'SIGTERM'] as const).map(name => process.listeners(name))).toEqual(before);
+    expect(stderr.map(line => JSON.parse(line))).toContainEqual({ schema_version: 1, kind: 'echo-clean-live-startup-failed-v1' });
+    expect(stderr.join('')).not.toContain('private shutdown detail');
+  });
+
   it.each(['bounded', 'persistent'])('wires %s hosted traces to ordinary research without a Person capture and drains on shutdown', async mode => {
     runtimeState.authority_url = 'https://authority-staging.echobrain.org';
     process.env.ECHO_SOURCE_SHA = 'a'.repeat(40);
@@ -418,6 +443,7 @@ describe("admitted runtime CLI events", () => {
   });
 
   it("closes telemetry only after the authority runtime has finished", async () => {
+    const before = (['SIGINT', 'SIGTERM'] as const).map(name => process.listeners(name));
     process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
     process.env.ECHO_SOURCE_SHA = "a".repeat(40);
     process.env.ECHO_BUILD_NUMBER = "1";
@@ -433,9 +459,12 @@ describe("admitted runtime CLI events", () => {
     await vi.waitFor(() =>
       expect(runtimeState.shutdown_events).toEqual(["runtime-close-started"]),
     );
+    expect(process.emit("SIGINT")).toBe(true);
+    expect(runtimeState.shutdown_events).toEqual(["runtime-close-started"]);
 
     releaseRuntimeClose!();
     await expect(running).resolves.toBe(0);
+    expect((['SIGINT', 'SIGTERM'] as const).map(name => process.listeners(name))).toEqual(before);
     expect(runtimeState.shutdown_events).toEqual([
       "runtime-close-started",
       "runtime-close-finished",

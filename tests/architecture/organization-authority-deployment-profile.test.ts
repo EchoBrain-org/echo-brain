@@ -214,7 +214,8 @@ if [[ "$1" == compose ]]; then
       install -m 0600 ${JSON.stringify(join(privateDir, "llm-credential-source"))} ${JSON.stringify(join(stateCredentialDir, "llm-credential"))}
       touch ${JSON.stringify(credentialsInstalledMarker)}
       if [[ "$ECHO_FAKE_WAIT_DURING_INSTALL" == true ]]; then
-        printf '%s\n' "$PPID" > ${JSON.stringify(installWaitMarker)}
+        printf '%s\n' "$PPID" > ${JSON.stringify(`${installWaitMarker}.tmp`)}
+        mv ${JSON.stringify(`${installWaitMarker}.tmp`)} ${JSON.stringify(installWaitMarker)}
         wait_attempts=0
         while [[ ! -f ${JSON.stringify(installReleaseMarker)} && "$wait_attempts" -lt 500 ]]; do
           sleep 0.01
@@ -1814,27 +1815,32 @@ describe("clean-v1 Organization Authority deployment profile", () => {
           );
         },
       );
-      await waitForFile(fixture.installWaitMarker);
-      expect(Number(readFileSync(fixture.installWaitMarker, "utf8"))).toBe(
-        activation.pid,
-      );
-      process.kill(activation.pid!, "SIGTERM");
-      const interruptedAt = Date.now();
-      const interrupted = await completion;
+      try {
+        await waitForFile(fixture.installWaitMarker);
+        expect(Number(readFileSync(fixture.installWaitMarker, "utf8"))).toBe(
+          activation.pid,
+        );
+        process.kill(activation.pid!, "SIGTERM");
+        const interruptedAt = Date.now();
+        const interrupted = await completion;
 
-      expect(interrupted).toEqual({ code: 143, signal: null });
-      expect(Date.now() - interruptedAt).toBeLessThan(4_000);
-      expect(stdout).not.toContain("provider_credentials_activated");
-      expect(stdout).not.toContain(nextLlm);
-      expect(stderr).not.toContain(nextLlm);
-      expectRestored();
-      const calls = readFileSync(fixture.calls, "utf8");
-      expect(calls.match(/ down\n/g)).toHaveLength(2);
-      expect(calls.match(/ credentials-install /g)).toHaveLength(1);
-      expect(calls.match(/ up -d --no-build --wait --wait-timeout 90\n/g)).toHaveLength(1);
-      expect(stderr).toContain(
-        "activation was interrupted; previous credentials were restored and verified",
-      );
+        expect(interrupted).toEqual({ code: 143, signal: null });
+        expect(Date.now() - interruptedAt).toBeLessThan(4_000);
+        expect(stdout).not.toContain("provider_credentials_activated");
+        expect(stdout).not.toContain(nextLlm);
+        expect(stderr).not.toContain(nextLlm);
+        expectRestored();
+        const calls = readFileSync(fixture.calls, "utf8");
+        expect(calls.match(/ down\n/g)).toHaveLength(2);
+        expect(calls.match(/ credentials-install /g)).toHaveLength(1);
+        expect(calls.match(/ up -d --no-build --wait --wait-timeout 90\n/g)).toHaveLength(1);
+        expect(stderr).toContain(
+          "activation was interrupted; previous credentials were restored and verified",
+        );
+      } finally {
+        if (activation.exitCode === null && activation.signalCode === null) activation.kill("SIGTERM");
+        await completion;
+      }
     }
   }, 10_000);
 

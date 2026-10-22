@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { JOB_OUTPUTS, TESTED_TREE } from "../../tools/ci-select-jobs.mjs";
@@ -60,6 +60,21 @@ function dependencyInputs(dockerfile: string) {
 }
 
 describe("CI workflow", () => {
+  it("runs every deterministic evaluator test in the tail leg", () => {
+    const scripts = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")).scripts as Record<string, string>;
+    const commands = legCommands("tail").map((command) =>
+      command.replace(/npm run ([\w:-]+)/g, (_match, name: string) => scripts[name] ?? ""),
+    );
+    const patterns = commands.flatMap((command) =>
+      [...command.matchAll(/(?:^| && )node --test ([^&]+)/g)]
+        .flatMap((match) => match[1]!.trim().split(/\s+/)),
+    );
+    const scheduled = new Set(globSync(patterns, { cwd: REPO }));
+    const tests = globSync("tools/evals/*/test/**/*.test.mjs", { cwd: REPO });
+    expect(tests.length).toBeGreaterThan(0);
+    expect(tests.filter((path) => !scheduled.has(path))).toEqual([]);
+  });
+
   it("splits check into parallel legs that run npm run check and every later proof", () => {
     const check = job("check");
     expect(check).toContain(
@@ -89,6 +104,7 @@ describe("CI workflow", () => {
       "npm run build",
       "node tests/fixtures/person-onboarding-smoke.mjs",
       "npm run test:research-loop-eval",
+      "npm run test:agentic-ask-eval",
       "npm run test:capacity",
       "npm run capacity:checkpoint",
     ]);

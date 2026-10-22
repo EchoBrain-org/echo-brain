@@ -51,8 +51,6 @@
     "http",
     "net",
     "path",
-    "util",
-    "async_hooks",
     "perf_hooks",
     "os",
     "worker_threads",
@@ -358,7 +356,8 @@
       "services/organization-authority/src/clean-granola-source-main.ts",
       "services/organization-authority/src/application/person-updates.ts",
       "services/organization-authority/src/adapters/persistence/sqlite/person-update-inbox-v1.ts",
-      "services/organization-authority/src/composition/related-atom-projector-v1.ts"
+      "services/organization-authority/src/composition/related-atom-projector-v1.ts",
+      "services/organization-authority/src/application/ports/person-ticket-live-runtime-v1.ts"
     ]
   },
   "layer_rules": [
@@ -555,8 +554,7 @@
         "buffer",
         "crypto",
         "http",
-        "net",
-        "util"
+        "net"
       ]
     },
     {

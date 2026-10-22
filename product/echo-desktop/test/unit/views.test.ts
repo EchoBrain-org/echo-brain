@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   abandonView, answerView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, listView, membersView, noteMatchesView,
-  noteTitle, openItemsView, openItemView, openView, revokedView, NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView,
+  noteTitle, openItemsView, openItemView, openView, revokedView, NotReadable, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { createHash } from 'node:crypto';
