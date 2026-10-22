@@ -1,4 +1,20 @@
 /** The provider-neutral structured generation port shared by research and model adapters. */
+import type { Sha256Digest } from '@echo-brain/federation-protocol';
+
+/** Exact outbound request admission, including an SDK's retries and token counting. */
+export interface StructuredGenerationRequestV1 {
+  readonly diagnostic_input?: import('../shared/core-runtime-diagnostics-v1.js').CoreRuntimeDiagnosticModelInputV1;
+  readonly model: string;
+  readonly body_sha256: Sha256Digest;
+  readonly operation: 'messages' | 'count_tokens';
+  readonly timeout: () => number;
+  /** Native session/request cancellation, including expiry while waiting for a call slot. */
+  readonly signal?: AbortSignal;
+  readonly payload_digests?: readonly Sha256Digest[];
+  readonly before_forward?: () => void;
+}
+export type StructuredGenerationAdmissionV1 = <T>(request: StructuredGenerationRequestV1,
+  forward: (signal: AbortSignal) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>) => Promise<T>;
 
 export interface StructuredGenerationJsonSchema {
   readonly [key: string]: unknown;
@@ -19,6 +35,8 @@ export interface StructuredGenerationInput {
 }
 
 export interface StructuredGenerationPort {
+  /** A native harness must admit every outbound request; callers cannot wrap the session as one model call. */
+  generate_with_admission?(input: StructuredGenerationInput, admit: StructuredGenerationAdmissionV1): Promise<unknown>;
   /**
    * A thrown error that carries StructuredGenerationFailureV1 lets the model
    * gate retry, repair or fall back; any other error ends the request.

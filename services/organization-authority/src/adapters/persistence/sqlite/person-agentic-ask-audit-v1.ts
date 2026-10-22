@@ -186,8 +186,8 @@ export class SqlitePersonAgenticAskAuditV1 {
       ((entry.outcome === "cancelled" || entry.outcome === "timed_out") && (entry.prompt_sha256 !== null || entry.answer_sha256 !== null || entry.response_sha256 !== null)) ||
       !Array.isArray(entry.generations) || entry.generations.length !== entry.model_calls ||
       entry.generations.some((generation) => !["step", "answer"].includes(generation.role) ||
-        (generation.engine !== undefined && generation.engine !== 'external_research') ||
-        (generation.engine === 'external_research' && (generation.role !== 'step' || typeof generation.model !== 'string' || !/^[a-zA-Z0-9_.:/-]{1,200}$/u.test(generation.model))) ||
+        (generation.engine !== undefined && !['external_research', 'external_writer'].includes(generation.engine)) ||
+        (generation.engine !== undefined && (generation.role !== (generation.engine === 'external_research' ? 'step' : 'answer') || typeof generation.model !== 'string' || !/^[a-zA-Z0-9_.:/-]{1,200}$/u.test(generation.model))) ||
         (generation.finish_reason !== null && (typeof generation.finish_reason !== "string" || generation.finish_reason.length > 128)) ||
         (generation.usage !== null && ![generation.usage.input_tokens, generation.usage.output_tokens, generation.usage.total_tokens]
           .every((value) => value === null || (Number.isSafeInteger(value) && value >= 0)))) ||

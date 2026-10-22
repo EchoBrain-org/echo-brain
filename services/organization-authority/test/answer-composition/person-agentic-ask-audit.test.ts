@@ -26,6 +26,12 @@ function openedDatabase() {
 }
 
 describe("agentic Ask audit", () => {
+  it('retains native writer model identity under the answer role and rejects a mismatched role', () => {
+    const store = new SqlitePersonAgenticAskAuditV1(openedDatabase());
+    const writer = { ...entry, rounds: 1, model_calls: 1, generations: [{ role: 'answer' as const, engine: 'external_writer' as const, model: 'claude-sonnet-fixture', finish_reason: 'stop', usage: null }] };
+    expect(() => store.forRequest(requestContext).append(writer)).not.toThrow();
+    expect(() => store.forRequest({ ...requestContext, request_id: 'bad-role' }).append({ ...writer, generations: [{ ...writer.generations[0]!, role: 'step' }] })).toThrow('audit entry is invalid');
+  });
   it('records native research calls under the call budget with their actual model identity', () => {
     const database = openedDatabase(), store = new SqlitePersonAgenticAskAuditV1(database);
     const native = { ...entry, rounds: 13, model_calls: 13, generations: Array.from({ length: 13 }, () => ({ role: 'step' as const, engine: 'external_research' as const, model: 'claude-sonnet-fixture', finish_reason: 'tool_use', usage: null })) };

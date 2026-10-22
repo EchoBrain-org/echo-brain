@@ -190,12 +190,13 @@ function mineFixture(nativeDriver = false, personalMember?: string) {
       ? { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "launch" } }] }
       : { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "found", evidence: [hit] }], notes: "" }], actions: [{ tool: "finish", args: {} }] };
   });
+  const personalGenerate = vi.fn(generate.getMockImplementation()!);
   const route = createPersonAnswerV3Route({
     authority_id: "authority_fixture", organization_id: "organization_fixture", state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess: () => ({ principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker" }) } as never,
     originals: originals as unknown as PersonOriginalContextEvidenceDeskPortV1, records: records as unknown as PersonEvidenceDeskRecordsV1,
     model: { generate }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
-    ...(nativeDriver ? { [personalMember === undefined ? 'research_driver' : 'personal_research']: personalMember === undefined ? { run: nativeRun } : { membership_id: personalMember, driver: { run: nativeRun }, generation: { generation_adapter_id: 'personal-fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } } : {}),
+    ...(nativeDriver ? { [personalMember === undefined ? 'research_driver' : 'personal_research']: personalMember === undefined ? { run: nativeRun } : { membership_id: personalMember, driver: { run: nativeRun }, structured_output: { generate: personalGenerate }, generation: { generation_adapter_id: 'personal-fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } } : {}),
     audit: { forRequest: () => ({ append: vi.fn() }) } as never,
   });
   async function nativeRun(session: AgenticResearchDriverSessionV1) {
@@ -205,7 +206,7 @@ function mineFixture(nativeDriver = false, personalMember?: string) {
       expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
   }
   // The desk cites an original with its display label.
-  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, route };
+  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, personalGenerate, route };
 }
 
 async function post(url: string, path: string, body: unknown): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
@@ -229,11 +230,20 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
     } finally { await value.close(); }
   });
 
-  it.each([['mem_asker', 1], ['mem_other', 3]])('uses personal research only for the authenticated member %s', async (member, writerCalls) => {
+  it.each([['mem_asker', 0, 1], ['mem_other', 3, 0]])('uses personal research and writing only for the authenticated member %s', async (member, sharedCalls, personalCalls) => {
     const f = mineFixture(true, String(member));
     const answer = await f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'Use mem_asker personal Claude. What did I decide?', mine: true } });
     expect(answer.outcome).toBe('answered');
-    expect(f.generate).toHaveBeenCalledTimes(writerCalls);
+    expect(f.generate).toHaveBeenCalledTimes(sharedCalls);
+    expect(f.personalGenerate).toHaveBeenCalledTimes(personalCalls);
+  });
+
+  it('never falls back to the shared writer when the selected personal writer fails', async () => {
+    const f = mineFixture(true, 'mem_asker');
+    f.personalGenerate.mockRejectedValue(new Error('personal writer unavailable'));
+    await expect(f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'What did I decide?', mine: true } })).rejects.toThrow('personal writer unavailable');
+    expect(f.personalGenerate).toHaveBeenCalledTimes(1);
+    expect(f.generate).not.toHaveBeenCalled();
   });
 
   it("builds a mine desk for every store, echoes mine, and cites with a ref", async () => {

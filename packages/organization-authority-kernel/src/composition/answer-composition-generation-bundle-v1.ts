@@ -28,6 +28,7 @@ export interface AnswerCompositionGenerationBindingV1 {
   readonly personal_research?: {
     readonly membership_id: string;
     readonly driver: AgenticResearchDriverV1;
+    readonly structured_output?: StructuredGenerationPort;
     readonly generation: AnswerCompositionGenerationProfileV1;
   };
 }

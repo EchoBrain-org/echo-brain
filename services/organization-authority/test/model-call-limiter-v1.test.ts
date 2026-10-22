@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createModelCallLimiterV1, limitResearchDriverV1, type ModelCallPriorityV1 } from '../src/composition/model-call-limiter-v1.js';
+import { createModelCallLimiterV1, limitResearchDriverV1, limitStructuredGenerationPortV1, type ModelCallPriorityV1 } from '../src/composition/model-call-limiter-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 
@@ -18,6 +18,45 @@ function held(limiter = createModelCallLimiterV1()) {
 }
 
 describe('model call limiter', () => {
+  it('removes an expired native writer from the call queue before any access check or budget admission', async () => {
+    const calls = held(createModelCallLimiterV1({ concurrent: 1, background: 1 }));
+    const occupied = calls.call('occupied', 'interactive');
+    const stop = new AbortController(), expired = new Error('native session expired');
+    const admit = vi.fn();
+    const port = limitStructuredGenerationPortV1({ generate: async () => false,
+      generate_with_admission: async (input, admission) => admission({ model: input.model, signal: stop.signal,
+        body_sha256: canonicalSha256('writer'), operation: 'messages', timeout: () => 20_000 }, async () => ({ value: true })),
+    }, (signal, op) => calls.limiter.run('interactive', signal, op));
+    let settled = false;
+    const pending = port.generate_with_admission!({ model: 'fixture', system_prompt: 'system', user_prompt: '{}', schema: {}, max_output_tokens: 1500, timeout_ms: 20_000 }, async (_request, send) => {
+      admit(); return (await send(new AbortController().signal)).value;
+    })
+      .then(value => { settled = true; return value; }, error => { settled = true; return error; });
+    await flush(); stop.abort(expired); await flush();
+    const cancelledWhileQueued = settled;
+    await calls.release('occupied'); await occupied;
+    const result = await pending;
+    expect(cancelledWhileQueued).toBe(true);
+    expect(result).toBe(expired);
+    expect(admit).not.toHaveBeenCalled();
+  });
+  it('queues native writer calls before revalidation and releases its session after access is revoked', async () => {
+    const calls = held(createModelCallLimiterV1({ concurrent: 1, background: 1 }));
+    const occupied = calls.call('occupied', 'interactive');
+    let checks = 0, revoked = false, forwarded = false, activeSessions = 0;
+    const port = limitStructuredGenerationPortV1({ generate: async () => { throw new Error('must use admission'); },
+      generate_with_admission: async (input, admit) => admit({ model: input.model, body_sha256: canonicalSha256('writer'), operation: 'messages', timeout: () => 20_000 }, async () => { forwarded = true; return { value: true }; }),
+    }, (signal, op) => calls.limiter.run('interactive', signal, op), async (_signal, op) => {
+      activeSessions++; try { return await op(); } finally { activeSessions--; }
+    });
+    const pending = port.generate_with_admission!({ model: 'fixture', system_prompt: 'system', user_prompt: '{}', schema: {}, max_output_tokens: 1500, timeout_ms: 20_000 }, async (_request, send) => {
+      checks++; if (revoked) throw new Error('revoked while queued'); return (await send(new AbortController().signal)).value;
+    });
+    const rejected = expect(pending).rejects.toThrow('revoked while queued');
+    await flush(); expect(checks).toBe(0); expect(activeSessions).toBe(1);
+    revoked = true; await calls.release('occupied'); await occupied; await rejected;
+    expect(checks).toBe(1); expect(forwarded).toBe(false); expect(activeSessions).toBe(0);
+  });
   it('checks SDK access after queuing so a revocation while waiting prevents forwarding', async () => {
     const f = held();
     const occupied = ['i1', 'i2', 'i3', 'i4', 'i5', 'i6'];
