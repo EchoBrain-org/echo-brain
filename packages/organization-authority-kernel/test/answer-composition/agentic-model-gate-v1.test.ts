@@ -51,6 +51,42 @@ function harness(options: {
 }
 
 describe("agentic model gate", () => {
+  it('admits each native writer request as an answer, including retries and token counts, without double counting the session', async () => {
+    const forwarded: string[] = [];
+    const { gate, trace } = harness({ max_model_calls: 3, model: {
+      generate: async () => { throw new Error('must use native admission'); },
+      generate_with_admission: async (input, admit) => {
+        for (const operation of ['messages', 'messages', 'count_tokens'] as const) {
+          await admit({ model: input.model, operation, body_sha256: canonicalSha256(operation), timeout: () => 20_000 }, async () => {
+            forwarded.push(operation); return { value: true, finish_reason: 'stop' };
+          });
+        }
+        return { answer: true };
+      },
+    } });
+    await expect(gate.call(ANSWER, 'system', {}, schema, () => 20_000)).resolves.toEqual({ answer: true });
+    expect(trace).toEqual(['revalidate', 'revalidate', 'revalidate']);
+    expect(forwarded).toEqual(['messages', 'messages', 'count_tokens']);
+    expect(gate.stats()).toMatchObject({ calls: 3, generations: Array.from({ length: 3 }, () => ({ role: 'answer', engine: 'external_writer', model: generation.answer_model })) });
+  });
+
+  it.each(['revoked', 'budget'] as const)('stops native writer requests after %s, including a subsequent SDK attempt', async reason => {
+    let checks = 0, forwarded = 0;
+    const { gate } = harness({ max_model_calls: reason === 'budget' ? 1 : 24,
+      desk_revalidate: async () => { if (++checks === 2 && reason === 'revoked') throw new AuthorityOperationError('unauthorized', 'revoked'); return { checked_at: 'now' }; },
+      model: { generate: async () => { throw new Error('shared writer must not run'); }, generate_with_admission: async (input, admit) => {
+        const send = () => admit({ model: input.model, operation: 'messages', body_sha256: canonicalSha256('writer'), timeout: () => 20_000 }, async () => { forwarded++; return { value: true }; });
+        await send();
+        const errors = await Promise.allSettled([send(), send()]);
+        expect(errors.map(value => value.status)).toEqual(['rejected', 'rejected']);
+        throw (errors[0] as PromiseRejectedResult).reason;
+      } },
+    });
+    await expect(gate.call(ANSWER, 'system', {}, schema, () => 20_000)).rejects.toBeInstanceOf(Error);
+    expect(forwarded).toBe(1); expect(gate.stats().calls).toBe(1);
+    expect(checks).toBe(reason === 'revoked' ? 2 : 1);
+  });
+
   it('pairs native SDK payloads and visible responses in the private trace without adding content to the audit', async () => {
     const { gate } = harness();
     const events: CoreRuntimeDiagnosticObservationV1[] = [];

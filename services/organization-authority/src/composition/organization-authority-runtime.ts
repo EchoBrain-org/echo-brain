@@ -191,6 +191,8 @@ export async function openOrganizationAuthorityRuntime(
       structured_output: limitStructuredGenerationPortV1(answerGeneration.structured_output, (signal, op) => limiter.run(priority, signal, op)),
       ...(personalResearch === undefined || priority !== 'interactive' ? {} : { personal_research: {
         ...personalResearch,
+        ...(personalResearch.structured_output === undefined ? {} : { structured_output: limitStructuredGenerationPortV1(personalResearch.structured_output,
+          (signal, op) => limiter.run(priority, signal, op), (signal, op) => researchSessions.run(priority, signal, op)) }),
         driver: limitResearchDriverV1(personalResearch.driver,
           (signal, op) => limiter.run(priority, signal, op), (signal, op) => researchSessions.run(priority, signal, op)),
       } }),

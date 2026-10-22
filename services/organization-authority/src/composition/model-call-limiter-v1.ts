@@ -92,11 +92,19 @@ export function createModelCallLimiterV1(limits: { readonly concurrent: number; 
 }
 
 /** The same port, with each call admitted through `limit`. */
-export function limitStructuredGenerationPortV1(port: StructuredGenerationPort, limit: ModelCallLimitV1): StructuredGenerationPort {
+export function limitStructuredGenerationPortV1(port: StructuredGenerationPort, limit: ModelCallLimitV1, sessions: ModelCallLimitV1 = (_signal, op) => op()): StructuredGenerationPort {
   const generate = (input: StructuredGenerationInput) => limit(input.signal, () => port.generate(input));
   const observed = port.generate_with_observation;
-  return Object.freeze(observed === undefined ? { generate } : {
-    generate, generate_with_observation: (input: StructuredGenerationInput) => limit(input.signal, () => observed.call(port, input)),
+  return Object.freeze({ generate,
+    ...(observed === undefined ? {} : { generate_with_observation: (input: StructuredGenerationInput) => limit(input.signal, () => observed.call(port, input)) }),
+    ...(port.generate_with_admission === undefined ? {} : { generate_with_admission: ((input, admit) => sessions(input.signal, () => {
+      let queue: Promise<unknown> = Promise.resolve();
+      return port.generate_with_admission!(input, (request, forward) => {
+        const next = queue.then(() => limit(input.signal, () => admit(request, forward)));
+        queue = next.catch(() => undefined);
+        return next;
+      });
+    })) satisfies NonNullable<StructuredGenerationPort['generate_with_admission']> }),
   });
 }
 

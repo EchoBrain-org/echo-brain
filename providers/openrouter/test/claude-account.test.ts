@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Options, query } from '@anthropic-ai/claude-agent-sdk';
 import { claudeAccountEnvironmentV1 } from '../src/claude-research/account-profile.js';
-import { runClaudeResearchV1 } from '../src/claude-research/sdk-client.js';
+import { runClaudeResearchV1, runClaudeStructuredV1 } from '../src/claude-research/sdk-client.js';
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from '../src/openrouter-answer-composition-generation-bundle-v1.js';
 
 const directories: string[] = [];
@@ -38,16 +38,34 @@ it.each([['api_key', true], ['claude.ai', false]])('rejects %s loggedIn=%s witho
   await expect(claudeAccountEnvironmentV1(await profile(String(method), Boolean(loggedIn)), new AbortController().signal)).rejects.toThrow('Personal Claude sign-in is unavailable');
 });
 
+it('writes through the same native account with the answer schema and no research or host tools', async () => {
+  const account = await profile();
+  let options: Options | undefined;
+  const fake = ((request: Parameters<typeof query>[0]) => {
+    options = request.options;
+    return Object.assign((async function* () { yield { type: 'result', subtype: 'success', is_error: false, structured_output: { answer: 'synthetic' } }; })(), { close() {} });
+  }) as unknown as typeof query;
+  const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] };
+  await expect(runClaudeStructuredV1({ account, schema, model: 'claude-sonnet-5-5', prompt: 'Synthetic evidence', system: 'Write from evidence',
+    base_url: 'http://127.0.0.1:1/test', signal: new AbortController().signal }, fake)).resolves.toEqual({ answer: 'synthetic' });
+  expect(options).toMatchObject({ pathToClaudeCodeExecutable: account.executable_path, systemPrompt: 'Write from evidence',
+    tools: [], allowedTools: ['StructuredOutput'], mcpServers: {}, settingSources: [], persistSession: false, outputFormat: { type: 'json_schema', schema } });
+  expect(options!.env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+  expect(options!.maxTurns).toBeUndefined();
+});
+
 it('rejects a writable sign-in directory before launching native authentication', async () => {
   const account = await profile(); await chmod(join(account.home_directory, '.claude'), 0o777);
   await expect(claudeAccountEnvironmentV1(account, new AbortController().signal)).rejects.toThrow('Personal Claude sign-in is unavailable');
 });
 
-it('keeps personal research separate from the default engine and OpenRouter writer', async () => {
+it('selects a personal researcher and writer while retaining the shared OpenRouter route', async () => {
   const binding = createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: '/missing',
     personal_claude_research: { ...await profile(), membership_id: 'mem_owner' } }).load();
   expect(binding.research_driver).toBeUndefined();
-  expect(binding.personal_research).toMatchObject({ membership_id: 'mem_owner', driver: { run: expect.any(Function) } });
+  expect(binding.personal_research).toMatchObject({ membership_id: 'mem_owner', driver: { run: expect.any(Function) },
+    structured_output: { generate_with_admission: expect.any(Function) },
+    generation: { generation_adapter_id: 'claude-account-research-writer-v1', answer_model: 'claude-sonnet-5-5' } });
   expect(binding.generation.generation_adapter_id).toBe('openrouter');
   expect(binding.structured_output.generate).toBeTypeOf('function');
 });

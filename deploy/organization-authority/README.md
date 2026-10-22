@@ -952,8 +952,8 @@ remains open for that full recovery path.
 ## Personal Claude staging research
 
 The optional personal route uses one authenticated ECHO member's own Claude
-account for interactive Ask research. The final writer, other members and
-background processing retain OpenRouter. The member is selected by the host
+account for both interactive Ask research and the separate final writing pass.
+Other members and background processing retain OpenRouter. The member is selected by the host
 operator and matched against the authenticated Person identity, never question
 text or a client-supplied provider choice.
 

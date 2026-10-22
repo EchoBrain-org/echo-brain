@@ -4,6 +4,7 @@ import type { AnswerCompositionGenerationBundleV1 } from "@echo-brain/organizati
 import { createClaudeResearchDriverV1 } from './claude-research/driver.js';
 import { claudeAccountForwarderV1, openRouterClaudeForwarderV1 } from './claude-research/model-transport.js';
 import { assertPersonalClaudeResearchV1, type PersonalClaudeResearchV1 } from './claude-research/account-profile.js';
+import { createClaudeAccountStructuredGenerationV1 } from './claude-research/structured-generation.js';
 export type { PersonalClaudeResearchV1 } from './claude-research/account-profile.js';
 export { assertPersonalClaudeResearchV1 } from './claude-research/account-profile.js';
 
@@ -31,11 +32,12 @@ export function createOpenRouterAnswerCompositionGenerationBundleV1(input: {
       return Object.freeze({
         ...(input.personal_claude_research === undefined ? {} : { personal_research: {
           membership_id: input.personal_claude_research.membership_id,
-          generation: Object.freeze({ generation_adapter_id: 'claude-account-research-openrouter-writer-v1',
-            planner_model: 'claude-sonnet-5-5', answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+          generation: Object.freeze({ generation_adapter_id: 'claude-account-research-writer-v1',
+            planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5',
             timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1, context_tokens: OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 }),
           driver: createClaudeResearchDriverV1({ model: 'claude-sonnet-5-5',
             account: input.personal_claude_research, forward: claudeAccountForwarderV1('claude-sonnet-5-5') }),
+          structured_output: createClaudeAccountStructuredGenerationV1({ model: 'claude-sonnet-5-5', account: input.personal_claude_research }),
         } }),
         ...(input.research_engine === 'claude-sdk' ? { research_driver: createClaudeResearchDriverV1({
           model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,

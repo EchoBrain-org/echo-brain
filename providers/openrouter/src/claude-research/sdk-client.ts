@@ -23,6 +23,17 @@ export class ClaudeResearchResultErrorV1 extends Error {
 
 /** Each request gets an empty working directory and only ECHO tools; personal runs preserve native sign-in. */
 export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: typeof query = query): Promise<void> {
+  await runClaudeSessionV1(input, { type: 'object', additionalProperties: false, required: ['finished'], properties: { finished: { type: 'boolean' } } }, sdkQuery);
+}
+
+/** A separate native writing pass: same isolated runtime, no research tools, ECHO's answer schema. */
+export async function runClaudeStructuredV1(input: Omit<ClaudeResearchRunV1, 'servers' | 'tools'> & { readonly schema: Record<string, unknown> }, sdkQuery: typeof query = query): Promise<unknown> {
+  const result = await runClaudeSessionV1({ ...input, servers: {}, tools: [] }, input.schema, sdkQuery);
+  if (result.structured_output === undefined) throw new ClaudeResearchResultErrorV1();
+  return result.structured_output;
+}
+
+async function runClaudeSessionV1(input: ClaudeResearchRunV1, schema: Record<string, unknown>, sdkQuery: typeof query) {
   input.signal.throwIfAborted();
   const cwd = await mkdtemp(join(tmpdir(), 'echo-research-'));
   const abortController = new AbortController();
@@ -60,7 +71,7 @@ export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: 
       ...(input.account === undefined ? {} : { pathToClaudeCodeExecutable: input.account.executable_path }),
       tools: [], allowedTools: [...input.tools, 'StructuredOutput'], mcpServers: input.servers,
       strictMcpConfig: true, settingSources: [], plugins: [], persistSession: false, permissionMode: 'dontAsk', verbatimPrompts: true,
-      outputFormat: { type: 'json_schema', schema: { type: 'object', additionalProperties: false, required: ['finished'], properties: { finished: { type: 'boolean' } } } },
+      outputFormat: { type: 'json_schema', schema },
       // Explicit spawn environment prevents the SDK's parent environment merge from leaking host credentials/config.
       spawnClaudeCodeProcess: options => {
         child = spawn(options.command, options.args, { cwd, env, signal: options.signal, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -81,6 +92,7 @@ export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: 
     }
     input.signal.throwIfAborted();
     if (result?.subtype !== 'success' || result.is_error) throw new ClaudeResearchResultErrorV1();
+    return result;
   } finally {
     input.signal.removeEventListener('abort', cancel);
     session?.close();

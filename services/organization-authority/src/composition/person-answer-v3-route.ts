@@ -23,10 +23,10 @@ import type { PersonDiagnosticCaptureHandleV1, PersonDiagnosticsV1 } from './per
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
 /** Call only after session authentication. Identity never comes from question text or client preferences. */
-export function personResearchDriverV1(options: Pick<CreatePersonAnswerV3RouteOptions, 'research_driver' | 'personal_research' | 'generation'>, membershipId: string) {
+export function personResearchDriverV1(options: Pick<CreatePersonAnswerV3RouteOptions, 'research_driver' | 'personal_research' | 'generation' | 'model'>, membershipId: string) {
   const personal = options.personal_research?.membership_id === membershipId ? options.personal_research : undefined;
   const driver = personal?.driver ?? options.research_driver;
-  return { generation: personal?.generation ?? options.generation, ...(driver === undefined ? {} : { research_driver: driver }) };
+  return { model: personal?.structured_output ?? options.model, generation: personal?.generation ?? options.generation, ...(driver === undefined ? {} : { research_driver: driver }) };
 }
 
 export interface CreatePersonAnswerV3RouteOptions {
@@ -159,7 +159,7 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
         return createAgenticAskV1({
           ...(asker === undefined ? {} : { asker }),
           ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
-          ...personResearchDriverV1(options, context.membership_id), desk, model: options.model, audit: options.audit.forRequest(context),
+          ...personResearchDriverV1(options, context.membership_id), desk, audit: options.audit.forRequest(context),
         }).answer({ question: input.request.question, signal });
       });
     },
