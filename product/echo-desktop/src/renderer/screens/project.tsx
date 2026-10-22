@@ -1,5 +1,5 @@
 import type { ListItem, ProjectSummary } from '../../shared/protocol.js';
-import { colorFor, initials } from '../format.js';
+import { identity, initials } from '../format.js';
 import { message } from '../messages.js';
 import { activeTotal, followUpCount, stateCounts } from '../needs.js';
 import { moreList, openCompose, openFollowUps, openListItem, openPeople, openProject, openProjectTools, readsWords, retryList, type State } from '../store.js';
@@ -112,7 +112,7 @@ export function MembersButton({ state }: { state: State }) {
   return (
     <button type="button" class="members-button" data-testid="members-button" aria-label="Project members" onClick={() => void openPeople()}>
       {shown.length === 0 ? <People /> : shown.map(person => (
-        <span key={person.membership_id} class="face" style={{ background: colorFor(person.membership_id) }} aria-hidden="true">
+        <span key={person.membership_id} class="face" style={identity(person.membership_id)} aria-hidden="true">
           {initials(person.display_name)}
         </span>
       ))}

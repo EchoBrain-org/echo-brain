@@ -1,10 +1,15 @@
-const COLORS = ['#6B5A3E', '#4E5A6B', '#5A6B4E', '#6B4E5A'];
+/** The hues a project's or a person's mark can take: styles.css's --id-1 to --id-6, tinted for each appearance. */
+const HUES = 6;
 
-/** A stable circle color per project. */
-export function colorFor(key: string): string {
+/**
+ * A stable mark per project or person: its letters in its hue, on a wash of
+ * that hue over the workspace, opaque so overlapping faces stay apart.
+ */
+export function identity(key: string): { background: string; color: string } {
   let hash = 0;
   for (const character of key) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  return COLORS[hash % COLORS.length]!;
+  const hue = (hash % HUES) + 1;
+  return { background: `linear-gradient(var(--id-${hue}-bg), var(--id-${hue}-bg)), var(--ink)`, color: `var(--id-${hue})` };
 }
 
 /** Text cut to `max` characters, ending "…" when it was longer. */

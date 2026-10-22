@@ -1,9 +1,9 @@
 import type { ComponentChildren } from 'preact';
-import { colorFor, initial, when } from '../format.js';
+import { identity, initial, when } from '../format.js';
 import { message } from '../messages.js';
 import { actionCount, homeFooter, itemNames, itemNeeds, itemWhy, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
 import { awaitingLive, homeRows, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openYourFollowUps, type NeedRow, type State } from '../store.js';
-import { Plus, Saved } from './icons.js';
+import { EchoRings, KindMark, Plus } from './icons.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
 const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', review: 'Review', failed: 'Retry', checking: 'Checking' };
@@ -26,7 +26,7 @@ function Side({ state, at, projects, children }: { state: State; at?: string | n
       {at && <span class="need-when">{when(at)}</span>}
       {first && (
         <span class="need-project" title={names.map(name => name.name).join(', ')}>
-          <span class="need-dot" style={{ background: colorFor(first.id) }} aria-hidden="true">{initial(first.name)}</span>
+          <span class="need-dot" style={identity(first.id)} aria-hidden="true">{initial(first.name)}</span>
           <span>{first.name}{names.length > 1 ? ` +${names.length - 1}` : ''}</span>
         </span>
       )}
@@ -53,7 +53,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
     return (
       <button type="button" class="need-row send" data-testid="need-row" data-kind="send"
         onClick={() => void openFollowUps('record', send.decision.record_sha256, send.decision.title)}>
-        <span class="need-kind">{KIND.send}</span>
+        <span class="need-kind"><KindMark kind="send" />{KIND.send}</span>
         <span class="need-text">
           <span class="need-title">{titleLine(send.decision.first_line ?? send.decision.title)} — {toSend(send.items)}</span>
           <span class="need-detail">From <b>{send.decision.title}</b>{owners.length > 0 ? ` · owners ${owners.join(', ')}` : ''}</span>
@@ -67,7 +67,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
   return (
     <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} disabled={row.kind === 'checking'}
       onClick={() => void openDecision(review.approval_id, run ?? null)}>
-      <span class="need-kind">{KIND[row.kind]}</span>
+      <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">
         <span class="need-title">{titleLine(review.first_line ?? review.title)}</span>
         <span class="need-detail"><ReviewLine row={row} /></span>
@@ -94,7 +94,7 @@ function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { 
   return (
     <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} aria-busy={reading || undefined}
       onClick={() => void openFollowUp(item.item_id, item)}>
-      <span class="need-kind">{KIND[row.kind]}</span>
+      <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">
         <span class={`need-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
         {needs && <span class="need-change">{needs}</span>}
@@ -154,7 +154,7 @@ export function Home({ state }: { state: State }) {
     }
     return (
       <div class="column needs empty" data-testid="needs" aria-busy={home?.loading ?? true}>
-        <div class="home-clear" data-testid="home-clear">{home && !home.loading && <><Saved /><span>Nothing needs you</span></>}</div>
+        <div class="home-clear" data-testid="home-clear">{home && !home.loading && <><EchoRings /><span>Nothing needs you</span></>}</div>
         <Footer state={state} />
       </div>
     );
@@ -163,7 +163,7 @@ export function Home({ state }: { state: State }) {
   const names = itemNames(rows.flatMap(row => ('item' in row ? [row.item] : [])));
   return (
     <div class="column needs" data-testid="needs" aria-busy={home ? home.loading || home.reading : true}>
-      <div class="section-label needs-head">Needs you{waiting > 0 ? ` · ${waiting}` : ''}</div>
+      <h1 class="needs-head">Needs you{waiting > 0 && <> <span class="count">{waiting}</span></>}</h1>
       {rows.map(row => ('item' in row
         ? <ItemRow key={row.item.item_id} state={state} row={row} label={names.get(row.item.item_id)!.label} />
         : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />))}

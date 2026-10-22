@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
-import { colorFor, initials } from '../format.js';
+import { identity, initials } from '../format.js';
 import { saidLines, type ProposalSignal } from '../proposal.js';
 import { Chevron } from './icons.js';
 
@@ -23,7 +23,7 @@ export function CardHead({ kind, verb, where, title, meta, id }: {
 
 /** A person, by their initials in their color. */
 export function Face({ name, keyed = name }: { name: string; keyed?: string }) {
-  return <span class="face" style={{ background: colorFor(keyed) }} aria-hidden="true">{initials(name)}</span>;
+  return <span class="face" style={identity(keyed)} aria-hidden="true">{initials(name)}</span>;
 }
 
 /** What was said in the meeting, one line per speaker, with the time the meeting tool gave it. */

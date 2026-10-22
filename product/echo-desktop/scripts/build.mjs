@@ -4,6 +4,7 @@
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { deflateSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +31,21 @@ await Promise.all([
   }),
 ]);
 for (const file of ['index.html', 'styles.css']) copyFileSync(join(root, 'src/renderer', file), join(out, 'renderer', file));
+
+// The page's type, Geist and Geist Mono (SIL Open Font License 1.1), come from
+// npm rather than the repository: the Latin subsets styles.css names, each
+// family's license beside them. Every other script falls back to the system's.
+const fonts = join(out, 'renderer', 'fonts');
+mkdirSync(fonts, { recursive: true });
+const require = createRequire(import.meta.url);
+for (const family of ['geist', 'geist-mono']) {
+  const from = dirname(require.resolve(`@fontsource-variable/${family}/package.json`));
+  for (const subset of ['latin', 'latin-ext']) {
+    const file = `${family}-${subset}-wght-normal.woff2`;
+    copyFileSync(join(from, 'files', file), join(fonts, file));
+  }
+  copyFileSync(join(from, 'LICENSE'), join(fonts, `${family}-LICENSE.txt`));
+}
 
 // The commit this was built from, shown in the tray. Modified means anywhere
 // in the repository: the host bundles the organization API, and the app ships

@@ -1,5 +1,5 @@
 import type { ProjectSummary } from '../../shared/protocol.js';
-import { colorFor, dateTime, initial } from '../format.js';
+import { dateTime, identity, initial } from '../format.js';
 import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
 import {
@@ -21,7 +21,7 @@ function SidebarProject({ project, current, state }: { project: ProjectSummary; 
         type="button" data-testid="sidebar-project" class="side-project" data-role={project.role}
         aria-current={current ? 'page' : undefined} onClick={() => void openProject(project)}
       >
-        <span class="dot" style={{ background: colorFor(project.project_id) }} aria-hidden="true">{initial(project.name)}</span>
+        <span class="dot" style={identity(project.project_id)} aria-hidden="true">{initial(project.name)}</span>
         <span class="label">{project.name}</span>
       </button>
       <ProjectSettingsButton state={state} project={project} />
@@ -131,7 +131,7 @@ export function Sidebar({ state }: { state: State }) {
       <nav class="sidebar-list" aria-label="Projects">
         {account && (items.length > 0 || failure) && (
           <>
-            <div class="side-header">PROJECTS</div>
+            <div class="side-header">Projects</div>
             {items.filter(project => project.status === 'active').map(project => <SidebarProject key={project.project_id} project={project} current={project.project_id === current} state={state} />)}
             {next && (
               <button type="button" class="link-button side-more" data-testid="sidebar-more" disabled={loading} onClick={() => void loadProjects(true)}>
@@ -145,10 +145,10 @@ export function Sidebar({ state }: { state: State }) {
         {account && (archived.items.length > 0 || archived.loading || archived.failure) && (
           <section class="archived-projects" data-testid="archived-projects" aria-label="Archived projects">
             <button type="button" class="disclosure archived-heading" data-testid="archived-projects-toggle" aria-expanded={archivedOpen}
-              onClick={() => setArchivedOpen(!archivedOpen)}><Chevron /><span>ARCHIVED</span></button>
+              onClick={() => setArchivedOpen(!archivedOpen)}><Chevron /><span>Archived</span></button>
             {archivedOpen && archived.items.map(project => (
               <button type="button" key={project.project_id} data-testid="archived-project-row" class="side-project" onClick={() => void openProject(project)}>
-                <span class="dot" style={{ background: colorFor(project.project_id) }} aria-hidden="true">{initial(project.name)}</span>
+                <span class="dot" style={identity(project.project_id)} aria-hidden="true">{initial(project.name)}</span>
                 <span class="label">{project.name}</span>
               </button>
             ))}
@@ -163,7 +163,7 @@ export function Sidebar({ state }: { state: State }) {
       </nav>
       {account?.role === 'owner' && (
         <div class="sidebar-rows organization-rows">
-          <div class="side-header">ORGANIZATION</div>
+          <div class="side-header">Organization</div>
           <button type="button" data-testid="sidebar-organization" onClick={() => openOrganization()}
             class={`side-row${!state.concealed && state.route.page === 'organization' ? ' current' : ''}`}
             aria-current={!state.concealed && state.route.page === 'organization' ? 'page' : undefined}>
@@ -186,7 +186,7 @@ export function Sidebar({ state }: { state: State }) {
         onClick={event => showAccountMenu(event.currentTarget, 'row')}>
         {account ? (
           <>
-            <span class="avatar" style={{ background: colorFor(account.membership_id) }} aria-hidden="true">{initial(account.display_name)}</span>
+            <span class="avatar" style={identity(account.membership_id)} aria-hidden="true">{initial(account.display_name)}</span>
             <span class="who"><span class="name">{account.display_name}</span><span class="role">{account.role}</span></span>
           </>
         ) : (
