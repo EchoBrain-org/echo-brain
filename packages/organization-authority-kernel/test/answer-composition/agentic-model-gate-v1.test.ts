@@ -51,6 +51,21 @@ function harness(options: {
 }
 
 describe("agentic model gate", () => {
+  it('does not revalidate or account for an expired native request, and admits a fresh writer attempt', async () => {
+    const expired = new Error('writer expired');
+    let attempts = 0, forwarded = 0;
+    const { gate, trace } = harness({ model: {
+      generate: async () => false,
+      generate_with_admission: async (input, admit) => admit({ model: input.model, operation: 'messages',
+        body_sha256: canonicalSha256('writer'), timeout: () => 20_000,
+        signal: attempts++ === 0 ? AbortSignal.abort(expired) : new AbortController().signal,
+      }, async () => { forwarded++; return { value: true }; }),
+    } });
+    await expect(gate.call(ANSWER, 'system', {}, schema, () => 20_000)).rejects.toBe(expired);
+    expect(trace).toEqual([]); expect(gate.stats().calls).toBe(0);
+    await expect(gate.call(ANSWER, 'system', {}, schema, () => 20_000)).resolves.toBe(true);
+    expect(trace).toEqual(['revalidate']); expect(forwarded).toBe(1); expect(gate.stats().calls).toBe(1);
+  });
   it('admits each native writer request as an answer, including retries and token counts, without double counting the session', async () => {
     const forwarded: string[] = [];
     const { gate, trace } = harness({ max_model_calls: 3, model: {

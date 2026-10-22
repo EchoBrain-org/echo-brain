@@ -47,10 +47,11 @@ it('writes through the same native account with the answer schema and no researc
   }) as unknown as typeof query;
   const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] };
   await expect(runClaudeStructuredV1({ account, schema, model: 'claude-sonnet-5-5', prompt: 'Synthetic evidence', system: 'Write from evidence',
-    base_url: 'http://127.0.0.1:1/test', signal: new AbortController().signal }, fake)).resolves.toEqual({ answer: 'synthetic' });
+    base_url: 'http://127.0.0.1:1/test', max_output_tokens: 1500, signal: new AbortController().signal }, fake)).resolves.toEqual({ answer: 'synthetic' });
   expect(options).toMatchObject({ pathToClaudeCodeExecutable: account.executable_path, systemPrompt: 'Write from evidence',
     tools: [], allowedTools: ['StructuredOutput'], mcpServers: {}, settingSources: [], persistSession: false, outputFormat: { type: 'json_schema', schema } });
   expect(options!.env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+  expect(options!.env).toHaveProperty('CLAUDE_CODE_MAX_OUTPUT_TOKENS', '1500');
   expect(options!.maxTurns).toBeUndefined();
 });
 

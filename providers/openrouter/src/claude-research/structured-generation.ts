@@ -26,6 +26,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
           try {
             const payload = JSON.parse(body.toString('utf8'));
             if (payload.model !== input.model) throw new Error('Unexpected native writer model');
+            if (operation === 'messages' && (!Number.isSafeInteger(payload.max_tokens) || payload.max_tokens <= 0 || payload.max_tokens > input.max_output_tokens)) throw new Error('Native writer exceeded its output allowance');
             const strings: string[] = [];
             const collect = (value: unknown): void => {
               if (typeof value === 'string') strings.push(value);
@@ -36,7 +37,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
             // Native framing may surround these strings; it must preserve the exact admitted writer inputs.
             if (![input.system_prompt, input.user_prompt].every(text => strings.some(value => value.includes(text)))) throw new Error('Native writer changed its evidence input');
             return await admit({ model: input.model, body_sha256: `sha256:${createHash('sha256').update(body).digest('hex')}`, operation,
-              timeout: () => deadline - performance.now(),
+              timeout: () => deadline - performance.now(), signal,
               ...(operation === 'messages' ? { diagnostic_input: { model: input.model, system_prompt: JSON.stringify(payload.system ?? []),
                 user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0,
                 timeout_ms: Math.max(1, Math.floor(deadline - performance.now())) } } : {}),
@@ -54,7 +55,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
       });
       try {
         const value = await (options.run ?? runClaudeStructuredV1)({ prompt: input.user_prompt, system: input.system_prompt, schema: input.schema,
-          model: input.model, base_url: fence.base_url, account: options.account, signal });
+          model: input.model, max_output_tokens: input.max_output_tokens, base_url: fence.base_url, account: options.account, signal });
         if (terminal !== undefined) throw terminal;
         if (fence.forwarded() === 0) throw new Error('Native writer did not use model admission');
         return value;
@@ -68,7 +69,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
           } });
         }
         throw error;
-      } finally { fence.close(); }
+      } finally { stop.abort(); fence.close(); }
     },
   };
 }

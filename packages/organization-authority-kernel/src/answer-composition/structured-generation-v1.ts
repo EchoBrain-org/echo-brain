@@ -8,6 +8,8 @@ export interface StructuredGenerationRequestV1 {
   readonly body_sha256: Sha256Digest;
   readonly operation: 'messages' | 'count_tokens';
   readonly timeout: () => number;
+  /** Native session/request cancellation, including expiry while waiting for a call slot. */
+  readonly signal?: AbortSignal;
   readonly payload_digests?: readonly Sha256Digest[];
   readonly before_forward?: () => void;
 }

@@ -100,7 +100,8 @@ export function limitStructuredGenerationPortV1(port: StructuredGenerationPort, 
     ...(port.generate_with_admission === undefined ? {} : { generate_with_admission: ((input, admit) => sessions(input.signal, () => {
       let queue: Promise<unknown> = Promise.resolve();
       return port.generate_with_admission!(input, (request, forward) => {
-        const next = queue.then(() => limit(input.signal, () => admit(request, forward)));
+        const signal = AbortSignal.any([...(input.signal === undefined ? [] : [input.signal]), ...(request.signal === undefined ? [] : [request.signal])]);
+        const next = queue.then(() => limit(signal, () => { signal.throwIfAborted(); return admit(request, forward); }));
         queue = next.catch(() => undefined);
         return next;
       });

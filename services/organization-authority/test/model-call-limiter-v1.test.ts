@@ -18,6 +18,28 @@ function held(limiter = createModelCallLimiterV1()) {
 }
 
 describe('model call limiter', () => {
+  it('removes an expired native writer from the call queue before any access check or budget admission', async () => {
+    const calls = held(createModelCallLimiterV1({ concurrent: 1, background: 1 }));
+    const occupied = calls.call('occupied', 'interactive');
+    const stop = new AbortController(), expired = new Error('native session expired');
+    const admit = vi.fn();
+    const port = limitStructuredGenerationPortV1({ generate: async () => false,
+      generate_with_admission: async (input, admission) => admission({ model: input.model, signal: stop.signal,
+        body_sha256: canonicalSha256('writer'), operation: 'messages', timeout: () => 20_000 }, async () => ({ value: true })),
+    }, (signal, op) => calls.limiter.run('interactive', signal, op));
+    let settled = false;
+    const pending = port.generate_with_admission!({ model: 'fixture', system_prompt: 'system', user_prompt: '{}', schema: {}, max_output_tokens: 1500, timeout_ms: 20_000 }, async (_request, send) => {
+      admit(); return (await send(new AbortController().signal)).value;
+    })
+      .then(value => { settled = true; return value; }, error => { settled = true; return error; });
+    await flush(); stop.abort(expired); await flush();
+    const cancelledWhileQueued = settled;
+    await calls.release('occupied'); await occupied;
+    const result = await pending;
+    expect(cancelledWhileQueued).toBe(true);
+    expect(result).toBe(expired);
+    expect(admit).not.toHaveBeenCalled();
+  });
   it('queues native writer calls before revalidation and releases its session after access is revoked', async () => {
     const calls = held(createModelCallLimiterV1({ concurrent: 1, background: 1 }));
     const occupied = calls.call('occupied', 'interactive');

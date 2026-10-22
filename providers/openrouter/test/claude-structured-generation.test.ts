@@ -8,7 +8,7 @@ const model = 'claude-sonnet-5-5';
 const account = { home_directory: '/synthetic/owner', executable_path: '/synthetic/claude' };
 const input: StructuredGenerationInput = { model, system_prompt: 'Synthetic writer instructions', user_prompt: '{"evidence":"Synthetic E1"}',
   schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] }, max_output_tokens: 1500, timeout_ms: 20_000 };
-const body = JSON.stringify({ model, system: input.system_prompt, messages: [{ role: 'user', content: input.user_prompt }] });
+const body = JSON.stringify({ model, max_tokens: 1500, system: input.system_prompt, messages: [{ role: 'user', content: input.user_prompt }] });
 
 it('uses native account writing with the original evidence/schema and fresh admission for every request', async () => {
   const requests: StructuredGenerationRequestV1[] = [];
@@ -16,7 +16,7 @@ it('uses native account writing with the original evidence/schema and fresh admi
   const port = createClaudeAccountStructuredGenerationV1({ account, model,
     forward: async ({ res }) => { expect(admitted).toBe(++forwarded); res.end('{}'); return { content: [{ type: 'text', text: 'synthetic' }], finish_reason: 'stop' }; },
     run: async request => {
-      expect(request).toMatchObject({ account, schema: input.schema, prompt: input.user_prompt, system: input.system_prompt });
+      expect(request).toMatchObject({ account, schema: input.schema, prompt: input.user_prompt, system: input.system_prompt, max_output_tokens: 1500 });
       for (const path of ['messages', 'messages/count_tokens', 'messages']) {
         const response = await fetch(`${request.base_url}/v1/${path}`, { method: 'POST', body });
         expect(response.status).toBe(200); await response.text();
@@ -31,6 +31,19 @@ it('uses native account writing with the original evidence/schema and fresh admi
   expect(requests.map(request => request.operation)).toEqual(['messages', 'count_tokens', 'messages']);
   expect(requests.every(request => /^sha256:[a-f0-9]{64}$/u.test(request.body_sha256))).toBe(true);
   expect(requests[0]!.diagnostic_input).toMatchObject({ model });
+  expect(requests[0]!.signal?.aborted).toBe(true);
+});
+
+it('refuses an SDK request exceeding the admitted writer allowance', async () => {
+  const forward = vi.fn();
+  const port = createClaudeAccountStructuredGenerationV1({ account, model, forward,
+    run: async request => {
+      await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body: body.replace('1500', '32000') }).catch(() => undefined);
+      return {};
+    },
+  });
+  await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value)).rejects.toThrow('output allowance');
+  expect(forward).not.toHaveBeenCalled();
 });
 
 it.each(['model', 'evidence'] as const)('refuses a native writer that changes its %s before forwarding', async field => {

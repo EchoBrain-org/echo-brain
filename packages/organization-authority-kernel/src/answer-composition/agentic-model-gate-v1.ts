@@ -373,18 +373,20 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
   // SDK retries and auxiliary requests cannot share an admission. Serialize them so budget,
   // receipt admission and access failures have one order, even if the harness sends concurrently.
   const admitExternal = <T>(request: StructuredGenerationRequestV1, forward: (signal: AbortSignal) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>, { role, span }: AgenticModelCallV1, recovery = false): Promise<T> => {
+    const requestSignal = request.signal === undefined ? activeSignal : AbortSignal.any([activeSignal, request.signal]);
+    const assertRequestLive = () => { assertLive(); requestSignal.throwIfAborted(); };
     const run = externalQueue.then(async () => {
       if (externalFailure !== undefined) throw externalFailure;
-      assertLive();
+      assertRequestLive();
       if (calls + (role === 'step' ? 2 : 0) >= budget.max_model_calls) throw new AgenticResearchBudgetErrorV1(`${role === 'step' ? 'research' : 'writer'} call budget exhausted`);
       if (!/^[a-zA-Z0-9_.:/-]{1,200}$/u.test(request.model) || !/^sha256:[a-f0-9]{64}$/u.test(request.body_sha256)) throw new Error('Invalid external model invocation');
       try {
         const validated = await revalidateWithTransientRetryV1(() => observeAgenticLifecycleV1('revalidation', 'research_revalidation',
           { purpose: 'model', mode: 'incremental', role, next_call_id: calls + 1 },
-          () => raceAbort(activeSignal, options.desk_revalidate({ signal: activeSignal, mode: 'incremental' })), value => ({ checked_at: value.checked_at })),
-        { signal: activeSignal, assert_live: assertLive, remaining });
-        options.on_checked(validated.checked_at); assertLive();
-      } catch (error) { externalFailure = error; throw error; }
+          () => raceAbort(requestSignal, options.desk_revalidate({ signal: requestSignal, mode: 'incremental' })), value => ({ checked_at: value.checked_at })),
+        { signal: requestSignal, assert_live: assertRequestLive, remaining });
+        options.on_checked(validated.checked_at); assertRequestLive();
+      } catch (error) { if (!requestSignal.aborted) externalFailure = error; throw error; }
       const timeoutMs = Math.min(request.timeout(), remaining());
       if (timeoutMs < (role === 'step' ? AGENTIC_ASK_MIN_STEP_MS_V1 : AGENTIC_ASK_MIN_ANSWER_MS_V1)) throw new AgenticAskPostRevalidationNoTimeErrorV1();
       calls += 1;
@@ -395,7 +397,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       if (request.operation === 'messages') { request.before_forward?.(); options.before_call?.(role); }
       const started = now();
       const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
-      const signal = AbortSignal.any([activeSignal, timeoutSignal]);
+      const signal = AbortSignal.any([requestSignal, timeoutSignal]);
       try {
         const result = await observeCoreRuntimeV1(span, async () => {
           options.on_span?.({ role, phase: 'enter' });
@@ -409,7 +411,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
           } catch (error) {
             // This request's timer is the caller's remaining role time, not a provider failure.
             // Research keeps the writer's reserve. Caller/deadline stops win for either role.
-            if (timeoutSignal.aborted && !activeSignal.aborted) {
+            if (timeoutSignal.aborted && !requestSignal.aborted) {
               try { assertLive(); error = new AgenticResearchBudgetErrorV1(`${role === 'step' ? 'research' : 'writer'} time exhausted`); } catch (stopped) { error = stopped; }
             }
             if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: calls, role, error_kind: error instanceof AgenticResearchBudgetErrorV1 ? 'adapter_timeout' : coreRuntimeDiagnosticErrorKindV1(error) });

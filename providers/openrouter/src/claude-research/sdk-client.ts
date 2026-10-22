@@ -27,13 +27,13 @@ export async function runClaudeResearchV1(input: ClaudeResearchRunV1, sdkQuery: 
 }
 
 /** A separate native writing pass: same isolated runtime, no research tools, ECHO's answer schema. */
-export async function runClaudeStructuredV1(input: Omit<ClaudeResearchRunV1, 'servers' | 'tools'> & { readonly schema: Record<string, unknown> }, sdkQuery: typeof query = query): Promise<unknown> {
-  const result = await runClaudeSessionV1({ ...input, servers: {}, tools: [] }, input.schema, sdkQuery);
+export async function runClaudeStructuredV1(input: Omit<ClaudeResearchRunV1, 'servers' | 'tools'> & { readonly schema: Record<string, unknown>; readonly max_output_tokens: number }, sdkQuery: typeof query = query): Promise<unknown> {
+  const result = await runClaudeSessionV1({ ...input, servers: {}, tools: [] }, input.schema, sdkQuery, input.max_output_tokens);
   if (result.structured_output === undefined) throw new ClaudeResearchResultErrorV1();
   return result.structured_output;
 }
 
-async function runClaudeSessionV1(input: ClaudeResearchRunV1, schema: Record<string, unknown>, sdkQuery: typeof query) {
+async function runClaudeSessionV1(input: ClaudeResearchRunV1, schema: Record<string, unknown>, sdkQuery: typeof query, maxOutputTokens?: number) {
   input.signal.throwIfAborted();
   const cwd = await mkdtemp(join(tmpdir(), 'echo-research-'));
   const abortController = new AbortController();
@@ -54,6 +54,7 @@ async function runClaudeSessionV1(input: ClaudeResearchRunV1, schema: Record<str
     CLAUDE_CODE_DISABLE_FILE_MENTIONS: '1',
     // One retry, as the native engine; every retry is another admitted call against the request budget.
     CLAUDE_CODE_MAX_RETRIES: '1',
+    ...(maxOutputTokens === undefined ? {} : { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxOutputTokens) }),
   };
   let session: ReturnType<typeof query> | undefined;
   let child: ChildProcessWithoutNullStreams | undefined, exited: Promise<void> | undefined;
