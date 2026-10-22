@@ -73,3 +73,16 @@ it('cannot succeed without any admitted model request', async () => {
   const port = createClaudeAccountStructuredGenerationV1({ account, model, run: async () => ({ answer: 'not admitted' }) });
   await expect(port.generate_with_admission!(input, vi.fn())).rejects.toThrow('did not use model admission');
 });
+
+it('reports an expired queued admission as a retryable adapter timeout', async () => {
+  const port = createClaudeAccountStructuredGenerationV1({ account, model,
+    run: async request => {
+      await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body }).catch(() => undefined);
+      throw new ClaudeResearchResultErrorV1();
+    },
+  });
+  await expect(port.generate_with_admission!({ ...input, timeout_ms: 100 }, request => new Promise((_resolve, reject) => {
+    request.signal!.throwIfAborted();
+    request.signal!.addEventListener('abort', () => reject(request.signal!.reason), { once: true });
+  }))).rejects.toMatchObject({ diagnostic: { failure_class: 'adapter_timeout', http_status: null } });
+});

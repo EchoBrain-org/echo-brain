@@ -60,12 +60,13 @@ export function createClaudeAccountStructuredGenerationV1(options: {
         if (fence.forwarded() === 0) throw new Error('Native writer did not use model admission');
         return value;
       } catch (error) {
-        if (terminal !== undefined) throw terminal;
         input.signal?.throwIfAborted();
-        if (providerFailure !== undefined) throw providerFailure;
-        if (timeout.aborted || error instanceof ClaudeResearchResultErrorV1) {
+        const timedOut = timeout.aborted && signal.reason === timeout.reason;
+        if (terminal !== undefined && !timedOut) throw terminal;
+        if (providerFailure !== undefined && !timedOut) throw providerFailure;
+        if (timedOut || error instanceof ClaudeResearchResultErrorV1) {
           throw Object.assign(new Error('Native writer unavailable'), { diagnostic: {
-            failure_class: timeout.aborted ? 'adapter_timeout' : 'adapter_response', http_status: timeout.aborted ? null : 200, finish_reason: null,
+            failure_class: timedOut ? 'adapter_timeout' : 'adapter_response', http_status: timedOut ? null : 200, finish_reason: null,
           } });
         }
         throw error;
