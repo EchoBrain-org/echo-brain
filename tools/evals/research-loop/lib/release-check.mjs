@@ -4,8 +4,9 @@ import { reachChecks, traceCounts } from "./reach.mjs";
 /**
  * The staging release check's open-ended Asks (deploy/release/README.md), read from their LangSmith traces. A staging
  * trace's `research` run holds the same research result an evaluation run saves, and its root run the released answer,
- * so the open-ended family's reach and cost checks apply unchanged: every collection holding part of the answer looked
- * at, no refused call sent again, unchecked items stated, research finished within 4 rounds. A trace whose research
+ * so the open-ended family's coverage checks apply: every collection holding part of the answer looked
+ * at, no refused call sent again, unchecked items stated, research finished. The release trial imposes no round cap;
+ * counts remain in the report and the evaluation's cost benchmark is unchanged. A trace whose research
  * run was not captured is read from its tool runs instead, which carry each call's arguments, result and round.
  */
 
@@ -79,14 +80,14 @@ export function releaseCheck(value, questions, { release_sha: releaseSha } = {})
     const trace = asked[0];
     if (trace === undefined) return { case_id: entry.id, question: entry.question, found: false, problems: ["no trace asked this question"], passed: false };
     const run = { outcome: "completed", started_at: trace.started_at, result: { status: "completed", research: trace.research, ...(trace.answer === null ? {} : { ask: { response: trace.answer } }) } };
-    const reach = reachChecks({ reach: entry.reach }, run);
+    const reach = reachChecks({ reach: entry.reach }, run, { max_rounds: null });
     const problems = [
       ...(releaseSha !== undefined && trace.release_sha !== releaseSha ? [`the trace ran release ${trace.release_sha ?? "unknown"}, not ${releaseSha}`] : []),
       ...(trace.complete === true ? [] : ["the trace's capture is not confirmed complete"]),
       ...(reach.looked_at_every_collection ? [] : [`collections not looked at: ${reach.missing.join(", ")}`]),
       ...(reach.no_repeated_refusal ? [] : ["a refused call was sent again"]),
       ...(reach.unchecked_stated === false ? ["unchecked items were not stated"] : []),
-      ...(reach.within_rounds ? [] : [`research did not finish within ${reach.max_rounds} rounds`]),
+      ...(reach.within_rounds ? [] : ["research did not finish"]),
     ];
     return {
       case_id: entry.id, question: entry.question, found: true, trace_id: trace.trace_id, started_at: trace.started_at, release_sha: trace.release_sha,

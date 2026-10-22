@@ -306,6 +306,33 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   const FIT = "Some evidence could not fit in this response.";
   const LEG = "The list of tickets could not be read to its end, so more may exist.";
   const visibility = (...expected: readonly (readonly [string, string])[]) => (rendered: Rendered) => expect(rendered.result.response.citations.map(value => [value.kind, value.visibility])).toEqual(expected);
+  it("gives the writer final list coverage instead of superseded page truncation", async () => {
+    const complete = list("L1", ids(1, 4));
+    const incomplete = list("L2", ids(5, 4), { filter: { status: "open" }, filter_applied: { status: "applied" }, ended: false });
+    const research = listBundle(8, 0, [complete, incomplete], [WI(["L1", "L2"])]);
+    const failed = { tool: "list", source: "pages", returned_items: 0, truncated: false, notice: false, unavailable: true };
+    const limitedOpen = { tool: "open", source: "tickets", returned_items: 1, truncated: true, notice: true, unavailable: false };
+    const run = alone({
+      bundle: { ...research, coverage: { reads: [
+        { tool: "list", source: "tickets", returned_items: 2, truncated: true, notice: false, unavailable: false },
+        { tool: "list", source: "tickets", returned_items: 2, truncated: false, notice: false, unavailable: false },
+        failed, limitedOpen,
+      ], inventories: [], notices: ["A ticket body was incomplete."] } },
+      version: 8, replies: [use({ id: "L1" }, { id: "L2" })],
+    });
+    await run.render("Which tickets are open?");
+    const coverage = run.prompt(0).research;
+    expect(coverage.reads).toEqual([
+      failed, limitedOpen,
+      expect.objectContaining({ tool: "list", list: "L1", source: "tickets", filter: complete.filter, returned_items: 4, complete: true, truncated: false, unavailable: false }),
+      expect.objectContaining({ tool: "list", list: "L2", source: "tickets", filter: incomplete.filter, returned_items: 4, complete: false, truncated: false, unavailable: false }),
+    ]);
+    expect(coverage.notices).toEqual(["A ticket body was incomplete."]);
+    expect(run.prompt(0).lists).toEqual([
+      expect.objectContaining({ id: "L1", count: 4, complete: true }),
+      expect.objectContaining({ id: "L2", count: 4, complete: false }),
+    ]);
+  });
   it("removes repeats before the statement bound and keeps coverage for the last retained detail", async () => {
     const research = listBundle(1, 9, [list("L1", ["E1"])], [WI(["L1"])]);
     const run = alone({
