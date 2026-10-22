@@ -216,8 +216,10 @@ export function Home({ state }: { state: State }) {
   }
   const waiting = rows.filter(row => row.kind !== 'checking').length;
   const names = itemNames(rows.flatMap(row => ('item' in row ? [row.item] : [])));
+  // Home no longer repeats the meeting beneath every title. Use the qualified
+  // name when titles collide, so actions from different meetings stay distinct.
   const shown = (row: NeedRow) => ('item' in row
-    ? <ItemRow key={row.item.item_id} state={state} row={row} label={names.get(row.item.item_id)!.label} />
+    ? <ItemRow key={row.item.item_id} state={state} row={row} label={names.get(row.item.item_id)!.name} />
     : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />);
   const groups = homeGroups(rows, open);
   return (

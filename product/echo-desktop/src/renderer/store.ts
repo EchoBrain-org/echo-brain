@@ -732,6 +732,7 @@ export async function signInAgain(): Promise<void> {
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
 function forgetAccount(): void {
+  askedQuestions = [];
   // Cleanup belongs to the previous account, even after status has changed. The host may refuse it once that session
   // is gone; never try an old request or connection with the newly signed-in account's authority.
   const account = lastAccount;
@@ -3851,7 +3852,8 @@ export function chipName(current: State = state): string | null {
 
 /**
  * The questions asked in this window, oldest first, each with its account and
- * scope: kept in memory only, never stored, so they go when the app quits.
+ * scope: kept in memory only, never stored. Forgetting the account or quitting
+ * the app clears them; an ordinary session refresh keeps them.
  */
 let askedQuestions: { account: string; scope: AskScope; question: string }[] = [];
 /** Enough to suggest from, never a history. */
