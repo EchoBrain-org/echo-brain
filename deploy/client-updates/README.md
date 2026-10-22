@@ -46,6 +46,7 @@ npm run client-update:staging -- plan --hosting s3 \
 Planning creates a CloudFormation change set and captures its exact template
 digest, resource inventory, source commit, and change-set ARN in a mode-0600
 receipt. It provisions no bucket. Review that named change set before execution.
+S3 is the default and the only supported lane for new plans and execution.
 Planning may use a committed feature branch; execution
 requires that exact source to be merged into fetched `origin/main`.
 If the result is `planning`, repeat `plan --hosting s3` with the same output path
@@ -74,6 +75,9 @@ The original `staging-feed-v1.template.json` operation
 resources; the tool can still inspect its receipt. Preserve that stack, bucket,
 and receipt unchanged: do not delete or reuse them, reset the receipt, or retry
 an uncertain execution. Its approval does not cover the S3-only stack.
+`plan --hosting cloudfront` and `execute` with a CloudFront receipt refuse with
+`hosting_retired`; use `status --receipt <existing-receipt>` for inspection.
+Status returns its observation without rewriting the archived receipt.
 
 ## Sign and publish the first release
 

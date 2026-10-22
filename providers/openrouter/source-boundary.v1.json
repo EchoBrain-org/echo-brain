@@ -22,7 +22,6 @@
     "@echo-brain/federation-protocol"
   ],
   "allowed_external_packages": [
-    "better-sqlite3",
     "@anthropic-ai/claude-agent-sdk",
     "zod"
   ],
@@ -53,7 +52,6 @@
         "@echo-brain/federation-protocol"
       ],
       "allowed_external_packages": [
-        "better-sqlite3",
         "@anthropic-ai/claude-agent-sdk",
         "zod"
       ],

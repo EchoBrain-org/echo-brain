@@ -156,13 +156,12 @@ function stableOutputs(lane, stack) {
   return { bucket_name: bucket, distribution_id: distribution, feed_url: url.href };
 }
 
-function expectedChanges(lane, changes, action) {
+function expectedChanges(lane, changes) {
   const actual = (changes ?? []).map(change => [change?.ResourceChange?.LogicalResourceId, change?.ResourceChange?.ResourceType, change?.ResourceChange?.Action]);
-  const wantedAction = action === 'CREATE' ? 'Add' : undefined;
   if (actual.length !== lane.expected.length || new Set(actual.map(item => item[0])).size !== lane.expected.length) fail('change_set_boundary_violation');
   for (const [logicalId, type] of lane.expected) {
     const entry = actual.find(item => item[0] === logicalId);
-    if (!entry || entry[1] !== type || (wantedAction && entry[2] !== wantedAction) || (!wantedAction && !['Add', 'Modify'].includes(entry[2]))) fail('change_set_boundary_violation');
+    if (!entry || entry[1] !== type || entry[2] !== 'Add') fail('change_set_boundary_violation');
   }
   return actual.map(([logical_id, resource_type, action_name]) => ({ logical_id, resource_type, action: action_name })).sort((a, b) => a.logical_id.localeCompare(b.logical_id));
 }
@@ -188,7 +187,7 @@ function readChangeSet(lane, name, aws) {
   if (described?.Status === 'NOT_FOUND') return null;
   if (['CREATE_PENDING', 'CREATE_IN_PROGRESS'].includes(described?.Status)) return { pending: true };
   if (described?.Status !== 'CREATE_COMPLETE' || typeof described.ChangeSetId !== 'string' || !lane.changeSet.test(described.ChangeSetId) || described.StackName !== lane.stack || typeof described.StackId !== 'string' || !lane.stackId.test(described.StackId)) fail('change_set_not_reviewable');
-  return { id: described.ChangeSetId, stack_id: described.StackId, inventory: expectedChanges(lane, described.Changes, 'CREATE') };
+  return { id: described.ChangeSetId, stack_id: described.StackId, inventory: expectedChanges(lane, described.Changes) };
 }
 
 function readReceipt(path) {
@@ -216,7 +215,7 @@ function readReceipt(path) {
 function describeBoundChangeSet(lane, receipt, aws) {
   account(aws);
   const value = aws(['cloudformation', 'describe-change-set', '--stack-name', lane.stack, '--change-set-name', receipt.change_set_id]);
-  if (value?.ChangeSetId !== receipt.change_set_id || value?.StackName !== lane.stack || value?.StackId !== receipt.stack_id || value?.Status !== 'CREATE_COMPLETE' || expectedChanges(lane, value.Changes, receipt.change_set_type).some((item, index) => canonical(item) !== canonical(receipt.inventory[index]))) fail('change_set_changed');
+  if (value?.ChangeSetId !== receipt.change_set_id || value?.StackName !== lane.stack || value?.StackId !== receipt.stack_id || value?.Status !== 'CREATE_COMPLETE' || expectedChanges(lane, value.Changes).some((item, index) => canonical(item) !== canonical(receipt.inventory[index]))) fail('change_set_changed');
   return value;
 }
 
@@ -239,8 +238,10 @@ function summary(receipt) {
   return { schema_version: 1, kind: receipt.kind, operation_id: receipt.operation_id, state: receipt.state, change_set_id: receipt.change_set_id, feed_url: receipt.outputs?.feed_url ?? null };
 }
 
-export function planClientUpdateStaging({ output, hosting = 'cloudfront' }, dependencies = {}) {
+export function planClientUpdateStaging({ output, hosting = 's3' }, dependencies = {}) {
   const lane = hostingLane(hosting);
+  // The rolled-back CloudFront operation is retained for receipt inspection only.
+  if (lane.name !== 's3') fail('hosting_retired');
   const runtime = dependencies.runtime ?? planningRuntime;
   const aws = dependencies.aws ?? defaultAws;
   const awsNoOutput = dependencies.awsNoOutput ?? defaultAwsNoOutput;
@@ -287,6 +288,7 @@ export function executeClientUpdateStaging({ receipt: receiptPath, approveChange
   return withLock(path, () => {
     const receipt = readReceipt(path);
     const lane = receiptLane(receipt);
+    if (lane.name !== 's3') fail('hosting_retired');
     if (approveChangeSet !== receipt.change_set_id) fail('exact_change_set_approval_required');
     if (receipt.state === 'succeeded') return summary(receipt);
     if (receipt.state === 'unconfirmed') fail('operation_unconfirmed');
@@ -307,15 +309,18 @@ export function executeClientUpdateStaging({ receipt: receiptPath, approveChange
 
 function statusReceipt(path, receipt, aws) {
   const lane = receiptLane(receipt);
+  // Archived CloudFront receipts remain immutable; return fresh observations
+  // without rewriting the evidence of that retired operation.
+  const saveStatus = () => { if (lane.name === 's3') save(path, receipt); };
   account(aws);
   let stack;
-  try { stack = stackDescription(lane, aws); } catch { receipt.state = 'unconfirmed'; save(path, receipt); return summary(receipt); }
-  if (!stack) { receipt.state = 'unconfirmed'; save(path, receipt); return summary(receipt); }
+  try { stack = stackDescription(lane, aws); } catch { receipt.state = 'unconfirmed'; saveStatus(); return summary(receipt); }
+  if (!stack) { receipt.state = 'unconfirmed'; saveStatus(); return summary(receipt); }
   if (['CREATE_IN_PROGRESS', 'UPDATE_IN_PROGRESS', 'REVIEW_IN_PROGRESS'].includes(stack.StackStatus)) return summary(receipt);
-  if (stack.StackId !== receipt.stack_id) { receipt.state = 'unconfirmed'; save(path, receipt); return summary(receipt); }
-  if (!['CREATE_COMPLETE', 'UPDATE_COMPLETE'].includes(stack.StackStatus)) { receipt.state = 'unconfirmed'; save(path, receipt); return summary(receipt); }
-  try { receipt.outputs = stableOutputs(lane, stack); receipt.state = 'succeeded'; save(path, receipt); }
-  catch { receipt.state = 'unconfirmed'; save(path, receipt); }
+  if (stack.StackId !== receipt.stack_id) { receipt.state = 'unconfirmed'; saveStatus(); return summary(receipt); }
+  if (!['CREATE_COMPLETE', 'UPDATE_COMPLETE'].includes(stack.StackStatus)) { receipt.state = 'unconfirmed'; saveStatus(); return summary(receipt); }
+  try { receipt.outputs = stableOutputs(lane, stack); receipt.state = 'succeeded'; saveStatus(); }
+  catch { receipt.state = 'unconfirmed'; saveStatus(); }
   return summary(receipt);
 }
 

@@ -367,8 +367,12 @@ export async function runOrganizationAuthorityServiceCli(
     // A failed or still-pending runtime open must not make staging look alive.
     journeyTelemetry.start();
     langSmith.start();
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       let closing: Promise<void> | undefined;
+      const detach = (): void => {
+        process.removeListener("SIGINT", close);
+        process.removeListener("SIGTERM", close);
+      };
       const close = (): void => {
         closing ??=
           stagingCanaryControl === undefined
@@ -379,7 +383,10 @@ export async function runOrganizationAuthorityServiceCli(
               ])
                 .then(() => undefined)
                 .finally(async () => { await langSmith?.close(); journeyTelemetry?.close(); });
-        void closing.finally(resolve);
+        void closing.then(
+          () => { detach(); resolve(); },
+          (error: unknown) => { detach(); reject(error); },
+        );
       };
       process.once("SIGINT", close);
       process.once("SIGTERM", close);

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,7 +22,7 @@ const expected = [
   ['FeedCachePolicy', 'AWS::CloudFront::CachePolicy'],
 ];
 
-function fixture(hosting: 'cloudfront' | 's3' = 'cloudfront') {
+function fixture(hosting: 'cloudfront' | 's3' = 's3') {
   const directory = mkdtempSync(join(tmpdir(), 'echo-client-update-staging-'));
   chmodSync(directory, 0o700);
   temporary.push(directory);
@@ -62,30 +63,47 @@ function fixture(hosting: 'cloudfront' | 's3' = 'cloudfront') {
   return { directory, receipt, calls, state, dependencies, overrideAws };
 }
 
+// Persist the historical shape directly: retired plans must never be recreated
+// through the current planner merely to make a receipt available for inspection.
+function archivedCloudFrontReceipt(receipt: string, state: 'planning' | 'planned' | 'executing' | 'unconfirmed' = 'planned') {
+  writeFileSync(receipt, JSON.stringify({
+    schema_version: 1, kind: 'echo-client-update-staging-feed-operation-v1', operation_id: UUID,
+    source_sha: COMMIT, template_sha256: createHash('sha256').update(TEMPLATE.toString('utf8').trim()).digest('hex'),
+    account: '904560150024', region: 'us-west-2', stack_name: 'echo-client-update-staging-v1',
+    change_set_name: `echo-client-update-staging-${UUID}`,
+    change_set_id: state === 'planning' ? null : CHANGE_SET,
+    stack_id: state === 'planning' ? null : STACK_ID,
+    change_set_type: state === 'planning' ? null : 'CREATE',
+    inventory: state === 'planning' ? null : expected.map(([logical_id, resource_type]) => ({ logical_id, resource_type, action: 'Add' }))
+      .sort((left, right) => left.logical_id.localeCompare(right.logical_id)),
+    state, outputs: null,
+  }), { mode: 0o600 });
+}
+
 afterEach(() => { for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('client update staging feed operator', () => {
-  it('plans only the five dedicated resources and requires the exact approved change set before execution', () => {
+  it('plans only the two dedicated S3 resources by default and requires the exact approved change set before execution', () => {
     const f = fixture();
     const planned = planClientUpdateStaging({ output: f.receipt }, f.dependencies);
-    expect(planned).toMatchObject({ state: 'planned', change_set_id: CHANGE_SET, feed_url: null });
+    expect(planned).toMatchObject({ state: 'planned', change_set_id: S3_CHANGE_SET, feed_url: null });
     expect(f.calls.some(args => args.includes('execute-change-set'))).toBe(false);
     expect(f.calls.flat().some(value => /^(s3api|iam|ssm|secretsmanager)$/.test(value))).toBe(false);
-    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: `${CHANGE_SET}x` }, f.dependencies)).toThrow('exact_change_set_approval_required');
+    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: `${S3_CHANGE_SET}x` }, f.dependencies)).toThrow('exact_change_set_approval_required');
     expect(f.state.executes).toBe(0);
-    expect(executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: CHANGE_SET }, f.dependencies).state).toBe('executing');
+    expect(executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies).state).toBe('executing');
     expect(f.state.executes).toBe(1);
-    expect(JSON.parse(readFileSync(f.receipt, 'utf8'))).toMatchObject({ source_sha: COMMIT, change_set_id: CHANGE_SET, state: 'executing' });
+    expect(JSON.parse(readFileSync(f.receipt, 'utf8'))).toMatchObject({ source_sha: COMMIT, change_set_id: S3_CHANGE_SET, state: 'executing' });
   });
 
   it('never repeats an uncertain execution and records only validated outputs after the stack completes', () => {
     const f = fixture();
     planClientUpdateStaging({ output: f.receipt }, f.dependencies);
-    executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: CHANGE_SET }, f.dependencies);
-    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: CHANGE_SET }, f.dependencies)).not.toThrow();
+    executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies);
+    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies)).not.toThrow();
     expect(f.state.executes).toBe(1);
     f.state.complete = true;
-    expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies)).toMatchObject({ state: 'succeeded', feed_url: 'https://d111111abcdef8.cloudfront.net/feed.json' });
+    expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies)).toMatchObject({ state: 'succeeded', feed_url: S3_FEED_URL });
     expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies).state).toBe('succeeded');
   });
 
@@ -95,14 +113,14 @@ describe('client update staging feed operator', () => {
     expect(planClientUpdateStaging({ output: f.receipt }, f.dependencies).state).toBe('planning');
     expect(f.state.creates).toBe(1);
     f.state.changeSetReady = true;
-    expect(planClientUpdateStaging({ output: f.receipt }, f.dependencies)).toMatchObject({ state: 'planned', change_set_id: CHANGE_SET });
+    expect(planClientUpdateStaging({ output: f.receipt }, f.dependencies)).toMatchObject({ state: 'planned', change_set_id: S3_CHANGE_SET });
     expect(f.state.creates).toBe(1);
   });
 
-  it.each(['cloudfront', 's3'] as const)('binds %s execution to the same source and canonical remote template as its plan', hosting => {
-    const f = fixture(hosting);
-    const approveChangeSet = hosting === 's3' ? S3_CHANGE_SET : CHANGE_SET;
-    planClientUpdateStaging({ output: f.receipt, hosting }, f.dependencies);
+  it('binds execution to the same source and canonical remote template as its plan', () => {
+    const f = fixture();
+    const approveChangeSet = S3_CHANGE_SET;
+    planClientUpdateStaging({ output: f.receipt }, f.dependencies);
     f.dependencies.runtime = () => 'b'.repeat(40);
     expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet }, f.dependencies)).toThrow('exact_reviewed_runtime_required');
     f.dependencies.runtime = () => COMMIT;
@@ -111,17 +129,17 @@ describe('client update staging feed operator', () => {
     expect(f.state.executes).toBe(0);
   });
 
-  it.each([['cloudfront', 'planning'], ['cloudfront', 'execution'], ['s3', 'planning'], ['s3', 'execution']] as const)('rejects %s resource injection during %s', (hosting, stage) => {
-    const f = fixture(hosting);
-    if (stage === 'execution') planClientUpdateStaging({ output: f.receipt, hosting }, f.dependencies);
+  it.each(['planning', 'execution'])('rejects resource injection during %s', stage => {
+    const f = fixture();
+    if (stage === 'execution') planClientUpdateStaging({ output: f.receipt }, f.dependencies);
     f.overrideAws((args, aws) => {
       const response = aws(args);
       if (args[1] === 'describe-change-set' && response.Changes) response.Changes.push({ ResourceChange: { LogicalResourceId: 'UnexpectedRole', ResourceType: 'AWS::IAM::Role', Action: 'Add' } });
       return response;
     });
     expect(() => stage === 'execution'
-      ? executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: hosting === 's3' ? S3_CHANGE_SET : CHANGE_SET }, f.dependencies)
-      : planClientUpdateStaging({ output: f.receipt, hosting }, f.dependencies)).toThrow('change_set_boundary_violation');
+      ? executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies)
+      : planClientUpdateStaging({ output: f.receipt }, f.dependencies)).toThrow('change_set_boundary_violation');
     expect(f.state.executes).toBe(0);
   });
 
@@ -140,8 +158,8 @@ describe('client update staging feed operator', () => {
     f.dependencies.awsNoOutput = (args: string[]) => {
       if (args[1] === 'execute-change-set') f.state.executes += 1;
     };
-    expect(executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: CHANGE_SET }, f.dependencies).state).toBe('unconfirmed');
-    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: CHANGE_SET }, f.dependencies)).toThrow('operation_unconfirmed');
+    expect(executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies).state).toBe('unconfirmed');
+    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies)).toThrow('operation_unconfirmed');
     expect(f.state.executes).toBe(1);
   });
 });
@@ -267,13 +285,13 @@ describe('direct S3 client update staging feed operator', () => {
   });
 
   it('never converts or overwrites an existing CloudFront receipt', () => {
-    const f = fixture();
-    f.state.changeSetReady = false;
-    planClientUpdateStaging({ output: f.receipt }, f.dependencies);
+    const f = fixture('cloudfront');
+    archivedCloudFrontReceipt(f.receipt, 'planning');
     const original = readFileSync(f.receipt);
     expect(() => planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies)).toThrow('receipt_destination_exists');
     expect(readFileSync(f.receipt)).toEqual(original);
-    expect(f.state.creates).toBe(1);
+    expect(f.calls).toEqual([]);
+    expect(f.state.creates).toBe(0);
   });
 
   it.each(['kind', 'stack_name', 'stack_id', 'change_set_name', 'change_set_id'])('rejects receipt %s from the other hosting lane', key => {
@@ -294,5 +312,61 @@ describe('direct S3 client update staging feed operator', () => {
     expect(() => planClientUpdateStaging({ output: f.receipt, hosting: 's3' }, f.dependencies)).toThrow('staging_feed_stack_already_exists');
     expect(f.state.creates).toBe(0);
     expect(f.state.executes).toBe(0);
+  });
+});
+
+describe('retired CloudFront staging lane', () => {
+  it('refuses explicit CloudFront planning before inspecting AWS or writing a receipt', () => {
+    const f = fixture('cloudfront');
+    f.dependencies.runtime = () => { throw new Error('runtime must not run'); };
+    // @ts-expect-error Retired hosting can still arrive through the CLI at runtime.
+    expect(() => planClientUpdateStaging({ output: f.receipt, hosting: 'cloudfront' }, f.dependencies)).toThrow('hosting_retired');
+    expect(f.calls).toEqual([]);
+    expect(existsSync(f.receipt)).toBe(false);
+  });
+
+  it.each(['planned', 'executing', 'unconfirmed'] as const)('refuses execution of an archived %s receipt without changing it', state => {
+    const f = fixture('cloudfront');
+    archivedCloudFrontReceipt(f.receipt, state);
+    const original = readFileSync(f.receipt);
+    f.dependencies.runtime = () => { throw new Error('runtime must not run'); };
+    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: CHANGE_SET }, f.dependencies)).toThrow('hosting_retired');
+    expect(f.calls).toEqual([]);
+    expect(readFileSync(f.receipt)).toEqual(original);
+  });
+
+  it('retains read-only inspection of an archived unfinished operation', () => {
+    const f = fixture('cloudfront');
+    archivedCloudFrontReceipt(f.receipt, 'executing');
+    const original = readFileSync(f.receipt);
+    f.state.stackExists = true;
+    f.state.complete = true;
+    expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies)).toMatchObject({
+      kind: 'echo-client-update-staging-feed-operation-v1', state: 'succeeded',
+      feed_url: 'https://d111111abcdef8.cloudfront.net/feed.json',
+    });
+    expect(f.calls.every(args => args[0] === 'sts' || args[1] === 'describe-stacks')).toBe(true);
+    expect(f.state.creates).toBe(0);
+    expect(f.state.executes).toBe(0);
+    expect(readFileSync(f.receipt)).toEqual(original);
+  });
+
+  it.each(['rolled-back', 'missing', 'unavailable', 'invalid-outputs'])('reports an archived %s observation without changing its receipt', observation => {
+    const f = fixture('cloudfront');
+    archivedCloudFrontReceipt(f.receipt, 'executing');
+    const original = readFileSync(f.receipt);
+    f.state.stackExists = observation !== 'missing';
+    f.state.complete = true;
+    f.overrideAws((args, aws) => {
+      if (args[1] !== 'describe-stacks') return aws(args);
+      if (observation === 'unavailable') throw new Error('aws_operation_unconfirmed');
+      const response = aws(args);
+      if (observation === 'rolled-back') response.Stacks[0].StackStatus = 'ROLLBACK_COMPLETE';
+      if (observation === 'invalid-outputs') response.Stacks[0].Outputs = [];
+      return response;
+    });
+    expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies).state).toBe('unconfirmed');
+    expect(readFileSync(f.receipt)).toEqual(original);
+    expect(f.calls.every(args => args[0] === 'sts' || args[1] === 'describe-stacks')).toBe(true);
   });
 });

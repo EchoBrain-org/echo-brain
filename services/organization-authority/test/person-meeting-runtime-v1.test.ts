@@ -2,7 +2,7 @@ import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persiste
 import { SqlitePersonOriginalItemsV1 } from '../src/adapters/persistence/sqlite/person-original-items-v1.js';
 import { createPersonListRouteV1 } from '../src/composition/person-list-v1-route.js';
 import { SqlitePersonListDirectoryV1 } from '../src/adapters/persistence/sqlite/person-list-directory-v1.js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,6 +39,8 @@ const folder = '00000000-0000-4000-8000-000000000002';
 const project = 'prj_00000000-0000-4000-8000-000000000003';
 const projectB = 'prj_00000000-0000-4000-8000-000000000013';
 const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
+const ledgers: SqliteExtractionAttemptStoreV1[] = [];
+afterEach(() => { for (const ledger of ledgers.splice(0)) ledger.close(); });
 /** `actions` adds that many unowned actions (act-2, act-3, …) to what the extractor finds. */
 async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string; readonly path?: string } = {}) {
   const f = await approvalContextFixture(options.path === undefined ? {} : { path: options.path });
@@ -55,6 +57,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   let active = true, extracted = 0, duringPull: (() => void | Promise<void>) | undefined, duringExtract: (() => void | Promise<void>) | undefined, failExtraction: unknown, edition = '', pulls = 0;
   // One durable attempt ledger per Authority, shared by every runtime the test creates.
   const ledger = new SqliteExtractionAttemptStoreV1(new Database(':memory:'), { authority_id: 'aut_runtime', organization_id: 'org_runtime', state_lineage_id: 'lineage-runtime' });
+  ledgers.push(ledger);
   // Meetings the watched folder delivers on its next scans after the baseline.
   const folderDeliveries: string[] = [];
   const current = () => { if (!active) throw new Error('Disconnected'); };
@@ -636,18 +639,21 @@ describe('personal meeting intake uses the shared processing path', () => {
       await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
       const [setting] = f.intake.list();
       let release!: () => void, targeted = false;
-      f.duringExtract(() => { f.duringExtract(undefined); return new Promise<void>(resolve => { release = resolve; }); });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      f.duringExtract(() => { f.duringExtract(undefined); return gate; });
       const periodic = runtime.processing.pollAndStageAdmittedMeetings(signal);
-      await vi.waitFor(() => expect(f.extracted()).toBe(1));
-      const pass = runtime.pollAndStageSource(setting!.source_key, signal).then(() => { targeted = true; });
-      await runtime.processing.pollAndStageAdmittedMeetings(signal);
-      // A waiter whose caller gives up leaves without registering a pass.
-      const stop = new AbortController(), abandoned = runtime.pollAndStageSource(setting!.source_key, stop.signal);
-      stop.abort(); await expect(abandoned).rejects.toThrow();
-      await new Promise(resolve => setTimeout(resolve, 20));
-      expect([f.pulls(), targeted]).toEqual([1, false]);
-      release(); await Promise.all([periodic, pass]);
-      expect([f.extracted(), f.pulls(), f.proposals(setting!.source_key), advances.mock.calls.length]).toEqual([1, 1, 1, 1]);
+      let pass: Promise<void> | undefined;
+      try {
+        await vi.waitFor(() => expect(f.extracted()).toBe(1));
+        pass = runtime.pollAndStageSource(setting!.source_key, signal).then(() => { targeted = true; });
+        await runtime.processing.pollAndStageAdmittedMeetings(signal);
+        // A waiter whose caller gives up leaves without registering a pass.
+        const stop = new AbortController(), abandoned = runtime.pollAndStageSource(setting!.source_key, stop.signal);
+        stop.abort(); await expect(abandoned).rejects.toThrow();
+        expect([f.pulls(), targeted]).toEqual([1, false]);
+        release(); await Promise.all([periodic, pass]);
+        expect([f.extracted(), f.pulls(), f.proposals(setting!.source_key), advances.mock.calls.length]).toEqual([1, 1, 1, 1]);
+      } finally { release(); await Promise.allSettled([periodic, pass]); }
     } finally { advances.mockRestore(); }
   });
   it('lets a second runtime on another handle find the extraction in flight: no error, park or cursor move', async () => {
@@ -659,17 +665,20 @@ describe('personal meeting intake uses the shared processing path', () => {
         const second = f.create(undefined, { database: handle });
         await f.call(first, { operation: 'import', meeting_id: id, project_id: null, retain: true });
         let release!: () => void;
-        f.duringExtract(() => { f.duringExtract(undefined); return new Promise<void>(resolve => { release = resolve; }); });
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        f.duringExtract(() => { f.duringExtract(undefined); return gate; });
         const running = first.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-        await vi.waitFor(() => expect(f.extracted()).toBe(1));
-        await second.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-        const [source] = (await f.call(second, { operation: 'home' })).sources;
-        expect([source!.error, source!.pending_imports, f.held(), f.extracted()]).toEqual([null, [id], [], 1]);
-        // The head in flight elsewhere backs its source off instead of being pulled again at once.
-        const pulls = f.pulls(); await second.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-        expect(f.pulls()).toBe(pulls);
-        release(); await running;
-        expect(f.proposals(source!.source_key)).toBe(1);
+        try {
+          await vi.waitFor(() => expect(f.extracted()).toBe(1));
+          await second.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+          const [source] = (await f.call(second, { operation: 'home' })).sources;
+          expect([source!.error, source!.pending_imports, f.held(), f.extracted()]).toEqual([null, [id], [], 1]);
+          // The head in flight elsewhere backs its source off instead of being pulled again at once.
+          const pulls = f.pulls(); await second.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+          expect(f.pulls()).toBe(pulls);
+          release(); await running;
+          expect(f.proposals(source!.source_key)).toBe(1);
+        } finally { release(); await Promise.allSettled([running]); }
       } finally { handle.close(); }
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
@@ -683,26 +692,32 @@ describe('personal meeting intake uses the shared processing path', () => {
     }
     let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
     f.duringExtract(() => gate);
-    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); }, () => { settles++; });
-    await vi.waitFor(() => expect(f.extracted()).toBe(2));
-    await new Promise(resolve => setTimeout(resolve, 20));
-    // Two sources extract at once; the failed lane's free slot never starts the owner's second import beside its first.
-    expect([f.extracted(), f.pulls(), failures, settles]).toEqual([2, 2, ['boom'], 1]);
-    release(); await runtime.processing.settle?.();
-    // The owner's lane topped up with its second import as it settled; every settled lane said so.
-    expect([f.extracted(), failures, settles]).toEqual([3, ['boom'], 4]);
+    try {
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, failure => { failures.push(failure); }, () => { settles++; });
+      await vi.waitFor(() => expect([f.extracted(), settles]).toEqual([2, 1]));
+      // Let the failed lane's queued top-up run while both successful extractions remain held.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      // Two sources extract at once; the failed lane's free slot never starts the owner's second import beside its first.
+      expect([f.extracted(), f.pulls(), failures, settles]).toEqual([2, 2, ['boom'], 1]);
+      release(); await runtime.processing.settle?.();
+      // The owner's lane topped up with its second import as it settled; every settled lane said so.
+      expect([f.extracted(), failures, settles]).toEqual([3, ['boom'], 4]);
+    } finally { release(); await runtime.processing.settle?.(true); }
   });
   it('starts no more passes than the lane count and tops up as one settles', async () => {
     const f = await fixture(), runtime = f.create(undefined, { meeting_lanes: 2 });
     for (const token of ['owner', 'other', 'reader-a']) await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true }, token);
     let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
     f.duringExtract(() => gate);
-    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
-    await vi.waitFor(() => expect(f.extracted()).toBe(2));
-    await new Promise(resolve => setTimeout(resolve, 20));
-    expect([f.extracted(), f.pulls()]).toEqual([2, 2]);
-    release(); await runtime.processing.settle?.();
-    expect(f.extracted()).toBe(3);
+    try {
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
+      await vi.waitFor(() => expect(f.extracted()).toBe(2));
+      // Another poll cannot fill an occupied lane while its extraction is held.
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal, () => undefined);
+      expect([f.extracted(), f.pulls()]).toEqual([2, 2]);
+      release(); await runtime.processing.settle?.();
+      expect(f.extracted()).toBe(3);
+    } finally { release(); await runtime.processing.settle?.(true); }
   });
   it('starts no lane once shutdown has asked it to stop', async () => {
     const f = await fixture(), runtime = f.create();

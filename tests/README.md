@@ -39,5 +39,8 @@ separately, as CI does:
   Electron end-to-end tests. It needs `npm ci` in that directory, the Person
   client built at the root (`node tools/build.mjs --person-client`) and a
   graphical session; CI uses Xvfb on Linux.
-- `npm run test:capacity` runs `tools/evals/authority-core/test/`,
-  and `npm run test:research-loop-eval` runs `tools/evals/research-loop/test/`.
+- `npm run test:capacity` runs `tools/evals/authority-core/test/`.
+- `npm run test:research-loop-eval` runs `tools/evals/research-loop/test/`.
+- `npm run test:agentic-ask-eval` runs `tools/evals/agentic-ask/test/` with a
+  stubbed transport. It makes no model requests and needs no real credentials.
+  These deterministic evaluator suites all run in CI's `check (tail)` leg.

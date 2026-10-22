@@ -66,6 +66,8 @@ interface BoundaryManifest {
 interface PackageManifest {
   name: string;
   dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
   files?: string[];
   exports?: Record<string, unknown>;
 }
@@ -439,7 +441,42 @@ describe("workspace source boundaries", () => {
       "@echo-brain/provider-jira-client": [
         "@echo-brain/organization-api"
       ]
-    });;
+    });
+  });
+
+  describe("declared workspace dependency direction", () => {
+    const neutral = "packages/federation-protocol";
+    const provider = "providers/openrouter";
+    const service = "services/organization-authority";
+    const person = "src/product/person-client";
+    const dependencies = [
+      ["dependencies", neutral, "packages/organization-record", "workspace dependency cycle:"],
+      ["dependencies", neutral, provider, `neutral module reaches provider: ${neutral}/package.json -> ${provider}/package.json`],
+      ["peerDependencies", provider, service, `provider imports the composing service: ${provider}/package.json -> ${service}/package.json`],
+      ["optionalDependencies", provider, person, `provider imports the composing application: ${provider}/package.json -> ${person}/package.json`],
+    ] as const;
+    let result: BoundaryResult;
+    beforeAll(() => {
+      const fixture = fixtureRepository();
+      for (const [field, from, to] of dependencies) {
+        const target = readFixtureJson<{ name: string; version: string }>(fixture, `${to}/package.json`);
+        const packagePath = `${from}/package.json`;
+        const pkg = readFixtureJson<PackageManifest>(fixture, packagePath);
+        pkg[field] = { ...pkg[field], [target.name]: target.version };
+        writeFixtureJson(fixture, packagePath, pkg);
+        const manifestPath = `${from}/source-boundary.v1.json`;
+        const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+        manifest.allowed_workspace_packages.push(target.name);
+        writeFixtureJson(fixture, manifestPath, manifest);
+      }
+      result = runBoundary(fixture);
+    });
+
+    it.each(dependencies)("rejects unused %s from %s to %s", (_field, _from, _to, failure) => {
+      expect(result.status).not.toBe(0);
+      const report = JSON.parse(result.stdout) as { errors: string[] };
+      expect(report.errors.join("\n"), result.stderr).toContain(failure);
+    });
   });
 
   it("keeps the Authority container closed over its workspace build and runtime dependencies", () => {

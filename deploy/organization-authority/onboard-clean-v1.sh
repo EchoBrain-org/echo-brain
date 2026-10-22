@@ -846,11 +846,6 @@ private_source() {
   [[ -f "$path" && ! -L "$path" ]] || fail "$label must be a regular, non-symlink file"
 }
 
-no_newline_value() {
-  local value="$1" label="$2"
-  [[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || fail "$label must be one non-empty line"
-}
-
 select_runtime_identity() {
   local runtime_user="$1"
   [[ "$runtime_user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || \
@@ -897,23 +892,6 @@ copy_exact_private() {
   if [[ "$ownership" == runtime ]]; then
     own_for_runtime "$destination"
   fi
-}
-
-write_exact_private() {
-  local destination="$1" value="$2" label="$3" temporary
-  temporary="$(mktemp "$PRIVATE_DIR/.${label}.XXXXXX")"
-  chmod 0600 "$temporary"
-  printf '%s' "$value" > "$temporary"
-  own_for_runtime "$temporary"
-  if [[ -e "$destination" ]]; then
-    [[ -f "$destination" && ! -L "$destination" ]] || fail "existing $label destination is unsafe"
-    cmp -s "$temporary" "$destination" || fail "$label conflicts with the existing clean onboarding input"
-    chmod 0600 "$destination"
-    own_for_runtime "$destination"
-    rm -f "$temporary"
-    return
-  fi
-  mv "$temporary" "$destination"
 }
 
 write_exact_file() {
@@ -972,14 +950,6 @@ environment_value() {
   value="$(sed -n "s/^${key}=//p" "$file")"
   [[ -n "$value" ]] || return 1
   printf '%s\n' "$value"
-}
-
-accepted_runtime_profile_path() {
-  printf '%s/%s.profile\n' "$RUNTIME_PROFILES_DIR" "$(release_field release-id)"
-}
-
-accepted_runtime_environment_path() {
-  printf '%s/%s.env\n' "$RUNTIME_ENVIRONMENTS_DIR" "$(release_field release-id)"
 }
 
 runtime_profile_files_match_deployment() {

@@ -54,6 +54,8 @@ export const JOB_INPUTS = Object.freeze({
   desktop_app: Object.freeze([
     ...SHARED_INPUTS,
     'product/echo-desktop/',
+    'deploy/release/release-artifact-validation.mjs',
+    'tools/clean-v1-release.mjs',
     'tools/ci-runner-info.mjs',
     'tests/fixtures/project-context-v1/',
   ]),
@@ -70,6 +72,8 @@ export const JOB_INPUTS = Object.freeze({
     'tests/person-client/client-update.test.ts',
     'tests/support/clean-v1-release.ts',
     'tests/support/test-canonical-json.ts',
+    'tests/support/isolated-home.ts',
+    'tests/support/isolated-home-global-setup.ts',
     'vitest.config.ts',
     'tsconfig.json',
   ]),

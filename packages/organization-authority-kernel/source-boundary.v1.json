@@ -34,8 +34,7 @@
     "crypto",
     "fs",
     "path",
-    "buffer",
-    "util"
+    "buffer"
   ],
   "runtime_assets": [
     "packages/organization-authority-kernel/baselines/authority-baseline-v14.sql"
@@ -154,8 +153,7 @@
       "allowed_node_builtins": [
         "crypto",
         "fs",
-        "path",
-        "util"
+        "path"
       ]
     }
   ],
