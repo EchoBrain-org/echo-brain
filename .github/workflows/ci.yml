@@ -112,6 +112,9 @@ jobs:
       - name: Verify the research-loop evaluator
         if: matrix.leg == 'tail'
         run: npm run test:research-loop-eval
+      - name: Verify the synthetic Ask evaluator
+        if: matrix.leg == 'tail'
+        run: npm run test:agentic-ask-eval
       - name: Verify the Authority core evaluation components
         if: matrix.leg == 'tail'
         run: npm run test:capacity

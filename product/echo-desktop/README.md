@@ -4,6 +4,11 @@ The app shares its TypeScript client, host, renderer and Electron main process
 across macOS and Linux. Packages currently target macOS arm64 and Linux x64.
 Windows packaging is not implemented.
 
+The window follows the system's light or dark appearance: one theme, Signal,
+in `src/renderer/styles.css`, whose single signal colour marks only what needs
+you. Its type, Geist and Geist Mono (SIL Open Font License 1.1), comes from npm
+and the build copies it into `build/renderer/fonts`.
+
 Global Ask includes live Jira and Confluence reads through the person's
 connected accounts, with citations that open directly in Jira or Confluence.
 Project Ask includes them only through the project's saved Jira project and

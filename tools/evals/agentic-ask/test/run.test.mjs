@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { routeDiagnosticAdapter } from "../run.mjs";
 
-test("route diagnosis sends the production request to the requested host alone, even a host production ignores", async () => {
-  const credentialFile = join(mkdtempSync(join(tmpdir(), "echo-agentic-ask-route-")), "openrouter-key");
+test("route diagnosis sends the production request to the requested host alone, even a host production ignores", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "echo-agentic-ask-route-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const credentialFile = join(root, "openrouter-key");
   writeFileSync(credentialFile, `sk-or-v1-${"0".repeat(64)}`, { mode: 0o600 });
   const sent = [];
   const upstream = async (_url, init) => { sent.push(JSON.parse(String(init.body)).provider); return new Response("{}", { status: 503 }); };

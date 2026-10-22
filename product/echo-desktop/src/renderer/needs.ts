@@ -1,5 +1,5 @@
 import type {
-  PersonImpactStageV1, PersonOpenItemDecisionV1, PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1, PersonOpenItemVerdictV1,
+  PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1, PersonOpenItemVerdictV1,
 } from '@echo-brain/organization-api';
 import type { ConnectedTool, HomeView, OpenItemView } from '../shared/protocol.js';
 import { externalSourceProvider } from './answer.js';
@@ -51,11 +51,6 @@ export function shortNames(names: readonly string[]): string[] {
 /** A person's first name ("Mina"), or the whole name when its first word is an initial ("S. Okafor"). */
 export function firstName(name: string): string {
   return shortNames([name])[0] ?? name;
-}
-
-/** A phrase made to start a line: "Says …", "Due Oct 30", "Decision needs: …". */
-function capitalized(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** What an item is, when its title is not shown. */
@@ -133,12 +128,17 @@ export function itemNames(items: readonly OpenItemView[]): ReadonlyMap<string, {
 /** Longest quote of what an item says that a row shows. */
 const QUOTE_CHARS = 80;
 
-/** What an item says now, in a few words: "due Oct 30", else its status, else what its text says. Nothing when you cannot open it. */
-function liveDetails(item: OpenItemView): string | null {
+/**
+ * What an item says now, as its tool gave it to you just now: its status and
+ * due date, "Now: In Review, due Nov 20"; without either, its own words, 'Now:
+ * “starts after freeze”'. Nothing when ECHO did not open it for you.
+ */
+function nowWords(item: OpenItemView): string | null {
   const current = item.current;
   if (!current) return null;
-  if (current.due_at !== undefined) return `due ${monthDay(current.due_at) ?? current.due_at}`;
-  return current.status ?? `says "${clip(current.says_now, QUOTE_CHARS)}"`;
+  const facts = [current.status ?? null, current.due_at === undefined ? null : `due ${monthDay(current.due_at) ?? current.due_at}`]
+    .filter((fact): fact is string => fact !== null);
+  return `Now: ${facts.length > 0 ? facts.join(', ') : `“${clip(current.says_now, QUOTE_CHARS)}”`}`;
 }
 
 /** What kind of thing an item is, named by its tool once you can open it: "Jira ticket", "Confluence page", "Meeting action". */
@@ -154,47 +154,27 @@ export function itemKind(item: OpenItemView, tools?: readonly ConnectedTool[] | 
   }
 }
 
-/**
- * A meeting as a follow-up names it: "Pilot planning meeting, approved Oct
- * 6". Every meeting with follow-ups is one someone approved, named as its
- * Approve row named it.
- */
-function approvedMeeting(decision: Pick<PersonOpenItemDecisionV1, 'title' | 'approved_at'>): string {
-  const day = monthDay(decision.approved_at);
-  return `${decision.title}${meetingSuffix(decision.title)}${day === null ? '' : `, approved ${day}`}`;
-}
-
 /** " meeting" after a meeting's title, unless the title already ends with it ("Approved meeting"; R76). */
 export function meetingSuffix(title: string): string {
   return /meeting$/iu.test(title.trimEnd()) ? '' : ' meeting';
 }
 
-/** Where an item came from: its meeting when you can read it, else who sent it ("sent by Mina"). */
-function whereFrom(item: OpenItemView): string {
-  return item.decision ? approvedMeeting(item.decision) : `sent by ${firstName(item.approver.name)}`;
-}
-
 /**
- * A document's second line on Home: what it says now, then what the meeting
- * needs: 'Says "starts after freeze" → decision needs: pilot starts next
- * week'. What it says now only when ECHO opened it for you; parts that are
- * missing are left out. Nothing for a meeting's action: its title says it.
+ * A Home row's second line, in plain words: what the meeting needs of it,
+ * what it says now when ECHO opened it for you, and whose it is when it is
+ * not yours. "Needs: qualified before DVT-R2 starts Nov 2 · Now: In Review,
+ * due Nov 20 · Mina's to update". An action's title is already what the
+ * meeting needs. Where it came from is on its page; with nothing else to say,
+ * the row says what it is ("Meeting action").
  */
-export function itemNeeds(item: OpenItemView): string | null {
-  if (item.kind === 'action') return null;
-  const parts = [liveDetails(item), item.expected === null ? null : `decision needs: ${item.expected}`].filter((part): part is string => part !== null);
-  return parts.length === 0 ? null : capitalized(parts.join(' → '));
-}
-
-/**
- * A Home row's muted line: what the item is, where it came from, and whose it
- * is when it is not yours. "Confluence page · Pilot planning meeting,
- * approved Oct 6"; "Jira ticket · Pilot planning meeting, approved Oct 6 ·
- * Mina's to update" on its approver's Review row.
- */
-export function itemWhy(item: OpenItemView, me: string | null, tools?: readonly ConnectedTool[] | null): string {
-  const owner = me === null || item.owner.membership_id === me;
-  return joined([itemKind(item, tools), whereFrom(item), owner ? null : `${firstName(item.owner.name)}'s to update`]);
+export function itemLine(item: OpenItemView, me: string | null, tools?: readonly ConnectedTool[] | null): string {
+  const mine = me === null || item.owner.membership_id === me;
+  const line = joined([
+    item.kind === 'action' || item.expected === null ? null : `Needs: ${item.expected}`,
+    nowWords(item),
+    mine ? null : `${firstName(item.owner.name)}'s to update`,
+  ]);
+  return line === '' ? itemKind(item, tools) : line;
 }
 
 /** What an item says now on its page, as its tool gave it to you just now ('“Planned for the end of the month.”'); else why it is not shown. */
@@ -298,6 +278,28 @@ export function stateCounts(counts: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'o
 }
 
 /**
+ * How far follow-ups have come, as a meeting's list and a project's line show
+ * it: of every one not dismissed, those sent (open or done) and those done.
+ */
+export interface FollowUpProgress {
+  readonly total: number;
+  readonly sent: number;
+  readonly unsent: number;
+  readonly open: number;
+  readonly done: number;
+}
+
+/** A summary's progress. Dismissed follow-ups count in none of it. */
+export function followUpProgress(counts: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'open' | 'done'>): FollowUpProgress {
+  return { total: counts.unsent + counts.open + counts.done, sent: counts.open + counts.done, unsent: counts.unsent, open: counts.open, done: counts.done };
+}
+
+/** "1 of 4 sent · 0 done": a meeting's follow-ups under its title. */
+export function progressWords(progress: FollowUpProgress): string {
+  return `${progress.sent} of ${progress.total} sent · ${progress.done} done`;
+}
+
+/**
  * The words after "Follow-ups" on an approved meeting: its follow-ups by
  * status ("1 open · 4 not sent"); with none, how its check stands: "Not
  * checked yet", "Checking…", "Check failed", or "None".
@@ -329,15 +331,16 @@ function checkedAgo(iso: string, now = Date.now()): string {
 }
 
 /**
- * Home's footer (F9): "2 waiting on others · ECHO checked 2 h ago": open
- * items you sent that wait on someone else, and when ECHO last checked one of
- * yours. Zero counts are left out; null when nothing is left.
+ * Home's footer (F9), as its two parts: its link, "2 waiting on others" (open
+ * items you sent that wait on someone else) while any do, else "Follow-ups",
+ * also before Home is read; and when ECHO last checked one of yours, "ECHO
+ * checked 2 h ago", or null. Never what matches.
  */
-export function homeFooter(open: Pick<HomeView, 'waiting' | 'last_checked_at'>, now = Date.now()): string | null {
-  const words = joined([
-    open.waiting > 0 ? `${open.waiting} waiting on others` : null, open.last_checked_at === null ? null : `ECHO checked ${checkedAgo(open.last_checked_at, now)}`,
-  ]);
-  return words === '' ? null : words;
+export function homeFooter(open: Pick<HomeView, 'waiting' | 'last_checked_at'> | null, now = Date.now()): { link: string; checked: string | null } {
+  return {
+    link: open !== null && open.waiting > 0 ? `${open.waiting} waiting on others` : 'Follow-ups',
+    checked: open === null || open.last_checked_at === null ? null : `ECHO checked ${checkedAgo(open.last_checked_at, now)}`,
+  };
 }
 
 /** One event of a follow-up's history. */

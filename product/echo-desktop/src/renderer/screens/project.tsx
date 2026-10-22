@@ -1,11 +1,12 @@
 import type { ListItem, ProjectSummary } from '../../shared/protocol.js';
-import { colorFor, initials } from '../format.js';
+import { identity, initials } from '../format.js';
 import { message } from '../messages.js';
-import { activeTotal, followUpCount, stateCounts } from '../needs.js';
+import { activeTotal, followUpCount, followUpProgress, stateCounts } from '../needs.js';
 import { moreList, openCompose, openFollowUps, openListItem, openPeople, openProject, openProjectTools, readsWords, retryList, type State } from '../store.js';
 import { People, Plug, Plus } from './icons.js';
 import { FollowUpsLabel } from './impact-card.js';
 import { ItemRow, useKeptPlace } from './items.js';
+import { ProgressBar } from './progress-bar.js';
 
 /**
  * What the project reads from its tools, above its feed: Set up tools for a
@@ -40,9 +41,10 @@ function ToolsLine({ state, project }: { state: State; project: ProjectSummary }
  * A project's one list: its notes, documents and approved meetings, newest
  * first, one line each, and one More for older ones. Choosing a row reads it
  * in place. Above it, the project's follow-ups counted by status as a
- * meeting's are ("Follow-ups · 1 open · 3 not sent", canvas 9.7): the line
- * opens the project's follow-ups, and each meeting's row says how many of its
- * follow-ups are not closed ("4 follow-ups").
+ * meeting's are ("Follow-ups · 1 open · 3 not sent", canvas 9.7), with how far
+ * they have come in a thin bar under the words: the line opens the project's
+ * follow-ups, and each meeting's row says how many of its follow-ups are not
+ * closed ("4 follow-ups").
  */
 export function Project({ state, project }: { state: State; project: ProjectSummary }) {
   const list = state.list?.scope.kind === 'project' && state.list.scope.project_id === project.project_id ? state.list : null;
@@ -86,6 +88,7 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
       {words && (
         <div class="items-line project-line" data-testid="project-line">
           <FollowUpsLabel words={words} open={() => void openFollowUps('project', project.project_id, project.name)} class="items-line-open" />
+          {line?.summary && <ProgressBar progress={followUpProgress(line.summary)} />}
         </div>
       )}
       {items.map(item => (
@@ -112,7 +115,7 @@ export function MembersButton({ state }: { state: State }) {
   return (
     <button type="button" class="members-button" data-testid="members-button" aria-label="Project members" onClick={() => void openPeople()}>
       {shown.length === 0 ? <People /> : shown.map(person => (
-        <span key={person.membership_id} class="face" style={{ background: colorFor(person.membership_id) }} aria-hidden="true">
+        <span key={person.membership_id} class="face" style={identity(person.membership_id)} aria-hidden="true">
           {initials(person.display_name)}
         </span>
       ))}

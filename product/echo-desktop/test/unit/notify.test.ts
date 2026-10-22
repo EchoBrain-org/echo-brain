@@ -445,7 +445,7 @@ describe('noise (N4)', () => {
   });
 
   it('after a wake, what changed while asleep notifies, in one summary', async () => {
-    const store = await signedIn([sent(1, MINA)]);
+    await signedIn([sent(1, MINA)]);
     authority.items = [stated(sent(1, MINA), 'done', MINA, 30), followUp(2)];
     void wake();
     await flush();

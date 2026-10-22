@@ -4,7 +4,7 @@
 // and its source row says "owner · status", with no kind label.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, Expect, OpenItemView } from '../../src/shared/protocol.js';
-import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, storeLifecycle, text } from './harness.js';
+import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, rpcFor, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { Member } from '../../shared/protocol.js';
-import { colorFor, initials } from '../format.js';
+import { identity, initials } from '../format.js';
 import { message } from '../messages.js';
 import {
   addPerson, askMemberChange, cancelMemberChange, candidates, canManage, closeSheet, confirmMemberChange, findPeople, moreMembers, openPeople,
@@ -12,7 +12,7 @@ import { Close, Ellipsis } from './icons.js';
 
 /** A person's circle: their initials, in their color. */
 export function Face({ person }: { person: Pick<Member, 'membership_id' | 'display_name'> }) {
-  return <span class="face large" style={{ background: colorFor(person.membership_id) }} aria-hidden="true">{initials(person.display_name)}</span>;
+  return <span class="face large" style={identity(person.membership_id)} aria-hidden="true">{initials(person.display_name)}</span>;
 }
 
 /** Make lead, Make member and Remove from project: each is asked first, and Cancel has the focus. */

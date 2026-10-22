@@ -1,9 +1,9 @@
-import type { ComponentChildren } from 'preact';
-import { colorFor, initial, when } from '../format.js';
+import { useState } from 'preact/hooks';
+import { identity, initial, when } from '../format.js';
 import { message } from '../messages.js';
-import { actionCount, homeFooter, itemNames, itemNeeds, itemWhy, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
+import { actionCount, homeFooter, itemLine, itemNames, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
 import { awaitingLive, homeRows, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openYourFollowUps, type NeedRow, type State } from '../store.js';
-import { Plus, Saved } from './icons.js';
+import { EchoRings, KindMark, Plus } from './icons.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
 const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', review: 'Review', failed: 'Retry', checking: 'Checking' };
@@ -17,21 +17,30 @@ function projectNames(state: State, ids: readonly string[]): { id: string; name:
   });
 }
 
-/** On the right: when, and the decision's first project. */
-function Side({ state, at, projects, children }: { state: State; at?: string | null; projects: readonly string[]; children?: ComponentChildren }) {
+/**
+ * Where and when, opening a row's second line (Proximity): the first of its
+ * projects Home knows, as its mark and name ("Supplier review +1"; all of
+ * them in its tooltip), then when, for a row that has a time. With no project
+ * known it starts with the time; with neither it is nothing.
+ */
+export function Where({ state, at, projects }: { state: State; at?: string | null; projects: readonly string[] }) {
   const names = projectNames(state, projects);
   const first = names[0];
+  const time = at ? when(at) : '';
+  if (!first && time === '') return null;
   return (
-    <span class="need-side">
-      {at && <span class="need-when">{when(at)}</span>}
+    <>
       {first && (
-        <span class="need-project" title={names.map(name => name.name).join(', ')}>
-          <span class="need-dot" style={{ background: colorFor(first.id) }} aria-hidden="true">{initial(first.name)}</span>
-          <span>{first.name}{names.length > 1 ? ` +${names.length - 1}` : ''}</span>
+        <span class="need-where" title={names.map(name => name.name).join(', ')}>
+          <span class="need-dot" style={identity(first.id)} aria-hidden="true">{initial(first.name)}</span>
+          <span class="need-where-name">{first.name}</span>
+          {names.length > 1 && <span class="need-where-more">+{names.length - 1}</span>}
         </span>
       )}
-      {children}
-    </span>
+      {first && time !== '' && ' · '}
+      {time !== '' && <span class="need-when">{time}</span>}
+      {' · '}
+    </>
   );
 }
 
@@ -53,12 +62,14 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
     return (
       <button type="button" class="need-row send" data-testid="need-row" data-kind="send"
         onClick={() => void openFollowUps('record', send.decision.record_sha256, send.decision.title)}>
-        <span class="need-kind">{KIND.send}</span>
+        <span class="need-kind"><KindMark kind="send" />{KIND.send}</span>
         <span class="need-text">
           <span class="need-title">{titleLine(send.decision.first_line ?? send.decision.title)} — {toSend(send.items)}</span>
-          <span class="need-detail">From <b>{send.decision.title}</b>{owners.length > 0 ? ` · owners ${owners.join(', ')}` : ''}</span>
+          <span class="need-detail">
+            <Where state={state} at={send.finished_at} projects={send.decision.project_ids} />
+            From <b>{send.decision.title}</b>{owners.length > 0 ? ` · owners ${owners.join(', ')}` : ''}
+          </span>
         </span>
-        <Side state={state} at={send.finished_at} projects={send.decision.project_ids} />
       </button>
     );
   }
@@ -67,14 +78,15 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
   return (
     <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} disabled={row.kind === 'checking'}
       onClick={() => void openDecision(review.approval_id, run ?? null)}>
-      <span class="need-kind">{KIND[row.kind]}</span>
+      <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">
         <span class="need-title">{titleLine(review.first_line ?? review.title)}</span>
-        <span class="need-detail"><ReviewLine row={row} /></span>
+        <span class="need-detail">
+          <Where state={state} at={run?.updated_at} projects={review.project_ids} />
+          <ReviewLine row={row} />
+          {row.kind === 'checking' && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
+        </span>
       </span>
-      <Side state={state} at={run?.updated_at} projects={review.project_ids}>
-        {row.kind === 'checking' && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
-      </Side>
     </button>
   );
 }
@@ -82,50 +94,93 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
 /**
  * Update, for a follow-up that waits on you, and Review, for one someone else
  * owns that changed since you sent it (R64): the whole row opens its page
- * (F5). Its three lines: its title (`label`, apart from any other on Home);
- * for a document, what it says now and what the meeting needs; and, muted,
- * what it is, its meeting and whose it is.
+ * (F5), which says where it came from. Its two lines: its title (`label`,
+ * apart from any other on Home), and its project, then what the meeting needs
+ * of it, what it says now and whose it is.
  */
 function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { item: unknown }>; label: string }) {
   const { item } = row;
-  const needs = itemNeeds(item);
   // Shown from ECHO's own fields at once: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
   const reading = state.home?.reading === true && awaitingLive(item);
   return (
     <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} aria-busy={reading || undefined}
       onClick={() => void openFollowUp(item.item_id, item)}>
-      <span class="need-kind">{KIND[row.kind]}</span>
+      <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">
         <span class={`need-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
-        {needs && <span class="need-change">{needs}</span>}
-        <span class="need-detail">{itemWhy(item, state.status?.account?.membership_id ?? null, state.tools?.items)}</span>
+        <span class="need-change">
+          <Where state={state} projects={item.decision?.project_ids ?? []} />
+          {itemLine(item, state.status?.account?.membership_id ?? null, state.tools?.items)}
+        </span>
       </span>
-      <Side state={state} projects={item.decision?.project_ids ?? []} />
     </button>
   );
 }
 
+/** Home's groups, once it is long, in its order. */
+export type HomeGroupName = 'decisions' | 'send' | 'follow-ups' | 'checking';
+const GROUPS: readonly { name: HomeGroupName; label: string; kinds: readonly NeedRow['kind'][] }[] = [
+  { name: 'decisions', label: 'Decisions', kinds: ['approve', 'failed'] },
+  { name: 'send', label: 'To send', kinds: ['send'] },
+  { name: 'follow-ups', label: 'Follow-ups', kinds: ['review', 'update'] },
+  { name: 'checking', label: 'Checking', kinds: ['checking'] },
+];
+/** More rows than this wait on you (Checking aside), and Home groups them. */
+export const FLAT_ROWS = 10;
+/** The rows a group shows before its "Show N more". */
+export const GROUP_ROWS = 5;
+
+export interface HomeGroup {
+  name: HomeGroupName;
+  label: string;
+  /** All its rows, shown or not. */
+  count: number;
+  rows: NeedRow[];
+  /** Its rows past the first five, until it is opened. */
+  hidden: number;
+}
+
 /**
- * Under the rows, and on an empty Home (F9): what waits on others and when
- * ECHO last checked, and Follow-ups (everything you sent, own or last handed on), always.
+ * Home's rows as it shows them: one list while at most ten wait on you
+ * (null); past that, grouped in Home's order, Decisions (Approve and Retry),
+ * To send, Follow-ups and Checking, each counted and showing its first five
+ * rows until it is opened (`open`).
  */
-function Footer({ state }: { state: State }) {
-  const open = state.home?.open;
-  const words = open ? homeFooter(open) : null;
+export function homeGroups(rows: readonly NeedRow[], open: ReadonlySet<HomeGroupName>): HomeGroup[] | null {
+  if (rows.filter(row => row.kind !== 'checking').length <= FLAT_ROWS) return null;
+  return GROUPS.flatMap(({ name, label, kinds }) => {
+    const all = rows.filter(row => kinds.includes(row.kind));
+    const shown = open.has(name) ? all : all.slice(0, GROUP_ROWS);
+    return all.length === 0 ? [] : [{ name, label, count: all.length, rows: shown, hidden: all.length - shown.length }];
+  });
+}
+
+/**
+ * Under the rows, and on an empty Home (F9): one line, its link first. "2
+ * waiting on others" while anything waits on others, else "Follow-ups": it
+ * opens Follow-ups (everything you sent, own or last handed on), so Home
+ * keeps its own way there even with the sidebar hidden. Then when ECHO last
+ * checked.
+ */
+export function Footer({ state }: { state: State }) {
+  const { link, checked } = homeFooter(state.home?.open ?? null);
   return (
     <div class="needs-foot" data-testid="needs-foot">
-      <span class="needs-foot-words">{words}</span>
-      <button type="button" class="need-open" data-testid="your-follow-ups" onClick={() => void openYourFollowUps()}>Follow-ups</button>
+      <button type="button" class="link-button inline needs-foot-link" data-testid="your-follow-ups" onClick={() => void openYourFollowUps()}>{link}</button>
+      {checked !== null && <span class="needs-foot-words">{` · ${checked}`}</span>}
     </div>
   );
 }
 
 /**
- * Home: only what waits on you. Decisions from meetings to approve, meetings
- * you approved with follow-ups to send, follow-ups that wait on you, and
- * checks still on their way. Projects live in the sidebar.
+ * Home: only what waits on you. Decisions from meetings to approve, checks
+ * to retry, meetings you approved with follow-ups to send, follow-ups that
+ * wait on you, and checks still on their way; grouped once it is long.
+ * Projects live in the sidebar.
  */
 export function Home({ state }: { state: State }) {
+  // Groups opened past their first five rows stay open while Home is on screen.
+  const [open, setOpen] = useState<ReadonlySet<HomeGroupName>>(new Set());
   const home = state.home;
   const rows = homeRows(state);
   const noProjects = !state.projects.loading && !state.projects.failure && state.projects.items.length === 0 &&
@@ -154,19 +209,33 @@ export function Home({ state }: { state: State }) {
     }
     return (
       <div class="column needs empty" data-testid="needs" aria-busy={home?.loading ?? true}>
-        <div class="home-clear" data-testid="home-clear">{home && !home.loading && <><Saved /><span>Nothing needs you</span></>}</div>
+        <div class="home-clear" data-testid="home-clear">{home && !home.loading && <><EchoRings /><span>Nothing needs you</span></>}</div>
         <Footer state={state} />
       </div>
     );
   }
   const waiting = rows.filter(row => row.kind !== 'checking').length;
   const names = itemNames(rows.flatMap(row => ('item' in row ? [row.item] : [])));
+  // Home no longer repeats the meeting beneath every title. Use the qualified
+  // name when titles collide, so actions from different meetings stay distinct.
+  const shown = (row: NeedRow) => ('item' in row
+    ? <ItemRow key={row.item.item_id} state={state} row={row} label={names.get(row.item.item_id)!.name} />
+    : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />);
+  const groups = homeGroups(rows, open);
   return (
     <div class="column needs" data-testid="needs" aria-busy={home ? home.loading || home.reading : true}>
-      <div class="section-label needs-head">Needs you{waiting > 0 ? ` · ${waiting}` : ''}</div>
-      {rows.map(row => ('item' in row
-        ? <ItemRow key={row.item.item_id} state={state} row={row} label={names.get(row.item.item_id)!.label} />
-        : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />))}
+      <h1 class="needs-head">Needs you{waiting > 0 && <> <span class="count">{waiting}</span></>}</h1>
+      {groups === null ? rows.map(shown) : groups.map(group => (
+        <section key={group.name} class="needs-group" data-testid="needs-group" aria-labelledby={`needs-group-${group.name}`}>
+          <h2 class="section-label needs-group-head" id={`needs-group-${group.name}`}>{group.label} · {group.count}</h2>
+          {group.rows.map(shown)}
+          {group.hidden > 0 && (
+            <button type="button" class="link-button needs-more" data-testid="needs-more" onClick={() => setOpen(new Set([...open, group.name]))}>
+              Show {group.hidden} more
+            </button>
+          )}
+        </section>
+      ))}
       {home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>}
       <Footer state={state} />
     </div>

@@ -65,6 +65,52 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
   };
   const edges = [];
   const workspaceEdges = new Map();
+  const checkEdge = (from, to, path, target) => {
+    if (from.kind === 'neutral' && to.kind !== 'neutral') {
+      errors.push(`neutral module reaches ${to.kind}: ${path} -> ${target}`);
+    }
+    if (within(from.manifest.boundary_root, 'packages') && (within(target, 'services') || within(target, 'src/product'))) {
+      errors.push(`neutral library imports a composing application: ${path} -> ${target}`);
+    }
+    if ((from.kind === 'provider' || from.kind === 'shared-provider') && (to.kind === 'bootstrap' || within(target, 'services'))) {
+      errors.push(`provider imports the composing service: ${path} -> ${target}`);
+    }
+    if ((from.kind === 'provider' || from.kind === 'shared-provider') && within(target, 'src/product')) {
+      errors.push(`provider imports the composing application: ${path} -> ${target}`);
+    }
+    if (from.kind === 'shared-provider' && to.kind === 'provider') {
+      errors.push(`shared provider library imports a concrete provider or application: ${path} -> ${target}`);
+    }
+    if (from.kind === 'provider' && to.kind === 'provider' && from.provider !== to.provider) {
+      errors.push(`cross-provider dependency: ${path} -> ${target}`);
+    }
+    if (from.manifest.name !== to.manifest.name) {
+      if (!workspaceEdges.has(from.manifest.name)) workspaceEdges.set(from.manifest.name, new Set());
+      workspaceEdges.get(from.manifest.name).add(to.manifest.name);
+    }
+  };
+  // Package dependencies determine install/build closure even when source no
+  // longer imports them. Keep them subject to the same direction and cycle
+  // rules, so an unused dependency cannot quietly reintroduce a retired edge.
+  const workspaceByName = new Map(manifests.filter(manifest => manifest.workspace)
+    .map(manifest => [manifest.name, manifest]));
+  for (const manifest of workspaceByName.values()) {
+    const path = manifest.package_json;
+    const pkg = JSON.parse(textFile(tree, path));
+    const from = owner(path);
+    if (!from) continue;
+    // Application manifests include the dependencies selected by their
+    // bootstrap modules; ordinary modules still obey the finer source rules.
+    if (within(manifest.boundary_root, 'services') || within(manifest.boundary_root, 'src/product')) {
+      from.kind = 'bootstrap';
+    }
+    for (const name of Object.keys({ ...pkg.dependencies, ...pkg.optionalDependencies, ...pkg.peerDependencies })) {
+      const target = workspaceByName.get(name)?.package_json;
+      if (target === undefined) continue;
+      const to = owner(target);
+      if (to) checkEdge(from, to, path, target);
+    }
+  }
   for (const path of production) {
     const from = owner(path);
     if (!from) { errors.push(`production module has no architecture owner: ${path}`); continue; }
@@ -73,25 +119,7 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
       const to = owner(target);
       edges.push([path, target]);
       if (!to) { errors.push(`production dependency has no architecture owner: ${path} -> ${target}`); continue; }
-      if (from.kind === 'neutral' && to.kind !== 'neutral') {
-        errors.push(`neutral module reaches ${to.kind}: ${path} -> ${target}`);
-      }
-      if (within(from.manifest.boundary_root, 'packages') && (within(target, 'services') || within(target, 'src/product'))) {
-        errors.push(`neutral library imports a composing application: ${path} -> ${target}`);
-      }
-      if ((from.kind === 'provider' || from.kind === 'shared-provider') && (to.kind === 'bootstrap' || within(target, 'services'))) {
-        errors.push(`provider imports the composing service: ${path} -> ${target}`);
-      }
-      if (from.kind === 'shared-provider' && (to.kind === 'provider' || within(target, 'src/product'))) {
-        errors.push(`shared provider library imports a concrete provider or application: ${path} -> ${target}`);
-      }
-      if (from.kind === 'provider' && to.kind === 'provider' && from.provider !== to.provider) {
-        errors.push(`cross-provider dependency: ${path} -> ${target}`);
-      }
-      if (from.manifest.name !== to.manifest.name) {
-        if (!workspaceEdges.has(from.manifest.name)) workspaceEdges.set(from.manifest.name, new Set());
-        workspaceEdges.get(from.manifest.name).add(to.manifest.name);
-      }
+      checkEdge(from, to, path, target);
     }
   }
   const visited = new Set(), active = new Set(), cycles = [];

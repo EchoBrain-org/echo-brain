@@ -21,6 +21,10 @@ exports; they cannot import another provider or the Authority service.
 Explicit bootstrap modules select implementations and inject ports. Neutral
 modules cannot import bootstrap modules. Cross-workspace imports use explicit
 public exports, and the complete workspace graph must remain acyclic.
+Declared runtime dependencies, including optional and peer dependencies, obey
+the same direction and cycle rules even when no source module imports them.
+Application manifests may declare the providers selected by their bootstrap
+modules; ordinary source modules still obey their narrower layer rules.
 
 - `organization-processing` owns processing contracts, the bounded cycle, generic
   LLM prompt/grounding behavior, and processing state.
@@ -29,8 +33,12 @@ public exports, and the complete workspace graph must remain acyclic.
 - Federation/API/protocol, control-plane, record and retrieval retain their
   existing responsibilities. Record has no runtime dependency on protocol.
 - The Authority and Person composition modules select provider implementations.
-  The deployed Authority selects its product profile. OpenRouter is the only
-  LLM transport.
+  The deployed Authority selects its product profile. OpenRouter is the default
+  LLM transport. The staging profile can also select a host-installed personal
+  Claude account for one membership's research and final answer writer, using
+  the Anthropic transport in `providers/openrouter/src/claude-research/`.
+  Housing this second upstream in the OpenRouter workspace is provider-ownership
+  debt; the folder-based import checks cannot detect that semantic distinction.
 
 The registry is
 [`tools/workspace-source-boundaries.v1.json`](../../tools/workspace-source-boundaries.v1.json).
@@ -53,7 +61,9 @@ workspaces. The Authority image contains the workspace dependency closure and
 frozen SQL/provider assets that `deploy/organization-authority/Dockerfile`
 copies into its runtime stage. The Electron
 desktop app in `product/echo-desktop` is not a root workspace and imports no
-workspace source; it loads the built Person client package at run time.
+workspace internals. It bundles public neutral exports from `organization-api`
+and `federation-protocol` for validation and view construction, and loads the
+built Person client package at run time.
 
 The architecture suite compiles all eight neutral packages in an isolated tree
 with no provider, Person, service or prebuilt workspace output available.

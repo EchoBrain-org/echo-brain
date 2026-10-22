@@ -1,7 +1,7 @@
 // ECHO desktop main process: windows, tray, shortcuts and the IPC broker. It
 // never reads the session or holds a token; the person host does that.
 import {
-  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, Notification, powerMonitor, protocol, session, shell,
+  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, net, Notification, powerMonitor, protocol, session, shell,
   Tray, utilityProcess, type IpcMainInvokeEvent, type MenuItemConstructorOptions, type UtilityProcess,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
@@ -26,6 +26,10 @@ const RENDERER_ROOT = join(BUILD, 'renderer');
 const ORIGIN = 'app://echo';
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; " +
   "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; frame-src 'none'; worker-src 'none'; form-action 'none'";
+/** What the renderer may load from its own origin: the page, its code and styles, and the fonts the build copies in. */
+const RENDERER_EXTENSIONS = ['.html', '.js', '.css', '.map', '.woff2'];
+/** The window behind the page follows the system's appearance: styles.css's --frame in each, so nothing flashes before the page paints. */
+const frameColor = () => (nativeTheme.shouldUseDarkColors ? '#0B0C0E' : '#EEEEEC');
 const DOCUMENT_EXTENSIONS = new Set(['.txt', '.md', '.markdown', '.pdf', '.docx']);
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 /** What an owner's invitation export holds; the person client checks the rest. */
@@ -571,7 +575,7 @@ function testShown(): void {
 function createWindow(): BrowserWindow {
   const created = new BrowserWindow({
     width: 900, height: 680, minWidth: 800, minHeight: 560, show: false,
-    title: 'ECHO', backgroundColor: '#242222',
+    title: 'ECHO', backgroundColor: frameColor(),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
       preload: join(BUILD, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false,
@@ -910,7 +914,7 @@ void app.whenReady().then(() => {
     const url = new URL(request.url);
     const target = resolve(RENDERER_ROOT, `.${decodeURIComponent(url.pathname)}`);
     if (url.host !== 'echo' || !target.startsWith(`${RENDERER_ROOT}${sep}`) ||
-        !['.html', '.js', '.css', '.map'].includes(extname(target))) {
+        !RENDERER_EXTENSIONS.includes(extname(target))) {
       return new Response('Not found', { status: 404 });
     }
     const file = await net.fetch(pathToFileURL(target).href);
@@ -925,6 +929,8 @@ void app.whenReady().then(() => {
   startHost();
   window = createWindow();
   window.once('ready-to-show', () => { if (!test.ECHO_DESKTOP_HIDDEN) show(); });
+  // The page follows the appearance by itself (prefers-color-scheme); the window behind it is told.
+  nativeTheme.on('updated', () => { if (window && !window.isDestroyed()) window.setBackgroundColor(frameColor()); });
   // Tests never take the person's own keys.
   if (!test.ECHO_DESKTOP_HIDDEN) registerShortcuts();
   updateTray();

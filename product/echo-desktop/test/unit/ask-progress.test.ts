@@ -2,7 +2,7 @@
 // the Ask on its way, the items they name opening beside a running Ask, and
 // the receipt an answer keeps.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Answer, AnswerSource, AskReceipt, AskStep, Expect } from '../../src/shared/protocol.js';
+import type { Answer, AnswerSource, AskReceipt, Expect } from '../../src/shared/protocol.js';
 import { ACCOUNT, asking as askingWith, fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));

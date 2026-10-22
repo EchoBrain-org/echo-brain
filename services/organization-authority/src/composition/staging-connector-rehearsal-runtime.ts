@@ -1,4 +1,3 @@
-import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
@@ -25,7 +24,7 @@ import {
   type StagingConnectorReadReasonV1,
   type StagingConnectorReadResultV1,
 } from './staging-connector-rehearsal-protocol.js';
-import type { PersonContextProjectNamesV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import type { PersonContextProjectAuthorizationV1, PersonContextProjectNamesV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { jiraPersonLiveConnectorsV1, openJiraPersonLiveRuntimeV1, type JiraPersonLiveRuntimeSeamsV1, type OpenedJiraPersonLiveRuntimeV1 } from './jira-person-live-runtime-v1.js';
 import {
   openOrganizationAuthorityService,
@@ -322,7 +321,7 @@ export async function openStagingConnectorRehearsalService(
         invalid();
       },
     });
-    const openJira = (sessions: Parameters<PersonHttpRuntimeFactory>[0], authorize_project?: PersonTicketProjectAuthorizationV1, project_names?: PersonContextProjectNamesV1) => {
+    const openJira = (sessions: Parameters<PersonHttpRuntimeFactory>[0], authorize_project?: PersonContextProjectAuthorizationV1, project_names?: PersonContextProjectNamesV1) => {
       authenticate = input => sessions.authenticateAccess(input);
       // The rehearsal's owner/project restrictions apply to its diagnostics.
       // Live Ask authenticates each Person and uses their own Jira connection.

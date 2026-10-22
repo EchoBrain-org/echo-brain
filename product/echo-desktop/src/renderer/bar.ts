@@ -1,0 +1,49 @@
+// The ask bar's own words: what it suggests asking while it is empty, and how
+// it counts toward a question's limit. Pure, for the bar and its tests.
+import type { AskScope } from '../shared/protocol.js';
+import { clip } from './format.js';
+
+/** The longest question the bar takes, as its field counts: the API's 240. */
+export const MAX_QUESTION = 240;
+/** From this many characters the bar counts them. */
+export const COUNT_FROM = 200;
+/** "Try asking" offers at most this many questions. */
+export const MAX_SUGGESTIONS = 3;
+
+/** The count at the bar's right end: none below COUNT_FROM, "212 / 240" from it, and full at the limit, where the bar says why it stops. */
+export function questionCount(text: string): { words: string; full: boolean } | null {
+  const length = text.length;
+  if (length < COUNT_FROM) return null;
+  return { words: `${Math.min(length, MAX_QUESTION)} / ${MAX_QUESTION}`, full: length >= MAX_QUESTION };
+}
+
+/** A meeting ECHO shows, as a question: "What did we decide in THERM DVT recovery?" */
+export function decidedIn(meeting: string): string {
+  return `What did we decide in ${clip(meeting.trim(), 120)}?`;
+}
+
+/** The question for any week, in the bar's scope: all context, a project by its name, or Mine. */
+export function weekQuestion(scope: AskScope, project: string | null): string {
+  if (scope.kind === 'project') return `What changed in ${clip(project ?? 'this project', 120)} this week?`;
+  if (scope.kind === 'mine') return 'What did I add this week?';
+  return 'What did we decide this week?';
+}
+
+/**
+ * "Try asking", for an empty bar: the questions asked in its scope this
+ * session (newest first), then one for each meeting ECHO shows there (newest
+ * first), then the question for any week. Each once, at most three.
+ */
+export function suggestedQuestions(recent: readonly string[], meetings: readonly string[], week: string): string[] {
+  const seen = new Set<string>();
+  const questions: string[] = [];
+  for (const question of [...recent, ...meetings.filter(meeting => meeting.trim() !== '').map(decidedIn), week]) {
+    const text = question.replace(/\s+/gu, ' ').trim();
+    const key = text.toLowerCase();
+    if (text === '' || seen.has(key)) continue;
+    seen.add(key);
+    questions.push(text);
+    if (questions.length === MAX_SUGGESTIONS) break;
+  }
+  return questions;
+}

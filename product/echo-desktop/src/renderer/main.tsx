@@ -9,7 +9,7 @@ import { Decision } from './screens/decision.js';
 import { FollowUp, FollowUps } from './screens/follow-ups.js';
 import { Home } from './screens/home.js';
 import { ChangeLine, changeShownInPlace } from './screens/change.js';
-import { Back, Saved, SidebarIcon, Warning } from './screens/icons.js';
+import { Back, EchoMark, Saved, SidebarIcon, Warning } from './screens/icons.js';
 import { Mine } from './screens/mine.js';
 import { NewProject } from './screens/new-project.js';
 import { Organization } from './screens/organization.js';
@@ -134,11 +134,11 @@ function App() {
     return () => { stops.forEach(stop => stop()); window.removeEventListener('keydown', onKey); };
   }, []);
 
-  if (state.booting) return <div class="app"><div class="titlebar"><div class="side" /><div class="title brand">ECHO</div><div class="side" /></div></div>;
+  if (state.booting) return <div class="app"><div class="titlebar"><div class="side" /><div class="title brand"><EchoMark />ECHO</div><div class="side" /></div></div>;
   if (state.startFailed) {
     return (
       <div class="app">
-        <div class="titlebar"><div class="side" /><div class="title brand">ECHO</div><div class="side" /></div>
+        <div class="titlebar"><div class="side" /><div class="title brand"><EchoMark />ECHO</div><div class="side" /></div>
         <div class="page"><div class="signin" data-testid="start-failed">
           <h1>ECHO could not start</h1>
           <button type="button" class="primary-button" data-testid="start-retry" onClick={() => void retryStart()}>Try again</button>
@@ -258,7 +258,7 @@ function Shell({ state, title, backLabel, pane = false, trailing = null, childre
               aria-pressed={open} onClick={toggleSidebar}><SidebarIcon /></button>
             {backLabel && <button type="button" class="back" data-testid="back" onClick={back}><Back /><span>{backLabel}</span></button>}
           </div>
-          <div class={`title${title === 'ECHO' ? ' brand' : ''}`} data-testid="title">{title}</div>
+          <div class={`title${title === 'ECHO' ? ' brand' : ''}`} data-testid="title">{title === 'ECHO' && <EchoMark />}{title}</div>
           <div class="side">{trailing}</div>
         </header>
         {children}
