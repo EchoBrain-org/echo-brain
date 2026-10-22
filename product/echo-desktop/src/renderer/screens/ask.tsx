@@ -14,10 +14,11 @@ import {
   type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
-  answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject, fullPageOffered,
-  litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, retryEvidence, retryRecord, searchAgain, setBarText,
-  submitBar, widenScope, type AskTurn, type PaneTarget, type Read, type RecordSectionKey, type SourcesState, type State,
+  answerGroups, answerSources, ask, askEverywhere, askSuggestion, barSuggestions, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject,
+  fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, retryEvidence, retryRecord,
+  searchAgain, setBarText, submitBar, suggestionsShown, widenScope, type AskTurn, type PaneTarget, type Read, type RecordSectionKey, type SourcesState, type State,
 } from '../store.js';
+import { MAX_QUESTION, questionCount } from '../bar.js';
 import { Check, Chevron, Close, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Ticks, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
@@ -71,10 +72,36 @@ function Matches({ state, scopeName }: { state: State; scopeName: string | null 
 }
 
 /**
+ * "Try asking": the empty bar's suggestions, over the page where live matches
+ * show. The caret stays in the bar: the arrow keys light one, and Return or a
+ * click asks it.
+ */
+function Suggestions({ questions, active, onPick }: { questions: readonly string[]; active: number; onPick: (question: string) => void }) {
+  return (
+    <div class="matches suggestions" data-testid="suggestions" id="ask-suggestions" role="listbox" aria-label="Try asking">
+      <div class="matches-head" aria-hidden="true">Try asking</div>
+      {questions.map((question, index) => (
+        <div key={question} id={`ask-suggestion-${index}`} role="option" aria-selected={index === active} data-testid="suggestion"
+          class={`match-row suggestion${index === active ? ' active' : ''}`} onMouseDown={event => event.preventDefault()} onClick={() => onPick(question)}>
+          <Up /><span class="label">{question}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const CLOSED = { open: false, active: -1 };
+
+/**
  * The one bar on every page. ⊕ captures and Return asks, both in the bar's
  * scope; typing shows live matches in it. The chip names a project scope, or
  * Mine, which is only asked; its × widens to all context without moving the
  * page. Mine is not a place to capture: it has no ⊕.
+ *
+ * Going to the empty bar (a click, or an arrow key) offers what to ask in its
+ * scope; the caret only waiting there, as it does whenever the window comes
+ * forward, offers nothing. Typing, Escape or leaving the bar closes them.
+ * From 200 characters the bar counts them, and at its limit says why it stops.
  */
 export function Bar({ state }: { state: State }) {
   // While another app is in front nothing says which project is open, or what
@@ -84,9 +111,34 @@ export function Bar({ state }: { state: State }) {
   const text = covered ? '' : state.barText;
   const verb = state.ask || (chip !== null && state.barScope.kind === 'mine') ? 'Ask' : 'Search or ask';
   const name = `${verb} ${chip ?? 'ECHO'}`;
+  const [suggesting, setSuggesting] = useState(CLOSED);
+  const shown = suggesting.open && suggestionsShown(state) ? barSuggestions(state) : [];
+  const active = shown.length === 0 ? -1 : Math.min(suggesting.active, shown.length - 1);
+  // Another page, project or scope: the suggestions were for the one before.
+  const where = `${state.route.page === 'project' ? state.route.project.project_id : state.route.page} ${state.barScope.kind}`;
+  useEffect(() => { setSuggesting(CLOSED); }, [where]);
+  const pick = (question: string) => { setSuggesting(CLOSED); askSuggestion(question); };
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (text !== '' || !suggestionsShown(state)) return;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      const last = (shown.length > 0 ? shown.length : barSuggestions(state).length) - 1;
+      // The list is above the bar: Up goes into it from the bar, Down past its last row comes back to the bar.
+      if (shown.length === 0) setSuggesting({ open: true, active: event.key === 'ArrowUp' ? last : 0 });
+      else if (event.key === 'ArrowUp') setSuggesting({ open: true, active: active === -1 ? last : Math.max(0, active - 1) });
+      else setSuggesting({ open: true, active: active >= last ? -1 : active + 1 });
+      return;
+    }
+    if (shown.length === 0) return;
+    if (event.key === 'Enter' && active >= 0) { event.preventDefault(); pick(shown[active]!); return; }
+    // Escape closes the suggestions only: the window's Escape would go back a level.
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setSuggesting(CLOSED); }
+  };
+  const count = covered ? null : questionCount(text);
   return (
     <div class={`bar-wrap${state.ask && !covered ? ' with-ask' : ''}`}>
       {matchesShown(state) && <Matches state={state} scopeName={chip} />}
+      {shown.length > 0 && <Suggestions questions={shown} active={active} onPick={pick} />}
       <form class="bar" onSubmit={event => { event.preventDefault(); submitBar(); }}>
         {state.route.page !== 'mine' && (
           <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
@@ -100,12 +152,19 @@ export function Bar({ state }: { state: State }) {
         )}
         <label for="ask-field" class="sr-only">{name}</label>
         <input
-          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck maxLength={240} placeholder={name}
-          value={text} readOnly={covered} onInput={event => setBarText((event.target as HTMLInputElement).value)}
+          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck maxLength={MAX_QUESTION} placeholder={name}
+          role="combobox" aria-autocomplete="list" aria-expanded={shown.length > 0} aria-controls={shown.length > 0 ? 'ask-suggestions' : undefined}
+          aria-activedescendant={active >= 0 ? `ask-suggestion-${active}` : undefined} aria-describedby={count?.full ? 'ask-limit' : undefined}
+          value={text} readOnly={covered} onMouseDown={() => { if (text === '') setSuggesting({ open: true, active: -1 }); }} onKeyDown={onKeyDown}
+          onBlur={() => setSuggesting(CLOSED)}
+          onInput={event => { setSuggesting(CLOSED); setBarText((event.target as HTMLInputElement).value); }}
         />
+        {count && <span class={`bar-count${count.full ? ' full' : ''}`} data-testid="ask-count" aria-hidden="true">{count.words}</span>}
         <button type="submit" class="circle primary" aria-label="Ask" data-testid="ask-send"
           disabled={text.trim() === '' || Boolean(state.ask?.asking)}><Up /></button>
       </form>
+      {/* Always there, so a screen reader hears it when the limit is reached; the page's one status line stays the toast's. */}
+      <div id="ask-limit" class={count?.full ? 'bar-note' : 'sr-only'} aria-live="polite" data-testid="ask-limit">{count?.full ? `Questions are up to ${MAX_QUESTION} characters` : ''}</div>
     </div>
   );
 }

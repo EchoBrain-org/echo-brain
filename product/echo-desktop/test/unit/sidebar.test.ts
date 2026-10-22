@@ -3,7 +3,9 @@ import type { State } from '../../src/renderer/store.js';
 import type { UpdateState } from '../../src/shared/protocol.js';
 import { elements, text } from './harness.js';
 
-const { loadProjects, loadArchivedProjects, installUpdate } = vi.hoisted(() => ({ loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn() }));
+const { loadProjects, loadArchivedProjects, installUpdate, openNewProject } = vi.hoisted(() => ({
+  loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn(), openNewProject: vi.fn(),
+}));
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', async original => ({
   ...await original<typeof import('preact/hooks')>(),
@@ -11,7 +13,7 @@ vi.mock('preact/hooks', async original => ({
   useState: () => [true, vi.fn()],
 }));
 vi.mock('../../src/renderer/store.js', async original => ({
-  ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects, installUpdate,
+  ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects, installUpdate, openNewProject,
 }));
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -44,6 +46,43 @@ describe('project list failures', () => {
     const state = await projectFailure(archived);
     const { Home } = await import('../../src/renderer/screens/home.js');
     expect(Home({ state }).props['data-testid']).not.toBe('home-empty');
+  });
+});
+
+describe('New project', () => {
+  /** Signed in with no projects at all: the list read, nothing in it, nothing failed. */
+  async function noProjects(): Promise<State> {
+    const { getState } = await import('../../src/renderer/store.js');
+    return {
+      ...getState(), route: { page: 'home' },
+      status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } },
+      projects: { items: [], next: null, loading: false },
+      home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
+    };
+  }
+
+  it('is the Projects header\'s "+", there even with no projects, and no longer a row of its own', async () => {
+    const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
+    const tree = elements(Sidebar({ state: await noProjects() }));
+    const header = tree.find(node => node.props['data-testid'] === 'sidebar-projects-header');
+    expect(header).toBeDefined();
+    expect(text(header)).toBe('Projects');
+    const plus = elements(header).find(node => node.props['data-testid'] === 'sidebar-new-project');
+    expect(plus?.type).toBe('button');
+    expect(plus?.props['aria-label']).toBe('New project');
+    expect(plus?.props.title).toBe('New project');
+    (plus?.props.onClick as () => void)();
+    expect(openNewProject).toHaveBeenCalledExactlyOnceWith();
+    // The top block keeps Home, Capture, Mine and Follow-ups only.
+    const rows = tree.filter(node => typeof node.props.class === 'string' && node.props.class.split(' ').includes('side-row'));
+    expect(rows.map(node => node.props['data-testid'])).toEqual(['sidebar-home', 'sidebar-capture', 'sidebar-mine', 'sidebar-follow-ups', 'sidebar-tools']);
+  });
+
+  it('is not offered while signed out', async () => {
+    const { getState } = await import('../../src/renderer/store.js');
+    const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
+    const tree = elements(Sidebar({ state: { ...getState(), status: { client_version: 'test', signed_in: false, account: null } } }));
+    expect(tree.some(node => node.props['data-testid'] === 'sidebar-projects-header' || node.props['data-testid'] === 'sidebar-new-project')).toBe(false);
   });
 });
 

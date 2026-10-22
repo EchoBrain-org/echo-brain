@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
-import { ACCOUNT, cover, EMPTY_SUMMARY, fail, flush, ok, render, show, startStore as start, storeLifecycle, text, uncover } from './harness.js';
+import { ACCOUNT, cover, elements, EMPTY_SUMMARY, fail, flush, ok, render, show, startStore as start, storeLifecycle, text, uncover } from './harness.js';
 import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -307,14 +307,16 @@ describe('Home rows', () => {
     expect(operations().filter(operation => operation === 'home')).toEqual(['home', 'home']);
   });
 
-  it('orders rows approve, send, review, update, failed, checking', async () => {
+  it('orders rows approve, retry, send, review, update, checking', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
     const reviews = [meeting('c', 'approved'), meeting('b', 'approved'), meeting('d', 'publishing'), meeting('e', 'approved'), meeting('a', 'pending')];
     const runs = [impactRun('running', '21', reviews[0]!.approval_id), impactRun('failed', '22', reviews[1]!.approval_id), impactRun('done', '23', reviews[3]!.approval_id)];
     const open: HomeView = { ...emptyHome(), send: [sendRow()], items: [item('1'), item('2', 'changed')] };
     const rows = needRows(reviews, runs, open, 'member');
-    expect(rows.map(row => row.kind)).toEqual(['approve', 'send', 'review', 'update', 'failed', 'checking', 'checking']);
-    expect(rows[2]).toMatchObject({ kind: 'review', item: { item_id: 'itm_00000002' } });
+    // A check that did not finish needs you: right after the decisions to approve, never at the bottom of a long Home.
+    expect(rows.map(row => row.kind)).toEqual(['approve', 'failed', 'send', 'review', 'update', 'checking', 'checking']);
+    expect(rows[1]).toMatchObject({ kind: 'failed', review: { approval_id: reviews[1]!.approval_id } });
+    expect(rows[3]).toMatchObject({ kind: 'review', item: { item_id: 'itm_00000002' } });
     expect(rows[5]).toMatchObject({ kind: 'checking', run: { state: 'running' } });
     // A finished check makes no row of its own: what it found comes from `home`.
     expect(rows.some(row => 'review' in row && row.review.approval_id === reviews[3]!.approval_id)).toBe(false);
@@ -345,10 +347,63 @@ describe('Home rows', () => {
     expect(store.homeRows().map(row => row.kind)).toEqual(['review', 'update']);
   });
 
+  it('groups a long Home past ten rows that wait on you, five rows to a group until it is opened', async () => {
+    const { homeGroups } = await import('../../src/renderer/screens/home.js');
+    type Row = Parameters<typeof homeGroups>[0][number];
+    const rows = (kind: Row['kind'], count: number) => Array.from({ length: count }, (_, at) => ({ kind, at }) as unknown as Row);
+    const summary = (groups: ReturnType<typeof homeGroups>) => groups?.map(group => [group.name, group.label, group.count, group.rows.length, group.hidden]);
+    // Ten that wait on you, however many checks are on their way: one list.
+    expect(homeGroups([...rows('approve', 4), ...rows('update', 6), ...rows('checking', 3)], new Set())).toBeNull();
+    // Eleven: groups in Home's order, each counted; an empty kind makes no group.
+    const long = [...rows('approve', 2), ...rows('failed', 1), ...rows('send', 1), ...rows('review', 2), ...rows('update', 5), ...rows('checking', 1)];
+    expect(summary(homeGroups(long, new Set()))).toEqual([
+      ['decisions', 'Decisions', 3, 3, 0], ['send', 'To send', 1, 1, 0], ['follow-ups', 'Follow-ups', 7, 5, 2], ['checking', 'Checking', 1, 1, 0],
+    ]);
+    expect(homeGroups(long, new Set())![0]!.rows.map(row => row.kind)).toEqual(['approve', 'approve', 'failed']);
+    // Its first five rows in Home's order: changed items (Review) before the others.
+    expect(homeGroups(long, new Set())![2]!.rows.map(row => row.kind)).toEqual(['review', 'review', 'update', 'update', 'update']);
+    // Opened, a group shows every row.
+    expect(summary(homeGroups(long, new Set(['follow-ups'])))?.[2]).toEqual(['follow-ups', 'Follow-ups', 7, 7, 0]);
+    expect(summary(homeGroups([...rows('update', 12)], new Set()))).toEqual([['follow-ups', 'Follow-ups', 12, 5, 7]]);
+  });
+
   it('names an Approve row\'s meeting and its day', async () => {
     const { ReviewLine } = await import('../../src/renderer/screens/home.js');
     const row = { kind: 'approve' as const, review: { ...meeting('a', 'pending'), title: 'Pilot planning', meeting_at: '2026-10-06T12:00:00.000Z' } };
     expect(text(render(ReviewLine({ row })))).toBe('Decision · Pilot planning meeting, Oct 6');
+  });
+
+  it('opens a row\'s second line with where and when: the first project Home knows, "+N" for more, then the time', async () => {
+    const { Where } = await import('../../src/renderer/screens/home.js');
+    const supplier = { ...project, project_id: 'prj_22222222-2222-4222-8222-222222222222', name: 'Supplier review' };
+    const state = { projects: { items: [supplier, project] }, archivedProjects: { items: [] } } as unknown as Parameters<typeof Where>[0]['state'];
+    const fiveAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    const tree = render(Where({ state, at: fiveAgo, projects: [supplier.project_id, project.project_id, 'prj_33333333-3333-4333-8333-333333333333'] }));
+    const part = (name: string) => elements(tree).find(node => node.props.class === name);
+    // Its mark and name, "+1" for the other project Home knows (one it does not know is left out), all of them in its tooltip.
+    expect(text(part('need-dot'))).toBe('S');
+    expect([text(part('need-where-name')), text(part('need-where-more'))]).toEqual(['Supplier review', '+1']);
+    expect(part('need-where')!.props.title).toBe('Supplier review, Thermostat redesign');
+    expect(text(part('need-when'))).toBe('5m');
+    expect(text(tree)).toMatch(/ · 5m · $/);
+    // A follow-up's row has no time: its project, then the row's own words.
+    expect(text(render(Where({ state, projects: [project.project_id] })))).toBe('TThermostat redesign · ');
+    // No project Home knows: it starts with the time; with neither, there is nothing to open the line.
+    expect(text(render(Where({ state, at: fiveAgo, projects: ['prj_33333333-3333-4333-8333-333333333333'] })))).toBe('5m · ');
+    expect(Where({ state, projects: [] })).toBeNull();
+  });
+
+  it('ends Home with one line: its link to Follow-ups, named for what waits on others, then when ECHO checked', async () => {
+    const { Footer } = await import('../../src/renderer/screens/home.js');
+    const foot = (open: Pick<HomeView, 'waiting' | 'last_checked_at'> | null) =>
+      render(Footer({ state: { home: open && { open } } as unknown as Parameters<typeof Footer>[0]['state'] }));
+    const link = (tree: unknown) => elements(tree).filter(node => node.props['data-testid'] === 'your-follow-ups');
+    const twoAgo = new Date(Date.now() - 2 * 60_000).toISOString();
+    expect(text(foot({ waiting: 2, last_checked_at: twoAgo }))).toBe('2 waiting on others · ECHO checked 2 min ago');
+    expect(text(link(foot({ waiting: 2, last_checked_at: twoAgo })))).toBe('2 waiting on others');
+    // Nothing waits on others, or Home not read yet: the link is still there, as Follow-ups.
+    expect(text(link(foot({ waiting: 0, last_checked_at: twoAgo })))).toBe('Follow-ups');
+    expect(text(foot(null))).toBe('Follow-ups');
   });
 
   it('polls only while something is in flight, and backs off after failed reads', async () => {

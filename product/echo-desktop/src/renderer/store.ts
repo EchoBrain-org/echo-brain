@@ -13,6 +13,7 @@ import type {
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_PROJECT_FILES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { answerSentences, sourceGroups, type SourceGroup } from './answer.js';
+import { suggestedQuestions, weekQuestion } from './bar.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
 import { dropFile, rpc } from './api.js';
@@ -3305,6 +3306,7 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
   const text = question.trim();
   const thread = state.ask;
   if (!account || text === '' || thread?.asking) return;
+  rememberAsked(account, text, scope);
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
   activeAskCancelId = cancelId;
@@ -3843,6 +3845,74 @@ export function chipName(current: State = state): string | null {
   if (current.concealed) return null;
   if (route.page === 'mine' && barScope.kind === 'mine') return 'Mine';
   return route.page === 'project' && barScope.kind === 'project' && barScope.project_id === route.project.project_id ? route.project.name : null;
+}
+
+// ---- the bar: what to ask -------------------------------------------------------
+
+/**
+ * The questions asked in this window, oldest first, each with its account and
+ * scope: kept in memory only, never stored, so they go when the app quits.
+ */
+let askedQuestions: { account: string; scope: AskScope; question: string }[] = [];
+/** Enough to suggest from, never a history. */
+const MAX_ASKED = 12;
+
+function accountKey(account: Expect): string {
+  return `${account.authority} ${account.membership_id}`;
+}
+
+/** A question asked: the newest of its scope, once. */
+function rememberAsked(account: Expect, question: string, scope: AskScope): void {
+  const key = accountKey(account);
+  const same = (entry: { account: string; scope: AskScope; question: string }) =>
+    entry.account === key && sameScope(entry.scope, scope) && entry.question.toLowerCase() === question.toLowerCase();
+  askedQuestions = [...askedQuestions.filter(entry => !same(entry)), { account: key, scope, question }].slice(-MAX_ASKED);
+}
+
+/**
+ * The approved meetings ECHO shows for the bar's scope, newest first: Home's
+ * decisions for all context; the page's own list, for a project or Mine.
+ */
+function shownMeetings(current: State): string[] {
+  const scope = current.barScope;
+  if (scope.kind === 'global') {
+    const home = current.home;
+    if (!home) return [];
+    const dated = [
+      ...(home.open?.send ?? []).map(send => ({ title: send.decision.title, at: send.decision.approved_at })),
+      ...(home.open?.items ?? []).flatMap(item => (item.decision ? [{ title: item.decision.title, at: item.decision.approved_at }] : [])),
+      ...home.reviews.filter(review => review.status === 'approved').map(review => ({ title: review.title, at: review.meeting_at ?? '' })),
+    ];
+    return dated.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).map(entry => entry.title);
+  }
+  const list = current.list;
+  if (!list || list.scope.kind !== scope.kind || (list.scope.kind === 'project' && scope.kind === 'project' && list.scope.project_id !== scope.project_id)) return [];
+  return list.items.filter(item => item.ref.kind === 'meeting').map(item => item.title);
+}
+
+/**
+ * "Try asking": what the empty bar suggests in its scope. This window's own
+ * questions there come first, newest first; then the meetings ECHO shows; then
+ * the question for any week.
+ */
+export function barSuggestions(current: State = state): string[] {
+  const account = current.status?.account;
+  const key = account ? accountKey(account) : null;
+  const recent = askedQuestions.filter(entry => entry.account === key && sameScope(entry.scope, current.barScope)).map(entry => entry.question).reverse();
+  return suggestedQuestions(recent, shownMeetings(current), weekQuestion(current.barScope, chipName(current)));
+}
+
+/** The suggestions may show over the page where live matches would: the bar empty, and no answer, reader, sheet or covered window over it. */
+export function suggestionsShown(current: State = state): boolean {
+  return Boolean(current.status?.signed_in) && current.barText === '' && !current.concealed && !current.ask && !current.reader && !sheetShown(current) &&
+    !(current.compose && !current.compose.hidden);
+}
+
+/** A suggestion chosen: asked in the bar's scope, as if typed and sent. */
+export function askSuggestion(question: string): void {
+  if (state.ask?.asking) return;
+  emptyBar();
+  void ask(question, state.barScope);
 }
 
 // ---- capture -----------------------------------------------------------------
@@ -4447,11 +4517,12 @@ export interface DecisionState {
 }
 
 /**
- * Rows that wait on you first; what is on its way last. Changed items (Update
- * or Review) sort before the others. An item whose last check is `changed`
- * and whose owner is not you (`me`) is a Review row; every other item is an
- * Update row (R64). Only impact checks make rows: a sweep never does, going
- * or failed.
+ * Rows that wait on you first; what is on its way last. A check that did not
+ * finish (Retry) comes right after the decisions to approve: it needs you, and
+ * further down a long Home would hide it. Changed items (Update or Review)
+ * sort before the others. An item whose last check is `changed` and whose
+ * owner is not you (`me`) is a Review row; every other item is an Update row
+ * (R64). Only impact checks make rows: a sweep never does, going or failed.
  */
 export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readonly PersonRunV1[], open: HomeView | null, me: string | null): NeedRow[] {
   const byApproval = new Map(runs.filter(run => run.trigger === 'approved_record').map(run => [run.event_ref, run]));
@@ -4474,11 +4545,11 @@ export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readon
   const items = open?.items ?? [];
   const changed = (item: OpenItemView) => item.check?.verdict === 'changed';
   return [
-    ...approve,
+    ...approve, ...failed,
     ...(open?.send ?? []).map(send => ({ kind: 'send' as const, send })),
     ...items.filter(changed).map((item): NeedRow => ({ kind: me === null || item.owner.membership_id === me ? 'update' : 'review', item })),
     ...items.filter(item => !changed(item)).map((item): NeedRow => ({ kind: 'update', item })),
-    ...failed, ...checking,
+    ...checking,
   ];
 }
 

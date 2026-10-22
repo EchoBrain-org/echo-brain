@@ -4,8 +4,8 @@ import type { Member, OpenItemView } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
-  ACTIVE_STATES, checkWords, CLOSED_STATES, followUpCount, itemGroups, itemHistory, itemKind, itemNames, itemTitle, joined, liveFacts, matchesNow, monthDay,
-  ownerUnmatched, ownerWords, reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
+  ACTIVE_STATES, checkWords, CLOSED_STATES, followUpProgress, itemGroups, itemHistory, itemKind, itemNames, itemTitle, joined, liveFacts, matchesNow, monthDay,
+  ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
 } from '../needs.js';
 import {
   awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps,
@@ -17,6 +17,7 @@ import { Face } from './card.js';
 import { within } from './change.js';
 import { Chevron } from './icons.js';
 import { useKeptPlace } from './items.js';
+import { ProgressBar } from './progress-bar.js';
 
 /** A person, as a chip: their initials in their color, and their first name. */
 function Chip({ person, label }: { person: { membership_id: string; name: string }; label: string }) {
@@ -160,16 +161,21 @@ function Row({ state, list, item, label, name }: { state: State; list: FollowUpL
   </>;
 }
 
-/** The list's head: its name, and under it what it is ("Approved Oct 6 · 4 follow-ups", or the project), with Check now. */
+/**
+ * The list's head: its name, and under it what it is, with Check now. A
+ * meeting's says how far its follow-ups have come ("Approved Oct 6 · 1 of 4
+ * sent · 0 done", dismissed ones left out), with a thin bar under it; a
+ * project's says the project.
+ */
 function Head({ list }: { list: FollowUpList }) {
-  const total = list.summary && summaryTotal(list.summary);
+  const progress = list.scope === 'record' && list.summary ? followUpProgress(list.summary) : null;
   const decision = listDecision(list);
   const heading = list.scope === 'record' ? list.title ?? decision?.title ?? 'Follow-ups' : list.ids ? list.title ?? 'Follow-ups' : 'Follow-ups';
   const day = decision ? monthDay(decision.approved_at) : null;
   // A meeting's approval opens its decision page over the list, when you approved it.
   const approved = list.scope !== 'record' || !day ? null
     : list.stage?.mine ? <button type="button" class="link-button inline faint-link" onClick={() => void openListDecision()}>Approved {day}</button> : <span>Approved {day}</span>;
-  const count = list.scope === 'record' && total !== null ? followUpCount(total) : null;
+  const count = progress && progress.total > 0 ? progressWords(progress) : null;
   return (
     <header class="follow-ups-head">
       <h1 tabIndex={-1}>{heading}</h1>
@@ -179,6 +185,7 @@ function Head({ list }: { list: FollowUpList }) {
           <CheckNow list={list} />
         </div>
       )}
+      {progress && <ProgressBar progress={progress} />}
     </header>
   );
 }
@@ -189,8 +196,9 @@ function Head({ list }: { list: FollowUpList }) {
  * whole list. Current work comes first, with its own More; once it is read to
  * its end, each closed group, which opens and closes (yours and a project's
  * start closed), with its own. Send N and Dismiss N act on the ticked Not sent
- * rows; the list stays where it was, and its foot says what happened. Every
- * row opens its page, and Back returns to that row.
+ * rows, right under them (held at the window's foot while the list runs
+ * past it); the list stays where it was, and the same foot says what
+ * happened. Every row opens its page, and Back returns to that row.
  */
 export function FollowUps({ state, list }: { state: State; list: FollowUpList }) {
   const { column, returned } = useKeptPlace(`follow-ups:${list.seq}`);
@@ -251,7 +259,17 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
   return (
     <div class="column follow-ups" data-testid="follow-ups" ref={column} aria-busy={list.loading || list.busy}>
       <Head list={list} />
-      {ACTIVE_STATES.map(group)}
+      {group('unsent')}
+      {/* Under the Not sent rows it acts on. No tick and nothing said: it takes no room, and its status line stays where a screen reader hears it. */}
+      <div class={foot ? 'follow-ups-foot' : 'sr-only'} data-testid="follow-ups-foot">
+        {ticked > 0 && <>
+          <button type="button" class="primary-button small" disabled={list.busy || list.loading} onClick={() => void sendTicked(true)}>Send {ticked}</button>
+          <button type="button" class="plain-button small" disabled={list.busy || list.loading} onClick={() => void sendTicked(false)}>Dismiss {ticked}</button>
+        </>}
+        {list.busy && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
+        <SaidLine said={list.said} testid="follow-ups-said" line={said} />
+      </div>
+      {group('open')}
       {more('active')}
       {CLOSED_STATES.map(closedGroup)}
       {list.loading && list.items.length === 0 && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
@@ -262,15 +280,6 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
           <button type="button" class="link-button" disabled={list.loading} onClick={() => void retryFollowUps()}>Try again</button>
         </div>
       )}
-      {/* No tick and nothing said: the foot takes no room, and its status line stays where a screen reader hears it. */}
-      <div class={foot ? 'follow-ups-foot' : 'sr-only'} data-testid="follow-ups-foot">
-        {ticked > 0 && <>
-          <button type="button" class="primary-button small" disabled={list.busy || list.loading} onClick={() => void sendTicked(true)}>Send {ticked}</button>
-          <button type="button" class="plain-button small" disabled={list.busy || list.loading} onClick={() => void sendTicked(false)}>Dismiss {ticked}</button>
-        </>}
-        {list.busy && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
-        <SaidLine said={list.said} testid="follow-ups-said" line={said} />
-      </div>
     </div>
   );
 }

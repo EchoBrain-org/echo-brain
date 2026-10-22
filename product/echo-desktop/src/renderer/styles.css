@@ -35,6 +35,8 @@
   --field: #0F1013;
   --hover: rgba(255, 255, 255, 0.04);
   --selected: rgba(255, 255, 255, 0.075);
+  /* A tag's quiet fill: a word that only says something, never a control. */
+  --tag: rgba(255, 255, 255, 0.07);
   --line: rgba(255, 255, 255, 0.07);
   --line-strong: rgba(255, 255, 255, 0.12);
   --control: rgba(255, 255, 255, 0.28);
@@ -90,6 +92,7 @@
     --field: #F4F4F2;
     --hover: rgba(17, 17, 19, 0.04);
     --selected: rgba(17, 17, 19, 0.06);
+    --tag: rgba(17, 17, 19, 0.055);
     --line: rgba(17, 17, 19, 0.08);
     --line-strong: rgba(17, 17, 19, 0.14);
     --control: rgba(17, 17, 19, 0.32);
@@ -199,6 +202,8 @@ input[type="checkbox"]:disabled { cursor: default; }
 .side-row .hint { font-family: var(--mono); font-size: 11px; color: var(--faint); }
 .sidebar-list { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; gap: 1px; padding: 0 10px 8px; overflow-y: auto; }
 .side-header { padding: 18px 10px 6px; font-size: 12px; font-weight: 500; color: var(--faint); }
+/* A header with its own action at the right end (Projects' "+"), lined up with the rows' "…" and as tall as the plain header. */
+.side-header.with-action { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 4px 0 10px; }
 .side-project { height: 32px; }
 .side-project-row { display: flex; align-items: center; flex-shrink: 0; min-width: 0; border-radius: 8px; padding-right: 4px; }
 .side-project-row .side-project { flex: 1; min-width: 0; }
@@ -260,6 +265,12 @@ button.account-row:hover { background: var(--raise); }
 .match-row .label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .match-row .meta { flex-shrink: 0; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
 .match-row.ask-row { color: var(--text); }
+/* Try asking: the empty bar's suggestions, one lit by the arrow keys. */
+.match-row.suggestion.active { background: var(--selected); }
+/* The bar counts from 200 characters; at its limit the count turns and a line under the bar says why it stops. */
+.bar-count { flex-shrink: 0; padding: 0 4px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.bar-count.full { color: var(--signal-text); }
+.bar-note { position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%); font-size: 12px; line-height: 18px; color: var(--signal-text); white-space: nowrap; }
 .matches-rule { height: 1px; flex-shrink: 0; margin: 4px 6px; background: var(--line); }
 .matches-note { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; color: var(--faint); }
 
@@ -678,7 +689,7 @@ button.toast:hover { background: var(--panel); }
 .impact-head h4 { margin: 0; }
 .impact-head .asking { font-size: 12.5px; }
 
-/* Home: only what needs you. One row per decision or item, the verb and its shape on the left, the project on the right. */
+/* Home: only what needs you. One row per decision or item: the verb and its shape on the left, then its title, and a second line that opens with where and when. */
 .column.needs { overflow-y: auto; gap: 2px; padding: 4px 0; }
 .column.needs.empty { overflow: hidden; }
 .needs-head { display: flex; align-items: baseline; gap: 10px; margin: 0; padding: 18px 14px 10px; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
@@ -687,11 +698,10 @@ button.toast:hover { background: var(--panel); }
 .need-row:hover:not(:disabled) { background: var(--hover); }
 .need-row:disabled { cursor: default; }
 .need-kind { flex-shrink: 0; width: 92px; height: 21px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 500; }
+/* Only what asks you to act now is coloured: Approve, and Retry. Send, Update, Review and Checking keep their mark and word, in grey. */
+.need-row .need-kind { color: var(--muted); }
 .need-row.approve .need-kind { color: var(--approve); }
-.need-row.send .need-kind { color: var(--send); }
-.need-row.update .need-kind { color: var(--update); }
-.need-row.review .need-kind, .need-row.failed .need-kind { color: var(--review); }
-.need-row.checking .need-kind { color: var(--faint); }
+.need-row.failed .need-kind { color: var(--review); }
 .need-text { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .need-title { font-size: 15px; font-weight: 500; line-height: 1.4; letter-spacing: -0.005em; }
 .need-row.checking .need-title { color: var(--muted); }
@@ -700,16 +710,21 @@ button.toast:hover { background: var(--panel); }
 .need-detail b { font-weight: 500; color: var(--muted); }
 .need-open { height: 28px; padding: 0 10px; border: 0; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--muted); background: transparent; }
 .need-open:hover { color: var(--text); background: var(--hover); }
-.need-side { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 7px; padding-top: 1px; }
-.need-when { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
-.need-project { display: flex; align-items: center; gap: 7px; max-width: 200px; font-size: 12.5px; color: var(--muted); }
-.need-project span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.need-dot { width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; font-size: 9.5px; font-weight: 600; }
-.need-side .asking { gap: 4px; }
+/* Where and when open the second line, in its own colour: the project's mark and name ("+1" for more), then the time. */
+.need-where { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; vertical-align: middle; white-space: nowrap; }
+.need-where-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.need-where-more { flex-shrink: 0; }
+.need-dot { width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; margin: -2px 0; border-radius: 5px; font-size: 9.5px; font-weight: 600; }
+.need-detail .asking { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
+/* Past ten rows Home groups them, in its order, each group showing five rows until Show N more opens it. */
+.needs-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
+.needs-group-head { margin: 0; padding: 16px 14px 4px; }
+.needs-more { align-self: flex-start; margin: 2px 6px 6px; font-size: 13px; }
 .home-clear { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; font-size: 14px; color: var(--muted); }
-/* Under the rows, and on an empty Home: what waits on others, when ECHO last checked, and Follow-ups. */
-.needs-foot { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 14px 14px 4px; font-size: 12.5px; color: var(--faint); }
-.needs-foot-words { flex-grow: 1; min-width: 0; }
+/* Under the rows, and on an empty Home: one line. Its link (what waits on others, else Follow-ups), then when ECHO last checked. */
+.needs-foot { flex-shrink: 0; margin-top: auto; padding: 14px 14px 4px; font-size: 12.5px; line-height: 1.5; color: var(--faint); }
+.needs-foot-link { font-weight: 500; color: var(--muted); }
+.needs-foot-link:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
 .side-row .badge { min-width: 20px; height: 18px; padding: 0 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--on-signal); background: var(--signal); }
 
 /* A decision, from Home: one card, the question on top, the button at its foot. */
@@ -741,7 +756,8 @@ button.items-line:hover { background: var(--raise); }
 .items-line .link-button { flex-shrink: 0; padding: 2px 6px; }
 .items-line-check { flex-shrink: 0; display: flex; align-items: center; padding: 2px 6px; white-space: nowrap; }
 .items-line-check .link-button { padding: 2px 4px; }
-.project-line { margin-bottom: 8px; }
+.project-line { flex-wrap: wrap; row-gap: 8px; margin-bottom: 8px; }
+.project-line .progress-bar { flex: 1 0 100%; margin-bottom: 4px; }
 
 .item-row .open-count { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .item-row .open-count::before { content: ""; width: 6px; height: 6px; border-radius: 3px; background: var(--send); }
@@ -809,13 +825,16 @@ button.items-line:hover { background: var(--raise); }
 .card-num { width: 22px; height: 22px; flex-shrink: 0; margin-top: 1px; display: flex; align-items: center; justify-content: center; border-radius: 6px; font-family: var(--mono); font-size: 11.5px; font-weight: 500; color: var(--muted); background: var(--selected); }
 .card-row-body { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .card-text { font-size: 15.5px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-line; }
-.card-tag { display: inline-block; margin-left: 8px; padding: 0 7px; border: 1px dashed var(--control); border-radius: 6px; font-size: 11.5px; font-weight: 500; line-height: 18px; color: var(--muted); vertical-align: 2px; }
+/* A tag only says something (Proposed, Unresolved): a quiet solid chip. Dashed borders are kept for slots to fill and places to drop. */
+.card-tag { display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 6px; font-size: 11.5px; font-weight: 500; line-height: 20px; color: var(--muted); background: var(--tag); vertical-align: 2px; }
 .card-subject { display: inline-block; margin-left: 8px; font-family: var(--mono); font-size: 12px; color: var(--faint); }
-.card-toggle { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border: 0; border-radius: 7px; font-size: 12.5px; color: var(--faint); background: transparent; white-space: nowrap; }
-.card-toggle:hover, .card-toggle.open { color: var(--text); background: var(--selected); }
+/* In the meeting: a pill that reads as a button at rest, lit on hover, filled while its words show. */
+.card-toggle { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 13px; font-size: 12.5px; color: var(--muted); background: transparent; white-space: nowrap; }
+.card-toggle:hover { color: var(--text); background: var(--hover); }
+.card-toggle.open, .card-toggle.open:hover { border-color: transparent; color: var(--text); background: var(--selected); }
 .card-toggle svg { width: 10px; height: 10px; transform: rotate(90deg); transition: transform 120ms ease; }
 .card-toggle.open svg { transform: rotate(-90deg); }
-.card-toggle.wide { align-self: flex-start; margin-left: -8px; font-size: 13px; color: var(--muted); }
+.card-toggle.wide { align-self: flex-start; margin-left: -8px; padding: 0 8px; border-color: transparent; border-radius: 7px; font-size: 13px; color: var(--muted); }
 .card-toggle.wide svg { transform: none; }
 .card-toggle.wide.open svg { transform: rotate(90deg); }
 .said { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; line-height: 1.5; background: var(--field); }
@@ -849,13 +868,19 @@ button.items-line:hover { background: var(--raise); }
 .card-delta-label.needs::before { width: 7px; height: 7px; border: 0; border-radius: 1px; background: var(--approve); transform: rotate(45deg); }
 .card-delta-now { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: var(--muted); }
 
-/* Follow-ups (follow-ups thread v1): a list grouped by status, each row opening its page; Send and Dismiss at its foot. */
+/* Follow-ups (follow-ups thread v1): a list grouped by status, each row opening its page; Send and Dismiss under the Not sent rows. */
 .column.follow-ups { gap: 20px; padding: 10px 0 4px; }
 .follow-ups-head { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
 .follow-ups-head h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
 .follow-ups-head h1:focus, #follow-up-title:focus, #decision-ask:focus { outline: none; }
 .follow-ups-sub { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--faint); }
 .follow-ups-sub .need-open { margin-left: -4px; }
+/* How far follow-ups have come: done, then sent and still open, over the not sent track. */
+.progress-bar { flex-shrink: 0; display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: var(--line-strong); }
+.progress-bar span { flex: none; height: 100%; }
+.progress-bar .done { background: var(--done); }
+.progress-bar .open { background: color-mix(in srgb, var(--approve) 60%, transparent); }
+.follow-ups-head .progress-bar { margin-top: 4px; }
 .result-line { flex-shrink: 0; font-size: 13.5px; color: var(--muted); }
 .result-line.error { color: var(--danger); }
 .result-line .link-button { padding: 2px 4px; }
@@ -879,7 +904,9 @@ button.items-line:hover { background: var(--raise); }
 @media (prefers-reduced-motion: reduce) { .reading-title { animation: none; } }
 /* A closed group opens and closes ("Done · 12"). */
 .follow-ups-group .disclosure { margin-left: -4px; padding: 2px 4px; }
-.follow-ups-foot { position: sticky; bottom: 0; flex-shrink: 0; display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 12px 0 4px; background: var(--ink); }
+/* Right under the Not sent rows; held at the window's foot only while the list runs past it, the rows fading under it. */
+.follow-ups-foot { position: sticky; bottom: 0; flex-shrink: 0; display: flex; align-items: center; gap: 10px; margin-top: -8px; padding: 8px 0; background: var(--ink); box-shadow: 0 8px 0 var(--ink); }
+.follow-ups-foot::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 12px; background: linear-gradient(transparent, var(--ink)); pointer-events: none; }
 .follow-ups-foot .primary-button.small { align-self: auto; }
 .follow-ups-foot .result-line { min-width: 0; }
 .owner-button { padding: 0; border: 0; border-radius: 8px; background: transparent; }

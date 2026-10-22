@@ -23,8 +23,9 @@ test('Mine lists only what you added, newest first, with what each is, where it 
   run = await launch('mine');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  // Under New project, above Follow-ups and your projects; Tools stays at the bottom.
-  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText(['Home', /Capture/, 'New project', 'Mine', 'Follow-ups', 'Tools']);
+  // Under Capture, above Follow-ups and your projects; Tools stays at the bottom. New project is the Projects header's "+".
+  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText(['Home', /Capture/, 'Mine', 'Follow-ups', 'Tools']);
+  await expect(page.getByTestId('sidebar-projects-header').getByRole('button', { name: 'New project' })).toBeVisible();
   await page.getByTestId('sidebar-mine').click();
   await expect(page.getByTestId('title')).toHaveText('Mine');
   await expect(page.getByTestId('back')).toHaveText('Home');

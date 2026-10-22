@@ -7,7 +7,7 @@ import {
   openYourFollowUps, settleWords, showAccountMenu, signInAgain, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Capture, Chevron, FolderPlus, Home as HomeIcon, OnePerson, People, Person, Plug, Ticks, Up } from './icons.js';
+import { Capture, Chevron, Home as HomeIcon, OnePerson, People, Person, Plug, Plus, Ticks, Up } from './icons.js';
 import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
@@ -85,11 +85,13 @@ export function SignInDueRow({ state }: { state: State }) {
 }
 
 /**
- * Always beside the page: Capture, New project, Mine, Follow-ups (everything
- * you sent, own or last handed on), your projects (one click switches), People & invites for
- * owners, Tools, a new version, the weekly sign-in once it is a day away, and who is signed in. It shares the list Home loads. While another app is in front
- * the page is covered, but the project rows stay, so a dropped file lands.
- * Mine never takes a drop.
+ * Always beside the page: Capture, Mine, Follow-ups (everything you sent, own
+ * or last handed on), your projects (one click switches) under a Projects
+ * header whose "+" starts a new project, People & invites for owners, Tools,
+ * a new version, the weekly sign-in once it is a day away, and who is signed
+ * in. It shares the list Home loads. While another app is in front the page is
+ * covered, but the project rows stay, so a dropped file lands. Mine never
+ * takes a drop.
  */
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
@@ -115,9 +117,6 @@ export function Sidebar({ state }: { state: State }) {
           <button type="button" class="side-row" data-testid="sidebar-capture" onClick={() => openCompose()}>
             <Capture /><span class="label">Capture</span><span class="hint">{CAPTURE_HINT}</span>
           </button>
-          <button type="button" class="side-row" data-testid="sidebar-new-project" onClick={openNewProject}>
-            <FolderPlus /><span class="label">New project</span>
-          </button>
           <button type="button" class={`side-row${mine ? ' current' : ''}`} data-testid="sidebar-mine" aria-current={mine ? 'page' : undefined}
             onClick={() => void openMine()} onDragOver={noDrop} onDrop={noDrop}>
             <OnePerson /><span class="label">Mine</span>
@@ -129,9 +128,15 @@ export function Sidebar({ state }: { state: State }) {
         </div>
       )}
       <nav class="sidebar-list" aria-label="Projects">
-        {account && (items.length > 0 || failure) && (
+        {account && (
           <>
-            <div class="side-header">Projects</div>
+            {/* Shown signed in even with no projects yet, so a new project is always one click away. */}
+            <div class="side-header with-action" data-testid="sidebar-projects-header">
+              <span>Projects</span>
+              <button type="button" class="icon-button" data-testid="sidebar-new-project" aria-label="New project" title="New project" onClick={openNewProject}>
+                <Plus />
+              </button>
+            </div>
             {items.filter(project => project.status === 'active').map(project => <SidebarProject key={project.project_id} project={project} current={project.project_id === current} state={state} />)}
             {next && (
               <button type="button" class="link-button side-more" data-testid="sidebar-more" disabled={loading} onClick={() => void loadProjects(true)}>

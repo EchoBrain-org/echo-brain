@@ -592,3 +592,45 @@ test('a quick Ask shows nothing more, and its source opens the cited decision li
   await expect(reader.locator('.record-item.on')).toHaveText(/^Cited: Ship Apollo with annual plans first\./);
   expect(opens()).toEqual([`meeting:${RECORD}`]);
 });
+
+test('an empty bar offers what to ask once you go to it: Up lights one, Return asks it, Escape only closes them, and typing hides them', async () => {
+  run = await launch();
+  const { page } = run;
+  const field = page.getByTestId('ask-field');
+  const offered = page.getByTestId('suggestions');
+  const suggestions = page.getByTestId('suggestion');
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  // The caret only waiting in the bar offers nothing.
+  await expect(offered).toHaveCount(0);
+
+  // In a project, a click on the empty bar offers its questions; Escape closes them and the page stays.
+  await page.getByTestId('sidebar-project').first().click();
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
+  await field.click();
+  await expect(offered).toContainText('Try asking');
+  await expect(suggestions.last()).toHaveText(/\?$/);
+  const count = await suggestions.count();
+  expect(count).toBeGreaterThanOrEqual(1);
+  expect(count).toBeLessThanOrEqual(3);
+  await field.press('Escape');
+  await expect(offered).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
+
+  // Up goes into them from the bar, to the row nearest it; Return asks it in the project.
+  await field.press('ArrowUp');
+  await expect(suggestions.last()).toHaveAttribute('aria-selected', 'true');
+  await expect(field).toHaveAttribute('aria-activedescendant', `ask-suggestion-${count - 1}`);
+  const chosen = (await suggestions.last().textContent())!;
+  await field.press('Enter');
+  await expect(page.getByTestId('question')).toHaveText(chosen);
+  await expect.poll(questions).toEqual([chosen]);
+  await expect(offered).toHaveCount(0);
+
+  // Back on the project, what was asked there comes first; typing hides the suggestions.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
+  await field.click();
+  await expect(suggestions.first()).toHaveText(chosen);
+  await field.pressSequentially('sh');
+  await expect(offered).toHaveCount(0);
+});

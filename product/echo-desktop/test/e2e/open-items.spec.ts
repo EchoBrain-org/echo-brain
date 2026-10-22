@@ -43,7 +43,8 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await send.click();
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
-  await expect(list).toContainText(`Approved ${day('2026-10-07T10:00:00.000Z')} · 4 follow-ups`);
+  // How far its follow-ups have come: none sent yet, of four.
+  await expect(list).toContainText(`Approved ${day('2026-10-07T10:00:00.000Z')} · 0 of 4 sent · 0 done`);
   // Not sent: the meeting's actions first, then what its check found; every row ticked, as one click sends them all.
   const unsent = group(list, 'Not sent');
   await expect(unsent.getByText('Not sent · 4')).toBeVisible();
@@ -168,7 +169,7 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
   const { page } = app;
   const rows = page.getByTestId('need-row');
   // Home's rows, before any live read answered: a document named by what it is and its meeting, faintly, while ECHO reads it.
-  const pilot = rows.filter({ hasText: 'Decision needs: launch next week' });
+  const pilot = rows.filter({ hasText: 'Needs: launch next week' });
   await expect(pilot).toContainText('Jira ticket · Pilot planning');
   await expect(pilot.locator('[data-reading]')).toHaveCount(1);
   await expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'true');
@@ -177,7 +178,7 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
   // The live read answers: titles and what each says now fill in, in place.
   rmSync(join(app.home, 'hold-live'));
   await expect(pilot).toContainText('ECHO-12 · Pilot launch');
-  await expect(pilot).toContainText('Due Oct 30 → decision needs: launch next week');
+  await expect(pilot).toContainText('Needs: launch next week · Now: In Progress, due Oct 30');
   await expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
   await expect(page.locator('[data-reading]')).toHaveCount(0);
 });
@@ -250,9 +251,11 @@ test('a reader who cannot open an item sees what it is, never what it says', asy
   // Ari reads Pilot planning, but cannot open this ticket in Jira.
   const home = page.getByTestId('need-row').filter({ hasText: 'confirm the trace by Friday' });
   await expect(home).toContainText('A Jira ticket you can\'t open');
-  await expect(home).toContainText('Decision needs: confirm the trace by Friday');
-  // A meeting Ari cannot read is never named: who sent the item is.
-  await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toContainText('Jira ticket · sent by Mina');
+  await expect(home).toContainText('Needs: confirm the trace by Friday');
+  // A meeting Ari cannot read is never named: the row says what the decision needs; who sent it is on its page.
+  const vendor = page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' });
+  await expect(vendor).toContainText('Needs: order six weeks ahead');
+  await expect(vendor).not.toContainText('Vendor review');
   await home.click();
   const item = page.getByTestId('follow-up');
   await expect(item.getByRole('heading', { name: 'A Jira ticket you can\'t open' })).toBeVisible();
@@ -378,7 +381,8 @@ test('Home sweeps by itself, and the Follow-ups page lists everything you sent o
   expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
   expect(runOperations().indexOf('start')).toBeGreaterThan(runOperations().indexOf('sweep'));
   await expect(page.getByTestId('need-row')).toHaveCount(1);
-  await foot.getByRole('button', { name: 'Follow-ups' }).click();
+  // The footer's one link is named for what waits on others, and opens Follow-ups.
+  await foot.getByRole('button', { name: '4 waiting on others', exact: true }).click();
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Follow-ups', exact: true })).toBeVisible();
   // Every status, current work first; the meeting's actions first; a match says so, faintly.
@@ -400,7 +404,9 @@ test('every Home row opens its follow-up\'s page', async () => {
   // ECHO-12 is Mina's, sent by Ari, and changed since: a Review row (R64). Ari's own changed page stays an Update row.
   const review = rows.filter({ hasText: 'ECHO-12' });
   await expect(review).toHaveAttribute('data-kind', 'review');
-  await expect(review).toContainText(`Jira ticket · ${ARI_PILOT} · Mina's to update`);
+  await expect(review).toContainText('Needs: launch next week · Now: In Progress, due Oct 30 · Mina\'s to update');
+  // Where it came from is on its page, not on Home's row.
+  await expect(review).not.toContainText(ARI_PILOT);
   await expect(review).not.toContainText('changed');
   const update = rows.filter({ hasText: 'Thermostat PRD' });
   await expect(update).toHaveAttribute('data-kind', 'update');

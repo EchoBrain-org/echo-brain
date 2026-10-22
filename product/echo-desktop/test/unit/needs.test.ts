@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, activeTotal, checkWords, followUpCount, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemNames, itemNeeds, itemTitle, itemWhy,
-  liveFacts, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerUnmatched, ownerWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
+  actionCount, activeTotal, checkWords, followUpCount, followUpProgress, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemLine, itemNames, itemTitle,
+  liveFacts, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
@@ -88,9 +88,6 @@ describe('the words Home and the follow-ups use', () => {
   });
 
   it('never writes "meeting" after a title that already ends with it (R76)', () => {
-    const from = (title: string) => itemWhy(item({ decision: { ...pilot, title } }), person.membership_id);
-    expect(from('Pilot planning')).toBe('Jira ticket · Pilot planning meeting, approved Oct 6');
-    expect(from('Approved meeting')).toBe('Jira ticket · Approved meeting, approved Oct 6');
     expect([meetingSuffix('Pilot planning'), meetingSuffix('Approved meeting'), meetingSuffix('Team Meeting')]).toEqual([' meeting', '', '']);
   });
 });
@@ -128,6 +125,16 @@ describe('one status vocabulary (F7)', () => {
     expect(stateCounts({ ...summary, unsent: 3, open: 1 })).toBe('1 open · 3 not sent');
   });
 
+  it('says how far a meeting\'s follow-ups have come: sent is open and done, and dismissed ones count in none of it', () => {
+    const of = (counts: Partial<typeof summary>) => followUpProgress({ ...summary, ...counts });
+    expect(of({ unsent: 3, open: 1, not_relevant: 2 })).toEqual({ total: 4, sent: 1, unsent: 3, open: 1, done: 0 });
+    expect(progressWords(of({ unsent: 3, open: 1, not_relevant: 2 }))).toBe('1 of 4 sent · 0 done');
+    expect(progressWords(of({ open: 2, done: 3, not_relevant: 1 }))).toBe('5 of 5 sent · 3 done');
+    // A check's verdict never moves one: a landed item is still open.
+    expect(of({ unsent: 1, open: 2, landed: 2 })).toEqual({ total: 3, sent: 2, unsent: 1, open: 2, done: 0 });
+    expect(of({ not_relevant: 2 }).total).toBe(0);
+  });
+
   it('says a meeting\'s follow-ups by status, and with none how its check stands', () => {
     const stage = { record_sha256: 'sha256:1', run_id: 'run_00000001', mine: true };
     // Canvas 9.6: a landed or unreadable item is still open; nothing is "handled" or "couldn't read".
@@ -160,7 +167,7 @@ describe('ECHO\'s re-reads, kept underneath', () => {
   const checked = (verdict: NonNullable<OpenItemView['check']>['verdict']) => ({ verdict, checked_at: ago(120), checked_by: 'Mina Patel' });
 
   it('says when a check ran as the canvas does', () => {
-    const checkedAgo = (iso: string, at: number) => homeFooter({ waiting: 0, last_checked_at: iso }, at)!.replace('ECHO checked ', '');
+    const checkedAgo = (iso: string, at: number) => homeFooter({ waiting: 0, last_checked_at: iso }, at).checked!.replace('ECHO checked ', '');
     expect([checkedAgo(ago(0), now), checkedAgo(ago(0.5), now), checkedAgo(new Date(now + 30_000).toISOString(), now)]).toEqual(['just now', 'just now', 'just now']);
     expect([checkedAgo(ago(1), now), checkedAgo(ago(59), now)]).toEqual(['1 min ago', '59 min ago']);
     expect([checkedAgo(ago(60), now), checkedAgo(ago(120), now), checkedAgo(ago(359), now)]).toEqual(['1 h ago', '2 h ago', '5 h ago']);
@@ -181,11 +188,13 @@ describe('ECHO\'s re-reads, kept underneath', () => {
     expect([matchesNow(item({ check: checked('landed') })), matchesNow(item({ check: checked('changed') })), matchesNow(item())]).toEqual(['matches now', null, null]);
   });
 
-  it('sums up under Home\'s rows what waits on others and when ECHO checked, never what matches', () => {
-    expect(homeFooter({ waiting: 1, last_checked_at: ago(120) }, now)).toBe('1 waiting on others · ECHO checked 2 h ago');
-    expect(homeFooter({ waiting: 2, last_checked_at: null }, now)).toBe('2 waiting on others');
-    expect(homeFooter({ waiting: 0, last_checked_at: ago(120) }, now)).toBe('ECHO checked 2 h ago');
-    expect(homeFooter({ waiting: 0, last_checked_at: null }, now)).toBeNull();
+  it('sums up under Home\'s rows what waits on others, as its link, and when ECHO checked, never what matches', () => {
+    expect(homeFooter({ waiting: 1, last_checked_at: ago(120) }, now)).toEqual({ link: '1 waiting on others', checked: 'ECHO checked 2 h ago' });
+    expect(homeFooter({ waiting: 2, last_checked_at: null }, now)).toEqual({ link: '2 waiting on others', checked: null });
+    // Nothing waits on others: the link is still there, to Follow-ups; so it is before Home is read.
+    expect(homeFooter({ waiting: 0, last_checked_at: ago(120) }, now)).toEqual({ link: 'Follow-ups', checked: 'ECHO checked 2 h ago' });
+    expect(homeFooter({ waiting: 0, last_checked_at: null }, now)).toEqual({ link: 'Follow-ups', checked: null });
+    expect(homeFooter(null, now)).toEqual({ link: 'Follow-ups', checked: null });
   });
 });
 
@@ -199,20 +208,33 @@ describe('Home item rows and the item page', () => {
   /** ECHO-12, sent by Ari to Mina. */
   const theirs = item({ approver: ari, owner: { ...mina, match: 'jira_account' }, decision: pilot, current: { source: ticket, says_now: 'Planned.', assignee: 'Mina Patel', due_at: '2026-10-30' } });
 
-  it('says on a document\'s second line what it says now and what the meeting needs, and nothing for an action', () => {
-    expect(itemNeeds(own)).toBe('Says "starts after freeze" → decision needs: pilot starts next week');
-    expect(itemNeeds(theirs)).toBe('Due Oct 30 → decision needs: launch next week');
-    expect(itemNeeds(item())).toBe('Decision needs: launch next week');
-    expect(itemNeeds(item({ expected: null }))).toBeNull();
-    expect(itemNeeds(action())).toBeNull();
+  it('says on a row\'s second line what the meeting needs, what the item says now, and whose it is, in plain words', () => {
+    const facts = (current: Partial<NonNullable<OpenItemView['current']>>) => ({ current: { source: ticket, says_now: 'Planned.', ...current } });
+    // The founder's example: a ticket Mina owns, read live just now.
+    expect(itemLine(item({ expected: 'qualified before DVT-R2 starts Nov 2', ...facts({ status: 'In Review', due_at: '2026-11-20', assignee: 'Mina Patel' }) }), ari.membership_id))
+      .toBe('Needs: qualified before DVT-R2 starts Nov 2 · Now: In Review, due Nov 20 · Mina\'s to update');
+    // The tool's facts: its status and due date, in that order; its assignee is never said twice beside whose it is.
+    expect(itemLine(theirs, ari.membership_id)).toBe('Needs: launch next week · Now: due Oct 30 · Mina\'s to update');
+    expect(itemLine(item({ owner: { ...ari, match: 'jira_account' }, ...facts({ status: 'Blocked' }) }), ari.membership_id)).toBe('Needs: launch next week · Now: Blocked');
+    // A page with neither says what it says now, its own words cut short.
+    expect(itemLine(own, ari.membership_id)).toBe('Needs: pilot starts next week · Now: “starts after freeze”');
+    expect(itemLine(item({ owner: { ...ari, match: 'picked' }, ...facts({ says_now: 'x'.repeat(100) }) }), ari.membership_id))
+      .toBe(`Needs: launch next week · Now: “${'x'.repeat(79)}…”`);
+    // Not opened for you (yet, or ever): what the meeting needs, and whose it is.
+    expect(itemLine(item({ approver: mina, owner: { ...ari, match: 'picked' } }), ari.membership_id)).toBe('Needs: launch next week');
+    expect(itemLine(item({ owner: { ...OKAFOR, match: 'name' } }), ari.membership_id)).toBe('Needs: launch next week · S. Okafor\'s to update');
+    // Where it came from is on its page, never on the row.
+    expect(itemLine(theirs, ari.membership_id)).not.toContain('Pilot planning');
   });
 
-  it('says on the muted line what an item is, its meeting, and whose it is, never what a check found', () => {
-    expect(itemWhy(own, ari.membership_id, null)).toBe('Confluence page · Pilot planning meeting, approved Oct 6');
-    expect(itemWhy(theirs, ari.membership_id, null)).toBe('Jira ticket · Pilot planning meeting, approved Oct 6 · Mina\'s to update');
-    expect(itemWhy(action({ owner: { ...ari, match: 'name' } }), ari.membership_id, null)).toBe('Meeting action · Pilot planning meeting, approved Oct 6');
-    expect(itemWhy(item({ approver: mina, owner: { ...ari, match: 'picked' } }), ari.membership_id, null)).toBe('Jira ticket · sent by Mina');
-    expect(itemWhy(item({ owner: { ...OKAFOR, match: 'name' } }), ari.membership_id)).toBe('Jira ticket · sent by Mina · S. Okafor\'s to update');
+  it('never says an action\'s words twice, and says what an item is when there is nothing else to say', () => {
+    expect(itemLine(action({ owner: { ...ari, match: 'name' } }), ari.membership_id)).toBe('Meeting action');
+    expect(itemLine(action(), ari.membership_id)).toBe('Mina\'s to update');
+    expect(itemLine(item({ expected: null, owner: { ...ari, match: 'picked' } }), ari.membership_id)).toBe('Jira ticket');
+    expect(itemLine(item({ kind: 'page', expected: null, owner: { ...ari, match: 'picked' }, current: { source: page, says_now: 'x', status: 'Draft' } }), ari.membership_id, null))
+      .toBe('Now: Draft');
+    // Nobody signed in to compare with: nothing is said to be someone else's.
+    expect(itemLine(theirs, null)).toBe('Needs: launch next week · Now: due Oct 30');
   });
 
   it('shows on the item page what an item says now, else why it is not shown, and its tool\'s facts in one line', () => {
