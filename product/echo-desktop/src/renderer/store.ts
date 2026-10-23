@@ -10,9 +10,9 @@ import type {
   NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
   ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_PROJECT_FILES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { answerSentences, sourceGroups, type SourceGroup } from './answer.js';
+import { answerMarkdown, answerSentences, documentName, MAX_SOURCES, sourceGroups, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
@@ -90,8 +90,13 @@ export interface SourcesState {
    * go if the Ask gets no answer.
    */
   named: readonly AnswerSource[] | null;
-  /** The sentence whose number opened the pane: "direct", or its part and place ("0.2", "0.r1" for a passage found); null when a row did. */
+  /**
+   * The sentence whose number opened the pane: "direct", its part and place ("0.2", "0.r1" for a passage found), or a table
+   * row ("0.t4.1"); null when a source row did.
+   */
   focus: string | null;
+  /** Whether the answer's source rows show: they start closed, as one line; that line or a number opens them (ADR-0045). */
+  listed: boolean;
   /** Approved records read for this answer, by digest. */
   records: Readonly<Record<string, Read<ApprovedRecord>>>;
   /** Meetings read by their ref for a transcript the pane shows, by record digest: the first page, and whether more follows. */
@@ -3388,10 +3393,18 @@ export function cancelAsk(): void {
   startSources();
 }
 
-/** Copy answer: the current answer's text, onto the clipboard. Says whether it got there. */
+/**
+ * Copy answer: the current answer as Markdown (ADR-0045), its sources
+ * numbered and named as the page shows them, onto the clipboard; its plain
+ * text when the Markdown is longer than Copy answer takes. Says whether it got there.
+ */
 export async function copyAnswer(): Promise<boolean> {
-  const text = state.ask?.shown?.answer.text;
-  return text !== undefined && (await rpc('clipboard.writeText', { text })).ok;
+  const answer = state.ask?.shown?.answer;
+  if (answer === undefined) return false;
+  const all = answerSources();
+  const markdown = answerMarkdown(answer, answerGroups().map(group => sourceName(all[group.indexes[0]!]!, state.sources)));
+  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : answer.text;
+  return (await rpc('clipboard.writeText', { text })).ok;
 }
 
 /** Back or Escape: leaves the thread, and it is gone. */
@@ -3402,9 +3415,6 @@ export function closeAsk(): void {
 
 // ---- an answer's sources -----------------------------------------------------
 
-/** What the pane may show: at most 32 sources. */
-export const MAX_SOURCES = 32;
-
 /** The citations of the answer on screen. */
 export function answerSources(current: State = state): readonly AnswerSource[] {
   return current.ask?.shown?.answer.sources.slice(0, MAX_SOURCES) ?? [];
@@ -3413,6 +3423,16 @@ export function answerSources(current: State = state): readonly AnswerSource[] {
 /** The answer's sources, numbered from one: each document, meeting record or live item it cites. */
 export function answerGroups(current: State = state): SourceGroup[] {
   return sourceGroups(answerSources(current));
+}
+
+export const UNTITLED = 'Untitled meeting';
+
+/** What a source is called: a meeting's title once its record is read, a file's name as a person says it. */
+export function sourceName(source: AnswerSource, sources: SourcesState | null): string {
+  if (source.kind === 'original') return documentName(source.label).name;
+  if (source.kind !== 'record') return source.label;
+  const read = sources?.records[source.record.record_sha256];
+  return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
 
 /** What the pane shows: one of the answer's numbered sources, or a place Ask named. */
@@ -3535,7 +3555,7 @@ async function openCitedProject(project_id: string, label: string): Promise<void
 
 /** Nothing open in the pane, nothing read for it yet. */
 function emptySources(): SourcesState {
-  return { gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, followUps: {}, evidence: null };
+  return { gen: ++seq, open: null, focus: null, listed: false, named: null, records: {}, meetings: {}, followUps: {}, evidence: null };
 }
 
 /**
@@ -3551,7 +3571,7 @@ function startSources(keep: ReadonlySet<string> | null = null): void {
   if (sources && named.length > 0) {
     const same = named.length === sources.named!.length;
     // With fewer passages, their places change: they are read again.
-    set({ sources: { ...sources, open: null, focus: null, named, ...(same ? {} : { evidence: null }) } });
+    set({ sources: { ...sources, open: null, focus: null, listed: false, named, ...(same ? {} : { evidence: null }) } });
     if (!same) readPane(sources.gen, named[0]!);
     void readRecords(sources.gen);
     return;
@@ -3643,15 +3663,22 @@ function readPane(gen: number, source: AnswerSource): void {
 
 /**
  * A source's number or row: the pane opens beside the answer on that source,
- * read unless it already was. A sentence's number also names the sentence.
+ * read unless it already was, and the source rows open with it. A sentence's
+ * or a row's number also names it.
  */
 export function chooseSource(group: number, focus: string | null = null): void {
   const sources = state.sources;
   const chosen = answerGroups()[group];
   const source = chosen ? answerSources()[chosen.indexes[0]!] : undefined;
   if (!sources || !source) return;
-  set({ sources: { ...sources, open: group, focus, named: null, evidence: null } });
+  set({ sources: { ...sources, open: group, focus, listed: true, named: null, evidence: null } });
   readPane(sources.gen, source);
+}
+
+/** The sources' line: opens or closes their rows. The pane stays as it is. */
+export function toggleSourceList(): void {
+  const sources = state.sources;
+  if (sources) set({ sources: { ...sources, listed: !sources.listed } });
 }
 
 /**

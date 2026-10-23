@@ -1,10 +1,14 @@
-import type { ComponentChildren } from 'preact';
+import { Fragment, type ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
-  AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, OpenItemView, RecordItem, ToolContainerKind,
+  Answer, AnswerBlock, AnswerPart, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, OpenItemView, RecordItem,
+  ToolContainerKind,
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
-import { answerSentences, documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
+import {
+  answerSentences, coverage, documentName, dueColumn, externalSourceProvider, lateForYou, passageBlocks, rowId, rowStatement, statementGroups, tableDay, yoursIn,
+  type AnswerTable, type Inline, type SourceGroup,
+} from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
@@ -16,10 +20,11 @@ import {
 import {
   answerGroups, answerSources, ask, askEverywhere, askSuggestion, barSuggestions, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject,
   fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, retryEvidence, retryRecord,
-  searchAgain, setBarText, submitBar, suggestionsShown, widenScope, type AskTurn, type PaneTarget, type Read, type RecordSectionKey, type SourcesState, type State,
+  searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleSourceList, widenScope, UNTITLED, type AskTurn, type PaneTarget, type Read, type RecordSectionKey,
+  type State,
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
-import { Check, Chevron, Close, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Ticks, Up } from './icons.js';
+import { Caret, Check, Chevron, Close, Doc, Folder, Info, Lock, Meeting, OnePerson, Plug, Plus, Ticks, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -169,16 +174,6 @@ export function Bar({ state }: { state: State }) {
   );
 }
 
-/** What a source is called: a meeting's title once its record is read, a file's name as a person says it. */
-function sourceName(source: AnswerSource, sources: SourcesState | null): string {
-  if (source.kind === 'original') return documentName(source.label).name;
-  if (source.kind !== 'record') return source.label;
-  const read = sources?.records[source.record.record_sha256];
-  return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
-}
-
-export const UNTITLED = 'Untitled meeting';
-
 /** A source's first citation stands for it: its kind, its label, its record or its link. */
 function firstSource(state: State, group: SourceGroup): AnswerSource {
   return answerSources(state)[group.indexes[0]!]!;
@@ -204,9 +199,14 @@ function Markers({ state, statement, id }: { state: State; statement: AnswerStat
   </>;
 }
 
+/** Whether the sentence or row `id` is lit: its number opened the pane. */
+function lit(state: State, id: string): boolean {
+  return state.sources?.open != null && state.sources.focus === id;
+}
+
 /** A sentence and the numbers of its sources. The one whose number opened the pane is lit. */
 function Statement({ state, statement, id }: { state: State; statement: AnswerStatement; id: string }) {
-  const on = state.sources?.open != null && state.sources.focus === id;
+  const on = lit(state, id);
   return (
     <p class={`answer-statement selectable${on ? ' on' : ''}`} data-testid="statement">
       <span data-testid="statement-text">{statement.text}</span>
@@ -226,23 +226,147 @@ function Found({ state, statement, id }: { state: State; statement: AnswerStatem
   );
 }
 
+/** A sentence of the lead or a paragraph, inline with the others: its text and its numbers, lit on its own. */
+function Claim({ state, statement, id }: { state: State; statement: AnswerStatement; id: string }) {
+  return (
+    <span class={`claim${lit(state, id) ? ' on' : ''}`} data-testid="statement">
+      <span data-testid="statement-text">{statement.text}</span>
+      <Markers state={state} statement={statement} id={id} />
+    </span>
+  );
+}
+
+/** The sentences of a lead or a paragraph, one after another, each with its own numbers. */
+function Claims({ state, part, index, statements }: { state: State; part: AnswerPart; index: number; statements: readonly number[] }) {
+  return <>{statements.map((place, at) => <Fragment key={place}>{at > 0 && ' '}
+    <Claim state={state} statement={part.statements[place]!} id={`${index}.${place}`} /></Fragment>)}</>;
+}
+
+/** One cell of a table that is not its first: an ISO date as "Oct 14" in mono, late when the row is yours and late; you, as the owner, heavier. */
+function Cell({ cell, late, you }: { cell: string; late: boolean; you: boolean }) {
+  const day = tableDay(cell);
+  if (day !== null) {
+    return <td class={`day${late ? ' late' : ''}`}><time dateTime={cell}>{day}</time>{late && <span class="sr-only">, overdue</span>}</td>;
+  }
+  const kind = [you ? 'you' : '', [...cell].length <= 32 ? 'short' : ''].filter(Boolean).join(' ');
+  return <td class={kind || undefined}>{cell}</td>;
+}
+
+/**
+ * A table of a laid-out part, in its own box that scrolls when the window is
+ * narrow; the page never does. Its caption above it, in the lead's type when
+ * the table opens the answer (`opens`). Each row's numbers are in its first
+ * cell, and a row is lit on its own. Only your row's late due date is in the
+ * signal colour.
+ */
+function Table({ state, sources, index, block, place, opens, label }: {
+  state: State; sources: readonly AnswerSource[]; index: number; block: AnswerTable; place: number; opens: boolean; label: string;
+}) {
+  const me = state.status?.account?.display_name ?? null;
+  const due = dueColumn(block.columns);
+  return <>
+    {block.caption && <p class={`${opens ? 'answer-lead' : 'answer-caption'} selectable`}>{block.caption}</p>}
+    <div class="answer-table selectable" role="region" tabIndex={0} aria-label={block.caption ?? label}>
+      <table class={`cols-${block.columns.length}`}>
+        <thead><tr>{block.columns.map(column => <th key={column} scope="col">{column}</th>)}</tr></thead>
+        <tbody>
+          {block.rows.map((row, at) => {
+            const id = rowId(index, place, at);
+            const late = lateForYou(block.columns, row.cells, me);
+            return (
+              <tr key={at} class={lit(state, id) ? 'on' : undefined} data-testid="answer-row">
+                {row.cells.map((cell, column) => column === 0
+                  ? <td key={column}><span class="first">{cell}<Markers state={state} statement={rowStatement(row, sources)} id={id} /></span></td>
+                  : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  </>;
+}
+
+/**
+ * A laid-out part (answer layout v1, ADR-0045), in the desktop's own type:
+ * the lead, its first sentence heavier; headings; paragraphs; bullets; and
+ * tables. Every sentence and row keeps its own numbers and is lit on its own.
+ * `opening`: the part opens the answer, so a table first has no lead above it.
+ */
+function LaidOut({ state, sources, part, index, layout, opening }: {
+  state: State; sources: readonly AnswerSource[]; part: AnswerPart; index: number; layout: readonly AnswerBlock[]; opening: boolean;
+}) {
+  // A table without a caption is named by the heading above it.
+  let heading = 'Table';
+  return (
+    <div class="answer-layout">
+      {layout.map((block, place) => {
+        if (block.kind === 'heading') { heading = block.text; return <h3 key={place} class="answer-heading">{block.text}</h3>; }
+        if (block.kind === 'lead') return <p key={place} class="answer-lead selectable"><Claims state={state} part={part} index={index} statements={block.statements} /></p>;
+        if (block.kind === 'paragraph') return <p key={place} class="answer-paragraph selectable"><Claims state={state} part={part} index={index} statements={block.statements} /></p>;
+        if (block.kind === 'bullets') {
+          return (
+            <ul key={place} class="answer-bullets selectable">
+              {block.statements.map(at => {
+                const id = `${index}.${at}`;
+                const statement = part.statements[at]!;
+                return <li key={at} class={lit(state, id) ? 'on' : undefined} data-testid="statement">
+                  <span><span data-testid="statement-text">{statement.text}</span><Markers state={state} statement={statement} id={id} /></span>
+                </li>;
+              })}
+            </ul>
+          );
+        }
+        return <Table key={place} state={state} sources={sources} index={index} block={block} place={place} opens={opening && place === 0} label={heading} />;
+      })}
+    </div>
+  );
+}
+
+/**
+ * What research did not cover, as one quiet note after the answer, never a
+ * banner over it: the notice, then each part's gap, after its part's
+ * question when there are several.
+ */
+function CoverageNote({ answer }: { answer: Answer }) {
+  const { notice, gaps } = coverage(answer);
+  if (!notice && gaps.length === 0) return null;
+  return (
+    <p class="coverage-note selectable" data-testid="coverage-note">
+      <Info />
+      <span>
+        {notice && <span data-testid="answer-notice">{notice}</span>}
+        {gaps.map((gap, at) => <Fragment key={at}>{(notice || at > 0) && ' '}
+          {gap.question && <span class="part">{gap.question} </span>}<span data-testid="answer-gap">{gap.text}</span></Fragment>)}
+      </span>
+    </p>
+  );
+}
+
+/**
+ * The answer: an assumption or an off-scope line on top, then each part, laid
+ * out when it carries a layout and a paragraph per sentence when not, then
+ * what research did not cover. A part with nothing to show is left out: its
+ * gap is in the note.
+ */
 function AgenticAnswer({ state, turn }: { state: State; turn: AskTurn }) {
   const answer = turn.answer;
   return (
     <div class="agentic-answer" data-testid="answer">
       {answer.assumption && <div class="answer-banner" data-testid="answer-assumption">{answer.assumption}</div>}
       {answer.outcome === 'off_scope' && <div class="answer-banner" data-testid="answer-off-scope">The accessible evidence may be about a different subject.</div>}
-      {answer.notice && <div class="answer-banner" data-testid="answer-notice">{answer.notice}</div>}
       {answer.direct && <Statement state={state} statement={answer.direct} id="direct" />}
-      {answer.parts.map((part, index) => (
+      {answer.parts.map((part, index) => part.statements.length === 0 && !part.records?.length ? null : (
         <section class="answer-part" key={index}>
           {/* One part answers the question itself: its label would repeat it. */}
           {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
-          {part.statements.map((statement, place) => <Statement key={place} state={state} statement={statement} id={`${index}.${place}`} />)}
+          {part.layout
+            ? <LaidOut state={state} sources={answer.sources} part={part} index={index} layout={part.layout} opening={index === 0 && !answer.direct} />
+            : part.statements.map((statement, place) => <Statement key={place} state={state} statement={statement} id={`${index}.${place}`} />)}
           {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} statement={statement} id={`${index}.r${place}`} />)}
-          {part.gap && <div class="answer-gap" data-testid="answer-gap">{part.gap}</div>}
         </section>
       ))}
+      <CoverageNote answer={answer} />
     </div>
   );
 }
@@ -278,14 +402,31 @@ function containerMeta(source: Extract<AnswerSource, { kind: 'container' }>, pro
   return source.key === undefined ? provider : `${provider} · ${source.key}`;
 }
 
-/** One row per source, numbered as the sentences cite it. The one the pane shows is lit. */
+/** A source's name on the sources' line: up to its first " · ", so a ticket is its key. */
+function shortName(name: string): string {
+  return name.split(' · ')[0]!;
+}
+
+/**
+ * The answer's sources: one line, "4 sources · Tuesday sync · Apollo update",
+ * that opens onto a row per source, numbered as the sentences cite it. It
+ * starts closed (ADR-0045); a number after a sentence opens it too. The row
+ * the pane shows is lit.
+ */
 function SourceList({ state }: { state: State }) {
   const groups = answerGroups(state);
   if (groups.length === 0) return null;
   const open = state.sources?.open ?? null;
+  const listed = state.sources?.listed === true;
+  const names = groups.map(group => sourceName(firstSource(state, group), state.sources));
   return (
     <div class="source-list" data-testid="source-list">
-      {groups.map((group, index) => {
+      <button type="button" class={`sources-toggle${listed ? ' open' : ''}`} data-testid="sources-toggle" aria-expanded={listed} onClick={toggleSourceList}>
+        <span class="count">{groups.length === 1 ? '1 source' : `${groups.length} sources`}</span>
+        <span class="names">{names.map(shortName).join(' · ')}</span>
+        <Caret />
+      </button>
+      {listed && <div class="source-rows">{groups.map((group, index) => {
         const source = firstSource(state, group);
         // One short qualifier only where it helps: a document's version and passages, a follow-up's owner and status, a
         // container's tool and key. A project, a person and a tool are named by their label alone.
@@ -298,11 +439,11 @@ function SourceList({ state }: { state: State }) {
             title={source.kind === 'original' ? source.label : undefined} onClick={() => chooseSource(index)}>
             <span class="marker">{index + 1}</span>
             <KindIcon source={source} />
-            <span class="label">{sourceName(source, state.sources)}</span>
+            <span class="label">{names[index]}</span>
             {meta && <span class="meta">{meta}</span>}
           </button>
         );
-      })}
+      })}</div>}
     </div>
   );
 }

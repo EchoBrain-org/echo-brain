@@ -145,8 +145,9 @@ export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAn
       const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, response_version, signal }, context);
       capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
+      // Answer layout reaches every version's Ask; only the V8 answer lays its part out (ADR-0045).
       const askOptions = { ...personResearchDriverV1(options, context.membership_id), ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, audit: options.audit.forRequest(context),
-        ...(asker === undefined ? {} : { asker }),
+        ...(input.answer_layout === undefined ? {} : { answer_layout: input.answer_layout }), ...(asker === undefined ? {} : { asker }),
       };
       // Each attempt audits what it named; only the released attempt's receipt is returned.
       // The V8 answer streams progress V3, whose names may be workspace items and tool containers; the V7 answer

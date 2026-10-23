@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { answerSchema, createStepSchema, parseStep } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { answerLayoutSchema, answerSchema, createStepSchema, parseStep } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { createOpenRouterStructuredGenerationAdapter } from '../../providers/openrouter/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js';
 
 // Claude's documented grammar rejects these bounds. Local protocol parsing
@@ -31,6 +31,7 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
   it.each([
     ['research', createStepSchema(['meetings', 'pages'], ['E1', 'E2'], true, true, true)],
     ['answer', answerSchema],
+    ['laid-out answer', answerLayoutSchema],
   ])('%s keeps the closed protocol without unsupported wire bounds', async (_role, schema) => {
     const before = JSON.stringify(schema);
     const body = await wireRequest(schema);

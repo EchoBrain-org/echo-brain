@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AgenticAskOutputErrorV1,
   ASK_STEP_PROMPT,
+  answerLayoutSchema,
   answerSchema,
   cleanId,
   createStepSchema,
@@ -279,10 +280,12 @@ describe("agentic Ask model protocol parity", () => {
     }
   });
 
-  it("never rejects an answer the answer schema permits", () => {
+  it("never rejects an answer the answer schema permits, or a laid-out answer the layout schema permits", () => {
     for (let seed = 1; seed <= 400; seed += 1) {
       const value = generator(seed)(answerSchema);
       expect(() => parseAnswer(value)).not.toThrow();
+      const laid = generator(seed)(answerLayoutSchema);
+      expect(() => parseAnswer(laid, { layout: true })).not.toThrow();
     }
   });
 
@@ -298,6 +301,75 @@ describe("agentic Ask model protocol parity", () => {
       .toEqual({ parts: [{ question: "Who owns it?", needs: [{ need: "owner", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner" } }] });
     expect(parseAnswer({ sentences: [{ text: " Done. ", evidence: ["e2", "[E3]"] }, { text: "", evidence: [] }], not_found: ["", "owner"] }))
       .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"] }], not_found: ["owner"], lists: [] });
+  });
+
+  describe("a laid-out answer (ADR-0045)", () => {
+    const next = "Next steps";
+    const reply = {
+      lists: [], not_found: [],
+      tables: [{ section: ` ${next} `, columns: ["Action", "Owner", "Due"] }, { section: "One column", columns: ["Only"] }, { section: "Twice", columns: ["A", "B"] }, { section: "Twice", columns: ["C", "D"] }],
+      sentences: [
+        { text: "The scope was rejected.", evidence: ["E1"], form: "lead", section: "Decisions" },
+        { text: "The retest covers TC-D-03.", evidence: ["E1"], form: "Bullet", section: " Decisions " },
+        { text: "Prose.", evidence: ["E1"], form: "text", section: "" },
+        { text: "Mara sends the plan by Friday.", evidence: ["E2"], form: "row", section: next, cells: ["Send the plan (E2)", "Mara", "2026-10-23"] },
+        { text: "", evidence: ["E2"], form: "row", section: next, cells: ["Fix BUG-412", "", "2026-10-28"] },
+        { text: "Tomas fixes the board.", evidence: ["E3"], form: "row", section: next, cells: ["Fix the board", "Tomas"] },
+        { text: "", evidence: ["E3"], form: "row", section: next, cells: ["Publish", "QA", "2026-10-30", "To do"] },
+        { text: "No table holds this row.", evidence: ["E3"], form: "row", section: "Later", cells: ["x", "y"] },
+        { text: "Its section declares two tables.", evidence: ["E3"], form: "row", section: "Twice", cells: ["x", "y"] },
+        { text: "An empty row.", evidence: ["E3"], form: "row", section: next, cells: ["", " ", ""] },
+      ],
+    };
+
+    it("reads each sentence's form, section and cells, a row's text written by code from its cells", () => {
+      const parsed = parseAnswer(reply, { layout: true });
+      // A table needs a section and two columns; a section declared twice has no table.
+      expect(parsed.tables).toEqual([{ section: next, columns: ["Action", "Owner", "Due"] }]);
+      expect(parsed.sentences).toEqual([
+        // A lead has no section; "text" is prose, which carries no form.
+        { text: "The scope was rejected.", evidence: ["E1"], form: "lead" },
+        { text: "The retest covers TC-D-03.", evidence: ["E1"], form: "bullet", section: "Decisions" },
+        { text: "Prose.", evidence: ["E1"] },
+        // A row says its cells under their columns, whatever text the writer wrote, or none.
+        { text: "Action: Send the plan; Owner: Mara; Due: 2026-10-23.", evidence: ["E2"], form: "row", section: next, cells: ["Send the plan", "Mara", "2026-10-23"] },
+        { text: "Action: Fix BUG-412; Due: 2026-10-28.", evidence: ["E2"], form: "row", section: next, cells: ["Fix BUG-412", "", "2026-10-28"] },
+        // A row whose cells are not one per column, whose section has no one table, or whose cells say nothing is a bullet:
+        // the writer's text, or else its cells, never a cell under a column it was not written for.
+        { text: "Tomas fixes the board.", evidence: ["E3"], form: "bullet", section: next },
+        { text: "Publish; QA; 2026-10-30; To do.", evidence: ["E3"], form: "bullet", section: next },
+        { text: "No table holds this row.", evidence: ["E3"], form: "bullet", section: "Later" },
+        { text: "Its section declares two tables.", evidence: ["E3"], form: "bullet", section: "Twice" },
+        { text: "An empty row.", evidence: ["E3"], form: "bullet", section: next },
+      ]);
+      // A form no answer has is prose, and cells on a sentence that is no row are dropped.
+      expect(parseAnswer({ ...reply, sentences: [{ text: "No form is called that.", evidence: ["E3"], form: "heading", cells: ["dropped"] }] }, { layout: true }).sentences).toEqual([{ text: "No form is called that.", evidence: ["E3"] }]);
+    });
+
+    it("leaves an answer without layout as it was: no form, cell or table read, and a row with no text left out", () => {
+      expect(parseAnswer(reply)).toEqual({ lists: [], not_found: [], sentences: reply.sentences.filter(value => value.text !== "").map(value => ({ text: value.text, evidence: value.evidence })) });
+    });
+
+    it("writes a row's whole claim from its cells, past the 700 characters a writer's sentence holds, so rows that end apart stay apart", () => {
+      const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
+      const row = (last: string) => ({ text: "", evidence: ["E1"], form: "row", section: "Rules", cells: [...columns.slice(0, 5).map(() => "x".repeat(120)), last] });
+      const parsed = parseAnswer({ lists: [], not_found: [], tables: [{ section: "Rules", columns }], sentences: [row(`${"y".repeat(114)} ALLOW`), row(`${"y".repeat(115)} DENY`)] }, { layout: true });
+      const texts = parsed.sentences.map(value => value.text);
+      expect(texts.map(text => [text.length > 700, text.endsWith(" ALLOW."), text.endsWith(" DENY.")])).toEqual([[true, true, false], [true, false, true]]);
+      expect(texts[0]).toBe(`${columns.map((column, at) => `${column}: ${row(at === 5 ? `${"y".repeat(114)} ALLOW` : "").cells[at]}`).join("; ")}.`);
+    });
+});
+
+  it("names each form, a section, a row's cells and the tables in the layout schema, and leaves the answer schema as it was (ADR-0045)", () => {
+    const sentence = ((answerLayoutSchema.properties as Schema).sentences as Schema).items as Schema;
+    expect([sentence.required, (sentence.properties as Schema).form, (sentence.properties as Schema).section, (sentence.properties as Schema).cells]).toEqual([
+      ["text", "evidence"], { type: "string", enum: ["lead", "text", "bullet", "row"] }, { type: "string", maxLength: 60 }, { type: "array", maxItems: 6, items: { type: "string", maxLength: 120 } },
+    ]);
+    expect([(answerLayoutSchema as Schema).required, (answerLayoutSchema.properties as Schema).tables]).toEqual([["lists", "sentences", "not_found"], { type: "array", maxItems: 3, items: {
+      type: "object", additionalProperties: false, required: ["section", "columns"], properties: { section: { type: "string", maxLength: 60 }, columns: { type: "array", minItems: 2, maxItems: 6, items: { type: "string", maxLength: 40 } } },
+    } }]);
+    const plain = ((answerSchema.properties as Schema).sentences as Schema).items as Schema;
+    expect([Object.keys(answerSchema.properties as Schema), Object.keys(plain.properties as Schema)]).toEqual([["lists", "sentences", "not_found"], ["text", "evidence"]]);
   });
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
@@ -421,8 +493,32 @@ describe("agentic Ask model protocol parity", () => {
       ["members respelled, repeated or unreadable", answer({ lists: [{ id: "L1", members: ["e5", "E5", "[E7]", "L2", 9] }] }), { model_id_respelled: 3, model_repeat_dropped: 1, model_entry_dropped: 1 }],
       ["more members than a use names", answer({ lists: [{ id: "L3", members: items(1, 30) }] }), { model_items_capped: 5 }],
       ["a list used twice the same way, or past five lists", answer({ lists: ["L1", "L1", "L2", "L3", "L4", "L5", "L6"].map(id => ({ id })) }), { model_repeat_dropped: 1, model_items_capped: 1 }],
+      // An Ask without layout never reads forms, cells or tables (ADR-0045).
+      ["forms, cells and tables an answer without layout never reads", answer({ tables: [{ section: " ", columns: ["A"] }], sentences: [{ text: "x.", evidence: ["E1"], form: "heading", section: "s".repeat(61), cells: [7] }] }), {}],
     ] as const)("in an answer: %s", (_name, value, expected) => {
       expect(corrected(() => parseAnswer(value))).toEqual(expected);
+    });
+
+    it.each([
+      ["forms, a section, a row and its table the schema holds", answer({ tables: [{ section: "Next", columns: ["Action", "Owner"] }], sentences: [
+        { text: "x.", evidence: ["E1"], form: "lead" }, { text: "y.", evidence: ["E1"], form: "text", section: "Next" }, { text: "", evidence: ["E1"], form: "row", section: "Next", cells: ["a", ""] },
+      ] }), {}],
+      ["a form in another case, or one no answer has", answer({ sentences: [{ text: "x.", evidence: ["E1"], form: " Bullet" }, { text: "y.", evidence: ["E1"], form: "heading" }] }), { model_enum_respelled: 2 }],
+      ["a row no table holds, with cells that are not one per column, or that say nothing", answer({ tables: [{ section: "Next", columns: ["A", "B"] }], sentences: [
+        { text: "x.", evidence: ["E1"], form: "row", section: "Later", cells: ["a", "b"] }, { text: "y.", evidence: ["E1"], form: "row", cells: ["a", "b"] },
+        { text: "z.", evidence: ["E1"], form: "row", section: "Next", cells: ["a"] }, { text: "w.", evidence: ["E1"], form: "row", section: "Next", cells: ["", " "] },
+      ] }), { model_enum_respelled: 4 }],
+      ["a cell that is no string, more cells than a table holds, and cells on a sentence that is no row", answer({ tables: [{ section: "Next", columns: ["A", "B"] }], sentences: [
+        { text: "x.", evidence: ["E1"], form: "row", section: "Next", cells: ["a", 7] }, { text: "y.", evidence: ["E1"], form: "row", section: "Next", cells: ["a", "b", "c", "d", "e", "f", "g"] },
+        { text: "z.", evidence: ["E1"], form: "bullet", cells: ["a"] },
+      ] }), { model_entry_dropped: 2, model_items_capped: 1, model_enum_respelled: 1 }],
+      ["a table with no section or two columns, a section declared twice, or past three", answer({ tables: [
+        { section: " ", columns: ["A", "B"] }, { section: "S", columns: ["A", "a", " "] }, { section: "T", columns: ["A", "B"] }, { section: "T", columns: ["C", "D"] },
+        { section: "U", columns: ["A", "B", "C", "D", "E", "F", "G"] }, { section: "V", columns: ["A", "B"] }, { section: "W", columns: ["A", "B"] },
+      ] }), { model_entry_dropped: 3, model_repeat_dropped: 2, model_items_capped: 3 }],
+      ["a section, column or cell past its cap", answer({ tables: [{ section: "s".repeat(61), columns: ["c".repeat(41), "B"] }], sentences: [{ text: "x.", evidence: ["E1"], form: "row", section: "s".repeat(61), cells: ["x".repeat(121), "y"] }] }), { model_text_truncated: 4 }],
+    ] as const)("in a laid-out answer: %s", (_name, value, expected) => {
+      expect(corrected(() => parseAnswer(value, { layout: true }))).toEqual(expected);
     });
 
     it("counts what it reads of a reply it then rejects, and nothing outside a span", () => {

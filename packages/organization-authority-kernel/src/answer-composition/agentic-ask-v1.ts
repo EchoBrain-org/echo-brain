@@ -104,6 +104,8 @@ export interface CreateAgenticAskV1Options {
   readonly today?: () => string;
   /** Captured once by the calling client, used only to interpret temporal questions. */
   readonly time_context?: PersonAskTimeContextV1;
+  /** The client asked for answer layout v1 (ADR-0045): a V8 answer's part carries its layout. */
+  readonly answer_layout?: boolean;
   /**
    * Who is asking, as the organization's directory names them, so "I", "me"
    * and "my" resolve to a person. Only the models see it; audits never do.
@@ -298,7 +300,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const taskPrompt = (list: boolean) => stepPrompt(`${guided(list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT, liveGuidance(list), FOLLOW_UPS_STEP_GUIDANCE)}\n\n${TASK_RULE_PROMPT}`);
   const prompts = Object.freeze({ ask: stepPrompt(guided(ASK_STEP_PROMPT, liveGuidance(true), FOLLOW_UPS_STEP_GUIDANCE)), task: taskPrompt(true), search_only_task: taskPrompt(false) });
   /** What a renderer's user prompt may fill beside its system prompt. */
-  const promptBudget = (system: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, OUTPUT_TOKENS.answer);
+  const promptBudget = (system: string, outputTokens: number = OUTPUT_TOKENS.answer) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, outputTokens);
   /**
    * One agentic request: shared session state (deadline, model-call budget,
    * access fences, audit), the research loop, then a renderer (Ask's for a
@@ -446,6 +448,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const writer = createAskRendererV1({
           response_version: responseVersion, answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
+          layout: responseVersion === 8 && options.answer_layout === true,
         });
         let selectedEvidence: readonly string[] = [];
         progress?.stage("writing");

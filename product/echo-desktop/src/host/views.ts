@@ -316,9 +316,18 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
     ...(part.records?.map(record => record.text) ?? []), part.gap])]
     .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
-  return { text: textValue, scope, sources: (result.citations as readonly PersonAnswerCitationV8[]).map(answerSource), ...(direct === undefined ? {} : { direct }), parts, outcome,
+  return { text: textValue, scope, sources: (result.citations as readonly PersonAnswerCitationV8[]).map(citedSource), ...(direct === undefined ? {} : { direct }), parts, outcome,
     ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }),
     ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) } }) };
+}
+
+/** Who alone may read an item cited as private: you, or the approver. */
+const PRIVATE_VISIBILITY: ReadonlySet<string> = new Set(['only_me', 'approver_only']);
+
+/** An answer's cited item, and whether only you can read it: a table row that cites it shows the lock (ADR-0045). */
+function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
+  const source = answerSource(citation);
+  return PRIVATE_VISIBILITY.has(citation.visibility) ? { ...source, private: true } : source;
 }
 
 function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {

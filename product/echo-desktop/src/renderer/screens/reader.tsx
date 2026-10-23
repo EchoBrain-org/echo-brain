@@ -2,10 +2,10 @@ import type { ApprovedRecord, Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, type CitedItem, type ReaderState,
+  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreImportedMeeting, moreRecord, nextTextPage, projectChoices, refreshDocument, removableFrom, removeFromProject, retryLineCheck, saveOriginal, showProjectChoices, toggleReaderMenu, UNTITLED, type CitedItem, type ReaderState,
   type State,
 } from '../store.js';
-import { RecordDetail, UNTITLED, type LitItem } from './ask.js';
+import { RecordDetail, type LitItem } from './ask.js';
 import { ChangeLine, changeShownInPlace, within } from './change.js';
 import { Chevron, Ellipsis } from './icons.js';
 import { FollowUpsLabel, meetingFollowUps } from './impact-card.js';
