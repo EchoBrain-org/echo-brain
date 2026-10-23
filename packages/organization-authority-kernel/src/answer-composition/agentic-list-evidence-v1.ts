@@ -639,15 +639,13 @@ function groupNames(members: readonly AgenticListNamedMemberV1[], groups: readon
   const common = (group: readonly number[], field: "status" | "owner" | "due") => members[group[0]!]![field];
   const differs = (field: "status" | "owner" | "due") => new Set(groups.map(group => same(common(group, field)))).size > 1;
   const show = { status: differs("status"), owner: differs("owner"), due: differs("due") };
-  // Several kinds among the members: each name says which kinds it holds.
-  const mixed = new Set(members.map(member => member.kind)).size > 1;
   return Object.freeze(groups.map(group => {
-    const kinds = [...new Set(group.map(index => members[index]!.kind ?? ""))];
+    const kinds = groupKinds(members, group);
     const status = show.status ? common(group, "status") : undefined;
     const owner = show.owner ? common(group, "owner") : undefined;
     const due = show.due ? common(group, "due") : undefined;
     const details = [
-      ...(group.length > 1 || mixed ? [joined(kinds.map(kind => kindNoun(kind, group.filter(index => (members[index]!.kind ?? "") === kind).length)))] : []),
+      ...(kinds === undefined ? [] : [kinds]),
       ...(status === undefined ? [] : [line(status, 60)]),
       ...(owner === undefined ? [] : [owner === "none recorded" ? "no owner recorded" : `owner ${line(owner, 80)}`]),
       ...(due === undefined ? [] : [`due ${agenticCalendarDayV1(line(due, 40))}`]),
@@ -655,6 +653,11 @@ function groupNames(members: readonly AgenticListNamedMemberV1[], groups: readon
     const label = line(members[group[0]!]!.title, AGENTIC_LIST_NAME_CHARS_V1);
     return details.length === 0 ? label : `${label} (${details.join(", ")})`;
   }));
+}
+/** A group's kinds counted ("2 actions"), when it holds several members or the members are of several kinds. */
+function groupKinds(members: readonly AgenticListNamedMemberV1[], group: readonly number[]): string | undefined {
+  if (group.length === 1 && new Set(members.map(member => member.kind)).size <= 1) return undefined;
+  return joined([...new Set(group.map(index => members[index]!.kind ?? ""))].map(kind => kindNoun(kind, group.filter(index => (members[index]!.kind ?? "") === kind).length)));
 }
 
 /** How a member's dates read in its row facts, in this order. A due date the member's attributes record is said once. */
@@ -666,19 +669,30 @@ const DATE_KIND_WORDS: Readonly<Partial<Record<EvidenceDeskDateKindV1, string>>>
  * October 4, 2026)". A date with no stated meaning is left out.
  */
 function factsName(member: AgenticListNamedMemberV1, timeZone: string | undefined): string {
-  const day = (value: string) => agenticCalendarDayV1(evidenceDayV1(line(value, 40), timeZone ?? "UTC") ?? line(value, 40));
-  const dated = member.dates === undefined || Object.keys(member.dates).length === 0
-    ? (member.date === undefined || member.date_kind === undefined || member.date_kind === "unspecified" || DATE_KIND_WORDS[member.date_kind] === undefined
-      ? [] : [`${DATE_KIND_WORDS[member.date_kind]} ${day(member.date)}`])
-    : FACT_DATES.flatMap(([field, word]) => member.dates?.[field] === undefined || (field === "due" && member.due !== undefined) ? [] : [`${word} ${day(member.dates[field]!)}`]);
+  const { status, owner, due, dated } = memberFacts(member, timeZone);
   const facts = [
-    ...(member.status === undefined ? [] : [`status ${line(member.status, 60)}`]),
-    ...(member.owner === undefined ? [] : [member.owner === "none recorded" ? "no owner recorded" : `owner ${line(member.owner, 80)}`]),
-    ...(member.due === undefined ? [] : [`due ${day(member.due)}`]),
-    ...dated,
+    ...(status === undefined ? [] : [`status ${status}`]),
+    ...(owner === undefined ? [] : [owner === "none recorded" ? "no owner recorded" : `owner ${owner}`]),
+    ...(due === undefined ? [] : [`due ${agenticCalendarDayV1(due)}`]),
+    ...dated.map(([word, day]) => `${word} ${agenticCalendarDayV1(day)}`),
   ];
   const label = line(member.title, AGENTIC_LIST_NAME_CHARS_V1);
   return facts.length === 0 ? label : `${label} (${facts.join(", ")})`;
+}
+/**
+ * The row facts factsName says of a member, each date as its day in `timeZone` (YYYY-MM-DD when it is one): its status,
+ * owner and due date, then its dates with the words that say them, a due date only when its attributes record none.
+ */
+function memberFacts(member: AgenticListNamedMemberV1, timeZone: string | undefined): { readonly status?: string; readonly owner?: string; readonly due?: string; readonly dated: readonly (readonly [word: string, day: string])[] } {
+  const day = (value: string) => evidenceDayV1(line(value, 40), timeZone ?? "UTC") ?? line(value, 40);
+  const dated = member.dates === undefined || Object.keys(member.dates).length === 0
+    ? (member.date === undefined || member.date_kind === undefined || member.date_kind === "unspecified" || DATE_KIND_WORDS[member.date_kind] === undefined
+      ? [] : [[DATE_KIND_WORDS[member.date_kind]!, day(member.date)] as const])
+    : FACT_DATES.flatMap(([field, word]) => member.dates?.[field] === undefined || (field === "due" && member.due !== undefined) ? [] : [[word, day(member.dates[field]!)] as const]);
+  return {
+    ...(member.status === undefined ? {} : { status: line(member.status, 60) }), ...(member.owner === undefined ? {} : { owner: line(member.owner, 80) }),
+    ...(member.due === undefined ? {} : { due: day(member.due) }), dated,
+  };
 }
 
 /** A member's own date of one field: its named dates, then its due date, then its one dated fact. */
@@ -749,9 +763,11 @@ export interface AgenticListStatementInputV1 {
  * covers the first member: with `share` 0, a first member no other statement
  * takes costs one name past the share, which buys no other member. `cited`
  * are the indexes in `selected` of the members the names cover, in order,
- * which the caller cites; "and N more" counts the rest.
+ * which the caller cites; "and N more" counts the rest. For answer layout v1
+ * (ADR-0045), `caption` is the statement without its names ("60 Jira tickets
+ * ...; and 35 more") and `names` the indexes each name covers, in order.
  */
-export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly cited: readonly number[] } {
+export function agenticListStatementV1(input: AgenticListStatementInputV1): { readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] } {
   const { count, complete, where, selected, noun } = input;
   if (selected.length === 0 || !Number.isSafeInteger(input.share) || input.share < 0) throw new RangeError("A list statement names at least one member, with a whole, non-negative share");
   const phrase = phraseAfter(noun, input.filter);
@@ -777,12 +793,55 @@ export function agenticListStatementV1(input: AgenticListStatementInputV1): { re
   for (let shown = fit; shown >= 1; shown -= 1) {
     const named = groups.slice(0, shown);
     const covered = named.reduce((total, group) => total + group.length, 0);
-    const text = `${lead}: ${namesOf(named).join("; ")}${covered < k ? `; and ${k - covered} more` : ""}.`;
+    const more = covered < k ? `; and ${k - covered} more` : "";
+    const text = `${lead}: ${namesOf(named).join("; ")}${more}.`;
     if (Buffer.byteLength(text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1 || shown === 1) {
-      return Object.freeze({ text, cited: Object.freeze(named.flat().sort((left, right) => left - right)) });
+      return Object.freeze({
+        text, cited: Object.freeze(named.flat().sort((left, right) => left - right)),
+        caption: `${lead}${more}`, names: Object.freeze(named.map(group => Object.freeze([...group]))),
+      });
     }
   }
   throw new RangeError("unreachable");
+}
+
+/** Columns a list's table may hold, in order: its names, then the row facts and dates they state. */
+const TABLE_FACTS = Object.freeze(["Status", "Owner", "Due"] as const);
+const TABLE_DATES = Object.freeze(["created", "version created", "updated", "dated", "received"] as const);
+/** A table a list statement's names read as: a row of cells per name, and the indexes of `selected` it covers. */
+export interface AgenticListTableV1 {
+  readonly columns: readonly string[];
+  readonly rows: readonly { readonly cells: readonly string[]; readonly members: readonly number[] }[];
+}
+
+/**
+ * A list statement's names as a table (answer layout v1, ADR-0045): one row per name (agenticListStatementV1's `names`),
+ * an Item column, then Status, Owner and Due when any named member records them. Members selected by id are named with
+ * every row fact they record, so their table also has a column for each date they state, each day in the list's time
+ * zone. Undefined, so the statement stays prose, for one name, for names with nothing beside their titles, or for more
+ * columns than a table holds.
+ */
+export function agenticListTableV1(input: { readonly selected: readonly AgenticListNamedMemberV1[]; readonly names: readonly (readonly number[])[]; readonly by_id?: boolean; readonly time_zone?: string }): AgenticListTableV1 | undefined {
+  if (input.names.length < 2) return undefined;
+  const named = input.names.map(group => {
+    const member = input.selected[group[0]!]!;
+    const facts = memberFacts(member, input.time_zone);
+    const kinds = input.by_id === true ? undefined : groupKinds(input.selected, group);
+    const label = line(member.title, AGENTIC_LIST_NAME_CHARS_V1);
+    const owner = facts.owner === "none recorded" ? "None recorded" : facts.owner;
+    const dated = new Map(input.by_id === true ? facts.dated : []);
+    // A due date the member's dates record, where its attributes record none, reads in the Due column.
+    const due = facts.due ?? dated.get("due");
+    return { group, values: new Map<string, string | undefined>([
+      ["Item", kinds === undefined ? label : `${label} (${kinds})`], ["Status", facts.status], ["Owner", owner], ["Due", due],
+      ...TABLE_DATES.map(word => [sentence(word), dated.get(word)] as const),
+    ]) };
+  });
+  const columns = ["Item", ...[...TABLE_FACTS, ...TABLE_DATES.map(sentence)].filter(column => named.some(name => name.values.get(column) !== undefined))];
+  if (columns.length < 2 || columns.length > 6) return undefined;
+  const rows = named.map(name => Object.freeze({ cells: Object.freeze(columns.map(column => name.values.get(column) ?? "")), members: Object.freeze([...name.group]) }));
+  if (rows.some(row => row.cells.every(cell => cell === ""))) return undefined;
+  return Object.freeze({ columns: Object.freeze(columns), rows: Object.freeze(rows) });
 }
 
 /** The not_found phrase for a selection that matches no member: never a statement (ADR-0041). */

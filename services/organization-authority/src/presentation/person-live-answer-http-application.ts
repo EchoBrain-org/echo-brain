@@ -8,6 +8,8 @@ export interface PersonAnswerHttpInputV1 {
   readonly access_token: string;
   readonly request: PersonAnswerRequestV3;
   readonly time_context?: PersonAskTimeContextV1;
+  /** The client asked for answer layout v1 (ADR-0045); only the V8 answer carries one. */
+  readonly answer_layout?: boolean;
   readonly signal?: AbortSignal;
 }
 

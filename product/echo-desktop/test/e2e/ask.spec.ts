@@ -386,9 +386,8 @@ test('Copy answer copies the answer as Markdown and says so, and main takes no m
   expect((await write('𝄞'.repeat(12_000))).ok).toBe(true);
 });
 
-// Answer layout v1 (ADR-0045): `ask-layout`'s THERM answer, laid out because the Ask asked for it. Until the person
-// client sends `x-echo-answer-layout: 1` on every Ask, the fixture answers it as it would an older client.
-test.fixme('a laid-out answer reads as a document, and its table scrolls in its own box beside the pane', async () => {
+// Answer layout v1 (ADR-0045): `ask-layout`'s THERM answer, laid out because the person client asks for it on every Ask.
+test('a laid-out answer reads as a document, and its table scrolls in its own box beside the pane', async () => {
   run = await launch('ask-layout');
   const { page } = run;
   await askFromHome(page, 'Can DVT-R2 run on the reduced test scope?');

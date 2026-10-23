@@ -1,4 +1,7 @@
-import { PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1 } from "@echo-brain/organization-api";
+import {
+  PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
+  validatePersonAskAnswerLayoutHeaderV1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
+} from "@echo-brain/organization-api";
 import {
   PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   formatPersonAskProgressEventV2, formatPersonAskProgressEventV3, type PersonAskProgressErrorStatusV1,
@@ -512,11 +515,25 @@ function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | unde
   catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
 }
 
+/** Whether the client asked for answer layout v1 (ADR-0045); only a V8 answer reads it. */
+function askAnswerLayout(request: IncomingMessage): boolean {
+  try { return validatePersonAskAnswerLayoutHeaderV1(request.headers[PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]); }
+  catch { throw new AuthorityOperationError('invalid_request', 'Ask answer layout is invalid'); }
+}
+
+/** An Ask's optional headers as its options: the client's time context, and answer layout when asked for. An invalid one is `invalid_request`. */
+function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: true } {
+  const time_context = askTimeContext(request);
+  return { ...(time_context === undefined ? {} : { time_context }), ...(askAnswerLayout(request) ? { answer_layout: true as const } : {}) };
+}
+
 /** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
   application: Application | undefined,
   validate: (value: unknown) => Request,
-  read: (application: Application, input: { readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly signal: AbortSignal }) => Promise<unknown>,
+  read: (application: Application, input: {
+    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: boolean; readonly signal: AbortSignal;
+  }) => Promise<unknown>,
   ask = false,
 ): PersonPostHandler {
   return async (request, response) => {
@@ -525,7 +542,7 @@ function personCancellablePost<Application, Request>(
     const disconnect = disconnectSignal(request, response);
     try {
       const requestBody = await personBody(request, validate);
-      json(response, 200, await read(application, { access_token, request: requestBody, ...(ask ? { time_context: askTimeContext(request) } : {}), signal: disconnect.signal }));
+      json(response, 200, await read(application, { access_token, request: requestBody, ...(ask ? askOptions(request) : {}), signal: disconnect.signal }));
     } finally { disconnect.dispose(); }
   };
 }
@@ -592,9 +609,8 @@ function personAskStreamingPost<Step, Answered extends { readonly response: unkn
     let stream: StreamingAskStream<Step, Answered> | undefined;
     try {
       const requestBody = await personBody(request, validatePersonAnswerRequestV3);
-      const time_context = askTimeContext(request);
       const answered = await application.askWithProgress({
-        access_token, request: requestBody, ...(time_context === undefined ? {} : { time_context }), signal: disconnect.signal,
+        access_token, request: requestBody, ...askOptions(request), signal: disconnect.signal,
         on_start: () => { stream ??= startStream(response); },
         on_progress: event => { stream?.step(event); },
       });
