@@ -4,7 +4,7 @@ import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../..
 import {
   AGENTIC_LIST_FILTER_FIELDS_V1, AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_STATEMENT_BYTES_V1,
   agenticCalendarDayV1, agenticListCheckedNoteV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
-  agenticListMembersNounV1, agenticListMembershipV1, agenticListNameSharesV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListStatementV1,
+  agenticListMembersNounV1, agenticListMembershipV1, agenticListNameSharesV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListStatementV1, agenticListTableV1,
   agenticNeedReadsListV1, agenticOpenReadsV1, agenticPlanListsV1, agenticWriterListMemberV1, agenticWriterListV1, createAgenticListEvidenceV1, parseAgenticListIdV1,
   type AgenticAnswerListUseV1, type AgenticListEvidenceInputV1, type AgenticListEvidenceV1, type AgenticListFilterApplicationV1, type AgenticListIdV1,
   type AgenticListNounFormsV1, type AgenticListSelectionV1, type AgenticListStatementInputV1, type AgenticOpenActionV1, type AgenticWriterListMemberV1,
@@ -413,24 +413,50 @@ describe("the statement code writes for a list (ADR-0041)", () => {
   it("names members that share a label and their row facts once, with their kinds counted, and cites every member it names (W6)", () => {
     // A meeting's records all carry the meeting's label; its action records an owner the others do not.
     expect(statement({ noun: agenticListMembersNounV1({ selector: "meetings" }, meeting.map(value => value.kind)), filter: { since: "2026-10-04", until: "2026-10-04" }, selected: meeting }))
-      .toEqual({ text: `5 items from meetings dated on October 4, 2026: ${sync} (1 meeting, 1 decision and 1 rationale); Vendor review (2026-10-04) (1 action, owner Dana); ${sync} (1 action, owner Dana).`, cited: [0, 1, 2, 3, 4] });
+      .toEqual({ text: `5 items from meetings dated on October 4, 2026: ${sync} (1 meeting, 1 decision and 1 rationale); Vendor review (2026-10-04) (1 action, owner Dana); ${sync} (1 action, owner Dana).`, cited: [0, 1, 2, 3, 4], caption: "5 items from meetings dated on October 4, 2026", names: [[0, 1, 4], [2], [3]] });
     // A share smaller than a name's members names as many of them as it cites; "and N more" counts the rest, from the list.
-    expect(statement({ noun: DECISIONS, count: 4, share: 2, selected: [...decisions, { title: "Other (2026-10-05)", kind: "decision" }] })).toEqual({ text: `4 decisions: ${sync} (2 decisions); and 2 more.`, cited: [0, 1] });
+    expect(statement({ noun: DECISIONS, count: 4, share: 2, selected: [...decisions, { title: "Other (2026-10-05)", kind: "decision" }] })).toEqual({ text: `4 decisions: ${sync} (2 decisions); and 2 more.`, cited: [0, 1], caption: "4 decisions; and 2 more", names: [[0, 1]] });
     // A merged group names its free members and at most `share` of the others; members another statement named by id cost no share.
-    expect(statement({ noun: DECISIONS, count: 4, share: 1, free: new Set([2, 3]), selected: Array.from({ length: 4 }, () => ({ title: sync, kind: "decision" })) })).toEqual({ text: `4 decisions: ${sync} (3 decisions); and 1 more.`, cited: [0, 2, 3] });
+    expect(statement({ noun: DECISIONS, count: 4, share: 1, free: new Set([2, 3]), selected: Array.from({ length: 4 }, () => ({ title: sync, kind: "decision" })) })).toEqual({ text: `4 decisions: ${sync} (3 decisions); and 1 more.`, cited: [0, 2, 3], caption: "4 decisions; and 1 more", names: [[0, 2, 3]] });
     expect(statement({ noun: TICKETS, complete: false, share: 15, free: new Set(Array.from({ length: 10 }, (_, index) => index)), selected: reviewed }))
-      .toEqual({ text: `At least 25 Jira tickets: ${reviewed.map(value => value.title).join("; ")}.`, cited: Array.from({ length: 25 }, (_, index) => index) });
+      .toEqual({ text: `At least 25 Jira tickets: ${reviewed.map(value => value.title).join("; ")}.`, cited: Array.from({ length: 25 }, (_, index) => index), caption: "At least 25 Jira tickets", names: Array.from({ length: 25 }, (_, index) => [index]) });
     expect(statement({ noun: TICKETS, complete: false, share: 15, selected: reviewed }).cited).toEqual(Array.from({ length: 15 }, (_, index) => index));
     expect(statement({ noun: TICKETS, filter: OCTOBER_4.filter, count: 60, selected: sixty }))
-      .toEqual({ text: `60 Jira tickets created on October 4, 2026: ${sixty.slice(0, 25).map(value => value.title).join("; ")}; and 35 more.`, cited: Array.from({ length: 25 }, (_, index) => index) });
+      .toEqual({ text: `60 Jira tickets created on October 4, 2026: ${sixty.slice(0, 25).map(value => value.title).join("; ")}; and 35 more.`, cited: Array.from({ length: 25 }, (_, index) => index), caption: "60 Jira tickets created on October 4, 2026; and 35 more", names: Array.from({ length: 25 }, (_, index) => [index]) });
     const long = statement({ selected: [{ title: `${"x".repeat(200)}\nsecond line` }] }).text.slice("1 item: ".length, -1);
     expect([[...long].length, long.endsWith("…")]).toEqual([120, true]);
   });
 
-  it("takes the noun as the renderer builds it, and gives the text and the members it cites, all the renderer reads", () => {
+  it("takes the noun as the renderer builds it, and gives the text, the members it cites, its caption and its names, all the renderer reads", () => {
     expectTypeOf<AgenticListStatementInputV1["noun"]>().toEqualTypeOf<AgenticListNounFormsV1>();
     expectTypeOf<Parameters<typeof agenticListSelectionNotFoundV1>[0]>().toEqualTypeOf<AgenticListNounFormsV1>();
-    expectTypeOf<ReturnType<typeof agenticListStatementV1>>().toEqualTypeOf<{ readonly text: string; readonly cited: readonly number[] }>();
+    expectTypeOf<ReturnType<typeof agenticListStatementV1>>().toEqualTypeOf<{ readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] }>();
+  });
+
+  it("tabulates a statement's names: one row per name, an Item column, then the status, owner and due date any of them records (ADR-0045)", () => {
+    // A name covering several members is one row; with several kinds among the members, each name says its kinds.
+    expect(agenticListTableV1({ selected: meeting, names: [[0, 1, 4], [2], [3]] })).toEqual({ columns: ["Item", "Owner"], rows: [
+      { cells: [`${sync} (1 meeting, 1 decision and 1 rationale)`, ""], members: [0, 1, 4] },
+      { cells: ["Vendor review (2026-10-04) (1 action)", "Dana"], members: [2] },
+      { cells: [`${sync} (1 action)`, "Dana"], members: [3] },
+    ] });
+    expect(agenticListTableV1({ selected: [due("2026-10-09"), due("2026-10-12"), due(), due(" 2026-10-09")], names: [[0, 3], [1], [2]] })).toEqual({ columns: ["Item", "Owner", "Due"], rows: [
+      { cells: [`${review} (2 actions)`, "Mara Quinn", "2026-10-09"], members: [0, 3] }, { cells: [review, "Mara Quinn", "2026-10-12"], members: [1] }, { cells: [review, "Mara Quinn", ""], members: [2] },
+    ] });
+    // Members selected by id are named with every row fact they record, so their table has a column per date they state,
+    // each day in the list's time zone, and an owner on record as none says so.
+    expect(agenticListTableV1({ selected: actions, names: [[0], [1]], by_id: true, time_zone: "UTC" })).toEqual({ columns: ["Item", "Owner", "Due", "Dated"], rows: [
+      { cells: [review, "Mara Quinn", "2026-10-09", "2026-10-01"], members: [0] }, { cells: [review, "None recorded", "2026-10-12", "2026-10-01"], members: [1] },
+    ] });
+    expect(agenticListTableV1({ selected: [prd, { ...prd, title: "MRD" }], names: [[0], [1]], by_id: true, time_zone: "America/Los_Angeles" })).toEqual({ columns: ["Item", "Status", "Created", "Updated"], rows: [
+      { cells: [prd.title, "current", "2026-10-04", "2026-10-05"], members: [0] }, { cells: ["MRD", "current", "2026-10-04", "2026-10-05"], members: [1] },
+    ] });
+    // One name, names with no fact beside their titles, or more facts than six columns hold: the statement stays prose.
+    const everything = { title: "THERM-1", status: "Open", owner: "Dana", due: "2026-10-30", dates: { created: "2026-10-01", updated: "2026-10-02", occurred: "2026-10-03", received: "2026-10-04" } };
+    expect([
+      agenticListTableV1({ selected: pages, names: [[0]] }), agenticListTableV1({ selected: sixty, names: [[0], [1]] }),
+      agenticListTableV1({ selected: [everything, { ...everything, title: "THERM-2" }], names: [[0], [1]], by_id: true }),
+    ]).toEqual([undefined, undefined, undefined]);
   });
 
   it("writes a selection's not-found phrase, and selects by owner, status or a row date within an inclusive range, each day the list's", () => {

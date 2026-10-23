@@ -4,6 +4,8 @@ import {
   isPersonWorkspaceCitationV1,
   personAnswerCitationKeyV7,
   personAnswerCitationKeyV8,
+  validatePersonAnswerLayoutV1,
+  type PersonAnswerBlockV1,
   type PersonAnswerResponseV8,
   type PersonAnswerPartV4,
   type PersonAnswerResponseV4,
@@ -35,6 +37,7 @@ import {
   agenticListSelectionNotFoundV1,
   agenticListSelectV1,
   agenticListStatementV1,
+  agenticListTableV1,
   agenticOpenReadsV1,
   agenticPlanListsV1,
   agenticWriterListMemberV1,
@@ -49,6 +52,7 @@ import {
 import { AGENTIC_ASK_MIN_ANSWER_MS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import { observeCoreModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
+import { buildAskLayoutV1, orderAskLayoutV1, type AskLayoutShapeV1 } from "./ask-layout-v1.js";
 
 /**
  * Ask's renderer: one writer call reads the question against released
@@ -58,7 +62,9 @@ import { observeCoreModelCorrectionV1 } from "../../shared/core-runtime-observat
  * need of the plan cites, whatever the writer replies, and for each list the
  * writer chooses. The writer's sentences follow, each standing only on text it
  * read. With no usable writer reply code still states those lists, or falls
- * back to the records research read, or says what it could not find.
+ * back to the records research read, or says what it could not find. A V8
+ * answer that asked for its layout (ADR-0045) reads lead first, and its part
+ * carries the blocks its kept statements read as.
  */
 
 const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
@@ -84,6 +90,12 @@ const MAX_STATEMENTS = AGENTIC_ASK_MAX_SENTENCES_V1;
 const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
 
 type Entry = AgenticEvidenceBundleItemV1;
+/** A statement's shape before its citations are known: a list's rows name the items they cite. */
+type DraftShape = Exclude<AskLayoutShapeV1, { kind: "list" }> | {
+  readonly kind: "list"; readonly caption: string; readonly columns: readonly string[];
+  readonly rows: readonly { readonly cells: readonly string[]; readonly shorts: readonly string[] }[];
+};
+const PROSE: DraftShape = Object.freeze({ kind: "text" });
 type AskResponse = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8;
 
 export interface AskRendererInputV1 {
@@ -157,9 +169,18 @@ function coverageIsLimitedFor(bundle: AgenticEvidenceBundleV1, used: readonly En
   return [...limited].some(id => !resolved.has(id));
 }
 
+/**
+ * A layout that passes the contract against the part's statements, or none: layout adds no claim, so an answer whose
+ * layout code could not build reads as it would without one rather than failing.
+ */
+function laidOutBlocks(blocks: readonly PersonAnswerBlockV1[], statements: readonly { readonly citation_indexes: readonly number[] }[], citations: number): readonly PersonAnswerBlockV1[] | undefined {
+  try { return validatePersonAnswerLayoutV1(blocks, statements, citations); } catch { return undefined; }
+}
+
 export function createAskRendererV1(options: CreateAskRendererV1Options): AgenticRendererV1<AskRendererInputV1, AskRenderedV1> {
   const responseVersion = options.response_version;
   const tickets = responseVersion >= 5;
+  const laidOut = responseVersion === 8 && options.layout === true;
   return Object.freeze({
     async render(input: AgenticRenderInputV1<AskRendererInputV1>) {
       const { bundle } = input;
@@ -360,8 +381,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected,
           share: shares[index]!.share, free: shares[index]!.free, ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
         });
-        // Each named member cites its own row.
-        return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id) };
+        // Each named member cites its own row; with layout, a statement naming two or more names is a table, a row per name.
+        const table = !laidOut ? undefined : agenticListTableV1({ selected: value.selected, names: statement.names, by_id: value.by_id, ...(value.list.filter.time_zone === undefined ? {} : { time_zone: value.list.filter.time_zone }) });
+        const shape: DraftShape = table === undefined ? PROSE : {
+          kind: "list", caption: statement.caption, columns: table.columns,
+          rows: table.rows.map(row => ({ cells: row.cells, shorts: row.members.map(at => value.selected[at]!.id) })),
+        };
+        return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id), shape };
       });
 
       // ---- the writer's sentences (W1, W3, W4, W5) ---------------------------
@@ -384,6 +410,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // It stands on the items whose text the writer read (W1); after them, never as support, it cites the rows whose facts it
       // may carry: each row it cites that the writer saw, and each private row the writer saw of a list it cites (W6).
       const rowsOf = (id: string) => shownRows.has(id) ? [id] : writerById.get(parseAgenticListIdV1(id) ?? "L0")?.members.map(member => member.id).filter(short => privateItem(byShort.get(short)!.item)) ?? [];
+      /** How a sentence reads (ADR-0045): a row whose sentence carries code's note reads as a bullet, so the note shows. */
+      const shapeOf = (sentence: AnswerSentence, noted: boolean): DraftShape => {
+        const section = sentence.section === undefined ? {} : { section: sentence.section };
+        if (sentence.form === "row" && !noted) return { kind: "row", ...section, columns: answer!.tables.find(table => table.section === sentence.section)!.columns, cells: sentence.cells! };
+        return { kind: sentence.form === undefined ? "text" : sentence.form === "row" ? "bullet" : sentence.form, ...section };
+      };
       const writerSentences = sentences.flatMap(sentence => {
         const read = sentence.evidence.filter(short => textGiven.has(short));
         if (read.length === 0) { observeCoreModelCorrectionV1("writer_uncited_sentence_dropped"); return []; }
@@ -391,15 +423,18 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
         if (unknown > 0) observeCoreModelCorrectionV1("writer_unknown_id_dropped", unknown);
         const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
-        return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read }];
+        return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, shape: shapeOf(sentence, notes.length > 0) }];
       });
       // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
+      // A laid-out answer reads lead first (ADR-0045): the writer's leads, then the lists, then its other sentences by section.
       const statements: Statement[] = [];
       const statementKeys = new Set<string>();
       const keptReads: Entry[] = [];
-      const layout: readonly { text: string; shorts: readonly string[]; read?: readonly string[] }[] = [...listStatements, ...writerSentences];
+      const order: readonly { text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape }[] = laidOut ? orderAskLayoutV1(listStatements, writerSentences) : [...listStatements, ...writerSentences];
+      /** The shape of each statement kept, in order. */
+      const shapes: DraftShape[] = [];
       let dropped = false;
-      for (const sentence of layout) {
+      for (const sentence of order) {
         // Temporary model guardrail (ADR-0041): only exact text with the same cited objects and privacy is a repeat.
         // Shared sources or planner kinds never establish that two sentences say the same thing.
         const statementKey = JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
@@ -412,6 +447,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         if (statements.length >= MAX_STATEMENTS || used.length + fresh.size > MAX_CITATIONS) { dropped = true; break; }
         statementKeys.add(statementKey);
         statements.push(statementOf(sentence.text, sentence.shorts));
+        shapes.push(sentence.shape);
         keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
       }
       const notFound = [...(answer?.not_found ?? []), ...selectionNotFound];
@@ -455,6 +491,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
       ];
       const outcome = !anyEvidence ? (incomplete || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
+      // The blocks of the statements kept (ADR-0045), only for a part with statements; a list's rows cite their items' citations.
+      const indexesOf = (shorts: readonly string[]) => [...new Set(shorts.map(short => usedKeys.get(keyOf(short))!))];
+      const layout = !laidOut || draft.statements.length === 0 ? undefined : laidOutBlocks(buildAskLayoutV1(draft.statements.map((value, index) => {
+        const shape = shapes[index]!;
+        return { citation_indexes: value.citation_indexes, shape: shape.kind !== "list" ? shape : { ...shape, rows: shape.rows.map(row => ({ cells: row.cells, citation_indexes: indexesOf(row.shorts) })) } };
+      })), draft.statements, used.length);
       const result = Object.freeze({
         schema_version: responseVersion, kind: responseVersion === 8 ? "echo-clean-person-answer-v8" : responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
         parts: Object.freeze([Object.freeze({
@@ -462,6 +504,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
           ...(draft.gap === undefined ? {} : { gap: draft.gap }),
           ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
+          ...(layout === undefined ? {} : { layout }),
         })]),
         citations: Object.freeze(anyEvidence ? used.map(entry => (responseVersion === 8 ? citationOfAgenticEvidenceItemV8 : citationOfAgenticEvidenceItemV1)(entry.item, options.context.time_zone ?? 'UTC')) : []),
         ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),

@@ -34,6 +34,16 @@ const ARG_CHARS = 240;
 const SENTENCE_CHARS = 700;
 const NOT_FOUND_CHARS = 200;
 const SELECTION_CHARS = 120;
+/** Answer layout v1 (ADR-0045): a section names its heading, a table declares its columns, a row gives a cell per column. */
+const SECTION_CHARS = 60;
+const COLUMN_CHARS = 40;
+const CELL_CHARS = 120;
+/** The layout contract's bytes for a heading, a column and a cell (person-answer-layout-v1). */
+const SECTION_BYTES = 200;
+const COLUMN_BYTES = 100;
+const CELL_BYTES = 300;
+export const AGENTIC_ASK_MAX_TABLES_V1 = 3;
+export const AGENTIC_ASK_MAX_COLUMNS_V1 = 6;
 
 /** A model response failed its closed, request-local protocol. */
 export class AgenticAskOutputErrorV1 extends Error {
@@ -51,9 +61,18 @@ export type NeedStatus = "open" | "found" | "not_found";
 export type StepNeed = { readonly id?: string; readonly need: string; readonly kind?: AgenticResearchNeedKindV1; readonly status: NeedStatus; readonly evidence: readonly string[] };
 export type StepPart = { readonly question: string; readonly needs: readonly StepNeed[]; readonly notes: string };
 export type Step = { readonly parts: readonly StepPart[]; readonly actions: readonly StepAction[] };
-export type AnswerSentence = { readonly text: string; readonly evidence: readonly string[] };
-/** `lists` (ADR-0041): the lists whose members code names. */
-export type Answer = { readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[]; readonly lists: readonly AgenticAnswerListUseV1[] };
+/**
+ * A writer's sentence. `form`, `section` and `cells` (answer layout v1, ADR-0045) say how it reads: the lead, a bullet or
+ * a row of its section's table, with a cell per column; prose has no form. They never change what it cites.
+ */
+export type AnswerSentence = {
+  readonly text: string; readonly evidence: readonly string[];
+  readonly form?: "lead" | "bullet" | "row"; readonly section?: string; readonly cells?: readonly string[];
+};
+/** A table the writer declares for a section's rows (ADR-0045). */
+export type AnswerTable = { readonly section: string; readonly columns: readonly string[] };
+/** `lists` (ADR-0041): the lists whose members code names. `tables` (ADR-0045): the tables its rows stand in. */
+export type Answer = { readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[]; readonly lists: readonly AgenticAnswerListUseV1[]; readonly tables: readonly AnswerTable[] };
 
 /** Each tool's first argument is required; finish has no arguments. A task goal's arguments, byte for byte. */
 const ACTION_ARGS = {
@@ -159,13 +178,27 @@ const listUse = {
   },
 } as const;
 
-/** Ask's answer: the lists code names first (ADR-0041), the writer's own sentences, and what it could not find. */
+/** The forms a writer's sentence may take (ADR-0045): "text" is prose, which carries no form once read. */
+const ANSWER_FORMS = ["lead", "text", "bullet", "row"] as const;
+
+/**
+ * Ask's answer: the lists code names first (ADR-0041), the tables its rows stand in and the writer's own sentences, each
+ * with its form and section (ADR-0045), and what it could not find. Forms, sections, cells and tables are optional.
+ */
 export const answerSchema: StructuredGenerationJsonSchema = Object.freeze({
   type: "object", additionalProperties: false, required: ["lists", "sentences", "not_found"], properties: {
     lists: { type: "array", maxItems: AGENTIC_LIST_WRITER_LISTS_MAX_V1, items: listUse },
+    tables: { type: "array", maxItems: AGENTIC_ASK_MAX_TABLES_V1, items: {
+      type: "object", additionalProperties: false, required: ["section", "columns"], properties: {
+        section: { type: "string", maxLength: SECTION_CHARS },
+        columns: { type: "array", minItems: 2, maxItems: AGENTIC_ASK_MAX_COLUMNS_V1, items: { type: "string", maxLength: COLUMN_CHARS } },
+      },
+    } },
     sentences: { type: "array", maxItems: AGENTIC_ASK_MAX_SENTENCES_V1, items: {
       type: "object", additionalProperties: false, required: ["text", "evidence"], properties: {
         text: { type: "string", maxLength: SENTENCE_CHARS }, evidence: ids,
+        form: closedString(ANSWER_FORMS), section: { type: "string", maxLength: SECTION_CHARS },
+        cells: { type: "array", maxItems: AGENTIC_ASK_MAX_COLUMNS_V1, items: { type: "string", maxLength: CELL_CHARS } },
       },
     } },
     not_found: { type: "array", maxItems: AGENTIC_ASK_MAX_PARTS_V1, items: { type: "string", maxLength: NOT_FOUND_CHARS } },
@@ -200,6 +233,22 @@ export function cleanModelLine(value: unknown, maximumChars: number): string {
   const line = oneLine(value);
   if ([...line].length > maximumChars) observeCoreModelCorrectionV1("model_text_truncated");
   return truncate(line, maximumChars);
+}
+
+/** `text` within `maximumBytes` of UTF-8, cut whole characters at a time and ending "…" when cut. */
+export function boundedBytes(text: string, maximumBytes: number): string {
+  if (Buffer.byteLength(text, "utf8") <= maximumBytes) return text;
+  const chars = [...text];
+  let cut: string;
+  do { chars.pop(); cut = `${chars.join("").trimEnd()}…`; } while (chars.length > 0 && Buffer.byteLength(cut, "utf8") > maximumBytes);
+  return cut;
+}
+/** cleanModelLine within both a character and a byte cap: one count for a cut to either. */
+function boundedModelLine(value: unknown, maximumChars: number, maximumBytes: number): string {
+  const line = oneLine(value);
+  const bounded = boundedBytes(truncate(line, maximumChars), maximumBytes);
+  if (bounded !== line) observeCoreModelCorrectionV1("model_text_truncated");
+  return bounded;
 }
 
 /** A response part's question: V4 bounds part questions to 1 KiB of single-line text. */
@@ -478,12 +527,16 @@ export function parseAnswer(value: unknown): Answer {
   const body = object(value);
   if (body === null) throw new AgenticAskOutputErrorV1("the reply was not a JSON object");
   if (!Array.isArray(body.sentences)) throw new AgenticAskOutputErrorV1(`"sentences" must be an array (got ${keysOf(body)})`);
+  const tables = answerTables(body.tables);
   const sentences: AnswerSentence[] = [];
   for (const [index, raw] of body.sentences.entries()) {
     const entry = object(raw);
-    const text = entry === null ? "" : stripEvidenceIds(cleanModelLine(entry.text, SENTENCE_CHARS), true);
+    const shape = entry === null ? undefined : sentenceShape(entry, tables);
+    let text = entry === null ? "" : stripEvidenceIds(cleanModelLine(entry.text, SENTENCE_CHARS), true);
+    // A row with no text says its cells under their columns.
+    if (text.length === 0 && shape?.cells !== undefined) text = rowText(tables.find(table => table.section === shape.section)!.columns, shape.cells);
     // A sentence's list ids support nothing (W1), so they take no item's slot: its first 12 item ids are kept, rows included.
-    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry!.evidence, true, false) }));
+    if (text.length > 0) sentences.push(Object.freeze({ text, evidence: cleanIds(entry!.evidence, true, false), ...shape }));
     else observeCoreModelCorrectionV1("model_entry_dropped");
     if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) {
       if (index + 1 < body.sentences.length) observeCoreModelCorrectionV1("model_items_capped", body.sentences.length - index - 1);
@@ -515,7 +568,73 @@ export function parseAnswer(value: unknown): Answer {
       break;
     }
   }
-  return Object.freeze({ sentences: Object.freeze(sentences), not_found: Object.freeze(notFound), lists: Object.freeze(uses) });
+  return Object.freeze({ sentences: Object.freeze(sentences), not_found: Object.freeze(notFound), lists: Object.freeze(uses), tables });
+}
+
+/**
+ * The tables an answer declares (ADR-0045): each a section and 2 to 6 distinct columns, at most 3, one per section. A
+ * table with no section or fewer than two columns is dropped.
+ */
+function answerTables(value: unknown): readonly AnswerTable[] {
+  const tables: AnswerTable[] = [];
+  const declared: readonly unknown[] = Array.isArray(value) ? value : [];
+  for (const [index, raw] of declared.entries()) {
+    const entry = object(raw);
+    const section = entry === null ? "" : boundedModelLine(entry.section, SECTION_CHARS, SECTION_BYTES);
+    const columns: string[] = [];
+    const named: readonly unknown[] = Array.isArray(entry?.columns) ? entry.columns : [];
+    for (const [at, column] of named.entries()) {
+      const text = boundedModelLine(column, COLUMN_CHARS, COLUMN_BYTES);
+      if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
+      else if (columns.some(existing => existing.toLowerCase() === text.toLowerCase())) observeCoreModelCorrectionV1("model_repeat_dropped");
+      else columns.push(text);
+      if (columns.length === AGENTIC_ASK_MAX_COLUMNS_V1) {
+        if (at + 1 < named.length) observeCoreModelCorrectionV1("model_items_capped", named.length - at - 1);
+        break;
+      }
+    }
+    if (section.length === 0 || columns.length < 2) observeCoreModelCorrectionV1("model_entry_dropped");
+    else if (tables.some(table => table.section === section)) observeCoreModelCorrectionV1("model_repeat_dropped");
+    else tables.push(Object.freeze({ section, columns: Object.freeze(columns) }));
+    if (tables.length === AGENTIC_ASK_MAX_TABLES_V1) {
+      if (index + 1 < declared.length) observeCoreModelCorrectionV1("model_items_capped", declared.length - index - 1);
+      break;
+    }
+  }
+  return Object.freeze(tables);
+}
+
+/**
+ * A sentence's form, section and cells (ADR-0045). A form in another spelling is read, an unknown one is prose; a lead
+ * has no section. A row needs its section's table and a cell that says something, or it is a bullet; its cells are cut
+ * or filled to the table's columns. Cells on a sentence that is no row are dropped.
+ */
+function sentenceShape(entry: Record<string, unknown>, tables: readonly AnswerTable[]): Pick<AnswerSentence, "form" | "section" | "cells"> {
+  const normalized = typeof entry.form === "string" ? entry.form.trim().toLowerCase() : "";
+  const read = entry.form === undefined ? "text" : respelled(entry.form, (ANSWER_FORMS as readonly string[]).includes(normalized) ? normalized as (typeof ANSWER_FORMS)[number] : "text");
+  const named = read === "lead" ? "" : boundedModelLine(entry.section, SECTION_CHARS, SECTION_BYTES);
+  const section = named.length === 0 ? {} : { section: named };
+  const given: readonly unknown[] = Array.isArray(entry.cells) ? entry.cells : [];
+  if (read !== "row") {
+    if (given.length > 0) observeCoreModelCorrectionV1("model_entry_dropped");
+    return read === "text" ? section : { form: read, ...section };
+  }
+  const columns = tables.find(table => table.section === named)?.columns;
+  if (columns === undefined) { observeCoreModelCorrectionV1("model_enum_respelled"); return { form: "bullet", ...section }; }
+  if (given.length > columns.length) observeCoreModelCorrectionV1("model_items_capped", given.length - columns.length);
+  const cells = columns.map((_, at) => {
+    const cell = given[at];
+    if (typeof cell !== "string") { observeCoreModelCorrectionV1("model_entry_dropped"); return ""; }
+    return stripEvidenceIds(boundedModelLine(cell, CELL_CHARS, CELL_BYTES), true);
+  });
+  if (cells.every(cell => cell.length === 0)) { observeCoreModelCorrectionV1("model_enum_respelled"); return { form: "bullet", ...section }; }
+  return { form: "row", ...section, cells: Object.freeze(cells) };
+}
+
+/** A row's text from its cells: "Action: Fix BUG-412; Due: 2026-10-28.", each non-empty cell under its column. */
+function rowText(columns: readonly string[], cells: readonly string[]): string {
+  const said = columns.flatMap((column, at) => cells[at]!.length === 0 ? [] : [`${column}: ${cells[at]!}`]).join("; ");
+  return cleanLine(/[.!?]$/u.test(said) ? said : `${said}.`, SENTENCE_CHARS);
 }
 
 // ---- step prompt text, word for word: what stepPrompt and askStepPrompt both say, and Ask's own (DATE_ARGUMENTS, ASK_*) ----
@@ -708,6 +827,12 @@ export const ANSWER_PROMPT = [
   "",
   "Write a direct answer as a list of sentences:",
   "- Lead with the direct answer, then the facts that support or qualify it, in plain words a busy reader can scan. Use a compact paragraph for a narrative answer, or checklist-style sentences when the question asks for prerequisites, conditions, or several parallel items. Usually 2 to 6 sentences; use up to 10 when the question asks several things. Never leave out something the question asks for to stay short.",
+  "- Give the answer its shape with each sentence's \"form\" and \"section\":",
+  "  - The lead is the conclusion, in one or two sentences, first: \"form\": \"lead\". Leave \"form\" out for other prose.",
+  "  - \"section\" is a short heading, such as \"Decisions\" or \"Next steps\". Give sentences a section only when the answer covers two or more distinct topics; never the lead.",
+  "  - \"form\": \"bullet\" for parallel items, such as blockers, conditions or decisions.",
+  "  - For three or more items that share owner, date or status fields, declare a table in \"tables\" with its section and columns, such as [\"Action\", \"Owner\", \"Due\", \"Status\"], and give each item \"form\": \"row\", that section, and \"cells\" in the columns' order. Leave a cell empty when the evidence does not give it; write a date as YYYY-MM-DD. Still write each row's text as one sentence.",
+  "  - A sentence cites its evidence whatever its form. Never write bullets or rows for a list's members: code states them.",
   "- Every factual answer sentence cites the ids that support it, and only those, in \"evidence\". Never write ids such as E4 or L1 in the sentence text. Use only the evidence and lists; never guess or add outside knowledge.",
   "- Answer only what was asked. Do not add facts about other topics, customers or projects. If the question asks about something the evidence does not cover, put that missing fact in \"not_found\"; do not substitute a related answer, and do not guess who or what the question means.",
   "- source_catalog describes source capabilities, not extra questions to answer. Do not report an unrequested discussion, document or approval as missing when the requested fact is already supported.",
@@ -736,7 +861,7 @@ export const ANSWER_PROMPT = [
   "- Check every requested fact before returning JSON. If your prose says a requested date, owner, result or decision is unknown or not recorded, that fact must also appear in not_found. For example, when asked when a ticket moved to Done, a creation date and current Done status cannot answer: return not_found containing \"date the ticket moved to Done\".",
   "",
   "Reply with ONLY a JSON object in exactly this shape:",
-  "{\"lists\":[],\"sentences\":[{\"text\":\"<sentence>\",\"evidence\":[\"E1\"]}],\"not_found\":[]}",
+  "{\"lists\":[],\"tables\":[],\"sentences\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"],\"form\":\"lead\"},{\"text\":\"<sentence>\",\"evidence\":[\"E2\"],\"form\":\"bullet\",\"section\":\"<section>\"}],\"not_found\":[]}",
 ].join("\n");
 
 /**

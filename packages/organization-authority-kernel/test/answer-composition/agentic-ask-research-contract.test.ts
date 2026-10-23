@@ -150,6 +150,27 @@ describe('Ask research tool contract v1', () => {
   });
 });
 
+describe('Ask answer layout v1 (ADR-0045)', () => {
+  it('lays a V8 answer out only when the client asked for it', async () => {
+    const projects = [1, 2].map((n): EvidenceDeskItemV2 => Object.freeze({
+      id: `project-${n}`, kind: 'project', citation: { kind: 'project' as const, project_id: `prj_00000000-0000-4000-8000-00000000000${n}` as const }, label: `Project ${n}`, visibility: 'project',
+      attributes: { status: 'active' }, text: `Project ${n}.`, receipt_sha256: canonicalSha256(`project-${n}`),
+    }));
+    const answer = async (answer_layout?: boolean) => {
+      const run = scripted([step([{ tool: 'list', args: { source: 'projects', status: 'active' } }]), finish(), { lists: [{ id: 'L1' }], sentences: [], not_found: [] }]);
+      const port = desk({ live_sources: [PROJECTS_SOURCE_DESCRIPTOR_V1], list: vi.fn(async () => result(projects)) });
+      const response = await createAgenticAskV5({ desk: port, model: run.model, audit: { append: () => undefined }, generation, today: () => '2026-10-19', ...(answer_layout === undefined ? {} : { answer_layout }) })
+        .answer({ question: 'What are the current projects?' });
+      expect(validatePersonAnswerResponseV8(response)).toEqual(response);
+      return response.parts[0]!;
+    };
+    expect((await answer(true)).layout).toEqual([{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: expect.stringMatching(/^2 projects/u), rows: [
+      { cells: ['Project 1', 'active'], citation_indexes: [0] }, { cells: ['Project 2', 'active'], citation_indexes: [1] },
+    ] }]);
+    for (const asked of [false, undefined]) expect(await answer(asked)).not.toHaveProperty('layout');
+  });
+});
+
 describe('Ask research tool contract v1: review fixes', () => {
   const project = (n: number, role: 'lead' | 'member', links?: EvidenceDeskItemV2['links']): EvidenceDeskItemV2 => Object.freeze({
     id: `project-${n}`, kind: 'project', citation: { kind: 'project' as const, project_id: `prj_00000000-0000-4000-8000-00000000000${n}` as const }, label: `Project ${n}`, visibility: 'project',
