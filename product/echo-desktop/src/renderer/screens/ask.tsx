@@ -410,8 +410,8 @@ function shortName(name: string): string {
 /**
  * The answer's sources: one line, "4 sources · Tuesday sync · Apollo update",
  * that opens onto a row per source, numbered as the sentences cite it. It
- * starts closed (ADR-0045); a number after a sentence opens it too. The row
- * the pane shows is lit.
+ * starts closed (ADR-0045). Citation numbers open the source pane without
+ * expanding this list. If expanded explicitly, the row the pane shows is lit.
  */
 function SourceList({ state }: { state: State }) {
   const groups = answerGroups(state);

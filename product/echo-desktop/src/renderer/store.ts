@@ -3663,15 +3663,15 @@ function readPane(gen: number, source: AnswerSource): void {
 
 /**
  * A source's number or row: the pane opens beside the answer on that source,
- * read unless it already was, and the source rows open with it. A sentence's
- * or a row's number also names it.
+ * read unless it already was. The source list keeps its explicit open/closed
+ * choice. A sentence's or a row's number also names it.
  */
 export function chooseSource(group: number, focus: string | null = null): void {
   const sources = state.sources;
   const chosen = answerGroups()[group];
   const source = chosen ? answerSources()[chosen.indexes[0]!] : undefined;
   if (!sources || !source) return;
-  set({ sources: { ...sources, open: group, focus, listed: true, named: null, evidence: null } });
+  set({ sources: { ...sources, open: group, focus, named: null, evidence: null } });
   readPane(sources.gen, source);
 }
 

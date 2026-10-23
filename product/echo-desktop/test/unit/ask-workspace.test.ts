@@ -164,7 +164,9 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     expect(byTestId(shown, 'source-open')).toEqual([]);
     store.openFullPage();
     expect(store.getState().ask).not.toBeNull();
-    // Its source row names them, with no qualifier.
+    // Explicitly expanding sources names them, with no qualifier.
+    expect(byTestId(thread(), 'source-row')).toEqual([]);
+    store.toggleSourceList();
     expect(text(byTestId(thread(), 'source-row'))).toBe('1Mara Lind');
   });
 

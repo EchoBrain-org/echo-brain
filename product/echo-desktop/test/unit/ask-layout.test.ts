@@ -121,7 +121,7 @@ describe('a laid-out part reads as its blocks', () => {
     const { store, thread } = await answered(therm());
     const [row] = byTestId(thread(), 'answer-row');
     click(byTestId(row, 'citation')[0]);
-    expect(store.getState().sources).toMatchObject({ open: 3, focus: '0.t4.0', listed: true });
+    expect(store.getState().sources).toMatchObject({ open: 3, focus: '0.t4.0', listed: false });
     expect(store.paneTarget()?.number).toBe(3);
     const rows = byTestId(thread(), 'answer-row');
     expect(rows.map(node => classes(node).includes('on'))).toEqual([true, false, false, false]);
@@ -175,8 +175,13 @@ describe('every answer\'s sources start closed, as one line', () => {
     expect(store.getState().sources?.listed).toBe(false);
   });
 
-  it('opens when a number opens the pane, stays open when the pane closes, and starts closed again for the next answer', async () => {
+  it('keeps the source list choice when citations open, and starts closed again for the next answer', async () => {
     const { store, thread } = await answered(therm(false));
+    click(byTestId(thread(), 'citation')[0]);
+    expect(byTestId(thread(), 'source-row')).toHaveLength(0);
+    store.closeSources();
+    expect(byTestId(thread(), 'source-row')).toHaveLength(0);
+    click(byTestId(thread(), 'sources-toggle')[0]);
     click(byTestId(thread(), 'citation')[0]);
     expect(byTestId(thread(), 'source-row')).toHaveLength(6);
     store.closeSources();

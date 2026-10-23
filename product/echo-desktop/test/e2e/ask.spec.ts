@@ -409,11 +409,13 @@ test('a laid-out answer reads as a document, and its table scrolls in its own bo
     'One of three THERM meetings in range was not read before the time limit. Who proposed the reduced scope was not found in the evidence read.');
   await expect(page.getByTestId('sources-toggle')).toHaveText(/^6 sources\s*DVT failure review · Traceability · Gate reviews · TRACE-01 · HW-11 · DVT-R2$/);
 
-  // A row's number opens its ticket beside the answer, lights the row, and opens the sources' rows.
+  // A row's number opens only its ticket beside the answer and lights the row.
   await rows.nth(0).getByTestId('citation').click();
   await expect(page.getByTestId('source-pane')).toContainText('Jira · Ticket');
   await expect(rows.nth(0)).toHaveClass(/\bon\b/);
-  await expect(page.getByTestId('sources-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('sources-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('source-row')).toHaveCount(0);
+  await page.getByTestId('sources-toggle').click();
   await expect(page.getByTestId('source-row').nth(3)).toHaveAttribute('aria-pressed', 'true');
   // Narrowed by the pane, the table scrolls in its own box; the thread and the page never scroll sideways.
   const widths = await page.evaluate(() => {
@@ -692,4 +694,23 @@ test('an empty bar offers what to ask once you go to it: Up lights one, Return a
   await expect(suggestions.first()).toHaveText(chosen);
   await field.pressSequentially('sh');
   await expect(offered).toHaveCount(0);
+});
+
+
+test('Ask uses the available page for scrolling and a wider answer aligned with its bar', async () => {
+  run = await launch('ask-layout');
+  const { page, app } = run;
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1911, 1074));
+  await askFromHome(page, 'Can DVT-R2 run on the reduced test scope?');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  const geometry = await page.evaluate(() => {
+    const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect().toJSON();
+    return { page: box('.page'), scroll: box('.ask'), answer: box('.turn'), bar: box('.bar') };
+  });
+  expect(Math.abs(geometry.scroll.right - geometry.page.right)).toBeLessThanOrEqual(1);
+  expect(geometry.answer.width).toBeGreaterThan(1000);
+  expect(Math.abs(geometry.answer.left - geometry.bar.left)).toBeLessThanOrEqual(8);
+  expect(Math.abs(geometry.answer.width - geometry.bar.width)).toBeLessThanOrEqual(16);
+  await expect(page.getByTestId('sources-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('source-row')).toHaveCount(0);
 });
