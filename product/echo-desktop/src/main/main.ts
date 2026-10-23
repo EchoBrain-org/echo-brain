@@ -13,8 +13,8 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  changesLogLine, externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_PARAMS_BYTES, MAX_PROJECT_FILES, noticeOf, plainJsonBytes,
-  remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
+  changesLogLine, externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_COPY_CHARACTERS, MAX_PARAMS_BYTES, MAX_PROJECT_FILES,
+  noticeOf, plainJsonBytes, remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Notice, type Result, type UpdateState,
 } from '../shared/protocol.js';
@@ -35,8 +35,6 @@ const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 /** What an owner's invitation export holds; the person client checks the rest. */
 const INVITATION_FILE = 'person-invitation.json';
 const MAX_INVITATION_BYTES = 8 * 1024;
-/** Copy answer takes what an answer can hold: 12,000 characters. */
-const MAX_COPY_CHARACTERS = 12_000;
 const test = __ECHO_TEST_HOOK__ ? process.env : {} as NodeJS.ProcessEnv;
 const smoke = process.argv.includes('--smoke');
 // Release builds: no fuse covers remote debugging, so refuse every form of it

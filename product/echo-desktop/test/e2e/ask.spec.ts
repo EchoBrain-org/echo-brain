@@ -39,6 +39,13 @@ test('global Ask reads Jira live and opens its ticket citation', async () => {
     .toEqual([{ path: '/v5/person/ask', body: { schema_version: 3, question } }]);
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
   await expect(page.getByTestId('private-mark')).toHaveCount(1);
+  // The sources start as one closed line, a ticket named by its key; it opens onto their rows (ADR-0045).
+  const sources = page.getByTestId('sources-toggle');
+  await expect(sources).toHaveText(/^1 source\s*ECHO-7$/);
+  await expect(sources).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('source-row')).toHaveCount(0);
+  await sources.click();
+  await expect(sources).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
   await page.getByTestId('citation').click();
   const pane = page.getByTestId('source-pane');
@@ -92,8 +99,8 @@ test('follow-ups stack in a thread, newest at the bottom: earlier answers collap
   await expect(earlier.locator('.q')).toHaveText(['Question 2', 'Question 3', 'Question 4', 'Question 5', 'Question 6']);
   await expect(page.getByTestId('question')).toHaveText('Question 7');
   await expect(page.getByTestId('answer')).toBeInViewport();
-  // Only the current answer lists its sources.
-  await expect(page.getByTestId('source-row')).toHaveCount(2);
+  // Only the current answer lists its sources, on one line.
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
   // Collapsed until clicked.
   await expect(earlier.nth(4)).toHaveAttribute('aria-expanded', 'false');
   await earlier.nth(4).click();
@@ -133,7 +140,7 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   const field = page.getByTestId('ask-field');
   const earlier = page.getByTestId('earlier-turn');
   await askFromHome(page, 'First?');
-  await expect(page.getByTestId('source-row')).toHaveCount(2);
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
 
   await field.fill('Second?');
   await field.press('Enter');
@@ -154,14 +161,14 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await expect(page.getByTestId('asking')).toHaveCount(0);
   await expect(page.getByTestId('question')).toHaveText('First?');
   await expect(earlier).toHaveCount(0);
-  await expect(page.getByTestId('source-row')).toHaveCount(2);
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
 
   // The third question fails: the first answer stays current, and Try again asks the third again.
   await field.press('Enter');
   await expect(page.getByTestId('ask-error')).toHaveText('ECHO is unavailable right now. Try again.');
   await expect(page.getByTestId('ask-failed')).toContainText('Third?');
   await expect(page.getByTestId('question')).toHaveText('First?');
-  await expect(page.getByTestId('source-row')).toHaveCount(2);
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
   await expect(earlier).toHaveCount(0);
   await page.getByTestId('ask-retry').click();
   await expect(page.getByTestId('question')).toHaveText('Third?');
@@ -190,7 +197,9 @@ test('a project question that finds nothing says so and offers, never makes, one
   await expect(page.getByTestId('answer-gap')).toHaveText("I couldn't find this in the sources you can access.");
   await expect(page.getByTestId('statement-text')).toHaveCount(0);
   await expect(page.getByTestId('project-empty')).toContainText('Nothing in Apollo matched.');
-  await expect(page.getByTestId('source-row')).toHaveCount(0);
+  // What research did not find is the quiet note after the answer, and nothing is cited.
+  await expect(page.getByTestId('coverage-note')).toHaveText("I couldn't find this in the sources you can access.");
+  await expect(page.getByTestId('sources-toggle')).toHaveCount(0);
   // Nothing widened on its own: one question, to the project.
   expect(asks()).toEqual([{ question: 'What did we agree on pricing?', project: 'prj_11111111-1111-4111-8111-111111111111' }]);
   await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
@@ -199,7 +208,7 @@ test('a project question that finds nothing says so and offers, never makes, one
   await expect(page.getByTestId('question')).toHaveText('What did we agree on pricing?');
   await expect(page.getByTestId('statement-text')).toHaveText('We agreed to ship Apollo with annual plans first.');
   await expect(page.getByTestId('project-empty')).toHaveCount(0);
-  await expect(page.getByTestId('source-row')).toHaveCount(2);
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
   // The project answer stays in the thread; the bar widened with the question.
   await expect(page.getByTestId('earlier-turn').locator('.q')).toHaveText(['What did we agree on pricing?']);
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
@@ -225,8 +234,10 @@ test('an approved record opens beside the answer: who approved it, who was there
   const { page, app } = run;
   await askFromHome(page, 'What did we agree?');
   await expect(page.getByTestId('answer')).toBeVisible();
-  // The record is read once, so its chip names the meeting.
+  // The record is read once, so its chip names the meeting, on the sources' line and, opened, on its row.
   const chips = page.getByTestId('source-row');
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources\s*Tuesday sync · Apollo update$/);
+  await page.getByTestId('sources-toggle').click();
   await expect(chips).toHaveText([/^1\s*Tuesday sync$/, /^2\s*Apollo update$/]);
   expect(recordReads().map(call => call.query)).toEqual([`?record_sha256=${RECORD}`]);
   await expect(page.getByTestId('source-pane')).toHaveCount(0);
@@ -285,6 +296,7 @@ test('a cited record the person can no longer read says so, with no Try again th
   // The Authority answers with an empty list; the chip keeps its own name.
   const chips = page.getByTestId('source-row');
   await expect.poll(() => recordReads().length).toBe(1);
+  await page.getByTestId('sources-toggle').click();
   await expect(chips.nth(0)).toHaveText(/^1\s*Approved record 1$/);
   await chips.nth(0).click();
   const pane = page.getByTestId('source-pane');
@@ -302,6 +314,7 @@ test('passages of one file are one source: one number, one row, and a pane that 
   ]);
   // Three citations, two sources: the file is named once, as a person says it, its version apart.
   const rows = page.getByTestId('source-row');
+  await page.getByTestId('sources-toggle').click();
   await expect(rows).toHaveText([/^1\s*Tuesday sync$/, /^2\s*Apollo launch plan\s*v2 · 2 passages$/]);
   const markers = page.getByTestId('citation');
   await expect(markers).toHaveText(['1', '2', '2']);
@@ -337,6 +350,7 @@ test('evidence that could not be read says so, and Try again reads it again', as
   run = await launch('evidence-fails-once');
   const { page } = run;
   await askFromHome(page, 'What did we agree?');
+  await page.getByTestId('sources-toggle').click();
   await page.getByTestId('source-row').nth(1).click();
   const pane = page.getByTestId('source-pane');
   await expect(pane.getByTestId('source-error')).toHaveText('ECHO is unavailable right now. Try again.');
@@ -348,15 +362,18 @@ test('evidence that could not be read says so, and Try again reads it again', as
   expect(evidenceReads()).toHaveLength(2);
 });
 
-test('Copy answer copies the answer and says so, and main takes no more than an answer holds', async () => {
+test('Copy answer copies the answer as Markdown and says so, and main takes no more than an answer holds', async () => {
   run = await launch();
   const { page, app } = run;
   const copied = () => app.evaluate(() => (globalThis as { echoTestClipboard?: string }).echoTestClipboard);
+  const markdown = 'We agreed to ship Apollo with annual plans first. [1][2]\n\nSources\n\n1. Tuesday sync\n2. Apollo update';
   await askFromHome(page, 'What did we agree?');
+  // Its sources numbered and named as the page shows them, once the meeting's record is read.
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/Tuesday sync/);
   const copy = page.getByTestId('copy-answer');
   await copy.click();
   await expect(copy).toHaveText('Copied');
-  expect(await copied()).toBe('We agreed to ship Apollo with annual plans first.');
+  expect(await copied()).toBe(markdown);
   await expect(copy).toHaveText('Copy answer');
 
   // An answer is at most 12,000 characters; the broker refuses more.
@@ -364,9 +381,47 @@ test('Copy answer copies the answer and says so, and main takes no more than an 
     (window as unknown as { echo: { rpc(method: string, params: object): Promise<{ ok: boolean }> } }).echo.rpc('clipboard.writeText', { text: value }),
   text);
   expect(await write('x'.repeat(12_001))).toEqual({ ok: false, failure: { code: 'invalid_request', retryable: false } });
-  expect(await copied()).toBe('We agreed to ship Apollo with annual plans first.');
+  expect(await copied()).toBe(markdown);
   // Counted in characters: 12,000 that each take two UTF-16 units still fit.
   expect((await write('𝄞'.repeat(12_000))).ok).toBe(true);
+});
+
+// Answer layout v1 (ADR-0045): `ask-layout`'s THERM answer, laid out because the person client asks for it on every Ask.
+test('a laid-out answer reads as a document, and its table scrolls in its own box beside the pane', async () => {
+  run = await launch('ask-layout');
+  const { page } = run;
+  await askFromHome(page, 'Can DVT-R2 run on the reduced test scope?');
+  const answer = page.getByTestId('answer');
+  await expect(answer).toBeVisible();
+  expect(run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.layout)).toEqual(['1']);
+  await expect(answer.locator('.answer-lead [data-testid="statement-text"]')).toHaveText(['No, the reduced test scope was rejected.',
+    'DVT-R2 retests TC-D-03 and TC-D-01, plus the regression subset QA approves.']);
+  await expect(answer.locator('h3')).toHaveText(['Decisions', 'What has to happen first']);
+  await expect(answer.locator('.answer-bullets li')).toHaveCount(3);
+  await expect(answer.locator('th')).toHaveText(['Action', 'Owner', 'Due', 'Status']);
+  const rows = page.getByTestId('answer-row');
+  await expect(rows).toHaveCount(4);
+  // Only your late row's due date is in the signal colour.
+  await expect(answer.locator('td.late')).toHaveCount(1);
+  await expect(rows.nth(0).locator('td.late time')).toHaveText('Oct 14');
+  await expect(page.getByTestId('coverage-note')).toHaveText(
+    'One of three THERM meetings in range was not read before the time limit. Who proposed the reduced scope was not found in the evidence read.');
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^6 sources\s*DVT failure review · Traceability · Gate reviews · TRACE-01 · HW-11 · DVT-R2$/);
+
+  // A row's number opens its ticket beside the answer, lights the row, and opens the sources' rows.
+  await rows.nth(0).getByTestId('citation').click();
+  await expect(page.getByTestId('source-pane')).toContainText('Jira · Ticket');
+  await expect(rows.nth(0)).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId('sources-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('source-row').nth(3)).toHaveAttribute('aria-pressed', 'true');
+  // Narrowed by the pane, the table scrolls in its own box; the thread and the page never scroll sideways.
+  const widths = await page.evaluate(() => {
+    const overflow = (element: Element | null) => element === null ? null : element.scrollWidth - element.clientWidth;
+    return { table: overflow(document.querySelector('.answer-table')), thread: overflow(document.querySelector('.ask')), page: overflow(document.scrollingElement) };
+  });
+  expect(widths.table).toBeGreaterThan(0);
+  expect(widths.thread).toBe(0);
+  expect(widths.page).toBe(0);
 });
 
 // Ask progress and internal links v1 (ADR-0039). The fixture streams a search
@@ -492,6 +547,7 @@ test('an answer that cites your project, a person, a tool and a Jira project ope
   writeFileSync(join(run.home, 'release-ask'), '');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(page.getByTestId('asking')).toHaveCount(0);
+  await page.getByTestId('sources-toggle').click();
   await expect(page.getByTestId('source-row')).toHaveText([/^1\s*Apollo$/, /^2\s*Mina Patel$/, /^3\s*Jira$/, /^4\s*Apollo delivery\s*Jira · APOLLO$/]);
   await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 4 items · \d+s$/);
   await page.getByTestId('source-row').nth(2).click();
@@ -505,6 +561,7 @@ test('an answer that cites your project, a person, a tool and a Jira project ope
   await page.getByTestId('ask-field').fill('Who leads Apollo?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
+  await page.getByTestId('sources-toggle').click();
   await page.getByTestId('source-row').nth(0).click();
   await expect(pane).toContainText('Project');
   await expect(pane.getByTestId('pane-project')).toHaveText('Apollo');
@@ -573,6 +630,7 @@ test('a quick Ask shows nothing more, and its source opens the cited decision li
   await askFromHome(page, 'What did we agree?');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(page.getByTestId('ask-receipt')).toHaveCount(0);
+  await page.getByTestId('sources-toggle').click();
   await page.getByTestId('source-row').nth(0).click();
   const pane = page.getByTestId('source-pane');
   await expect(pane.locator('.record-item.on')).toHaveCount(1);

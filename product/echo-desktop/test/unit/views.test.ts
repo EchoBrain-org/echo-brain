@@ -7,6 +7,7 @@ import {
 import { createHash } from 'node:crypto';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
+import { layoutAnswer } from '../../src/host/test-authority.js';
 
 /**
  * An approved item's id as the Authority derives it (organization-record's
@@ -790,5 +791,33 @@ describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
     expect(answerView({ ok: true, result: answer(8), receipt: v1 }, mine).receipt)
       .toEqual({ looked_through: 14, elapsed_ms: 48_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [namedSource] }] });
     expect(() => answerView({ ok: true, result: answer(4) }, mine)).toThrow(ViewError);
+  });
+});
+
+describe('a laid-out answer (answer layout v1, ADR-0045)', () => {
+  const scope = { kind: 'global' } as const;
+  const question = 'Can DVT-R2 run on the reduced test scope?';
+
+  it('carries the fixture\'s layout as the client validated it; an answer to an Ask that did not ask for it has none, and reads the same', () => {
+    const laid = answerView({ ok: true, result: layoutAnswer(question, scope, true) }, scope);
+    const layout = laid.parts[0]!.layout!;
+    expect(layout.map(block => block.kind)).toEqual(['lead', 'heading', 'bullets', 'heading', 'table']);
+    expect(layout[4]).toMatchObject({ kind: 'table', statements: [5, 6, 7, 8], columns: ['Action', 'Owner', 'Due', 'Status'] });
+    const plain = answerView({ ok: true, result: layoutAnswer(question, scope, false) }, scope);
+    expect(plain.parts[0]).not.toHaveProperty('layout');
+    expect(plain.parts[0]!.statements).toEqual(laid.parts[0]!.statements);
+    // The plain reading, for earlier turns, stays the statements, in order.
+    expect(laid.text).toBe(plain.text);
+    expect(laid.notice).toBe('One of three THERM meetings in range was not read before the time limit.');
+  });
+
+  it('refuses a layout that leaves a statement out, or a row that cites what its statements do not', () => {
+    const answer = layoutAnswer(question, scope, true) as { parts: { layout: Record<string, unknown>[] }[] };
+    const [part] = answer.parts;
+    const dropped = { ...answer, parts: [{ ...part, layout: part!.layout.slice(0, 3) }] };
+    expect(() => answerView({ ok: true, result: dropped }, scope)).toThrow(ViewError);
+    const table = part!.layout[4] as { rows: { cells: string[]; citation_indexes: number[] }[] };
+    const wrong = { ...answer, parts: [{ ...part, layout: [...part!.layout.slice(0, 4), { ...table, rows: [{ ...table.rows[0], citation_indexes: [0] }, ...table.rows.slice(1)] }] }] };
+    expect(() => answerView({ ok: true, result: wrong }, scope)).toThrow(ViewError);
   });
 });

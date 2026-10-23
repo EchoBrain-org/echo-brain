@@ -426,15 +426,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, shape: shapeOf(sentence, notes.length > 0) }];
       });
       // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
-      // A laid-out answer reads lead first (ADR-0045): the writer's leads, then the lists, then its other sentences by section.
-      const statements: Statement[] = [];
+      // What fits is decided in that order whatever the layout, so a long lead never crowds out a stated list (W3). A laid-out
+      // answer (ADR-0045) then reads what was kept lead first, then the lists, then the other sentences by section.
+      type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape };
       const statementKeys = new Set<string>();
       const keptReads: Entry[] = [];
-      const order: readonly { text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape }[] = laidOut ? orderAskLayoutV1(listStatements, writerSentences) : [...listStatements, ...writerSentences];
-      /** The shape of each statement kept, in order. */
-      const shapes: DraftShape[] = [];
+      const fitted: Laid[] = [];
+      const fittedKeys = new Set<string>();
       let dropped = false;
-      for (const sentence of order) {
+      for (const sentence of [...listStatements, ...writerSentences] as readonly Laid[]) {
         // Temporary model guardrail (ADR-0041): only exact text with the same cited objects and privacy is a repeat.
         // Shared sources or planner kinds never establish that two sentences say the same thing.
         const statementKey = JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
@@ -443,13 +443,18 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
           continue;
         }
-        const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !usedKeys.has(key)));
-        if (statements.length >= MAX_STATEMENTS || used.length + fresh.size > MAX_CITATIONS) { dropped = true; break; }
+        const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !fittedKeys.has(key)));
+        if (fitted.length >= MAX_STATEMENTS || fittedKeys.size + fresh.size > MAX_CITATIONS) { dropped = true; break; }
         statementKeys.add(statementKey);
-        statements.push(statementOf(sentence.text, sentence.shorts));
-        shapes.push(sentence.shape);
+        for (const key of fresh) fittedKeys.add(key);
+        fitted.push(sentence);
         keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
       }
+      const kept = new Set(fitted);
+      const order: readonly Laid[] = laidOut ? orderAskLayoutV1(listStatements.filter(entry => kept.has(entry)), writerSentences.filter(entry => kept.has(entry))) : fitted;
+      const statements: Statement[] = order.map(sentence => statementOf(sentence.text, sentence.shorts));
+      /** The shape of each statement kept, in order. */
+      const shapes: readonly DraftShape[] = order.map(sentence => sentence.shape);
       const notFound = [...(answer?.not_found ?? []), ...selectionNotFound];
       // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
       const coverageLimited = coverageIsLimitedFor(bundle, keptReads);

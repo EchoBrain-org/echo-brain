@@ -248,6 +248,7 @@ test('a lead maps a Jira project on Tools, Save closes it, asks in that scope, a
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
   expect(run.calls().filter(call => call.path === '/v5/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
+  await page.getByTestId('sources-toggle').click();
   await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
   await page.getByTestId('back').click();
   await page.getByTestId('project-tools').click();
@@ -262,7 +263,7 @@ test('a lead maps a Jira project on Tools, Save closes it, asks in that scope, a
   await page.getByTestId('ask-field').fill('What is the status of Apollo?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('answer')).toContainText('No accessible Jira ticket was found.');
-  await expect(page.getByTestId('source-row')).toHaveCount(0);
+  await expect(page.getByTestId('sources-toggle')).toHaveCount(0);
 });
 
 test('a lead maps accessible Confluence spaces, loads another page, asks with a page citation, and stops reading them', async () => {

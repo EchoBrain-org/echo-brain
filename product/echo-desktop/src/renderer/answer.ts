@@ -1,5 +1,8 @@
-import type { Answer, AnswerSource, AnswerStatement, ConnectedTool, ExternalAnswerSource } from '../shared/protocol.js';
+import type { Answer, AnswerBlock, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ConnectedTool, ExternalAnswerSource } from '../shared/protocol.js';
 import { sourceKey } from './openers.js';
+
+/** What the pane may show: at most 32 sources. */
+export const MAX_SOURCES = 32;
 
 /**
  * One source as an answer shows it: a document, a meeting's approved record,
@@ -27,13 +30,38 @@ export function groupKey(source: AnswerSource): string {
   return sourceKey(source);
 }
 
-/** Every sentence of an answer, by the id the pane knows it by: "direct", or its part and place ("0.2", "0.r1" for a passage found). */
+/** A table of a laid-out part. */
+export type AnswerTable = Extract<AnswerBlock, { kind: 'table' }>;
+
+/** A table row's id, as the pane knows it: its part, its table's place in the part's layout, and its own ("0.t4.1"). */
+export function rowId(part: number, block: number, row: number): string {
+  return `${part}.t${block}.${row}`;
+}
+
+/**
+ * A table row as a sentence the pane can light: its cells, and the citations
+ * it has. It says only you can read a source of it when a statement of its
+ * table that cites one of them says so.
+ */
+export function rowStatement(part: AnswerPart, table: AnswerTable, row: AnswerTableRow): AnswerStatement {
+  const cited = new Set(row.citation_indexes);
+  const own = table.statements.map(index => part.statements[index]!).filter(statement => statement.citation_indexes.some(index => cited.has(index)));
+  return { text: row.cells.filter(cell => cell !== '').join(' · '), citation_indexes: row.citation_indexes, private: own.some(statement => statement.private) };
+}
+
+/**
+ * Every sentence of an answer, by the id the pane knows it by: "direct", its
+ * part and place ("0.2", "0.r1" for a passage found), or a laid-out table's
+ * row ("0.t4.1").
+ */
 export function answerSentences(answer: Answer): [string, AnswerStatement][] {
   return [
     ...(answer.direct ? [['direct', answer.direct] as [string, AnswerStatement]] : []),
     ...answer.parts.flatMap((part, p) => [
       ...part.statements.map((statement, i) => [`${p}.${i}`, statement] as [string, AnswerStatement]),
       ...(part.records ?? []).map((statement, i) => [`${p}.r${i}`, statement] as [string, AnswerStatement]),
+      ...(part.layout ?? []).flatMap((block, b) => block.kind !== 'table' ? []
+        : block.rows.map((row, r) => [rowId(p, b, r), rowStatement(part, block, row)] as [string, AnswerStatement])),
     ]),
   ];
 }
@@ -144,4 +172,121 @@ export function passageBlocks(text: string, label: string): Block[] {
 export function externalSourceProvider(source: Pick<ExternalAnswerSource, 'tool_id'>, tools?: readonly ConnectedTool[] | null): string {
   return tools?.find(tool => tool.tool_id === source.tool_id)?.name ??
     source.tool_id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+}
+
+/** What research did not cover: an answer's notice, and each part's gap, with its part's question when there are several. */
+export interface Coverage {
+  readonly notice?: string;
+  readonly gaps: readonly { readonly question?: string; readonly text: string }[];
+}
+
+/** What an answer did not cover, for the one note after it (ADR-0045): never a banner over it. */
+export function coverage(answer: Answer): Coverage {
+  const several = answer.parts.length > 1;
+  const gaps = answer.parts.flatMap(part => part.gap ? [{ ...(several ? { question: part.question } : {}), text: part.gap }] : []);
+  return { ...(answer.notice ? { notice: answer.notice } : {}), gaps };
+}
+
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/u;
+
+/** An ISO date's day, here: null for any other text, or a date that is not one. */
+function day(cell: string): Date | null {
+  const found = DAY.exec(cell);
+  if (!found) return null;
+  const [year, month, date] = [Number(found[1]), Number(found[2]) - 1, Number(found[3])];
+  const value = new Date(year, month, date);
+  return value.getFullYear() === year && value.getMonth() === month && value.getDate() === date ? value : null;
+}
+
+/** An ISO date in a table ("2026-10-14") as a person reads it: "Oct 14", with its year when it is not this year's. Null for any other text. */
+export function tableDay(cell: string, now = Date.now()): string | null {
+  const value = day(cell);
+  if (!value) return null;
+  const year = value.getFullYear() === new Date(now).getFullYear() ? {} : { year: 'numeric' as const };
+  return value.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...year });
+}
+
+/** Which of a table's columns says a row's owner, its due date and its status, by name. */
+const OWNER = /\b(owner|assignee|assigned)\b/iu;
+const DUE = /\b(due|deadline)\b/iu;
+const STATUS = /\b(status|state)\b/iu;
+/** Statuses of work that is over. */
+const OVER = new Set(['done', 'closed', 'resolved', 'complete', 'completed', 'fixed', 'shipped', 'merged', 'released', 'cancelled', 'canceled', "won't do", 'dismissed',
+  'not relevant']);
+
+/** Whether a table cell names you as its row's owner: its column is an owner's, and it says "You" or your name (`me`). */
+export function yoursIn(column: string, cell: string, me: string | null): boolean {
+  const who = cell.trim().toLowerCase();
+  return OWNER.test(column) && (who === 'you' || (me !== null && who === me.trim().toLowerCase()));
+}
+
+/** The column that says when a row is due, or -1. */
+export function dueColumn(columns: readonly string[]): number {
+  return columns.findIndex(column => DUE.test(column));
+}
+
+/**
+ * Whether a table row is yours and late: its owner is you ("You", or your
+ * name), its due date has passed, and its status, if it has one, is not over.
+ * The one thing an answer shows in the signal colour (ADR-0045).
+ */
+export function lateForYou(columns: readonly string[], cells: readonly string[], me: string | null, now = Date.now()): boolean {
+  const due = dueColumn(columns);
+  const status = columns.findIndex(column => STATUS.test(column));
+  if (due < 0 || !columns.some((column, at) => yoursIn(column, cells[at]!, me))) return false;
+  const when = day(cells[due]!);
+  const today = new Date(now);
+  if (!when || when.getTime() >= new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) return false;
+  return status < 0 || !OVER.has(cells[status]!.trim().toLowerCase());
+}
+
+/** A sentence as a Markdown line: one that would start a heading, a list or a quote starts with a backslash. */
+function markdownLine(text: string): string {
+  return /^(#|[-+*>]\s|\d+[.)]\s)/u.test(text) ? `\\${text}` : text;
+}
+
+/** A table cell as Markdown: one line, its backslashes and pipes kept as text. */
+function markdownCell(text: string): string {
+  return text.replace(/\s*\n\s*/gu, ' ').replace(/\\/gu, '\\\\').replace(/\|/gu, '\\|');
+}
+
+/**
+ * Copy answer's Markdown (ADR-0045): the answer as it reads, each claim
+ * followed by its sources' numbers as the page shows them ("[1][3]"), what
+ * research did not cover, and the sources, numbered and named (`names`, one
+ * per number). A laid-out part keeps its lead, headings, bullets and tables;
+ * any other is a paragraph per sentence. A part's question heads what it says
+ * when there are several.
+ */
+export function answerMarkdown(answer: Answer, names: readonly string[]): string {
+  const groups = sourceGroups(answer.sources.slice(0, MAX_SOURCES));
+  const numbers = (citations: readonly number[]) => statementGroups(citations, groups).map(group => `[${group + 1}]`).join('');
+  const claim = (statement: AnswerStatement) => [statement.text, numbers(statement.citation_indexes)].filter(Boolean).join(' ');
+  const blocks: string[] = [];
+  if (answer.direct) blocks.push(markdownLine(claim(answer.direct)));
+  for (const part of answer.parts) {
+    // A part with nothing to show is not headed: its gap, after its question, is in the note.
+    if (answer.parts.length > 1 && (part.statements.length > 0 || (part.records?.length ?? 0) > 0)) blocks.push(`## ${part.question}`);
+    const said = (indexes: readonly number[]) => indexes.map(index => claim(part.statements[index]!));
+    if (!part.layout) blocks.push(...part.statements.map(statement => markdownLine(claim(statement))));
+    for (const block of part.layout ?? []) {
+      if (block.kind === 'heading') blocks.push(`### ${block.text}`);
+      else if (block.kind === 'bullets') blocks.push(said(block.statements).map(line => `- ${line}`).join('\n'));
+      else if (block.kind !== 'table') blocks.push(markdownLine(said(block.statements).join(' ')));
+      else {
+        if (block.caption) blocks.push(markdownLine(block.caption));
+        const line = (cells: readonly string[]) => `| ${cells.join(' | ')} |`;
+        blocks.push([
+          line(block.columns.map(markdownCell)), line(block.columns.map(() => '---')),
+          ...block.rows.map(row => line(row.cells.map((cell, at) => at === 0 ? [markdownCell(cell), numbers(row.citation_indexes)].filter(Boolean).join(' ') : markdownCell(cell)))),
+        ].join('\n'));
+      }
+    }
+    blocks.push(...(part.records ?? []).map(statement => claim(statement)));
+  }
+  const { notice, gaps } = coverage(answer);
+  const note = [notice, ...gaps.map(gap => [gap.question, gap.text].filter(Boolean).join(' '))].filter(Boolean).join(' ');
+  if (note) blocks.push(markdownLine(note));
+  if (groups.length > 0) blocks.push('Sources', groups.map((_, index) => `${index + 1}. ${names[index] ?? ''}`.trimEnd()).join('\n'));
+  return blocks.join('\n\n');
 }

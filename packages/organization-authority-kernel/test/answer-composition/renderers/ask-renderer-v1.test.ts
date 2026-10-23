@@ -509,6 +509,17 @@ describe("Ask renderer: lists (ADR-0041)", () => {
         { kind: "table", statements: [1], columns: ["Item", "Status", "Owner"], caption: "3 tickets created on October 4, 2026", rows: [1, 2, 3].map(n => ({ cells: [`THERM-${n}: Fixture work ${n}`, "In Progress", "Dana Lee"], citation_indexes: [n] })) },
       ]);
     });
+    it("decides what fits before it reads lead first, so two long leads never crowd out a stated list (W3)", async () => {
+      // 25 rows stated by code, then two leads citing twelve records each: the second lead is past 40 citations, not the list.
+      const twelve = (from: number) => Array.from({ length: 12 }, (_, index) => `E${from + index}`);
+      const part = await laid(listBundle(25, 24, [list("L1", ids(1, 25))], [WI(["L1"])]), { lists: [{ id: "L1" }], not_found: [], sentences: [
+        { text: "The first review approved the fixture work.", evidence: twelve(26), form: "lead" },
+        { text: "The second review confirmed it.", evidence: twelve(38), form: "lead" },
+      ] });
+      expect(part.statements.map(value => value.text)).toEqual(["The first review approved the fixture work.", expect.stringMatching(/^25 tickets created on October 4, 2026: /u)]);
+      expect(part.layout!.map(block => block.kind)).toEqual(["lead", "table"]);
+      expect(part.gap).toContain("Some evidence could not fit in this response.");
+    });
     it("captions what its names leave out, and cites every member a merged name covers", async () => {
       // E1, E2 and E8 share THERM-8's title and row facts: one name, one row citing all three.
       const research = listBundle(30, 0, [list("L1", ids(1, 30))], [WI(["L1"])]);

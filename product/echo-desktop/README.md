@@ -41,6 +41,18 @@ channel's says its tool and key ("Jira · THERM"). An older Authority answers
 on its newest route, without what that route cannot cite
 ([Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)).
 
+An answer the Authority lays out (answer layout v1, ADR-0045) reads as a short
+document, in the desktop's own type: the conclusion first and larger, a heading
+for each distinct topic, bullets for parallel items, and a table for items that
+share owners, dates or statuses. Each sentence and each table row keeps its
+sources' numbers and lights on its own; a table shows ISO dates as "Oct 14",
+only your own late row's due date in the signal colour, and scrolls in its own
+box when the window is narrow. An answer without a layout reads as a paragraph
+per sentence. Either way, its sources start as one closed line ("4 sources ·
+Tuesday sync · …") that a click or a source's number opens, what research did
+not cover is one quiet note after the answer, and **Copy answer** writes
+Markdown with the sources numbered as the page numbers them.
+
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 
 - **Approve**: a meeting waiting for your decision. Its card shows what was

@@ -94,6 +94,8 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     await flush();
     // Read in the background once the answer came, for the row's qualifier.
     expect(store.getState().sources?.followUps[ITEM]).toMatchObject({ loading: false, value: { item_id: ITEM } });
+    // The sources start closed (ADR-0045): their line opens them.
+    store.toggleSourceList();
     const [source] = byTestId(thread(), 'source-row');
     expect(text(source)).toBe(`1Ship the launch checklist${words}`);
     expect(text(source)).not.toMatch(/follow-up/iu);
@@ -106,6 +108,7 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     const { store, release, pane, thread } = await asking();
     release(ok({ ...answer, receipt: undefined }));
     await flush();
+    store.toggleSourceList();
     expect(text(byTestId(thread(), 'source-row'))).toBe('1Ship the launch checklistPick owner · Not sent');
     store.chooseSource(0);
     await flush();
@@ -118,6 +121,7 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     const { store, release, pane, thread } = await asking();
     release(ok({ ...answer, receipt: undefined }));
     await flush();
+    store.toggleSourceList();
     // A row whose follow-up was not read says nothing more than its title.
     expect(text(byTestId(thread(), 'source-row'))).toBe('1Ship the launch checklist');
     store.chooseSource(0);
