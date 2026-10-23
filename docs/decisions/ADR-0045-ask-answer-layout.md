@@ -58,11 +58,15 @@ parallel items, or which named a list's members.
   request without it carries no layout, so an older client never meets the
   field. The desktop runs the person client in-process, so the two update
   together.
-- **The writer chooses the shape.** Each writer sentence may say it is the
-  lead, a bullet or a table row, and name its section; a table row gives its
-  cells under columns the writer declares. Code checks citations exactly as
-  before (W1 to W6 of ADR-0041), then builds the layout from the sentences
-  that survive.
+- **The writer chooses the shape.** Only when layout is asked for, the
+  writer's prompt and schema let each sentence say it is the lead, a bullet
+  or a table row, and name its section; a table row gives its cells under
+  columns the writer declares. Code writes a row's statement from its cells
+  and columns ("Action: Fix BUG-412; Owner: Tomas Okafor."), so the cited
+  claim is exactly what the row shows. A row whose cells do not match its
+  columns reads as a bullet. Code decides which statements fit exactly as
+  before (W1 to W6 of ADR-0041, lists first), then reads the kept ones lead
+  first and builds the layout from them.
 - **Code tabulates lists.** A list statement that names two or more members
   becomes a table, one row per member it names, its row facts as cells and
   its count phrase as the caption. The writer still never counts or names
@@ -74,9 +78,12 @@ parallel items, or which named a list's members.
 
 ## Consequences
 
-- Statement text, citations, privacy and audits are unchanged for every
-  request; only the order of a laid-out answer's statements follows its
-  layout (lead first).
-- A response that must drop statements to fit its byte bound drops its
-  layout too, and reads as before.
-- The eval and judge read statements as before.
+- A request without the header is unchanged: the same writer prompt and
+  schema, statements, citations, privacy and audits. A laid-out answer keeps
+  the same statements and citations; it reads them lead first, numbers its
+  citations in that order, and its table rows' statements are written from
+  their cells.
+- A laid-out answer that would pass its byte bound is released without its
+  layout, exactly as the request without the header would be answered.
+- The eval and judge read statements as before; a row's statement says what
+  its cells show.
