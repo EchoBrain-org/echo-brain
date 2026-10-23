@@ -84,6 +84,10 @@ parallel items, or which named a list's members.
   numbers its citations in that order, and its table rows' statements are
   written from their cells.
 - A laid-out answer that would exceed its byte bound is released without its
-  layout, exactly as the request without the header would be answered.
+  layout: the same claims, a row still its cells' claim, in the order and
+  numbering an answer without layout has, and what cannot fit is dropped from
+  the end with a gap that says so.
+- Every section keeps its own heading: a part has at most ten statements, so
+  at most ten headings.
 - The eval and judge read statements as before; a row's statement says what
   its cells show.

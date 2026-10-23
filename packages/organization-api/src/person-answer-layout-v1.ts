@@ -16,7 +16,8 @@ export const PERSON_ASK_ANSWER_LAYOUT_HEADER_V1 = 'x-echo-answer-layout';
 export const PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1 = '1';
 
 export const PERSON_ANSWER_LAYOUT_MAX_BLOCKS_V1 = 24;
-export const PERSON_ANSWER_LAYOUT_MAX_HEADINGS_V1 = 6;
+/** One per statement at most: a part has at most ten, so every section keeps its own heading. */
+export const PERSON_ANSWER_LAYOUT_MAX_HEADINGS_V1 = 10;
 /** A lead is the conclusion: one or two statements. */
 export const PERSON_ANSWER_LEAD_MAX_STATEMENTS_V1 = 2;
 export const PERSON_ANSWER_TABLE_MIN_COLUMNS_V1 = 2;

@@ -534,11 +534,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return { result, used, laid_out: layout !== undefined };
       };
       const laidOutResponse = laidOut ? respond(answer, true, true) : undefined;
-      // A laid-out answer is released only with its layout and within its byte bound; otherwise the answer is exactly the
-      // one the same reply gives without layout, read as an Ask without layout reads it (ADR-0045).
-      const plainReply = answer?.plain === undefined ? answer : Object.freeze({ sentences: answer.plain, not_found: answer.not_found, lists: answer.lists });
+      // A laid-out answer is released only with its layout and within its byte bound. Otherwise the same claims are released
+      // without layout, in the order and numbering an answer without layout has (ADR-0045): a row is still its cells' claim,
+      // and what cannot fit the bound is dropped from the end and said to be missing.
       const { result, used } = laidOutResponse?.laid_out === true && canonicalJsonBytes(laidOutResponse.result).byteLength <= PERSON_ANSWER_RESPONSE_MAX_BYTES_V4
-        ? laidOutResponse : respond(plainReply, false, laidOutResponse === undefined);
+        ? laidOutResponse : respond(answer, false, laidOutResponse === undefined);
       const validated: AskResponse = responseVersion === 8 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV8) : responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
       return Object.freeze({
         result: Object.freeze({ response: validated, writer_evidence: writerEvidence }),

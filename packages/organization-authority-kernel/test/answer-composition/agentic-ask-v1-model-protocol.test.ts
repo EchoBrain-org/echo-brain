@@ -344,21 +344,21 @@ describe("agentic Ask model protocol parity", () => {
       ]);
       // A form no answer has is prose, and cells on a sentence that is no row are dropped.
       expect(parseAnswer({ ...reply, sentences: [{ text: "No form is called that.", evidence: ["E3"], form: "heading", cells: ["dropped"] }] }, { layout: true }).sentences).toEqual([{ text: "No form is called that.", evidence: ["E3"] }]);
-      // The same reply as an Ask without layout reads it: the writer's own text, a sentence with none left out.
-      expect(parsed.plain).toEqual(parseAnswer(reply).sentences);
     });
 
     it("leaves an answer without layout as it was: no form, cell or table read, and a row with no text left out", () => {
       expect(parseAnswer(reply)).toEqual({ lists: [], not_found: [], sentences: reply.sentences.filter(value => value.text !== "").map(value => ({ text: value.text, evidence: value.evidence })) });
     });
 
-    it("keeps reading the writer's own sentences past ten laid-out ones, as an Ask without layout reads them", () => {
-      const rows = Array.from({ length: 10 }, () => ({ text: "", evidence: ["E1"], form: "row", section: next, cells: ["a", "b", "c"] }));
-      const prose = Array.from({ length: 10 }, (_, index) => ({ text: `Fact ${index}.`, evidence: ["E1"] }));
-      const parsed = parseAnswer({ ...reply, sentences: [...rows, ...prose] }, { layout: true });
-      expect([parsed.sentences.map(value => value.form), parsed.plain!.map(value => value.text)]).toEqual([rows.map(() => "row"), prose.map(value => value.text)]);
+    it("writes a row's whole claim from its cells, past the 700 characters a writer's sentence holds, so rows that end apart stay apart", () => {
+      const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
+      const row = (last: string) => ({ text: "", evidence: ["E1"], form: "row", section: "Rules", cells: [...columns.slice(0, 5).map(() => "x".repeat(120)), last] });
+      const parsed = parseAnswer({ lists: [], not_found: [], tables: [{ section: "Rules", columns }], sentences: [row(`${"y".repeat(114)} ALLOW`), row(`${"y".repeat(115)} DENY`)] }, { layout: true });
+      const texts = parsed.sentences.map(value => value.text);
+      expect(texts.map(text => [text.length > 700, text.endsWith(" ALLOW."), text.endsWith(" DENY.")])).toEqual([[true, true, false], [true, false, true]]);
+      expect(texts[0]).toBe(`${columns.map((column, at) => `${column}: ${row(at === 5 ? `${"y".repeat(114)} ALLOW` : "").cells[at]}`).join("; ")}.`);
     });
-  });
+});
 
   it("names each form, a section, a row's cells and the tables in the layout schema, and leaves the answer schema as it was (ADR-0045)", () => {
     const sentence = ((answerLayoutSchema.properties as Schema).sentences as Schema).items as Schema;

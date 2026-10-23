@@ -75,6 +75,13 @@ describe('Answer layout v1 (ADR-0045)', () => {
     expect(() => check([{ kind: 'heading', text: 'Notes' }, { kind: 'paragraph', statements: [0, 1, 2, 3], extra: true }])).toThrow();
   });
 
+  it('gives every statement block a heading of its own if need be: at most ten, one per statement', () => {
+    const many = (count: number) => Array.from({ length: count }, (_, index) => statement(`Fact ${index + 1}.`, [index % 3]));
+    const sectioned = (count: number) => Array.from({ length: count }, (_, index) => [{ kind: 'heading', text: `Topic ${index + 1}` }, { kind: 'paragraph', statements: [index] }]).flat();
+    expect(check(sectioned(10), many(10)).filter(block => block.kind === 'heading')).toHaveLength(10);
+    expect(() => check(sectioned(11), many(11))).toThrow('heading is misplaced');
+  });
+
   it('refuses one bullet, which is a paragraph', () => {
     expect(() => check([{ kind: 'bullets', statements: [0] }, { kind: 'paragraph', statements: [1, 2, 3] }])).toThrow();
   });

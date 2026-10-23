@@ -71,13 +71,10 @@ export type AnswerSentence = {
 };
 /** A table the writer declares for a section's rows (ADR-0045). */
 export type AnswerTable = { readonly section: string; readonly columns: readonly string[] };
-/**
- * `lists` (ADR-0041): the lists whose members code names. Only a laid-out reply (ADR-0045) has `tables`, the tables its
- * rows stand in, and `plain`, its sentences as an Ask without layout reads them.
- */
+/** `lists` (ADR-0041): the lists whose members code names. Only a laid-out reply (ADR-0045) has `tables`, the tables its rows stand in. */
 export type Answer = {
   readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[]; readonly lists: readonly AgenticAnswerListUseV1[];
-  readonly tables?: readonly AnswerTable[]; readonly plain?: readonly AnswerSentence[];
+  readonly tables?: readonly AnswerTable[];
 };
 
 /** Each tool's first argument is required; finish has no arguments. A task goal's arguments, byte for byte. */
@@ -541,8 +538,8 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
  * Ask's answer (ADR-0041): its sentences, keeping list ids such as L1 in a sentence's evidence, and the lists it uses,
  * at most AGENTIC_LIST_WRITER_LISTS_MAX_V1 of them, each at most once in full or by a selection and once by members'
  * ids ("which pages were created, and when was the PRD updated"). With `layout` (answer layout v1, ADR-0045) it also
- * reads the tables the reply declares and each sentence's form, section and cells (laidSentence), and keeps `plain`:
- * the sentences an Ask without layout reads in the same reply. Without it, forms, cells and tables are never read.
+ * reads the tables the reply declares and each sentence's form, section and cells (laidSentence). Without it, forms,
+ * cells and tables are never read.
  */
 export function parseAnswer(value: unknown, options: { readonly layout?: boolean } = {}): Answer {
   const body = object(value);
@@ -550,22 +547,14 @@ export function parseAnswer(value: unknown, options: { readonly layout?: boolean
   if (!Array.isArray(body.sentences)) throw new AgenticAskOutputErrorV1(`"sentences" must be an array (got ${keysOf(body)})`);
   const tables = options.layout === true ? answerTables(body.tables) : undefined;
   const sentences: AnswerSentence[] = [];
-  const plain: AnswerSentence[] = [];
   for (const [index, raw] of body.sentences.entries()) {
     const entry = object(raw);
     const said = entry === null ? "" : stripEvidenceIds(cleanModelLine(entry.text, SENTENCE_CHARS), true);
-    const room = sentences.length < AGENTIC_ASK_MAX_SENTENCES_V1;
-    const shaped = tables !== undefined && entry !== null && room ? laidSentence(entry, said, tables) : { text: said };
+    const shaped = tables !== undefined && entry !== null ? laidSentence(entry, said, tables) : { text: said };
     // A sentence's list ids support nothing (W1), so they take no item's slot: its first 12 item ids are kept, rows included.
-    let evidence: readonly string[] | undefined;
-    const evidenceOf = () => evidence ??= cleanIds(entry!.evidence, true, false);
-    if (room) {
-      if (shaped.text.length > 0) sentences.push(Object.freeze({ ...shaped, evidence: evidenceOf() }));
-      else observeCoreModelCorrectionV1("model_entry_dropped");
-    }
-    // The same reply as an Ask without layout reads it: the writer's own text, the answer released when no layout fits.
-    if (tables !== undefined && said.length > 0 && plain.length < AGENTIC_ASK_MAX_SENTENCES_V1) plain.push(Object.freeze({ text: said, evidence: evidenceOf() }));
-    if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1 && (tables === undefined || plain.length === AGENTIC_ASK_MAX_SENTENCES_V1)) {
+    if (shaped.text.length > 0) sentences.push(Object.freeze({ ...shaped, evidence: cleanIds(entry!.evidence, true, false) }));
+    else observeCoreModelCorrectionV1("model_entry_dropped");
+    if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) {
       if (index + 1 < body.sentences.length) observeCoreModelCorrectionV1("model_items_capped", body.sentences.length - index - 1);
       break;
     }
@@ -597,7 +586,7 @@ export function parseAnswer(value: unknown, options: { readonly layout?: boolean
   }
   return Object.freeze({
     sentences: Object.freeze(sentences), not_found: Object.freeze(notFound), lists: Object.freeze(uses),
-    ...(tables === undefined ? {} : { tables, plain: Object.freeze(plain) }),
+    ...(tables === undefined ? {} : { tables }),
   });
 }
 
@@ -667,9 +656,13 @@ function laidSentence(entry: Record<string, unknown>, said: string, tables: read
   return { text: sentenceOf(columns.flatMap((column, at) => cells[at]!.length === 0 ? [] : [`${column}: ${cells[at]!}`]).join("; ")), form: "row", ...section, cells: Object.freeze(cells) };
 }
 
-/** Text as one sentence, ending with its punctuation: "" stays "". */
+/**
+ * A row's cells as one sentence, ending with its punctuation: "" stays "". Never cut: its columns and cells are bounded
+ * in bytes (at most six of each), so the whole claim fits a statement, and two rows that differ only at their end stay
+ * two statements.
+ */
 function sentenceOf(text: string): string {
-  return text.length === 0 ? "" : cleanLine(/[.!?]$/u.test(text) ? text : `${text}.`, SENTENCE_CHARS);
+  return text.length === 0 ? "" : /[.!?]$/u.test(text) ? text : `${text}.`;
 }
 
 // ---- step prompt text, word for word: what stepPrompt and askStepPrompt both say, and Ask's own (DATE_ARGUMENTS, ASK_*) ----

@@ -642,21 +642,37 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
     expect(layoutOf(rendered)).toEqual([{ kind: "lead", statements: [0] }, { kind: "heading", text: "Records" }, { kind: "bullets", statements: [1, 2] }]);
   });
 
-  it("releases exactly the answer without layout when the laid-out answer would pass its byte bound", async () => {
-    // Forty records with long labels, a lead and nine rows of six long cells, each citing four records: the laid-out answer
-    // is past 64 KiB, so it is never compacted into one that drops what the answer without layout keeps.
+  it("releases the laid-out answer's own statements without layout when it would pass its byte bound, and says what did not fit", async () => {
+    // Forty records with long labels, a lead and nine rows of six long cells and no text of their own, each citing four
+    // records: past 64 KiB laid out, so released without layout, every row still its cells' claim until what cannot fit.
     const research = records(40, { label: "𝔸".repeat(250) });
     const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
     const reply = { lists: [], not_found: [], tables: [{ section: "Rows", columns }], sentences: Array.from({ length: 10 }, (_, index) => ({
-      text: `${"𝔹".repeat(690)} ${index}.`, evidence: [1, 2, 3, 4].map(n => `E${4 * index + n}`),
-      ...(index === 0 ? { form: "lead" } : { form: "row", section: "Rows", cells: columns.map(column => `${column} ${"𝔸".repeat(110)}`) }),
+      text: index === 0 ? `${"𝔹".repeat(690)} ${index}.` : "", evidence: [1, 2, 3, 4].map(n => `E${4 * index + n}`),
+      ...(index === 0 ? { form: "lead" } : { form: "row", section: "Rows", cells: columns.map(column => `${column} ${"𝔸".repeat(70)} ${index}`) }),
     })) };
-    const off = await alone({ bundle: research, replies: [reply], version: 8 }).render("What applies?");
     const on = await alone({ bundle: research, replies: [reply], version: 8, layout: true }).render("What applies?");
-    expect(on).toEqual(off);
-    expect(part(on)).not.toHaveProperty("layout");
-    expect(part(on)).toMatchObject({ status: "partial", gap: "Some evidence could not fit in this response." });
+    const released = part(on);
+    expect(released).not.toHaveProperty("layout");
+    expect(released.statements.length).toBeGreaterThan(1);
+    expect(released.statements.slice(1).map(value => value.text.startsWith(`One: One ${"𝔸".repeat(70)} `))).toEqual(released.statements.slice(1).map(() => true));
+    // Rows that did not fit are said to be missing, never silently gone.
+    expect(released.statements.length === 10 || released.gap === "Some evidence could not fit in this response.").toBe(true);
+    expect(released.status === "answered").toBe(released.statements.length === 10);
     expect(canonicalJsonBytes(on.result.response).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
     expect((on.result.response as PersonAnswerResponseV8).schema_version).toBe(8);
+  });
+
+  it("keeps two rows that cite the same item and differ only at the end of their last cell", async () => {
+    const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
+    const row = (last: string) => ({ text: "", evidence: ["E1"], form: "row", section: "Rules", cells: [...columns.slice(0, 5).map(() => "x".repeat(120)), last] });
+    const rendered = await alone({ bundle: records(1), version: 8, layout: true, replies: [{ lists: [], not_found: [], tables: [{ section: "Rules", columns }], sentences: [
+      { text: "Two rules apply.", evidence: ["E1"], form: "lead" }, row(`${"y".repeat(114)} ALLOW`), row(`${"y".repeat(115)} DENY`),
+    ] }] }).render("Which rules apply?");
+    expect(part(rendered)).toMatchObject({ status: "answered" });
+    const texts = part(rendered).statements.map(value => value.text);
+    expect([texts.length, texts[1]!.endsWith(" ALLOW."), texts[2]!.endsWith(" DENY.")]).toEqual([3, true, true]);
+    const table = layoutOf(rendered).find(block => block.kind === "table");
+    expect(table?.kind === "table" && table.rows.map(value => value.cells[5]!.slice(-5))).toEqual(["ALLOW", " DENY"]);
   });
 });

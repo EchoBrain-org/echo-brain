@@ -3,7 +3,6 @@ import {
   PERSON_ANSWER_CELL_MAX_BYTES_V1,
   PERSON_ANSWER_COLUMN_MAX_BYTES_V1,
   PERSON_ANSWER_HEADING_MAX_BYTES_V1,
-  PERSON_ANSWER_LAYOUT_MAX_HEADINGS_V1,
   PERSON_ANSWER_LEAD_MAX_STATEMENTS_V1,
   type PersonAnswerBlockV1,
   type PersonAnswerTableRowV1,
@@ -67,7 +66,7 @@ function cellsOf(cells: readonly string[], columns: readonly string[]): readonly
 
 /**
  * The blocks of the statements a response kept, in their order: the leads that open them (at most two) as the lead;
- * a heading where each section starts, sections past six read under the sixth; consecutive prose as one paragraph,
+ * a heading where each section starts, every section its own; consecutive prose as one paragraph,
  * two or more consecutive bullets as bullets and one as prose; consecutive rows of one section's table as that table;
  * and each list statement as its own table, captioned. Every text is kept within the contract's bytes.
  */
@@ -78,13 +77,12 @@ export function buildAskLayoutV1(statements: readonly AskLayoutStatementV1[]): r
   while (at < statements.length && lead.length < PERSON_ANSWER_LEAD_MAX_STATEMENTS_V1 && statements[at]!.shape.kind === "lead") lead.push(at++);
   if (lead.length > 0) drafts.push({ kind: "lead", statements: lead });
   let section: string | undefined;
-  let headings = 0;
   for (; at < statements.length; at += 1) {
     const { shape, citation_indexes } = statements[at]!;
     const own = sectionOf(shape);
-    if (own !== undefined && own !== section && headings < PERSON_ANSWER_LAYOUT_MAX_HEADINGS_V1) {
+    // A heading opens a block of at least one statement, so a part's ten statements need at most the contract's ten.
+    if (own !== undefined && own !== section) {
       drafts.push({ kind: "heading", text: boundedBytes(own, PERSON_ANSWER_HEADING_MAX_BYTES_V1) });
-      headings += 1;
       section = own;
     }
     const last = drafts.at(-1);

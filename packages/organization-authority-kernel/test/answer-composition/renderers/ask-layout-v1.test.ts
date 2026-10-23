@@ -57,12 +57,12 @@ describe("Ask answer layout v1 (ADR-0045)", () => {
     expect(laid([at(BULLET)])).toEqual([{ kind: "paragraph", statements: [0] }]);
   });
 
-  it("starts each section with its heading, and folds sections past six into the sixth", () => {
+  it("starts each section with its heading, however many sections the statements hold, never folding one into another", () => {
     const sections = Array.from({ length: 8 }, (_, index) => `Topic ${index + 1}`);
     const layout = laid([at(LEAD), ...sections.map(section => at({ kind: "text", section })), at({ kind: "bullet", section: "Topic 8" })]);
-    expect(layout.filter(block => block.kind === "heading").map(block => block.text)).toEqual(sections.slice(0, 6));
-    // Topics 7 and 8 read under Topic 6: one paragraph of three, then a bullet, which reads as prose beside them.
-    expect(layout.at(-1)).toEqual({ kind: "paragraph", statements: [6, 7, 8, 9] });
+    expect(layout.filter(block => block.kind === "heading").map(block => block.text)).toEqual(sections);
+    // Topic 8 holds its prose and the bullet beside it; Topic 7 stays its own section.
+    expect(layout.slice(-4)).toEqual([{ kind: "heading", text: "Topic 7" }, { kind: "paragraph", statements: [7] }, { kind: "heading", text: "Topic 8" }, { kind: "paragraph", statements: [8, 9] }]);
     // A section that repeats is still one section, and prose before any section has no heading.
     expect(laid([at(LEAD), at(TEXT), at({ kind: "text", section: "A" }), at({ kind: "text", section: "A" })]))
       .toEqual([{ kind: "lead", statements: [0] }, { kind: "paragraph", statements: [1] }, { kind: "heading", text: "A" }, { kind: "paragraph", statements: [2, 3] }]);
