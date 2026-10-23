@@ -108,6 +108,8 @@ export interface CreateAskRendererV1Options {
   readonly context: { readonly asked_by?: string; readonly today: string; readonly time_zone?: string };
   /** The response's scope: the desk's. */
   readonly desk_scope: AgenticEvidenceBundleV1["gathered_for"]["scope"];
+  /** V8 only: the part carries its layout (answer layout v1, ADR-0045), because the client asked for it. */
+  readonly layout?: boolean;
 }
 
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }

@@ -15,6 +15,7 @@ import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
 import { validatePersonOpenRefV1, type PersonOpenRefV1 } from './person-list-v1.js';
+import { validatePersonAnswerLayoutV1, type PersonAnswerBlockV1 } from './person-answer-layout-v1.js';
 import {
   asEnumerableRecord as object,
   assertDigest,
@@ -88,6 +89,8 @@ export interface PersonAnswerPartV4 {
   readonly statements: readonly PersonAnswerStatementV4[];
   readonly gap?: string;
   readonly records?: readonly PersonAnswerEvidenceFallbackV4[];
+  /** V8 only, and only for an Ask that asked for it (answer layout v1, ADR-0045): how its statements read. */
+  readonly layout?: readonly PersonAnswerBlockV1[];
 }
 
 export interface PersonAnswerCitationV4 {
@@ -313,19 +316,23 @@ function answerCitation(value: unknown, version: AnswerVersion = 4): PersonAnswe
   });
 }
 
-function part(value: unknown, citations: readonly (PersonAnswerCitationV5 | PersonAnswerCitationV6 | PersonAnswerCitationV7 | PersonAnswerCitationV8)[]): PersonAnswerPartV4 {
+function part(value: unknown, citations: readonly (PersonAnswerCitationV5 | PersonAnswerCitationV6 | PersonAnswerCitationV7 | PersonAnswerCitationV8)[], version: AnswerVersion): PersonAnswerPartV4 {
   const input = object(value, 'Ask response part');
-  assertExactKeys(input, ['question', 'status', 'statements', ...(Object.hasOwn(input, 'gap') ? ['gap'] : []), ...(Object.hasOwn(input, 'records') ? ['records'] : [])], 'Ask response part');
+  assertExactKeys(input, ['question', 'status', 'statements', ...(Object.hasOwn(input, 'gap') ? ['gap'] : []), ...(Object.hasOwn(input, 'records') ? ['records'] : []), ...(version >= 8 && Object.hasOwn(input, 'layout') ? ['layout'] : [])], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
   if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4) fail('Ask response part is invalid');
   if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
+  const statements = Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement')));
+  // A layout arranges written statements; a part with none has nothing to arrange.
+  if (Object.hasOwn(input, 'layout') && statements.length === 0) fail('Ask response part layout is invalid');
   return Object.freeze({
     question: input.question as string,
     status: input.status as PersonAnswerPartV4['status'],
-    statements: Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement'))),
+    statements,
     ...(Object.hasOwn(input, 'gap') ? { gap: input.gap as string } : {}),
     ...(Object.hasOwn(input, 'records') ? { records: Object.freeze((input.records as unknown[]).map((item) => statement(item, citations, 'Ask response fallback record', true))) } : {}),
+    ...(Object.hasOwn(input, 'layout') ? { layout: validatePersonAnswerLayoutV1(input.layout, statements, citations.length) } : {}),
   });
 }
 
@@ -392,7 +399,7 @@ function answerResponse(value: unknown, version: AnswerVersion) {
   const result = {
     schema_version: version, kind: `echo-clean-person-answer-v${version}`, scope: scope(input.scope), outcome: input.outcome as PersonAnswerResponseV4['outcome'], citations: Object.freeze(citations),
     ...(Object.hasOwn(input, 'direct') ? { direct: statement(input.direct, citations, 'Ask response direct') } : {}),
-    parts: Object.freeze(input.parts.map((item) => part(item, citations))),
+    parts: Object.freeze(input.parts.map((item) => part(item, citations, version))),
     ...(Object.hasOwn(input, 'assumption') ? { assumption: input.assumption as string } : {}), ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}),
   };
   for (const item of result.parts) {

@@ -104,6 +104,8 @@ export interface CreateAgenticAskV1Options {
   readonly today?: () => string;
   /** Captured once by the calling client, used only to interpret temporal questions. */
   readonly time_context?: PersonAskTimeContextV1;
+  /** The client asked for answer layout v1 (ADR-0045): a V8 answer's part carries its layout. */
+  readonly answer_layout?: boolean;
   /**
    * Who is asking, as the organization's directory names them, so "I", "me"
    * and "my" resolve to a person. Only the models see it; audits never do.
@@ -446,6 +448,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const writer = createAskRendererV1({
           response_version: responseVersion, answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
+          layout: responseVersion === 8 && options.answer_layout === true,
         });
         let selectedEvidence: readonly string[] = [];
         progress?.stage("writing");
