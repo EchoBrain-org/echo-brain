@@ -375,8 +375,18 @@ button.marker:hover { color: var(--text); background: var(--line-strong); }
 .answer-bullets li::before { content: ""; flex-shrink: 0; width: 5px; height: 5px; margin-top: 10px; border-radius: 3px; background: var(--faint); }
 .answer-bullets li.on { margin: -2px -8px; padding: 2px 8px; border-radius: 8px; background: var(--selected); }
 .answer-caption { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--muted); }
-/* A table scrolls in its own box when the window is narrow; the page never scrolls sideways. Only your late due date is in the signal colour. */
-.answer-table { max-width: 100%; overflow-x: auto; overflow-wrap: normal; border: 1px solid var(--line); border-radius: 10px; }
+/* A table scrolls in its own box when the window is narrow; the page never scrolls sideways. Only your late due date is in the signal colour.
+   A shadow at an edge says more of the table is past it: covers in the workspace's colour scroll with the table (local) over shadows that
+   stay with the box (scroll). The first column wraps at about 40% of the box, so the next one shows beside it. */
+.answer-table {
+  max-width: 100%; overflow-x: auto; overflow-wrap: normal; container-type: inline-size; border: 1px solid var(--line); border-radius: 10px;
+  background:
+    linear-gradient(to right, var(--ink) 40%, transparent) left / 32px 100% no-repeat local,
+    linear-gradient(to left, var(--ink) 40%, transparent) right / 32px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--scrim-soft), transparent) left / 16px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--scrim-soft), transparent) right / 16px 100% no-repeat scroll;
+}
+.answer-table td .first { display: block; max-width: max(9rem, 40cqw); }
 .answer-table:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .answer-table table { width: 100%; border-collapse: collapse; font-size: 13.5px; line-height: 1.4; }
 .answer-table table.cols-2 { min-width: 320px; }

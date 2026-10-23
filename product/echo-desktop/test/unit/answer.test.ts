@@ -217,3 +217,76 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
       '\\- dash first [1]\n\nTwo paths\n\n| Name | Path |\n| --- | --- |\n| A \\| B [2] | C:\\\\temp |\n\nSources\n\n1. One\n2. Two\n3. Three');
   });
 });
+
+describe('a table row shows the lock by its own citations', () => {
+  const secret: AnswerSource = { ...page('9'), private: true };
+
+  it('locks a row only when one of its own citations is private, whatever another row of its table cites', () => {
+    // A cites a team page and a page only you can read; B cites the team page alone.
+    const base = plain([['A.', [0, 1]], ['B.', [0]]]);
+    const answer: Answer = { ...base, sources: [page('1'), secret], parts: [{ ...base.parts[0]!,
+      statements: [{ text: 'A.', citation_indexes: [0, 1], private: true }, { text: 'B.', citation_indexes: [0], private: false }],
+      layout: [{ kind: 'table', statements: [0, 1], columns: ['Item', 'Status'], rows: [
+        { cells: ['A', 'Open'], citation_indexes: [0, 1] }, { cells: ['B', 'Open'], citation_indexes: [0] },
+      ] }] }] };
+    const rows = Object.fromEntries(answerSentences(answer).filter(([id]) => id.includes('t')));
+    expect(rows['0.t0.0']!.private).toBe(true);
+    expect(rows['0.t0.1']!.private).toBe(false);
+  });
+
+  it('locks only the private members\' rows of a list table over members of mixed visibility', () => {
+    const base = plain([['3 Jira tickets are open: ECHO-1, ECHO-2 and ECHO-3.', [0, 1, 2]]]);
+    const answer: Answer = { ...base, sources: [page('1'), secret, page('3')], parts: [{ ...base.parts[0]!,
+      statements: [{ text: '3 Jira tickets are open: ECHO-1, ECHO-2 and ECHO-3.', citation_indexes: [0, 1, 2], private: true }],
+      layout: [{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: '3 Jira tickets are open', rows: [
+        { cells: ['ECHO-1', 'Open'], citation_indexes: [0] }, { cells: ['ECHO-2', 'Open'], citation_indexes: [1] }, { cells: ['ECHO-3', 'Open'], citation_indexes: [2] },
+      ] }] }] };
+    expect(answerSentences(answer).filter(([id]) => id.includes('t')).map(([, row]) => row.private)).toEqual([false, true, false]);
+  });
+});
+
+describe('a done row is never late, and only an owner column says whose a row is', () => {
+  const NOW = new Date(2026, 9, 23, 12).getTime();
+  const late = (status: string, owner = 'Owner') => lateForYou(['Action', owner, 'Due', 'Status'], ['Confirm the trace', 'You', '2026-10-14', status], null, NOW);
+
+  it('reads every status of finished work as done, in any case and with either apostrophe', () => {
+    for (const status of ['Done', 'closed', 'Resolved', 'complete', 'Completed', 'Cancelled', 'canceled', "Won't do", 'Won’t do', "won't fix", 'WON’T FIX', 'Duplicate',
+      'rejected', 'Obsolete']) expect(late(status), status).toBe(false);
+    for (const status of ['To Do', 'Open', 'In Progress', 'Blocked', '']) expect(late(status), status).toBe(true);
+  });
+
+  it('takes a row as yours only under a column named Owner, Assignee or Assigned to', () => {
+    for (const owner of ['Owner', 'assignee', 'Assigned to', ' OWNER ']) expect(late('To Do', owner), owner).toBe(true);
+    for (const owner of ['Assigned by', 'Owners', 'Reviewer', 'Who']) expect(late('To Do', owner), owner).toBe(false);
+  });
+});
+
+describe('Copy answer\'s Markdown keeps the text as it was written', () => {
+  const PROBE = 'Second | with pipe\nand a newline\n- not a list';
+
+  it('keeps a sentence of several lines on one line, its punctuation as text, and its numbers on its claim', () => {
+    const answer = plain([[PROBE, [0]], ['1. step', [1]], ['Doc *one*', [2]]]);
+    expect(answerMarkdown(answer, ['Doc *one*', '[draft] plan_v2', '# notes'])).toBe([
+      'Second \\| with pipe and a newline - not a list [1]', '', '1\\. step [2]', '', 'Doc \\*one\\* [3]', '', 'Sources', '',
+      '1. Doc \\*one\\*', '2. \\[draft\\] plan\\_v2', '3. \\# notes',
+    ].join('\n'));
+  });
+
+  it('escapes bullets, table cells, headings and captions alike', () => {
+    const base = plain([[PROBE, [0]], ['1. step', [1]], ['- item <b>', [2]], ['hidden', [1]]]);
+    const answer: Answer = { ...base, parts: [{ ...base.parts[0]!, layout: [
+      { kind: 'paragraph', statements: [0] },
+      { kind: 'heading', text: 'Steps `now`' },
+      { kind: 'bullets', statements: [1, 2] },
+      { kind: 'table', statements: [3], columns: ['Name', 'Note_1'], caption: '+ two > one', rows: [{ cells: ['Doc *one* <b>', '1. step'], citation_indexes: [1] }] },
+    ] }] };
+    expect(answerMarkdown(answer, ['One', 'Two', 'Three'])).toBe([
+      'Second \\| with pipe and a newline - not a list [1]', '',
+      '### Steps \\`now\\`', '',
+      '- 1\\. step [2]', '- \\- item \\<b\\> [3]', '',
+      '\\+ two \\> one', '',
+      '| Name | Note\\_1 |', '| --- | --- |', '| Doc \\*one\\* \\<b\\> [2] | 1\\. step |', '',
+      'Sources', '', '1. One', '2. Two', '3. Three',
+    ].join('\n'));
+  });
+});

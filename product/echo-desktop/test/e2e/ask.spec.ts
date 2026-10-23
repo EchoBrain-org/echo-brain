@@ -403,7 +403,8 @@ test('a laid-out answer reads as a document, and its table scrolls in its own bo
   await expect(rows).toHaveCount(4);
   // Only your late row's due date is in the signal colour.
   await expect(answer.locator('td.late')).toHaveCount(1);
-  await expect(rows.nth(0).locator('td.late time')).toHaveText('Oct 14');
+  // With its year once 2026 is past.
+  await expect(rows.nth(0).locator('td.late time')).toHaveText(/^Oct 14(, 2026)?$/);
   await expect(page.getByTestId('coverage-note')).toHaveText(
     'One of three THERM meetings in range was not read before the time limit. Who proposed the reduced scope was not found in the evidence read.');
   await expect(page.getByTestId('sources-toggle')).toHaveText(/^6 sources\s*DVT failure review · Traceability · Gate reviews · TRACE-01 · HW-11 · DVT-R2$/);

@@ -37,7 +37,8 @@ describe('view models copy only what the renderer may see', () => {
       parts: [{ question: 'When?', status: 'answered', statements: [{ text: 'Tuesday.', citation_indexes: [0], private: true }] }],
     });
     const answer = answerView({ ok: true, result: source(tool_id) }, { kind: 'global' });
-    expect(answer.sources).toEqual([{ kind: 'page', tool_id, label: 'Launch plan', permalink }]);
+    // Only you can read it: an answer's source says so (ADR-0045).
+    expect(answer.sources).toEqual([{ kind: 'page', tool_id, label: 'Launch plan', permalink, private: true }]);
     expect(JSON.stringify(answer)).not.toContain('private-tenant');
   });
   it('keeps a ticket citation by its tool and direct link alone', () => {
@@ -47,7 +48,7 @@ describe('view models copy only what the renderer may see', () => {
         kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10007', permalink, text_sha256: sha('a'),
       } }], parts: [{ question: 'Which ticket?', status: 'answered', statements: [{ text: 'ECHO-7 covers launch.', citation_indexes: [0], private: true }] }],
     } }, { kind: 'global' });
-    expect(answer.sources).toEqual([{ kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink }]);
+    expect(answer.sources).toEqual([{ kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink, private: true }]);
     expect(JSON.stringify(answer)).not.toContain('private-tenant');
   });
   it('an open item turns its live citation into a source it can open, an item you cannot open stays without one, and who and when cross', () => {
@@ -662,8 +663,8 @@ describe('an Ask citation opens the exact item it cites', () => {
       { citation: passage('f'), kind: 'note', label: 'Older note', visibility: 'team' },
     ])).toEqual([
       namedSource,
-      { kind: 'original', label: 'Launch notes', ref: coordinates('a'), item: { kind: 'note', id: note } },
-      { kind: 'original', label: 'Kickoff', ref: coordinates('b'), item: { kind: 'imported_meeting', id: imported } },
+      { kind: 'original', label: 'Launch notes', ref: coordinates('a'), item: { kind: 'note', id: note }, private: true },
+      { kind: 'original', label: 'Kickoff', ref: coordinates('b'), item: { kind: 'imported_meeting', id: imported }, private: true },
       { kind: 'original', label: 'Plan.md', ref: { ...coordinates('c'), document_id: document }, item: { kind: 'document', id: document } },
       { kind: 'original', label: 'Plan.md', ref: { ...coordinates('d'), document_id: document }, item: { kind: 'document', id: document } },
       { kind: 'transcript', label: 'Transcript', ref: coordinates('e'), meeting: sha('2') },
@@ -696,7 +697,7 @@ describe('follow-ups in a V7 answer and its progress (ADR-0040)', () => {
   it('reads a V7 answer whose source is a follow-up, by its item id alone, beside the kinds V6 cites', () => {
     const answer = answerView({ ok: true, result: v7([followUp, named, ticket]) }, { kind: 'global' });
     expect(answer.sources).toEqual([followUpSource, namedSource,
-      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' }]);
+      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7', private: true }]);
     expect(JSON.stringify(answer)).not.toContain('follow_up:');
   });
 
@@ -727,8 +728,10 @@ const workspaceSources = [
 describe('your workspace and your tools\' containers in a V8 answer and its progress (research tool contract v1)', () => {
   it('reads a V8 answer that cites your project, a person, a tool and a Jira project, by what each names, beside the kinds V7 cites', () => {
     const answer = answerView({ ok: true, result: v8([project, person, tool, container, followUp, named, ticket]) }, { kind: 'global' });
-    expect(answer.sources).toEqual([...workspaceSources, followUpSource, namedSource,
-      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' }]);
+    // The tool, the Jira project and the ticket only you can read.
+    const [ours, mara, jira, therm] = workspaceSources;
+    expect(answer.sources).toEqual([ours, mara, { ...jira, private: true }, { ...therm, private: true }, followUpSource, namedSource,
+      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7', private: true }]);
     // A container's scope and its own id in its tool stay behind, as a ticket's do; refs stay with the host.
     for (const behind of ['cloud-1', '10001', 'project:', 'tool:', 'tool_container']) expect(JSON.stringify(answer)).not.toContain(behind);
   });
@@ -738,10 +741,10 @@ describe('your workspace and your tools\' containers in a V8 answer and its prog
     const space = { ...container, label: 'Thermal team', key: 'THT', citation: { ...containerCitation, tool_id: 'confluence', container: 'confluence_space',
       container_id: '98765', permalink: 'https://example.atlassian.net/wiki/spaces/THT' } };
     const [jira, confluence] = answerView({ ok: true, result: v8([unkeyed, space]) }, { kind: 'global' }).sources;
-    expect(jira).toEqual({ kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: containerCitation.permalink, container: 'jira_project' });
+    expect(jira).toEqual({ kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: containerCitation.permalink, container: 'jira_project', private: true });
     expect(jira).not.toHaveProperty('key');
     expect(confluence).toEqual({ kind: 'container', tool_id: 'confluence', label: 'Thermal team', permalink: 'https://example.atlassian.net/wiki/spaces/THT',
-      container: 'confluence_space', key: 'THT' });
+      container: 'confluence_space', key: 'THT', private: true });
   });
 
   it('carries a V3 step that searched your workspace or a tool\'s containers, or read one of them', () => {
@@ -809,6 +812,17 @@ describe('a laid-out answer (answer layout v1, ADR-0045)', () => {
     // The plain reading, for earlier turns, stays the statements, in order.
     expect(laid.text).toBe(plain.text);
     expect(laid.notice).toBe('One of three THERM meetings in range was not read before the time limit.');
+  });
+
+  it('marks a cited item only you or the approver can read as private, for the lock on a table row that cites it', () => {
+    const laid = answerView({ ok: true, result: layoutAnswer(question, scope, true) }, scope);
+    // Three team pages, then three tickets only you can read.
+    expect(laid.sources.map(source => source.private ?? false)).toEqual([false, false, false, true, true, true]);
+    const approver = answerView({ ok: true, result: v8([{ ...named, visibility: 'approver_only' }]) }, scope);
+    expect(approver.sources[0]).toMatchObject({ kind: 'record', private: true });
+    // A progress row's items and a receipt's never carry it: only an answer's sources do.
+    expect(askStepView({ ok: true, progress: { type: 'read', items: [ticket] } })).toEqual({ type: 'read', items: [
+      { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' }] });
   });
 
   it('refuses a layout that leaves a statement out, or a row that cites what its statements do not', () => {
