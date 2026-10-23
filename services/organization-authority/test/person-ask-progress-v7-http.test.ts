@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_ANSWER_PATH_V6, PERSON_ANSWER_PATH_V7, PERSON_ANSWER_ROUTE_HEADER_V5,
@@ -6,6 +6,7 @@ import {
   createPersonAskProgressDecoderV3, validatePersonAnswerResponseV7, validatePersonAnswerResponseV8,
   type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
+import { createAgenticAskV5 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
@@ -24,6 +25,12 @@ import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
  */
 
 afterEach(closeAskServers);
+
+// The V8 Ask runs as it is; the spy only shows which options each request created it with.
+vi.mock('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1')>();
+  return { ...actual, createAgenticAskV5: vi.fn(actual.createAgenticAskV5) };
+});
 
 const QUESTION = 'Who leads Project A, and what are my open tasks?';
 type StepPrompt = { readonly question?: string; readonly asked_by?: string; readonly source_catalog?: readonly { readonly source: string }[];
@@ -142,6 +149,37 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     for (const source of ['projects', 'people', 'tools', 'follow_ups']) expect(planner.catalogs.flat()).not.toContain(source);
     expect(answer.citations.map(citation => citation.kind)).not.toContain('project');
     expect(audits(f, 'echo-person-workspace-release-audit-v1')).toEqual([]);
+  });
+
+  it('asks the V8 Ask for its layout exactly when the client sends the layout header, streamed or not, and refuses any other value before the Ask runs', async () => {
+    const f = await sentFixture();
+    const planner = leadsAndTasks();
+    const base = await origin(f, planner.model);
+    const created = vi.mocked(createAgenticAskV5);
+    created.mockClear();
+    for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {
+      for (const headers of [{ 'x-echo-answer-layout': '1' }, {}] as readonly Readonly<Record<string, string>>[]) {
+        planner.reset();
+        const response = await ask(base, { progress, headers });
+        expect(response.status).toBe(200);
+        await response.text();
+      }
+    }
+    // ADR-0045: the header's value is yes, its absence no, for the JSON answer and the stream alike.
+    expect(created.mock.calls.map(([options]) => options.answer_layout)).toEqual([true, undefined, true, undefined]);
+    const asked = audits(f, 'echo-person-agentic-ask-audit-v1').length;
+    const planned = planner.catalogs.length;
+    for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {
+      for (const value of ['2', 'true', '1, 1']) {
+        const refused = await ask(base, { progress, headers: { 'x-echo-answer-layout': value } });
+        expect([refused.status, refused.headers.get('content-type'), refused.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)]).toEqual([400, 'application/json; charset=utf-8', '7']);
+        await expect(refused.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
+      }
+    }
+    // Refused before the Ask runs: no Ask created, nothing planned, nothing audited.
+    expect(created).toHaveBeenCalledTimes(4);
+    expect(planner.catalogs.length).toBe(planned);
+    expect(audits(f, 'echo-person-agentic-ask-audit-v1').length).toBe(asked);
   });
 
   it('answers /v7 as unavailable, still route-matched, on an Authority composed without the V8 Ask', async () => {

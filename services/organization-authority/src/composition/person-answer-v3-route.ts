@@ -159,6 +159,7 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
         return createAgenticAskV1({
           ...(asker === undefined ? {} : { asker }),
           ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
+          ...(input.answer_layout === undefined ? {} : { answer_layout: input.answer_layout }),
           ...personResearchDriverV1(options, context.membership_id), desk, audit: options.audit.forRequest(context),
         }).answer({ question: input.request.question, signal });
       });
