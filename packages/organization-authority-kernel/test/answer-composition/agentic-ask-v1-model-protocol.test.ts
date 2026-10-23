@@ -297,7 +297,52 @@ describe("agentic Ask model protocol parity", () => {
     expect(parseStep({ parts: [{ question: "Who owns it? ", needs: [{ need: " owner ", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner " } }] }))
       .toEqual({ parts: [{ question: "Who owns it?", needs: [{ need: "owner", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner" } }] });
     expect(parseAnswer({ sentences: [{ text: " Done. ", evidence: ["e2", "[E3]"] }, { text: "", evidence: [] }], not_found: ["", "owner"] }))
-      .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"] }], not_found: ["owner"], lists: [] });
+      .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"] }], not_found: ["owner"], lists: [], tables: [] });
+  });
+
+  it("reads each sentence's form, section and cells, and the tables its rows stand in (ADR-0045)", () => {
+    const next = "Next steps";
+    const parsed = parseAnswer({
+      lists: [], not_found: [],
+      tables: [{ section: ` ${next} `, columns: ["Action", "Owner", "Due"] }, { section: "One column", columns: ["Only"] }, { section: next, columns: ["A", "B"] }],
+      sentences: [
+        { text: "The scope was rejected.", evidence: ["E1"], form: "lead", section: "Decisions" },
+        { text: "The retest covers TC-D-03.", evidence: ["E1"], form: "Bullet", section: " Decisions " },
+        { text: "Prose.", evidence: ["E1"], form: "text", section: "" },
+        { text: "Mara sends the plan by Friday.", evidence: ["E2"], form: "row", section: next, cells: ["Send the plan (E2)", "Mara", "2026-10-23", "extra"] },
+        { text: "", evidence: ["E2"], form: "row", section: next, cells: ["Fix BUG-412", "", "2026-10-28"] },
+        { text: "Tomas fixes the board.", evidence: ["E3"], form: "row", section: next, cells: ["Fix the board"] },
+        { text: "No table holds this row.", evidence: ["E3"], form: "row", section: "Later", cells: ["x", "y"] },
+        { text: "An empty row.", evidence: ["E3"], form: "row", section: next, cells: ["", " "] },
+        { text: "No form is called that.", evidence: ["E3"], form: "heading", cells: ["dropped"] },
+      ],
+    });
+    // A table needs a section and two columns; a second table for a section is a repeat.
+    expect(parsed.tables).toEqual([{ section: next, columns: ["Action", "Owner", "Due"] }]);
+    expect(parsed.sentences).toEqual([
+      // A lead has no section; "text" is prose, which carries no form.
+      { text: "The scope was rejected.", evidence: ["E1"], form: "lead" },
+      { text: "The retest covers TC-D-03.", evidence: ["E1"], form: "bullet", section: "Decisions" },
+      { text: "Prose.", evidence: ["E1"] },
+      // A row's cells, one per column of its section's table; a row with no text says its cells.
+      { text: "Mara sends the plan by Friday.", evidence: ["E2"], form: "row", section: next, cells: ["Send the plan", "Mara", "2026-10-23"] },
+      { text: "Action: Fix BUG-412; Due: 2026-10-28.", evidence: ["E2"], form: "row", section: next, cells: ["Fix BUG-412", "", "2026-10-28"] },
+      { text: "Tomas fixes the board.", evidence: ["E3"], form: "row", section: next, cells: ["Fix the board", "", ""] },
+      // A row no table holds, or with no cell, is a bullet; a form no answer has is prose.
+      { text: "No table holds this row.", evidence: ["E3"], form: "bullet", section: "Later" },
+      { text: "An empty row.", evidence: ["E3"], form: "bullet", section: next },
+      { text: "No form is called that.", evidence: ["E3"] },
+    ]);
+  });
+
+  it("names each form, a section, a row's cells and the tables in the answer schema (ADR-0045)", () => {
+    const sentence = ((answerSchema.properties as Schema).sentences as Schema).items as Schema;
+    expect([sentence.required, (sentence.properties as Schema).form, (sentence.properties as Schema).section, (sentence.properties as Schema).cells]).toEqual([
+      ["text", "evidence"], { type: "string", enum: ["lead", "text", "bullet", "row"] }, { type: "string", maxLength: 60 }, { type: "array", maxItems: 6, items: { type: "string", maxLength: 120 } },
+    ]);
+    expect([(answerSchema as Schema).required, (answerSchema.properties as Schema).tables]).toEqual([["lists", "sentences", "not_found"], { type: "array", maxItems: 3, items: {
+      type: "object", additionalProperties: false, required: ["section", "columns"], properties: { section: { type: "string", maxLength: 60 }, columns: { type: "array", minItems: 2, maxItems: 6, items: { type: "string", maxLength: 40 } } },
+    } }]);
   });
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
@@ -421,6 +466,22 @@ describe("agentic Ask model protocol parity", () => {
       ["members respelled, repeated or unreadable", answer({ lists: [{ id: "L1", members: ["e5", "E5", "[E7]", "L2", 9] }] }), { model_id_respelled: 3, model_repeat_dropped: 1, model_entry_dropped: 1 }],
       ["more members than a use names", answer({ lists: [{ id: "L3", members: items(1, 30) }] }), { model_items_capped: 5 }],
       ["a list used twice the same way, or past five lists", answer({ lists: ["L1", "L1", "L2", "L3", "L4", "L5", "L6"].map(id => ({ id })) }), { model_repeat_dropped: 1, model_items_capped: 1 }],
+      // Answer layout v1 (ADR-0045): forms, sections, cells and tables.
+      ["forms, a section, a row and its table the schema holds", answer({ tables: [{ section: "Next", columns: ["Action", "Owner"] }], sentences: [
+        { text: "x.", evidence: ["E1"], form: "lead" }, { text: "y.", evidence: ["E1"], form: "text", section: "Next" }, { text: "z.", evidence: ["E1"], form: "row", section: "Next", cells: ["a", ""] },
+      ] }), {}],
+      ["a form in another case, or one no answer has", answer({ sentences: [{ text: "x.", evidence: ["E1"], form: " Bullet" }, { text: "y.", evidence: ["E1"], form: "heading" }] }), { model_enum_respelled: 2 }],
+      ["a row no table holds, or with no cell", answer({ tables: [{ section: "Next", columns: ["A", "B"] }], sentences: [
+        { text: "x.", evidence: ["E1"], form: "row", section: "Later", cells: ["a", "b"] }, { text: "y.", evidence: ["E1"], form: "row", cells: ["a", "b"] }, { text: "z.", evidence: ["E1"], form: "row", section: "Next", cells: ["", " "] },
+      ] }), { model_enum_respelled: 3 }],
+      ["cells past or short of their table's columns, and cells on a sentence that is no row", answer({ tables: [{ section: "Next", columns: ["A", "B", "C"] }], sentences: [
+        { text: "x.", evidence: ["E1"], form: "row", section: "Next", cells: ["a", "b", "c", "d", "e"] }, { text: "y.", evidence: ["E1"], form: "row", section: "Next", cells: ["a", 7] }, { text: "z.", evidence: ["E1"], form: "bullet", cells: ["a"] },
+      ] }), { model_items_capped: 2, model_entry_dropped: 3 }],
+      ["a table with no section or two columns, a second for one section, or past three", answer({ tables: [
+        { section: " ", columns: ["A", "B"] }, { section: "S", columns: ["A", "a", " "] }, { section: "T", columns: ["A", "B"] }, { section: "T", columns: ["C", "D"] },
+        { section: "U", columns: ["A", "B", "C", "D", "E", "F", "G"] }, { section: "V", columns: ["A", "B"] }, { section: "W", columns: ["A", "B"] },
+      ] }), { model_entry_dropped: 3, model_repeat_dropped: 2, model_items_capped: 2 }],
+      ["a section, column or cell past its cap", answer({ tables: [{ section: "s".repeat(61), columns: ["c".repeat(41), "B"] }], sentences: [{ text: "x.", evidence: ["E1"], form: "row", section: "s".repeat(61), cells: ["x".repeat(121), "y"] }] }), { model_text_truncated: 4 }],
     ] as const)("in an answer: %s", (_name, value, expected) => {
       expect(corrected(() => parseAnswer(value))).toEqual(expected);
     });
