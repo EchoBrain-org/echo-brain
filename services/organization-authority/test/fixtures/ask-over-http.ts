@@ -89,13 +89,14 @@ export async function serveAsk(routes: Omit<Parameters<typeof createOrganization
 
 /**
  * A client's Ask of `question` on `path` as `token` (Mina unless told otherwise), asking for `progress` unless told
- * otherwise; `progress: null` sends no progress header, and `body` replaces the request.
+ * otherwise; `progress: null` sends no progress header, `headers` adds others, and `body` replaces the request.
  */
 export function askClient(defaults: { readonly path: string; readonly progress: string; readonly question: string; readonly token?: string; readonly mine?: true }) {
-  return (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: string; readonly mine?: true; readonly body?: unknown; readonly signal?: AbortSignal } = {}) => fetch(`${base}${input.path ?? defaults.path}`, {
+  return (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: string; readonly mine?: true; readonly body?: unknown; readonly signal?: AbortSignal;
+    readonly headers?: Readonly<Record<string, string>> } = {}) => fetch(`${base}${input.path ?? defaults.path}`, {
     method: 'POST', ...(input.signal === undefined ? {} : { signal: input.signal }),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? defaults.token ?? 'mina'}`,
-      ...(input.progress === null ? {} : { [PERSON_ASK_PROGRESS_HEADER_V1]: input.progress ?? defaults.progress }) },
+      ...(input.progress === null ? {} : { [PERSON_ASK_PROGRESS_HEADER_V1]: input.progress ?? defaults.progress }), ...input.headers },
     body: JSON.stringify(input.body ?? { schema_version: 3, question: defaults.question, ...((input.mine ?? defaults.mine) === true ? { mine: true } : {}) }),
   });
 }
