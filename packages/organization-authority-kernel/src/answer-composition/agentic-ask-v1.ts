@@ -300,7 +300,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const taskPrompt = (list: boolean) => stepPrompt(`${guided(list ? STEP_PROMPT : SEARCH_ONLY_STEP_PROMPT, liveGuidance(list), FOLLOW_UPS_STEP_GUIDANCE)}\n\n${TASK_RULE_PROMPT}`);
   const prompts = Object.freeze({ ask: stepPrompt(guided(ASK_STEP_PROMPT, liveGuidance(true), FOLLOW_UPS_STEP_GUIDANCE)), task: taskPrompt(true), search_only_task: taskPrompt(false) });
   /** What a renderer's user prompt may fill beside its system prompt. */
-  const promptBudget = (system: string) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, OUTPUT_TOKENS.answer);
+  const promptBudget = (system: string, outputTokens: number = OUTPUT_TOKENS.answer) => agenticAskContextBudgetBytesV1(options.generation.context_tokens, system, outputTokens);
   /**
    * One agentic request: shared session state (deadline, model-call budget,
    * access fences, audit), the research loop, then a renderer (Ask's for a

@@ -36,14 +36,16 @@ const LEAD = Object.freeze({ kind: "lead" as const });
 const sectionOf = (shape: { readonly kind: string; readonly section?: string }) => shape.kind === "list" ? undefined : shape.section;
 
 /**
- * A laid-out answer's statements in reading order: the writer's first two leads, then the list statements code writes,
- * then the writer's other sentences, those with no section first, then each section's in order of its first sentence.
- * A later lead is prose. With no lead, the first prose sentence with no section is the lead. A lead has no section.
+ * A laid-out answer's kept statements in reading order: the writer's first two leads, then the list statements code
+ * writes, then the writer's other sentences, those with no section first, then each section's in order of its first
+ * sentence. A later lead is prose, and a lead has no section. Only when the writer `marked` no lead at all is its first
+ * kept sentence the lead, and only when it is prose with no section: a lead the writer marked and code left out (W1, a
+ * repeat) leaves the answer with none, rather than one the writer never chose.
  */
-export function orderAskLayoutV1<L, S extends { readonly shape: { readonly kind: string; readonly section?: string } }>(lists: readonly L[], sentences: readonly S[]): readonly (L | S)[] {
-  const marked = sentences.filter(sentence => sentence.shape.kind === "lead").slice(0, PERSON_ANSWER_LEAD_MAX_STATEMENTS_V1);
-  const promoted = marked.length > 0 ? undefined : sentences.find(sentence => sentence.shape.kind === "text" && sentence.shape.section === undefined);
-  const leads = promoted === undefined ? marked : [promoted];
+export function orderAskLayoutV1<L, S extends { readonly shape: { readonly kind: string; readonly section?: string } }>(lists: readonly L[], sentences: readonly S[], marked: boolean): readonly (L | S)[] {
+  const first = sentences[0];
+  const leads = marked ? sentences.filter(sentence => sentence.shape.kind === "lead").slice(0, PERSON_ANSWER_LEAD_MAX_STATEMENTS_V1)
+    : first !== undefined && first.shape.kind === "text" && first.shape.section === undefined ? [first] : [];
   const rest = sentences.filter(sentence => !leads.includes(sentence)).map(sentence => sentence.shape.kind !== "lead" ? sentence
     : { ...sentence, shape: { kind: "text", ...(sentence.shape.section === undefined ? {} : { section: sentence.shape.section }) } } as S);
   const sections = [...new Set(rest.flatMap(sentence => sentence.shape.section ?? []))];

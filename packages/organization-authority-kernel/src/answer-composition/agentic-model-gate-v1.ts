@@ -35,11 +35,14 @@ export type AgenticAskModelRoleV1 = "step" | "answer";
 /**
  * One model call as its caller names it: the role the audit records (research
  * steps are `step`, every renderer call is `answer`) and the runtime span the
- * call runs in (Ask uses `ask_planner` and `ask_answer`).
+ * call runs in (Ask uses `ask_planner` and `ask_answer`). `output_tokens` is
+ * its own output allowance where it needs more than its role's (a laid-out
+ * Ask's writer, ADR-0045); without it the role's applies.
  */
 export interface AgenticModelCallV1 {
   readonly role: AgenticAskModelRoleV1;
   readonly span: CoreRuntimePhaseV1;
+  readonly output_tokens?: number;
 }
 
 export interface AgenticAskGenerationObservationV1 {
@@ -245,7 +248,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     if (options.is_deadline_expired() || now() >= deadline) throw new AgenticAskDeadlineErrorV1();
     if (activeSignal.aborted) throw new DOMException("Ask stopped", "AbortError");
   };
-  const call = async ({ role, span }: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery = false): Promise<unknown> => {
+  const call = async ({ role, span, output_tokens }: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery = false): Promise<unknown> => {
     assertLive();
     if (calls >= budget.max_model_calls) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
     if (options.model.generate_with_admission !== undefined) {
@@ -253,7 +256,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       // access fence, accounting and diagnostics as research, with the writer's role.
       const sessionDeadline = Math.min(deadline, now() + options.generation.timeout_ms, now() + timeout());
       const input: StructuredGenerationInput = { model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema,
-        max_output_tokens: AGENTIC_MODEL_OUTPUT_TOKENS_V1[role], timeout_ms: Math.max(1, Math.floor(sessionDeadline - now())), signal: activeSignal };
+        max_output_tokens: output_tokens ?? AGENTIC_MODEL_OUTPUT_TOKENS_V1[role], timeout_ms: Math.max(1, Math.floor(sessionDeadline - now())), signal: activeSignal };
       try {
         return await raceAbort(activeSignal, options.model.generate_with_admission(input, (request, forward) => {
           if (request.model !== input.model) throw new Error('Unexpected structured generation model');
@@ -282,7 +285,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     if (timeoutMs < minimum) throw new AgenticAskPostRevalidationNoTimeErrorV1();
     calls += 1;
     if (recovery) repairs += 1;
-    const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: AGENTIC_MODEL_OUTPUT_TOKENS_V1[role], timeout_ms: Math.max(1, Math.floor(Math.min(options.generation.timeout_ms, timeoutMs, remaining()))), signal: activeSignal });
+    const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: output_tokens ?? AGENTIC_MODEL_OUTPUT_TOKENS_V1[role], timeout_ms: Math.max(1, Math.floor(Math.min(options.generation.timeout_ms, timeoutMs, remaining()))), signal: activeSignal });
     const callId = calls;
     options.before_call?.(role);
     invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));

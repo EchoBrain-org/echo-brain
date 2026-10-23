@@ -102,7 +102,9 @@ describe("Ask answer layout v1 (ADR-0045)", () => {
 describe("Ask answer order (ADR-0045)", () => {
   type Entry = { readonly id: string; readonly shape: AskLayoutShapeV1 };
   const entry = (id: string, shape: AskLayoutShapeV1): Entry => ({ id, shape });
-  const ordered = (lists: readonly Entry[], sentences: readonly Entry[]) => orderAskLayoutV1(lists, sentences).map(value => [value.id, value.shape.kind, "section" in value.shape ? value.shape.section : undefined]);
+  /** The order, with `marked` when the writer's reply marked a lead (kept or not). */
+  const ordered = (lists: readonly Entry[], sentences: readonly Entry[], marked = sentences.some(value => value.shape.kind === "lead")) =>
+    orderAskLayoutV1(lists, sentences, marked).map(value => [value.id, value.shape.kind, "section" in value.shape ? value.shape.section : undefined]);
   const LIST: AskLayoutShapeV1 = { kind: "list", caption: "2 tickets", columns: ["Item", "Status"], rows: [] };
 
   it("puts the writer's first two leads first, then the lists, then its other sentences by section in order of first appearance", () => {
@@ -116,10 +118,14 @@ describe("Ask answer order (ADR-0045)", () => {
     ]);
   });
 
-  it("makes the first unsectioned prose sentence the lead when the writer marked none, and leaves no lead without one", () => {
-    expect(ordered([entry("L1", LIST)], [entry("a", { kind: "text", section: "A" }), entry("b", BULLET), entry("c", TEXT), entry("d", TEXT)]))
+  it("makes the writer's first kept sentence the lead only when it marked none and that sentence is prose with no section", () => {
+    expect(ordered([entry("L1", LIST)], [entry("c", TEXT), entry("a", { kind: "text", section: "A" }), entry("b", BULLET), entry("d", TEXT)]))
       .toEqual([["c", "lead", undefined], ["L1", "list", undefined], ["b", "bullet", undefined], ["d", "text", undefined], ["a", "text", "A"]]);
-    expect(ordered([entry("L1", LIST)], [entry("a", { kind: "text", section: "A" }), entry("b", BULLET)]))
-      .toEqual([["L1", "list", undefined], ["b", "bullet", undefined], ["a", "text", "A"]]);
+    // A first sentence with a section, or a bullet, is no lead, however much prose follows.
+    for (const first of [entry("a", { kind: "text", section: "A" }), entry("b", BULLET)]) {
+      expect(ordered([entry("L1", LIST)], [first, entry("c", TEXT)]).map(([, kind]) => kind)).not.toContain("lead");
+    }
+    // A lead the writer marked and code left out (W1, a repeat) leaves no lead, not one the writer never chose.
+    expect(ordered([entry("L1", LIST)], [entry("c", TEXT), entry("d", TEXT)], true)).toEqual([["L1", "list", undefined], ["c", "text", undefined], ["d", "text", undefined]]);
   });
 });
