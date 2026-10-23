@@ -80,10 +80,10 @@ parallel items, or which named a list's members.
 
 - A request without the header is unchanged: the same writer prompt and
   schema, statements, citations, privacy and audits. A laid-out answer keeps
-  the same statements and citations; it reads them lead first, numbers its
-  citations in that order, and its table rows' statements are written from
-  their cells.
-- A laid-out answer that would pass its byte bound is released without its
+  statements and citations by the same rules; it reads them lead first,
+  numbers its citations in that order, and its table rows' statements are
+  written from their cells.
+- A laid-out answer that would exceed its byte bound is released without its
   layout, exactly as the request without the header would be answered.
 - The eval and judge read statements as before; a row's statement says what
   its cells show.
