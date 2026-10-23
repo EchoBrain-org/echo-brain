@@ -2,7 +2,7 @@ import { canonicalJsonBytes, canonicalSha256, sha256Digest } from "@echo-brain/f
 import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, validatePersonAnswerLayoutV1, type PersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { describe, expect, it } from "vitest";
 import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_PROMPT } from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_LAYOUT_PROMPT, ANSWER_PROMPT, answerLayoutSchema, answerSchema } from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import { createAgenticListEvidenceV1, type AgenticListEvidenceV1 } from "../../../src/answer-composition/agentic-list-evidence-v1.js";
 import { AGENTIC_MODEL_OUTPUT_TOKENS_V1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
@@ -22,10 +22,10 @@ function alone(input: { readonly bundle: AgenticEvidenceBundleV1; readonly repli
   });
   const render = (question: string) => renderer.render({
     bundle: input.bundle, trigger_input: { question }, gate, remaining: () => input.remaining ?? 30_000, signal: new AbortController().signal,
-    prompt_budget: system => agenticAskContextBudgetBytesV1(undefined, system, AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer),
+    prompt_budget: (system, output = AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer) => agenticAskContextBudgetBytesV1(undefined, system, output),
     on_context: selected => { trace.push(`context:${selected.join(",")}`); },
   });
-  return { render, trace, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, any> };
+  return { render, trace, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, any>, input: (index: number) => inputs[index]! };
 }
 
 type Rendering = Awaited<ReturnType<ReturnType<typeof alone>["render"]>>;
@@ -547,7 +547,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       const part = await laid(research, { lists: [], tables: [{ section: "Blocked", columns: ["Ticket", "Blocker"] }], not_found: [], sentences: [
         { text: "THERM-1 is blocked by BUG-412.", evidence: ["E1"], form: "row", section: "Blocked", cells: ["THERM-1", "BUG-412"] },
       ] });
-      expect(part.statements[0]!.text).toBe("THERM-1 is blocked by BUG-412 (1 of 2 checked so far).");
+      expect(part.statements[0]!.text).toBe("Ticket: THERM-1; Blocker: BUG-412 (1 of 2 checked so far).");
       expect(part.layout).toEqual([{ kind: "heading", text: "Blocked" }, { kind: "paragraph", statements: [0] }]);
     });
   });
@@ -580,9 +580,10 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
 
   it("lays the THERM answer out lead first: the conclusion, its decisions as bullets, and what has to happen first as a table", async () => {
     const rendered = await alone({ bundle: records(4), replies: [THERM], version: 8, layout: true }).render("Can DVT-R2 run on the reduced test scope?");
+    // A row's statement is code's, from its cells, so what audits and the judge read is what the table shows.
     expect(part(rendered).statements.map(value => [value.text, value.citation_indexes])).toEqual([
       ["The reduced test scope was rejected.", [0]], ["DVT-R2 retests TC-D-03 and TC-D-01.", [1]], ["Hardware owns the BUG-412 fix.", [2]],
-      ["Rafael sends the regression-scope proposal by October 9.", [3]], ["Tomas fixes BUG-412 by October 28.", [2]],
+      ["Action: Send the regression-scope proposal; Owner: Rafael Moreno; Due: 2026-10-09.", [3]], ["Action: Fix BUG-412; Owner: Tomas Okafor; Due: 2026-10-28.", [2]],
     ]);
     expect(layoutOf(rendered)).toEqual([
       { kind: "lead", statements: [0] }, { kind: "heading", text: "Decisions" }, { kind: "bullets", statements: [1, 2] }, { kind: "heading", text: NEXT },
@@ -600,20 +601,32 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
       expect(part(rendered)).not.toHaveProperty("layout");
       expect(part(rendered).statements).toEqual(part(today).statements);
     }
-    const laidOut = await alone({ bundle: records(4), replies: [THERM], version: 8, layout: true }).render("Can DVT-R2 run on the reduced test scope?");
-    expect(new Set(part(laidOut).statements.map(value => value.text))).toEqual(new Set(part(today).statements.map(value => value.text)));
   });
 
-  it("makes the first prose sentence the lead when the writer marked none, and lays out only the statements kept (W1, repeat)", async () => {
-    const rendered = await alone({ bundle: records(3), version: 8, layout: true, replies: [{ lists: [], not_found: [], sentences: [
+  it("gives only a laid-out Ask's writer the layout prompt, the layout schema and a longer reply's allowance", async () => {
+    for (const layout of [false, true]) {
+      const run = alone({ bundle: records(4), replies: [THERM], version: 8, layout });
+      await run.render("Can DVT-R2 run on the reduced test scope?");
+      expect(run.input(0)).toMatchObject(layout
+        ? { system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_LAYOUT_PROMPT}`, schema: answerLayoutSchema, max_output_tokens: 2_000 }
+        : { system_prompt: ANSWER_PROMPT, schema: answerSchema, max_output_tokens: AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer });
+    }
+  });
+
+  it("lays out only the statements kept (W1, repeat), with no lead when the one the writer marked was left out", async () => {
+    const sentences = [
       { text: "An unread item says so.", evidence: ["E9"], form: "lead" },
       { text: "Approved: one.", evidence: ["E1"], form: "bullet", section: "Decisions" },
       { text: "Approved: one.", evidence: ["E1"], form: "bullet", section: "Decisions" },
       { text: "Approved: two.", evidence: ["E2"], form: "bullet", section: "Decisions" },
       { text: "Record three applies.", evidence: ["E3"] },
-    ] }] }).render("What was decided?");
+    ];
+    const rendered = await alone({ bundle: records(3), version: 8, layout: true, replies: [{ lists: [], not_found: [], sentences }] }).render("What was decided?");
     expect(part(rendered).statements.map(value => value.text)).toEqual(["Record three applies.", "Approved: one.", "Approved: two."]);
-    expect(layoutOf(rendered)).toEqual([{ kind: "lead", statements: [0] }, { kind: "heading", text: "Decisions" }, { kind: "bullets", statements: [1, 2] }]);
+    expect(layoutOf(rendered)).toEqual([{ kind: "paragraph", statements: [0] }, { kind: "heading", text: "Decisions" }, { kind: "bullets", statements: [1, 2] }]);
+    // A writer that marked no lead has its first sentence read as one, when that is prose with no section.
+    const unmarked = await alone({ bundle: records(3), version: 8, layout: true, replies: [{ lists: [], not_found: [], sentences: [sentences[4]!, ...sentences.slice(1, 4)] }] }).render("What was decided?");
+    expect(layoutOf(unmarked)).toEqual([{ kind: "lead", statements: [0] }, { kind: "heading", text: "Decisions" }, { kind: "bullets", statements: [1, 2] }]);
   });
 
   it("lays out only the statements that fit the 40-citation bound", async () => {
@@ -629,18 +642,21 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
     expect(layoutOf(rendered)).toEqual([{ kind: "lead", statements: [0] }, { kind: "heading", text: "Records" }, { kind: "bullets", statements: [1, 2] }]);
   });
 
-  it("drops the layout of an answer that must shrink to its byte bound, which still validates", async () => {
-    // Forty records with long labels, and ten long sentences citing four each: past 64 KiB until statements are dropped.
+  it("releases exactly the answer without layout when the laid-out answer would pass its byte bound", async () => {
+    // Forty records with long labels, a lead and nine rows of six long cells, each citing four records: the laid-out answer
+    // is past 64 KiB, so it is never compacted into one that drops what the answer without layout keeps.
     const research = records(40, { label: "𝔸".repeat(250) });
-    const long = (index: number) => `${"𝔹".repeat(690)} ${index}.`;
-    const reply = { lists: [], not_found: [], sentences: Array.from({ length: 10 }, (_, index) => ({ text: long(index), evidence: [1, 2, 3, 4].map(n => `E${4 * index + n}`), form: index === 0 ? "lead" : "bullet" })) };
-    const unbounded = await alone({ bundle: research, replies: [reply], version: 8 }).render("What applies?");
-    const rendered = await alone({ bundle: research, replies: [reply], version: 8, layout: true }).render("What applies?");
-    expect(canonicalJsonBytes(rendered.result.response).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
-    expect(part(rendered).statements.length).toBeLessThan(10);
-    expect(part(rendered)).toMatchObject({ status: "partial", gap: "Some evidence could not fit in this response." });
-    expect(part(rendered)).not.toHaveProperty("layout");
-    expect(part(rendered).statements).toEqual(part(unbounded).statements);
-    expect((rendered.result.response as PersonAnswerResponseV8).schema_version).toBe(8);
+    const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
+    const reply = { lists: [], not_found: [], tables: [{ section: "Rows", columns }], sentences: Array.from({ length: 10 }, (_, index) => ({
+      text: `${"𝔹".repeat(690)} ${index}.`, evidence: [1, 2, 3, 4].map(n => `E${4 * index + n}`),
+      ...(index === 0 ? { form: "lead" } : { form: "row", section: "Rows", cells: columns.map(column => `${column} ${"𝔸".repeat(110)}`) }),
+    })) };
+    const off = await alone({ bundle: research, replies: [reply], version: 8 }).render("What applies?");
+    const on = await alone({ bundle: research, replies: [reply], version: 8, layout: true }).render("What applies?");
+    expect(on).toEqual(off);
+    expect(part(on)).not.toHaveProperty("layout");
+    expect(part(on)).toMatchObject({ status: "partial", gap: "Some evidence could not fit in this response." });
+    expect(canonicalJsonBytes(on.result.response).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
+    expect((on.result.response as PersonAnswerResponseV8).schema_version).toBe(8);
   });
 });

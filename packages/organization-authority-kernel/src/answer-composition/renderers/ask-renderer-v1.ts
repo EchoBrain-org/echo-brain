@@ -1,7 +1,8 @@
 import { AuthorityOperationError } from "../../domain/errors.js";
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import { canonicalJsonBytes, canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   isPersonWorkspaceCitationV1,
+  PERSON_ANSWER_RESPONSE_MAX_BYTES_V4,
   personAnswerCitationKeyV7,
   personAnswerCitationKeyV8,
   validatePersonAnswerLayoutV1,
@@ -16,6 +17,8 @@ import {
 import {
   AGENTIC_ASK_MAX_SENTENCES_V1,
   AgenticAskOutputErrorV1,
+  ANSWER_LAYOUT_PROMPT,
+  answerLayoutSchema,
   answerSchema,
   cleanId,
   cleanLine,
@@ -51,7 +54,7 @@ import {
 } from "../agentic-list-evidence-v1.js";
 import { AGENTIC_ASK_MIN_ANSWER_MS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
-import { observeCoreModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
+import { observeCoreModelCorrectionV1, type CoreRuntimeModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
 import { buildAskLayoutV1, orderAskLayoutV1, type AskLayoutShapeV1 } from "./ask-layout-v1.js";
 
 /**
@@ -63,8 +66,10 @@ import { buildAskLayoutV1, orderAskLayoutV1, type AskLayoutShapeV1 } from "./ask
  * writer chooses. The writer's sentences follow, each standing only on text it
  * read. With no usable writer reply code still states those lists, or falls
  * back to the records research read, or says what it could not find. A V8
- * answer that asked for its layout (ADR-0045) reads lead first, and its part
- * carries the blocks its kept statements read as.
+ * Ask that asked for its layout (ADR-0045) gives its writer the layout prompt
+ * and schema; its answer reads lead first and its part carries the blocks its
+ * kept statements read as, or, when that cannot be released, it is exactly the
+ * answer the same reply gives without layout.
  */
 
 const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
@@ -88,6 +93,8 @@ const MAX_CITATIONS = 40;
 const MAX_STATEMENTS = AGENTIC_ASK_MAX_SENTENCES_V1;
 /** The writer runs in Ask's answer span; the audit records it as an `answer` call. */
 const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
+/** A laid-out Ask's writer (ADR-0045) marks each sentence's form and section, and a row's cells: a longer reply. */
+const LAYOUT_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_000 });
 
 type Entry = AgenticEvidenceBundleItemV1;
 /** A statement's shape before its citations are known: a list's rows name the items they cite. */
@@ -241,7 +248,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           notices: [...bundle.coverage.notices], omitted_evidence_items: bundle.items.filter(entry => entry.item.text !== undefined).length,
         },
       };
-      const contextBudget = Math.max(0, input.prompt_budget(options.answer_prompt) - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
+      // A laid-out Ask's writer is also told how to mark forms (ADR-0045), and has a longer reply's room; no other writer's prompt changes.
+      const writerPrompt = laidOut ? `${options.answer_prompt}\n\n${ANSWER_LAYOUT_PROMPT}` : options.answer_prompt;
+      const promptBudget = laidOut ? input.prompt_budget(writerPrompt, LAYOUT_WRITER_CALL.output_tokens) : input.prompt_budget(options.answer_prompt);
+      const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
       // Lists' rows take at most half the room; a smaller window shows fewer members of each, never fewer lists.
       // The largest per-list cap that fits (binary search), so no list loses rows that would have fit.
       const fits = (cap: number) => bytes(JSON.stringify(writerListsWith(cap))) <= contextBudget / 2;
@@ -291,20 +301,20 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return stats.calls === callsBefore + 1 && stats.calls < bundle.budget.max_model_calls && input.remaining() >= AGENTIC_ASK_MIN_ANSWER_MS_V1;
       };
       const parse = (value: unknown): Answer => {
-        const parsed = withMembers(parseAnswer(value));
+        const parsed = withMembers(parseAnswer(value, { layout: laidOut }));
         last.answer = parsed;
         if (parsed.sentences.some(restsOnRows) && repairable()) throw new AgenticAskOutputErrorV1(ROWS_REASON);
         return parsed;
       };
 
       const writerRuns = evidence.length > 0 || writerLists.some(list => list.count > 0);
-      const written = !writerRuns ? null : await callRendererModelV1(input, WRITER_CALL, options.answer_prompt, {
+      const written = !writerRuns ? null : await callRendererModelV1(input, laidOut ? LAYOUT_WRITER_CALL : WRITER_CALL, writerPrompt, {
         ...answerContext,
         lists: writerLists,
         // Working hypotheses are not user requirements or evidence. The
         // writer assesses the original question against released text.
         evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
-      }, answerSchema, parse);
+      }, laidOut ? answerLayoutSchema : answerSchema, parse);
       // A reply sent back only for a sentence resting on rows is still the writer's answer; code leaves that sentence out.
       const answer = written === null ? null : written.value ?? last.answer;
       if (written?.value === null) observeCoreModelCorrectionV1("writer_fallback");
@@ -312,8 +322,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
 
       // ---- layout (code, not model): one part, read as one paragraph ------
       type Statement = { text: string; citation_indexes: number[]; private: boolean };
-      const used: Entry[] = [];
-      const usedKeys = new Map<string, number>();
       // One citation per key, the key the Ask response checks for duplicates: a listed ticket's row and its opened body
       // are two items with one key, so they share one citation.
       // A workspace item cites only in the V8 answer, whose renderer keys it (research tool contract v1).
@@ -323,197 +331,214 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         if (isPersonWorkspaceCitationV1(citation)) throw new AuthorityOperationError("invalid_output", "A workspace item has no V7 citation");
         return personAnswerCitationKeyV7(citation);
       };
-      /** Citation indexes of `shorts`, each once; a new cited object becomes the next citation. */
-      const cite = (shorts: readonly string[]): number[] => {
-        const indexes: number[] = [];
-        for (const short of shorts) {
-          const key = keyOf(short);
-          if (!usedKeys.has(key)) { usedKeys.set(key, used.length); used.push(byShort.get(short)!); }
-          const index = usedKeys.get(key)!;
-          if (!indexes.includes(index)) indexes.push(index);
-        }
-        return indexes;
-      };
-      /** A statement or record from cited ids: private exactly when one of its citations is. */
-      const statementOf = (text: string, shorts: readonly string[]): Statement => {
-        const indexes = cite(shorts);
-        return { text, citation_indexes: indexes, private: indexes.some(index => privateItem(used[index]!.item)) };
-      };
       const question = partQuestion(askedQuestion);
-
-      // ---- statements (W2, W3): each list's use that says which items exist, then its use by id ----
-      /** One statement of a list; `which` when it says which items exist (a use in full or by `where`), never for a use by id alone. */
-      type Naming = { readonly list: AgenticWriterListV1; readonly noun: AgenticListNounFormsV1; readonly selected: readonly AgenticWriterListMemberV1[]; readonly which: boolean; readonly where?: AgenticListSelectionV1; readonly by_id: boolean };
-      const uses = answer?.lists ?? [];
-      /** What the lists add to the gap, in order; `partial` when its rule makes the part partial whatever it names (W1, W2, W3). */
-      const listGaps: { readonly text: string; readonly partial: boolean }[] = [];
-      const selectionNotFound: string[] = [];
-      /** The lists the answer uses: those the writer saw, in the order of its first use, then every stated list it did not use. */
-      const usedLists = [...new Set([...uses.map(use => use.id).filter(id => writerById.has(id)), ...stated])].map(id => views.get(id)!);
-      const unseen = uses.filter(use => !writerById.has(use.id)).length;
-      if (unseen > 0) observeCoreModelCorrectionV1("writer_unknown_id_dropped", unseen);
-      const naming: Naming[] = usedLists.flatMap(list => {
-        const id = list.id, all = rows.get(id)!, noun = nounOf(list);
-        const byId = uses.find(use => use.id === id && use.members !== undefined);
-        const picked = byId === undefined ? undefined : all.filter(member => byId.members!.includes(member.id));
-        // Code adds the full use of a stated list the writer gave no use saying which items exist (W3), whatever its members.
-        const given = uses.find(use => use.id === id && use.members === undefined) ?? (stated.includes(id) ? { id } : undefined);
-        const where = given?.where;
-        const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
-        // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
-        if (chosen !== undefined && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
-        // Two uses that select the same members are one statement, named by id, with the lead of the one that says which items exist.
-        if (chosen !== undefined && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return [{ list, noun, selected: picked, which: true, ...(where === undefined ? {} : { where }), by_id: true }];
-        // A selection that names nothing is its not_found phrase (K); an empty list keeps the plain not-found answer.
-        if (chosen?.length === 0 && where !== undefined) selectionNotFound.push(agenticListSelectionNotFoundV1(noun, list.filter, where));
-        return [
-          ...(chosen === undefined || chosen.length === 0 ? [] : [{ list, noun, selected: chosen, which: true, ...(where === undefined ? {} : { where }), by_id: false }]),
-          ...(picked === undefined ? [] : [{ list, noun, selected: picked, which: false, by_id: true }]),
-        ];
-      });
-      // At most 25 distinct members named across the answer (W6): those selected by id first, then the rest shared
-      // round-robin, a member another statement names costing nothing; "and N more" counts from the list itself (addition 5).
-      const shares = agenticListNameSharesV1(naming);
-      const listStatements = naming.map((value, index) => {
-        // An owner or status reads as the first selected member records it; a date range as the writer gave it.
-        const where = value.where === undefined || !("value" in value.where) ? value.where : { field: value.where.field, value: value.selected[0]![value.where.field]! };
-        const statement = agenticListStatementV1({
-          noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected,
-          share: shares[index]!.share, free: shares[index]!.free, ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
-        });
-        // Each named member cites its own row; with layout, a statement naming two or more names is a table, a row per name.
-        const table = !laidOut ? undefined : agenticListTableV1({ selected: value.selected, names: statement.names, by_id: value.by_id, ...(value.list.filter.time_zone === undefined ? {} : { time_zone: value.list.filter.time_zone }) });
-        const shape: DraftShape = table === undefined ? PROSE : {
-          kind: "list", caption: statement.caption, columns: table.columns,
-          rows: table.rows.map(row => ({ cells: row.cells, shorts: row.members.map(at => value.selected[at]!.id) })),
+      /**
+       * The response `reply` (the writer's answer, or null) gives, laid out (ADR-0045) or not, and the items its citations
+       * cite, in order. Each call reads the reply afresh; only the first counts the writer's corrections (`count`).
+       */
+      const respond = (reply: Answer | null, laid: boolean, count: boolean) => {
+        const correct = (correction: CoreRuntimeModelCorrectionV1, times?: number) => { if (count) observeCoreModelCorrectionV1(correction, times); };
+        const used: Entry[] = [];
+        const usedKeys = new Map<string, number>();
+        /** Citation indexes of `shorts`, each once; a new cited object becomes the next citation. */
+        const cite = (shorts: readonly string[]): number[] => {
+          const indexes: number[] = [];
+          for (const short of shorts) {
+            const key = keyOf(short);
+            if (!usedKeys.has(key)) { usedKeys.set(key, used.length); used.push(byShort.get(short)!); }
+            const index = usedKeys.get(key)!;
+            if (!indexes.includes(index)) indexes.push(index);
+          }
+          return indexes;
         };
-        return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id), shape };
-      });
+        /** A statement or record from cited ids: private exactly when one of its citations is. */
+        const statementOf = (text: string, shorts: readonly string[]): Statement => {
+          const indexes = cite(shorts);
+          return { text, citation_indexes: indexes, private: indexes.some(index => privateItem(used[index]!.item)) };
+        };
 
-      // ---- the writer's sentences (W1, W3, W4, W5) ---------------------------
-      // A which_say list whose members were not all checked qualifies every sentence citing its members' text (W5).
-      const unchecked = checking.map(id => views.get(id)!).filter(list => agenticListCheckedNoteV1(list) !== undefined);
-      if (unchecked.length > 0) listGaps.push({ text: UNCHECKED_GAP, partial: false });
-      if (unlisted) listGaps.push({ text: WHICH_GAP, partial: true });
-      // A list whose date filter could not test some items (research tool contract v1) supports neither "none" nor "all" of
-      // them: the part says how many were not checked, and is partial, even when the list is empty.
-      let uncheckedEmpty = false;
-      for (const list of [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])]) {
-        const text = agenticListUncheckedNoticeV1(list, nounOf(list));
-        if (text === undefined) continue;
-        listGaps.push({ text, partial: true });
-        if (list.count === 0) uncheckedEmpty = true;
-      }
-      const sentences = answer?.sentences ?? [];
-      // A sentence the kept reply still rests on rows or list ids is left out, and the part says so, never what it claimed.
-      if (sentences.some(restsOnRows)) listGaps.push({ text: UNSUPPORTED_GAP, partial: true });
-      // It stands on the items whose text the writer read (W1); after them, never as support, it cites the rows whose facts it
-      // may carry: each row it cites that the writer saw, and each private row the writer saw of a list it cites (W6).
-      const rowsOf = (id: string) => shownRows.has(id) ? [id] : writerById.get(parseAgenticListIdV1(id) ?? "L0")?.members.map(member => member.id).filter(short => privateItem(byShort.get(short)!.item)) ?? [];
-      /** How a sentence reads (ADR-0045): a row whose sentence carries code's note reads as a bullet, so the note shows. */
-      const shapeOf = (sentence: AnswerSentence, noted: boolean): DraftShape => {
-        const section = sentence.section === undefined ? {} : { section: sentence.section };
-        if (sentence.form === "row" && !noted) return { kind: "row", ...section, columns: answer!.tables.find(table => table.section === sentence.section)!.columns, cells: sentence.cells! };
-        return { kind: sentence.form === undefined ? "text" : sentence.form === "row" ? "bullet" : sentence.form, ...section };
-      };
-      const writerSentences = sentences.flatMap(sentence => {
-        const read = sentence.evidence.filter(short => textGiven.has(short));
-        if (read.length === 0) { observeCoreModelCorrectionV1("writer_uncited_sentence_dropped"); return []; }
-        // An id that is no text, row or list the writer saw cites nothing.
-        const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
-        if (unknown > 0) observeCoreModelCorrectionV1("writer_unknown_id_dropped", unknown);
-        const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
-        return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, shape: shapeOf(sentence, notes.length > 0) }];
-      });
-      // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
-      // What fits is decided in that order whatever the layout, so a long lead never crowds out a stated list (W3). A laid-out
-      // answer (ADR-0045) then reads what was kept lead first, then the lists, then the other sentences by section.
-      type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape };
-      const statementKeys = new Set<string>();
-      const keptReads: Entry[] = [];
-      const fitted: Laid[] = [];
-      const fittedKeys = new Set<string>();
-      let dropped = false;
-      for (const sentence of [...listStatements, ...writerSentences] as readonly Laid[]) {
-        // Temporary model guardrail (ADR-0041): only exact text with the same cited objects and privacy is a repeat.
-        // Shared sources or planner kinds never establish that two sentences say the same thing.
-        const statementKey = JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
-        if (statementKeys.has(statementKey)) {
-          observeCoreModelCorrectionV1("writer_repeat_dropped");
-          keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
-          continue;
+        // ---- statements (W2, W3): each list's use that says which items exist, then its use by id ----
+        /** One statement of a list; `which` when it says which items exist (a use in full or by `where`), never for a use by id alone. */
+        type Naming = { readonly list: AgenticWriterListV1; readonly noun: AgenticListNounFormsV1; readonly selected: readonly AgenticWriterListMemberV1[]; readonly which: boolean; readonly where?: AgenticListSelectionV1; readonly by_id: boolean };
+        const uses = reply?.lists ?? [];
+        /** What the lists add to the gap, in order; `partial` when its rule makes the part partial whatever it names (W1, W2, W3). */
+        const listGaps: { readonly text: string; readonly partial: boolean }[] = [];
+        const selectionNotFound: string[] = [];
+        /** The lists the answer uses: those the writer saw, in the order of its first use, then every stated list it did not use. */
+        const usedLists = [...new Set([...uses.map(use => use.id).filter(id => writerById.has(id)), ...stated])].map(id => views.get(id)!);
+        const unseen = uses.filter(use => !writerById.has(use.id)).length;
+        if (unseen > 0) correct("writer_unknown_id_dropped", unseen);
+        const naming: Naming[] = usedLists.flatMap(list => {
+          const id = list.id, all = rows.get(id)!, noun = nounOf(list);
+          const byId = uses.find(use => use.id === id && use.members !== undefined);
+          const picked = byId === undefined ? undefined : all.filter(member => byId.members!.includes(member.id));
+          // Code adds the full use of a stated list the writer gave no use saying which items exist (W3), whatever its members.
+          const given = uses.find(use => use.id === id && use.members === undefined) ?? (stated.includes(id) ? { id } : undefined);
+          const where = given?.where;
+          const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
+          // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
+          if (chosen !== undefined && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
+          // Two uses that select the same members are one statement, named by id, with the lead of the one that says which items exist.
+          if (chosen !== undefined && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return [{ list, noun, selected: picked, which: true, ...(where === undefined ? {} : { where }), by_id: true }];
+          // A selection that names nothing is its not_found phrase (K); an empty list keeps the plain not-found answer.
+          if (chosen?.length === 0 && where !== undefined) selectionNotFound.push(agenticListSelectionNotFoundV1(noun, list.filter, where));
+          return [
+            ...(chosen === undefined || chosen.length === 0 ? [] : [{ list, noun, selected: chosen, which: true, ...(where === undefined ? {} : { where }), by_id: false }]),
+            ...(picked === undefined ? [] : [{ list, noun, selected: picked, which: false, by_id: true }]),
+          ];
+        });
+        // At most 25 distinct members named across the answer (W6): those selected by id first, then the rest shared
+        // round-robin, a member another statement names costing nothing; "and N more" counts from the list itself (addition 5).
+        const shares = agenticListNameSharesV1(naming);
+        const listStatements = naming.map((value, index) => {
+          // An owner or status reads as the first selected member records it; a date range as the writer gave it.
+          const where = value.where === undefined || !("value" in value.where) ? value.where : { field: value.where.field, value: value.selected[0]![value.where.field]! };
+          const statement = agenticListStatementV1({
+            noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected,
+            share: shares[index]!.share, free: shares[index]!.free, ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
+          });
+          // Each named member cites its own row; with layout, a statement naming two or more names is a table, a row per name.
+          const table = !laid ? undefined : agenticListTableV1({ selected: value.selected, names: statement.names, by_id: value.by_id, ...(value.list.filter.time_zone === undefined ? {} : { time_zone: value.list.filter.time_zone }) });
+          const shape: DraftShape = table === undefined ? PROSE : {
+            kind: "list", caption: statement.caption, columns: table.columns,
+            rows: table.rows.map(row => ({ cells: row.cells, shorts: row.members.map(at => value.selected[at]!.id) })),
+          };
+          return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id), shape };
+        });
+
+        // ---- the writer's sentences (W1, W3, W4, W5) ---------------------------
+        // A which_say list whose members were not all checked qualifies every sentence citing its members' text (W5).
+        const unchecked = checking.map(id => views.get(id)!).filter(list => agenticListCheckedNoteV1(list) !== undefined);
+        if (unchecked.length > 0) listGaps.push({ text: UNCHECKED_GAP, partial: false });
+        if (unlisted) listGaps.push({ text: WHICH_GAP, partial: true });
+        // A list whose date filter could not test some items (research tool contract v1) supports neither "none" nor "all" of
+        // them: the part says how many were not checked, and is partial, even when the list is empty.
+        let uncheckedEmpty = false;
+        for (const list of [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])]) {
+          const text = agenticListUncheckedNoticeV1(list, nounOf(list));
+          if (text === undefined) continue;
+          listGaps.push({ text, partial: true });
+          if (list.count === 0) uncheckedEmpty = true;
         }
-        const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !fittedKeys.has(key)));
-        if (fitted.length >= MAX_STATEMENTS || fittedKeys.size + fresh.size > MAX_CITATIONS) { dropped = true; break; }
-        statementKeys.add(statementKey);
-        for (const key of fresh) fittedKeys.add(key);
-        fitted.push(sentence);
-        keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
-      }
-      const kept = new Set(fitted);
-      const order: readonly Laid[] = laidOut ? orderAskLayoutV1(listStatements.filter(entry => kept.has(entry)), writerSentences.filter(entry => kept.has(entry))) : fitted;
-      const statements: Statement[] = order.map(sentence => statementOf(sentence.text, sentence.shorts));
-      /** The shape of each statement kept, in order. */
-      const shapes: readonly DraftShape[] = order.map(sentence => sentence.shape);
-      const notFound = [...(answer?.not_found ?? []), ...selectionNotFound];
-      // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
-      const coverageLimited = coverageIsLimitedFor(bundle, keptReads);
-      const incomplete = (answer === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
-      const gapText = incomplete
-        ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
-        : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
-      // What the lists add to the gap: a list not read to its end, a which_say list not fully checked, a list kind with no
-      // list, a sentence left out for resting on rows, and what did not fit.
-      const extraGaps = [...new Set(listGaps.map(gap => gap.text)), ...(dropped ? [FIT_GAP] : [])];
-      const withGaps = (base: string | undefined) => {
-        const gaps = [...(base === undefined ? [] : [base]), ...extraGaps];
-        return gaps.length === 0 ? undefined : cleanLine(gaps.join(" "), 600);
+        const sentences = reply?.sentences ?? [];
+        // A sentence the kept reply still rests on rows or list ids is left out, and the part says so, never what it claimed.
+        if (sentences.some(restsOnRows)) listGaps.push({ text: UNSUPPORTED_GAP, partial: true });
+        // It stands on the items whose text the writer read (W1); after them, never as support, it cites the rows whose facts it
+        // may carry: each row it cites that the writer saw, and each private row the writer saw of a list it cites (W6).
+        const rowsOf = (id: string) => shownRows.has(id) ? [id] : writerById.get(parseAgenticListIdV1(id) ?? "L0")?.members.map(member => member.id).filter(short => privateItem(byShort.get(short)!.item)) ?? [];
+        /** How a sentence reads (ADR-0045): a row whose sentence carries code's note reads as a bullet, so the note shows. Only a laid-out reply has forms. */
+        const shapeOf = (sentence: AnswerSentence, noted: boolean): DraftShape => {
+          const section = sentence.section === undefined ? {} : { section: sentence.section };
+          if (sentence.form === "row" && !noted) return { kind: "row", ...section, columns: reply!.tables!.find(table => table.section === sentence.section)!.columns, cells: sentence.cells! };
+          return { kind: sentence.form === undefined ? "text" : sentence.form === "row" ? "bullet" : sentence.form, ...section };
+        };
+        const writerSentences = sentences.flatMap(sentence => {
+          const read = sentence.evidence.filter(short => textGiven.has(short));
+          if (read.length === 0) { correct("writer_uncited_sentence_dropped"); return []; }
+          // An id that is no text, row or list the writer saw cites nothing.
+          const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
+          if (unknown > 0) correct("writer_unknown_id_dropped", unknown);
+          const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
+          return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, shape: shapeOf(sentence, notes.length > 0) }];
+        });
+        // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
+        // What fits is decided in that order whatever the layout, so a long lead never crowds out a stated list (W3). A laid-out
+        // answer (ADR-0045) then reads what was kept lead first, then the lists, then the other sentences by section.
+        type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape };
+        const statementKeys = new Set<string>();
+        const keptReads: Entry[] = [];
+        const fitted: Laid[] = [];
+        const fittedKeys = new Set<string>();
+        let dropped = false;
+        for (const sentence of [...listStatements, ...writerSentences] as readonly Laid[]) {
+          // Temporary model guardrail (ADR-0041): only exact text with the same cited objects and privacy is a repeat.
+          // Shared sources or planner kinds never establish that two sentences say the same thing.
+          const statementKey = JSON.stringify([sentence.text, [...new Set(sentence.shorts.map(keyOf))].sort(), sentence.shorts.some(short => privateItem(byShort.get(short)!.item))]);
+          if (statementKeys.has(statementKey)) {
+            correct("writer_repeat_dropped");
+            keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
+            continue;
+          }
+          const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !fittedKeys.has(key)));
+          if (fitted.length >= MAX_STATEMENTS || fittedKeys.size + fresh.size > MAX_CITATIONS) { dropped = true; break; }
+          statementKeys.add(statementKey);
+          for (const key of fresh) fittedKeys.add(key);
+          fitted.push(sentence);
+          keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
+        }
+        const kept = new Set(fitted);
+        // Only a writer that marked no lead at all has its first sentence read as one (orderAskLayoutV1).
+        const order: readonly Laid[] = laid ? orderAskLayoutV1(listStatements.filter(entry => kept.has(entry)), writerSentences.filter(entry => kept.has(entry)), sentences.some(sentence => sentence.form === "lead")) : fitted;
+        const statements: Statement[] = order.map(sentence => statementOf(sentence.text, sentence.shorts));
+        /** The shape of each statement kept, in order. */
+        const shapes: readonly DraftShape[] = order.map(sentence => sentence.shape);
+        const notFound = [...(reply?.not_found ?? []), ...selectionNotFound];
+        // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
+        const coverageLimited = coverageIsLimitedFor(bundle, keptReads);
+        const incomplete = (reply === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
+        const gapText = incomplete
+          ? cleanLine(`${INCOMPLETE_SEARCH_GAP}${notFound.length === 0 ? "" : ` Missing context: ${notFound.join("; ")}.`}`, 600)
+          : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
+        // What the lists add to the gap: a list not read to its end, a which_say list not fully checked, a list kind with no
+        // list, a sentence left out for resting on rows, and what did not fit.
+        const extraGaps = [...new Set(listGaps.map(gap => gap.text)), ...(dropped ? [FIT_GAP] : [])];
+        const withGaps = (base: string | undefined) => {
+          const gaps = [...(base === undefined ? [] : [base]), ...extraGaps];
+          return gaps.length === 0 ? undefined : cleanLine(gaps.join(" "), 600);
+        };
+        type Draft = { status: PersonAnswerPartV4["status"]; statements: Statement[]; gap?: string; records?: Statement[] };
+        let draft: Draft;
+        if (statements.length > 0) {
+          // With no usable writer reply, code stated the lists the plan's which_items needs cite (ADR-0041).
+          const gap = withGaps(reply === null ? LIST_FALLBACK_GAP : gapText);
+          draft = gap === undefined ? { status: "answered", statements } : { status: "partial", statements, gap };
+        } else {
+          // Honor a completed writer's no-match result instead of substituting research-selected records.
+          // Raw fallback remains limited to research-read evidence; merely sending
+          // a search passage to a failed writer does not make it a useful answer.
+          const fallback = notFound.length > 0 ? [] : (reply === null ? evidence.filter(entry => entry.full) : cited.filter(entry => textGiven.has(entry.short))).slice(0, 3);
+          const records = fallback.map(entry => statementOf(entry.item.text!, [entry.short]));
+          draft = records.length > 0
+            ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
+            : { status: "not_found", statements: [], gap: withGaps(gapText ?? (uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
+        }
+        const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
+        // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
+        const filterNotices = [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
+        // A completed answer can retain source coverage as a notice. A stop
+        // becomes a notice only when the rendered answer has no existing gap.
+        const responseNotices = [
+          ...new Set([...bundle.coverage.notices, ...filterNotices]),
+          ...(coverageLimited ? [LIMITED_COVERAGE_GAP] : []),
+          ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
+        ];
+        const outcome = !anyEvidence ? (incomplete || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
+        // The blocks of the statements kept (ADR-0045), only for a part with statements; a list's rows cite their items' citations.
+        const indexesOf = (shorts: readonly string[]) => [...new Set(shorts.map(short => usedKeys.get(keyOf(short))!))];
+        const layout = !laid || draft.statements.length === 0 ? undefined : laidOutBlocks(buildAskLayoutV1(draft.statements.map((value, index) => {
+          const shape = shapes[index]!;
+          return { citation_indexes: value.citation_indexes, shape: shape.kind !== "list" ? shape : { ...shape, rows: shape.rows.map(row => ({ cells: row.cells, citation_indexes: indexesOf(row.shorts) })) } };
+        })), draft.statements, used.length);
+        const result = Object.freeze({
+          schema_version: responseVersion, kind: responseVersion === 8 ? "echo-clean-person-answer-v8" : responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
+          parts: Object.freeze([Object.freeze({
+            question, status: draft.status,
+            statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
+            ...(draft.gap === undefined ? {} : { gap: draft.gap }),
+            ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
+            ...(layout === undefined ? {} : { layout }),
+          })]),
+          citations: Object.freeze(anyEvidence ? used.map(entry => (responseVersion === 8 ? citationOfAgenticEvidenceItemV8 : citationOfAgenticEvidenceItemV1)(entry.item, options.context.time_zone ?? 'UTC')) : []),
+          ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
+        });
+        return { result, used, laid_out: layout !== undefined };
       };
-      type Draft = { status: PersonAnswerPartV4["status"]; statements: Statement[]; gap?: string; records?: Statement[] };
-      let draft: Draft;
-      if (statements.length > 0) {
-        // With no usable writer reply, code stated the lists the plan's which_items needs cite (ADR-0041).
-        const gap = withGaps(answer === null ? LIST_FALLBACK_GAP : gapText);
-        draft = gap === undefined ? { status: "answered", statements } : { status: "partial", statements, gap };
-      } else {
-        // Honor a completed writer's no-match result instead of substituting research-selected records.
-        // Raw fallback remains limited to research-read evidence; merely sending
-        // a search passage to a failed writer does not make it a useful answer.
-        const fallback = notFound.length > 0 ? [] : (answer === null ? evidence.filter(entry => entry.full) : cited.filter(entry => textGiven.has(entry.short))).slice(0, 3);
-        const records = fallback.map(entry => statementOf(entry.item.text!, [entry.short]));
-        draft = records.length > 0
-          ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
-          : { status: "not_found", statements: [], gap: withGaps(gapText ?? (uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
-      }
-      const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
-      // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
-      const filterNotices = [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
-      // A completed answer can retain source coverage as a notice. A stop
-      // becomes a notice only when the rendered answer has no existing gap.
-      const responseNotices = [
-        ...new Set([...bundle.coverage.notices, ...filterNotices]),
-        ...(coverageLimited ? [LIMITED_COVERAGE_GAP] : []),
-        ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
-      ];
-      const outcome = !anyEvidence ? (incomplete || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
-      // The blocks of the statements kept (ADR-0045), only for a part with statements; a list's rows cite their items' citations.
-      const indexesOf = (shorts: readonly string[]) => [...new Set(shorts.map(short => usedKeys.get(keyOf(short))!))];
-      const layout = !laidOut || draft.statements.length === 0 ? undefined : laidOutBlocks(buildAskLayoutV1(draft.statements.map((value, index) => {
-        const shape = shapes[index]!;
-        return { citation_indexes: value.citation_indexes, shape: shape.kind !== "list" ? shape : { ...shape, rows: shape.rows.map(row => ({ cells: row.cells, citation_indexes: indexesOf(row.shorts) })) } };
-      })), draft.statements, used.length);
-      const result = Object.freeze({
-        schema_version: responseVersion, kind: responseVersion === 8 ? "echo-clean-person-answer-v8" : responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
-        parts: Object.freeze([Object.freeze({
-          question, status: draft.status,
-          statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
-          ...(draft.gap === undefined ? {} : { gap: draft.gap }),
-          ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
-          ...(layout === undefined ? {} : { layout }),
-        })]),
-        citations: Object.freeze(anyEvidence ? used.map(entry => (responseVersion === 8 ? citationOfAgenticEvidenceItemV8 : citationOfAgenticEvidenceItemV1)(entry.item, options.context.time_zone ?? 'UTC')) : []),
-        ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
-      });
+      const laidOutResponse = laidOut ? respond(answer, true, true) : undefined;
+      // A laid-out answer is released only with its layout and within its byte bound; otherwise the answer is exactly the
+      // one the same reply gives without layout, read as an Ask without layout reads it (ADR-0045).
+      const plainReply = answer?.plain === undefined ? answer : Object.freeze({ sentences: answer.plain, not_found: answer.not_found, lists: answer.lists });
+      const { result, used } = laidOutResponse?.laid_out === true && canonicalJsonBytes(laidOutResponse.result).byteLength <= PERSON_ANSWER_RESPONSE_MAX_BYTES_V4
+        ? laidOutResponse : respond(plainReply, false, laidOutResponse === undefined);
       const validated: AskResponse = responseVersion === 8 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV8) : responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
       return Object.freeze({
         result: Object.freeze({ response: validated, writer_evidence: writerEvidence }),

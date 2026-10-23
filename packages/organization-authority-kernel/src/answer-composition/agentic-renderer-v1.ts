@@ -22,8 +22,8 @@ export interface AgenticRenderInputV1<In> {
   readonly gate: AgenticModelGateV1;
   /** Milliseconds the renderer may still spend. The runner has already set aside the release step's time. */
   readonly remaining: () => number;
-  /** Bytes a user prompt may fill beside `system_prompt` and an answer reply in the model's context window. */
-  readonly prompt_budget: (system_prompt: string) => number;
+  /** Bytes a user prompt may fill beside `system_prompt` and an answer reply (of `output_tokens`, else an answer's allowance) in the model's context window. */
+  readonly prompt_budget: (system_prompt: string, output_tokens?: number) => number;
   /** The request's signal: aborted when the caller cancels or the deadline passes. */
   readonly signal: AbortSignal;
   /**
