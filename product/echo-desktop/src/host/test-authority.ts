@@ -64,6 +64,9 @@ interface Contract {
    */
   PERSON_ASK_PROGRESS_HEADER_VALUE_V3: string;
   formatPersonAskProgressEventV3(event: unknown): string;
+  /** Answer layout v1 (ADR-0045): the header an Ask asks for it with, and its value. */
+  PERSON_ASK_ANSWER_LAYOUT_HEADER_V1: string;
+  PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1: string;
 }
 
 /** A runs request, as the contract's validator returns it. */
@@ -200,6 +203,63 @@ const LONG_NAMES = [
   'Pricing', 'Launch', 'Design system', 'Support escalations', 'Partnerships',
   'A project whose name is far too long to fit on one line of the Capture sheet, however wide the window is made', 'Legal', 'Finance',
 ];
+
+/** A digest, as the Authority writes one, of any text. */
+const digestOf = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
+/** A Confluence page or a Jira ticket the THERM answer cites. A page is the team's to read; a ticket only yours. */
+const thermPage = (id: string, title: string) => ({ kind: 'page', label: title, visibility: 'team', citation: {
+  kind: 'page', tool_id: 'confluence', external_scope_id: CONFLUENCE_CLOUD, page_id: id, section_id: 'summary', version: '3',
+  permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: digestOf(title) } });
+const thermTicket = (key: string, title: string, id: string) => ({ kind: 'ticket', label: `${key} · ${title}`, visibility: 'only_me', citation: {
+  kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: id, permalink: `https://example.atlassian.net/browse/${key}`, text_sha256: digestOf(`${key}: ${title}`) } });
+/** What `ask-layout`'s THERM answer cites and its Ask reads: three pages, then three tickets. */
+const THERM_CITATIONS = [
+  thermPage('31001', 'DVT failure review'), thermPage('31002', 'Traceability'), thermPage('31003', 'Gate reviews'),
+  thermTicket('TRACE-01', 'Confirm TC-D-03 traces to MRD-01', '20001'), thermTicket('HW-11', 'Fix BUG-412 on the board', '20002'),
+  thermTicket('DVT-R2', 'Run DVT-R2', '20003'),
+];
+
+/**
+ * `ask-layout`'s V8 answer (answer layout v1, ADR-0045), THERM's: a lead,
+ * the decisions as bullets, and what has to happen first as a table, whose
+ * row of yours is late. Research stopped short, so it says what it did not
+ * cover. Its layout comes only to an Ask that asked for it (`layout`); without
+ * it the statements are the same, in the same order.
+ */
+export function layoutAnswer(question: string, scope: Record<string, unknown>, layout: boolean): Record<string, unknown> {
+  const said = (text: string, cited: number) => ({ text, citation_indexes: [cited], private: THERM_CITATIONS[cited]!.visibility === 'only_me' });
+  const row = (cells: string[], cited: number) => ({ cells, citation_indexes: [cited] });
+  return {
+    schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'partial', citations: THERM_CITATIONS,
+    notice: 'One of three THERM meetings in range was not read before the time limit.',
+    parts: [{
+      question, status: 'partial', gap: 'Who proposed the reduced scope was not found in the evidence read.',
+      statements: [
+        said('No, the reduced test scope was rejected.', 1),
+        said('DVT-R2 retests TC-D-03 and TC-D-01, plus the regression subset QA approves.', 1),
+        said('A narrower run cannot exit DVT: the retest must cover the failed bar TC-D-03, TC-D-01 and a QA-approved regression subset.', 2),
+        said('Hardware owns the BUG-412 fix (HW-11); the failure review made sensor self-heating the likely cause.', 0),
+        said('TC-D-06 reruns too: its pass predates the approved two-decimal display.', 2),
+        said('TRACE-01, confirming TC-D-03 traces to MRD-01, is yours, To Do, due 2026-10-14.', 3),
+        said('Rafael Moreno owes the PM the regression-scope proposal, due 2026-10-09.', 2),
+        said('Tomas Okafor\'s board fix for BUG-412 (HW-11) is In Progress, due 2026-10-28.', 4),
+        said('DVT-R2 is To Do with QA, due 2026-10-30.', 5),
+      ],
+      ...(layout ? { layout: [
+        { kind: 'lead', statements: [0, 1] },
+        { kind: 'heading', text: 'Decisions' },
+        { kind: 'bullets', statements: [2, 3, 4] },
+        { kind: 'heading', text: 'What has to happen first' },
+        { kind: 'table', statements: [5, 6, 7, 8], columns: ['Action', 'Owner', 'Due', 'Status'], rows: [
+          row(['Confirm TC-D-03 traces to MRD-01 (TRACE-01)', 'You', '2026-10-14', 'To Do'], 3),
+          row(['Send the regression-scope proposal to the PM', 'Rafael Moreno', '2026-10-09', 'Open'], 2),
+          row(['Fix BUG-412 on the board (HW-11)', 'Tomas Okafor', '2026-10-28', 'In Progress'], 4),
+          row(['Run DVT-R2 and publish the report', 'QA', '2026-10-30', 'To Do'], 5),
+        ] },
+      ] } : {}),
+    }],
+  };
+}
 
 export function installTestAuthority(home: string, fixturesDirectory: string, SessionStore: new (home: string) => unknown) {
   const repository = join(process.env.ECHO_PERSON_CLIENT_ENTRY!, '..', '..', '..', '..', '..');
@@ -634,19 +694,25 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * lists Jira's 30 rows, a page of 25 and then the other 5, and reads none
    * in full: its receipt counts all 30 rows it looked through (ADR-0043). A
    * Mine Ask, on either route, searches meetings and documents and reads
-   * Ari's note alone.
+   * Ari's note alone. `ask-layout`, on `/v7`, searches Confluence and Jira,
+   * reads THERM's pages and tickets and answers at once, laid out when the Ask
+   * asked for it (`layout`).
    */
-  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, version: 1 | 3 = 1): Response => {
+  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, version: 1 | 3 = 1,
+    layout = false): Response => {
     const format = version === 3 ? api.formatPersonAskProgressEventV3 : api.formatPersonAskProgressEventV1;
     const mine = scope.kind === 'mine';
     const listed = !mine && mode === 'ask-progress-listed';
-    const items = listed ? [] : mine ? mineItems() : version === 3 ? workspaceCitations : progressItems();
+    const laid = !mine && mode === 'ask-layout';
+    const items = listed ? [] : mine ? mineItems() : laid ? THERM_CITATIONS : version === 3 ? workspaceCitations : progressItems();
     const searched = listed ? { type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira' }], found: 30 }
+      : laid ? { type: 'searched', sources: [{ kind: 'pages', tool_id: 'confluence' }, { kind: 'tickets', tool_id: 'jira' }], found: items.length }
       : mine ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }], found: items.length }
         : version === 3 ? { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 }
           : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
     const [part] = desktop.answer.parts as Record<string, unknown>[];
-    const response = listed ? listedAnswer(question, scope) : mine ? mineAnswer(question, scope, version) : version === 3 ? workspaceAnswer(question, scope)
+    const response = listed ? listedAnswer(question, scope) : mine ? mineAnswer(question, scope, version) : laid ? layoutAnswer(question, scope, layout)
+      : version === 3 ? workspaceAnswer(question, scope)
       : { ...desktop.answer, schema_version: 6, kind: 'echo-clean-person-answer-v6', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
     const steps = listed
       ? [{ type: 'stage', stage: 'searching' }, { ...searched, found: 25 }, { ...searched, found: 5 }]
@@ -658,7 +724,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const frames = (async function* () {
       for (const step of steps) yield format(step);
       let more = false;
-      while (mode !== 'ask-progress-quick' && !existsSync(join(home, 'release-ask'))) {
+      while (mode !== 'ask-progress-quick' && !laid && !existsSync(join(home, 'release-ask'))) {
         if (cancelled || signal?.aborted) return;
         if (!more && existsSync(join(home, 'more-steps'))) {
           more = true;
@@ -950,9 +1016,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const metadata = new Headers(init?.headers).get('x-echo-document-metadata');
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown>
       : metadata ? JSON.parse(Buffer.from(metadata, 'base64url').toString('utf8')) as Record<string, unknown> : undefined;
-    // An Ask that asked for its progress says so (ADR-0039).
+    // An Ask that asked for its progress says so (ADR-0039), and one that asked for its answer's layout (ADR-0045).
     const progress = new Headers(init?.headers).get('x-echo-ask-progress');
-    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body, ...(progress === null ? {} : { progress }) })}\n`);
+    const layout = new Headers(init?.headers).get('x-echo-answer-layout');
+    appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body, ...(progress === null ? {} : { progress }),
+      ...(layout === null ? {} : { layout }) })}\n`);
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
 
@@ -1703,9 +1771,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    // Only ask-progress-workspace's and ask-progress-listed's Authority has `/v7` (research tool contract v1); every other
-    // mode's predates it and `/v6`, so its client asks `/v5`. Every Ask asks the newest route, Mine too: none asks `/v3`.
-    const v7 = (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed') && path === '/v7/person/ask';
+    // Only ask-progress-workspace's, ask-progress-listed's and ask-layout's Authority has `/v7` (research tool contract v1); every
+    // other mode's predates it and `/v6`, so its client asks `/v5`. Every Ask asks the newest route, Mine too: none asks `/v3`.
+    const v7 = (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed' || mode === 'ask-layout') && path === '/v7/person/ask';
     if (method === 'POST' && (path === '/v5/person/ask' || v7)) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
@@ -1724,8 +1792,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const api = await contract();
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
       if (v7) {
-        if (progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) return progressStream(api, question, scope, init?.signal ?? undefined, 3);
-        const answered = json(mode === 'ask-progress-listed' ? listedAnswer(question, scope) : workspaceAnswer(question, scope));
+        // Laid out only for an Ask that asked for it.
+        const laidOut = new Headers(init?.headers).get(api.PERSON_ASK_ANSWER_LAYOUT_HEADER_V1) === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1;
+        if (progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) return progressStream(api, question, scope, init?.signal ?? undefined, 3, laidOut);
+        const answered = json(mode === 'ask-progress-listed' ? listedAnswer(question, scope)
+          : mode === 'ask-layout' && scope.kind !== 'mine' ? layoutAnswer(question, scope, laidOut) : workspaceAnswer(question, scope));
         answered.headers.set('x-echo-person-ask-route', '7');
         return answered;
       }

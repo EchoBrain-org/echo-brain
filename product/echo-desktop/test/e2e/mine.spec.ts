@@ -265,6 +265,7 @@ for (const [mode, route, progress] of [['ask-progress', '/v5', '1'], ['ask-progr
     await expect(page.locator('.asked')).toHaveText('Mine');
     await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 1 item · \d+s$/);
     await expect(page.getByTestId('receipt-rows').getByTestId('ask-step')).toHaveText(['Searched meetings and documents · 1 found', 'Read Apollo update']);
+    await page.getByTestId('sources-toggle').click();
     await expect(page.getByTestId('source-row')).toHaveText([/^1\s*Apollo update$/]);
   });
 }

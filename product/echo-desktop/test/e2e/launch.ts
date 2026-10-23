@@ -12,8 +12,8 @@ export interface Launched {
   home: string;
   /** Chromium's data and ECHO's diagnostic log. */
   userData: string;
-  /** Requests the real person client sent to the fixture Authority. */
-  calls(): { method: string; path: string; query: string; body?: Record<string, unknown>; progress?: string }[];
+  /** Requests the real person client sent to the fixture Authority, with the progress and answer layout an Ask asked for. */
+  calls(): { method: string; path: string; query: string; body?: Record<string, unknown>; progress?: string; layout?: string }[];
   close(): Promise<void>;
 }
 
