@@ -259,8 +259,8 @@ function Cell({ cell, late, you }: { cell: string; late: boolean; you: boolean }
  * cell, and a row is lit on its own. Only your row's late due date is in the
  * signal colour.
  */
-function Table({ state, part, index, block, place, opens, label }: {
-  state: State; part: AnswerPart; index: number; block: AnswerTable; place: number; opens: boolean; label: string;
+function Table({ state, sources, index, block, place, opens, label }: {
+  state: State; sources: readonly AnswerSource[]; index: number; block: AnswerTable; place: number; opens: boolean; label: string;
 }) {
   const me = state.status?.account?.display_name ?? null;
   const due = dueColumn(block.columns);
@@ -276,7 +276,7 @@ function Table({ state, part, index, block, place, opens, label }: {
             return (
               <tr key={at} class={lit(state, id) ? 'on' : undefined} data-testid="answer-row">
                 {row.cells.map((cell, column) => column === 0
-                  ? <td key={column}>{cell}<Markers state={state} statement={rowStatement(part, block, row)} id={id} /></td>
+                  ? <td key={column}><span class="first">{cell}<Markers state={state} statement={rowStatement(row, sources)} id={id} /></span></td>
                   : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
               </tr>
             );
@@ -293,7 +293,9 @@ function Table({ state, part, index, block, place, opens, label }: {
  * tables. Every sentence and row keeps its own numbers and is lit on its own.
  * `opening`: the part opens the answer, so a table first has no lead above it.
  */
-function LaidOut({ state, part, index, layout, opening }: { state: State; part: AnswerPart; index: number; layout: readonly AnswerBlock[]; opening: boolean }) {
+function LaidOut({ state, sources, part, index, layout, opening }: {
+  state: State; sources: readonly AnswerSource[]; part: AnswerPart; index: number; layout: readonly AnswerBlock[]; opening: boolean;
+}) {
   // A table without a caption is named by the heading above it.
   let heading = 'Table';
   return (
@@ -315,7 +317,7 @@ function LaidOut({ state, part, index, layout, opening }: { state: State; part: 
             </ul>
           );
         }
-        return <Table key={place} state={state} part={part} index={index} block={block} place={place} opens={opening && place === 0} label={heading} />;
+        return <Table key={place} state={state} sources={sources} index={index} block={block} place={place} opens={opening && place === 0} label={heading} />;
       })}
     </div>
   );
@@ -359,7 +361,7 @@ function AgenticAnswer({ state, turn }: { state: State; turn: AskTurn }) {
           {/* One part answers the question itself: its label would repeat it. */}
           {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
           {part.layout
-            ? <LaidOut state={state} part={part} index={index} layout={part.layout} opening={index === 0 && !answer.direct} />
+            ? <LaidOut state={state} sources={answer.sources} part={part} index={index} layout={part.layout} opening={index === 0 && !answer.direct} />
             : part.statements.map((statement, place) => <Statement key={place} state={state} statement={statement} id={`${index}.${place}`} />)}
           {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} statement={statement} id={`${index}.r${place}`} />)}
         </section>

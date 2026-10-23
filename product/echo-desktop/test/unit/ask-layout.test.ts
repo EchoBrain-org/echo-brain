@@ -91,6 +91,21 @@ describe('a laid-out part reads as its blocks', () => {
     expect(classes(cells[1]![1])).not.toContain('you');
   });
 
+  it('locks only the rows whose own citations only you can read', async () => {
+    const base = therm();
+    const [part] = base.parts;
+    // One list statement over a team page, a ticket only you can read and another team page.
+    const sources = [base.sources[0]!, base.sources[3]!, base.sources[1]!];
+    const answer: Answer = { ...base, sources, parts: [{ ...part!,
+      statements: [{ text: '3 items are open: DVT failure review, TRACE-01 and Traceability.', citation_indexes: [0, 1, 2], private: true }],
+      layout: [{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: '3 items are open', rows: [
+        { cells: ['DVT failure review', 'Open'], citation_indexes: [0] }, { cells: ['TRACE-01', 'Open'], citation_indexes: [1] },
+        { cells: ['Traceability', 'Open'], citation_indexes: [2] },
+      ] }] }] };
+    const rows = byTestId((await answered(answer)).thread(), 'answer-row');
+    expect(rows.map(row => byTestId(row, 'private-mark').length)).toEqual([0, 1, 0]);
+  });
+
   it('marks a row yours by your name too, and never a row that is done', async () => {
     const base = therm();
     const [part] = base.parts;

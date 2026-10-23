@@ -237,7 +237,7 @@ export type ExternalAnswerSource =
    * ("THERM"), when it has one.
    */
   | { readonly kind: 'container'; readonly tool_id: string; readonly label: string; readonly permalink: string; readonly container: ToolContainerKind; readonly key?: string };
-export type AnswerSource =
+export type AnswerSource = (
   /** `atom_id`: the decision, action or rationale cited, as its record's items carry it. */
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef; readonly atom_id: string }
   /** `item`: the note, document or imported meeting it is a passage of, from the Authority's own ref, when it sent one. */
@@ -255,7 +255,14 @@ export type AnswerSource =
   | { readonly kind: 'person'; readonly label: string; readonly membership_id: string }
   /** One of your tools, by its id: it opens Tools, where you connect it. */
   | { readonly kind: 'tool'; readonly label: string; readonly tool_id: string }
-  | ExternalAnswerSource;
+  | ExternalAnswerSource
+) & {
+  /**
+   * Only you can read it (cited as yours alone, or the approver's): only on an
+   * answer's sources, so a table row that cites it shows the lock (ADR-0045).
+   */
+  readonly private?: true;
+};
 
 /**
  * What Ask is doing now (ADR-0039), from what ECHO ran: a step's searches,
