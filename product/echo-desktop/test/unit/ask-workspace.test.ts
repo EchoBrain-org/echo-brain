@@ -173,6 +173,8 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     const { store, release, pane, thread } = await asking();
     release(ok(answering([jira])));
     await flush();
+    // The sources start closed (ADR-0045): their line opens them.
+    store.toggleSourceList();
     const [row] = byTestId(thread(), 'source-row');
     expect(text(row)).toBe('1Jira');
     expect(drawn(row)).toEqual(drawn(render(Plug())));
@@ -207,6 +209,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     const { store, release, pane, thread } = await asking();
     release(ok(answering([therm, space])));
     await flush();
+    store.toggleSourceList();
     const rows = byTestId(thread(), 'source-row');
     // "Jira · THERM"; a container with no key says its tool alone.
     expect(rows.map(text)).toEqual(['1ThermalJira · THERM', '2Thermal teamConfluence']);

@@ -54,6 +54,10 @@ export const Ellipsis = () => (
 export const Chevron = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
 );
+/** What research did not cover: an i in a circle, in the colour of the note's text. */
+export const Info = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" fill="none" /><path d="M8 7.5v3.5M8 5.2v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none" /></svg>
+);
 /** Opens a list: in the colour of the text around it. */
 export const Caret = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5l3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>

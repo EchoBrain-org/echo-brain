@@ -1,5 +1,6 @@
 import type {
-  PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
+  PersonAnswerBlockV1, PersonAnswerTableRowV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1,
+  PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
@@ -303,15 +304,27 @@ export interface AnswerStatement {
   readonly private: boolean;
 }
 
+/**
+ * How a part reads (answer layout v1, ADR-0045): blocks that group its
+ * statements, in their order, into a lead, headings, paragraphs, bullets and
+ * tables. It adds no claim and no citation: a table's rows each cite only
+ * what its statements cite. The contract's own type, as the host validated it.
+ */
+export type AnswerBlock = PersonAnswerBlockV1;
+/** One table row of a laid-out part: its cells, in its table's column order, and the citations of what it shows. */
+export type AnswerTableRow = PersonAnswerTableRowV1;
+
 export interface AnswerPart {
   readonly question: string;
   readonly status: 'answered' | 'partial' | 'not_found' | 'records_only';
   readonly statements: readonly AnswerStatement[];
   readonly gap?: string;
   readonly records?: readonly AnswerStatement[];
+  /** Only on a V8 answer to an Ask that asked for it: how its statements read. Without it, each is a paragraph. */
+  readonly layout?: readonly AnswerBlock[];
 }
 
-/** An Agentic Ask answer. `text` is its plain reading, for Copy answer and earlier turns. */
+/** An Agentic Ask answer. `text` is its plain reading, for earlier turns, and for Copy answer when its Markdown is too long. */
 export interface Answer {
   readonly text: string;
   readonly scope: AskScope;
@@ -396,6 +409,8 @@ export type Audience =
 export const MAX_CAPTURE_PROJECTS = 20;
 /** New project takes up to 20 files. */
 export const MAX_PROJECT_FILES = 20;
+/** Copy answer takes what an answer can hold: 12,000 characters. */
+export const MAX_COPY_CHARACTERS = 12_000;
 
 /** Where a saved document's text extraction stands (the Authority's own states). */
 export type Extraction = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out'
