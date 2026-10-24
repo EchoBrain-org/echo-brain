@@ -230,49 +230,91 @@ test('shows that the meeting was already approved in Slack', async () => {
   await expect(page.getByTestId('toast')).toHaveText('Already approved in Slack');
 });
 
-test('Granola imports my meetings automatically with no folder, suggesting a project only if asked, and stops', async () => {
+test('Granola imports my meetings automatically with no folder, suggests a project only if asked, changes it in place, and stops', async () => {
   run = await launch('granola-preparing');
   const { page } = run;
   await page.getByTestId('sidebar-tools').click();
   await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
   const meetings = page.getByRole('region', { name: 'Personal meetings' });
   const automatic = meetings.getByRole('group', { name: 'Automatic import' });
-  await expect(meetings).toContainText('Imported meetings stay private until you approve items from them.');
+  const save = meetings.getByRole('button', { name: 'Save', exact: true });
+  const apollo = 'prj_11111111-1111-4111-8111-111111111111', beacon = 'prj_44444444-4444-4444-8444-444444444444';
+  // Imported meetings are private by default, so the sheet says nothing about who reads them.
+  await expect(meetings).toContainText('I allow ECHO to retain');
   await expect(meetings).not.toContainText('Project members can read');
+  await expect(meetings).not.toContainText('stay private');
   await automatic.getByLabel('Import').selectOption({ label: 'My meetings' });
   await expect(automatic.getByLabel('Folder', { exact: true })).toHaveCount(0);
   await expect(automatic.getByLabel('Suggest')).toHaveValue('');
   // Consent comes first.
-  await expect(meetings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await expect(save).toBeDisabled();
   await automatic.getByLabel('Suggest').selectOption({ label: 'Apollo' });
   await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
-  await meetings.getByRole('button', { name: 'Save', exact: true }).click();
+  await save.click();
   const watch = meetings.getByTestId('meeting-watch');
-  await expect(watch).toHaveText(/^My meetings · suggests Apollo · PreparingStop$/);
-  await expect(meetings.getByRole('status')).toContainText('Saved.');
+  await expect(watch).toHaveText(/^PreparingStop$/);
+  await expect(meetings.getByRole('status')).toHaveText('Saved.');
+  // The controls show the watch that runs; Save is back only once they differ from it.
+  await expect(automatic.getByLabel('Import')).toHaveValue('mine');
+  await expect(automatic.getByLabel('Suggest')).toHaveValue(apollo);
+  await expect(save).toHaveCount(0);
   await meetings.getByRole('button', { name: 'Refresh', exact: true }).click();
-  await expect(watch).toContainText('My meetings · suggests Apollo · Checked');
-  expect(run.calls().find(call => call.body?.operation === 'watch')?.body).toMatchObject({ watch: 'mine', folder_id: null, project_id: 'prj_11111111-1111-4111-8111-111111111111', retain: true });
+  await expect(watch).toContainText('Checked');
+  // Another suggestion updates the running watch, with no Stop first.
+  await automatic.getByLabel('Suggest').selectOption({ label: 'Beacon' });
+  await save.click();
+  await expect(meetings.getByRole('status')).toHaveText('Saved.');
+  await expect(automatic.getByLabel('Suggest')).toHaveValue(beacon);
+  await expect(save).toHaveCount(0);
+  await expect(watch).toContainText('Checked');
+  expect(run.calls().filter(call => call.body?.operation === 'watch').map(call => call.body)).toMatchObject([
+    { watch: 'mine', folder_id: null, project_id: apollo, retain: true },
+    { watch: 'mine', folder_id: null, project_id: beacon, retain: true },
+  ]);
   await watch.getByRole('button', { name: 'Stop' }).click();
   await expect(watch).toHaveCount(0);
   await expect(automatic.getByLabel('Import')).toHaveValue('off');
   expect(run.calls().filter(call => call.body?.operation === 'watch').at(-1)?.body).toMatchObject({ watch: 'off', folder_id: null, project_id: null });
+  // The next watch starts with no suggestion, as a first one does.
+  await automatic.getByLabel('Import').selectOption({ label: 'My meetings' });
+  await expect(automatic.getByLabel('Suggest')).toHaveValue('');
 });
 
-test('Granola watches one folder, with no suggested project by default', async () => {
+test('Granola watches one folder, with no suggested project by default, and forgets the folder once stopped', async () => {
   run = await launch('granola-preparing');
   const { page } = run;
   await page.getByTestId('sidebar-tools').click();
   await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
   const meetings = page.getByRole('region', { name: 'Personal meetings' });
   const automatic = meetings.getByRole('group', { name: 'Automatic import' });
+  const folder = '00000000-0000-4000-8000-000000000011';
   await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await automatic.getByLabel('Import').selectOption({ label: 'One folder' });
   await expect(meetings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   await automatic.getByLabel('Folder', { exact: true }).selectOption({ label: 'ECHO' });
   await meetings.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(meetings.getByTestId('meeting-watch')).toHaveText(/^ECHO folder · PreparingStop$/);
-  expect(run.calls().find(call => call.body?.operation === 'watch')?.body).toMatchObject({ watch: 'folder', folder_id: '00000000-0000-4000-8000-000000000011', project_id: null, retain: true });
+  const watch = meetings.getByTestId('meeting-watch');
+  await expect(watch).toHaveText(/^PreparingStop$/);
+  await expect(automatic.getByLabel('Folder', { exact: true })).toHaveValue(folder);
+  await expect(automatic.getByLabel('Suggest')).toHaveValue('');
+  expect(run.calls().find(call => call.body?.operation === 'watch')?.body).toMatchObject({ watch: 'folder', folder_id: folder, project_id: null, retain: true });
+  await watch.getByRole('button', { name: 'Stop' }).click();
+  await expect(watch).toHaveCount(0);
+  await automatic.getByLabel('Import').selectOption({ label: 'One folder' });
+  await expect(automatic.getByLabel('Folder', { exact: true })).toHaveValue('');
+});
+
+test('a watch whose window holds more than 200 meetings is refused at Save, in its own words', async () => {
+  run = await launch('granola-window-full');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
+  const meetings = page.getByRole('region', { name: 'Personal meetings' });
+  await meetings.getByRole('group', { name: 'Automatic import' }).getByLabel('Import').selectOption({ label: 'My meetings' });
+  await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
+  await meetings.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(meetings.getByRole('status')).toHaveText('More than 200 meetings in 7 days. Choose one folder.');
+  await expect(meetings.getByTestId('meeting-watch')).toHaveCount(0);
 });
 
 test('adding one meeting by hand browses a chosen folder and keeps its suggested project', async () => {
@@ -291,7 +333,7 @@ test('adding one meeting by hand browses a chosen folder and keeps its suggested
   await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await expect(meetings.getByRole('article', { name: 'Pilot planning' })).toContainText('Suggests Thermostat redesign');
   await meetings.getByRole('button', { name: 'Add to ECHO', exact: true }).click();
-  await expect(meetings.getByRole('status')).toContainText('Added.');
+  await expect(meetings.getByRole('status')).toHaveText('Added.');
   expect(run.calls().find(call => call.body?.operation === 'import')?.body).toMatchObject({ retain: true, project_id: 'prj_11111111-1111-4111-8111-111111111111' });
 });
 

@@ -20,7 +20,7 @@ import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing
 import { openExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
 import { OrganizationRecordAppenderV4, type RecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { FileOrganizationAuthoritySigner } from '../adapters/security/file-organization-authority-signer.js';
-import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
+import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingWatchV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
 import { approvalProposalSummaryV1, approvalReviewV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
@@ -45,6 +45,11 @@ export interface PersonMeetingProviderV1 {
     folders(): Promise<PersonMeetingResultsV2['home']['folders']>;
     /** The newest meetings, at most 50: the person's own captures (`null`), or one folder's. */
     browse(folder: string | null): Promise<PersonMeetingResultsV2['browse']>;
+    /**
+     * Optional: checks a watch at Save with the listing its worker uses, refusing a folder the person cannot read and a
+     * window over the watch cap (`quota_exceeded`). A provider without it has nothing to watch.
+     */
+    watchable?(watch: PersonalMeetingWatchV1): Promise<void>;
     preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
     /**
      * Optional: keeps a submitted meeting for the person's source and returns the id its import is queued under. It runs
@@ -98,6 +103,8 @@ export async function queuePersonMeetingsV1(input: {
 const MEETING_LANES = 3;
 /** Extraction stages that mean the provider is refusing or struggling; one trips the runtime-wide breaker. */
 const TRANSIENT_STAGES = new Set<string>(['rate_limited', 'temporarily_unavailable', 'timeout']);
+/** A watch whose window holds more meetings than it reads (spec §1.2): checking the connection would not help. */
+const WINDOW_FULL = 'More than 200 meetings in 7 days. Choose one folder.';
 /** Meeting lanes over shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
@@ -269,7 +276,9 @@ export function createPersonMeetingRuntimeV1(options: {
         && !retryReady(setting.source_key)) { observed.delete(setting.source_key); return; }
       // Fixed, content-free status; one broken grant cannot starve another person's work. A failed retry is already
       // deferred, so the source's intake goes next.
-      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection and folder access.', next: Date.now() + (retry ? 0 : 60_000) });
+      const full = error instanceof AuthorityOperationError && error.code === 'quota_exceeded';
+      observed.set(setting.source_key, { checked_at: new Date().toISOString(),
+        error: full ? WINDOW_FULL : 'Meeting intake needs attention. Check the connection and folder access.', next: Date.now() + (retry ? 0 : 60_000) });
       if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
     }
   }
@@ -415,12 +424,15 @@ export function createPersonMeetingRuntimeV1(options: {
           if (!setting) throw new AuthorityOperationError('not_found', 'Meeting import unavailable');
           ownerOf(setting.source_adapter_id).intake.cancelImport(setting, input.meeting_id, current); observed.delete(setting.source_key); return { status: 'cancelled' };
         }
-        // Stopping needs no provider session and no project access.
+        // Stopping needs no provider session and no project access, and leaves no status from the stopped watch behind.
         if (input.operation === 'watch' && input.watch === 'off') {
-          current(); db.transaction(() => {
+          current(); const stopped = db.transaction(() => {
             if (settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
             const old = intake.list(person).find(s => s.watch !== 'off'); if (old) ownerOf(old.source_adapter_id).intake.watch(old, { watch: 'off', folder_id: null }, null, current);
-          }).immediate(); return { status: 'saved' };
+            return old;
+          }).immediate();
+          if (stopped) observed.delete(stopped.source_key);
+          return { status: 'saved' };
         }
         const linked = provider.tool(token).personal_status === 'linked';
         let session: Awaited<ReturnType<PersonMeetingProviderV1['open']>> | null = null;
@@ -455,10 +467,13 @@ export function createPersonMeetingRuntimeV1(options: {
           currentProject();
           if (!session.submit) throw new AuthorityOperationError('not_found', 'Meeting submission unavailable');
         }
-        // Validate what the watch reads (the person's own captures, or the folder) here; the worker records the window
-        // from the durable pending cursor without holding this request. A submitted meeting has nothing to preview yet.
-        if (input.operation === 'watch') await session.browse(input.folder_id);
-        else if (input.operation === 'import') await session.preview(input.meeting_id);
+        // Check what the watch reads with its worker's own listing, so an unreadable folder or a window over the cap fails
+        // Save, not every later pull; the worker records the window from the durable pending cursor without holding this
+        // request. A submitted meeting has nothing to preview yet.
+        if (input.operation === 'watch') {
+          if (!session.watchable) throw new AuthorityOperationError('not_found', 'Meeting watch unavailable');
+          await session.watchable({ watch: input.watch, folder_id: input.folder_id });
+        } else if (input.operation === 'import') await session.preview(input.meeting_id);
         return db.transaction(() => {
           currentProject();
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');

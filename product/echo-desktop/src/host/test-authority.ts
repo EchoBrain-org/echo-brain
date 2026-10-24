@@ -1127,7 +1127,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         // Your recent meetings, or one folder's: the same meeting here.
         case 'browse': return json({ meetings: [{ id: meetingId, title: 'Pilot planning', date: 'Oct 6, 2026 6:30 PM PDT' }] });
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
-        case 'watch': granolaWatch = { watch: body?.watch as string, folder_id: body?.folder_id as string | null, project_id: body?.project_id as string | null }; return json({ status: 'saved' });
+        case 'watch':
+          // granola-window-full: more than 200 meetings in the window, so the Authority refuses to start a watch.
+          if (mode === 'granola-window-full' && body?.watch !== 'off') return failure('quota_exceeded', 409);
+          granolaWatch = { watch: body?.watch as string, folder_id: body?.folder_id as string | null, project_id: body?.project_id as string | null }; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
         case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added' ? [review] : [] });
         case 'review_open': {

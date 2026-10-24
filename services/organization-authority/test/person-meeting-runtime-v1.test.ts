@@ -18,6 +18,7 @@ vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (impo
 });
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
@@ -59,8 +60,9 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   // One durable attempt ledger per Authority, shared by every runtime the test creates.
   const ledger = new SqliteExtractionAttemptStoreV1(new Database(':memory:'), { authority_id: 'aut_runtime', organization_id: 'org_runtime', state_lineage_id: 'lineage-runtime' });
   ledgers.push(ledger);
-  // Meetings the watch delivers on its next scans after the baseline, and what each watch check browsed.
-  const folderDeliveries: string[] = [], browsed: (string | null)[] = [];
+  // Meetings the watch delivers on its next scans after the baseline, what each browse read, and each watch Save checked.
+  const folderDeliveries: string[] = [], browsed: (string | null)[] = [], watched: unknown[] = [];
+  let windowFull = false;
   const current = () => { if (!active) throw new Error('Disconnected'); };
   const sources: { readonly tool_id: string; readonly source_key: string }[] = [];
   const fakeProvider = (tool_id: string, adapter_id: string): PersonMeetingProviderV1 => ({
@@ -73,6 +75,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
       return { identity: { kind: 'meeting-source', adapter_id, instance_id: `${tool_id}-${canonicalSha256(actor).slice(7)}`, version: '1.0.0' },
         custodian: { actor }, email: 'fixture@example.test', workspace: 'Fixture', current() { guard(); current(); },
         async folders() { return [{ id: folder, title: 'ECHO', count: 0 }]; }, async browse(value) { browsed.push(value); return { meetings: [] }; },
+        async watchable(value) { watched.push(value); if (windowFull) throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch'); },
         async preview(value) { return { id: value, title: 'Test meeting', notes: 'Ship pilot.', summary: '', truncated: false }; },
       };
     },
@@ -187,7 +190,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   /** Routes for every item of an open review, each to one destination (null = not kept, [] = Only me) or as chosen per item. */
   const routes = (opened: PersonMeetingResultsV2['review_open'], to: readonly string[] | null | ((item: PersonMeetingResultsV2['review_open']['items'][number]) => readonly string[] | null) = []) =>
     opened.items.map(item => ({ signal_id: item.signal_id, project_ids: typeof to === 'function' ? to(item) : to }));
-  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, browsed, fakeProvider, sources, intake, processUntilIdle, pendingReview, routes, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
+  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, browsed, watched, fullWindow: (value = true) => { windowFull = value; }, fakeProvider, sources, intake, processUntilIdle, pendingReview, routes, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: (error: unknown = new Error('extraction failed')) => { failExtraction = error; },
     ledger, pulls: () => pulls, revise: (value: string) => { edition = value; },
     held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
@@ -482,7 +485,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     const home = await f.call(f.create(), { operation: 'home' });
     await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
-    expect(f.browsed).toEqual([folder]);
+    expect(f.watched).toEqual([{ watch: 'folder', folder_id: folder }]);
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
     f.folderDeliveries.push(id);
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
@@ -504,7 +507,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       await expect(f.call(f.create(), { operation: 'watch', ...invalid, retain: true, settings_sha256: home.settings_sha256 })).rejects.toMatchObject({ code: 'invalid_request' });
     }
     await expect(f.call(f.create(), { operation: 'watch', watch: 'mine', folder_id: null, project_id: null, retain: true, settings_sha256: home.settings_sha256 })).resolves.toEqual({ status: 'saved' });
-    expect(f.browsed).toEqual([null]);
+    expect(f.watched).toEqual([{ watch: 'mine', folder_id: null }]);
     expect((await f.call(f.create(), { operation: 'home' })).sources).toEqual([expect.objectContaining({ watch: 'mine', folder_id: null, project_id: null, baseline: false })]);
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
     expect((await f.call(f.create(), { operation: 'home' })).sources[0]).toMatchObject({ watch: 'mine', baseline: true, error: null });
@@ -1022,6 +1025,55 @@ describe('personal meeting intake uses the shared processing path', () => {
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(new Date().toISOString(), project);
     await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: next.settings_sha256 });
     expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', folder_id: null, project_id: null });
+  });
+  it('changes only the suggestion of an unchanged watch, so its change detection carries on', async () => {
+    const f = await fixture(); f.grantProject(); f.grantProject(projectB);
+    const home = await f.call(f.create(), { operation: 'home' });
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
+    const watched = await f.call(f.create(), { operation: 'home' });
+    const [source] = watched.sources;
+    expect(source).toMatchObject({ project_id: project, baseline: true });
+    const checkpoint = f.intake.checkpoint(source!.source_key);
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: projectB, retain: true, settings_sha256: watched.settings_sha256 });
+    const changed = await f.call(f.create(), { operation: 'home' });
+    expect(changed.sources).toEqual([expect.objectContaining({ watch: 'folder', folder_id: folder, project_id: projectB, baseline: true })]);
+    expect(changed.settings_sha256).not.toBe(watched.settings_sha256);
+    expect(f.intake.checkpoint(source!.source_key)).toEqual(checkpoint);
+    // The next meeting the watch delivers takes the new suggestion.
+    f.folderDeliveries.push(id);
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([projectB]);
+  });
+  it('refuses at Save a watch whose window holds more than 200 meetings, and names the cap when the worker meets it later', async () => {
+    const f = await fixture(), runtime = f.create();
+    const home = await f.call(runtime, { operation: 'home' });
+    const mine = { operation: 'watch' as const, watch: 'mine' as const, folder_id: null, project_id: null, retain: true as const, settings_sha256: home.settings_sha256 };
+    f.fullWindow();
+    await expect(f.call(runtime, mine)).rejects.toMatchObject({ code: 'quota_exceeded' });
+    expect((await f.call(runtime, { operation: 'home' })).sources).toEqual([]);
+    f.fullWindow(false);
+    await expect(f.call(runtime, mine)).resolves.toEqual({ status: 'saved' });
+    expect(f.watched).toEqual([{ watch: 'mine', folder_id: null }, { watch: 'mine', folder_id: null }]);
+    // The window grew past the cap after Save: the status says so, rather than blaming the connection.
+    f.duringPull(() => { throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch'); });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [full] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(full).toMatchObject({ baseline: false, error: 'More than 200 meetings in 7 days. Choose one folder.' });
+    f.duringPull(() => { throw new AuthorityOperationError('unavailable', 'Granola operation could not be completed'); });
+    await runtime.pollAndStageSource(full!.source_key, new AbortController().signal);
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ error: 'Meeting intake needs attention. Check the connection and folder access.' });
+  });
+  it('leaves no status behind when the person stops a failing watch', async () => {
+    const f = await fixture(), runtime = f.create();
+    const home = await f.call(runtime, { operation: 'home' });
+    await f.call(runtime, { operation: 'watch', watch: 'mine', folder_id: null, project_id: null, retain: true, settings_sha256: home.settings_sha256 });
+    f.duringPull(() => { throw new AuthorityOperationError('unavailable', 'Granola operation could not be completed'); });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const failing = await f.call(runtime, { operation: 'home' });
+    expect(failing.sources[0]).toMatchObject({ error: expect.stringContaining('needs attention'), checked_at: expect.any(String) });
+    await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: failing.settings_sha256 });
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', error: null, checked_at: null });
   });
   it('imports a note saved to A and then B before processing as one source and one extraction, freezing both projects', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);

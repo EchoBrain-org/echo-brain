@@ -3,6 +3,7 @@ import { createPersonConnectionLifecycleV1 } from '@echo-brain/provider-runtime/
 import type { ConnectedPersonV1 } from '@echo-brain/provider-runtime/person-connection-store-v1';
 import { createGranolaMcpV1, GRANOLA_PERSON_PROVIDER_V1, granolaMcpMeetingContentV1 } from './granola-mcp-v1.js';
 import { normalizeGranolaMeetingV1 } from './granola-meeting-normalizer-v1.js';
+import { granolaWatchWindowV1, type GranolaWatchV1 } from './granola-watch-source-v1.js';
 const fail: typeof GRANOLA_PERSON_PROVIDER_V1.failure = GRANOLA_PERSON_PROVIDER_V1.failure;
 
 /** Verified MCP acquisition. Retention, watch checkpoints, extraction and review belong to Authority. */
@@ -31,7 +32,15 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
     const identity = Object.freeze({ kind: 'meeting-source' as const, adapter_id: 'granola-person-mcp', version: '1.0.0',
       instance_id: `granola-${canonicalSha256({ person, account: account.email, workspace: account.workspace_id }).slice(7)}`,
     });
-    return Object.freeze({ ...session, api, account, identity, verify,
+    /** Every meeting of a watch's window: the ones the person captured, or one folder's. Past 200 it fails closed. */
+    async function windowed(input: { readonly mode: 'mine' | 'folder'; readonly folder: string | null; readonly from_date: string; readonly to_date: string }) {
+      if ((input.mode === 'folder') !== (input.folder !== null)) fail('invalid_request');
+      const meetings = await api.meetings({ from_date: input.from_date, to_date: input.to_date,
+        ...(input.folder === null ? { captured_by_me: true as const } : { folder_id: input.folder }), signal });
+      await verify();
+      return meetings;
+    }
+    return Object.freeze({ ...session, api, account, identity, verify, window: windowed,
       async read(meetingId: string) {
         const detail = await api.meeting(meetingId, signal);
         const transcript = await api.transcript(meetingId, signal);
@@ -46,13 +55,14 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
         await verify();
         return meetings;
       },
-      /** Every meeting of a watch's window: the ones the person captured, or one folder's. Past 200 it fails closed. */
-      async window(input: { readonly mode: 'mine' | 'folder'; readonly folder: string | null; readonly from_date: string; readonly to_date: string }) {
-        if ((input.mode === 'folder') !== (input.folder !== null)) fail('invalid_request');
-        const meetings = await api.meetings({ from_date: input.from_date, to_date: input.to_date,
-          ...(input.folder === null ? { captured_by_me: true as const } : { folder_id: input.folder }), signal });
-        await verify();
-        return meetings;
+      /**
+       * A watch checked at Save with the listing its worker uses: a folder the person no longer lists, or a window over
+       * 200 meetings, refuses it now rather than failing every later pull.
+       */
+      async watchable(watch: GranolaWatchV1) {
+        if (watch.watch === 'off') fail('invalid_request');
+        if (watch.folder_id !== null && !(await api.folders(signal)).some(folder => folder.id === watch.folder_id)) fail('not_found');
+        await windowed({ mode: watch.watch, folder: watch.folder_id, ...granolaWatchWindowV1(Date.now()) });
       },
     });
   }

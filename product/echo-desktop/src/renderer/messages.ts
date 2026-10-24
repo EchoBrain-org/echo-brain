@@ -43,6 +43,11 @@ export function message(failure: Failure): string {
   return Object.hasOwn(MESSAGES, failure.code) ? MESSAGES[failure.code]! : 'Something went wrong. Try again.';
 }
 
+/** A meetings request's failure. There a limit is the watch's window over its cap, which choosing one folder fixes. */
+export function meetingMessage(failure: Failure): string {
+  return failure.mutation_outcome !== 'unknown' && failure.code === 'quota_exceeded' ? 'More than 200 meetings in 7 days. Choose one folder.' : message(failure);
+}
+
 /** Where you stand with a tool, in the renderer's words: on its row in Tools. */
 export const TOOL_STATES: Readonly<Record<ToolStatus, string>> = {
   linked: 'Connected',

@@ -46,6 +46,14 @@ export function Meetings() {
   const [from, setFrom] = useState(''), [project, setProject] = useState('');
   const [retain, setRetain] = useState(false);
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
+  // The controls show the active watch each time it changes, and Off once it goes; unsaved choices survive a refresh.
+  const shown = useRef('');
+  function show(watch: PersonMeetingHomeV2['sources'][number] | undefined) {
+    const key = watch === undefined ? '' : JSON.stringify([watch.source_key, watch.watch, watch.folder_id, watch.project_id]);
+    if (key === shown.current) return;
+    shown.current = key;
+    setMode(watch?.watch ?? 'off'); setWatchFolder(watch?.folder_id ?? ''); setSuggest(watch?.project_id ?? '');
+  }
   /** Your recent meetings, or one folder's, newest first. */
   async function browse(folder: string) {
     setMeetings([]); setPreview(null);
@@ -55,7 +63,7 @@ export function Meetings() {
   async function refresh(initialize = false) {
     const next = await meetingCommand({ operation: 'home' }).catch((error: unknown) => { setHome(null); throw error; });
     if (!alive.current) return;
-    setHome(next);
+    setHome(next); show(next.sources.find(s => s.watch !== 'off'));
     if (initialize && next.connected) {
       try { await browse(''); } catch { /* the list can be read again */ }
     }
@@ -75,19 +83,21 @@ export function Meetings() {
   const projectOptions = projects.map(p => <option key={p.project_id} value={p.project_id}>{p.name}</option>);
   const moreProjects = state.projects.next && <button type="button" class="link-button" disabled={busy || state.projects.loading} onClick={() => void loadProjects(true)}>More projects</button>;
   const watch = home?.sources.find(s => s.watch !== 'off');
-  const watchLine = !watch ? '' : [
-    watch.watch === 'folder' ? `${home?.folders.find(f => f.id === watch.folder_id)?.title ?? 'Selected'} folder` : 'My meetings',
-    watch.project_id !== null ? `suggests ${projectName(watch.project_id)}` : '',
-    !watch.baseline ? 'Preparing' : watch.checked_at ? `Checked ${dateTime(watch.checked_at)}` : 'Active',
-  ].filter(part => part !== '').join(' · ');
+  // The watch's suggestion stays named while its project is on a page not loaded yet.
+  const suggestOptions = suggest !== '' && !projects.some(p => p.project_id === suggest)
+    ? [...projectOptions, <option key={suggest} value={suggest}>{projectName(suggest)}</option>] : projectOptions;
+  const watchState = !watch ? '' : !watch.baseline ? 'Preparing' : watch.checked_at ? `Checked ${dateTime(watch.checked_at)}` : 'Active';
+  // Save starts a watch, or updates the active one once its controls differ from it.
+  const unsaved = mode !== 'off' && (!watch || mode !== watch.watch || (mode === 'folder' && watchFolder !== (watch.folder_id ?? '')) || suggest !== (watch.project_id ?? ''));
 
   const saveWatch = () => void run(async () => {
     await meetingCommand({ operation: 'watch', watch: mode, folder_id: mode === 'folder' ? watchFolder : null, project_id: suggest || null, settings_sha256: home!.settings_sha256, retain: true });
-    await refresh(); if (alive.current) setNotice('Saved. New meetings come in by themselves.');
+    await refresh(); if (alive.current) setNotice('Saved.');
   });
   const stopWatch = () => void run(async () => {
     await meetingCommand({ operation: 'watch', watch: 'off', folder_id: null, project_id: null, settings_sha256: home!.settings_sha256, retain: true });
-    await refresh(); if (alive.current) setMode('off');
+    // A new watch starts from nothing: no folder and no suggestion.
+    await refresh(); if (alive.current) { setMode('off'); setWatchFolder(''); setSuggest(''); }
   });
 
   return <section class="personal-meetings" aria-label="Personal meetings" aria-busy={busy}>
@@ -101,23 +111,21 @@ export function Meetings() {
     {/* Automatic import, or one meeting by hand. Consent is given once, for both. */}
     {home?.connected && <>
       <div class="section-label">Automatic import</div>
-      {watch ? (
-        <div class="watch-row" data-testid="meeting-watch">
-          <span class="item-icon" aria-hidden="true"><Calendar /></span>
-          <span class="lines"><span class="name">{watchLine}</span></span>
-          <button type="button" class="link-button" disabled={busy} onClick={stopWatch}>Stop</button>
-        </div>
-      ) : (
-        <div class="meeting-controls thirds" role="group" aria-label="Automatic import">
-          <Select label="Import" value={mode} disabled={busy} onChange={value => setMode(value as PersonMeetingWatchV2)}>
-            <option value="off">Off</option><option value="mine">My meetings</option><option value="folder">One folder</option>
-          </Select>
-          {mode === 'folder' && <Select label="Folder" value={watchFolder} disabled={busy} onChange={setWatchFolder}>
-            <option value="">Choose a folder</option>{home.folders.map(f => <option key={f.id} value={f.id}>{f.title}</option>)}
-          </Select>}
-          {mode !== 'off' && <><Select label="Suggest" value={suggest} disabled={busy} onChange={setSuggest}><option value="">None</option>{projectOptions}</Select>{moreProjects}</>}
-        </div>
-      )}
+      {watch && <div class="watch-row" data-testid="meeting-watch">
+        <span class="item-icon" aria-hidden="true"><Calendar /></span>
+        <span class="lines"><span class="name">{watchState}</span></span>
+        <button type="button" class="link-button" disabled={busy} onClick={stopWatch}>Stop</button>
+      </div>}
+      {/* With a watch active these show it, and Save updates it; Stop is how it ends. */}
+      <div class="meeting-controls thirds" role="group" aria-label="Automatic import">
+        <Select label="Import" value={mode} disabled={busy} onChange={value => setMode(value as PersonMeetingWatchV2)}>
+          {!watch && <option value="off">Off</option>}<option value="mine">My meetings</option><option value="folder">One folder</option>
+        </Select>
+        {mode === 'folder' && <Select label="Folder" value={watchFolder} disabled={busy} onChange={setWatchFolder}>
+          <option value="">Choose a folder</option>{home.folders.map(f => <option key={f.id} value={f.id}>{f.title}</option>)}
+        </Select>}
+        {mode !== 'off' && <><Select label="Suggest" value={suggest} disabled={busy} onChange={setSuggest}><option value="">None</option>{suggestOptions}</Select>{moreProjects}</>}
+      </div>
       {home.sources.map(s => <div key={s.source_key} class="source-notes">
         {s.error && <div class="error">{s.error}</div>}
         {s.pending_imports.map(id => <div key={id} class="notice-line">Import queued
@@ -125,8 +133,7 @@ export function Meetings() {
       </div>)}
       <label class="check consent"><input type="checkbox" checked={retain} disabled={busy} onChange={e => setRetain(e.currentTarget.checked)} />
         <span>I allow ECHO to retain notes and transcripts from these meetings and process them.</span></label>
-      <div class="notice-line">Imported meetings stay private until you approve items from them.</div>
-      {!watch && mode !== 'off' && <div class="choices start">
+      {unsaved && <div class="choices start">
         <button type="button" class="plain-button small" disabled={busy || !retain || (mode === 'folder' && !watchFolder)} onClick={saveWatch}>Save</button>
       </div>}
 
@@ -159,7 +166,7 @@ export function Meetings() {
         <div class="choices start">
           <button type="button" class="primary-button small" disabled={busy || !retain} onClick={() => void run(async () => {
             await meetingCommand({ operation: 'import', meeting_id: preview.id, project_id: project || null, retain: true }); await refresh();
-            if (alive.current) { setPreview(null); setNotice('Added. Its decisions and actions reach Home once processed.'); void loadHome(); }
+            if (alive.current) { setPreview(null); setNotice('Added.'); void loadHome(); }
           })}>Add to ECHO</button>
           <span class="notice-line">{[project ? `Suggests ${projectName(project)}` : '', retain ? '' : 'Allow retention above first'].filter(part => part !== '').join(' · ')}</span>
         </div>

@@ -26,8 +26,8 @@ export interface PersonalMeetingCheckpointCodecV1 {
   write(value: PersonalMeetingCheckpointV1): string;
   /** A new source's cursor: no watch and nothing queued. */
   initial(): string;
-  /** The checkpoint once the watch changes; the provider restarts its own change detection. */
-  watch(value: PersonalMeetingCheckpointV1, watch: PersonalMeetingWatchV1): PersonalMeetingCheckpointV1;
+  /** The checkpoint once the watch changes, `at` (a UTC instant); the provider restarts its own change detection from then. */
+  watch(value: PersonalMeetingCheckpointV1, watch: PersonalMeetingWatchV1, at: string): PersonalMeetingCheckpointV1;
   /** Whether automatic import is active, not still preparing. */
   ready(value: PersonalMeetingCheckpointV1): boolean;
 }
@@ -122,17 +122,27 @@ export class SqlitePersonMeetingIntakeV1 {
   /**
    * Sets the person's one watch on this source, ending any watch on their other sources. It needs no project; a suggested
    * project is checked for the person's active membership, and stopping (`off`, which names none) needs no project access.
+   * Saving the same watch with another suggestion changes only the suggestion, so its change detection carries on.
    */
   watch(setting: MeetingIntakeSettingV1, watch: PersonalMeetingWatchV1, suggestedProjectId: string | null, current: () => void): void {
     if ((watch.watch === 'folder') !== (watch.folder_id !== null) || (watch.watch === 'off' && suggestedProjectId !== null)) throw new AuthorityOperationError('invalid_request', 'Invalid meeting watch');
     this.db.transaction(() => {
       current();
       if (watch.watch === 'off') this.currentPerson(setting); else { this.requireCurrent(setting); this.currentPerson(setting, suggestedProjectId); }
+      // requireCurrent pinned this setting's revision, so its watch and suggestion are the stored ones.
+      if (watch.watch !== 'off' && watch.watch === setting.watch && watch.folder_id === setting.folder_id) {
+        // The ordered revision bump still fences a pass in flight, so it records no delivery under the former suggestion.
+        if (suggestedProjectId !== setting.suggested_project_id) this.db.prepare('UPDATE authority_person_meeting_sources_v2 SET suggested_project_id=?,settings_revision=settings_revision+1 WHERE source_key=?')
+          .run(suggestedProjectId, setting.source_key);
+        current();
+        return;
+      }
+      const at = new Date().toISOString();
       for (const old of this.list({ organization_id: setting.organization_id, principal_id: setting.principal_id, membership_id: setting.membership_id })) {
         if (old.watch === 'off' && old.source_key !== setting.source_key) continue;
         const selected = old.source_key === setting.source_key ? { watch: watch.watch, folder_id: watch.folder_id } : OFF;
         this.db.prepare("UPDATE authority_person_meeting_sources_v2 SET watch='off',folder_id=NULL,suggested_project_id=NULL,settings_revision=settings_revision+1 WHERE source_key=?").run(old.source_key);
-        this.write(old.source_key, this.cursor.watch(this.checkpoint(old.source_key), selected));
+        this.write(old.source_key, this.cursor.watch(this.checkpoint(old.source_key), selected, at));
       }
       // Clear the former watch first so the unique personal watch constraint also holds while moving it between tool accounts.
       if (watch.watch !== 'off') this.db.prepare('UPDATE authority_person_meeting_sources_v2 SET watch=?,folder_id=?,suggested_project_id=?,settings_revision=settings_revision+1 WHERE source_key=?')

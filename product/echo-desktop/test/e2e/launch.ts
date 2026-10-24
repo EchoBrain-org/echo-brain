@@ -172,7 +172,7 @@ export async function addMeeting(page: Page): Promise<void> {
   await expect(add).toBeDisabled();
   await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await add.click();
-  await expect(meetings.getByRole('status')).toContainText('Added.');
+  await expect(meetings.getByRole('status')).toHaveText('Added.');
   await page.keyboard.press('Escape');
   await page.getByTestId('sidebar-home').click();
 }
