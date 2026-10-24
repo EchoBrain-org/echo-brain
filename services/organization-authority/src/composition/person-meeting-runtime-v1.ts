@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePersonMeetingResultV2,
-  type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSyntheticMeetingV1 } from '@echo-brain/organization-api';
+  type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSubmittedMeetingV2 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, coreRuntimeDiagnosticErrorKindV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeSyncV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, observeCoreRuntimeRootV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
@@ -34,17 +34,22 @@ export interface PersonMeetingProviderV1 {
   readonly id: string; readonly normalizer_version: string;
   /** The admission label for this provider's custodian; defaults to a person's own OAuth account. */
   readonly custodian_assurance?: string;
+  /** `members` takes submitted meetings from every active member (the hand-in tool); otherwise only owners submit (the staging synthetic source). */
+  readonly submitters?: 'members';
   readonly connection_http: ProviderHttpApplicationV1;
   readonly cursor: PersonalMeetingCheckpointCodecV1 & { readonly policy: AdmittedMeetingSourceCursorPolicyV1 };
   tool(token: string): OrganizationPersonToolV4;
   open(person: MeetingIntakePersonV1, current: () => void, signal?: AbortSignal): Promise<{
-    readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown; readonly email: string; readonly workspace: string;
+    readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown; readonly email: string | null; readonly workspace: string | null;
     current(): void;
     folders(): Promise<PersonMeetingResultsV2['home']['folders']>;
     browse(folder: string): Promise<PersonMeetingResultsV2['browse']>;
     preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
-    /** Optional staging capability. Persists an immutable payload before its normal import is queued. */
-    submit?(meeting: PersonSyntheticMeetingV1): void;
+    /**
+     * Optional: keeps a submitted meeting for the person's source and returns the id its import is queued under. It runs
+     * inside the Authority transaction that queues that import, so a payload kept in the Authority commits with it.
+     */
+    submit?(meeting: PersonSubmittedMeetingV2, setting: MeetingIntakeSettingV1): string;
   }>;
   source(setting: MeetingIntakeSettingV1, current: () => void): MeetingSourceAdapter & { requireCurrent(): void };
 }
@@ -415,29 +420,31 @@ export function createPersonMeetingRuntimeV1(options: {
         const currentProject = () => {
           session.current(); current();
           if (intake.currentPerson(person, project).grant_sha256 !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting project access changed');
-          if (input.operation === 'submit' && options.sessions.authenticateAccess({ access_token: token }).membership_type !== 'owner') {
-            throw new AuthorityOperationError('unauthorized', 'Only the staging owner can submit synthetic meetings');
+          // Every active member hands meetings in; the staging synthetic source stays owner-only.
+          if (input.operation === 'submit' && provider.submitters !== 'members' && options.sessions.authenticateAccess({ access_token: token }).membership_type !== 'owner') {
+            throw new AuthorityOperationError('unauthorized', 'Only an owner can submit meetings to this tool');
           }
         };
         if (input.operation === 'submit') {
           currentProject();
-          if (!session.submit) throw new AuthorityOperationError('not_found', 'Custom meeting submission unavailable');
-          session.submit(input.meeting);
+          if (!session.submit) throw new AuthorityOperationError('not_found', 'Meeting submission unavailable');
         }
-        // Validate folder access here; the existing worker builds its content
+        // Validate folder or meeting access here; the existing worker builds its content
         // baseline from the durable pending cursor without holding this request.
         if (input.operation === 'watch') await session.browse(input.folder_id!);
-        else await session.preview(input.operation === 'submit' ? input.meeting.id : input.meeting_id);
+        else if (input.operation === 'import') await session.preview(input.meeting_id);
         return db.transaction(() => {
           currentProject();
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
           const providerIntake = ownerOf(provider.cursor.policy.source_adapter_id).intake;
           const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, session, commitments: id => processor.current_commitments?.(id), current: currentProject });
+          // A submitted meeting is kept here, so its payload and its queued import commit together or not at all.
+          const submitted = input.operation === 'submit' ? session.submit!(input.meeting, setting) : null;
           // "Save to" records the watched folder's project or the import's suggestion; neither changes the source.
           if (input.operation === 'watch') providerIntake.watch(setting, input.folder_id, project, currentProject);
-          else providerIntake.enqueue(setting, input.operation === 'submit' ? input.meeting.id : input.meeting_id, project, currentProject);
+          else providerIntake.enqueue(setting, input.operation === 'submit' ? submitted! : input.meeting_id, project, currentProject);
           observed.delete(setting.source_key);
-          if (input.operation === 'submit') return { status: 'queued', meeting_id: input.meeting.id };
+          if (input.operation === 'submit') return { status: 'queued', meeting_id: submitted };
           return { status: input.operation === 'watch' ? 'saved' : 'queued' };
         }).immediate();
       };

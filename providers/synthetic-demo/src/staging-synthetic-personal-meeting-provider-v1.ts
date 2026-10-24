@@ -227,7 +227,8 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
       return {
         identity, custodian: { kind: "echo-staging-synthetic-custodian-v1", person: identity.instance_id },
         email: "staging-synthetic@example.test", workspace: "Synthetic staging meetings", current,
-        ...(options.custom_store === undefined ? {} : { submit(input: PersonSyntheticMeetingV1) { current(); options.custom_store!.save(identity, input); current(); } }),
+        // The sidecar store commits on its own; an immutable id makes a retry after a failed queue safe. Returns the id to queue.
+        ...(options.custom_store === undefined ? {} : { submit(input: PersonSyntheticMeetingV1) { current(); options.custom_store!.save(identity, input); current(); return input.id; } }),
         async folders(): Promise<readonly { readonly id: string; readonly title: string; readonly count: number }[]> { return []; },
         async browse(_folder: string): Promise<{ readonly meetings: readonly { readonly id: string; readonly title: string; readonly date: string }[] }> {
           throw new AuthorityOperationError("not_found", "Synthetic meetings have no folders");
