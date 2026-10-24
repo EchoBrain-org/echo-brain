@@ -5,11 +5,11 @@ import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authori
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { AdapterError, assertCanonicalMeetingDocument, type AdapterConfig, type MeetingDocument, type MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
-import { SqlitePersonHandInMeetingsV1, type StoredHandInMeetingV1 } from '../adapters/persistence/sqlite/person-hand-in-meetings-v1.js';
+import { HAND_IN_SOURCE_ADAPTER_ID_V1, SqlitePersonHandInMeetingsV1, type StoredHandInMeetingV1 } from '../adapters/persistence/sqlite/person-hand-in-meetings-v1.js';
 import type { PersonalMeetingCheckpointV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { meetingIntakePersonV1, type PersonMeetingProviderV1 } from './person-meeting-runtime-v1.js';
 
-export const HAND_IN_SOURCE_ADAPTER_ID_V1 = 'person-hand-in-meeting';
+export { HAND_IN_SOURCE_ADAPTER_ID_V1 };
 /** How a hand-in source's custodian is established: the person handed the meeting in themselves. */
 export const HAND_IN_CUSTODIAN_ASSURANCE_V1 = 'person_hand_in';
 const VERSION = '1.0.0';

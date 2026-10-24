@@ -3,6 +3,9 @@ import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/f
 import { validatePersonHandInMeetingV1, type PersonHandInMeetingV1 } from '@echo-brain/organization-api';
 import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 
+/** The source adapter of every hand-in source: its meetings, transcripts included, are what their person handed in. */
+export const HAND_IN_SOURCE_ADAPTER_ID_V1 = 'person-hand-in-meeting';
+
 /** A handed-in meeting as kept: its payload, the digest its id derives from, and when it was handed in. */
 export interface StoredHandInMeetingV1 {
   readonly external_id: string; readonly meeting: PersonHandInMeetingV1; readonly payload_sha256: Sha256Digest; readonly submitted_at: string;
