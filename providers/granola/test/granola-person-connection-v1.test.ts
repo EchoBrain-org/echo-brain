@@ -71,7 +71,7 @@ describe('Granola verified account and meeting listings', () => {
       expect(await session.recent(null)).toEqual([]);
       expect(await session.recent(folder)).toEqual([]);
       const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
-      const listed = { time_range: 'custom', from_date: '1970-01-01', to_date: tomorrow, limit: 50 };
+      const listed = { time_range: 'custom', from_date: '1970-01-01', to_date: tomorrow, limit: 50, max_participants: 50 };
       expect(calls.filter(call => call.name !== 'get_account_info')).toEqual([
         { name: 'list_meetings', arguments: { ...listed, involvement: { captured_by_me: true } } },
         { name: 'list_meeting_folders', arguments: { limit: 100, offset: 0 } },

@@ -119,6 +119,16 @@ describe('verified Granola MCP contract', () => {
       ['Lee', []],
     ]);
   });
+  it('ends each participant at its own email, one line at a time', () => {
+    const people = (known: string) => normalizeMcp({ ...listed, known_participants: known }).participants.map(person => [person.display_name, person.identities ?? []]);
+    const email = (value: string) => [{ kind: 'email', value }];
+    expect(people('Alice (alice@x.test), Bob (bob@x.test)')).toEqual([['Alice', email('alice@x.test')], ['Bob', email('bob@x.test')]]);
+    // A line without an email never borrows the next line's, and ` from …` never reaches past its own line.
+    expect(people('Alice from Acme\nBob <bob@x.test>')).toEqual([['Alice', []], ['Bob', email('bob@x.test')]]);
+    // A bracket without an @ is part of its entry's name, not the end of it.
+    expect(people('Dana <Ops lead> Kim <dana@x.test>, Lee')).toEqual([['Dana Kim', email('dana@x.test')], ['Lee', []]]);
+    expect(people('Pat (Ops) Lee (pat@x.test)\nSam (sam@x.test) Ross')).toEqual([['Pat (Ops) Lee', email('pat@x.test')], ['Sam (sam@x.test) Ross', []]]);
+  });
   it('prepares a real-shaped meeting for extraction with its date, participants, and N/S/T units', async () => {
     const detail: GranolaMeetingV1 = { ...listed, title: 'Beta launch', known_participants: 'Zhen Ye (note creator) from Acme <zhen@acme.com>, Pat Lee <pat@y.com>',
       private_notes: '- Ship beta Friday\n- Pat owns the FAQ', summary: '### Decisions\n- Ship the beta on Friday\n\n### Next steps\n- Pat drafts the FAQ' };
@@ -159,6 +169,50 @@ describe('verified Granola MCP contract', () => {
   });
 });
 
+describe('one meeting\'s large or unnormalized fields never fail its read', () => {
+  // A 400-invitee all-hands, one person per line: well over 16 KiB.
+  const invitees = Array.from({ length: 400 }, (_, index) => `Person ${index} from Lumen (person${index}@example.test)`);
+  const allHands = (meeting: string) => `<meeting id="${meeting}" title="All hands" date="Oct 20, 2026 9:00 AM PDT" updated_at="2026-10-20T10:31:00.000-07:00" url="https://notes.granola.ai/d/${meeting}">`
+    + `<known_participants total="400" omitted="0">\n${invitees.join('\n')}\n</known_participants><private_notes>Owner notes</private_notes><summary>Ship it.</summary></meeting>`;
+  /** The first whole invitee lines within 16 KiB of the raw element, as the reader keeps them. */
+  const kept = (text: string) => {
+    const lines = text.split('\n'), bytes = (count: number) => Buffer.byteLength(['', ...invitees.slice(0, count)].join('\n'), 'utf8');
+    expect(lines).toEqual(invitees.slice(0, lines.length));
+    expect(bytes(lines.length)).toBeLessThanOrEqual(16 * 1024);
+    expect(bytes(lines.length + 1)).toBeGreaterThan(16 * 1024);
+    return lines.length;
+  };
+  it('keeps the first whole lines of participants over 16 KiB, in a list page and in a detail read', async () => {
+    expect(Buffer.byteLength(invitees.join('\n'), 'utf8')).toBeGreaterThan(16 * 1024);
+    const [listedAllHands] = parseGranolaMeetingPageV1(listPage([allHands(numbered(1))]), false).meetings;
+    const people = kept(listedAllHands!.known_participants);
+    expect(people).toBeGreaterThan(300);
+    const detail = await fixture(warning + `<meetings_data count="1">${allHands(id)}</meetings_data>`).adapter.meeting(id);
+    expect(kept(detail.known_participants)).toBe(people);
+    const normalized = normalizeMcp(detail);
+    expect(normalized.participants).toHaveLength(people);
+    expect(normalized.participants.at(-1)).toMatchObject({ display_name: `Person ${people - 1}`, identities: [{ kind: 'email', value: `person${people - 1}@example.test` }] });
+  });
+  it('keeps the start of a transcript over 256 KiB, cut between turns or at a character boundary', async () => {
+    const transcript = (text: string) => fixture(warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', transcript: text })).adapter.transcript(id);
+    const turns = Array.from({ length: 300 }, (_, index) => `${index % 2 === 0 ? 'Microphone' : 'System audio'}: ${'We go over the plan once more. '.repeat(30)}Turn ${index}.`);
+    expect(Buffer.byteLength(turns.join('\n\n'), 'utf8')).toBeGreaterThan(256 * 1024);
+    const { text } = await transcript(turns.join('\n\n'));
+    const head = text.split('\n\n');
+    expect(head).toEqual(turns.slice(0, head.length));
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(256 * 1024);
+    expect(Buffer.byteLength(turns.slice(0, head.length + 1).join('\n\n'), 'utf8')).toBeGreaterThan(256 * 1024);
+    // One turn longer than the cap keeps whole characters: é is two bytes in UTF-8.
+    expect((await transcript('é'.repeat(140_000))).text).toBe('é'.repeat(128 * 1024));
+  });
+  it('reads a title that is not NFC, has controls, or is over 1 KiB, without failing its page', () => {
+    // 'Plan ' × 204 is 1,020 bytes; é makes 1,022, and the three-byte € would end past 1,024, so the cut falls before it.
+    const long = `${'Plan '.repeat(204)}é€ and more`;
+    const page = parseGranolaMeetingPageV1(listPage([plainRow(numbered(1), 'Café review'), plainRow(numbered(2), long), plainRow(numbered(3), 'Weekly\tsync')]), false);
+    expect(page.meetings.map(meeting => meeting.title)).toEqual(['Café review', `${'Plan '.repeat(204)}é`, 'Weekly sync']);
+  });
+});
+
 describe('Granola list contract, as observed live', () => {
   it('reads a page with its requested range, warning line and pagination, and ignores folders and unknown attributes', () => {
     const url = (meeting: string) => `https://notes.granola.ai/d/${meeting}`;
@@ -194,7 +248,7 @@ describe('Granola list contract, as observed live', () => {
     const mine = scripted(LIVE_PAGE, last);
     expect((await mine.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).map(meeting => meeting.id))
       .toEqual([REVIEW, WEEKLY, numbered(3), numbered(4)]);
-    const range = { time_range: 'custom', from_date: '2026-10-17', to_date: '2026-10-25', limit: 200 };
+    const range = { time_range: 'custom', from_date: '2026-10-17', to_date: '2026-10-25', limit: 200, max_participants: 50 };
     expect(mine.calls()).toEqual([
       { name: 'list_meetings', arguments: { ...range, involvement: { captured_by_me: true } } },
       { name: 'list_meetings', arguments: { ...range, cursor: 'eyJ2ZXJzaW9uIjoxfQ', involvement: { captured_by_me: true } } },
