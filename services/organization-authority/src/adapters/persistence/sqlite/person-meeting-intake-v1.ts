@@ -5,33 +5,40 @@ import type { AdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organiz
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
 export interface MeetingIntakePersonV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
-/** One source per person and tool account; a watched folder carries the project it suggests for its meetings. */
-export interface MeetingIntakeSettingV1 extends MeetingIntakePersonV1 {
-  readonly source_key: string; readonly person_key: string; readonly folder_id: string | null; readonly folder_project_id: string | null; readonly settings_revision: number;
+/**
+ * What a source imports by itself: nothing (`off`), the meetings its person captured (`mine`), or one folder's
+ * (`folder`, the only watch with a `folder_id`). A source belongs to its person, never to a project.
+ */
+export interface PersonalMeetingWatchV1 { readonly watch: 'off' | 'mine' | 'folder'; readonly folder_id: string | null }
+/** One source per person and tool account; a watch may name one project it suggests for its meetings. */
+export interface MeetingIntakeSettingV1 extends MeetingIntakePersonV1, PersonalMeetingWatchV1 {
+  readonly source_key: string; readonly person_key: string; readonly suggested_project_id: string | null; readonly settings_revision: number;
   readonly source_adapter_id: string; readonly source_adapter_version: string; readonly source_adapter_instance_id: string;
 }
 /**
- * The part of a personal checkpoint the shared intake owns: the watched folder and the import queue. Every other
- * field is the provider's (its change detection, for example) and travels through spreads untouched.
+ * The part of a personal checkpoint the shared intake owns: the import queue. The watch it mirrors and every other
+ * field are the provider's (its change detection, for example) and travel through spreads untouched.
  */
-export interface PersonalMeetingCheckpointV1 { readonly folder: string | null; readonly manual: readonly string[] }
+export interface PersonalMeetingCheckpointV1 { readonly manual: readonly string[] }
 /** A provider's checkpoint codec. Only the provider reads or resets its own fields. */
 export interface PersonalMeetingCheckpointCodecV1 {
   read(value: string): PersonalMeetingCheckpointV1;
   write(value: PersonalMeetingCheckpointV1): string;
-  /** A new source's cursor: no watched folder and nothing queued. */
+  /** A new source's cursor: no watch and nothing queued. */
   initial(): string;
-  /** The checkpoint once the watched folder changes; the provider restarts its own change detection. */
-  watch(value: PersonalMeetingCheckpointV1, folder: string | null): PersonalMeetingCheckpointV1;
-  /** Whether automatic import of the watched folder is active, not still preparing. */
+  /** The checkpoint once the watch changes; the provider restarts its own change detection. */
+  watch(value: PersonalMeetingCheckpointV1, watch: PersonalMeetingWatchV1): PersonalMeetingCheckpointV1;
+  /** Whether automatic import is active, not still preparing. */
   ready(value: PersonalMeetingCheckpointV1): boolean;
 }
+const OFF: PersonalMeetingWatchV1 = Object.freeze({ watch: 'off', folder_id: null });
 function denied(): never { throw new AuthorityOperationError('unauthorized', 'Personal meeting access is unavailable'); }
 
 /**
  * Personal configuration and progress use the existing Authority admission/cursor owner.
  * A project chosen on import or watch is never part of the source. It becomes a per-meeting
- * suggestion: the review offers it, and its current members may read the meeting's imported notes.
+ * suggestion that pre-ticks the review's destinations and grants nothing: unapproved notes stay
+ * readable by their importer alone (ADR-0046).
  */
 export class SqlitePersonMeetingIntakeV1 {
   constructor(private readonly db: Database.Database, private readonly cursor: PersonalMeetingCheckpointCodecV1) {}
@@ -51,8 +58,8 @@ export class SqlitePersonMeetingIntakeV1 {
   }
   requireCurrent(setting: MeetingIntakeSettingV1): void {
     this.currentPerson(setting);
-    const row = this.db.prepare('SELECT settings_revision,folder_id FROM authority_person_meeting_sources_v2 WHERE source_key=?').get(setting.source_key) as { settings_revision: number; folder_id: string | null } | undefined;
-    if (!row || row.settings_revision !== setting.settings_revision || row.folder_id !== setting.folder_id) throw new AuthorityOperationError('stale_access_state', 'Meeting intake settings changed');
+    const row = this.db.prepare('SELECT settings_revision,watch,folder_id FROM authority_person_meeting_sources_v2 WHERE source_key=?').get(setting.source_key) as { settings_revision: number } & PersonalMeetingWatchV1 | undefined;
+    if (!row || row.settings_revision !== setting.settings_revision || row.watch !== setting.watch || row.folder_id !== setting.folder_id) throw new AuthorityOperationError('stale_access_state', 'Meeting intake settings changed');
   }
   ensure(input: { readonly person: MeetingIntakePersonV1; readonly identity: SourceAdapterIdentityV1;
     readonly normalizer_version: string; readonly custodian: unknown; readonly processor: AdmittedMeetingProcessingCommitmentsV1['processor']; readonly current: () => void;
@@ -75,7 +82,7 @@ export class SqlitePersonMeetingIntakeV1 {
         identity.adapter_id, identity.version, identity.instance_id, input.normalizer_version, canonicalSha256(input.custodian), input.custodian_assurance ?? 'personal_oauth_email_workspace', now,
         canonicalSha256({ person, tool: identity.adapter_id }), initial, now, processor.adapter_id, processor.version, processor.instance_id, processor.configuration_sha256, processor.credential_reference_sha256, semantic, now);
       this.db.prepare('INSERT INTO authority_live_source_progress_v2 VALUES(?,?,?,0,?)').run(source_key, semantic, initial, now);
-      this.db.prepare('INSERT INTO authority_person_meeting_sources_v2(source_key,person_key,folder_id,folder_project_id,settings_revision) VALUES(?,?,NULL,NULL,0)').run(source_key, canonicalSha256(person));
+      this.db.prepare("INSERT INTO authority_person_meeting_sources_v2(source_key,person_key,watch,folder_id,suggested_project_id,settings_revision) VALUES(?,?,'off',NULL,NULL,0)").run(source_key, canonicalSha256(person));
       input.current(); return this.list(person).find(row => row.source_key === source_key)!;
     }).immediate();
   }
@@ -87,7 +94,7 @@ export class SqlitePersonMeetingIntakeV1 {
     const next = this.cursor.write(checkpoint);
     this.db.prepare('UPDATE authority_live_source_progress_v2 SET cursor=?,cursor_version=cursor_version+1,updated_at=? WHERE source_key=? AND cursor!=?').run(next, new Date().toISOString(), sourceKey, next);
   }
-  /** Sorted project ids suggested for one meeting by its imports and folder deliveries. */
+  /** Sorted project ids suggested for one meeting by its imports and watch deliveries. */
   suggestions(sourceKey: string, externalId: string): readonly string[] {
     return this.db.prepare('SELECT project_id FROM authority_person_meeting_suggestions_v1 WHERE source_key=? AND external_id=? ORDER BY project_id')
       .pluck().all(sourceKey, externalId) as string[];
@@ -112,20 +119,24 @@ export class SqlitePersonMeetingIntakeV1 {
        WHERE pending.source_key=? AND pending.external_id=?
       ORDER BY project_id`).pluck().all(sourceKey, externalId, sourceKey, externalId) as string[];
   }
-  /** A watch names the project it suggests; stopping (`folder` null) needs no project access. */
-  watch(setting: MeetingIntakeSettingV1, folder: string | null, folderProjectId: string | null, current: () => void): void {
-    if ((folder === null) !== (folderProjectId === null)) throw new AuthorityOperationError('invalid_request', 'A watched folder needs a project');
+  /**
+   * Sets the person's one watch on this source, ending any watch on their other sources. It needs no project; a suggested
+   * project is checked for the person's active membership, and stopping (`off`, which names none) needs no project access.
+   */
+  watch(setting: MeetingIntakeSettingV1, watch: PersonalMeetingWatchV1, suggestedProjectId: string | null, current: () => void): void {
+    if ((watch.watch === 'folder') !== (watch.folder_id !== null) || (watch.watch === 'off' && suggestedProjectId !== null)) throw new AuthorityOperationError('invalid_request', 'Invalid meeting watch');
     this.db.transaction(() => {
       current();
-      if (folder === null) this.currentPerson(setting); else { this.requireCurrent(setting); this.currentPerson(setting, folderProjectId); }
+      if (watch.watch === 'off') this.currentPerson(setting); else { this.requireCurrent(setting); this.currentPerson(setting, suggestedProjectId); }
       for (const old of this.list({ organization_id: setting.organization_id, principal_id: setting.principal_id, membership_id: setting.membership_id })) {
-        if (old.folder_id === null && old.source_key !== setting.source_key) continue;
-        const selected = old.source_key === setting.source_key ? folder : null;
-        this.db.prepare('UPDATE authority_person_meeting_sources_v2 SET folder_id=NULL,folder_project_id=NULL,settings_revision=settings_revision+1 WHERE source_key=?').run(old.source_key);
+        if (old.watch === 'off' && old.source_key !== setting.source_key) continue;
+        const selected = old.source_key === setting.source_key ? { watch: watch.watch, folder_id: watch.folder_id } : OFF;
+        this.db.prepare("UPDATE authority_person_meeting_sources_v2 SET watch='off',folder_id=NULL,suggested_project_id=NULL,settings_revision=settings_revision+1 WHERE source_key=?").run(old.source_key);
         this.write(old.source_key, this.cursor.watch(this.checkpoint(old.source_key), selected));
       }
       // Clear the former watch first so the unique personal watch constraint also holds while moving it between tool accounts.
-      if (folder !== null) this.db.prepare('UPDATE authority_person_meeting_sources_v2 SET folder_id=?,folder_project_id=?,settings_revision=settings_revision+1 WHERE source_key=?').run(folder, folderProjectId, setting.source_key);
+      if (watch.watch !== 'off') this.db.prepare('UPDATE authority_person_meeting_sources_v2 SET watch=?,folder_id=?,suggested_project_id=?,settings_revision=settings_revision+1 WHERE source_key=?')
+        .run(watch.watch, watch.folder_id, suggestedProjectId, setting.source_key);
       current();
     }).immediate();
   }
@@ -160,16 +171,16 @@ export class SqlitePersonMeetingIntakeV1 {
     }).immediate();
   }
   /**
-   * Called inside the transaction that admits a meeting. A meeting the watched folder delivers (not a
-   * queued import) keeps the folder's current project as its suggestion, so it stays readable by that
-   * project's members after the watch moves; the person must still be an active member, as on import.
+   * Called inside the transaction that admits a meeting. A meeting the watch delivers (not a queued import)
+   * keeps the watch's suggested project, when it names one and the person is still an active member of it, as
+   * a consumed import's choices do; it pre-ticks the review and grants nothing. A suggestion never stops intake.
    * A queued import's projects wait for the cursor advance that consumes it (`promoteConsumedImports`).
    */
   recordAdmission(setting: MeetingIntakeSettingV1, externalId: string): void {
     this.requireCurrent(setting);
-    if (setting.folder_project_id === null || this.checkpoint(setting.source_key).manual.includes(externalId)) return;
-    this.currentPerson(setting, setting.folder_project_id);
-    this.suggest(setting, externalId, setting.folder_project_id);
+    const project = setting.suggested_project_id;
+    if (project === null || this.checkpoint(setting.source_key).manual.includes(externalId) || !this.isMember(setting, project)) return;
+    this.suggest(setting, externalId, project);
   }
   /**
    * Called inside the processing cursor-advance transaction, after its compare-and-set succeeded. Each
@@ -192,7 +203,7 @@ export class SqlitePersonMeetingIntakeV1 {
   /**
    * The checkpoint a processing advance moves to when other imports were queued or cancelled after its pull: the pull's
    * next checkpoint with the current queue, in order, minus what that pull consumed. Undefined when the consumed import
-   * was cancelled or anything but the queue changed (a folder or the provider's own fields), so those still refuse the advance.
+   * was cancelled or anything but the queue changed (the watch or the provider's own fields), so those still refuse the advance.
    */
   rebase(transition: { readonly expected_cursor: string; readonly next_cursor: string; readonly current_cursor: string }): string | undefined {
     const pulled = this.cursor.read(transition.expected_cursor), next = this.cursor.read(transition.next_cursor), now = this.cursor.read(transition.current_cursor);

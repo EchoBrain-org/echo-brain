@@ -9,10 +9,17 @@ export interface PersonSyntheticMeetingV1 {
   readonly id: string; readonly title: string; readonly notes: string; readonly transcript: string;
   readonly started_at?: string; readonly ended_at?: string; readonly time_zone?: string;
 }
+/**
+ * What a source imports by itself: nothing, the meetings the person captured, or one folder's. A watch's project is only a
+ * suggestion; it grants no read.
+ */
+export type PersonMeetingWatchV2 = 'off' | 'mine' | 'folder';
 export type PersonMeetingOperationV2 =
   | { readonly operation: 'home' } | { readonly operation: 'reviews' }
-  | { readonly operation: 'browse'; readonly folder_id: string } | { readonly operation: 'open'; readonly meeting_id: string }
-  | { readonly operation: 'watch'; readonly folder_id: string | null; readonly project_id: string | null; readonly settings_sha256: string; readonly retain: true }
+  /** `folder_id` null browses the person's own recent meetings. */
+  | { readonly operation: 'browse'; readonly folder_id: string | null } | { readonly operation: 'open'; readonly meeting_id: string }
+  /** `folder_id` is set exactly for `folder`; `off` names no project. */
+  | { readonly operation: 'watch'; readonly watch: PersonMeetingWatchV2; readonly folder_id: string | null; readonly project_id: string | null; readonly settings_sha256: string; readonly retain: true }
   | { readonly operation: 'import'; readonly meeting_id: string; readonly project_id: string | null; readonly retain: true }
   | { readonly operation: 'submit'; readonly meeting: PersonSyntheticMeetingV1; readonly project_id: string | null; readonly retain: true }
   | { readonly operation: 'cancel_import'; readonly source_key: string; readonly meeting_id: string }
@@ -23,7 +30,8 @@ export interface PersonMeetingRowV2 { readonly id: string; readonly title: strin
 export interface PersonMeetingHomeV2 {
   readonly connected: boolean; readonly email: string | null; readonly workspace: string | null;
   readonly folders: readonly { readonly id: string; readonly title: string; readonly count: number }[]; readonly settings_sha256: string;
-  readonly sources: readonly { readonly source_key: string; readonly folder_id: string | null; readonly folder_project_id: string | null; readonly baseline: boolean; readonly pending_imports: readonly string[]; readonly checked_at: string | null; readonly error: string | null }[];
+  /** `project_id` is the watch's suggested project. */
+  readonly sources: readonly { readonly source_key: string; readonly watch: PersonMeetingWatchV2; readonly folder_id: string | null; readonly project_id: string | null; readonly baseline: boolean; readonly pending_imports: readonly string[]; readonly checked_at: string | null; readonly error: string | null }[];
 }
 export interface PersonMeetingReviewV2 {
   readonly approval_id: string; readonly title: string; readonly project_ids: readonly string[];
@@ -45,12 +53,15 @@ export interface PersonMeetingResultsV2 {
 }
 const fields: Record<PersonMeetingOperationV2['operation'], readonly string[]> = {
   home: [], reviews: [], browse: ['folder_id'], open: ['meeting_id'],
-  watch: ['folder_id', 'project_id', 'settings_sha256', 'retain'], import: ['meeting_id', 'project_id', 'retain'],
+  watch: ['watch', 'folder_id', 'project_id', 'settings_sha256', 'retain'], import: ['meeting_id', 'project_id', 'retain'],
   submit: ['meeting', 'project_id', 'retain'],
   cancel_import: ['source_key', 'meeting_id'], review_open: ['approval_id'],
   review: ['approval_id', 'command_id', 'snapshot_sha256', 'action', 'project_ids', 'share_transcript', 'owners'],
 };
 const label = 'Personal meeting request';
+const WATCHES: readonly unknown[] = ['off', 'mine', 'folder'];
+/** A watch names its folder exactly when it watches one, and stopping names no project. */
+function watchShape(watch: unknown, folder: unknown, project: unknown): boolean { return WATCHES.includes(watch) && (watch === 'folder') === (folder !== null) && (watch !== 'off' || project === null); }
 function text(value: unknown, maximum = 256): asserts value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) fail(label);
 }
@@ -103,7 +114,8 @@ export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingReq
     else if (key === 'share_transcript') { if (typeof item !== 'boolean') fail(label); }
     else if (key === 'project_ids') projectIds(item);
     else if (key === 'owners') ownerChoices(item);
-    else if ((key === 'project_id' || (key === 'folder_id' && operation === 'watch')) && item === null) continue;
+    else if (key === 'watch') { if (!WATCHES.includes(item)) fail(label); }
+    else if ((key === 'project_id' || key === 'folder_id') && item === null) continue;
     else { text(item); if (key.endsWith('_sha256')) digest(item); }
   }
   if ('project_id' in row && row.project_id !== null) validateProjectIdV1(row.project_id);
@@ -114,7 +126,7 @@ export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingReq
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(row.command_id) || (row.action !== 'approve' && row.action !== 'reject')) fail(label);
     if (review.action === 'reject' && (review.project_ids.length !== 0 || review.share_transcript !== false || review.owners.length !== 0)) fail(label);
   }
-  if (operation === 'watch' && (row.folder_id === null) !== (row.project_id === null)) fail(label);
+  if (operation === 'watch' && !watchShape(row.watch, row.folder_id, row.project_id)) fail(label);
   return Object.freeze({ ...row }) as PersonMeetingRequestV2;
 }
 /** Transport and UTF-8 bounds apply before parsing; typed response checks also run at the Authority. */
@@ -140,8 +152,9 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
     nullableText(row.email); nullableText(row.workspace); digest(row.settings_sha256);
     for (const value of array(row.folders, 200)) { const item = object(value, ['id','title','count']); text(item.id); text(item.title, 128); if (!Number.isSafeInteger(item.count) || (item.count as number) < 0) fail('Invalid folder count'); }
     for (const value of array(row.sources, 100)) {
-      const item = object(value, ['source_key','folder_id','folder_project_id','baseline','pending_imports','checked_at','error']);
-      text(item.source_key); nullableText(item.folder_id); if (item.folder_project_id !== null) project(item.folder_project_id); nullableText(item.error);
+      const item = object(value, ['source_key','watch','folder_id','project_id','baseline','pending_imports','checked_at','error']);
+      text(item.source_key); nullableText(item.folder_id); if (item.project_id !== null) project(item.project_id); nullableText(item.error);
+      if (!watchShape(item.watch, item.folder_id, item.project_id)) fail('Invalid meeting watch');
       if (typeof item.baseline !== 'boolean') fail('Invalid folder baseline'); if (item.checked_at !== null) assertTimestamp(item.checked_at, 'Meeting check timestamp');
       for (const id of array(item.pending_imports, 50)) text(id);
     }

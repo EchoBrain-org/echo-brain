@@ -73,10 +73,10 @@ Concrete bundles live in `providers/synthetic-demo` (the staging synthetic
 personal meeting provider), `providers/openrouter`, `providers/slack/server`
 (the approval presenter and click, Person identity and the organization Slack
 connection state), `providers/granola` (the personal Granola connection and
-folder meeting source), `providers/jira` and `providers/confluence` (each a
-gated Person connection and live reader), and `providers/shared` (the shared
-Person connection and Nango runtime). Secret values enter only through
-private-file adapters.
+its watch source: my meetings or one folder), `providers/jira` and
+`providers/confluence` (each a gated Person connection and live reader), and
+`providers/shared` (the shared Person connection and Nango runtime). Secret
+values enter only through private-file adapters.
 Public `clean-*` command names and versioned `clean-founder` wire values are
 compatibility contracts, not component names.
 

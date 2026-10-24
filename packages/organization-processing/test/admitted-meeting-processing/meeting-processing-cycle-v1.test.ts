@@ -189,7 +189,8 @@ class FakeState implements AuthorityMeetingProcessingStateV1 {
           input.meeting.provenance.external_id &&
         candidate.review_input_sha256 === reviewInputSha256,
     );
-    const actionable = input.decisions.signals.length > 0;
+    // As the Authority decides it: no card without a decision or an action.
+    const actionable = input.decisions.signals.some((signal) => signal.kind === "decision" || signal.kind === "action");
     const reviewLineageId = reviewLineageIdV1({
       adapter_id: input.meeting.provenance.source.adapter_id,
       instance_id: input.meeting.provenance.source.instance_id,

@@ -22,7 +22,7 @@ import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
-import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
+import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
 import { AdapterError } from '@echo-brain/organization-processing/core/contracts/adapter';
 import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
@@ -41,8 +41,8 @@ const projectB = 'prj_00000000-0000-4000-8000-000000000013';
 const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
 const ledgers: SqliteExtractionAttemptStoreV1[] = [];
 afterEach(() => { for (const ledger of ledgers.splice(0)) ledger.close(); });
-/** `actions` adds that many unowned actions (act-2, act-3, …) to what the extractor finds. */
-async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string; readonly path?: string } = {}) {
+/** `actions` adds that many unowned actions (act-2, act-3, …) to what the extractor finds; `reasonsOnly` finds one rationale and nothing else. */
+async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string; readonly path?: string; readonly reasonsOnly?: boolean } = {}) {
   const f = await approvalContextFixture(options.path === undefined ? {} : { path: options.path });
   f.db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(f.actor.organization_id, new Date().toISOString());
   const person = { organization_id: f.actor.organization_id, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id };
@@ -58,20 +58,20 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   // One durable attempt ledger per Authority, shared by every runtime the test creates.
   const ledger = new SqliteExtractionAttemptStoreV1(new Database(':memory:'), { authority_id: 'aut_runtime', organization_id: 'org_runtime', state_lineage_id: 'lineage-runtime' });
   ledgers.push(ledger);
-  // Meetings the watched folder delivers on its next scans after the baseline.
-  const folderDeliveries: string[] = [];
+  // Meetings the watch delivers on its next scans after the baseline, and what each watch check browsed.
+  const folderDeliveries: string[] = [], browsed: (string | null)[] = [];
   const current = () => { if (!active) throw new Error('Disconnected'); };
   const sources: { readonly tool_id: string; readonly source_key: string }[] = [];
   const fakeProvider = (tool_id: string, adapter_id: string): PersonMeetingProviderV1 => ({
     id: tool_id, normalizer_version: '2.2.0', cursor: { ...GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1,
-      policy: adapter_id === GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id ? GRANOLA_FOLDER_CURSOR_POLICY_V1 : { source_adapter_id: adapter_id, assert_live_cursor(cursor) { readGranolaCheckpointV1(cursor); } } },
+      policy: adapter_id === GRANOLA_WATCH_CURSOR_POLICY_V1.source_adapter_id ? GRANOLA_WATCH_CURSOR_POLICY_V1 : { source_adapter_id: adapter_id, assert_live_cursor(cursor) { readGranolaCheckpointV1(cursor); } } },
     connection_http: { routes: [], async accept() { throw new Error('unused'); } },
     tool: () => ({ tool_id, display_name: tool_id, availability: 'enabled', personal_status: active ? 'linked' : 'revoked', external_scope_id: null, external_subject_id: null, organization_setup: null }),
     async open(actor, guard) {
       guard(); current();
       return { identity: { kind: 'meeting-source', adapter_id, instance_id: `${tool_id}-${canonicalSha256(actor).slice(7)}`, version: '1.0.0' },
         custodian: { actor }, email: 'fixture@example.test', workspace: 'Fixture', current() { guard(); current(); },
-        async folders() { return [{ id: folder, title: 'ECHO', count: 0 }]; }, async browse() { return { meetings: [] }; },
+        async folders() { return [{ id: folder, title: 'ECHO', count: 0 }]; }, async browse(value) { browsed.push(value); return { meetings: [] }; },
         async preview(value) { return { id: value, title: 'Test meeting', notes: 'Ship pilot.', summary: '', truncated: false }; },
       };
     },
@@ -87,13 +87,13 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
           const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: `Test meeting${edition}`, provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256(`meeting version${edition}`) },
             ...(options.started === undefined ? {} : { time: { actual_start_at: options.started } }) });
           if (!cursor.manual[0]) {
-            if (cursor.folder !== null && cursor.baseline && folderDeliveries[0] !== undefined) {
+            if (cursor.mode !== 'off' && cursor.baseline && folderDeliveries[0] !== undefined) {
               const delivered = folderDeliveries.shift()!;
-              return { meetings: [build(delivered)], next_cursor: writeGranolaCheckpointV1({ ...cursor, revisions: { ...cursor.revisions, [delivered]: canonicalSha256('meeting version') } }) };
+              return { meetings: [build(delivered)], next_cursor: writeGranolaCheckpointV1({ ...cursor, seen: { ...cursor.seen, [delivered]: canonicalSha256('meeting version') } }) };
             }
-            if (cursor.folder === null || cursor.baseline) return { meetings: [] };
+            if (cursor.mode === 'off' || cursor.baseline) return { meetings: [] };
             await duringPull?.();
-            return { meetings: [], next_cursor: writeGranolaCheckpointV1({ ...cursor, baseline: true, revisions: { [id]: canonicalSha256('historical meeting') } }) };
+            return { meetings: [], next_cursor: writeGranolaCheckpointV1({ ...cursor, baseline: true, seen: { [id]: canonicalSha256('historical meeting') } }) };
           }
           const meeting = build(cursor.manual[0]);
           await duringPull?.();
@@ -102,7 +102,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
       };
     },
   });
-  const provider = fakeProvider('granola', GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id);
+  const provider = fakeProvider('granola', GRANOLA_WATCH_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(actors[access_token as keyof typeof actors] ?? other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
   const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number; readonly observation?: CoreRuntimeObservationScopeV1 } = {}) =>
     createPersonMeetingRuntimeV1({ database: seams.database ?? f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
@@ -114,6 +114,8 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
           async extract(meeting) {
             extracted++; await duringExtract?.();
             if (failExtraction !== undefined) { const failure = failExtraction; failExtraction = undefined; throw failure; }
+            if (options.reasonsOnly) return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
+              signals: [{ id: 'reason-1', kind: 'rationale' as const, text: 'The cohort is ready.', subject: null, confidence: 1, supports_signal_ids: [], evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] };
             return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
             signals: [...decisions.signals, ...(options.ownedAction ? [{ id: 'act-1', kind: 'action' as const, text: 'Send the pilot plan.', subject: null, confidence: 1, owner: 'Rafael Moreno', due_at: null,
               evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] : []),
@@ -181,7 +183,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   const outbox = (sourceKey: string) => f.db.prepare(`SELECT o.approval_id, o.state, o.suggested_projects_json FROM authority_live_approval_outbox_v2 o
     JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=? ORDER BY c.created_at, o.approval_id`).all(sourceKey) as { approval_id: string; state: string; suggested_projects_json: string | null }[];
-  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
+  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, browsed, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: (error: unknown = new Error('extraction failed')) => { failExtraction = error; },
     ledger, pulls: () => pulls, revise: (value: string) => { edition = value; },
     held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
@@ -384,27 +386,33 @@ describe('personal meeting intake uses the shared processing path', () => {
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.db.prepare('SELECT count(*) AS n FROM authority_source_revisions_v1').get()).toEqual(before); expect(f.extracted()).toBe(0);
   });
-  it('lists and cites imported originals in Mine and project scope; the importer always reads their own imports, without releasing transcripts or outsider content', async () => {
-    const f = await fixture(), runtime = f.create(); f.grantProject();
+  it('lists and cites imported originals for their importer alone, in global and Mine scope and never in project scope, without releasing transcripts', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
     const list = f.listRoute();
     const page = await list.list({ access_token: 'owner', request: { schema_version: 1, mine: true } });
-    expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', visibility: 'project' });
+    expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', visibility: 'only_me', projects: [] });
     const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
     expect(JSON.stringify(opened)).toContain('Ship the cohort'); expect(JSON.stringify(opened)).not.toContain('TRANSCRIPT_SECRET');
-    const search = originals.deskSearch({ access_token: 'owner', scope: { kind: 'project', project_id: project }, query: 'cohort', kinds: ['imported_meeting'] });
+    // A suggested project grants nothing: its scope holds no unapproved notes, for its members or the importer.
+    for (const token of ['owner', 'reader-a']) {
+      expect(originals.deskSearch({ access_token: token, scope: { kind: 'project', project_id: project }, query: 'cohort', kinds: ['imported_meeting'] }).items).toEqual([]);
+    }
+    const search = originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] });
     expect(search.items).toHaveLength(1); expect(search.items[0]?.kind).toBe('imported_meeting');
     expect(originals.deskOpen({ access_token: 'owner', scope: { kind: 'mine' }, citation: search.items[0]!.citation }).items[0]?.text).toContain('Ship the cohort');
-    expect(originals.deskSearch({ access_token: 'other', scope: { kind: 'global' }, query: 'cohort' }).items).toEqual([]);
-    await expect(list.open({ access_token: 'other', request: { schema_version: 1, ref: page.items[0]!.ref } })).rejects.toMatchObject({ code: 'not_found' });
+    for (const token of ['other', 'reader-a']) {
+      expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toEqual([]);
+      expect(() => originals.deskOpen({ access_token: token, scope: { kind: 'global' }, citation: search.items[0]!.citation })).toThrow();
+      await expect(list.open({ access_token: token, request: { schema_version: 1, ref: page.items[0]!.ref } })).rejects.toMatchObject({ code: 'not_found' });
+    }
     expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(new Date().toISOString(), project);
-    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: search })).toThrow();
-    // Intended rule (R26): the importer always reads their own imports; project members read them only while they are members.
-    // Project scope itself still needs current project membership.
+    // Project scope itself still needs current project membership; the importer's own notes do not.
     expect(() => originals.deskSearch({ access_token: 'owner', scope: { kind: 'project', project_id: project }, query: 'cohort' })).toThrow();
+    expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] }).items).toHaveLength(1);
     expect(JSON.stringify(await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } }))).toContain('Ship the cohort');
   });
   it.each([undefined, '2026-10-02T15:00:00.000Z'])('dates imported notes by their meeting when recorded and by their arrival, and counts them where a date cannot test them (started: %s)', async started => {
@@ -486,29 +494,56 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(originals.deskOpen({ access_token: 'owner', scope, citation: notes.items[0]!.citation }).items[0]?.kind).toBe('imported_meeting');
     }
   });
-  it('keeps a folder-delivered meeting readable by the folder project after the watch moves', async () => {
+  it('keeps a meeting the watch delivers private to its importer, with the watch\'s project frozen only as a suggestion', async () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     const home = await f.call(f.create(), { operation: 'home' });
-    await f.call(f.create(), { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    expect(f.browsed).toEqual([folder]);
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
     f.folderDeliveries.push(id);
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.folderDeliveries).toEqual([]); expect(f.extracted()).toBe(1);
     const [source] = (await f.call(f.create(), { operation: 'home' })).sources;
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+    expect(JSON.parse(f.outbox(source!.source_key)[0]!.suggested_projects_json!)).toEqual([project]);
+    expect(await f.readers()).toEqual(['owner']);
     const watched = await f.call(f.create(), { operation: 'home' });
-    await f.call(f.create(), { operation: 'watch', folder_id: folder, project_id: projectB, retain: true, settings_sha256: watched.settings_sha256 });
-    expect((await f.call(f.create(), { operation: 'home' })).sources[0]).toMatchObject({ folder_id: folder, folder_project_id: projectB });
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
-    // A member of both projects reads it through project A.
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: projectB, retain: true, settings_sha256: watched.settings_sha256 });
+    expect((await f.call(f.create(), { operation: 'home' })).sources[0]).toMatchObject({ watch: 'folder', folder_id: folder, project_id: projectB });
     f.join(project, 'reader-b');
-    expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
+    expect(await f.readers()).toEqual(['owner']);
+  });
+  it('watches the meetings the person captured with no folder and no project', async () => {
+    const f = await fixture(); f.grantProject(); f.join(project, 'reader-a');
+    const home = await f.call(f.create(), { operation: 'home' });
+    for (const invalid of [{ watch: 'folder', folder_id: null, project_id: null }, { watch: 'mine', folder_id: folder, project_id: null }, { watch: 'off', folder_id: null, project_id: project }] as const) {
+      await expect(f.call(f.create(), { operation: 'watch', ...invalid, retain: true, settings_sha256: home.settings_sha256 })).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    await expect(f.call(f.create(), { operation: 'watch', watch: 'mine', folder_id: null, project_id: null, retain: true, settings_sha256: home.settings_sha256 })).resolves.toEqual({ status: 'saved' });
+    expect(f.browsed).toEqual([null]);
+    expect((await f.call(f.create(), { operation: 'home' })).sources).toEqual([expect.objectContaining({ watch: 'mine', folder_id: null, project_id: null, baseline: false })]);
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
+    expect((await f.call(f.create(), { operation: 'home' })).sources[0]).toMatchObject({ watch: 'mine', baseline: true, error: null });
+    f.folderDeliveries.push(id);
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [source] = (await f.call(f.create(), { operation: 'home' })).sources;
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([]);
+    expect((await f.call(f.create(), { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ status: 'pending', project_ids: [] })]);
+    expect(await f.readers()).toEqual(['owner']);
+  });
+  it('makes no review of a meeting with no decision and no action, and keeps it in its importer\'s context', async () => {
+    const f = await fixture({ reasonsOnly: true }), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    await f.processUntilIdle(runtime);
+    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect([f.extracted(), source!.pending_imports, source!.error, f.proposals(source!.source_key)]).toEqual([1, [], null, 0]);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it('keeps a private import with the importer even while a folder is watched', async () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a');
     const home = await f.call(f.create(), { operation: 'home' });
-    await f.call(f.create(), { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
     await f.call(f.create(), { operation: 'import', meeting_id: id, project_id: null, retain: true });
     await f.processUntilIdle(f.create());
@@ -517,7 +552,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([]);
     expect(await f.readers()).toEqual(['owner']);
   });
-  it('lets members of each project a note was imported with read it, and only while they are members', async () => {
+  it('keeps a note imported with projects readable by its importer alone, recording the projects as suggestions', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     // The project choice waits as pending until processing consumes the queued import.
@@ -527,18 +562,16 @@ describe('personal meeting intake uses the shared processing path', () => {
     const [source] = (await f.call(runtime, { operation: 'home' })).sources;
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+    expect(await f.readers()).toEqual(['owner']);
     const revisions = f.count('authority_source_revisions_v1');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: projectB, retain: true });
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+    expect(await f.readers()).toEqual(['owner']);
     await f.processUntilIdle(f.create());
     // The unchanged revision is re-admitted as a duplicate; that admission consumes the queued import and promotes B.
     expect(f.count('authority_source_revisions_v1')).toBe(revisions); expect(f.extracted()).toBe(1);
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
-    f.leave(project, 'reader-a');
-    expect(await f.readers()).toEqual(['owner', 'reader-b']);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it('grants nothing to the project of a cancelled import when the note is re-imported privately', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
@@ -555,7 +588,7 @@ describe('personal meeting intake uses the shared processing path', () => {
   it('grants nothing to the project of a cancelled import when the folder later delivers the note', async () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     const home = await f.call(f.create(), { operation: 'home' });
-    await f.call(f.create(), { operation: 'watch', folder_id: folder, project_id: projectB, retain: true, settings_sha256: home.settings_sha256 });
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: projectB, retain: true, settings_sha256: home.settings_sha256 });
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
     await f.call(f.create(), { operation: 'import', meeting_id: id, project_id: project, retain: true });
     const [queued] = (await f.call(f.create(), { operation: 'home' })).sources;
@@ -565,7 +598,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.folderDeliveries).toEqual([]); expect(f.extracted()).toBe(1);
     expect(f.intake.suggestions(queued!.source_key, id)).toEqual([projectB]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner', 'reader-b']);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it.each([false, true])('grants, stages and parks nothing when the import is cancelled while its admitted meeting is being extracted (extraction fails: %s)', async (fails) => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
@@ -779,7 +812,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(held).toMatchObject({ pending_imports: [], error: heldError(id) });
     expect(f.intake.suggestions(held!.source_key, id)).toEqual([project]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it.each(['granola', 'synthetic'] as const)('parks a failed meeting and stages the next one in its %s source on the next poll', async (tool) => {
     const f = await fixture(), storage = new Database(':memory:');
@@ -813,7 +846,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const [row] = f.held();
     const key = { admission_sha256: row!.extraction_admission_sha256, review_lineage_id: row!.review_lineage_id, review_input_sha256: row!.review_input_sha256 };
     // The parked revision is rebuilt from source custody, as an operator retry reads it.
-    const state = new SqliteAuthorityMeetingProcessingStateV1(f.db, GRANOLA_FOLDER_CURSOR_POLICY_V1, 'llm', undefined, source!.source_key);
+    const state = new SqliteAuthorityMeetingProcessingStateV1(f.db, GRANOLA_WATCH_CURSOR_POLICY_V1, 'llm', undefined, source!.source_key);
     const [listed] = await state.listHeldExtractions();
     expect(listed).toMatchObject({ external_id: id, key, attempt: 1, failure_stage: 'unknown' });
     expect((await state.readHeldMeeting(listed!)).provenance).toMatchObject({ external_id: id, canonical_revision: listed!.revision_id });
@@ -921,7 +954,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(JSON.parse(f.outbox(source!.source_key)[0]!.suggested_projects_json!)).toEqual([project, projectB].sort());
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(f.extracted()).toBe(1);
-    expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it('opens a valid transcript-only imported meeting with no releasable body', async () => {
     const f = await fixture({ transcriptOnly: true }), runtime = f.create();
@@ -966,8 +999,8 @@ describe('personal meeting intake uses the shared processing path', () => {
   it('saves a pending watch before the background baseline finishes, survives restart, and retains no history', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     const home = await f.call(runtime, { operation: 'home' });
-    await expect(f.call(runtime, { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 })).resolves.toEqual({ status: 'saved' });
-    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ folder_id: folder, folder_project_id: project, baseline: false });
+    await expect(f.call(runtime, { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 })).resolves.toEqual({ status: 'saved' });
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'folder', folder_id: folder, project_id: project, baseline: false });
     const before = f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get();
     let started!: () => void, release!: () => void;
     const startedPull = new Promise<void>(resolve => { started = resolve; });
@@ -985,26 +1018,26 @@ describe('personal meeting intake uses the shared processing path', () => {
   it('discards an in-flight baseline when the person stops the watch', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     const home = await f.call(runtime, { operation: 'home' });
-    await f.call(runtime, { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    await f.call(runtime, { operation: 'watch', watch: 'mine', folder_id: null, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
     const pending = await f.call(runtime, { operation: 'home' });
     expect(pending.sources[0]?.baseline).toBe(false);
-    f.duringPull(async () => { await f.call(runtime, { operation: 'watch', folder_id: null, project_id: null, retain: true, settings_sha256: pending.settings_sha256 }); });
+    f.duringPull(async () => { await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: pending.settings_sha256 }); });
     const before = f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get();
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ folder_id: null, baseline: false });
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', folder_id: null, project_id: null, baseline: false });
     expect(f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get()).toBe(before);
     expect(f.extracted()).toBe(0);
   });
   it('uses compare-and-set across clients and permits stopping after project access is revoked', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     const home = await f.call(runtime, { operation: 'home' });
-    const watch = { operation: 'watch' as const, folder_id: folder, project_id: project, retain: true as const, settings_sha256: home.settings_sha256 };
+    const watch = { operation: 'watch' as const, watch: 'folder' as const, folder_id: folder, project_id: project, retain: true as const, settings_sha256: home.settings_sha256 };
     await f.call(runtime, watch);
     await expect(f.call(f.create(), watch)).rejects.toMatchObject({ code: 'stale_access_state' });
     const next = await f.call(runtime, { operation: 'home' }); expect(next.sources[0]?.baseline).toBe(false);
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(new Date().toISOString(), project);
-    await f.call(runtime, { operation: 'watch', folder_id: null, project_id: null, retain: true, settings_sha256: next.settings_sha256 });
-    expect((await f.call(runtime, { operation: 'home' })).sources[0]?.folder_id).toBeNull();
+    await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: next.settings_sha256 });
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', folder_id: null, project_id: null });
   });
   it('imports a note saved to A and then B before processing as one source and one extraction, freezing both projects', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
@@ -1075,7 +1108,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]?.project_ids).toEqual([project]);
     expect((await runtime.approvals()).proposal(proposals[0]!.approval_id)!.project_ids).toEqual([project]);
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
-    expect(await f.readers()).toContain('reader-b');
+    expect(await f.readers()).toEqual(['owner']);
   });
   it('approves into the chosen project through the v2 route', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);

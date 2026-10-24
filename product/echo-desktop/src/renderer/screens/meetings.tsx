@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { PersonMeetingHomeV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
+import type { PersonMeetingHomeV2, PersonMeetingResultsV2, PersonMeetingWatchV2 } from '@echo-brain/organization-api';
 import { dateTime } from '../format.js';
 import { loadHome, loadProjects, meetingCommand, useStore } from '../store.js';
 import { Passage } from './ask.js';
@@ -14,7 +14,7 @@ function day(date: string): string {
   return Number.isNaN(time) ? date : new Date(time).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
-/** A labelled select, in the sheet's style. */
+/** A labelled select, in the sheet's style, named by its label alone (not its options' text). */
 function Select({ label, value, disabled, onChange, children }: {
   label: string; value: string; disabled: boolean; onChange(value: string): void; children: ComponentChildren;
 }) {
@@ -22,7 +22,7 @@ function Select({ label, value, disabled, onChange, children }: {
     <label class="select-field">
       <span class="select-label">{label}</span>
       <span class="select-wrap">
-        <select class="field small" value={value} disabled={disabled} onChange={event => onChange(event.currentTarget.value)}>{children}</select>
+        <select class="field small" aria-label={label} value={value} disabled={disabled} onChange={event => onChange(event.currentTarget.value)}>{children}</select>
         <Caret />
       </span>
     </label>
@@ -30,9 +30,9 @@ function Select({ label, value, disabled, onChange, children }: {
 }
 
 /**
- * Granola: the folder ECHO watches, and any meeting you add by hand. Browsing
- * never saves meeting content; only Add to ECHO and the folder watch do, with
- * your consent given once. Decisions from added meetings reach Home.
+ * Granola: what ECHO imports by itself (nothing, the meetings you captured, or one folder), and any meeting you add by
+ * hand. Browsing never saves meeting content; only Add to ECHO and automatic import do, with your consent given once.
+ * Imported meetings stay yours until you approve items from them: a suggested project only pre-ticks where they go.
  */
 export function Meetings() {
   const state = useStore();
@@ -40,24 +40,24 @@ export function Meetings() {
   const [home, setHome] = useState<PersonMeetingHomeV2 | null>(null);
   const [meetings, setMeetings] = useState<PersonMeetingResultsV2['browse']['meetings']>([]);
   const [preview, setPreview] = useState<PersonMeetingResultsV2['open'] | null>(null);
-  const [folder, setFolder] = useState(''), [project, setProject] = useState('');
+  // Automatic import: what it watches, its folder, and the project it suggests.
+  const [mode, setMode] = useState<PersonMeetingWatchV2>('off'), [watchFolder, setWatchFolder] = useState(''), [suggest, setSuggest] = useState('');
+  // One meeting by hand: from your recent meetings ('') or a folder, and the project it suggests.
+  const [from, setFrom] = useState(''), [project, setProject] = useState('');
   const [retain, setRetain] = useState(false);
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
-  /** The folder's meetings, newest first, as soon as it is chosen. */
-  async function browse(folder_id: string) {
+  /** Your recent meetings, or one folder's, newest first. */
+  async function browse(folder: string) {
     setMeetings([]); setPreview(null);
-    if (!folder_id) return;
-    const result = await meetingCommand({ operation: 'browse', folder_id });
+    const result = await meetingCommand({ operation: 'browse', folder_id: folder || null });
     if (alive.current) setMeetings(result.meetings);
   }
   async function refresh(initialize = false) {
     const next = await meetingCommand({ operation: 'home' }).catch((error: unknown) => { setHome(null); throw error; });
     if (!alive.current) return;
     setHome(next);
-    const watch = next.sources.find(s => s.folder_id !== null);
-    if (watch && initialize) {
-      setFolder(watch.folder_id!); setProject(watch.folder_project_id!);
-      try { await browse(watch.folder_id!); } catch { /* the list can be read again */ }
+    if (initialize && next.connected) {
+      try { await browse(''); } catch { /* the list can be read again */ }
     }
   }
   async function run(work: () => Promise<void>) {
@@ -72,13 +72,22 @@ export function Meetings() {
 
   const projects = state.projects.items;
   const projectName = (id: string | null) => projects.find(p => p.project_id === id)?.name ?? 'Selected project';
-  const watch = home?.sources.find(s => s.folder_id !== null);
-  const watchFolder = watch ? home?.folders.find(f => f.id === watch.folder_id)?.title ?? 'Selected folder' : '';
-  const savedTo = project ? projectName(project) : 'Only me';
+  const projectOptions = projects.map(p => <option key={p.project_id} value={p.project_id}>{p.name}</option>);
+  const moreProjects = state.projects.next && <button type="button" class="link-button" disabled={busy || state.projects.loading} onClick={() => void loadProjects(true)}>More projects</button>;
+  const watch = home?.sources.find(s => s.watch !== 'off');
+  const watchLine = !watch ? '' : [
+    watch.watch === 'folder' ? `${home?.folders.find(f => f.id === watch.folder_id)?.title ?? 'Selected'} folder` : 'My meetings',
+    watch.project_id !== null ? `suggests ${projectName(watch.project_id)}` : '',
+    !watch.baseline ? 'Preparing' : watch.checked_at ? `Checked ${dateTime(watch.checked_at)}` : 'Active',
+  ].filter(part => part !== '').join(' · ');
 
+  const saveWatch = () => void run(async () => {
+    await meetingCommand({ operation: 'watch', watch: mode, folder_id: mode === 'folder' ? watchFolder : null, project_id: suggest || null, settings_sha256: home!.settings_sha256, retain: true });
+    await refresh(); if (alive.current) setNotice('Saved. New meetings come in by themselves.');
+  });
   const stopWatch = () => void run(async () => {
-    await meetingCommand({ operation: 'watch', folder_id: null, project_id: null, settings_sha256: home!.settings_sha256, retain: true });
-    await refresh();
+    await meetingCommand({ operation: 'watch', watch: 'off', folder_id: null, project_id: null, settings_sha256: home!.settings_sha256, retain: true });
+    await refresh(); if (alive.current) setMode('off');
   });
 
   return <section class="personal-meetings" aria-label="Personal meetings" aria-busy={busy}>
@@ -89,28 +98,26 @@ export function Meetings() {
     </div>
     {notice && <div class="meetings-status" role="status">{notice}</div>}
 
-    {/* Add: the folder ECHO watches, or one meeting by hand. Consent is given once, for both. */}
+    {/* Automatic import, or one meeting by hand. Consent is given once, for both. */}
     {home?.connected && <>
-      <div class="section-label">Add meetings</div>
-      {watch && (
+      <div class="section-label">Automatic import</div>
+      {watch ? (
         <div class="watch-row" data-testid="meeting-watch">
           <span class="item-icon" aria-hidden="true"><Calendar /></span>
-          <span class="lines">
-            <span class="name">{watchFolder} → {projectName(watch.folder_project_id)}</span>
-            <span class="detail">{watch.baseline ? 'Automatic import active' : 'Preparing automatic import'}{watch.checked_at ? ` · Checked ${dateTime(watch.checked_at)}` : ''} · Checks about every five minutes</span>
-          </span>
+          <span class="lines"><span class="name">{watchLine}</span></span>
           <button type="button" class="link-button" disabled={busy} onClick={stopWatch}>Stop</button>
         </div>
+      ) : (
+        <div class="meeting-controls thirds" role="group" aria-label="Automatic import">
+          <Select label="Import" value={mode} disabled={busy} onChange={value => setMode(value as PersonMeetingWatchV2)}>
+            <option value="off">Off</option><option value="mine">My meetings</option><option value="folder">One folder</option>
+          </Select>
+          {mode === 'folder' && <Select label="Folder" value={watchFolder} disabled={busy} onChange={setWatchFolder}>
+            <option value="">Choose a folder</option>{home.folders.map(f => <option key={f.id} value={f.id}>{f.title}</option>)}
+          </Select>}
+          {mode !== 'off' && <><Select label="Suggest" value={suggest} disabled={busy} onChange={setSuggest}><option value="">None</option>{projectOptions}</Select>{moreProjects}</>}
+        </div>
       )}
-      <div class="meeting-controls">
-        <Select label="Granola folder" value={folder} disabled={busy} onChange={value => { setFolder(value); void run(() => browse(value)); }}>
-          <option value="">Choose a folder</option>{home.folders.map(f => <option key={f.id} value={f.id}>{f.title} ({f.count})</option>)}
-        </Select>
-        <Select label="Save to" value={project} disabled={busy} onChange={setProject}>
-          <option value="">Only me</option>{projects.map(p => <option key={p.project_id} value={p.project_id}>{p.name}</option>)}
-        </Select>
-        {state.projects.next && <button type="button" class="link-button" disabled={busy || state.projects.loading} onClick={() => void loadProjects(true)}>More projects</button>}
-      </div>
       {home.sources.map(s => <div key={s.source_key} class="source-notes">
         {s.error && <div class="error">{s.error}</div>}
         {s.pending_imports.map(id => <div key={id} class="notice-line">Import queued
@@ -118,15 +125,20 @@ export function Meetings() {
       </div>)}
       <label class="check consent"><input type="checkbox" checked={retain} disabled={busy} onChange={e => setRetain(e.currentTarget.checked)} />
         <span>I allow ECHO to retain notes and transcripts from these meetings and process them.</span></label>
-      <div class="notice-line">Project members can read imported notes. Transcripts stay private until you share them at approval. Browsing saves nothing.</div>
-      {!watch && <div class="choices start">
-        <button type="button" class="plain-button small" disabled={busy || !folder || !project || !retain} onClick={() => void run(async () => {
-          await meetingCommand({ operation: 'watch', folder_id: folder, project_id: project, settings_sha256: home.settings_sha256, retain: true });
-          await refresh(); if (alive.current) setNotice('Folder saved. New meetings in it are imported by themselves; existing ones you add below.');
-        })}>Use folder for automatic import</button>
-        <span class="notice-line">Up to 50 meetings in the folder.</span>
+      <div class="notice-line">Imported meetings stay private until you approve items from them.</div>
+      {!watch && mode !== 'off' && <div class="choices start">
+        <button type="button" class="plain-button small" disabled={busy || !retain || (mode === 'folder' && !watchFolder)} onClick={saveWatch}>Save</button>
       </div>}
-      {folder && !busy && meetings.length === 0 && <div class="notice-line">No meetings in this folder.</div>}
+
+      <div class="section-label">Add one meeting</div>
+      <div class="meeting-controls" role="group" aria-label="Add one meeting">
+        <Select label="From" value={from} disabled={busy} onChange={value => { setFrom(value); void run(() => browse(value)); }}>
+          <option value="">Recent meetings</option>{home.folders.map(f => <option key={f.id} value={f.id}>{f.title} ({f.count})</option>)}
+        </Select>
+        <Select label="Suggest" value={project} disabled={busy} onChange={setProject}><option value="">None</option>{projectOptions}</Select>
+        {moreProjects}
+      </div>
+      {!busy && meetings.length === 0 && <div class="notice-line">No meetings.</div>}
       <div class="meeting-list">
         {meetings.map(m => {
           const open = preview?.id === m.id;
@@ -147,9 +159,9 @@ export function Meetings() {
         <div class="choices start">
           <button type="button" class="primary-button small" disabled={busy || !retain} onClick={() => void run(async () => {
             await meetingCommand({ operation: 'import', meeting_id: preview.id, project_id: project || null, retain: true }); await refresh();
-            if (alive.current) { setPreview(null); setNotice('Added. It reaches Home once processed.'); void loadHome(); }
+            if (alive.current) { setPreview(null); setNotice('Added. Its decisions and actions reach Home once processed.'); void loadHome(); }
           })}>Add to ECHO</button>
-          <span class="notice-line">Saved to {savedTo}{!retain ? ' · Allow retention above first' : ''}</span>
+          <span class="notice-line">{[project ? `Suggests ${projectName(project)}` : '', retain ? '' : 'Allow retention above first'].filter(part => part !== '').join(' · ')}</span>
         </div>
       </article>}
     </>}

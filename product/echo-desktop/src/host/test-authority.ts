@@ -269,7 +269,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<Contract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
-  let granolaImported = false, granolaApproved = false, granolaWatch = false, granolaBaselineHomeReads = 0;
+  let granolaImported = false, granolaApproved = false, granolaBaselineHomeReads = 0;
+  // The automatic import granola-preparing saved: what it watches and the project it suggests.
+  let granolaWatch: { watch: string; folder_id: string | null; project_id: string | null } | undefined;
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
@@ -1071,11 +1073,18 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         status: granolaApproved ? 'approved' : 'pending', decided_on: decidedOn,
         first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' };
       switch (body?.operation) {
-        case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
-          sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, folder_project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });
+        case 'home': {
+          if (mode === 'granola-browse-unavailable') return failure('unavailable', 503);
+          // A saved watch prepares on its first home read and has been checked on the next.
+          const watching = mode === 'granola-preparing' && granolaWatch !== undefined && granolaWatch.watch !== 'off', baseline = watching && granolaBaselineHomeReads++ > 0;
+          return json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
+            sources: mode === 'granola-preparing' && granolaWatch !== undefined ? [{ source_key: 'pms_fixture', ...granolaWatch, baseline, pending_imports: [],
+              checked_at: baseline ? '2026-10-24T17:04:00.000Z' : null, error: null }] : [] });
+        }
+        // Your recent meetings, or one folder's: the same meeting here.
         case 'browse': return json({ meetings: [{ id: meetingId, title: 'Pilot planning', date: 'Oct 6, 2026 6:30 PM PDT' }] });
         case 'open': return json({ id: meetingId, title: 'Pilot planning', notes: 'Launch the pilot next week.', summary: 'Decision: launch.', truncated: false });
-        case 'watch': granolaWatch = true; return json({ status: 'saved' });
+        case 'watch': granolaWatch = { watch: body?.watch as string, folder_id: body?.folder_id as string | null, project_id: body?.project_id as string | null }; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
         case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added' ? [review] : [] });
         case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: PILOT_PROPOSAL,

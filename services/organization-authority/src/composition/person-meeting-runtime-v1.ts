@@ -41,7 +41,8 @@ export interface PersonMeetingProviderV1 {
     readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown; readonly email: string; readonly workspace: string;
     current(): void;
     folders(): Promise<PersonMeetingResultsV2['home']['folders']>;
-    browse(folder: string): Promise<PersonMeetingResultsV2['browse']>;
+    /** The newest meetings, at most 50: the person's own captures (`null`), or one folder's. */
+    browse(folder: string | null): Promise<PersonMeetingResultsV2['browse']>;
     preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
     /** Optional staging capability. Persists an immutable payload before its normal import is queued. */
     submit?(meeting: PersonSyntheticMeetingV1): void;
@@ -134,7 +135,9 @@ export function createPersonMeetingRuntimeV1(options: {
     suggestions: (sourceKey, externalId) => intake.proposalSuggestions(sourceKey, externalId),
     projects: (actor, ids) => { for (const id of ids) intake.currentPerson(actor, id); },
   }).catch((error: unknown) => { core = undefined; throw error; });
-  function settings(person: MeetingIntakePersonV1) { return canonicalSha256(intake.list(person).map(({ source_key, folder_id, folder_project_id, settings_revision }) => ({ source_key, folder_id, folder_project_id, settings_revision }))); }
+  function settings(person: MeetingIntakePersonV1) {
+    return canonicalSha256(intake.list(person).map(({ source_key, watch, folder_id, suggested_project_id, settings_revision }) => ({ source_key, watch, folder_id, suggested_project_id, settings_revision })));
+  }
   async function lane(setting: MeetingIntakeSettingV1, fromCustody = false) {
     const { provider } = ownerOf(setting.source_adapter_id);
     // Pin the person's exact active membership; a source belongs to the person, not to a project.
@@ -196,7 +199,7 @@ export function createPersonMeetingRuntimeV1(options: {
     if (retry) retryAfter.set(setting.source_key, Date.now() + 60_000);
     try {
       intake.requireCurrent(setting);
-      if (!retry && setting.folder_id === null && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
+      if (!retry && setting.watch === 'off' && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
         // Only a failed freeze is left: retry it from the stored extraction, without the provider.
         const progressed = await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
         // A full page or a freeze looks again at once (a frozen source drops out); a pass that froze nothing waits.
@@ -238,7 +241,7 @@ export function createPersonMeetingRuntimeV1(options: {
         source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
           source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
           if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
-          // Same transaction as the admission: a folder delivery's project becomes the meeting's suggestion.
+          // Same transaction as the admission: a watch delivery's suggested project becomes the meeting's suggestion.
           sourceIntake.recordAdmission(setting, delivered.item.external_id);
         }),
           scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
@@ -255,12 +258,13 @@ export function createPersonMeetingRuntimeV1(options: {
     } catch (error) {
       signal.throwIfAborted();
       const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
-      // Nothing left to retry: the import queue is empty, every proposal of this source is frozen, and no granted retry is due.
-      if (remaining.folder === null && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)
+      const watching = intake.list().some(s => s.source_key === setting.source_key && s.watch !== 'off');
+      // Nothing left to retry: no watch, the import queue is empty, every proposal of this source is frozen, and no granted retry is due.
+      if (!watching && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)
         && !retryReady(setting.source_key)) { observed.delete(setting.source_key); return; }
       // Fixed, content-free status; one broken grant cannot starve another person's work. A failed retry is already
       // deferred, so the source's intake goes next.
-      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + (retry ? 0 : 60_000) });
+      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection and folder access.', next: Date.now() + (retry ? 0 : 60_000) });
       if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
     }
   }
@@ -277,7 +281,7 @@ export function createPersonMeetingRuntimeV1(options: {
     // Cheap checks first: a source's held rows are read, and its grants inspected, only when it is otherwise due.
     const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys());
     const eligible = intake.list().filter(s => !inFlight.has(s.source_key) && owners.has(s.source_adapter_id) && (observed.get(s.source_key)?.next ?? 0) <= Date.now()
-      && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0 || unfrozen.has(s.source_key) || retryReady(s.source_key)));
+      && (s.watch !== 'off' || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0 || unfrozen.has(s.source_key) || retryReady(s.source_key)));
     return [...eligible.filter(s => s.source_key > after), ...eligible.filter(s => s.source_key <= after)];
   }
   /**
@@ -385,10 +389,11 @@ export function createPersonMeetingRuntimeV1(options: {
           if (!setting) throw new AuthorityOperationError('not_found', 'Meeting import unavailable');
           ownerOf(setting.source_adapter_id).intake.cancelImport(setting, input.meeting_id, current); observed.delete(setting.source_key); return { status: 'cancelled' };
         }
-        if (input.operation === 'watch' && input.folder_id === null) {
+        // Stopping needs no provider session and no project access.
+        if (input.operation === 'watch' && input.watch === 'off') {
           current(); db.transaction(() => {
             if (settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
-            const old = intake.list(person).find(s => s.folder_id !== null); if (old) ownerOf(old.source_adapter_id).intake.watch(old, null, null, current);
+            const old = intake.list(person).find(s => s.watch !== 'off'); if (old) ownerOf(old.source_adapter_id).intake.watch(old, { watch: 'off', folder_id: null }, null, current);
           }).immediate(); return { status: 'saved' };
         }
         const linked = provider.tool(token).personal_status === 'linked';
@@ -402,7 +407,7 @@ export function createPersonMeetingRuntimeV1(options: {
           return { connected: session !== null, email: session?.email ?? null, workspace: session?.workspace ?? null, folders, settings_sha256: settings(person),
             sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => {
               const owner = ownerOf(s.source_adapter_id), checkpoint = owner.intake.checkpoint(s.source_key);
-              return { source_key: s.source_key, folder_id: s.folder_id, folder_project_id: s.folder_project_id,
+              return { source_key: s.source_key, watch: s.watch, folder_id: s.folder_id, project_id: s.suggested_project_id,
                 baseline: owner.provider.cursor.ready(checkpoint), pending_imports: checkpoint.manual,
                 checked_at: observed.get(s.source_key)?.checked_at ?? null, error: sourceError(s.source_key) };
             }) };
@@ -424,17 +429,17 @@ export function createPersonMeetingRuntimeV1(options: {
           if (!session.submit) throw new AuthorityOperationError('not_found', 'Custom meeting submission unavailable');
           session.submit(input.meeting);
         }
-        // Validate folder access here; the existing worker builds its content
-        // baseline from the durable pending cursor without holding this request.
-        if (input.operation === 'watch') await session.browse(input.folder_id!);
+        // Validate what the watch reads (the person's own captures, or the folder) here; the worker records the window
+        // from the durable pending cursor without holding this request.
+        if (input.operation === 'watch') await session.browse(input.folder_id);
         else await session.preview(input.operation === 'submit' ? input.meeting.id : input.meeting_id);
         return db.transaction(() => {
           currentProject();
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
           const providerIntake = ownerOf(provider.cursor.policy.source_adapter_id).intake;
           const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, session, commitments: id => processor.current_commitments?.(id), current: currentProject });
-          // "Save to" records the watched folder's project or the import's suggestion; neither changes the source.
-          if (input.operation === 'watch') providerIntake.watch(setting, input.folder_id, project, currentProject);
+          // A watch's or an import's project is only a suggestion; neither changes the source.
+          if (input.operation === 'watch') providerIntake.watch(setting, { watch: input.watch, folder_id: input.folder_id }, project, currentProject);
           else providerIntake.enqueue(setting, input.operation === 'submit' ? input.meeting.id : input.meeting_id, project, currentProject);
           observed.delete(setting.source_key);
           if (input.operation === 'submit') return { status: 'queued', meeting_id: input.meeting.id };

@@ -211,10 +211,10 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
     normalizer_version: NORMALIZER_VERSION,
     custodian_assurance: STAGING_SYNTHETIC_CUSTODIAN_ASSURANCE_V1,
     connection_http,
-    // This source has no folders and no baseline: a watched folder fails its write, and automatic import is never active.
+    // This source has no folders and no baseline: only stopping is a watch it takes, and automatic import is never active.
     cursor: Object.freeze({ read: readStagingSyntheticCheckpointV1, write: writeStagingSyntheticCheckpointV1, policy: CURSOR_POLICY,
       initial: () => writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: [] }),
-      watch: (checkpoint: StagingSyntheticCheckpointV1, folder: string | null): StagingSyntheticCheckpointV1 => ({ ...checkpoint, folder }),
+      watch: (checkpoint: StagingSyntheticCheckpointV1, watch: { readonly watch: string }): StagingSyntheticCheckpointV1 => watch.watch === 'off' ? checkpoint : invalidCursor(),
       ready: (): boolean => false }),
     tool(_token: string) {
       return { tool_id: STAGING_SYNTHETIC_TOOL_ID_V1, display_name: "Synthetic staging meetings", availability: "enabled" as const,
@@ -229,7 +229,7 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
         email: "staging-synthetic@example.test", workspace: "Synthetic staging meetings", current,
         ...(options.custom_store === undefined ? {} : { submit(input: PersonSyntheticMeetingV1) { current(); options.custom_store!.save(identity, input); current(); } }),
         async folders(): Promise<readonly { readonly id: string; readonly title: string; readonly count: number }[]> { return []; },
-        async browse(_folder: string): Promise<{ readonly meetings: readonly { readonly id: string; readonly title: string; readonly date: string }[] }> {
+        async browse(_folder: string | null): Promise<{ readonly meetings: readonly { readonly id: string; readonly title: string; readonly date: string }[] }> {
           throw new AuthorityOperationError("not_found", "Synthetic meetings have no folders");
         },
         async preview(id: string) {
