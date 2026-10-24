@@ -152,6 +152,12 @@ The review rows of `reviews` gain `records`: the published records of a
 decided approval, each `{ approval_id, project_ids }`. It is empty until the
 approval is published.
 
+`review_open` also takes one of those record approval ids (a run's
+`event_ref`, which a follow-ups list links) and opens the proposal's review,
+whose `review.approval_id` is the proposal's. It resolves through the
+decision's receipt, for the reviewer who decided it only; `review` takes the
+proposal's approval id alone.
+
 ### 2.2 What the card sends (`review`)
 
 `review` carries `approval_id`, `command_id`, `snapshot_sha256`, `action`,

@@ -1140,6 +1140,33 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(later.items[0]!.project_ids).toEqual([projectB]);
     expect(later.suggested_projects.map(entry => entry.project_id)).toEqual([project]);
   });
+  it('opens a review by one of its published records\' own approval ids (a run\'s event_ref), for its reviewer only', async () => {
+    const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
+    const { pending, opened } = await f.pendingReview(runtime, project);
+    const routes = f.routes(opened, item => ({ 'decision-1': [projectB], 'act-1': [], 'act-2': null })[item.signal_id] ?? null);
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-split', action: 'approve', routes, owners: [] });
+    const recordIds = [approvalRecordIdV2(pending!.approval_id, [projectB]), approvalRecordIdV2(pending!.approval_id, [])];
+    // While the approval publishes, no record exists yet to name it.
+    await expect(f.call(runtime, { operation: 'review_open', approval_id: recordIds[0]! })).rejects.toMatchObject({ code: 'not_found' });
+    await runtime.processing.recoverV4Appends(new AbortController().signal);
+    const byProposal = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(byProposal.records.map(record => record.approval_id)).toEqual(recordIds);
+    for (const id of recordIds) {
+      const byRecord = await f.call(runtime, { operation: 'review_open', approval_id: id });
+      // The proposal's own review, under its approval id: the desktop decides and links by that.
+      expect(byRecord).toEqual(byProposal);
+      expect(byRecord.review.approval_id).toBe(pending!.approval_id);
+    }
+    // Another member opens it by neither id, as if neither existed.
+    for (const id of [pending!.approval_id, ...recordIds]) {
+      await expect(f.call(runtime, { operation: 'review_open', approval_id: id }, 'other')).rejects.toMatchObject({ code: 'not_found' });
+    }
+    // A decision never takes a record id, and an id that names no record of theirs opens nothing.
+    await expect(f.call(runtime, { operation: 'review', approval_id: recordIds[1]!, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-record', action: 'reject', routes: [], owners: [] }))
+      .rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.call(runtime, { operation: 'review_open', approval_id: `apr_${'e'.repeat(64)}` })).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.count('authority_approval_decisions_v1')).toBe(1);
+  });
   it('opens a rejected review with nothing kept', async () => {
     const f = await fixture({ ownedAction: true }), runtime = f.create(); f.grantProject();
     const { pending, opened } = await f.pendingReview(runtime, project);
