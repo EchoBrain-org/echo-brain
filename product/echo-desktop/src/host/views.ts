@@ -352,13 +352,11 @@ export function askStepView(raw: unknown): AskStep {
 }
 
 /**
- * An original's passage, by what its ref opens: a transcript's opens its
- * meeting, any other its note, document or imported meeting. A document's id
- * opens it when no ref came.
+ * An original's passage, by what its ref opens: its note, document or
+ * imported meeting. A document's id opens it when no ref came.
  */
 function originalSource(citation: SourceRevision, label: string, ref: string | undefined): AnswerSource {
   const passage = sourceRef(citation);
-  if (ref?.startsWith('transcript:')) return { kind: 'transcript', label, ref: passage, meeting: ref.slice('transcript:'.length) };
   const opens = ref ?? (passage.document_id === undefined ? undefined : `document:${passage.document_id}`);
   return opens === undefined ? { kind: 'original', label, ref: passage } : { kind: 'original', label, ref: passage, item: itemRef(opens) };
 }
@@ -595,7 +593,7 @@ function whole(item: RecordItem): RecordItem {
  * A long item comes in parts: each part goes on the item before it, and only
  * a page read with a cursor may begin with a part that goes on the page
  * before. Who can read it follows the row: everyone, a project's members, or
- * the approver. Its transcript's ref and every id stay behind.
+ * the approver. Every id stays behind.
  */
 function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean): ApprovedRecord {
   if ((page.meeting !== undefined) !== first) throw new ViewError();

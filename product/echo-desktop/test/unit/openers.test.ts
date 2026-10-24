@@ -40,6 +40,6 @@ describe('one key for each item Ask cites', () => {
   it('tells items apart by what they cite, not by their label', () => {
     expect(sourceKey(decision('1', 'One'))).toBe(sourceKey(decision('1', 'Another')));
     expect(sourceKey(decision('1'))).not.toBe(sourceKey(decision('2')));
-    expect(sourceKey({ kind: 'original', label: 'a', ref: coordinates('6') })).not.toBe(sourceKey({ kind: 'transcript', label: 'a', ref: coordinates('6'), meeting: sha('2') }));
+    expect(sourceKey({ kind: 'original', label: 'a', ref: coordinates('6') })).not.toBe(sourceKey({ kind: 'original', label: 'a', ref: coordinates('7') }));
   });
 });

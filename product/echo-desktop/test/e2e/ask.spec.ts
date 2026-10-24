@@ -451,7 +451,7 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   await expect.poll(() => run.calls().filter(call => call.path === '/v5/person/ask').map(call => call.progress)).toEqual(['1']);
 
   // Then the line names the step now, and nothing more until it is opened: a place is named once, and the other places counted.
-  await expect(page.getByTestId('ask-stage')).toHaveText('Reading Tuesday sync and 3 more', { timeout: 10_000 });
+  await expect(page.getByTestId('ask-stage')).toHaveText('Reading Tuesday sync and 2 more', { timeout: 10_000 });
   await expect(page.getByTestId('ask-line')).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByTestId('ask-steps')).toHaveCount(0);
   // The timer is not read out; a screen reader hears the stage instead.
@@ -462,7 +462,7 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   // Opened, every row: source kinds, never the words searched, and every place read, counting its items.
   await openLine(page);
   await expect(progressSteps(page)).toHaveText([
-    'Searched meetings, documents and Jira · 3 found', 'Reading Tuesday sync ×2, Apollo update, Tuesday sync transcript, ECHO-7 · Jira launch',
+    'Searched meetings, documents and Jira · 3 found', 'Reading Tuesday sync ×2, Apollo update, ECHO-7 · Jira launch',
   ]);
   await expect(page.getByTestId('ask-steps').getByTestId('ask-step-name').nth(0)).toHaveAccessibleName('Tuesday sync, 2 items');
   await expect(page.getByTestId('ask-view').locator('[aria-live="off"]')).toHaveCount(1);
@@ -476,12 +476,6 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   await expect(names.nth(0)).toHaveAttribute('aria-pressed', 'true');
   await expect(pane.getByTestId('source-open')).toHaveCount(0);
   await expect(asking).toBeVisible();
-  // The transcript opens its meeting.
-  await names.nth(2).click();
-  await expect(pane).toContainText('Meeting · Transcript');
-  await expect(pane.locator('h2')).toHaveText('Tuesday sync');
-  expect(opens()).toEqual([`meeting:${RECORD}`]);
-  await expect(asking).toBeVisible();
 
   // The answer: the line becomes one receipt above it, still open as the person left it, and the pane, still on the meeting, offers Open.
   writeFileSync(join(run.home, 'release-ask'), '');
@@ -489,20 +483,20 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   await expect(asking).toHaveCount(0);
   const receipt = page.getByTestId('ask-receipt');
   // Its time is the wait the page timed, never the fixture Authority's 48 s of research.
-  await expect(receipt).toHaveText(/^Looked through 5 items · \d+s$/);
+  await expect(receipt).toHaveText(/^Looked through 4 items · \d+s$/);
   await expect(receipt).not.toHaveText(/48s/);
   await expect(receipt).toHaveAttribute('aria-expanded', 'true');
   // Its rows, mounted with the answer, stay out of the thread's live region: a screen reader hears the answer, not the history again.
   await expect(page.getByTestId('receipt-rows')).toHaveAttribute('aria-live', 'off');
-  await expect(pane).toContainText('Meeting · Transcript');
+  await expect(pane).toContainText('Meeting · Approved record');
   await expect(pane.getByTestId('source-open')).toBeVisible();
 
   // The receipt lists every search and read the Authority audited, each name opening beside the answer.
   const rows = page.getByTestId('receipt-rows').getByTestId('ask-step');
-  await expect(rows).toHaveText(['Searched meetings, documents and Jira · 3 found', 'Read Tuesday sync ×2, Apollo update, Tuesday sync transcript, ECHO-7 · Jira launch']);
+  await expect(rows).toHaveText(['Searched meetings, documents and Jira · 3 found', 'Read Tuesday sync ×2, Apollo update, ECHO-7 · Jira launch']);
   const named = page.getByTestId('receipt-rows').getByTestId('ask-step-name');
   // A ticket opens only in Jira: it has no page here.
-  await named.nth(3).click();
+  await named.nth(2).click();
   await expect(pane).toContainText('Jira · Ticket');
   await expect(pane.getByTestId('open-ticket-source')).toBeVisible();
   await expect(pane.getByTestId('source-open')).toHaveCount(0);

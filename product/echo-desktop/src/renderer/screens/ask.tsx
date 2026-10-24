@@ -12,7 +12,7 @@ import {
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
-import { openerOf, sourceKey } from '../openers.js';
+import { sourceKey } from '../openers.js';
 import {
   announceAfter, announcement, duration, foundBefore, headline, liveRows, namedPlaces, placeLabel, PROGRESS_AFTER_MS, receiptWords, searchedWords, type AskProgress,
   type LiveRow, type NamedPlace,
@@ -384,7 +384,7 @@ function originalMeta(source: Extract<AnswerSource, { kind: 'original' }>, group
  * page.
  */
 function KindIcon({ source }: { source: AnswerSource }) {
-  if (source.kind === 'record' || source.kind === 'transcript') return <Meeting />;
+  if (source.kind === 'record') return <Meeting />;
   if (source.kind === 'follow_up') return <Ticks />;
   if (source.kind === 'project' || source.kind === 'container') return <Folder />;
   if (source.kind === 'person') return <OnePerson />;
@@ -881,7 +881,6 @@ const CONTAINER_WORDS: Readonly<Record<ToolContainerKind, string>> = { jira_proj
 /** What the pane's head calls an item: its kind, or a live tool's name and kind. */
 function paneHeading(source: AnswerSource, state: State): string {
   if (source.kind === 'record') return 'Meeting · Approved record';
-  if (source.kind === 'transcript') return 'Meeting · Transcript';
   if (source.kind === 'original') return 'Original source';
   if (source.kind === 'follow_up') return 'Follow-up';
   if (source.kind === 'project') return 'Project';
@@ -928,26 +927,17 @@ function WorkspaceSource({ source }: { source: Extract<AnswerSource, { kind: 'pr
 /**
  * Beside Ask: one of the answer's sources, or an item Ask named, opened by
  * its kind (openers.ts): a meeting's approved record with the cited items lit,
- * a transcript's meeting, an original's cited passages, a follow-up, a
- * project, a person or a tool, or Open in its own app. Once the answer came,
- * Open goes to the item's own page.
+ * an original's cited passages, a follow-up, a project, a person or a tool, or
+ * Open in its own app. Once the answer came, Open goes to the item's own page.
  */
 export function SourcePane({ state }: { state: State }) {
   const sources = state.sources!;
   const target = paneTarget(state);
   if (!target) return null;
   const source = target.sources[0]!;
-  const opener = openerOf(source);
   let body;
   if (source.kind === 'record') {
     body = <ReadRecord read={sources.records[source.record.record_sha256]}>{record => <RecordDetail record={record} lit={byAtom(litAtoms(state, target))} />}</ReadRecord>;
-  } else if (opener.pane === 'meeting' && opener.meeting !== undefined) {
-    body = (
-      <ReadRecord read={sources.meetings[opener.meeting]}>{meeting => <>
-        <RecordDetail record={meeting.record} />
-        {meeting.more && <div class="notice" data-testid="meeting-more">Additional approved items are not shown.</div>}
-      </>}</ReadRecord>
-    );
   } else if ('permalink' in source) {
     body = <ExternalSource key={`${source.tool_id}:${source.permalink}`} source={source} provider={externalSourceProvider(source, state.tools?.items)} />;
   } else if (source.kind === 'original') {

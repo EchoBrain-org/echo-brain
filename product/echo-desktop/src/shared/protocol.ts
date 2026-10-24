@@ -225,9 +225,9 @@ export type ToolContainerKind = 'jira_project' | 'confluence_space';
 
 /**
  * What an answer is based on, or an item Ask named while it worked: an
- * approved record's item, an original's passage, a transcript's passage, a
- * follow-up, a project, a person, a tool, or live evidence. Each kind opens
- * through one opener (renderer/openers.ts).
+ * approved record's item, an original's passage, a follow-up, a project, a
+ * person, a tool, or live evidence. Each kind opens through one opener
+ * (renderer/openers.ts).
  */
 export type ExternalAnswerSource =
   | { readonly kind: 'ticket' | 'page'; readonly tool_id: string; readonly label: string; readonly permalink: string }
@@ -242,8 +242,6 @@ export type AnswerSource = (
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef; readonly atom_id: string }
   /** `item`: the note, document or imported meeting it is a passage of, from the Authority's own ref, when it sent one. */
   | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef; readonly item?: ItemRef }
-  /** A shared transcript's passage. It opens as its meeting (`meeting`, the record digest): there is no transcript reader. */
-  | { readonly kind: 'transcript'; readonly label: string; readonly ref: SourceRef; readonly meeting: string }
   /**
    * One of ECHO's shared follow-ups (ADR-0040), by its item id: it opens its
    * item page, where its owner, status and check are read again as Home shows them.
