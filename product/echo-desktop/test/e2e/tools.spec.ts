@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { addMeeting, chooseFromAccountMenu, emit, launch, type Launched } from './launch.js';
+import { addMeeting, chooseFromAccountMenu, emit, launch, routeAll, type Launched } from './launch.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -125,7 +125,7 @@ test('a stopped connection needs attention and reconnects; Manage disconnects on
 });
 
 
-test('a meeting added through Granola reaches Home as a decision to approve, with transcript sharing off', async ({}, testInfo) => {
+test('a meeting added through Granola reaches Home as a decision to approve, each item starting at the suggested project', async ({}, testInfo) => {
   run = await launch('granola');
   const { page } = run;
   await expect(page.getByTestId('home-clear')).toContainText('Nothing needs you');
@@ -142,48 +142,83 @@ test('a meeting added through Granola reaches Home as a decision to approve, wit
   await expect(card.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
   await expect(card).toContainText('Approve');
   await expect(card).toContainText('Launch the pilot next week.');
-  // The card reads the proposal text the Authority sent: what was decided, who does what by when, and what was said.
+  // The card reads the review the Authority sent: what was decided, who does what by when, what was said, and where each goes.
   await expect(card).toContainText('1 decision · 2 actions');
   await expect(card.getByTestId('card-signal').filter({ hasText: 'Confirm the trace' })).toContainText('Due Oct 10');
   await expect(card.getByRole('region', { name: 'In the meeting · 3' })).toContainText('Rafael Moreno');
   await card.getByRole('button', { name: 'In the meeting: Launch the pilot next week.' }).click();
   await expect(card.locator('.said-line').filter({ hasText: 'Mina Patel' })).toContainText('Agreed. The freeze lifts on Friday.');
   await expect(card.getByRole('button', { name: 'Why · 1 reason from the meeting' })).toBeVisible();
-  await expect(card.getByLabel('Share the transcript with them too')).not.toBeChecked();
-  await card.getByRole('radio', { name: 'Only me' }).check();
+  await expect(card.getByTestId('route-chip')).toHaveText(['Thermostat redesign', 'Thermostat redesign', 'Thermostat redesign']);
+  await expect(card.getByTestId('route-all')).toHaveText('Thermostat redesign');
+  await expect(card.getByTestId('route-summary')).toHaveText('3 to Thermostat redesign');
+  // Nothing on the card shares the transcript, and no one picks a single audience for the whole meeting.
+  await expect(card.getByText(/transcript/i)).toHaveCount(0);
+  await expect(card.getByText('Seen by')).toHaveCount(0);
+  await routeAll(card, 'Only me');
+  await expect(card.getByTestId('route-chip')).toHaveText(['Only me', 'Only me', 'Only me']);
   await page.screenshot({ path: testInfo.outputPath('decision-approve.png') });
   await card.getByTestId('decision-approve').click();
   await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
-  expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({
-    action: 'approve', share_transcript: false, project_ids: [], owners: [
+  const sent = run.calls().find(call => call.body?.operation === 'review')?.body;
+  expect(sent).toMatchObject({
+    action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: [] }, { signal_id: 'act-1', project_ids: [] }, { signal_id: 'act-2', project_ids: [] }], owners: [
       { signal_id: 'act-1', owner: 'Rafael Moreno' },
       { signal_id: 'act-2', owner: 'Mina Patel' },
     ],
   });
+  expect(sent).not.toHaveProperty('share_transcript');
+  expect(sent).not.toHaveProperty('project_ids');
   // Back on Home: the row says the check is on its way, then what it found waits to be sent.
   await expect(page.getByTestId('title')).toHaveText('ECHO');
   await expect(page.getByTestId('toast')).toContainText('Approved');
   await expect(page.getByTestId('need-row')).toHaveAttribute('data-kind', /checking|send/);
 });
 
-test('approves a meeting into two projects with an edited owner', async () => {
+test('sends each item to its own destination: a record and a check per destination, each shown once approved', async ({}, testInfo) => {
   run = await launch('granola');
   const { page } = run;
   await addMeeting(page);
   await page.getByTestId('need-row').click();
   const card = page.getByTestId('decision');
-  // The heading has the focus, not Only me: Enter or Space keeps the suggested projects.
+  // The heading has the focus, not a chip: Enter or Space keeps the suggested project.
   await expect(card.getByRole('heading', { name: 'Pilot planning' })).toBeFocused();
-  await expect(card.getByRole('radio', { name: /Thermostat redesign/ })).toHaveAttribute('aria-checked', 'true');
-  await expect(card.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
-  await card.getByRole('checkbox', { name: 'Supplier review' }).check();
+  const chips = card.getByTestId('route-chip');
+  // The decision: Supplier review too.
+  await chips.nth(0).click();
+  const menu = card.getByTestId('route-menu');
+  await expect(menu.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
+  await menu.getByRole('checkbox', { name: 'Supplier review' }).check();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(chips.nth(0)).toHaveText('Thermostat redesign +1');
+  // The first action stays with the suggestion, its owner edited; the second is not kept.
   await card.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
-  await card.getByLabel('Owner for: Confirm the trace').fill('');
+  await chips.nth(2).click();
+  await menu.getByRole('button', { name: 'Don\'t keep', exact: true }).click();
+  await expect(chips).toHaveText(['Thermostat redesign +1', 'Thermostat redesign', 'Not kept']);
+  await expect(card.getByLabel('Owner for: Confirm the trace')).toBeDisabled();
+  await expect(card.getByTestId('route-all')).toHaveText('Mixed');
+  await expect(card.getByTestId('route-summary')).toHaveText('1 to Thermostat redesign +1 · 1 to Thermostat redesign · 1 not kept');
+  await page.screenshot({ path: testInfo.outputPath('decision-routes.png') });
   await card.getByTestId('decision-approve').click();
   await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
   const body = run.calls().find(call => call.body?.operation === 'review')?.body;
-  expect(body).toMatchObject({ action: 'approve', share_transcript: false, owners: [{ signal_id: 'act-1', owner: 'Rafael M.' }] });
-  expect(body?.project_ids).toHaveLength(2);
+  expect(body).toMatchObject({ action: 'approve', routes: [
+    { signal_id: 'dec-1', project_ids: ['prj_11111111-1111-4111-8111-111111111111', 'prj_44444444-4444-4444-8444-444444444444'] },
+    { signal_id: 'act-1', project_ids: ['prj_11111111-1111-4111-8111-111111111111'] }, { signal_id: 'act-2', project_ids: null },
+  ], owners: [{ signal_id: 'act-1', owner: 'Rafael M.' }] });
+  // Two destinations: two records, each with its own check. The first record's follow-ups open its list; its Approved opens the meeting.
+  const send = page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' });
+  await expect(send).toBeVisible({ timeout: 20_000 });
+  await send.click();
+  await page.getByTestId('follow-ups').getByRole('button', { name: /^Approved / }).click();
+  const approved = page.getByTestId('decision');
+  await expect(approved.getByRole('region', { name: 'Impact · Thermostat redesign +1' }).getByTestId('impact-follow-ups')).toHaveText('Follow-ups · 4 not sent', { timeout: 20_000 });
+  await expect(approved.getByRole('region', { name: 'Impact · Thermostat redesign', exact: true })).toBeVisible();
+  await expect(approved.getByTestId('route-final')).toHaveText(['Thermostat redesign +1', 'Thermostat redesign', 'Not kept']);
+  await expect(approved).toContainText('Rafael M.');
+  await page.screenshot({ path: testInfo.outputPath('decision-records.png') });
 });
 
 test('shows that the meeting was already approved in Slack', async () => {
@@ -217,10 +252,14 @@ test('a Granola outage still lets a retained meeting be approved from Home', asy
   const { page } = run;
   await page.getByTestId('need-row').click({ timeout: 5_000 });
   const card = page.getByTestId('decision');
-  await expect(card.getByLabel('Share the transcript with them too')).not.toBeChecked();
+  // The review is the Authority's, so where each item goes needs nothing from Granola; the chip names the project as your list does.
+  await expect(card.getByTestId('route-chip')).toHaveText(['Apollo', 'Apollo', 'Apollo']);
   await card.getByTestId('decision-approve').click();
   await expect(page.getByTestId('toast')).toContainText('Approved');
   expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+  expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({ routes: [
+    { signal_id: 'dec-1', project_ids: ['prj_11111111-1111-4111-8111-111111111111'] }, { signal_id: 'act-1', project_ids: ['prj_11111111-1111-4111-8111-111111111111'] },
+    { signal_id: 'act-2', project_ids: ['prj_11111111-1111-4111-8111-111111111111'] }] });
 });
 
 test('Home and the decision card hide meeting content while ECHO is concealed', async () => {

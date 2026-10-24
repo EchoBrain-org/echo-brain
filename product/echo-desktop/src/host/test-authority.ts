@@ -155,6 +155,22 @@ const LAUNCH_CHECKLIST = `ctx_${'b'.repeat(64)}`;
 const MEETING_ACTIONS = [
   { signal_id: 'act-1', text: 'Send the revised quote', owner: 'Rafael Moreno' }, { signal_id: 'act-2', text: 'Confirm the trace', owner: 'Mina Patel' },
 ] as const;
+/**
+ * Pilot planning as review_open gives it, in brief order: the decision, then the actions. Every signal quotes each unit it
+ * cites (a note line, or a transcript part that may hold blank lines).
+ */
+const PILOT_ITEMS = [
+  { signal_id: 'dec-1', kind: 'decision', text: 'Launch the pilot next week.', subject: null, status: 'decided', due_at: null,
+    quotes: ['Launch the pilot next week.', '[09:02] Ari: Let\'s launch the pilot next week.\n\n[09:03] Mina Patel: Agreed. The freeze lifts on Friday.'] },
+  { signal_id: 'act-1', kind: 'action', text: 'Send the revised quote', subject: null, status: null, due_at: null,
+    quotes: ['[09:04] Ari: Rafael, can you send the revised quote?'] },
+  { signal_id: 'act-2', kind: 'action', text: 'Confirm the trace', subject: null, status: null, due_at: '2026-10-10T12:00:00.000Z',
+    quotes: ['[09:05] Mina Patel: I\'ll confirm the trace by Friday.'] },
+] as const;
+const PILOT_REASONS = [{ signal_id: 'why-1', text: 'The freeze lifts on Friday, so next week is the first clear window.', supports: ['dec-1'],
+  quotes: ['[09:03] Mina Patel: Agreed. The freeze lifts on Friday.'] }];
+/** One route per item of Pilot planning, each to `projects`. */
+const routesTo = (projects: readonly string[] | null) => PILOT_ITEMS.map(item => ({ signal_id: item.signal_id, project_ids: projects === null ? null : [...projects] }));
 /** One action long enough to come in three parts, across the first page's end. */
 const LONG_ACTION = `Draft the renewal terms.${' Clause.'.repeat(872)}`;
 
@@ -271,8 +287,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   let granolaImported = false, granolaApproved = false, granolaWatch = false, granolaBaselineHomeReads = 0;
   let granolaReview: Record<string, unknown> | undefined;
-  // The impact check of the approved meeting: none until it is approved.
+  // The impact check of the approved meeting's first record: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
+  // The checks of its other records, one per further destination: they find nothing.
+  let extraRuns: { run_id: string; record: { approval_id: string; project_ids: string[] }; record_sha256: string; state: 'pending' | 'running' | 'done' }[] = [];
   // The people a meeting's impact check names, to pick as owners.
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
   // Thirteen people: the organization's directory comes in two pages.
@@ -843,8 +861,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    */
   const writeFound = () => {
     if (granolaRun?.state !== 'done' || openItems.some(item => item.run_id === PILOT_RUN)) return;
-    const decision = { approval_id: 'apr_' + 'a'.repeat(64), record_sha256: PILOT_RECORD, title: 'Pilot planning', first_line: 'Launch the pilot next week.',
-      approved_at: '2026-10-07T10:00:00.000Z', project_ids: Array.isArray(granolaReview?.project_ids) ? [...granolaReview.project_ids as string[]] : [] };
+    const first = recordsOf(granolaReview)[0];
+    const decision = { approval_id: first?.approval_id ?? 'apr_' + 'a'.repeat(64), record_sha256: PILOT_RECORD, title: 'Pilot planning', first_line: 'Launch the pilot next week.',
+      approved_at: '2026-10-07T10:00:00.000Z', project_ids: [...first?.project_ids ?? []] };
     const unsent = { run_id: PILOT_RUN, decision, readable: true, approver: ARI, state: 'unsent' as const, created_at: '2026-10-07T10:05:00.000Z', sent_at: null, state_set_at: null,
       state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null, check: null };
     const confirmed = Array.isArray(granolaReview?.owners) ? granolaReview.owners as { signal_id: string; owner: string }[] : [];
@@ -862,6 +881,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         relation: 'needs_updating', expected: action.text, opens: false, live: {}, owner: ownerOf(action.signal_id) })),
     );
   };
+  /**
+   * The records an approval wrote: one per destination group of its routes, ordered by each group's first item, each under
+   * its own approval id. The first is Pilot planning's record (PILOT_RECORD); its check is PILOT_RUN.
+   */
+  function recordsOf(decided: Record<string, unknown> | undefined): { approval_id: string; project_ids: string[] }[] {
+    const routes = decided?.action === 'approve' && Array.isArray(decided.routes) ? decided.routes as { signal_id: string; project_ids: string[] | null }[] : [];
+    const groups = new Map<string, string[]>();
+    for (const route of routes) if (route.project_ids !== null && !groups.has(JSON.stringify(route.project_ids))) groups.set(JSON.stringify(route.project_ids), route.project_ids);
+    return [...groups.values()].map(project_ids => ({ approval_id: 'apr_' + sha(`route:${JSON.stringify(project_ids)}`).slice(7), project_ids }));
+  }
   /** Pilot planning, approved by Ari: in the projects it was approved into, where its record opens. */
   const pilotMeeting = (projectIds: string[]): Meeting => ({
     record_sha256: PILOT_RECORD, title: 'Pilot planning', added_at: '2026-10-07T10:00:00.000Z', meeting_date: '2026-10-06',
@@ -887,7 +916,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // for just now, not assessed (no expected phrase).
   if (mode === 'granola-checked' || mode === 'granola-paged' || mode.startsWith('granola-review') || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
-    granolaReview = { action: 'approve', project_ids: [THERMOSTAT], owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, owner: action.owner })) };
+    granolaReview = { action: 'approve', routes: routesTo([THERMOSTAT]), owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, owner: action.owner })) };
     granolaRun = { state: 'done', error_code: null, retried: false };
     meetings.push(pilotMeeting([THERMOSTAT]));
     writeFound();
@@ -952,19 +981,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const sweepRuns: SweepRun[] = [];
   let assigns = 0;
 
-  // The proposal as the Authority writes it for review (approvalProposalTextV1) now that meetings are cited by numbered
-  // units: every signal quotes each unit it cites (a note line, or a transcript part that may hold blank lines, each line
-  // after its first indented four spaces), and the meeting's start (the review's meeting_at) and time zone come before
-  // its participants.
-  const PILOT_PROPOSAL = ['Pilot planning', 'actual start at: 2026-10-06T16:00:00.000Z', 'timezone: America/Los_Angeles',
-    'Participant: Ari', 'Participant: Mina Patel', 'Participant: Rafael Moreno',
-    '', 'Decisions', '• Launch the pilot next week.', '  Status: decided', '  From the meeting: “Launch the pilot next week.”',
-    '  From the meeting: “[09:02] Ari: Let\'s launch the pilot next week.', '    ', '    [09:03] Mina Patel: Agreed. The freeze lifts on Friday.”',
-    '', 'Actions', '• Send the revised quote', '  Due: Not specified', '  From the meeting: “[09:04] Ari: Rafael, can you send the revised quote?”',
-    '• Confirm the trace', '  Due: 2026-10-10', '  From the meeting: “[09:05] Mina Patel: I\'ll confirm the trace by Friday.”',
-    '', 'Rationales', '• The freeze lifts on Friday, so next week is the first clear window.',
-    '  From the meeting: “[09:03] Mina Patel: Agreed. The freeze lifts on Friday.”'].join('\n');
-
   // Your connections to the organization's tools, as Tools changes them.
   let slackLinked = true;
   // Modes that map a project to a tool start connected to it, as a lead must be to pick.
@@ -1002,7 +1018,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       mode === 'role-changes' && elsewhere('role-changed') && index === 0 ? 'member' : project.role]);
     const followUps = openItems.filter(item => visible(item) && (involved(item) || item.owner_set_by?.membership_id === ARI.membership_id))
       .map(item => [item.item_id, item.state, item.owner.membership_id, item.owner_set_at, item.state_set_at, item.sent_at]);
-    const reviews = [granolaImported, granolaApproved, granolaRun?.state ?? null];
+    const reviews = [granolaImported, granolaApproved, granolaRun?.state ?? null, ...extraRuns.map(extra => extra.state)];
     // An hour unless the test says: a test's own reads never wait on, or race, a check it did not ask for.
     const seconds = elsewhere('changes-seconds') ? Number(readFileSync(join(home, 'changes-seconds'), 'utf8')) : 3600;
     return { kind: 'echo-person-changes-v1', areas: { projects: digest(projectsNow), follow_ups: digest(followUps), reviews: digest(reviews) },
@@ -1066,10 +1082,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const meetingId = '00000000-0000-4000-8000-000000000010';
       const folderId = '00000000-0000-4000-8000-000000000011';
       const decidedOn = granolaApproved ? mode === 'granola-decided-in-slack' ? 'slack' : 'desktop' : null;
+      // Decided: where each item went, and the records those routes wrote, one per destination.
+      const records = granolaApproved ? recordsOf(granolaReview) : [];
+      const routed = new Map((granolaApproved && Array.isArray(granolaReview?.routes) ? granolaReview.routes as { signal_id: string; project_ids: string[] | null }[] : [])
+        .map(route => [route.signal_id, route.project_ids]));
       const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning',
-        project_ids: Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids : [],
+        project_ids: [...new Set(records.flatMap(record => record.project_ids))].sort(),
         status: granolaApproved ? 'approved' : 'pending', decided_on: decidedOn,
-        first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' };
+        first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', records };
       switch (body?.operation) {
         case 'home': return mode === 'granola-browse-unavailable' ? failure('unavailable', 503) : json({ connected: true, email: 'ari@example.test', workspace: 'EchoBrain', folders: [{ id: folderId, title: 'ECHO', count: 1 }], settings_sha256: 'sha256:' + 'a'.repeat(64),
           sources: mode === 'granola-preparing' && granolaWatch ? [{ source_key: 'pms_fixture', folder_id: folderId, folder_project_id: 'prj_11111111-1111-4111-8111-111111111111', baseline: granolaBaselineHomeReads++ > 0, pending_imports: [], checked_at: null, error: null }] : [] });
@@ -1078,15 +1098,34 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         case 'watch': granolaWatch = true; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
         case 'reviews': return json({ reviews: granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added' ? [review] : [] });
-        case 'review_open': return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), content: PILOT_PROPOSAL,
-          owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, action: action.text, proposed: action.owner })),
-          suggested_projects: [{ project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign' }] });
+        case 'review_open': {
+          // Pending: each item starts at the suggestion (Thermostat redesign) with the owner the meeting proposes. Decided: where
+          // each went (null: not kept) and the owner Ari confirmed.
+          const confirmed = new Map((Array.isArray(granolaReview?.owners) ? granolaReview.owners as { signal_id: string; owner: string }[] : []).map(entry => [entry.signal_id, entry.owner]));
+          const items = PILOT_ITEMS.map(item => {
+            const proposed = MEETING_ACTIONS.find(action => action.signal_id === item.signal_id)?.owner ?? null;
+            return granolaApproved
+              ? { ...item, quotes: [...item.quotes], owner: item.kind === 'action' ? confirmed.get(item.signal_id) ?? null : null, owner_editable: false, project_ids: routed.get(item.signal_id) ?? null }
+              : { ...item, quotes: [...item.quotes], owner: proposed, owner_editable: proposed !== null, project_ids: [THERMOSTAT] };
+          });
+          const names = new Map([[THERMOSTAT, 'Thermostat redesign'], [SUPPLIER, 'Supplier review']]);
+          const named = [...new Set(items.flatMap(item => item.project_ids ?? []))].sort().flatMap(project_id => {
+            const name = names.get(project_id); return name === undefined ? [] : [{ project_id, name }];
+          });
+          return json({ review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), participants: ['Ari', 'Mina Patel', 'Rafael Moreno'], items, reasons: PILOT_REASONS,
+            suggested_projects: named, records });
+        }
         case 'review':
           granolaReview = body; granolaApproved = true;
-          if (body?.action === 'approve' && granolaRun === null) granolaRun = { state: 'pending', error_code: null, retried: false };
-          // The approved meeting: in the projects it was approved into, where its record opens.
+          if (body?.action === 'approve' && granolaRun === null) {
+            granolaRun = { state: 'pending', error_code: null, retried: false };
+            // A check per further destination, each of its own record.
+            extraRuns = recordsOf(body).slice(1).map((record, index) => ({ run_id: `run_00000000-0000-4000-8000-0000000000${21 + index}`, record,
+              record_sha256: sha(`record:Pilot planning:${record.approval_id}`), state: 'pending' as const }));
+          }
+          // The approved meeting's first record: in the projects it was sent to, where it opens.
           if (body?.action === 'approve' && !meetings.some(meeting => meeting.record_sha256 === PILOT_RECORD)) {
-            meetings.push(pilotMeeting(Array.isArray(body.project_ids) ? body.project_ids as string[] : []));
+            meetings.push(pilotMeeting(recordsOf(body)[0]?.project_ids ?? []));
           }
           return json(mode === 'granola-decided-in-slack' ? { status: 'approved', decided_on: 'slack' } : { status: 'publishing', decided_on: 'desktop' });
       }
@@ -1116,8 +1155,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       for (let waited = 0; live && existsSync(join(home, 'hold-live')) && waited < 30_000; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
       const runId = PILOT_RUN;
       const run = granolaRun;
-      const row = (value: NonNullable<typeof run>) => ({ run_id: runId, trigger: 'approved_record', event_ref: 'apr_' + 'a'.repeat(64), state: value.state,
-        error_code: value.error_code, created_at: '2026-10-07T10:00:00.000Z', updated_at: '2026-10-07T10:05:00.000Z' });
+      // Each record's check is keyed by its own approval id.
+      const row = (value: NonNullable<typeof run>) => ({ run_id: runId, trigger: 'approved_record', event_ref: recordsOf(granolaReview)[0]?.approval_id ?? 'apr_' + 'a'.repeat(64),
+        state: value.state, error_code: value.error_code, created_at: '2026-10-07T10:00:00.000Z', updated_at: '2026-10-07T10:05:00.000Z' });
+      const extraRow = (extra: (typeof extraRuns)[number]) => ({ run_id: extra.run_id, trigger: 'approved_record', event_ref: extra.record.approval_id, state: extra.state,
+        error_code: null, created_at: '2026-10-07T10:00:00.000Z', updated_at: '2026-10-07T10:05:00.000Z' });
       const sweepRow = (sweep: SweepRun) => ({ run_id: sweep.run_id, trigger: 'sweep', event_ref: sweep.event_ref, state: sweep.state, error_code: null,
         created_at: sweep.created_at, updated_at: sweep.created_at });
       const result = (operation: string, value: unknown) => json(api.validatePersonRunsResultV1(operation, value));
@@ -1125,6 +1167,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (request.operation === 'list' && run?.state === 'running') {
         Object.assign(run, mode === 'granola-run-failed' && !run.retried ? { state: 'failed', error_code: 'research_failed' } : { state: 'done' });
       }
+      for (const extra of extraRuns) if (request.operation === 'list' && extra.state === 'running') extra.state = 'done';
       for (const sweep of sweepRuns) {
         if (request.operation !== 'list' || sweep.state !== 'running') continue;
         // Done: each item it checked that is still open keeps this check as its last.
@@ -1147,7 +1190,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       switch (request.operation) {
         case 'list':
           // Newest first: Ari's sweeps came after the check of Pilot planning.
-          return result('list', { runs: [...sweepRuns.map(sweepRow), ...(run ? [row(run)] : [])] });
+          return result('list', { runs: [...sweepRuns.map(sweepRow), ...(run ? [row(run)] : []), ...extraRuns.map(extraRow)] });
         case 'start': {
           // One run goes at a time, and impact checks start before sweeps: a sweep waits while one is pending or running.
           const sweep = sweepRuns.find(entry => entry.run_id === request.run_id);
@@ -1157,6 +1200,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             }
             if (sweep.state === 'pending') sweep.state = 'running';
             return result('start', { state: sweep.state });
+          }
+          const extra = extraRuns.find(entry => entry.run_id === request.run_id);
+          if (extra) {
+            if (extra.state === 'pending') extra.state = 'running';
+            return result('start', { state: extra.state });
           }
           if (!run || request.run_id !== runId) return failure('not_found', 404);
           if (sweepRuns.some(entry => entry.state === 'running')) return result('start', { state: 'busy' });
@@ -1200,11 +1248,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           // Last checks count on open items only: a check reads open items.
           const verdicts = (verdict: Check['verdict'], of = items) => of.filter(item => item.state === 'open' && item.check?.verdict === verdict).length;
           // Each decision's check: Ari's own (whatever its stage), and Mina's, done. Only Ari's is Ari's own.
-          const pilotProjects = Array.isArray(granolaReview?.project_ids) ? granolaReview.project_ids as string[] : [];
+          const pilotProjects = recordsOf(granolaReview)[0]?.project_ids ?? [];
           const pilot = run !== null && granolaApproved && (scope === 'mine' || (scope === 'run' && id === runId) || (scope === 'record' && id === PILOT_RECORD) ||
             (scope === 'project' && pilotProjects.includes(id!)));
           const stages = [
             ...(pilot ? [{ record_sha256: PILOT_RECORD, run_id: runId, state: run.state, error_code: run.error_code, mine: true }] : []),
+            ...extraRuns.filter(extra => scope === 'run' && id === extra.run_id)
+              .map(extra => ({ record_sha256: extra.record_sha256, run_id: extra.run_id, state: extra.state, error_code: null, mine: true })),
             ...records.filter(record => record !== PILOT_RECORD).map(record => {
               const found = items.find(item => item.decision.record_sha256 === record)!;
               return { record_sha256: record, run_id: found.run_id, state: 'done', error_code: null, mine: found.approver.membership_id === ARI.membership_id };

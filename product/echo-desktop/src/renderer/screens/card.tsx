@@ -1,8 +1,46 @@
 import type { ComponentChildren } from 'preact';
 import { useState } from 'preact/hooks';
 import { identity, initials } from '../format.js';
-import { saidLines, type ProposalSignal } from '../proposal.js';
 import { Chevron } from './icons.js';
+
+/** One decision, action or reason as the card shows it: the review's own structured fields. */
+export interface CardSignal {
+  text: string;
+  subject: string | null;
+  /** A decision's: proposed, decided or unresolved. */
+  status: string | null;
+  /** What was said in the meeting, each as the meeting tool wrote it. */
+  quotes: readonly string[];
+}
+
+/** One line of a quote: "[09:01] Jonas Becker: …" when the meeting tool wrote it so, else the words alone. */
+export interface SaidLine {
+  time: string | null;
+  speaker: string | null;
+  text: string;
+}
+
+const SPOKEN = /^\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s+([^:\n]{1,80}):\s*(.*)$/u;
+
+/**
+ * A quote, one line per thing said. A line without a speaker right under one
+ * is more of what they said; after a blank line it stands on its own.
+ */
+export function saidLines(quote: string): SaidLine[] {
+  const said: SaidLine[] = [];
+  let apart = true;
+  for (const raw of quote.split('\n')) {
+    const line = raw.trim();
+    if (line === '') { apart = true; continue; }
+    const spoken = SPOKEN.exec(line);
+    if (spoken) { said.push({ time: spoken[1]!, speaker: spoken[2]!.trim(), text: spoken[3]!.trim() }); apart = false; continue; }
+    const last = said.at(-1);
+    if (last && !apart) last.text = `${last.text} ${line}`.trim();
+    else said.push({ time: null, speaker: null, text: line });
+    apart = false;
+  }
+  return said;
+}
 
 /**
  * The decision page's head (Approve, or what an approved meeting changed): on
@@ -45,7 +83,7 @@ function Said({ quotes }: { quotes: readonly string[] }) {
 const STATUS: Readonly<Record<string, string>> = { proposed: 'Proposed', unresolved: 'Unresolved' };
 
 /** One decision or action: its words, a tag for a status other than decided, and the meeting's words behind one button. */
-export function SignalRow({ signal, number, children }: { signal: ProposalSignal; number?: number; children?: ComponentChildren }) {
+export function SignalRow({ signal, number, children }: { signal: CardSignal; number?: number; children?: ComponentChildren }) {
   const [open, setOpen] = useState(false);
   const status = signal.status && signal.status !== 'decided' ? STATUS[signal.status] ?? signal.status : null;
   return (
@@ -71,7 +109,7 @@ export function SignalRow({ signal, number, children }: { signal: ProposalSignal
 }
 
 /** The reasons given in the meeting, behind one line. */
-export function Reasons({ reasons }: { reasons: readonly ProposalSignal[] }) {
+export function Reasons({ reasons }: { reasons: readonly Pick<CardSignal, 'text'>[] }) {
   const [open, setOpen] = useState(false);
   if (reasons.length === 0) return null;
   return (

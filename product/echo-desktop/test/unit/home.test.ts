@@ -7,11 +7,13 @@ import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../sr
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 
+/** The proposal, and the one record its approval wrote: a check is keyed by its record's own approval id. */
 const approval = 'apr_' + 'a'.repeat(64);
+const recordApproval = 'apr_' + 'f'.repeat(64);
 const record = 'sha256:' + '1'.repeat(64);
 const RAFAEL = { membership_id: 'mem_00000000-0000-4000-8000-000000000088', display_name: 'Rafael Moreno' };
 
-const impactRun = (state: PersonRunV1['state'], id = '20', event = approval): PersonRunV1 => ({
+const impactRun = (state: PersonRunV1['state'], id = '20', event = recordApproval): PersonRunV1 => ({
   run_id: `run_00000000-0000-4000-8000-0000000000${id}`, trigger: 'approved_record', event_ref: event, state,
   error_code: state === 'failed' ? 'research_failed' : null, created_at: '2026-10-08T10:00:00.000Z', updated_at: '2026-10-08T10:05:00.000Z',
 });
@@ -19,11 +21,18 @@ const sweepRun = (state: PersonRunV1['state']): PersonRunV1 => ({
   run_id: 'run_00000000-0000-4000-8000-000000000050', trigger: 'sweep', event_ref: 'sweep_00000000-0000-4000-8000-000000000050', state,
   error_code: state === 'failed' ? 'research_failed' : null, created_at: '2026-10-08T12:00:00.000Z', updated_at: '2026-10-08T12:00:00.000Z',
 });
+/** A meeting's review; approved, its one record. */
 const meeting = (id: string, status: PersonMeetingReviewV2['status']): PersonMeetingReviewV2 => ({
   approval_id: `apr_${id.repeat(64)}`, title: `Meeting ${id}`, project_ids: [], status, decided_on: status === 'pending' ? null : 'desktop',
-  first_line: null, action_count: 0, meeting_at: null,
+  first_line: null, action_count: 0, meeting_at: null, records: status === 'approved' ? [{ approval_id: `apr_${'f'.repeat(32)}${id.repeat(32)}`, project_ids: [] }] : [],
 });
-const decision = { approval_id: approval, record_sha256: record, title: 'Pilot planning', first_line: 'Launch the pilot next week.', approved_at: '2026-10-08T10:00:00.000Z', project_ids: [] };
+/** The approved record an item came from: its approval id is the record's own. */
+const decision = { approval_id: recordApproval, record_sha256: record, title: 'Pilot planning', first_line: 'Launch the pilot next week.', approved_at: '2026-10-08T10:00:00.000Z', project_ids: [] };
+/** A proposal's decision and action as review_open gives them. */
+const reviewItems = [
+  { signal_id: 'dec-1', kind: 'decision' as const, text: 'Launch the pilot next week.', subject: null, status: 'decided' as const, due_at: null, quotes: [], owner: null, owner_editable: false },
+  { signal_id: 'act-1', kind: 'action' as const, text: 'Send the revised quote', subject: null, status: null, due_at: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true },
+];
 const person = (name: string) => ({ membership_id: `mem_00000000-0000-4000-8000-00000000000${name.length}`, name, active: true });
 const item = (id: string, verdict: NonNullable<OpenItemView['check']>['verdict'] | null = null): OpenItemView => ({
   item_id: `itm_0000000${id}`, run_id: impactRun('done').run_id, kind: 'ticket', decision, relation: 'conflicts', expected: 'launch next week',
@@ -73,7 +82,8 @@ type Hold = 'live' | 'rows' | 'listRows' | 'tools' | 'send' | 'setState';
 
 /** What the fake Authority holds and how it answers, as each test starts: a test changes `fx` to say otherwise. */
 const fresh = () => ({
-  review: { approval_id: approval, title: 'Private meeting', project_ids: [], status: 'pending', decided_on: null, first_line: null, action_count: 0, meeting_at: null } as PersonMeetingReviewV2,
+  review: { approval_id: approval, title: 'Private meeting', project_ids: [], status: 'pending', decided_on: null, first_line: null, action_count: 0, meeting_at: null,
+    records: [] } as PersonMeetingReviewV2,
   run: null as PersonRunV1 | null,
   home: emptyHome(),
   granola: 'linked' as ToolStatus | null,
@@ -146,13 +156,18 @@ async function authority(method: string, params: { project_id?: string; request?
     case 'account.tools':
       if (fx.failTools) return fail('transport_failed', { retryable: true });
       return held('tools', () => ok({ tools: fx.granola === null ? [] : [{ tool_id: 'granola', status: fx.granola }] }));
-    case 'tools.meetings':
+    case 'tools.meetings': {
+      // Approved, the review names its one record unless the test says otherwise.
+      const review = { ...fx.review, records: fx.review.status === 'approved' && fx.review.records.length === 0 ? [{ approval_id: recordApproval, project_ids: fx.review.project_ids }] : fx.review.records };
       if (params.request?.operation === 'reviews') {
         if (fx.failNextReviews) { fx.failNextReviews = false; return unavailable; }
-        return ok({ reviews: [{ ...fx.review }] });
+        return ok({ reviews: [review] });
       }
-      if (params.request?.operation === 'review_open') return ok({ review: { ...fx.review }, content: 'Private proposal text', suggested_projects: [], owners: [], snapshot_sha256: 'snapshot' });
+      const decided = review.status !== 'pending' && review.status !== 'superseded';
+      if (params.request?.operation === 'review_open') return ok({ review, snapshot_sha256: 'snapshot', participants: [], reasons: [], suggested_projects: [], records: review.records,
+        items: reviewItems.map(entry => ({ ...entry, owner_editable: !decided && entry.owner_editable, project_ids: decided ? review.records[0]?.project_ids ?? null : [] })) });
       break;
+    }
     case 'runs':
       if (params.request?.operation === 'list') {
         if (fx.failLists) return unavailable;
@@ -310,7 +325,8 @@ describe('Home rows', () => {
   it('orders rows approve, retry, send, review, update, checking', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
     const reviews = [meeting('c', 'approved'), meeting('b', 'approved'), meeting('d', 'publishing'), meeting('e', 'approved'), meeting('a', 'pending')];
-    const runs = [impactRun('running', '21', reviews[0]!.approval_id), impactRun('failed', '22', reviews[1]!.approval_id), impactRun('done', '23', reviews[3]!.approval_id)];
+    const runs = [impactRun('running', '21', reviews[0]!.records[0]!.approval_id), impactRun('failed', '22', reviews[1]!.records[0]!.approval_id),
+      impactRun('done', '23', reviews[3]!.records[0]!.approval_id)];
     const open: HomeView = { ...emptyHome(), send: [sendRow()], items: [item('1'), item('2', 'changed')] };
     const rows = needRows(reviews, runs, open, 'member');
     // A check that did not finish needs you: right after the decisions to approve, never at the bottom of a long Home.
@@ -324,8 +340,22 @@ describe('Home rows', () => {
 
   it('leaves only review and run rows when the home part was never read', async () => {
     const { needRows } = await import('../../src/renderer/store.js');
-    const rows = needRows([meeting('a', 'pending'), meeting('b', 'approved')], [impactRun('failed', '22', meeting('b', 'approved').approval_id)], null, 'member');
+    const rows = needRows([meeting('a', 'pending'), meeting('b', 'approved')], [impactRun('failed', '22', meeting('b', 'approved').records[0]!.approval_id)], null, 'member');
     expect(rows.map(row => row.kind)).toEqual(['approve', 'failed']);
+  });
+
+  it('matches a meeting\'s checks through its records: one row, failed when any check did not finish, else checking while any goes', async () => {
+    const { needRows } = await import('../../src/renderer/store.js');
+    const records = [{ approval_id: 'apr_' + '1'.repeat(64), project_ids: ['prj_11111111-1111-4111-8111-111111111111'] }, { approval_id: 'apr_' + '2'.repeat(64), project_ids: [] }];
+    const approved: PersonMeetingReviewV2 = { ...meeting('b', 'approved'), records };
+    const runs = (first: PersonRunV1['state'], second: PersonRunV1['state']) => [impactRun(first, '31', records[0]!.approval_id), impactRun(second, '32', records[1]!.approval_id)];
+    expect(needRows([approved], runs('done', 'failed'), null, 'member')).toMatchObject([{ kind: 'failed', run: { run_id: impactRun('failed', '32').run_id } }]);
+    expect(needRows([approved], runs('running', 'done'), null, 'member')).toMatchObject([{ kind: 'checking', run: { run_id: impactRun('running', '31').run_id } }]);
+    expect(needRows([approved], runs('done', 'done'), null, 'member')).toEqual([]);
+    // A check keyed by the proposal's own id is no record's: it makes no row.
+    expect(needRows([approved], [impactRun('failed', '33', approved.approval_id)], null, 'member')).toEqual([]);
+    // Publishing, before its records are written: checking, with no run yet.
+    expect(needRows([{ ...meeting('d', 'publishing') }], [], null, 'member')).toMatchObject([{ kind: 'checking', review: { status: 'publishing' } }]);
   });
 
   it('keeps the owner\'s changed item an Update row, first, and makes someone else\'s changed item a Review row (R64)', async () => {
@@ -449,19 +479,55 @@ describe('Home decisions and impact checks', () => {
     const store = await start();
     await store.openDecision(approval);
     await flush();
-    store.setDecisionShare(true);
+    store.setDecisionRoute('act-1', null);
     const reviews = () => rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
     rpc.mockImplementationOnce(async () => ({ ok: false, failure: { code: 'timeout', retryable: true, mutation_outcome: 'unknown' } }));
     await store.decide('approve');
     expect(store.getState().decision).toMatchObject({ busy: false, unknown: true, failure: 'This may not have been sent.' });
-    store.setDecisionShare(false);
-    store.setDecisionAudience('projects');
-    expect(store.getState().decision).toMatchObject({ share: true, audience: 'only-me' });
+    store.setDecisionRoute('act-1', []);
+    store.setDecisionRoutes([project.project_id]);
+    store.setDecisionOwner('act-1', 'Someone else');
+    expect(store.getState().decision).toMatchObject({ routes: { 'dec-1': [], 'act-1': null }, owners: { 'act-1': 'Rafael Moreno' } });
     rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'approved', decided_on: 'desktop' } }));
     await store.decide('approve');
     expect(reviews()).toHaveLength(2);
     expect(reviews()[1]).toEqual(reviews()[0]);
+    // Every item in order with where it goes; no owner for the action not kept.
+    expect(reviews()[0]).toMatchObject({ action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: [] }, { signal_id: 'act-1', project_ids: null }], owners: [] });
     expect(store.getState().toast).toBe('Approved · checking what it changes');
+  });
+
+  it('starts each item at the review\'s destination, and sends every item\'s route and the owners of kept actions', async () => {
+    const store = await start();
+    await store.openDecision(approval);
+    await flush();
+    expect(store.getState().decision).toMatchObject({ routes: { 'dec-1': [], 'act-1': [] }, owners: { 'act-1': 'Rafael Moreno' } });
+    // One item to a project, then another ticked on and off: unticking its last project leaves it Only me.
+    store.tickDecisionRoute('dec-1', project.project_id);
+    store.tickDecisionRoute('act-1', project.project_id);
+    store.tickDecisionRoute('act-1', project.project_id);
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': [project.project_id], 'act-1': [] });
+    expect(store.sharedDestination(store.getState().decision!)).toBeNull();
+    // All items: every kept item at once; Don't keep keeps none, and then a destination goes to every item.
+    store.setDecisionRoutes(null);
+    expect(store.keptItems(store.getState().decision!)).toEqual([]);
+    store.tickDecisionRoutes(project.project_id);
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': [project.project_id], 'act-1': [project.project_id] });
+    expect(store.sharedDestination(store.getState().decision!)).toEqual([project.project_id]);
+    store.setDecisionRoute('dec-1', null);
+    store.setDecisionRoutes([]);
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': [] });
+    // No more than 20 projects in all.
+    const many = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    store.setDecisionRoute('act-1', many.slice(0, 20));
+    store.setDecisionRoute('dec-1', many.slice(20));
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': many.slice(0, 20) });
+    store.setDecisionOwner('act-1', ' R. Moreno ');
+    rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'publishing', decided_on: 'desktop' } }));
+    await store.decide('approve');
+    const sent = rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
+    expect(sent).toEqual([expect.objectContaining({ action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: null }, { signal_id: 'act-1', project_ids: many.slice(0, 20) }],
+      owners: [{ signal_id: 'act-1', owner: 'R. Moreno' }] })]);
   });
 
   it('keeps a publishing approval visible and shows what its check found once it finishes', async () => {
@@ -508,10 +574,10 @@ describe('Home decisions and impact checks', () => {
     fx.run = impactRun('done');
     uncover(store);
     await flush();
-    expect(store.getState().decision?.run?.state).toBe('done');
-    // Its follow-ups, counted by its check for the page's line; its card is never asked for.
+    expect(store.getState().decision?.runs[0]?.state).toBe('done');
+    // Its follow-ups, counted by its check for the record's line; its card is never asked for.
     expect(operations()).not.toContain('view');
-    expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: fx.run.run_id, loading: false, summary: { unsent: 1 } });
+    expect(store.getState().decision?.lines[fx.run.run_id]).toMatchObject({ summary: { unsent: 1 } });
     expect(requests('items').at(-1)).toEqual({ schema_version: 1, operation: 'items', scope: 'run', id: fx.run.run_id, read: 'counts' });
   });
 
@@ -632,7 +698,7 @@ describe('Home decisions and impact checks', () => {
     await flush();
     expect(store.homeRows()).toMatchObject([{ kind: 'checking', run: { state: 'running' } }]);
     expect(store.getState().home?.failure).toBeUndefined();
-    if (openCard) expect(store.getState().decision?.run?.state).toBe('running');
+    if (openCard) expect(store.getState().decision?.runs[0]?.state).toBe('running');
     // A second focus change must not strand the retry after stopping its timer.
     cover(store);
     fx.failNextList = true;
@@ -644,8 +710,8 @@ describe('Home decisions and impact checks', () => {
     expect(store.getState().home?.failure).toBeUndefined();
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
     if (openCard) {
-      expect(store.getState().decision?.run?.state).toBe('done');
-      expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: fx.run.run_id });
+      expect(store.getState().decision?.runs[0]?.state).toBe('done');
+      expect(store.getState().decision?.lines[fx.run.run_id]).toBeDefined();
     }
   });
 });
@@ -664,7 +730,7 @@ describe('Sweeps from Home', () => {
     const approved = meeting('b', 'approved');
     // Even a sweep naming an approval does not stand for its impact check.
     for (const state of ['pending', 'running', 'failed'] as const) {
-      expect(needRows([approved], [{ ...sweepRun(state), event_ref: approved.approval_id }], null, 'member')).toEqual([]);
+      expect(needRows([approved], [{ ...sweepRun(state), event_ref: approved.records[0]!.approval_id }], null, 'member')).toEqual([]);
     }
   });
 
@@ -1176,9 +1242,10 @@ describe('Follow-up lists: current work first, results in place', () => {
     const store = await meetingList();
     await store.openListDecision();
     expect(store.followUpShown()).toMatchObject({ kind: 'decision' });
-    expect(store.getState().decision).toMatchObject({ approval_id: approval, loading: false, run: { state: 'done' } });
-    // Its follow-ups line counts them by its check, as the decision's own page does.
-    expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: impactRun('done').run_id, summary: { unsent: 1 } });
+    // The list is one record's; the page is its proposal's, found through the reviews' records.
+    expect(store.getState().decision).toMatchObject({ approval_id: approval, loading: false, runs: [{ state: 'done', event_ref: recordApproval }] });
+    // Its record's follow-ups line counts them by its check, as the decision's own page does.
+    expect(store.getState().decision?.lines[impactRun('done').run_id]).toMatchObject({ summary: { unsent: 1 } });
     expect(operations()).not.toContain('view');
     // Its follow-ups line: Back to the list, not a list of its own.
     await store.openFollowUps('record', record, 'Pilot planning');
@@ -1271,7 +1338,7 @@ describe('Follow-up lists: current work first, results in place', () => {
     await flush();
     await store.openFollowUps('record', record, 'Pilot planning');
     await store.openListDecision();
-    expect(store.getState().impactLine).toMatchObject({ scope: 'run', id: impactRun('done').run_id });
+    expect(store.getState().decision?.lines[impactRun('done').run_id]).toBeDefined();
     // Back to the list, then to the meeting: its line is the meeting's again, by its record, with its check.
     store.closeFollowUp();
     await flush();
@@ -1334,13 +1401,13 @@ describe('Follow-up lists: current work first, results in place', () => {
     fx.page = listPage([unsent('1')]);
     const store = await meetingList();
     await store.openListDecision();
-    expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
+    expect(store.getState().decision).toMatchObject({ runs: [{ run_id: impactRun('done').run_id, state: 'done' }] });
     // Home is read again under them: its runs list holds only the newest checks, not this one.
     const lists = requests('list').length;
     await show(store);
     await flush();
     expect(requests('list').length).toBeGreaterThan(lists);
-    expect(store.getState().decision).toMatchObject({ run: { run_id: impactRun('done').run_id, state: 'done' } });
+    expect(store.getState().decision).toMatchObject({ runs: [{ run_id: impactRun('done').run_id, state: 'done' }] });
   });
 });
 
