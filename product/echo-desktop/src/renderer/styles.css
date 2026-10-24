@@ -275,9 +275,11 @@ button.account-row:hover { background: var(--raise); }
 .matches-note { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; color: var(--faint); }
 
 /* Ask: a thread, newest at the bottom. Earlier answers collapse to two lines. */
-/* Wider prose and an aligned bar; project lists keep their compact column.
-   8px each side leaves room for highlighted text without clipping its tint. */
-.ask { align-self: stretch; width: calc(var(--ask-width) + 16px); max-width: calc(100% - 32px); overflow-y: auto; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 16px; padding: 20px 8px 16px; }
+/* Ask and its bar use more of a wide window; other pages keep their compact column.
+   The full page scrolls, with a readable column inside it, so its scrollbar stays at the page edge. */
+.main:has(.ask) { --ask-width: 1120px; }
+.ask { align-self: stretch; width: 100%; min-width: 0; overflow-y: auto; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 16px; padding: 20px 24px 16px; }
+.ask > * { width: min(100%, var(--ask-width)); min-width: 0; margin-inline: auto; }
 .turn { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
 .ask .question { font-size: 18px; font-weight: 600; line-height: 1.35; letter-spacing: -0.015em; }
 .ask .asked { margin-top: -6px; font-size: 12.5px; color: var(--faint); }
@@ -298,7 +300,7 @@ button.marker:hover { color: var(--text); background: var(--line-strong); }
 .marker + .marker { margin-left: 3px; }
 .marker.on, .source-row.on .marker { color: var(--on-primary); background: var(--primary); }
 .private-mark { display: inline-flex; margin-left: 6px; vertical-align: -1px; color: var(--faint); }
-/* The answer's sources, below it: one line that opens onto a row per source. A number after a sentence opens it too. */
+/* The answer's sources, below it: one line that opens onto a row per source only when explicitly expanded. */
 .source-list { display: flex; flex-direction: column; margin-top: 4px; border-top: 1px solid var(--line); }
 .sources-toggle { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0; border: 0; text-align: left; color: var(--muted); background: transparent; }
 .sources-toggle:hover { color: var(--text); }
