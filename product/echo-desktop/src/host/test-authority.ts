@@ -54,6 +54,8 @@ interface Contract {
   validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string; mine?: true };
   validatePersonRunsRequestV1(value: unknown): RunsRequest;
   validatePersonRunsResultV1(operation: string, value: unknown): unknown;
+  /** A meetings request, here a handed-in meeting's submit. */
+  validatePersonMeetingRequestV2(value: unknown): { operation: string; meeting?: Record<string, unknown>; project_id?: string | null };
   /** Ask progress V1 (ADR-0039): the opt-in header, and one event as its stream frame. */
   PERSON_ASK_PROGRESS_HEADER_V1: string;
   PERSON_ASK_PROGRESS_HEADER_VALUE_V1: string;
@@ -273,6 +275,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
+  // The hand-in modes list Paste a meeting. Each meeting pasted, once per content: processed at once, it waits for review.
+  const handIn = mode.startsWith('hand-in');
+  const pasted: { meeting_id: string; title: string; first_line: string | null; meeting_at: string | null; project_ids: string[] }[] = [];
   // The people a meeting's impact check names, to pick as owners.
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
   // Thirteen people: the organization's directory comes in two pages.
@@ -1002,7 +1007,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       mode === 'role-changes' && elsewhere('role-changed') && index === 0 ? 'member' : project.role]);
     const followUps = openItems.filter(item => visible(item) && (involved(item) || item.owner_set_by?.membership_id === ARI.membership_id))
       .map(item => [item.item_id, item.state, item.owner.membership_id, item.owner_set_at, item.state_set_at, item.sent_at]);
-    const reviews = [granolaImported, granolaApproved, granolaRun?.state ?? null];
+    const reviews = [granolaImported, granolaApproved, granolaRun?.state ?? null, pasted.length];
     // An hour unless the test says: a test's own reads never wait on, or race, a check it did not ask for.
     const seconds = elsewhere('changes-seconds') ? Number(readFileSync(join(home, 'changes-seconds'), 'utf8')) : 3600;
     return { kind: 'echo-person-changes-v1', areas: { projects: digest(projectsNow), follow_ups: digest(followUps), reviews: digest(reviews) },
@@ -1059,8 +1064,26 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           tool('confluence', 'Confluence', confluenceLinked ? 'linked' : 'unlinked', CONFLUENCE_CLOUD, confluenceLinked ? 'atlassian-account-1' : null),
           mode.startsWith('granola') && !sentToAri ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
             external_scope_id: null, external_subject_id: null, organization_setup: null },
+          ...(handIn ? [tool('hand-in', 'Paste a meeting', 'linked', null, 'hand-in')] : []),
         ],
       });
+    }
+    // Paste a meeting, checked with the contract's own validator. Its id is derived from its content, as the Authority's
+    // is, so the same meeting pasted again is the same meeting; its review waits on Home at once.
+    if (method === 'POST' && path === '/v1/person/meetings' && handIn && body?.tool_id === 'hand-in') {
+      if (body.operation === 'reviews') {
+        return json({ reviews: pasted.map(entry => ({ approval_id: `apr_${entry.meeting_id.slice('hand-in-'.length)}`, title: entry.title, project_ids: entry.project_ids,
+          status: 'pending', decided_on: null, first_line: entry.first_line, action_count: 1, meeting_at: entry.meeting_at })) });
+      }
+      if (body.operation !== 'submit') return failure('not_found', 404);
+      const request = (await contract()).validatePersonMeetingRequestV2(body);
+      const meeting = request.meeting as { title: string; notes: string; transcript: string; started_at?: string };
+      const meeting_id = `hand-in-${createHash('sha256').update(JSON.stringify(meeting, Object.keys(meeting).sort())).digest('hex')}`;
+      if (!pasted.some(entry => entry.meeting_id === meeting_id)) {
+        const first = (meeting.notes || meeting.transcript).split('\n')[0]!.slice(0, 300);
+        pasted.push({ meeting_id, title: meeting.title, first_line: first, meeting_at: meeting.started_at ?? null, project_ids: request.project_id ? [request.project_id] : [] });
+      }
+      return json({ status: 'queued', meeting_id });
     }
     if (method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) {
       const meetingId = '00000000-0000-4000-8000-000000000010';
