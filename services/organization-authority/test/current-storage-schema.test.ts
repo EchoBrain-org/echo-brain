@@ -32,7 +32,7 @@ it("initializes only the active storage roles and tables", () => {
   expect(verification.root.schema_version).toBe(2);
   expect(verification.root.databases).toHaveLength(6);
   expect(existsSync(join(state, "record-derived.sqlite"))).toBe(false);
-  for (const [file, count, version] of [["authority.sqlite", 54, 14], ["integrations.sqlite", 7, 4], ["record-log.sqlite", 9, 4]] as const) {
+  for (const [file, count, version] of [["authority.sqlite", 54, 15], ["integrations.sqlite", 7, 4], ["record-log.sqlite", 9, 4]] as const) {
     const db = new Database(join(state, file), { readonly: true, fileMustExist: true });
     try {
       expect(db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'echo_state_lineage_manifest'").get()).toEqual({ n: count });
@@ -48,7 +48,7 @@ it("initializes only the active storage roles and tables", () => {
   }
 });
 
-it("refuses an Authority database whose schema header predates V14", () => {
+it("refuses an Authority database whose schema header predates V15", () => {
   const root = mkdtempSync(join(tmpdir(), "echo-current-storage-"));
   chmodSync(root, 0o700);
   roots.push(root);

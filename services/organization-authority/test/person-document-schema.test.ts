@@ -21,12 +21,12 @@ function seeded() {
 describe('Authority person document schema', () => {
   it('isolates original BLOBs from metadata and applies only to an empty database', () => {
     const db = database(); applyAuthorityBaseline(db);
-    expect(db.pragma('user_version', { simple: true })).toBe(14);
+    expect(db.pragma('user_version', { simple: true })).toBe(15);
     const columns = db.prepare("PRAGMA table_info('authority_person_documents_v1')").all() as { name: string; type: string }[];
     expect(columns.some(column => column.type === 'BLOB')).toBe(false);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'authority_person_document_%_v1' ORDER BY name").pluck().all()).toContain('authority_person_document_originals_v1');
     expect(() => applyAuthorityBaseline(db)).toThrow('completely empty');
-    expect(db.pragma('user_version', { simple: true })).toBe(14);
+    expect(db.pragma('user_version', { simple: true })).toBe(15);
   });
   it('enforces immutable custody, original size, and membership binding', () => {
     const db = seeded();

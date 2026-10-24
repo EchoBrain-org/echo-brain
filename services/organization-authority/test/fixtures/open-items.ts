@@ -18,7 +18,7 @@ import { approvalCoreFixture } from './approval-core.js';
 import { addMembership, revokeMembership } from './project-context-sqlite.js';
 
 /**
- * Open items over a real Authority V14 database (open items and Home v1).
+ * Open items over a real Authority V15 database (open items and Home v1).
  * Ari approves a meeting into project A, whose members are Ari (lead), Mina
  * Patel and Rafael Moreno; S. Okafor is in the organization but not in project
  * A. Decision readers are project A's active members. The impact check finds

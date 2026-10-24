@@ -467,7 +467,7 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses six byte-pinned baselines, one per role: Authority V14,
+Current state uses six byte-pinned baselines, one per role: Authority V15,
 control-plane V4, record-log V4, retrieval facts V3, retrieval lexical V2 and
 retrieval content V2. The V2 root binds exactly these six roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
