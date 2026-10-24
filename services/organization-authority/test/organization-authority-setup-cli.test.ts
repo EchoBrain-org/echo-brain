@@ -486,7 +486,7 @@ function insertStagingSyntheticSource(
   const adapterId = input.adapter_id ?? STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1;
   const sourceKey = `pms_${sha256Digest(`synthetic-source-${adapterId}`).slice(7)}`;
   const semantic = sha256Digest(`synthetic-source-admission-${adapterId}`);
-  const cursor = writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: input.pending ?? [] });
+  const cursor = writeStagingSyntheticCheckpointV1({ manual: input.pending ?? [] });
   authority
     .prepare(
       `INSERT INTO authority_live_source_admission_v2

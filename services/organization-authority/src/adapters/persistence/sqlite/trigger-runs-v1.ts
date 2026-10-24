@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
+import { publishedApprovalOfRecordV1 } from './published-approval-records-v1.js';
 
 /** Kept structural so this persistence adapter does not depend on approval composition. */
 export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
@@ -150,27 +151,16 @@ export class SqliteTriggerRunsV1 {
    * it (its siblings: the same meeting sent to other destinations), never that record itself. [] for any other digest.
    */
   siblingRecords(approver: ApprovalActorV1, recordSha256: Sha256Digest): readonly Sha256Digest[] {
-    return this.database.prepare(`SELECT DISTINCT json_extract(sibling.value, '$.record_sha256') FROM authority_approval_decisions_v1 d,
-        json_each(d.receipt_json, '$.records') AS own, json_each(d.receipt_json, '$.records') AS sibling
-      WHERE json_extract(d.body_json, '$.actor.membership_id') = ? AND d.action = 'approve' AND d.receipt_json IS NOT NULL
-        AND json_extract(d.body_json, '$.actor.organization_id') = ? AND json_extract(d.body_json, '$.actor.principal_id') = ?
-        AND json_extract(own.value, '$.record_sha256') = ? AND json_extract(sibling.value, '$.record_sha256') != ?`).pluck().all(
-      approver.membership_id, approver.organization_id, approver.principal_id, recordSha256, recordSha256) as Sha256Digest[];
+    const published = publishedApprovalOfRecordV1(this.database, approver, { record_sha256: recordSha256 });
+    return (published?.records ?? []).map(record => record.record_sha256 as Sha256Digest).filter(record => record !== recordSha256);
   }
 
   /**
-   * The source the meeting of one of the approver's records was read from: the frozen transcript_source of the decision whose
-   * receipt names it, the custody that holds the meeting's unapproved notes and any transcript of it. undefined for any other
-   * digest.
+   * The source the meeting of one of the approver's records was read from: the custody that holds the meeting's unapproved
+   * notes and any transcript of it. undefined for any other digest.
    */
   meetingSource(approver: ApprovalActorV1, recordSha256: Sha256Digest): string | undefined {
-    const source = this.database.prepare(`SELECT json_extract(d.body_json, '$.transcript_source.source_id') FROM authority_approval_decisions_v1 d,
-        json_each(d.receipt_json, '$.records') AS own
-      WHERE json_extract(d.body_json, '$.actor.membership_id') = ? AND d.action = 'approve' AND d.receipt_json IS NOT NULL
-        AND json_extract(d.body_json, '$.actor.organization_id') = ? AND json_extract(d.body_json, '$.actor.principal_id') = ?
-        AND json_extract(own.value, '$.record_sha256') = ? LIMIT 1`).pluck().get(
-      approver.membership_id, approver.organization_id, approver.principal_id, recordSha256);
-    return typeof source === 'string' ? source : undefined;
+    return publishedApprovalOfRecordV1(this.database, approver, { record_sha256: recordSha256 })?.meeting_source ?? undefined;
   }
 
   /** The approved-record runs of these records. Not fenced, as above. */

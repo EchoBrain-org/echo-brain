@@ -33,7 +33,7 @@ function fixtures(ids: readonly string[]): string {
   return directory;
 }
 
-const cursor = (manual: readonly string[]) => writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual });
+const cursor = (manual: readonly string[]) => writeStagingSyntheticCheckpointV1({ manual });
 
 async function source(options: { readonly fixtures_directory?: string } = {}) {
   const provider = createStagingSyntheticPersonalMeetingProviderV1(options);
@@ -101,9 +101,9 @@ describe("staging synthetic personal meeting provider", () => {
     await expect(readStagingSyntheticMeetingFixturesV1(fixtures(["fictional-planning", "fictional-planning"]))).rejects.toThrow("distinct lowercase ids");
   });
 
-  it("keeps a folder-free checkpoint and reports a linked staging tool", async () => {
-    expect(() => readStagingSyntheticCheckpointV1(writeStagingSyntheticCheckpointV1({ folder: "folder", baseline: false, revisions: {}, manual: [] }))).toThrow("cursor is invalid");
-    expect(() => readStagingSyntheticCheckpointV1("granola-folder-v1:{}")).toThrow("cursor is invalid");
+  it("keeps a checkpoint of queued imports only and reports a linked staging tool", async () => {
+    expect(() => writeStagingSyntheticCheckpointV1({ folder: null, manual: [] } as never)).toThrow("cursor is invalid");
+    expect(() => readStagingSyntheticCheckpointV1("granola-watch-v1:{}")).toThrow("cursor is invalid");
     const { provider, session } = await source();
     expect(provider.tool("token")).toMatchObject({ tool_id: "synthetic", personal_status: "linked" });
     await expect(session.folders()).resolves.toEqual([]);

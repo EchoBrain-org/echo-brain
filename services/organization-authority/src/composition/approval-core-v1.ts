@@ -201,7 +201,7 @@ export function validateApprovalDecisionRequestV1(surface: ApprovalSurfaceV1, va
 }
 
 /** The sorted, unique projects a decision's routes name. */
-export function approvalRoutedProjectsV1(routes: readonly ApprovalRouteV1[]): readonly string[] {
+function approvalRoutedProjectsV1(routes: readonly ApprovalRouteV1[]): readonly string[] {
   return Object.freeze([...new Set(routes.flatMap(route => route.project_ids ?? []))].sort());
 }
 

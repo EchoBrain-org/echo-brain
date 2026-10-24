@@ -27,7 +27,7 @@ describe('custom synthetic meeting custody', () => {
       reopened.submit!(input);
       const source = provider.source({ source_adapter_id: reopened.identity.adapter_id, source_adapter_version: reopened.identity.version,
         source_adapter_instance_id: reopened.identity.instance_id }, () => undefined);
-      const batch = await source.pull({ limit: 1, cursor: writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: [input.id] }) });
+      const batch = await source.pull({ limit: 1, cursor: writeStagingSyntheticCheckpointV1({ manual: [input.id] }) });
       expect(batch.meetings).toEqual([first]);
       const other = await provider.open({ ...person, membership_id: 'mem_other' }, () => undefined);
       await expect(other.preview(input.id)).rejects.toMatchObject({ code: 'not_found' });
@@ -45,7 +45,7 @@ describe('custom synthetic meeting custody', () => {
       const timed = { ...input, started_at: '2026-10-17T00:00:00.000Z', ended_at: '2026-10-17T00:30:00.000Z', time_zone: 'America/Los_Angeles' };
       session.submit!(timed);
       const source = provider.source({ source_adapter_id: session.identity.adapter_id, source_adapter_version: session.identity.version, source_adapter_instance_id: session.identity.instance_id }, () => undefined);
-      const batch = await source.pull({ limit: 1, cursor: writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: [input.id] }) });
+      const batch = await source.pull({ limit: 1, cursor: writeStagingSyntheticCheckpointV1({ manual: [input.id] }) });
       expect(batch.meetings[0]?.time).toEqual({ actual_start_at: timed.started_at, actual_end_at: timed.ended_at, timezone: timed.time_zone });
       expect(() => session.submit!({ ...timed, started_at: '2026-10-16T00:00:00.000Z' })).toThrow('different content');
       session.submit!({ ...input, id: 'synthetic-custom-undated' });

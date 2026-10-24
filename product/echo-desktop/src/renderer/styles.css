@@ -795,7 +795,6 @@ button.toast:hover { background: var(--panel); }
 .side-row .badge { min-width: 20px; height: 18px; padding: 0 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--on-signal); background: var(--signal); }
 
 /* A decision, from Home: one card, the question on top, the button at its foot. */
-.decision-body { font-size: 15px; line-height: 1.55; }
 
 /* An owner: a chip, a dashed Pick owner, and the people picker that opens under it. */
 .owner-slot { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }

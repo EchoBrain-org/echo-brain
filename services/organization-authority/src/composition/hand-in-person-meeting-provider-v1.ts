@@ -11,7 +11,7 @@ import { meetingIntakePersonV1, type PersonMeetingProviderV1 } from './person-me
 
 export { HAND_IN_SOURCE_ADAPTER_ID_V1 };
 /** How a hand-in source's custodian is established: the person handed the meeting in themselves. */
-export const HAND_IN_CUSTODIAN_ASSURANCE_V1 = 'person_hand_in';
+const HAND_IN_CUSTODIAN_ASSURANCE_V1 = 'person_hand_in';
 const VERSION = '1.0.0';
 const NORMALIZER_VERSION = 'person-hand-in-meeting-v1';
 const CURSOR_PREFIX = 'person-hand-in-meeting-v1:';

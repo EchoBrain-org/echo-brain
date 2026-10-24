@@ -37,10 +37,10 @@ const source_cursor_policy = Object.freeze({
 const checkpoint_codec = Object.freeze({
   read(value) {
     offset(value);
-    return Object.freeze({ folder: null, baseline: false, revisions: Object.freeze({}), manual: Object.freeze([]) });
+    return Object.freeze({ manual: Object.freeze([]) });
   },
   write(value) {
-    if (value?.folder !== null || value.baseline !== false || value.manual?.length !== 0 || Object.keys(value.revisions ?? {}).length !== 0) {
+    if (value?.manual?.length !== 0 || Object.keys(value).length !== 1) {
       throw new Error("core input admits only the empty initial checkpoint");
     }
     return cursor(0);

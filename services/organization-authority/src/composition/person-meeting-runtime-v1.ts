@@ -23,6 +23,7 @@ import { FileOrganizationAuthoritySigner } from '../adapters/security/file-organ
 import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingWatchV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
+import { publishedApprovalOfRecordV1 } from '../adapters/persistence/sqlite/published-approval-records-v1.js';
 import { approvalProposalSummaryV1, approvalReviewV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
@@ -361,12 +362,7 @@ export function createPersonMeetingRuntimeV1(options: {
    * receipt of that reviewer's decision names it. Another reviewer's record, or one not yet published, has none.
    */
   function proposalOfRecord(reviewer: MeetingIntakePersonV1, recordApprovalId: string): string | undefined {
-    const proposal = db.prepare(`SELECT d.approval_id FROM authority_approval_decisions_v1 d, json_each(d.receipt_json, '$.records') AS published
-      WHERE json_extract(d.body_json, '$.actor.membership_id') = ? AND d.action = 'approve' AND d.receipt_json IS NOT NULL
-        AND json_extract(d.body_json, '$.actor.organization_id') = ? AND json_extract(d.body_json, '$.actor.principal_id') = ?
-        AND json_extract(published.value, '$.approval_id') = ? LIMIT 1`).pluck()
-      .get(reviewer.membership_id, reviewer.organization_id, reviewer.principal_id, recordApprovalId);
-    return typeof proposal === 'string' ? proposal : undefined;
+    return publishedApprovalOfRecordV1(db, reviewer, { approval_id: recordApprovalId })?.approval_id;
   }
   function reviewView(view: ApprovalProposalViewV1): PersonMeetingReviewV2 {
     return { approval_id: view.approval_id, title: view.title, project_ids: view.project_ids, status: view.status, decided_on: view.decided_on, ...approvalProposalSummaryV1(view.snapshot_json),
