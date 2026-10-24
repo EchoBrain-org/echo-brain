@@ -222,6 +222,45 @@ test('sends each item to its own destination: a record and a check per destinati
   await page.screenshot({ path: testInfo.outputPath('decision-records.png') });
 });
 
+test('opens the decision from another destination\'s follow-ups, away from Home and past the reviews Home lists, by that record', async () => {
+  // granola-routes: once approved, the meeting is no longer in the reviews list; each further destination's check finds its actions.
+  run = await launch('granola-routes');
+  const { page } = run;
+  await addMeeting(page);
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  // The second action to Supplier review alone: a second destination, with a record and a check of its own.
+  await card.getByTestId('route-chip').nth(2).click();
+  const menu = card.getByTestId('route-menu');
+  await menu.getByRole('checkbox', { name: 'Supplier review' }).check();
+  await menu.getByRole('checkbox', { name: 'Thermostat redesign' }).uncheck();
+  await page.keyboard.press('Escape');
+  await expect(card.getByTestId('route-summary')).toHaveText('2 to Thermostat redesign · 1 to Supplier review');
+  await card.getByTestId('decision-approve').click();
+  // Supplier review's check runs first, then Thermostat redesign's, whose follow-ups wait to be sent.
+  await expect(page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' })).toBeVisible({ timeout: 30_000 });
+  // On Supplier review: its record of the meeting, that record's follow-ups, and its approval.
+  await page.getByTestId('sidebar-project').filter({ hasText: 'Supplier review' }).click();
+  await page.getByTestId('feed-row').filter({ hasText: 'Pilot planning' }).click();
+  const impact = page.getByTestId('impact-line');
+  await expect(impact).toHaveText('Follow-ups · 1 not sent');
+  await impact.getByRole('button', { name: /Follow-ups/ }).click();
+  const list = page.getByTestId('follow-ups');
+  await expect(list.getByTestId('follow-up-row')).toHaveText([/Confirm the trace/]);
+  await list.getByRole('button', { name: /^Approved / }).click();
+  // The whole meeting, opened by that record's own id: each destination with its check as it stands, each item where it went.
+  const decision = page.getByTestId('decision');
+  await expect(decision.getByRole('region', { name: 'Impact · Thermostat redesign' }).getByTestId('impact-follow-ups')).toHaveText('Follow-ups · 4 not sent');
+  await expect(decision.getByRole('region', { name: 'Impact · Supplier review' }).getByTestId('impact-follow-ups')).toHaveText('Follow-ups · 1 not sent');
+  await expect(decision.getByTestId('route-final')).toHaveText(['Thermostat redesign', 'Thermostat redesign', 'Supplier review']);
+  const opened = run.calls().filter(call => call.body?.operation === 'review_open').map(call => call.body?.approval_id);
+  expect(opened).toHaveLength(2);
+  expect(opened[1]).toMatch(/^apr_[0-9a-f]{64}$/);
+  expect(opened[1]).not.toBe(opened[0]);
+  await page.getByTestId('back').click();
+  await expect(list.getByTestId('follow-up-row')).toHaveText([/Confirm the trace/]);
+});
+
 test('shows that the meeting was already approved in Slack', async () => {
   run = await launch('granola-decided-in-slack');
   const { page } = run;
