@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
-import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, type PersonToolProviderV1, type PersonToolVerbContextV1 } from '@echo-brain/organization-api';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1, type PersonToolProviderV1, type PersonToolVerbContextV1 } from '@echo-brain/organization-api';
 import { readSecretLine, runPersonClientCli } from '../../src/product/person-client/commands.js';
 
 /** Standard input as a terminal (raw mode recorded) or a pipe, and a captured standard error. */
@@ -32,6 +32,17 @@ describe('neutral Person tool extension boundary', () => {
     await transport.getJson({ path: '/v3/tools/mail', validate_response: value => value, maximum_response_bytes: 100 });
     expect(String(fetch.mock.calls[0]?.[0])).toBe('https://authority.example/v3/tools/mail');
     expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('authorization')).toBe('Bearer test-credential');
+  });
+  it('sends past the ordinary request body only up to a stated bound, itself within the Authority route body', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response('{}', { headers: { 'content-type': 'application/json' } }));
+    const transport = new PersonAuthorityClient({ authority_origin: 'https://authority.example', fetch }).toolTransport('test-credential');
+    const send = (maximum_request_bytes?: number) => transport.json({ path: '/v3/tools/mail', body: { text: 'x'.repeat(20 * 1024) }, validate_request: value => value,
+      validate_response: value => value, ...(maximum_request_bytes === undefined ? {} : { maximum_request_bytes }) });
+    await expect(send()).rejects.toThrow('body bound');
+    for (const maximum of [0, 1.5, PERSON_TOOL_REQUEST_MAX_BYTES_V1 + 1]) await expect(send(maximum)).rejects.toThrow('bounds');
+    expect(fetch).not.toHaveBeenCalled();
+    await send(PERSON_TOOL_REQUEST_MAX_BYTES_V1);
+    expect(fetch).toHaveBeenCalledOnce();
   });
   it('reads a secret at a terminal behind one prompt with no echo, restoring the terminal on Enter and Ctrl-C', async () => {
     const typed = streams(true);

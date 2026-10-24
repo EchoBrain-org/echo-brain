@@ -16,10 +16,11 @@ import { createJiraPersonToolProviderV1 } from '@echo-brain/provider-jira-client
 import { createSlackPersonToolProviderV1 } from '@echo-brain/provider-slack-client/person/slack-tool-provider';
 import { runPersonClientCli as runCli, type PersonClientCliDependencies } from './commands.js';
 import { createSyntheticMeetingToolV1 } from './synthetic-meeting-tool.js';
+import { createHandInMeetingToolV1 } from './hand-in-meeting-tool.js';
 export { runClientUpdateCli, updateBeforePersonCommand } from './client-update-cli.js';
 
 /** The shipped Person CLI selects its tool providers only at this entrypoint. */
 export function runPersonClientCli(argv: readonly string[], dependencies: PersonClientCliDependencies): Promise<number> {
   // A call without dependencies reaches the CLI's own refusal of a missing home.
-  return runCli(argv, { ...dependencies, tool_providers: dependencies?.tool_providers ?? [granolaTool(), createSyntheticMeetingToolV1(), createSlackPersonToolProviderV1(), createJiraPersonToolProviderV1(), createConfluencePersonToolProviderV1()] });
+  return runCli(argv, { ...dependencies, tool_providers: dependencies?.tool_providers ?? [granolaTool(), createHandInMeetingToolV1(), createSyntheticMeetingToolV1(), createSlackPersonToolProviderV1(), createJiraPersonToolProviderV1(), createConfluencePersonToolProviderV1()] });
 }

@@ -459,6 +459,20 @@ export interface ConnectedTools {
   readonly tools: readonly ConnectedTool[];
 }
 
+/**
+ * Paste a meeting, as the page sends it: the text as typed, and a whole day's date (YYYY-MM-DD) or a start (a UTC
+ * timestamp), or neither. The host makes the text canonical and checks it with the meetings API's own validator.
+ */
+export interface PastedMeeting {
+  readonly title: string;
+  readonly notes: string;
+  readonly transcript: string;
+  readonly date?: string;
+  readonly started_at?: string;
+}
+/** The meetings API's bound on a pasted meeting (PERSON_HAND_IN_MEETING_MAX_BYTES_V1), which the page checks before sending. */
+export const MAX_PASTED_MEETING_BYTES = 60 * 1024;
+
 /** What a status check says about a save whose outcome was unknown. */
 export interface WriteStatus {
   readonly state: 'saved' | 'not_saved' | 'unknown';
@@ -649,6 +663,11 @@ export interface HostMethods {
   'tools.cancel': { params: { expect: Expect; tool_id: string; attempt_id: string }; result: ToolAttemptStatus };
   /** Removes your own connection to the tool. */
   'tools.disconnect': { params: { expect: Expect; tool_id: string }; result: null };
+  /**
+   * Paste a meeting: the host writes its text to private files for the client, never to its arguments. The same meeting
+   * pasted again answers the same id; what it decided still needs your approval.
+   */
+  'meetings.handIn': { params: { expect: Expect; meeting: PastedMeeting; project_id: string | null }; result: { meeting_id: string } };
 }
 
 export interface MainMethods {
@@ -698,6 +717,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
   'employees.reissue', 'employees.revoke', 'tools.meetings', 'runs', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
+  'meetings.handIn',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -707,6 +727,7 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
   'employees.revoke', 'tools.meetings', 'runs', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
+  'meetings.handIn',
 ]);
 /** Operations of a write method that only read. */
 const READ_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = {

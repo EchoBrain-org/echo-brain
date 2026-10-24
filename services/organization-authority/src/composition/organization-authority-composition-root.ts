@@ -1,4 +1,5 @@
 import { openGranolaPersonMeetingProviderV1 } from "./granola-person-live-runtime-v1.js";
+import { createHandInPersonMeetingProviderV1 } from "./hand-in-person-meeting-provider-v1.js";
 import { openPersonMeetingRuntimeV1 } from "./person-meeting-runtime-v1.js";
 import {
   enqueueApprovedRecordRunV1,
@@ -168,9 +169,10 @@ function composeSlackV1(
 
 /**
  * The deployable service selects OpenRouter and Slack identity. Meetings enter
- * only through personal sources; on staging the owner's synthetic personal source
- * also serves the release canary. The shared runtime and personal live connector
- * registry remain provider-neutral.
+ * only through personal sources: Granola, and the meetings any member hands in;
+ * on staging the owner's synthetic personal source also serves the release
+ * canary. The shared runtime and personal live connector registry remain
+ * provider-neutral.
  */
 export async function openOrganizationAuthorityService(
   config: OrganizationAuthorityServiceConfig,
@@ -303,7 +305,8 @@ export async function openOrganizationAuthorityService(
           resources,
           processor: dependencies.person_meeting_processor ?? decisionProcessor,
           projectors: policyProjectors,
-          providers: [openedGranola.provider, ...(synthetic === undefined ? [] : [synthetic.provider])],
+          // Every Authority takes handed-in meetings, kept in its own database with their queued imports.
+          providers: [openedGranola.provider, createHandInPersonMeetingProviderV1({ database: resources.database }), ...(synthetic === undefined ? [] : [synthetic.provider])],
           provider_applications: [interaction],
           ...(sharedConfig.core_runtime_observation === undefined ? {} : { observation: sharedConfig.core_runtime_observation }),
           approval_core: {

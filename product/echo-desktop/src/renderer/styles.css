@@ -738,6 +738,18 @@ button.toast:hover { background: var(--panel); }
 .source-notes:empty { display: none; }
 .source-notes .notice-line .link-button { margin-left: 2px; }
 
+/* Paste a meeting: one meeting from any tool, under Tools. Its fields scroll between the head and Add. */
+.sheet.paste { width: min(600px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 16px 0 14px; gap: 0; }
+.sheet.paste .sheet-head { flex-shrink: 0; padding: 0 22px 10px; }
+.sheet.paste > .error { margin: 0; padding: 6px 22px 0; }
+.sheet.paste > .choices { flex-shrink: 0; padding: 12px 22px 0; border-top: 1px solid var(--line); }
+.paste-form { display: flex; flex-direction: column; gap: 12px; }
+.paste-when { display: flex; flex-wrap: wrap; gap: 10px 14px; }
+.paste-form textarea.field { flex: none; height: auto; min-height: 132px; padding: 10px 14px; border: 1px solid var(--line-strong); border-radius: 10px; resize: vertical; font-size: 14px; line-height: 1.5; background: var(--field); }
+.paste-form textarea.field:focus { border-color: var(--control); }
+.paste-form .field:disabled { opacity: 0.5; }
+.paste-form > .link-button { align-self: flex-start; margin-left: -8px; }
+
 /* Impact: what an approved meeting changes, under its card. */
 .impact { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
 .impact-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

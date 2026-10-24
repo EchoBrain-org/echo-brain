@@ -2328,3 +2328,29 @@ BEFORE UPDATE ON authority_live_source_held_extractions_v1
 WHEN NEW.source_key != OLD.source_key OR NEW.review_lineage_id != OLD.review_lineage_id
   OR NEW.external_id != OLD.external_id OR NEW.organization_id != OLD.organization_id
 BEGIN SELECT RAISE(ABORT, 'held extraction identity is immutable'); END;
+
+-- A meeting a person handed in from any tool: the exact payload the submit route took, as canonical JSON, under the
+-- person's hand-in source and the id derived from the payload's digest, so the same meeting handed in twice is one row.
+-- It is written in the transaction that queues its import, and the source builds the meeting from it. Never changed.
+CREATE TABLE authority_person_hand_in_meetings_v1 (
+  source_key TEXT NOT NULL REFERENCES authority_person_meeting_sources_v2(source_key),
+  external_id TEXT NOT NULL CHECK (length(external_id) = 72 AND substr(external_id, 1, 8) = 'hand-in-'),
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object'
+    AND length(CAST(payload_json AS BLOB)) <= 61440),
+  payload_sha256 TEXT NOT NULL CHECK (length(payload_sha256) = 71 AND substr(payload_sha256, 1, 7) = 'sha256:'
+    AND substr(payload_sha256, 8) NOT GLOB '*[^0-9a-f]*'),
+  submitted_at TEXT NOT NULL CHECK (unixepoch(submitted_at) IS NOT NULL),
+  PRIMARY KEY (source_key, external_id),
+  CHECK (external_id = 'hand-in-' || substr(payload_sha256, 8))
+) STRICT;
+CREATE TRIGGER authority_person_hand_in_meetings_v1_source
+BEFORE INSERT ON authority_person_hand_in_meetings_v1
+WHEN NOT EXISTS (SELECT 1 FROM authority_live_source_admission_v2 a
+  WHERE a.source_key = NEW.source_key AND a.source_adapter_id = 'person-hand-in-meeting')
+BEGIN SELECT RAISE(ABORT, 'handed-in meeting requires a hand-in source'); END;
+CREATE TRIGGER authority_person_hand_in_meetings_v1_immutable
+BEFORE UPDATE ON authority_person_hand_in_meetings_v1
+BEGIN SELECT RAISE(ABORT, 'handed-in meeting is immutable'); END;
+CREATE TRIGGER authority_person_hand_in_meetings_v1_delete_denied
+BEFORE DELETE ON authority_person_hand_in_meetings_v1
+BEGIN SELECT RAISE(ABORT, 'handed-in meeting deletion is denied'); END;

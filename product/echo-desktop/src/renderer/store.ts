@@ -8,7 +8,7 @@ import type {
   Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
   NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
-  ExternalAnswerSource, UpdateState,
+  ExternalAnswerSource, PastedMeeting, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
@@ -984,10 +984,24 @@ function outcomeUnknown(failure: Failure, resend: boolean): boolean {
   return resend || failure.mutation_outcome === 'unknown';
 }
 
-/** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
-export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
-  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } }),
+/** Account-fenced command for a personal meeting tool, Granola unless named. No provider token enters the renderer. */
+export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }, tool_id = 'granola'): Promise<PersonMeetingResultsV2[K]> {
+  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id } }),
     isWriteCall('tools.meetings', { request: operation }));
+}
+
+/**
+ * Account-fenced Paste a meeting. Its sheet stays up while it is on its way, as Disconnect's does. Pasting the same
+ * meeting again is safe: it answers the same id and adds nothing.
+ */
+export async function handInMeeting(meeting: PastedMeeting, project_id: string | null): Promise<{ meeting_id: string }> {
+  const pasting = (sheet: Sheet | null): sheet is ToolManageSheet => sheet?.kind === 'tool-manage' && sheet.tool.tool_id === 'hand-in';
+  if (pasting(state.sheet)) set({ sheet: { ...state.sheet, busy: true } });
+  try {
+    return await fencedCommand<{ meeting_id: string }>(account => rpc('meetings.handIn', { expect: account, meeting, project_id }), true);
+  } finally {
+    if (pasting(state.sheet)) set({ sheet: { ...state.sheet, busy: false } });
+  }
 }
 
 /** Account-fenced runs request: your own approvals' checks, and the open items you can see. */
@@ -4682,10 +4696,16 @@ function checkEnded(before: readonly PersonRunV1[], after: readonly PersonRunV1[
 /** Tools that could not be read: they fail Home's load, which says so with their own failure. */
 class ToolsFailed extends CommandFailed {}
 
+/** The meeting tools, in the order Home reads reviews through them: a review is the person's, whichever tool brought it. */
+const MEETING_TOOLS = ['granola', 'hand-in'] as const;
+/** The meeting tool Home reads reviews through, as its last load learned. */
+let reviewTool: string = MEETING_TOOLS[0];
+
 /**
- * The meeting reviews, when Granola is there to review them. A load learns
- * that from the tools (`tools`), read beside Home's other reads; a poll keeps
- * what its load learned. Tools that cannot be read fail this part (`ToolsFailed`).
+ * The meeting reviews, when a meeting tool is there: Granola, or Paste a
+ * meeting. A load learns that from the tools (`tools`), read beside Home's
+ * other reads; a poll keeps what its load learned. Tools that cannot be read
+ * fail this part (`ToolsFailed`).
  */
 async function readReviews(mine: number, tools: Promise<Result<ConnectedTools>> | undefined): Promise<readonly PersonMeetingReviewV2[]> {
   if (tools) {
@@ -4694,12 +4714,13 @@ async function readReviews(mine: number, tools: Promise<Result<ConnectedTools>> 
       accountLost(answer.failure);
       throw new ToolsFailed(answer.failure);
     }
-    const granola = answer.value.tools.find(tool => tool.tool_id === 'granola');
+    const tool = MEETING_TOOLS.find(id => answer.value.tools.some(entry => entry.tool_id === id && entry.status !== 'unavailable'));
     const home = homeShown(mine);
     if (!home) return [];
-    set({ home: { ...home, meetings: granola !== undefined && granola.status !== 'unavailable' } });
+    if (tool !== undefined) reviewTool = tool;
+    set({ home: { ...home, meetings: tool !== undefined } });
   }
-  return state.home?.meetings ? (await meetingCommand({ operation: 'reviews' })).reviews : [];
+  return state.home?.meetings ? (await meetingCommand({ operation: 'reviews' }, reviewTool)).reviews : [];
 }
 
 /**
