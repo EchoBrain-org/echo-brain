@@ -4,8 +4,8 @@ import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol
 import { dateTime } from '../format.js';
 import { dueWords } from '../needs.js';
 import {
-  decide, keptItems, loadProjects, retryImpact, setDecisionOwner, setDecisionRoute, setDecisionRoutes, sharedDestination, tickDecisionRoute, tickDecisionRoutes,
-  type DecisionState, type Destination, type State,
+  decide, keptItems, loadProjects, retryImpact, routedProjects, setDecisionOwner, setDecisionRoute, setDecisionRoutes, sharedDestination, tickDecisionRoute,
+  tickDecisionRoutes, type DecisionState, type Destination, type State,
 } from '../store.js';
 import { CardHead, Face, Reasons, SignalRow } from './card.js';
 import { Caret } from './icons.js';
@@ -35,15 +35,39 @@ export function destinationLabel(destination: Destination, names: ReadonlyMap<st
   return destination.length > 1 ? `${first} +${destination.length - 1}` : first;
 }
 
-/** "2 to Thermostat redesign · 1 to Only me · 1 not kept": where Approve sends the items, in the card's order. */
+/**
+ * "2 to Thermostat redesign · 1 to Only me · 1 not kept": where Approve sends the items, in the card's order. Counted by
+ * destination, not by its words: THERM with ECHO and THERM with SUPPLIER both read "THERM +1", and are two records.
+ */
 function summary(items: readonly Item[], routes: DecisionState['routes'], names: ReadonlyMap<string, string>): string {
-  const counts = new Map<string, number>();
+  const counts = new Map<string, { destination: Destination; count: number }>();
   for (const item of items) {
     const destination = routes[item.signal_id] ?? null;
-    const key = destination === null ? '' : destinationLabel(destination, names);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+    const key = JSON.stringify(destination && [...destination].sort());
+    counts.set(key, { destination, count: (counts.get(key)?.count ?? 0) + 1 });
   }
-  return [...counts].sort(([a], [b]) => Number(a === '') - Number(b === '')).map(([key, count]) => (key === '' ? `${count} not kept` : `${count} to ${key}`)).join(' · ');
+  return [...counts.values()].sort((a, b) => Number(a.destination === null) - Number(b.destination === null))
+    .map(({ destination, count }) => (destination === null ? `${count} not kept` : `${count} to ${destinationLabel(destination, names)}`)).join(' · ');
+}
+
+/** A chip's choice as it shows: Don't keep (a faint chip) or Only me pressed, the projects ticked, and those only some items have. */
+interface Shown { dropped: boolean; onlyMe: boolean; ticked: readonly string[]; partly: readonly string[] }
+
+function shownOf(destination: Destination): Shown {
+  return { dropped: destination === null, onlyMe: destination?.length === 0, ticked: destination ?? [], partly: [] };
+}
+
+/**
+ * The All items control: the one destination every kept item has, or Not kept when none is. Mixed is its own: no choice
+ * pressed, a project every kept item has ticked, and one only some have part-ticked.
+ */
+function allShown(decision: DecisionState): Shown {
+  const kept = keptItems(decision).map(item => decision.routes[item.signal_id]!);
+  const shared = sharedDestination(decision);
+  if (kept.length === 0 || shared !== null) return shownOf(kept.length === 0 ? null : shared);
+  const every = (id: string) => kept.every(destination => destination.includes(id));
+  const named = [...new Set(kept.flat())];
+  return { dropped: false, onlyMe: false, ticked: named.filter(every), partly: named.filter(id => !every(id)) };
 }
 
 /** "2 decisions · 1 action": what the proposal holds. */
@@ -68,11 +92,12 @@ function short(text: string): string {
 }
 
 /**
- * A destination chip and its menu: Only me, your projects (several, up to 20),
- * or Don't keep. Escape or a click elsewhere closes it.
+ * A destination chip and its menu: Only me, your projects (several, up to 20
+ * named by the whole meeting), or Don't keep. Escape or a click elsewhere
+ * closes it.
  */
-function RouteChip({ label, destination, projects, state, frozen, name, testid, onOnlyMe, onTick, onDrop }: {
-  label: string; destination: Destination; projects: readonly ProjectSummary[]; state: State; frozen: boolean; name: string; testid: string;
+function RouteChip({ label, shown, named, projects, state, frozen, name, testid, onOnlyMe, onTick, onDrop }: {
+  label: string; shown: Shown; named: readonly string[]; projects: readonly ProjectSummary[]; state: State; frozen: boolean; name: string; testid: string;
   onOnlyMe(): void; onTick(projectId: string): void; onDrop(): void;
 }) {
   const [open, setOpen] = useState(false);
@@ -90,18 +115,18 @@ function RouteChip({ label, destination, projects, state, frozen, name, testid, 
   const choose = (then: () => void) => () => { then(); setOpen(false); chip.current?.focus(); };
   return (
     <div class="route" ref={box}>
-      <button type="button" ref={chip} class={`route-chip${destination === null ? ' dropped' : ''}`} aria-haspopup="true" aria-expanded={open} disabled={frozen}
+      <button type="button" ref={chip} class={`route-chip${shown.dropped ? ' dropped' : ''}`} aria-haspopup="true" aria-expanded={open} disabled={frozen}
         aria-label={`${name}: ${label}`} data-testid={testid} onClick={() => setOpen(!open)}>
         <span class="name">{label}</span><Caret />
       </button>
       {open && (
         <div class="menu route-menu" role="group" aria-label={name} data-testid="route-menu">
-          <button type="button" class="menu-item" aria-pressed={destination !== null && destination.length === 0} onClick={choose(onOnlyMe)}>Only me</button>
+          <button type="button" class="menu-item" aria-pressed={shown.onlyMe} onClick={choose(onOnlyMe)}>Only me</button>
           <div class="menu-rule" />
-          <ProjectPicker projects={projects} ticked={destination ?? []} max={MAX_CAPTURE_PROJECTS} onTick={onTick} disabled={frozen}
+          <ProjectPicker projects={projects} ticked={shown.ticked} partly={shown.partly} named={named} max={MAX_CAPTURE_PROJECTS} onTick={onTick} disabled={frozen}
             more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)} />
           <div class="menu-rule" />
-          <button type="button" class="menu-item" aria-pressed={destination === null} onClick={choose(onDrop)}>Don't keep</button>
+          <button type="button" class="menu-item" aria-pressed={shown.dropped} onClick={choose(onDrop)}>Don't keep</button>
         </div>
       )}
     </div>
@@ -109,11 +134,11 @@ function RouteChip({ label, destination, projects, state, frozen, name, testid, 
 }
 
 /** One item's chip: where this decision or action goes. */
-function ItemRoute({ item, decision, state, projects, names, frozen }: {
-  item: Item; decision: DecisionState; state: State; projects: readonly ProjectSummary[]; names: ReadonlyMap<string, string>; frozen: boolean;
+function ItemRoute({ item, decision, state, projects, names, named, frozen }: {
+  item: Item; decision: DecisionState; state: State; projects: readonly ProjectSummary[]; names: ReadonlyMap<string, string>; named: readonly string[]; frozen: boolean;
 }) {
   const destination = decision.routes[item.signal_id] ?? null;
-  return <RouteChip label={destinationLabel(destination, names)} destination={destination} projects={projects} state={state} frozen={frozen}
+  return <RouteChip label={destinationLabel(destination, names)} shown={shownOf(destination)} named={named} projects={projects} state={state} frozen={frozen}
     name={`Where it goes: ${short(item.text)}`} testid="route-chip"
     onOnlyMe={() => setDecisionRoute(item.signal_id, [])} onTick={id => tickDecisionRoute(item.signal_id, id)} onDrop={() => setDecisionRoute(item.signal_id, null)} />;
 }
@@ -160,7 +185,9 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   const shared = sharedDestination(decision);
   const all = kept.length === 0 ? 'Not kept' : shared === null ? 'Mixed' : destinationLabel(shared, names);
   const approvable = !decision.busy && kept.length > 0;
-  const route = (item: Item) => <ItemRoute item={item} decision={decision} state={state} projects={projects} names={names} frozen={frozen} />;
+  // Every chip counts the whole meeting's projects toward the 20 one approval may name.
+  const named = [...routedProjects(decision.routes)];
+  const route = (item: Item) => <ItemRoute item={item} decision={decision} state={state} projects={projects} names={names} named={named} frozen={frozen} />;
   return (
     <div class="card-page" data-testid="decision">
       <article class="card-main" aria-labelledby="decision-ask">
@@ -182,7 +209,7 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
         <section class="card-panel" aria-labelledby="decision-route">
           <div class="route-all">
             <div class="section-label" id="decision-route">All items</div>
-            <RouteChip label={all} destination={kept.length === 0 ? null : shared} projects={projects} state={state} frozen={frozen} name="Where all items go" testid="route-all"
+            <RouteChip label={all} shown={allShown(decision)} named={named} projects={projects} state={state} frozen={frozen} name="Where all items go" testid="route-all"
               onOnlyMe={() => setDecisionRoutes([])} onTick={tickDecisionRoutes} onDrop={() => setDecisionRoutes(null)} />
           </div>
           <div class="route-summary" data-testid="route-summary">{summary(open.items, decision.routes, names)}</div>

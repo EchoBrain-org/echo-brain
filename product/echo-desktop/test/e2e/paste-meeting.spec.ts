@@ -136,3 +136,54 @@ test('a pasted whole day opens its card on its day, east of UTC+11 too, through 
   // The card reads through the tool Home reads reviews through: Paste a meeting, with Granola not turned on.
   expect(run.calls().filter(call => call.path === '/v1/person/meetings' && call.body?.operation === 'review_open').map(call => call.body?.tool_id)).toEqual(['hand-in']);
 });
+
+test('a meeting names at most 20 projects across its items: past that, each chip offers only the projects it names, and says why', async () => {
+  // Twenty-two projects, ten a page.
+  run = await launch('hand-in-many-projects');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="hand-in"]').getByTestId('tool-paste').click();
+  const sheet = page.getByTestId('paste-sheet');
+  await sheet.getByLabel('Title', { exact: true }).fill('Supplier sync');
+  await sheet.getByLabel('Date', { exact: true }).fill('2026-10-21');
+  await sheet.getByLabel('Notes', { exact: true }).fill('Decision: move the pilot to Friday.\nAction: Mina sends the revised quote.');
+  await sheet.getByLabel('I allow ECHO to retain', { exact: false }).check();
+  await sheet.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(sheet.getByRole('status')).toHaveText('Added.');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('sidebar-home').click();
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  const chips = card.getByTestId('route-chip');
+  const menu = card.getByTestId('route-menu');
+  const box = (n: number) => menu.getByRole('checkbox', { name: `Project ${n}`, exact: true });
+  const limit = menu.getByTestId('projects-limit');
+  // Every project listed, then the decision to nineteen of them and the action to a twentieth.
+  await chips.nth(0).click();
+  await menu.getByTestId('projects-more').click();
+  await expect(box(20)).toBeVisible();
+  await menu.getByTestId('projects-more').click();
+  await expect(box(22)).toBeVisible();
+  for (let n = 1; n <= 19; n += 1) await box(n).check();
+  await expect(limit).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await chips.nth(1).click();
+  await box(20).check();
+  // Twenty in all: the action's chip offers only the projects the meeting names, and says why.
+  await expect(limit).toHaveText('Up to 20 projects.');
+  await expect(box(21)).toBeDisabled();
+  await expect(box(1)).toBeEnabled();
+  await page.keyboard.press('Escape');
+  // So does the decision's, though it has nineteen: the action's project is open to it, the others are not.
+  await chips.nth(0).click();
+  await expect(limit).toHaveText('Up to 20 projects.');
+  await expect(box(21)).toBeDisabled();
+  await expect(box(22)).toBeDisabled();
+  await box(20).check();
+  await expect(chips.nth(0)).toHaveText('Project 1 +19');
+  // A project only the decision named, ticked off, leaves room again.
+  await box(1).uncheck();
+  await expect(limit).toHaveCount(0);
+  await expect(box(21)).toBeEnabled();
+  await expect(card.getByTestId('route-summary')).toHaveText('1 to Project 2 +18 · 1 to Project 20');
+});

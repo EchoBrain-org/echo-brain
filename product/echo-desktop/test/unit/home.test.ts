@@ -85,10 +85,16 @@ const fresh = () => ({
   review: { approval_id: approval, title: 'Private meeting', project_ids: [], status: 'pending', decided_on: null, first_line: null, action_count: 0, meeting_at: null,
     all_day: false, records: [] } as PersonMeetingReviewV2,
   run: null as PersonRunV1 | null,
+  /** The checks of the review's further records, listed after its first record's. */
+  more: [] as PersonRunV1[],
   home: emptyHome(),
   granola: 'linked' as ToolStatus | null,
   failNextList: false,
   failNextReviews: false,
+  /** The reviews list names the review; one older than the newest it holds it does not. */
+  listed: true,
+  /** The review cannot be opened while set. */
+  failOpen: false,
   failLists: false,
   /** Home's next read of its rows fails (and so nothing of it is read live). */
   failNextHome: false,
@@ -161,10 +167,11 @@ async function authority(method: string, params: { project_id?: string; request?
       const review = { ...fx.review, records: fx.review.status === 'approved' && fx.review.records.length === 0 ? [{ approval_id: recordApproval, project_ids: fx.review.project_ids }] : fx.review.records };
       if (params.request?.operation === 'reviews') {
         if (fx.failNextReviews) { fx.failNextReviews = false; return unavailable; }
-        return ok({ reviews: [review] });
+        return ok({ reviews: fx.listed ? [review] : [] });
       }
       const decided = review.status !== 'pending' && review.status !== 'superseded';
-      if (params.request?.operation === 'review_open') return ok({ review, snapshot_sha256: 'snapshot', participants: [], reasons: [], suggested_projects: [], records: review.records,
+      if (params.request?.operation === 'review_open') return fx.failOpen ? unavailable : ok({ review, snapshot_sha256: 'snapshot', participants: [], reasons: [],
+        suggested_projects: [], records: review.records,
         items: reviewItems.map(entry => ({ ...entry, owner_editable: !decided && entry.owner_editable, project_ids: decided ? review.records[0]?.project_ids ?? null : [] })) });
       break;
     }
@@ -173,7 +180,7 @@ async function authority(method: string, params: { project_id?: string; request?
         if (fx.failLists) return unavailable;
         if (fx.failNextList) { fx.failNextList = false; return unavailable; }
         // Newest first: a sweep comes after the impact check.
-        return ok({ runs: [...(fx.sweep ? [{ ...fx.sweep }] : []), ...(fx.run ? [{ ...fx.run }] : [])] });
+        return ok({ runs: [...(fx.sweep ? [{ ...fx.sweep }] : []), ...(fx.run ? [{ ...fx.run }] : []), ...fx.more.map(entry => ({ ...entry }))] });
       }
       if (params.request?.operation === 'home') {
         // Its rows, answered with what `fx.home` holds when the test lets them go; and its live read.
@@ -193,6 +200,13 @@ async function authority(method: string, params: { project_id?: string; request?
         if (fx.impactStarts === 'pending') return ok({ state: 'pending' });
         fx.run = impactRun('running');
         return ok({ state: 'running' });
+      }
+      // Try again on a failed check: queued again.
+      if (params.request?.operation === 'retry') {
+        const failed = [fx.run, ...fx.more].find(entry => entry?.run_id === params.request?.run_id && entry?.state === 'failed');
+        if (!failed) return fail('not_found');
+        Object.assign(failed, { state: 'pending', error_code: null });
+        return ok({ state: 'pending' });
       }
       if (params.request?.operation === 'sweep') {
         if (fx.sweepAnswer === 'fails') return unavailable;
@@ -537,6 +551,37 @@ describe('Home decisions and impact checks', () => {
     const sent = rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
     expect(sent).toEqual([expect.objectContaining({ action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: null }, { signal_id: 'act-1', project_ids: many.slice(0, 20) }],
       owners: [{ signal_id: 'act-1', owner: 'R. Moreno' }] })]);
+  });
+
+  it('ticks a project on every kept item from All items while they differ, each keeping its others, and unticks one they all have', async () => {
+    const store = await start();
+    await store.openDecision(approval);
+    await flush();
+    const [therm, echo, supplier] = ['prj_11111111-1111-4111-8111-111111111111', 'prj_22222222-2222-4222-8222-222222222222', 'prj_44444444-4444-4444-8444-444444444444'];
+    const routes = () => store.getState().decision?.routes;
+    store.setDecisionRoute('dec-1', [echo, therm]);
+    store.setDecisionRoute('act-1', [therm]);
+    // SUPPLIER goes on both, and neither loses what it had.
+    store.tickDecisionRoutes(supplier);
+    expect(routes()).toEqual({ 'dec-1': [therm, echo, supplier], 'act-1': [therm, supplier] });
+    // ECHO, on one of them, goes on the other too; on both, it comes off both.
+    store.tickDecisionRoutes(echo);
+    expect(routes()).toEqual({ 'dec-1': [therm, echo, supplier], 'act-1': [therm, echo, supplier] });
+    store.tickDecisionRoutes(echo);
+    expect(routes()).toEqual({ 'dec-1': [therm, supplier], 'act-1': [therm, supplier] });
+    // An item not kept stays so; a kept one left with no project is Only me.
+    store.setDecisionRoute('act-1', null);
+    store.tickDecisionRoutes(therm);
+    store.tickDecisionRoutes(supplier);
+    expect(routes()).toEqual({ 'dec-1': [], 'act-1': null });
+    // At most 20 projects in all: a 21st goes on no item, and one the meeting names already goes on every kept item.
+    const many = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    store.setDecisionRoute('dec-1', many.slice(0, 19));
+    store.setDecisionRoute('act-1', many.slice(19, 20));
+    store.tickDecisionRoutes(many[20]!);
+    expect(routes()).toEqual({ 'dec-1': many.slice(0, 19), 'act-1': many.slice(19, 20) });
+    store.tickDecisionRoutes(many[19]!);
+    expect(routes()).toEqual({ 'dec-1': many.slice(0, 20), 'act-1': many.slice(19, 20) });
   });
 
   it('keeps a publishing approval visible and shows what its check found once it finishes', async () => {
@@ -1403,6 +1448,65 @@ describe('Follow-up lists: current work first, results in place', () => {
     fx.page = listPage([given, { ...yours('2'), owner: { ...mina, match: 'reassigned' as const }, owner_set_at: '2026-10-08T14:00:00.000Z', owner_set_by: mina }]);
     await store.pickFollowUpOwner(RAFAEL);
     expect(ids(store)).toEqual(['1']);
+  });
+
+  /** The ids each review_open asked for, in order. */
+  const opens = () => rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review_open')
+    .map(([, params]) => params.request.approval_id);
+
+  it('opens a decision from its list by the record\'s own id, past the newest reviews, and says so when it cannot be read', async () => {
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.listed = false;
+    fx.page = listPage([unsent('1')]);
+    const store = await meetingList();
+    await store.openListDecision();
+    // The Authority answers the record's proposal: the page holds the proposal's own id, and no reviews list was needed.
+    expect(opens()).toEqual([recordApproval]);
+    expect(store.followUpShown()).toMatchObject({ kind: 'decision' });
+    expect(store.getState().decision).toMatchObject({ approval_id: approval, loading: false, open: { review: { approval_id: approval } } });
+    expect(rpc.mock.calls.some(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'reviews')).toBe(false);
+    // Back on the list, opened again while the review cannot be read: the page says why, rather than nothing happening.
+    store.closeFollowUp();
+    await flush();
+    fx.failOpen = true;
+    await store.openListDecision();
+    expect(store.followUpShown()).toMatchObject({ kind: 'decision' });
+    expect(store.getState().decision).toMatchObject({ loading: false, open: null, failure: 'ECHO is unavailable right now. Try again.' });
+  });
+
+  it('reads each destination\'s check as it stands when another destination\'s list opens the decision away from Home, and again on Try again', async () => {
+    // Two destinations, each a record with its own check. Home last saw the first one running.
+    const second = 'apr_' + 'e'.repeat(64);
+    const secondRecord = 'sha256:' + '2'.repeat(64);
+    const secondRun = impactRun('done', '21', second);
+    const firstRun = impactRun('running').run_id;
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop',
+      records: [{ approval_id: recordApproval, project_ids: [] }, { approval_id: second, project_ids: [project.project_id] }] };
+    fx.run = impactRun('running');
+    const store = await start();
+    expect(store.getState().home?.runs).toEqual([expect.objectContaining({ run_id: firstRun, state: 'running' })]);
+    // On the project, away from Home, the first check finished and the second ran: nothing reads Home's runs there.
+    await store.openProject(project);
+    fx.run = impactRun('done');
+    fx.more = [secondRun];
+    fx.page = { items: [{ ...unsent('1', secondRun.run_id), decision: { ...decision, approval_id: second, record_sha256: secondRecord } }], next_cursor: null,
+      stages: [{ record_sha256: secondRecord, run_id: secondRun.run_id, state: 'done', error_code: null, mine: true }], summary: { ...EMPTY_SUMMARY, unsent: 1, decisions: 1 } };
+    await store.openFollowUps('record', secondRecord, 'Pilot planning');
+    await store.openListDecision();
+    await flush();
+    expect(store.getState().decision).toMatchObject({ approval_id: approval, runs: [{ run_id: firstRun, state: 'done' }, { run_id: secondRun.run_id, state: 'done' }] });
+    expect(Object.keys(store.getState().decision!.lines).sort()).toEqual([firstRun, secondRun.run_id]);
+    expect(opens()).toEqual([second]);
+    // ECHO comes back after the first check failed on a rerun: read again, the decision says so.
+    fx.run = impactRun('failed');
+    await show(store);
+    await flush();
+    expect(store.getState().decision?.runs[0]).toMatchObject({ run_id: firstRun, state: 'failed' });
+    // Try again: the check starts, and with no Home to look again, the decision reads it once more.
+    await store.retryImpact(firstRun);
+    await flush();
+    expect(requests('retry')).toEqual([{ schema_version: 1, operation: 'retry', run_id: firstRun }]);
+    expect(store.getState().decision?.runs[0]).toMatchObject({ run_id: firstRun, state: 'running' });
   });
 
   it('keeps the check of a decision opened from its list when a runs list read since does not hold it', async () => {

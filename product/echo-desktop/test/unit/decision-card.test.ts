@@ -9,6 +9,7 @@ vi.mock('preact/hooks', original => plainHooks(original));
 
 const THERM = 'prj_11111111-1111-4111-8111-111111111111';
 const ECHO = 'prj_22222222-2222-4222-8222-222222222222';
+const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 const project = (project_id: string, name: string) => ({ project_id, name, role: 'member' as const, created_at: '2026-10-01T00:00:00.000Z', status: 'active' as const });
 const items = [
   { signal_id: 'dec-1', kind: 'decision' as const, text: 'Launch the pilot next week.', subject: null, status: 'decided' as const, due_at: null,
@@ -32,7 +33,7 @@ const run = (id: string, event_ref: string, state: PersonRunV1['state']): Person
 async function page(value: DecisionState): Promise<Node> {
   const { getState } = await import('../../src/renderer/store.js');
   const { Decision } = await import('../../src/renderer/screens/decision.js');
-  const state: State = { ...getState(), projects: { ...getState().projects, items: [project(THERM, 'THERM'), project(ECHO, 'ECHO')] } };
+  const state: State = { ...getState(), projects: { ...getState().projects, items: [project(THERM, 'THERM'), project(ECHO, 'ECHO'), project(SUPPLIER, 'SUPPLIER')] } };
   return render(Decision({ state, decision: value })) as Node;
 }
 const chips = (tree: Node) => byTestId(tree, 'route-chip').map(node => text(node));
@@ -62,6 +63,21 @@ describe('the decision card', () => {
     expect(owner.props.disabled).toBe(true);
     const { destinationLabel } = await import('../../src/renderer/screens/decision.js');
     expect(destinationLabel([THERM], new Map())).toBe('A project');
+  });
+
+  it('counts the summary by destination, so two that read alike stay apart, and never shows Mixed as not kept', async () => {
+    const tree = await page(decision({ routes: { 'dec-1': [THERM, ECHO], 'dec-2': [THERM, SUPPLIER], 'act-1': [THERM, ECHO] } }));
+    expect(chips(tree)).toEqual(['THERM +1', 'THERM +1', 'THERM +1']);
+    expect(text(byTestId(tree, 'route-summary')[0])).toBe('2 to THERM +1 · 1 to THERM +1');
+    // Items are kept: Mixed is not the faint Not kept control.
+    const all = byTestId(tree, 'route-all')[0]!;
+    expect(text(all)).toBe('Mixed');
+    expect(all.props.class).toBe('route-chip');
+    expect(byTestId(await page(decision({ routes: { 'dec-1': null, 'dec-2': null, 'act-1': null } })), 'route-all')[0]!.props.class).toBe('route-chip dropped');
+  });
+
+  it('says why a decision could not be opened', async () => {
+    expect(text(await page(decision({ open: null, failure: 'ECHO is unavailable right now. Try again.' })))).toBe('ECHO is unavailable right now. Try again.');
   });
 
   it('cannot approve when nothing is kept', async () => {
@@ -101,6 +117,28 @@ describe('the decision card', () => {
     expect(text(tree)).toContain('R. Moreno');
     expect(text(tree)).toContain('The check did not finish');
     expect(byTestId(tree, 'route-chip')).toEqual([]);
+  });
+});
+
+describe('the project picker', () => {
+  it('part-ticks a project only some items have, and once the meeting names its most, offers only the projects it names', async () => {
+    const { ProjectPicker } = await import('../../src/renderer/screens/project-picker.js');
+    const projects = [project(THERM, 'THERM'), project(ECHO, 'ECHO'), project(SUPPLIER, 'SUPPLIER')];
+    const picker = (props: { ticked: readonly string[]; partly?: readonly string[]; named?: readonly string[] }) =>
+      render(ProjectPicker({ projects, onTick: () => undefined, onMore: () => undefined, more: false, max: 2, ...props }));
+    const boxes = (tree: unknown) => elements(tree).filter(node => node.type === 'input')
+      .map(node => ({ checked: node.props.checked, indeterminate: node.props.indeterminate, disabled: node.props.disabled }));
+    // All items, Mixed: THERM on every kept item, ECHO on some. The two are the most here, so SUPPLIER would be one too many.
+    const all = picker({ ticked: [THERM], partly: [ECHO], named: [THERM, ECHO] });
+    expect(boxes(all)).toEqual([{ checked: true, indeterminate: false, disabled: false }, { checked: false, indeterminate: true, disabled: false },
+      { checked: false, indeterminate: false, disabled: true }]);
+    expect(text(byTestId(all, 'projects-limit')[0])).toBe('Up to 2 projects.');
+    // One item's chip, nothing ticked on it: the projects other items name stay open to it.
+    expect(boxes(picker({ ticked: [], named: [THERM, ECHO] })).map(box => box.disabled)).toEqual([false, false, true]);
+    // Counting its own ticks alone (Capture), a free place leaves every project open.
+    const own = picker({ ticked: [THERM] });
+    expect(boxes(own).map(box => box.disabled)).toEqual([false, false, false]);
+    expect(byTestId(own, 'projects-limit')).toEqual([]);
   });
 });
 
