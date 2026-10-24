@@ -720,6 +720,39 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
     });
   });
 
+  it("makes no card for an extraction with rationales but no decision and no action", async () => {
+    const { value, state } = stateFixture();
+    const current = await state.readAdmission();
+    const reasonsOnly = await state.stageCandidate({
+      admission: current,
+      meeting,
+      decisions: {
+        ...decisions,
+        signals: [{ id: "reason-1", kind: "rationale", text: "The cohort is ready.", subject: null, confidence: 1,
+          evidence: [{ meeting_id: meeting.id, block_id: "block-1" }], supports_signal_ids: [] }],
+      },
+      review_policy: REVIEW_POLICY,
+    });
+    expect(reasonsOnly).toMatchObject({ disposition: "no_signals", state: "no_signals", approval_id: null, stage_command_id: null });
+    expect(rows(value, "authority_live_source_candidates_v2")).toBe(1);
+    expect(rows(value, "authority_live_approval_outbox_v2")).toBe(0);
+    // One action is enough for a card.
+    const withAction: MeetingDocument = { ...meeting, provenance: { ...meeting.provenance, canonical_revision: "sha256:note-action" } };
+    const actionable = await state.stageCandidate({
+      admission: current,
+      meeting: withAction,
+      decisions: {
+        ...decisions,
+        meeting_revision: withAction.provenance.canonical_revision,
+        signals: [{ id: "act-1", kind: "action", text: "Send the cohort plan.", subject: null, confidence: 1, owner: null, due_at: null,
+          evidence: [{ meeting_id: meeting.id, block_id: "block-1" }] }],
+      },
+      review_policy: REVIEW_POLICY,
+    });
+    assertActionable(actionable);
+    expect(rows(value, "authority_live_approval_outbox_v2")).toBe(1);
+  });
+
   it("rejects impossible proposal transitions", async () => {
     const { value, state, current, candidate: first } = await actionableFixture();
     const queued = await stageOtherMeeting(state, current, "other");

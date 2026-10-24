@@ -330,10 +330,12 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       const semanticChanged =
         previous === undefined ||
         previous.review_semantic_sha256 !== reviewSemanticSha256;
+      // No card without a commitment: an extraction with no decision and no action (rationales alone included)
+      // queues no proposal, and the meeting stays in its importer's custody.
       const disposition =
         !semanticChanged
           ? "coalesced"
-          : input.decisions.signals.length === 0
+          : !input.decisions.signals.some((signal) => signal.kind === "decision" || signal.kind === "action")
             ? "no_signals"
             : "actionable";
       const approvalId =
