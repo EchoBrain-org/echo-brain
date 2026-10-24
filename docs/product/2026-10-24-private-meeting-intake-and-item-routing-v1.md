@@ -225,7 +225,10 @@ record's audience.
 
 The DM card keeps its owner inputs, shows where the items go in one line, and
 offers Approve and Reject. Approve sends every item to the suggestion (Only
-me when there is none). Its fallback text says that choosing per item happens
+me when there is none). Its button carries a digest of the destination the
+card shows; when the suggestion the reviewer can read has changed since (a
+project joined or left), Approve decides nothing and the card is redrawn with
+the new destination. Its fallback text says that choosing per item happens
 in the ECHO desktop app. The closed card names the destinations.
 
 ## Part 3: hand in a meeting

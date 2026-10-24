@@ -24,6 +24,8 @@ export interface SlackApprovalCardInputV4 {
   readonly review: PrivateSlackApprovalBlockKitCardInputV1;
   /** Where Approve sends every decision and action: the suggested projects the reviewer can read, by name; [] = only the reviewer. */
   readonly destination: readonly string[];
+  /** slackApprovalDestinationSha256V4 of those projects' ids: the buttons carry it, so Approve decides only while it holds. */
+  readonly destination_sha256: string;
   readonly owners: readonly SlackApprovalOwnerProposalV4[];
 }
 const plain = (text: string) =>
@@ -46,6 +48,13 @@ export function slackApprovalActionIdV4(
 /** Where items go, in one line: project names, or "Only you". */
 export function slackApprovalDestinationV4(names: readonly string[]): string {
   return names.length === 0 ? "Only you" : names.join(", ");
+}
+/**
+ * Binds a card's buttons to the destination it shows: a digest of the sorted project ids Approve sends every item to
+ * ([] = only the reviewer). Shared with the click, which decides nothing when the suggestion it would send to differs.
+ */
+export function slackApprovalDestinationSha256V4(projectIds: readonly string[]): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(JSON.stringify(["echo-approval-v4-destination", [...projectIds].sort()])).digest("hex")}`;
 }
 /** A signal id remains explicit so a submitted owner can never be re-associated by its rendered position. */
 export function slackApprovalOwnerActionIdV4(
@@ -105,9 +114,10 @@ export function buildSlackApprovalCardV4(
         ...(action === "approve" ? { style: "primary" } : { style: "danger" }),
         text: plain(action === "approve" ? "Approve meeting" : "Reject"),
         value: JSON.stringify({
-          schema_version: 2,
+          schema_version: 3,
           approval_id: input.approval_id,
           snapshot_sha256: input.snapshot_sha256,
+          destination_sha256: input.destination_sha256,
         }),
       })),
     },

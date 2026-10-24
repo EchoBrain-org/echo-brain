@@ -62,13 +62,18 @@ export interface PrivateSlackApprovalLookupHintsV1 {
   readonly message_app_id: string;
   readonly message_bot_id: string;
 }
-/** A verified Approve or Reject. Slack approves as suggested, so a click carries no destination: only the owners typed on the card. */
+/**
+ * A verified Approve or Reject. Slack approves as suggested, so a click chooses no destination: it carries the digest of the
+ * one its card showed (slackApprovalDestinationSha256V4) and the owners typed on the card.
+ */
 export interface VerifiedSlackApprovalClickV1 {
   readonly schema_version: 4;
   readonly disposition: "resolution";
   readonly action: "approve" | "reject";
   readonly approval_id: string;
   readonly snapshot_sha256: `sha256:${string}`;
+  /** Where the card said Approve sends every item; an approval decides only while the suggestion is still that. */
+  readonly destination_sha256: `sha256:${string}`;
   readonly owners: readonly {
     readonly signal_id: string;
     readonly owner: string;
@@ -285,9 +290,11 @@ function lookup(payload: RecordValue): PrivateSlackApprovalLookupHintsV1 {
     message_bot_id: string(message.bot_id, BOT),
   });
 }
+const BUTTON_KEYS = ["schema_version", "approval_id", "snapshot_sha256", "destination_sha256"] as const;
 function value(action: RecordValue): {
   readonly approval_id: string;
   readonly snapshot_sha256: `sha256:${string}`;
+  readonly destination_sha256: `sha256:${string}`;
 } {
   if (typeof action.value !== "string" || action.value.length > 1024)
     invalid();
@@ -297,16 +304,14 @@ function value(action: RecordValue): {
   } catch {
     return invalid();
   }
-  const button = exact(
-    parsed,
-    ["schema_version", "approval_id", "snapshot_sha256"],
-    ["schema_version", "approval_id", "snapshot_sha256"],
-  );
-  if (button.schema_version !== 2) invalid();
+  const button = exact(parsed, BUTTON_KEYS, BUTTON_KEYS);
+  if (button.schema_version !== 3) invalid();
   const snapshot = string(button.snapshot_sha256, DIGEST, 80);
+  const destination = string(button.destination_sha256, DIGEST, 80);
   return Object.freeze({
     approval_id: string(button.approval_id, IDENTIFIER),
     snapshot_sha256: snapshot as `sha256:${string}`,
+    destination_sha256: destination as `sha256:${string}`,
   });
 }
 /** The owner inputs of the card's state. A reject keeps none; an approval needs no other state, since it sends every item to the suggestion. */
@@ -460,6 +465,7 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
       action: expected,
       approval_id: button.approval_id,
       snapshot_sha256: button.snapshot_sha256,
+      destination_sha256: button.destination_sha256,
       ...choices,
       provider_action_key_sha256: providerKey({
         lookup: hints,

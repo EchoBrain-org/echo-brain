@@ -23,7 +23,7 @@ import {
 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts";
 import { openOrganizationControlDatabase } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
-import { slackApprovalActionIdV4 } from "@echo-brain/provider-slack-server/private-approval/slack-approval-card-v4";
+import { slackApprovalActionIdV4, slackApprovalDestinationSha256V4 } from "@echo-brain/provider-slack-server/private-approval/slack-approval-card-v4";
 import {
   parseVerifiedPrivateSlackApprovalInteractionV1,
   PrivateSlackApprovalInteractionError,
@@ -697,9 +697,10 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
           text: { type: "plain_text", text: "Approve meeting", emoji: false },
           action_ts: "1727700001.000001",
           value: JSON.stringify({
-            schema_version: 2,
+            schema_version: 3,
             approval_id,
             snapshot_sha256: `sha256:${"a".repeat(64)}`,
+            destination_sha256: slackApprovalDestinationSha256V4([]),
           }),
         },
       ],

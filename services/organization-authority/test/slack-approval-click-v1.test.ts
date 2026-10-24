@@ -4,12 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   approvalCoreFixture,
   PROJECT_A,
+  PROJECT_B,
 } from "./fixtures/approval-core.js";
 import {
   enqueueApprovedRecordRunV1,
   SqliteTriggerRunsV1,
 } from "../src/adapters/persistence/sqlite/trigger-runs-v1.js";
 import { createSlackApprovalClickV1 } from "../../../providers/slack/server/src/private-approval/slack-approval-click-v1.js";
+import { slackApprovalDestinationSha256V4 } from "../../../providers/slack/server/src/private-approval/slack-approval-card-v4.js";
 
 const TARGET = {
   connection_id: "con_00000000-0000-4000-8000-000000000001",
@@ -31,6 +33,8 @@ function click(
     approval_id,
     snapshot_sha256,
     owners: [{ signal_id: "act-1", owner: "Rafael Moreno" }],
+    // The fixture's card shows its default suggestion, project A.
+    destination_sha256: slackApprovalDestinationSha256V4([PROJECT_A]),
     provider_action_key_sha256: canonicalSha256("click action"),
     lookup: {
       api_app_id: TARGET.api_app_id,
@@ -45,20 +49,24 @@ function click(
     ...patch,
   };
 }
-/** A proposal posted to the reviewer's Slack DM, suggesting project A unless `suggestions` says otherwise. */
-async function fixture(suggestions = 1) {
+/**
+ * A proposal whose drawn card is posted to the reviewer's Slack DM, suggesting project A unless `suggestions` says otherwise
+ * (of A and B). The reviewer is a member of the first `projects` of them.
+ */
+async function fixture(suggestions = 1, projects = 2) {
   const f = await approvalCoreFixture({
     owners: { "act-1": "Rafael Moreno" },
-    projects: 2,
+    projects,
     suggestions,
   });
   f.db
     .prepare(
-      "INSERT INTO authority_approval_presentations_v1(approval_id,surface,target_json,dm_channel_id,delivery,marker_state,marker_started_at,message_ts,card_sha256,shows,attempts,retry_at,created_at,updated_at) VALUES (?,'slack',?,'D012ABCDEF','posted',NULL,NULL,'1712345678.123456',NULL,'open',0,NULL,?,?)",
+      "INSERT INTO authority_approval_presentations_v1(approval_id,surface,target_json,dm_channel_id,delivery,marker_state,marker_started_at,message_ts,card_sha256,shows,attempts,retry_at,created_at,updated_at) VALUES (?,'slack',?,'D012ABCDEF','posted',NULL,NULL,'1712345678.123456',?,'open',0,NULL,?,?)",
     )
     .run(
       f.approvalId,
       JSON.stringify(TARGET),
+      canonicalSha256("drawn card"),
       "2026-10-07T09:00:00.000Z",
       "2026-10-07T09:00:00.000Z",
     );
@@ -76,6 +84,11 @@ async function fixture(suggestions = 1) {
     linked,
     link,
     redraw,
+    /** The card's digest while it is drawn, cleared when a click asks the presenter to draw it again. */
+    drawn: () => f.db.prepare("SELECT card_sha256 FROM authority_approval_presentations_v1 WHERE approval_id=?").pluck().get(f.approvalId),
+    /** The reviewer becomes an active member of a project. */
+    join: (project_id: string) => f.db.prepare("INSERT INTO authority_project_memberships_v1 VALUES ('pgm_00000000-0000-4000-8000-000000000f01',?,?,?,?,'owner','member','active','2026-10-07T09:00:00.000Z',NULL)")
+      .run(project_id, f.person.organization_id, f.person.principal_id, f.person.membership_id),
     decide: createSlackApprovalClickV1({
       database: f.db,
       core: f.core,
@@ -116,14 +129,43 @@ describe("Slack approval click V1", () => {
     await f.core.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     expect(f.core.proposal(f.approvalId)!.records).toEqual([{ approval_id: approvalRecordIdV2(f.approvalId, [PROJECT_A]), project_ids: [PROJECT_A] }]);
   });
-  it("approves every item for the reviewer alone when nothing is suggested, or the suggestion is no longer readable", async () => {
+  it("approves every item for the reviewer alone when nothing is suggested, or from a redrawn card once the suggestion is no longer readable", async () => {
     const f = await fixture(0);
-    expect(f.decide(click(f.approvalId, f.snapshotOf(f.approvalId)!))).toEqual({ outcome: "decided" });
+    expect(f.decide(click(f.approvalId, f.snapshotOf(f.approvalId)!, { destination_sha256: slackApprovalDestinationSha256V4([]) }))).toEqual({ outcome: "decided" });
     expect(JSON.parse(f.db.prepare("SELECT body_json FROM authority_approval_decisions_v1").pluck().get() as string).request.routes).toEqual(f.routes([]));
+    // The card said project A; the reviewer left it, so Approve on that card decides nothing and asks for a redraw.
     const g = await fixture();
     g.removeProjectMembership(PROJECT_A);
-    expect(g.decide(click(g.approvalId, g.snapshotOf(g.approvalId)!))).toEqual({ outcome: "decided" });
+    expect(g.decide(click(g.approvalId, g.snapshotOf(g.approvalId)!))).toEqual({ outcome: "stale" });
+    expect([g.decisionCount(), g.drawn()]).toEqual([0, null]);
+    expect(g.redraw).toHaveBeenCalledWith(g.approvalId);
+    // The redrawn card says Only you.
+    expect(g.decide(click(g.approvalId, g.snapshotOf(g.approvalId)!, { destination_sha256: slackApprovalDestinationSha256V4([]) }))).toEqual({ outcome: "decided" });
     expect(JSON.parse(g.db.prepare("SELECT body_json FROM authority_approval_decisions_v1").pluck().get() as string).request.routes).toEqual(g.routes([]));
+  });
+  it("decides nothing when the suggestion widened after the card was drawn, and approves to it from the redrawn card", async () => {
+    // A and B are suggested, but the reviewer reads only A: the card says A.
+    const f = await fixture(2, 1);
+    expect(f.core.proposal(f.approvalId)!.project_ids).toEqual([PROJECT_A]);
+    f.join(PROJECT_B);
+    expect(f.core.proposal(f.approvalId)!.project_ids).toEqual([PROJECT_A, PROJECT_B]);
+    // Approve on the drawn card would now also send every item to B, which the card never showed.
+    expect(f.decide(click(f.approvalId, f.snapshotOf(f.approvalId)!))).toEqual({ outcome: "stale" });
+    expect([f.decisionCount(), f.drawn()]).toEqual([0, null]);
+    expect(f.redraw).toHaveBeenCalledWith(f.approvalId);
+    expect(f.decide(click(f.approvalId, f.snapshotOf(f.approvalId)!, { destination_sha256: slackApprovalDestinationSha256V4([PROJECT_B, PROJECT_A]) }))).toEqual({ outcome: "decided" });
+    expect(JSON.parse(f.db.prepare("SELECT body_json FROM authority_approval_decisions_v1").pluck().get() as string).request.routes).toEqual(f.routes([PROJECT_A, PROJECT_B]));
+  });
+  it("approves when the suggestion is unchanged, leaving the drawn card alone, and rejects whatever the card's destination", async () => {
+    const f = await fixture();
+    expect(f.decide(click(f.approvalId, f.snapshotOf(f.approvalId)!))).toEqual({ outcome: "decided" });
+    expect(f.drawn()).toBe(canonicalSha256("drawn card"));
+    expect(f.redraw).not.toHaveBeenCalled();
+    const g = await fixture();
+    g.removeProjectMembership(PROJECT_A);
+    expect(g.decide(click(g.approvalId, g.snapshotOf(g.approvalId)!, { action: "reject" as const, owners: [] }))).toEqual({ outcome: "decided" });
+    expect(g.db.prepare("SELECT action FROM authority_approval_decisions_v1").pluck().get()).toBe("reject");
+    expect(g.drawn()).toBe(canonicalSha256("drawn card"));
   });
   it("decides through the real core with proposal-keyed owners", async () => {
     const f = await fixture();
