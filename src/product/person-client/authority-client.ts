@@ -38,7 +38,6 @@ import {
   type PersonResearchEvalStartReceiptV1,
   type PersonResearchEvalStartRequestV1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
-  PERSON_MEETING_TRANSCRIPT_PATH_V1,
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
   PERSON_LIST_RESPONSE_MAX_BYTES_V1,
@@ -59,8 +58,6 @@ import {
   validatePersonEvidenceDeskResponseV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
-  validatePersonMeetingTranscriptReadRequestV1,
-  validatePersonMeetingTranscriptV1,
   type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
   type PersonAnswerResponseV4 as OrganizationPersonAnswerV4,
   type PersonAnswerResponseV5 as OrganizationPersonAnswerV5,
@@ -72,8 +69,6 @@ import {
   type PersonEvidenceDeskResponseV1,
   type PersonSourceEvidenceReadRequestV1,
   type PersonSourceEvidenceV1,
-  type PersonMeetingTranscriptReadRequestV1,
-  type PersonMeetingTranscriptV1,
   type PersonListRequestV1,
   type PersonListResponseV1,
   type PersonOpenRequestV1,
@@ -189,7 +184,6 @@ export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
 export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
 export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
-export type PersonMeetingTranscriptReadV1 = PersonMeetingTranscriptV1;
 export type PersonListV1 = PersonListResponseV1;
 export type PersonOpenV1 = PersonOpenResponseV1;
 
@@ -1622,23 +1616,6 @@ export class PersonAuthorityClient {
       canonicalJson(citation) !== canonicalJson(request.citation)
     ) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different source evidence coordinates');
-    }
-    return response;
-  }
-
-  async readMeetingTranscript(accessToken: string, value: PersonMeetingTranscriptReadRequestV1): Promise<PersonMeetingTranscriptV1> {
-    const request = validatePersonMeetingTranscriptReadRequestV1(value);
-    const response = await this.json({
-      path: PERSON_MEETING_TRANSCRIPT_PATH_V1,
-      body: request,
-      validate_request: validatePersonMeetingTranscriptReadRequestV1,
-      validate_response: validatePersonMeetingTranscriptV1,
-      access_token: accessToken,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-      timeout_ms: DEFAULT_TIMEOUT_MS,
-    });
-    if (canonicalJson(response.scope) !== canonicalJson(request.scope) || canonicalJson(response.citation) !== canonicalJson(request.citation)) {
-      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different meeting transcript coordinates');
     }
     return response;
   }
