@@ -293,9 +293,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting's first record: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
-  // The hand-in modes list Paste a meeting. Each meeting pasted, once per content: processed at once, it waits for review.
+  // The hand-in modes list Paste a meeting. Each meeting pasted, once per content: processed at once, it waits for review,
+  // its first line the decision and its second the action, each starting at the project it suggests.
   const handIn = mode.startsWith('hand-in');
-  const pasted: { meeting_id: string; title: string; first_line: string | null; meeting_at: string | null; project_ids: string[] }[] = [];
+  const pasted: { meeting_id: string; title: string; lines: readonly [string, string]; meeting_at: string | null; all_day: boolean; project_ids: string[] }[] = [];
   // The checks of its other records, one per further destination: they find nothing.
   let extraRuns: { run_id: string; record: { approval_id: string; project_ids: string[] }; record_sha256: string; state: 'pending' | 'running' | 'done' }[] = [];
   // The people a meeting's impact check names, to pick as owners.
@@ -1089,17 +1090,28 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // Paste a meeting, checked with the contract's own validator. Its id is derived from its content, as the Authority's
     // is, so the same meeting pasted again is the same meeting; its review waits on Home at once.
     if (method === 'POST' && path === '/v1/person/meetings' && handIn && body?.tool_id === 'hand-in') {
-      if (body.operation === 'reviews') {
-        return json({ reviews: pasted.map(entry => ({ approval_id: `apr_${entry.meeting_id.slice('hand-in-'.length)}`, title: entry.title, project_ids: entry.project_ids,
-          status: 'pending', decided_on: null, first_line: entry.first_line, action_count: 1, meeting_at: entry.meeting_at })) });
+      const row = (entry: (typeof pasted)[number]) => ({ approval_id: `apr_${entry.meeting_id.slice('hand-in-'.length)}`, title: entry.title, project_ids: entry.project_ids,
+        status: 'pending', decided_on: null, first_line: entry.lines[0], action_count: 1, meeting_at: entry.meeting_at, all_day: entry.all_day, records: [] });
+      if (body.operation === 'reviews') return json({ reviews: pasted.map(row) });
+      // Its card: the decision and the action, each quoting its line and starting at the suggestion (Only me with none).
+      if (body.operation === 'review_open') {
+        const entry = pasted.find(item => row(item).approval_id === body.approval_id);
+        if (!entry) return failure('not_found', 404);
+        const item = (signal_id: string, kind: 'decision' | 'action', text: string) => ({ signal_id, kind, text, subject: null, status: kind === 'decision' ? 'decided' : null,
+          due_at: null, quotes: [text], owner: null, owner_editable: false, project_ids: entry.project_ids });
+        const names = new Map(listed().map(project => [project.project_id, project.name]));
+        return json({ review: row(entry), snapshot_sha256: sha(`pasted:${entry.meeting_id}`), participants: [],
+          items: [item('dec-1', 'decision', entry.lines[0]), item('act-1', 'action', entry.lines[1])], reasons: [],
+          suggested_projects: entry.project_ids.flatMap(project_id => { const name = names.get(project_id); return name === undefined ? [] : [{ project_id, name }]; }), records: [] });
       }
       if (body.operation !== 'submit') return failure('not_found', 404);
       const request = (await contract()).validatePersonMeetingRequestV2(body);
-      const meeting = request.meeting as { title: string; notes: string; transcript: string; started_at?: string };
+      const meeting = request.meeting as { title: string; notes: string; transcript: string; started_at?: string; all_day?: true };
       const meeting_id = `hand-in-${createHash('sha256').update(JSON.stringify(meeting, Object.keys(meeting).sort())).digest('hex')}`;
       if (!pasted.some(entry => entry.meeting_id === meeting_id)) {
-        const first = (meeting.notes || meeting.transcript).split('\n')[0]!.slice(0, 300);
-        pasted.push({ meeting_id, title: meeting.title, first_line: first, meeting_at: meeting.started_at ?? null, project_ids: request.project_id ? [request.project_id] : [] });
+        const lines = (meeting.notes || meeting.transcript).split('\n').map(line => line.slice(0, 300));
+        pasted.push({ meeting_id, title: meeting.title, lines: [lines[0]!, lines[1] ?? 'Follow up on the meeting.'], meeting_at: meeting.started_at ?? null,
+          all_day: meeting.all_day === true, project_ids: request.project_id ? [request.project_id] : [] });
       }
       return json({ status: 'queued', meeting_id });
     }
@@ -1114,7 +1126,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning',
         project_ids: [...new Set(records.flatMap(record => record.project_ids))].sort(),
         status: granolaApproved ? 'approved' : 'pending', decided_on: decidedOn,
-        first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', records };
+        first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false, records };
       switch (body?.operation) {
         case 'home': {
           if (mode === 'granola-browse-unavailable') return failure('unavailable', 503);

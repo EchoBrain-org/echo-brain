@@ -9,7 +9,7 @@ vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 const granola = (status: ConnectedTool['status']): ConnectedTool => ({ tool_id: 'granola', name: 'Granola', status });
 const PASTE: ConnectedTool = { tool_id: 'hand-in', name: 'Paste a meeting', status: 'linked' };
 const review = { approval_id: `apr_${'b'.repeat(64)}`, title: 'Supplier sync', project_ids: [], status: 'pending', decided_on: null,
-  first_line: 'Move the pilot to Friday.', action_count: 1, meeting_at: null };
+  first_line: 'Move the pilot to Friday.', action_count: 1, meeting_at: '2026-10-21T12:00:00.000Z', all_day: true, records: [] };
 const meetingId = `hand-in-${'c'.repeat(64)}`;
 let held: Held;
 let tools: ConnectedTool[];
@@ -83,4 +83,6 @@ describe('Paste a meeting', () => {
   it('checks the meetings API\'s own bound before sending', () => {
     expect(MAX_PASTED_MEETING_BYTES).toBe(PERSON_HAND_IN_MEETING_MAX_BYTES_V1);
   });
+
 });
+

@@ -70,8 +70,8 @@ export function handInMeetingDocumentV1(identity: MeetingSourceAdapter['identity
     title: meeting.title, lifecycle: 'completed' as const,
     ...(meeting.started_at === undefined ? {} : { time: { actual_start_at: meeting.started_at,
       ...(meeting.ended_at === undefined ? {} : { actual_end_at: meeting.ended_at }),
-      ...(meeting.time_zone === undefined ? {} : { timezone: meeting.time_zone }),
-      ...(meeting.all_day === true ? { all_day: true } : {}) } }),
+      // A whole day is its date at noon UTC, read in UTC, so no reader moves it to another day.
+      ...(meeting.all_day === true ? { timezone: 'UTC', all_day: true } : meeting.time_zone === undefined ? {} : { timezone: meeting.time_zone }) } }),
     capture: { state: 'complete' as const, components: [{ kind: 'metadata' as const, state: 'available' as const },
       { kind: 'notes' as const, state: meeting.notes === '' ? 'not_provided' as const : 'available' as const },
       { kind: 'transcript' as const, state: transcript.length === 0 ? 'not_provided' as const : 'available' as const }] },

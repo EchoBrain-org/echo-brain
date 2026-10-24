@@ -95,14 +95,19 @@ describe('the hand-in meeting source', () => {
     expect(f.extracted).toHaveLength(1);
     const [document] = f.extracted;
     // Honest custody: the text as handed in, its origin imported, the transcript a block per paragraph, nothing synthetic.
-    expect(document).toMatchObject({ id, title: 'Supplier sync', time: { actual_start_at: '2026-10-21T12:00:00.000Z', all_day: true }, participants: [], content: [
+    // A whole day is read in UTC, so no reader moves it to another day.
+    expect(document!.time).toEqual({ actual_start_at: '2026-10-21T12:00:00.000Z', timezone: 'UTC', all_day: true });
+    expect(document).toMatchObject({ id, title: 'Supplier sync', participants: [], content: [
       { id: `${id}:notes`, kind: 'note', origin: 'imported', text: meeting.notes },
       { id: `${id}:transcript:0`, kind: 'transcript', origin: 'imported', sequence: 0, text: 'Mina Patel: I will send the revised quote.\nRafael Moreno: Thanks.' },
       { id: `${id}:transcript:1`, kind: 'transcript', origin: 'imported', sequence: 1, text: 'Rafael Moreno: Friday works for the pilot.' },
     ] });
     expect(JSON.stringify(document).toLowerCase()).not.toContain('synthetic');
     const [review] = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    expect(review).toMatchObject({ title: 'Supplier sync', status: 'pending', project_ids: [project], first_line: 'Move the pilot to Friday.', meeting_at: '2026-10-21T12:00:00.000Z' });
+    expect(review).toMatchObject({ title: 'Supplier sync', status: 'pending', project_ids: [project], first_line: 'Move the pilot to Friday.', meeting_at: '2026-10-21T12:00:00.000Z',
+      all_day: true });
+    // The card reads the same row: its day, and no time of day.
+    expect((await f.call(runtime, { operation: 'review_open', approval_id: review!.approval_id })).review).toEqual(review);
     expect((await f.call(runtime, { operation: 'reviews' }, 'owner')).reviews).toEqual([]);
 
     // Handed in once more after processing: the frozen result is reused, so no second extraction and no second card.

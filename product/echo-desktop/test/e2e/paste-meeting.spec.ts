@@ -53,7 +53,7 @@ test('a meeting pasted from any tool reaches Home as a decision to approve', asy
   await expect(need).toHaveCount(1);
   await expect(need).toHaveAttribute('data-kind', 'approve');
   await expect(need).toContainText('Decision: move the pilot to Friday');
-  // A whole day keeps its day wherever Home shows it, from UTC-11 to UTC+11.
+  // A whole day keeps its day wherever Home shows it.
   await expect(need).toContainText('Supplier sync meeting, Oct 21');
   await expect(page.getByTestId('sidebar-badge')).toHaveText('1');
 });
@@ -101,4 +101,37 @@ test('Paste a meeting keeps what was typed under the cover, sends a start time, 
   await expect(sheet).toHaveCount(0);
   await page.getByTestId('sidebar-home').click();
   await expect(page.getByTestId('need-row')).toHaveCount(1);
+});
+
+test('a pasted whole day opens its card on its day, east of UTC+11 too, through Paste a meeting', async ({}, testInfo) => {
+  // UTC+14, where noon UTC on Oct 21 is 2 AM on Oct 22: the meeting is still on Oct 21.
+  run = await launch('hand-in', {}, { TZ: 'Pacific/Kiritimati' });
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="hand-in"]').getByTestId('tool-paste').click();
+  const sheet = page.getByTestId('paste-sheet');
+  await sheet.getByLabel('Title', { exact: true }).fill('Supplier sync');
+  await sheet.getByLabel('Date', { exact: true }).fill('2026-10-21');
+  await sheet.getByLabel('Notes', { exact: true }).fill('Decision: move the pilot to Friday.\nAction: Mina sends the revised quote.');
+  await sheet.getByRole('combobox', { name: 'Suggest project' }).selectOption({ label: 'Apollo' });
+  await sheet.getByLabel('I allow ECHO to retain', { exact: false }).check();
+  await sheet.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(sheet.getByRole('status')).toHaveText('Added. It reaches Home once processed.');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('sidebar-home').click();
+  const need = page.getByTestId('need-row');
+  await expect(need).toContainText('Supplier sync meeting, Oct 21');
+  await need.click();
+  const card = page.getByTestId('decision');
+  await expect(card.getByRole('heading', { name: 'Supplier sync' })).toBeVisible();
+  // Its day alone: no time of day, and not the next day.
+  await expect(card.locator('.card-top')).toHaveText('Approve· Meeting · Oct 21');
+  await expect(card).toContainText('1 decision · 1 action');
+  await expect(card).toContainText('Action: Mina sends the revised quote.');
+  // Each item starts at the project the paste suggested.
+  await expect(card.getByTestId('route-chip')).toHaveText(['Apollo', 'Apollo']);
+  await expect(card.getByTestId('route-summary')).toHaveText('2 to Apollo');
+  await page.screenshot({ path: testInfo.outputPath('paste-meeting-card.png') });
+  // The card reads through the tool Home reads reviews through: Paste a meeting, with Granola not turned on.
+  expect(run.calls().filter(call => call.path === '/v1/person/meetings' && call.body?.operation === 'review_open').map(call => call.body?.tool_id)).toEqual(['hand-in']);
 });

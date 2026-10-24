@@ -4715,7 +4715,7 @@ class ToolsFailed extends CommandFailed {}
 
 /** The meeting tools, in the order Home reads reviews through them: a review is the person's, whichever tool brought it. */
 const MEETING_TOOLS = ['granola', 'hand-in'] as const;
-/** The meeting tool Home reads reviews through, as its last load learned. */
+/** The meeting tool Home reads reviews through, as its last load learned; a card opens and decides through it too. */
 let reviewTool: string = MEETING_TOOLS[0];
 
 /**
@@ -5042,7 +5042,7 @@ function choicesOf(open: ReviewOpen): Pick<DecisionState, 'routes' | 'owners'> {
 async function readDecision(mine: number, approval_id: string, again = false): Promise<void> {
   let open: ReviewOpen;
   try {
-    open = await meetingCommand({ operation: 'review_open', approval_id });
+    open = await meetingCommand({ operation: 'review_open', approval_id }, reviewTool);
   } catch (error) {
     const decision = decisionShown(mine);
     if (decision && !again) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
@@ -5140,7 +5140,7 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
       routes: action === 'approve' ? items.map(item => ({ signal_id: item.signal_id, project_ids: decision.routes[item.signal_id] ?? null })) : [],
       owners: action === 'approve' ? items.flatMap(item => (item.owner_editable && (decision.routes[item.signal_id] ?? null) !== null && owner(item)
         ? [{ signal_id: item.signal_id, owner: owner(item) }] : [])) : [],
-    });
+    }, reviewTool);
     if (!decisionShown(mine)) return;
     const toast = result.decided_on === 'slack' ? `Already ${result.status === 'rejected' ? 'rejected' : 'approved'} in Slack`
       : result.status === 'rejected' ? 'Rejected' : 'Approved · checking what it changes';
@@ -6101,7 +6101,7 @@ async function proposalOf(recordApprovalId: string): Promise<string | null> {
     reviews.find(review => review.records.some(record => record.approval_id === recordApprovalId))?.approval_id ?? null;
   const known = named(state.home?.reviews ?? []);
   if (known !== null) return known;
-  try { return named((await meetingCommand({ operation: 'reviews' })).reviews); } catch { return null; }
+  try { return named((await meetingCommand({ operation: 'reviews' }, reviewTool)).reviews); } catch { return null; }
 }
 
 /**

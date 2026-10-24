@@ -24,7 +24,7 @@ const sweepRun = (state: PersonRunV1['state']): PersonRunV1 => ({
 /** A meeting's review; approved, its one record. */
 const meeting = (id: string, status: PersonMeetingReviewV2['status']): PersonMeetingReviewV2 => ({
   approval_id: `apr_${id.repeat(64)}`, title: `Meeting ${id}`, project_ids: [], status, decided_on: status === 'pending' ? null : 'desktop',
-  first_line: null, action_count: 0, meeting_at: null, records: status === 'approved' ? [{ approval_id: `apr_${'f'.repeat(32)}${id.repeat(32)}`, project_ids: [] }] : [],
+  first_line: null, action_count: 0, meeting_at: null, all_day: false, records: status === 'approved' ? [{ approval_id: `apr_${'f'.repeat(32)}${id.repeat(32)}`, project_ids: [] }] : [],
 });
 /** The approved record an item came from: its approval id is the record's own. */
 const decision = { approval_id: recordApproval, record_sha256: record, title: 'Pilot planning', first_line: 'Launch the pilot next week.', approved_at: '2026-10-08T10:00:00.000Z', project_ids: [] };
@@ -83,7 +83,7 @@ type Hold = 'live' | 'rows' | 'listRows' | 'tools' | 'send' | 'setState';
 /** What the fake Authority holds and how it answers, as each test starts: a test changes `fx` to say otherwise. */
 const fresh = () => ({
   review: { approval_id: approval, title: 'Private meeting', project_ids: [], status: 'pending', decided_on: null, first_line: null, action_count: 0, meeting_at: null,
-    records: [] } as PersonMeetingReviewV2,
+    all_day: false, records: [] } as PersonMeetingReviewV2,
   run: null as PersonRunV1 | null,
   home: emptyHome(),
   granola: 'linked' as ToolStatus | null,
@@ -401,6 +401,15 @@ describe('Home rows', () => {
     const { ReviewLine } = await import('../../src/renderer/screens/home.js');
     const row = { kind: 'approve' as const, review: { ...meeting('a', 'pending'), title: 'Pilot planning', meeting_at: '2026-10-06T12:00:00.000Z' } };
     expect(text(render(ReviewLine({ row })))).toBe('Decision · Pilot planning meeting, Oct 6');
+  });
+
+  it('names a whole day by its UTC date, the same day in any time zone', async () => {
+    const { ReviewLine } = await import('../../src/renderer/screens/home.js');
+    // A pasted day is noon UTC, a meeting tool's all-day event midnight UTC: either is Oct 21, from UTC-12 to UTC+14.
+    for (const meeting_at of ['2026-10-21T12:00:00.000Z', '2026-10-21T00:00:00.000Z']) {
+      const row = { kind: 'approve' as const, review: { ...meeting('a', 'pending'), title: 'Supplier sync', meeting_at, all_day: true } };
+      expect(text(render(ReviewLine({ row })))).toBe('Decision · Supplier sync meeting, Oct 21');
+    }
   });
 
   it('opens a row\'s second line with where and when: the first project Home knows, "+N" for more, then the time', async () => {

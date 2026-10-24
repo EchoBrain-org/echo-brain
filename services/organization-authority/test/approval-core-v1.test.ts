@@ -484,8 +484,9 @@ describe('approval core: views', () => {
 });
 
 /** A snapshot's JSON with just what approvalProposalSummaryV1 reads: the decisions, the actions and the meeting's start. */
-function snapshot(input: { readonly decisions: readonly string[]; readonly actions: readonly string[]; readonly started?: string; readonly scheduled?: string }): string {
-  const time = { ...(input.started === undefined ? {} : { actual_start_at: input.started }), ...(input.scheduled === undefined ? {} : { scheduled_start_at: input.scheduled }) };
+function snapshot(input: { readonly decisions: readonly string[]; readonly actions: readonly string[]; readonly started?: string; readonly scheduled?: string; readonly all_day?: boolean }): string {
+  const time = { ...(input.started === undefined ? {} : { actual_start_at: input.started }), ...(input.scheduled === undefined ? {} : { scheduled_start_at: input.scheduled }),
+    ...(input.all_day === undefined ? {} : { all_day: input.all_day }) };
   return JSON.stringify({ approved_payload: { brief: {
     meeting: { id: 'meeting-1', participants: [], ...(Object.keys(time).length === 0 ? {} : { time }) },
     decisions: input.decisions.map((text, i) => ({ id: `dec-${i + 1}`, kind: 'decision', text })),
@@ -496,7 +497,7 @@ function snapshot(input: { readonly decisions: readonly string[]; readonly actio
 describe('approval core: the Home row summary', () => {
   it('summarizes a proposal for its Home row', () => {
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['Launch the pilot next week.'], actions: ['Send the revised quote', 'Confirm the trace'], started: '2026-10-06T16:00:00Z' })))
-      .toEqual({ first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' });
+      .toEqual({ first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false });
     expect(approvalProposalSummaryV1(snapshot({ decisions: [], actions: ['Book the lab'] })).first_line).toBe('Book the lab');
   });
   it('keeps the line to one line of at most 300 characters and counts every action', () => {
@@ -508,13 +509,21 @@ describe('approval core: the Home row summary', () => {
   });
   it('falls back to the scheduled start, and has no line or time when the proposal has none', () => {
     expect(approvalProposalSummaryV1(snapshot({ decisions: [], actions: [], scheduled: '2026-10-06T15:30:00.000Z' })))
-      .toEqual({ first_line: null, action_count: 0, meeting_at: '2026-10-06T15:30:00.000Z' });
+      .toEqual({ first_line: null, action_count: 0, meeting_at: '2026-10-06T15:30:00.000Z', all_day: false });
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['Ship it.'], actions: [] })).meeting_at).toBeNull();
     expect(approvalProposalSummaryV1(snapshot({ decisions: ['Ship it.'], actions: [], started: 'not a time' })).meeting_at).toBeNull();
   });
+  it('says when the meeting is a whole day, and never without its time', () => {
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['Ship it.'], actions: [], started: '2026-10-21T12:00:00.000Z', all_day: true })))
+      .toMatchObject({ meeting_at: '2026-10-21T12:00:00.000Z', all_day: true });
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['Ship it.'], actions: [], scheduled: '2026-10-21T00:00:00.000Z', all_day: true })))
+      .toMatchObject({ meeting_at: '2026-10-21T00:00:00.000Z', all_day: true });
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['Ship it.'], actions: [], started: '2026-10-21T12:00:00.000Z', all_day: false })).all_day).toBe(false);
+    expect(approvalProposalSummaryV1(snapshot({ decisions: ['Ship it.'], actions: [], all_day: true }))).toMatchObject({ meeting_at: null, all_day: false });
+  });
   it('summarizes a frozen proposal', async () => {
     const f = await approvalCoreFixture();
-    expect(approvalProposalSummaryV1(f.core.proposal(f.approvalId)!.snapshot_json)).toEqual({ first_line: 'Ship the cohort onboarding.', action_count: 2, meeting_at: null });
+    expect(approvalProposalSummaryV1(f.core.proposal(f.approvalId)!.snapshot_json)).toEqual({ first_line: 'Ship the cohort onboarding.', action_count: 2, meeting_at: null, all_day: false });
   });
 });
 
