@@ -216,10 +216,11 @@ Provide exactly one identity option. --open-browser opens the handoff automatica
 Shows installed_version, client_build source_sha/source_kind, sign-in state, membership type, and Authority origin.
 Client provenance does not identify the Authority build serving requests. Status is local and makes no network request.
 `,
-  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings> --tool <tool> [options]]
+  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings|submit> --tool <tool> [options]]
 
 Without a verb, lists your organization's tools and your link to each; owners also see each tool's organization setup.
 setup (owners only) and connect open the tool's page in your browser and wait. A token is read only from standard input.
+submit --tool hand-in hands in a meeting from any tool, its text read from files.
 Run \`echo-brain person tools <verb> --help\` for each tool's options.
 `,
   logout: `usage: echo-brain person logout
@@ -444,7 +445,7 @@ const EMPLOYEE_ACTIONS = {
   list: "employee-list",
 } as const;
 
-const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project', 'meetings'];
+const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project', 'meetings', 'submit'];
 
 function toolVerb(value: string | undefined): PersonToolVerbNameV1 | undefined {
   return TOOL_VERBS.find((verb) => verb === value);
@@ -838,7 +839,7 @@ export async function runPersonClientCli(
   const evidenceAction = argv[0] === 'evidence' ? `evidence-${argv[1] ?? ''}` : undefined;
   const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
-  // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of the five.
+  // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of TOOL_VERBS.
   const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;
   const verbName = toolAction === undefined ? undefined : toolVerb(argv[1]);
   const subcommandAction = documentAction ?? evidenceAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction;
