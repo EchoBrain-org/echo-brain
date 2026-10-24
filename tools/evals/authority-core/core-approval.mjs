@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { bindApprovalWorkflowStateV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/approval-workflow-state-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../../../services/organization-authority/dist/application/project-context-application-v1.js";
-import { approvalProposalTextV1, createApprovalCoreV1 } from "../../../services/organization-authority/dist/composition/approval-core-v1.js";
+import { approvalReviewV1, createApprovalCoreV1 } from "../../../services/organization-authority/dist/composition/approval-core-v1.js";
 import { AuthorityOperationError } from "../../../packages/organization-authority-kernel/dist/domain/errors.js";
 import { personToolAuthenticationV1 } from "../../../services/organization-authority/dist/composition/person-tool-authentication-v1.js";
 
@@ -118,7 +118,7 @@ export async function createCoreApproval({ context, input, owner, employee, sess
     readPresentation(approval_id) {
       const view = core.proposal(identifier(approval_id, "approval_id"));
       if (view?.status !== "pending") return undefined;
-      return approvalProposalTextV1(view.snapshot_json);
+      return approvalReviewV1(view.snapshot_json);
     },
     /**
      * One reviewer's approve action, with the audience their policy names.
@@ -131,8 +131,11 @@ export async function createCoreApproval({ context, input, owner, employee, sess
       const project_id = projectOf(policy_id);
       const reviewer = role === "owner" ? ownerActor : role === "employee" ? employeeActor : undefined;
       if (reviewer === undefined) throw new TypeError("actor must name a configured owner or employee");
-      const snapshot_sha256 = core.proposal(approval_id)?.snapshot_sha256;
+      const view = core.proposal(approval_id);
+      const snapshot_sha256 = view?.snapshot_sha256;
       if (snapshot_sha256 === undefined) throw new Error("approval must be durably staged before an action is offered");
+      // Every decision and action goes to the one audience the policy names.
+      const routes = approvalReviewV1(view.snapshot_json).items.map((item) => ({ signal_id: item.signal_id, project_ids: project_id === null ? [] : [project_id] }));
       // The session only: the core checks the reviewer, the membership and each chosen project itself.
       const authorize = () => {
         const authorization = authenticate(reviewer.access_token);
@@ -145,7 +148,7 @@ export async function createCoreApproval({ context, input, owner, employee, sess
         };
       };
       const result = core.decide("desktop", {
-        approval_id, command_id, snapshot_sha256, action: "approve", project_ids: project_id === null ? [] : [project_id], share_transcript: false, owners: [],
+        approval_id, command_id, snapshot_sha256, action: "approve", routes, owners: [],
       }, authorize);
       if (result.kind === "already_decided") throw new AuthorityOperationError("stale_access_state", "Meeting review has already been resolved");
       if (result.kind === "stale") throw new AuthorityOperationError("stale_access_state", "Meeting review has changed");

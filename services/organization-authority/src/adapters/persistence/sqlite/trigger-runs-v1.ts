@@ -5,8 +5,9 @@ import type { Sha256Digest } from '@echo-brain/federation-protocol';
 
 /** Kept structural so this persistence adapter does not depend on approval composition. */
 export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
+/** `approval_id` is the record's own (the run's event_ref); `proposal_approval_id` the decided proposal its sibling records share. */
 export interface AfterApprovedRecordEventV1 {
-  readonly approval_id: string; readonly record_sha256: Sha256Digest; readonly reviewer: ApprovalActorV1; readonly decided_at: string;
+  readonly approval_id: string; readonly proposal_approval_id: string; readonly record_sha256: Sha256Digest; readonly reviewer: ApprovalActorV1; readonly decided_at: string;
 }
 export type AfterApprovedRecordHookV1 = (transaction: Database.Database, event: AfterApprovedRecordEventV1) => void;
 
@@ -142,6 +143,19 @@ export class SqliteTriggerRunsV1 {
   readUnfenced(runId: string): TriggerRunRowV1 | undefined {
     const found = this.database.prepare(`${selectRows} WHERE run_id=?`).get(runId) as StoredRowV1 | undefined;
     return found === undefined ? undefined : publicRow(found);
+  }
+
+  /**
+   * The other records published with one of the approver's records: the receipt records of the decision whose receipt names
+   * it (its siblings: the same meeting sent to other destinations), never that record itself. [] for any other digest.
+   */
+  siblingRecords(approver: ApprovalActorV1, recordSha256: Sha256Digest): readonly Sha256Digest[] {
+    return this.database.prepare(`SELECT DISTINCT json_extract(sibling.value, '$.record_sha256') FROM authority_approval_decisions_v1 d,
+        json_each(d.receipt_json, '$.records') AS own, json_each(d.receipt_json, '$.records') AS sibling
+      WHERE json_extract(d.body_json, '$.actor.membership_id') = ? AND d.action = 'approve' AND d.receipt_json IS NOT NULL
+        AND json_extract(d.body_json, '$.actor.organization_id') = ? AND json_extract(d.body_json, '$.actor.principal_id') = ?
+        AND json_extract(own.value, '$.record_sha256') = ? AND json_extract(sibling.value, '$.record_sha256') != ?`).pluck().all(
+      approver.membership_id, approver.organization_id, approver.principal_id, recordSha256, recordSha256) as Sha256Digest[];
   }
 
   /** The approved-record runs of these records. Not fenced, as above. */

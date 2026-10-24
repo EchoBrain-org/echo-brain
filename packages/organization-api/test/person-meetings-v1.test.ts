@@ -6,9 +6,17 @@ const projectA = 'prj_00000000-0000-4000-8000-000000000001';
 const projectB = 'prj_00000000-0000-4000-8000-000000000002';
 const digest = `sha256:${'b'.repeat(64)}`;
 const review = { approval_id: approval, title: 'Pilot planning', project_ids: [projectA], status: 'pending', decided_on: null,
-  first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' } as const;
+  first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', records: [] } as const;
+const routes = (...destinations: (readonly string[] | null)[]) => destinations.map((project_ids, index) => ({ signal_id: `sig-${index + 1}`, project_ids }));
 const request = (value: Record<string, unknown>) => ({ schema_version: 2, tool_id: 'granola', operation: 'review', approval_id: approval, command_id: 'review-1', snapshot_sha256: digest,
-  action: 'approve', project_ids: [projectA], share_transcript: false, owners: [], ...value });
+  action: 'approve', routes: routes([projectA], null, []), owners: [], ...value });
+const item = { signal_id: 'decision:sha256:1', kind: 'decision', text: 'Launch the pilot\nnext week.', subject: null, status: 'decided', due_at: null,
+  quotes: ['[09:01] Mina: Launch it.\n\nActions'], owner: null, owner_editable: false, project_ids: [projectA] } as const;
+const action = { signal_id: 'action:sha256:2', kind: 'action', text: 'Send the plan.', subject: 'THERM-48', status: null, due_at: '2026-10-20T00:00:00.000Z',
+  quotes: [], owner: 'Rafael Moreno', owner_editable: true, project_ids: [] } as const;
+const opened = (value: Record<string, unknown> = {}) => ({ review, snapshot_sha256: digest, participants: ['Mina Patel'], items: [item, action],
+  reasons: [{ signal_id: 'rationale:sha256:3', text: 'The freeze lifts.', supports: ['decision:sha256:1'], quotes: ['It lifts Friday.'] }],
+  suggested_projects: [{ project_id: projectA, name: 'Project A' }], records: [], ...value });
 
 describe('person meetings v2', () => {
   it('accepts an explicitly retained custom staging meeting', () => {
@@ -27,10 +35,22 @@ describe('person meetings v2', () => {
       meeting: { id: 'synthetic-custom-one', title: 'Test', notes: 'Test', transcript: '' }, ...overrides })).toThrow();
   });
   it.each([
-    ['more than twenty project ids', { project_ids: Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`) }],
-    ['unsorted project ids', { project_ids: [projectB, projectA] }],
-    ['duplicate project ids', { project_ids: [projectA, projectA] }],
-    ['invalid project id', { project_ids: ['project'] }],
+    ['more than twenty project ids in a route', { routes: routes(Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`)) }],
+    ['more than twenty project ids in all', { routes: routes(...Array.from({ length: 21 }, (_, index) => [`prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`])) }],
+    ['unsorted project ids', { routes: routes([projectB, projectA]) }],
+    ['duplicate project ids', { routes: routes([projectA, projectA]) }],
+    ['invalid project id', { routes: routes(['project']) }],
+    ['a route without its destination', { routes: [{ signal_id: 'sig-1' }] }],
+    ['a route with an extra key', { routes: [{ signal_id: 'sig-1', project_ids: [], share: true }] }],
+    ['a route naming no signal', { routes: [{ signal_id: '', project_ids: [] }] }],
+    ['a route with an invalid signal', { routes: [{ signal_id: 'sig 1', project_ids: [] }] }],
+    ['a signal routed twice', { routes: [{ signal_id: 'sig-1', project_ids: [] }, { signal_id: 'sig-1', project_ids: null }] }],
+    ['routes that are not a list', { routes: { 'sig-1': [] } }],
+    ['more than 500 routes', { routes: Array.from({ length: 501 }, (_, index) => ({ signal_id: `sig-${index}`, project_ids: [] })) }],
+    ['an approval that keeps nothing', { routes: routes(null, null) }],
+    ['an approval with no routes', { routes: [] }],
+    ['the retired audience', { project_ids: [projectA] }],
+    ['the retired transcript choice', { share_transcript: false }],
     ['more than forty owners', { owners: Array.from({ length: 41 }, (_, index) => ({ signal_id: `act-${index}`, owner: 'Rafael Moreno' })) }],
     ['duplicate owner signal ids', { owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }, { signal_id: 'act-1', owner: 'Ada Lovelace' }] }],
     ['empty owner signal id', { owners: [{ signal_id: '', owner: 'Rafael Moreno' }] }],
@@ -40,32 +60,59 @@ describe('person meetings v2', () => {
     ['untrimmed owner', { owners: [{ signal_id: 'act-1', owner: ' Rafael Moreno' }] }],
     ['control character owner', { owners: [{ signal_id: 'act-1', owner: 'Rafael\nMoreno' }] }],
     ['format control owner', { owners: [{ signal_id: 'act-1', owner: 'Rafael\u200e Moreno' }] }],
-    ['reject with projects', { action: 'reject', project_ids: [projectA] }],
-    ['reject sharing transcript', { action: 'reject', project_ids: [], share_transcript: true }],
-    ['reject with owners', { action: 'reject', project_ids: [], owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] }],
+    ['reject with routes', { action: 'reject', routes: routes(null) }],
+    ['reject with owners', { action: 'reject', routes: [], owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] }],
   ])('rejects %s', (_name, value) => expect(() => validatePersonMeetingRequestV2(request(value))).toThrow());
 
-  it('accepts a sorted multi-project approval with confirmed owners', () => {
-    expect(validatePersonMeetingRequestV2(request({ project_ids: [projectA, projectB], owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] })))
-      .toMatchObject({ schema_version: 2, project_ids: [projectA, projectB], owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] });
+  it('accepts mixed destinations with confirmed owners, and a reject with nothing routed', () => {
+    const mixed = routes([projectA, projectB], [projectA], null, []);
+    expect(validatePersonMeetingRequestV2(request({ routes: mixed, owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] })))
+      .toMatchObject({ schema_version: 2, routes: mixed, owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] });
+    expect(validatePersonMeetingRequestV2(request({ action: 'reject', routes: [] }))).toMatchObject({ action: 'reject', routes: [] });
+    expect(validatePersonMeetingRequestV2(request({ routes: routes(null, []) }))).toMatchObject({ routes: routes(null, []) });
+  });
+
+  it('accepts a review_open of items, reasons, names and records, with any line breaks in the meeting\'s words', () => {
+    expect(validatePersonMeetingResultV2('review_open', opened())).toEqual(opened());
+    const records = [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [projectA] }, { approval_id: `apr_${'d'.repeat(64)}`, project_ids: [] }];
+    expect(validatePersonMeetingResultV2('review_open', opened({ review: { ...review, status: 'approved', records }, records })).records).toEqual(records);
+    expect(validatePersonMeetingResultV2('review_open', opened({ items: [{ ...item, project_ids: null }, { ...action, owner_editable: false }] })).items).toHaveLength(2);
   });
 
   it.each([
-    ['too many suggested projects', { review, snapshot_sha256: digest, content: 'Review', owners: [], suggested_projects: Array.from({ length: 21 }, () => ({ project_id: projectA, name: 'Project A' })) }],
-    ['too many owner proposals', { review, snapshot_sha256: digest, content: 'Review', suggested_projects: [], owners: Array.from({ length: 41 }, (_, index) => ({ signal_id: `act-${index}`, action: 'Act', proposed: 'Rafael Moreno' })) }],
-    ['an overlong owner proposal line', { review, snapshot_sha256: digest, content: 'Review', suggested_projects: [], owners: [{ signal_id: 'act-1', action: 'A'.repeat(301), proposed: 'Rafael Moreno' }] }],
-    ['an overlong proposed owner result', { review, snapshot_sha256: digest, content: 'Review', suggested_projects: [], owners: [{ signal_id: 'act-1', action: 'Act', proposed: 'R'.repeat(301) }] }],
-  ])('rejects review_open response with %s', (_name, value) => expect(() => validatePersonMeetingResultV2('review_open', value)).toThrow());
-
-  it('allows independently bounded owner proposal lines', () => {
-    expect(validatePersonMeetingResultV2('review_open', { review, snapshot_sha256: digest, content: 'Review', suggested_projects: [],
-      owners: [{ signal_id: 'act-1', action: 'A'.repeat(300), proposed: 'R'.repeat(300) }] })).toMatchObject({ owners: [{ signal_id: 'act-1' }] });
+    ['the retired proposal text', { content: 'Review' }],
+    ['the retired owner proposals', { owners: [] }],
+    ['no records', { records: undefined }],
+    ['too many suggested projects', { suggested_projects: Array.from({ length: 21 }, () => ({ project_id: projectA, name: 'Project A' })) }],
+    ['an item of another kind', { items: [{ ...item, kind: 'rationale' }] }],
+    ['a decision without its status', { items: [{ ...item, status: null }] }],
+    ['an action with a status', { items: [{ ...action, status: 'decided' }] }],
+    ['a decision with a due date', { items: [{ ...item, due_at: '2026-10-20T00:00:00.000Z' }] }],
+    ['a due date that is not a timestamp', { items: [{ ...action, due_at: 'Friday' }] }],
+    ['an empty text', { items: [{ ...item, text: '' }] }],
+    ['an empty quote', { items: [{ ...item, quotes: [''] }] }],
+    ['an owner of a decision', { items: [{ ...item, owner: 'Rafael Moreno' }] }],
+    ['an editable owner that is not there', { items: [{ ...action, owner: null, owner_editable: true }] }],
+    ['an overlong owner', { items: [{ ...action, owner: 'R'.repeat(121) }] }],
+    ['an owner on two lines', { items: [{ ...action, owner: 'Rafael\nMoreno' }] }],
+    ['an unsorted destination', { items: [{ ...item, project_ids: [projectB, projectA] }] }],
+    ['a signal shown twice', { items: [item, item] }],
+    ['a reason supporting a non-identifier', { reasons: [{ signal_id: 'rationale:sha256:3', text: 'Why.', supports: ['a b'], quotes: [] }] }],
+    ['a record whose id is not apr_*', { review: { ...review, status: 'approved', records: [{ approval_id: 'rec_1', project_ids: [] }] }, records: [{ approval_id: 'rec_1', project_ids: [] }] }],
+    ['a record before the approval is published', { review: { ...review, status: 'publishing', records: [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [] }] } }],
+    ['one record twice', { records: [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [] }, { approval_id: `apr_${'c'.repeat(64)}`, project_ids: [projectA] }] }],
+  ])('rejects review_open response with %s', (_name, value) => {
+    const body: Record<string, unknown> = opened(value);
+    for (const [key, entry] of Object.entries(value)) if (entry === undefined) delete body[key];
+    expect(() => validatePersonMeetingResultV2('review_open', body)).toThrow();
   });
 
-  it('requires the three new review fields', () => {
+  it('requires the review row fields, records included', () => {
     expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: approval, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null }] })).toThrow();
+    expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: approval, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null,
+      first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' }] })).toThrow();
     expect(validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: approval, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null,
-      first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' }] }).reviews[0]!.action_count).toBe(2);
+      first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', records: [] }] }).reviews[0]!.action_count).toBe(2);
   });
 
   it.each([
@@ -80,13 +127,12 @@ describe('person meetings v2', () => {
     ['a meeting time without milliseconds', { meeting_at: '2026-10-06T16:00:00Z' }],
   ])('rejects a review row with %s, in reviews and review_open', (_name, value) => {
     expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ ...review, ...value }] })).toThrow();
-    expect(() => validatePersonMeetingResultV2('review_open', { review: { ...review, ...value }, snapshot_sha256: digest, content: 'Review', owners: [], suggested_projects: [] })).toThrow();
+    expect(() => validatePersonMeetingResultV2('review_open', opened({ review: { ...review, ...value } }))).toThrow();
   });
 
   it('accepts a review row without a decision line or meeting time, the bounds themselves, and more than 40 actions', () => {
     expect(validatePersonMeetingResultV2('reviews', { reviews: [{ ...review, first_line: null, action_count: 0, meeting_at: null },
       { ...review, first_line: 'L'.repeat(300), action_count: 41 }, { ...review, action_count: Number.MAX_SAFE_INTEGER }] }).reviews).toHaveLength(3);
-    expect(() => validatePersonMeetingResultV2('review_open', { review: { ...review, first_line: null, action_count: 0, meeting_at: null }, snapshot_sha256: digest,
-      content: 'Review', owners: [], suggested_projects: [] })).not.toThrow();
+    expect(() => validatePersonMeetingResultV2('review_open', opened({ review: { ...review, first_line: null, action_count: 0, meeting_at: null } }))).not.toThrow();
   });
 });

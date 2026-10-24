@@ -56,7 +56,9 @@ function snapshotFor(candidate: ActionableMeetingProcessingCandidateV1) {
 /** One decision row as the approval core writes it. */
 function insertDecision(value: Database.Database, approvalId: string, snapshotSha256: string, surface: "desktop" | "slack", action: "approve" | "reject") {
   const command_id = surface === "slack" ? `slack:${action}` : `desk-${action}`;
-  const body = { request: { approval_id: approvalId, command_id, snapshot_sha256: snapshotSha256, action, project_ids: [], share_transcript: false, owners: [] }, surface,
+  // An approval routes the fixture's one decision Only me; a rejection routes nothing.
+  const routes = action === "approve" ? [{ signal_id: decisions.signals[0]!.id, project_ids: [] }] : [];
+  const body = { request: { approval_id: approvalId, command_id, snapshot_sha256: snapshotSha256, action, routes, owners: [] }, surface,
     actor: { organization_id: "org_test", principal_id: "prn_test", membership_id: "mem_test" }, evidence: { kind: surface === "desktop" ? "person-session" : "slack-click", sha256: SHA },
     decided_at: ADVANCED_AT };
   value.prepare("INSERT INTO authority_approval_decisions_v1 (approval_id, command_id, surface, action, body_json) VALUES (?,?,?,?,?)").run(approvalId, command_id, surface, action, canonicalJson(body));

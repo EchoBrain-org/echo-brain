@@ -17,6 +17,7 @@ vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (impo
   } };
 });
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
@@ -181,7 +182,10 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   const outbox = (sourceKey: string) => f.db.prepare(`SELECT o.approval_id, o.state, o.suggested_projects_json FROM authority_live_approval_outbox_v2 o
     JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=? ORDER BY c.created_at, o.approval_id`).all(sourceKey) as { approval_id: string; state: string; suggested_projects_json: string | null }[];
-  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
+  /** Routes for every item of an open review, each to one destination (null = not kept, [] = Only me) or as chosen per item. */
+  const routes = (opened: PersonMeetingResultsV2['review_open'], to: readonly string[] | null | ((item: PersonMeetingResultsV2['review_open']['items'][number]) => readonly string[] | null) = []) =>
+    opened.items.map(item => ({ signal_id: item.signal_id, project_ids: typeof to === 'function' ? to(item) : to }));
+  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, routes, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: (error: unknown = new Error('extraction failed')) => { failExtraction = error; },
     ledger, pulls: () => pulls, revise: (value: string) => { edition = value; },
     held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
@@ -266,7 +270,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect((await f.call(runtime, { operation: 'reviews' }, 'other', 'synthetic')).reviews).toEqual([]);
       const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id }, 'owner', 'synthetic');
       const approve = { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256,
-        command_id: 'synthetic-review-1', action: 'approve', project_ids: [project], share_transcript: true, owners: [] } as const;
+        command_id: 'synthetic-review-1', action: 'approve', routes: f.routes(opened, [project]), owners: [] } as const;
       await f.call(runtime, approve, 'owner', 'synthetic');
       await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
       expect(calls).toHaveLength(1);
@@ -310,8 +314,10 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([{ ...pending, project_ids: [] }]);
     const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(opened.suggested_projects).toEqual([]);
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-left-project', action: 'approve', project_ids: [project], share_transcript: false, owners: [] })).rejects.toMatchObject({ code: 'unauthorized' });
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-only-me', action: 'approve', project_ids: [], share_transcript: false, owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
+    // The left project is no longer a suggestion: every item starts Only me.
+    expect(opened.items.map(item => item.project_ids)).toEqual(opened.items.map(() => []));
+    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-left-project', action: 'approve', routes: f.routes(opened, [project]), owners: [] })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-only-me', action: 'approve', routes: f.routes(opened, []), owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
   });
   it('routes each stored source to the provider that owns its adapter id', async () => {
     const f = await fixture(); f.grantProject();
@@ -358,10 +364,10 @@ describe('personal meeting intake uses the shared processing path', () => {
     const reviews = await f.call(runtime, { operation: 'reviews' }); expect(reviews.reviews).toHaveLength(1); expect(f.extracted()).toBe(1);
     expect((await f.call(runtime, { operation: 'reviews' }, 'other')).reviews).toEqual([]);
     const review = await f.call(runtime, { operation: 'review_open', approval_id: reviews.reviews[0]!.approval_id });
-    await expect(f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'invalid command id', action: 'approve', project_ids: [], share_transcript: false, owners: [] })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'invalid command id', action: 'approve', routes: f.routes(review), owners: [] })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1').pluck().get()).toBe(0);
     f.disconnect();
-    await f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'approve-once', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
+    await f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'approve-once', action: 'approve', routes: f.routes(review), owners: [] });
     await f.create().processing.recoverV4Appends(new AbortController().signal);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]?.status).toBe('approved');
     expect(f.record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: 1 });
@@ -438,7 +444,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     // Someone who cannot read the import never has it counted.
     expect(originals.deskSearch({ access_token: 'other', scope, source: 'meeting', ...day(arrived), date_field: 'approved' })).not.toHaveProperty('unchecked');
   });
-  it.each([false, true])('keeps imported notes and an approved transcript independently readable (project audience: %s)', async (sharedWithProject) => {
+  it.each([false, true])('never shares the transcript from an approval, and keeps the importer\'s notes readable (project audience: %s)', async (sharedWithProject) => {
     const f = await fixture(), runtime = f.create();
     f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
@@ -446,9 +452,11 @@ describe('personal meeting intake uses the shared processing path', () => {
     const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
     const review = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: review.snapshot_sha256,
-      command_id: 'approve-shared-transcript', action: 'approve', project_ids: sharedWithProject ? [projectB] : [], share_transcript: true, owners: [] });
+      command_id: 'approve-no-transcript', action: 'approve', routes: f.routes(review, sharedWithProject ? [projectB] : []), owners: [] });
     await runtime.processing.recoverV4Appends(new AbortController().signal);
     f.disconnect(); // Reading retained evidence must not require a provider connection.
+    expect(f.record.prepare('SELECT count(*) FROM organization_record_meeting_transcript_grant_v1').pluck().get()).toBe(0);
+    expect(JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string).body.human_act_resolution_ref.share_transcript).toBe(false);
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id, {
       ...f.context.coordinates, grants: new ApprovedMeetingTranscriptGrantReaderV1(f.record),
       is_expected_policy_contract: grant => grant.policy_contract_sha256 === (sharedWithProject ? PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256 : RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256),
@@ -457,33 +465,9 @@ describe('personal meeting intake uses the shared processing path', () => {
     const notes = originals.deskSearch({ access_token: 'owner', scope, query: 'cohort', kinds: ['imported_meeting'] });
     expect(notes.items).toHaveLength(1);
     expect(JSON.stringify(notes.items)).not.toContain('TRANSCRIPT_SECRET');
-    const transcript = originals.deskSearch({ access_token: 'owner', scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE', kinds: ['note'] });
-    expect(transcript.items).toHaveLength(1);
-    expect(transcript.items[0]).toMatchObject({ kind: 'note', visibility: sharedWithProject ? 'project' : 'only_me' });
-    const citation = transcript.items[0]!.citation;
-    expect(citation.source_id).toBe(notes.items[0]!.citation.source_id);
-    expect(citation.representation_sha256).not.toBe(notes.items[0]!.citation.representation_sha256);
-    expect(originals.deskOpen({ access_token: 'owner', scope, citation }).items[0]?.text).toContain('TRANSCRIPT_SECRET');
-    expect(originals.read({ access_token: 'owner', scope, citation }).atom.text).toContain('TRANSCRIPT_SECRET');
-    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: transcript })).not.toThrow();
-    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: notes })).not.toThrow();
     expect(originals.deskOpen({ access_token: 'owner', scope, citation: notes.items[0]!.citation }).items[0]?.kind).toBe('imported_meeting');
-    for (const token of ['reader-a', 'other']) {
-      expect(originals.deskSearch({ access_token: token, scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
-      expect(() => originals.deskOpen({ access_token: token, scope, citation })).toThrow();
-    }
-    expect(originals.deskSearch({ access_token: 'reader-b', scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toHaveLength(sharedWithProject ? 1 : 0);
-    for (const changed of [{ ...citation, representation_sha256: notes.items[0]!.citation.representation_sha256 }, { ...citation, anchor_sha256: canonicalSha256('wrong anchor') }]) {
-      expect(() => originals.deskOpen({ access_token: 'owner', scope, citation: changed })).toThrow();
-      expect(() => originals.read({ access_token: 'owner', scope, citation: changed })).toThrow();
-    }
-    expect(() => originals.deskOpen({ access_token: 'owner', scope: { kind: 'mine' }, citation })).toThrow();
-    if (sharedWithProject) {
-      f.leave(projectB, 'owner');
-      expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: transcript })).toThrow();
-      expect(() => originals.deskOpen({ access_token: 'owner', scope, citation })).toThrow();
-      expect(originals.deskSearch({ access_token: 'owner', scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
-      expect(originals.deskOpen({ access_token: 'owner', scope, citation: notes.items[0]!.citation }).items[0]?.kind).toBe('imported_meeting');
+    for (const token of ['owner', 'reader-a', 'reader-b', 'other']) {
+      expect(originals.deskSearch({ access_token: token, scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE', kinds: ['note'] }).items).toEqual([]);
     }
   });
   it('keeps a folder-delivered meeting readable by the folder project after the watch moves', async () => {
@@ -1077,26 +1061,69 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
     expect(await f.readers()).toContain('reader-b');
   });
-  it('approves into the chosen project through the v2 route', async () => {
+  it('approves into the chosen project through the route', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     const { pending, opened } = await f.pendingReview(runtime, project);
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-b', action: 'approve', project_ids: [projectB], share_transcript: true, owners: [] }))
+    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-b', action: 'approve', routes: f.routes(opened, [projectB]), owners: [] }))
       .resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
     const body = JSON.parse(f.db.prepare('SELECT body_json FROM authority_approval_decisions_v1').pluck().get() as string);
-    expect(body).toMatchObject({ surface: 'desktop', request: { project_ids: [projectB], share_transcript: true, owners: [] }, evidence: { kind: 'person-session' } });
+    expect(body).toMatchObject({ surface: 'desktop', request: { routes: f.routes(opened, [projectB]), owners: [] }, evidence: { kind: 'person-session' } });
+    expect(Object.keys(body.request).sort()).toEqual(['action', 'approval_id', 'command_id', 'owners', 'routes', 'snapshot_sha256']);
     await runtime.processing.recoverV4Appends(new AbortController().signal);
     const envelope = JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string);
     expect(envelope.body.human_act_resolution_ref.audience_project_ids).toEqual([projectB]);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]).toMatchObject({ status: 'approved', project_ids: [projectB], decided_on: 'desktop' });
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]).toMatchObject({ status: 'approved', project_ids: [projectB], decided_on: 'desktop',
+      records: [{ approval_id: approvalRecordIdV2(pending!.approval_id, [projectB]), project_ids: [projectB] }] });
+  });
+  it('opens a pending review as items with their suggested destinations and proposed owners, and a decided one as chosen', async () => {
+    const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
+    const { pending, opened } = await f.pendingReview(runtime, project);
+    expect(Object.keys(opened).sort()).toEqual(['items', 'participants', 'reasons', 'records', 'review', 'snapshot_sha256', 'suggested_projects']);
+    expect(opened.items).toEqual([
+      { signal_id: 'decision-1', kind: 'decision', text: 'Ship the cohort onboarding.', subject: null, status: 'decided', due_at: null, quotes: [], owner: null, owner_editable: false, project_ids: [project] },
+      { signal_id: 'act-1', kind: 'action', text: 'Send the pilot plan.', subject: null, status: null, due_at: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true, project_ids: [project] },
+      { signal_id: 'act-2', kind: 'action', text: 'Follow up on item 2.', subject: null, status: null, due_at: null, quotes: [], owner: null, owner_editable: false, project_ids: [project] },
+    ]);
+    expect(opened).toMatchObject({ reasons: [], records: [], suggested_projects: [{ project_id: project, name: 'ECHO' }], review: { status: 'pending', records: [] } });
+    // Mixed destinations: THERM-like project B for the decision, both for the owned action, the other action not kept.
+    const routes = f.routes(opened, item => ({ 'decision-1': [projectB], 'act-1': [project, projectB].sort(), 'act-2': null })[item.signal_id] ?? null);
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-mixed', action: 'approve',
+      routes, owners: [{ signal_id: 'act-1', owner: 'Rafael M.' }] });
+    const publishing = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(publishing.items.map(item => [item.signal_id, item.project_ids, item.owner, item.owner_editable])).toEqual([
+      ['decision-1', [projectB], null, false], ['act-1', [project, projectB].sort(), 'Rafael M.', false], ['act-2', null, null, false]]);
+    expect(publishing.records).toEqual([]);
+    expect(publishing.suggested_projects.map(entry => entry.project_id)).toEqual([project, projectB].sort());
+    await runtime.processing.recoverV4Appends(new AbortController().signal);
+    const approved = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const records = [{ approval_id: approvalRecordIdV2(pending!.approval_id, [projectB]), project_ids: [projectB] },
+      { approval_id: approvalRecordIdV2(pending!.approval_id, [project, projectB].sort()), project_ids: [project, projectB].sort() }];
+    expect(approved.records).toEqual(records);
+    expect(approved.review).toMatchObject({ status: 'approved', project_ids: [project, projectB].sort(), records });
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]!.records).toEqual(records);
+    // A destination the reviewer can no longer read keeps its route but loses its name.
+    f.leave(projectB, 'owner');
+    const later = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(later.items[0]!.project_ids).toEqual([projectB]);
+    expect(later.suggested_projects.map(entry => entry.project_id)).toEqual([project]);
+  });
+  it('opens a rejected review with nothing kept', async () => {
+    const f = await fixture({ ownedAction: true }), runtime = f.create(); f.grantProject();
+    const { pending, opened } = await f.pendingReview(runtime, project);
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-it', action: 'reject', routes: [], owners: [] });
+    const rejected = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(rejected.items.map(item => [item.project_ids, item.owner, item.owner_editable])).toEqual([[null, null, false], [null, null, false]]);
+    expect(rejected).toMatchObject({ suggested_projects: [], records: [], review: { status: 'rejected', project_ids: [], records: [] } });
   });
   it('forwards after_record hooks from the runtime passthrough', async () => {
     const calls: AfterApprovedRecordEventV1[] = [];
     const f = await fixture(), runtime = f.create(undefined, { approval_core: { after_record: [(tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); }] } });
     const { pending, opened } = await f.pendingReview(runtime);
-    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-hooked', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-hooked', action: 'approve', routes: f.routes(opened), owners: [] });
     await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
-    expect(calls).toEqual([expect.objectContaining({ approval_id: pending!.approval_id, record_sha256: f.record.prepare('SELECT record_sha256 FROM organization_record_log').pluck().get() })]);
+    expect(calls).toEqual([expect.objectContaining({ approval_id: approvalRecordIdV2(pending!.approval_id, []), proposal_approval_id: pending!.approval_id,
+      record_sha256: f.record.prepare('SELECT record_sha256 FROM organization_record_log').pluck().get() })]);
   });
   it('crash between append and receipt at restart: one record, one receipt, one hook', async () => {
     const calls: AfterApprovedRecordEventV1[] = [];
@@ -1104,7 +1131,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const f = await fixture();
     const crashing = f.create(undefined, { approval_core: { after_record }, record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('crash after append'); } } });
     const { pending, opened } = await f.pendingReview(crashing);
-    await f.call(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
+    await f.call(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', routes: f.routes(opened), owners: [] });
     // A row failure does not fail recovery; the row stays unpublished for the next pass.
     await crashing.processing.recoverV4Appends(new AbortController().signal);
     expect(calls).toEqual([]);
@@ -1114,39 +1141,36 @@ describe('personal meeting intake uses the shared processing path', () => {
     await restarted.processing.recoverV4Appends(new AbortController().signal);
     expect(f.record.prepare('SELECT count(*) FROM organization_record_log').pluck().get()).toBe(1);
     expect(f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1 WHERE receipt_json IS NOT NULL').pluck().get()).toBe(1);
-    expect(calls).toEqual([expect.objectContaining({ approval_id: pending!.approval_id })]);
+    expect(calls).toEqual([expect.objectContaining({ approval_id: approvalRecordIdV2(pending!.approval_id, []), proposal_approval_id: pending!.approval_id })]);
   });
   it('returns an earlier decision and writes no second row', async () => {
     const f = await fixture(), runtime = f.create();
     const { pending, opened } = await f.pendingReview(runtime);
-    const review = { operation: 'review' as const, approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-once', action: 'reject' as const, project_ids: [], share_transcript: false, owners: [] };
+    const review = { operation: 'review' as const, approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-once', action: 'reject' as const, routes: [], owners: [] };
     await expect(f.call(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
     await expect(f.call(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
-    await expect(f.call(runtime, { ...review, command_id: 'approve-later', action: 'approve' })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
-    await expect(f.call(runtime, { ...review, command_id: 'approve-stale', action: 'approve', snapshot_sha256: canonicalSha256('other') })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
+    await expect(f.call(runtime, { ...review, command_id: 'approve-later', action: 'approve', routes: f.routes(opened) })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
+    await expect(f.call(runtime, { ...review, command_id: 'approve-stale', action: 'approve', routes: f.routes(opened), snapshot_sha256: canonicalSha256('other') })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
     expect(f.count('authority_approval_decisions_v1')).toBe(1);
   });
   it('approves into two projects with a confirmed owner through the route', async () => {
     const f = await fixture({ ownedAction: true }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     const { pending, opened } = await f.pendingReview(runtime, project);
-    expect(opened.content).toContain('Send the pilot plan.');
-    expect(opened.content).toContain('  Due: Not specified');
-    expect(opened.content).not.toMatch(/Owner|Rafael/);
-    expect(opened.owners).toEqual([{ signal_id: 'act-1', action: 'Send the pilot plan.', proposed: 'Rafael Moreno' }]);
+    expect(opened.items.find(item => item.signal_id === 'act-1')).toMatchObject({ text: 'Send the pilot plan.', due_at: null, owner: 'Rafael Moreno', owner_editable: true });
     expect(opened.suggested_projects).toEqual([{ project_id: project, name: 'ECHO' }]);
     await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c1', snapshot_sha256: opened.snapshot_sha256,
-      action: 'approve', project_ids: [project, projectB].sort(), share_transcript: false, owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] }))
+      action: 'approve', routes: f.routes(opened, [project, projectB].sort()), owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] }))
       .resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
   });
   it('returns the earlier decision when Slack decided first', async () => {
     const f = await fixture(), runtime = f.create();
     const { pending, opened } = await f.pendingReview(runtime);
     const slackReview = validateApprovalDecisionRequestV1('slack', { approval_id: pending!.approval_id, command_id: 'slack:k', snapshot_sha256: opened.snapshot_sha256,
-      action: 'approve', project_ids: [], share_transcript: false, owners: [] });
+      action: 'approve', routes: f.routes(opened), owners: [] });
     (await runtime.approvals()).decide('slack', slackReview, () => ({ actor: f.person, evidence: { kind: 'slack-click', sha256: canonicalSha256('slack click') } }));
     expect((await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id })).review.decided_on).toBe('slack');
     await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c2', snapshot_sha256: opened.snapshot_sha256,
-      action: 'reject', project_ids: [], share_transcript: false, owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'slack' });
+      action: 'reject', routes: [], owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'slack' });
   });
   it('names the first decision, the action count and the meeting time on review rows', async () => {
     const f = await fixture({ ownedAction: true, started: '2026-10-06T16:00:00.000Z' }), runtime = f.create();

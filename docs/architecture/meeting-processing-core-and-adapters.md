@@ -226,7 +226,7 @@ The shared approval path keeps no presentation reference on a proposal. A
 surface keeps its own record of where it showed one (for Slack,
 `authority_approval_presentations_v1`). The approved-record path receives a
 policy projector that translates a canonical approval decision
-(`echo-approval-decision-ref-v1`) into the record facts appropriate for the
+(`echo-approval-decision-ref-v2`, one record per destination) into the record facts appropriate for the
 selected product policy; it does not inspect an approval-surface payload.
 
 Approval and any future delivery remain separate capabilities. They may share

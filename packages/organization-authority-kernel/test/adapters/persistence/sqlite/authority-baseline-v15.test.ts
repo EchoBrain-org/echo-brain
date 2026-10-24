@@ -70,7 +70,7 @@ function seededWithSources(): Database.Database {
 
 describe("Authority baseline V15", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256()).toBe("sha256:e8a2552973f5d7cd7c7be1c8f56dafb31242ca920cc83d30832a9a5e5f4d6a70");
+    expect(authorityBaselineSha256()).toBe("sha256:a490eab13327c7fb05915bbeeef266f2f814f93bc70b1fb52bc87b094389e108");
     const database = seeded();
     expect(() => applyAuthorityBaseline(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);

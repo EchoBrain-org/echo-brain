@@ -12,10 +12,7 @@ const SECRET = "not-a-real-signing-secret",
   APPROVAL = "apr_00000000-0000-4000-8000-000000000001",
   SNAPSHOT = `sha256:${"a".repeat(64)}`;
 function body(response_url?: string) {
-  const id = (
-    name:
-      "audience-select" | "projects-select" | "transcript-checkbox" | "approve",
-  ) => slackApprovalActionIdV4(APPROVAL, name);
+  const id = (name: "approve") => slackApprovalActionIdV4(APPROVAL, name);
   const payload = {
     type: "block_actions",
     user: { id: "U012ABCDEF", team_id: "T012ABCDEF" },
@@ -35,31 +32,8 @@ function body(response_url?: string) {
       app_id: "A012ABCDEF",
       bot_id: "B012ABCDEF",
     },
-    state: {
-      values: {
-        audience: {
-          [id("audience-select")]: {
-            type: "static_select",
-            selected_option: {
-              text: { type: "plain_text", text: "Only me" },
-              value: "only-me",
-            },
-          },
-        },
-        projects: {
-          [id("projects-select")]: {
-            type: "multi_static_select",
-            selected_options: [],
-          },
-        },
-        transcript: {
-          [id("transcript-checkbox")]: {
-            type: "checkboxes",
-            selected_options: [],
-          },
-        },
-      },
-    },
+    // Slack approves as suggested: the card's state holds only its owner inputs, none here.
+    state: { values: {} },
     ...(response_url === undefined ? {} : { response_url }),
     actions: [
       {

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
+import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { enqueueApprovedRecordRunV1, SqliteTriggerRunsV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
@@ -22,8 +23,51 @@ describe('SQLite trigger runs v1', () => {
     const f = await approvedRunFixture();
     await f.core.processing.recoverV4Appends(signal());
     expect(f.db.prepare('SELECT trigger, event_ref, state FROM authority_trigger_runs_v1').all()).toEqual([
-      { trigger: 'approved_record', event_ref: f.approvalId, state: 'pending' },
+      { trigger: 'approved_record', event_ref: f.recordApprovalId, state: 'pending' },
     ]);
+  });
+
+  it('enqueues one run per record of a decision, each keyed by its record approval id', async () => {
+    const f = await approvalCoreFixture();
+    const runs = new SqliteTriggerRunsV1(f.db);
+    const events: string[] = [];
+    f.core.decide('desktop', f.approve({ routes: f.routes(id => ({ 'decision-1': [f.projectA], 'act-1': [f.projectA, f.projectB], 'act-2': [] })[id] ?? null) }), () => f.session);
+    await f.publisher([enqueueApprovedRecordRunV1(runs), (_tx, event) => { events.push(event.approval_id); }]).appendFinalizedApprovalsToV4(signal());
+    const records = (JSON.parse(f.receipt()!) as { records: { approval_id: string; record_sha256: string }[] }).records;
+    expect(records).toHaveLength(3);
+    expect(events).toEqual(records.map(record => record.approval_id));
+    expect(f.db.prepare('SELECT event_ref, record_sha256, state FROM authority_trigger_runs_v1 ORDER BY rowid').all())
+      .toEqual(records.map(record => ({ event_ref: record.approval_id, record_sha256: record.record_sha256, state: 'pending' })));
+    expect(records.map(record => record.approval_id)).toEqual([[f.projectA], [f.projectA, f.projectB], []].map(projects => approvalRecordIdV2(f.approvalId, projects)));
+    // Retries change nothing: the receipt is written, and each record's run already exists.
+    await f.publisher([enqueueApprovedRecordRunV1(runs)]).recoverV4Appends(signal());
+    expect(f.db.prepare('SELECT count(*) FROM authority_trigger_runs_v1').pluck().get()).toBe(3);
+    // Each record's siblings are the decision's other records.
+    const digests = records.map(record => record.record_sha256 as Sha256Digest);
+    for (const digest of digests) expect([...runs.siblingRecords(f.person, digest)].sort()).toEqual(digests.filter(other => other !== digest).sort());
+    expect(runs.siblingRecords({ ...f.person, membership_id: 'mem_00000000-0000-4000-8000-0000000000e2' }, digests[0]!)).toEqual([]);
+    expect(runs.siblingRecords(f.person, canonicalSha256('unknown record') as Sha256Digest)).toEqual([]);
+  });
+
+  it('a run of an approval with one record has no siblings', async () => {
+    const f = await approvedRunFixture();
+    expect(f.runs.siblingRecords(f.owner, f.recordSha256)).toEqual([]);
+  });
+
+  it('refuses a run for a record its approval did not publish, or under another record\'s id', async () => {
+    const f = await approvalCoreFixture();
+    f.core.decide('desktop', f.approve({ routes: f.routes(id => id === 'act-2' ? [f.projectA] : []) }), () => f.session);
+    await f.publisher([]).appendFinalizedApprovalsToV4(signal());
+    const [first, second] = (JSON.parse(f.receipt()!) as { records: { approval_id: string; record_sha256: string }[] }).records;
+    const insert = (event_ref: string, record_sha256: string) => () => f.db.prepare(`INSERT INTO authority_trigger_runs_v1
+      (run_id, trigger, event_ref, organization_id, principal_id, membership_id, record_sha256, state, attempts, created_at, updated_at)
+      VALUES (?, 'approved_record', ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`).run(`run_${randomUUID()}`, event_ref, f.person.organization_id, f.person.principal_id, f.person.membership_id, record_sha256, NOW, NOW);
+    expect(insert(first!.approval_id, second!.record_sha256)).toThrow('approved-record run needs its published approval');
+    expect(insert(f.approvalId, first!.record_sha256)).toThrow('approved-record run needs its published approval');
+    expect(insert(first!.approval_id, canonicalSha256('another record'))).toThrow('approved-record run needs its published approval');
+    insert(first!.approval_id, first!.record_sha256)();
+    insert(second!.approval_id, second!.record_sha256)();
+    expect(f.db.prepare('SELECT count(*) FROM authority_trigger_runs_v1').pluck().get()).toBe(2);
   });
 
   it('recovers a crash after record append with exactly one enqueued run, while rejection enqueues none', async () => {
@@ -40,7 +84,7 @@ describe('SQLite trigger runs v1', () => {
     await f.publisher([hook]).recoverV4Appends(signal());
     await f.publisher([hook]).recoverV4Appends(signal());
     expect(f.db.prepare('SELECT trigger, event_ref, state FROM authority_trigger_runs_v1').all()).toEqual([
-      { trigger: 'approved_record', event_ref: f.approvalId, state: 'pending' },
+      { trigger: 'approved_record', event_ref: approvalRecordIdV2(f.approvalId, []), state: 'pending' },
     ]);
 
     const rejected = await approvalCoreFixture();
@@ -155,10 +199,10 @@ describe('SQLite trigger runs v1', () => {
     const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve(), () => f.session);
     await f.publisher([]).appendFinalizedApprovalsToV4(signal());
-    const record = (JSON.parse(f.receipt()!) as { readonly record_sha256: Sha256Digest }).record_sha256;
+    const [{ approval_id, record_sha256: record }] = (JSON.parse(f.receipt()!) as { readonly records: readonly { readonly approval_id: string; readonly record_sha256: Sha256Digest }[] }).records as [{ approval_id: string; record_sha256: Sha256Digest }];
     const impact = (scopeKind: string | null) => () => f.db.prepare(`INSERT INTO authority_trigger_runs_v1
       (run_id, trigger, event_ref, organization_id, principal_id, membership_id, record_sha256, scope_kind, state, attempts, created_at, updated_at)
-      VALUES (?, 'approved_record', ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`).run(`run_${randomUUID()}`, f.approvalId, f.person.organization_id, f.person.principal_id, f.person.membership_id, record, scopeKind, NOW, NOW);
+      VALUES (?, 'approved_record', ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`).run(`run_${randomUUID()}`, approval_id, f.person.organization_id, f.person.principal_id, f.person.membership_id, record, scopeKind, NOW, NOW);
     expect(impact('mine')).toThrow("CHECK constraint failed: (trigger = 'sweep') = (scope_kind IS NOT NULL)");
     impact(null)();
     expect(f.db.prepare('SELECT trigger, scope_kind FROM authority_trigger_runs_v1').all()).toEqual([{ trigger: 'approved_record', scope_kind: null }]);
@@ -214,7 +258,7 @@ describe('SQLite trigger runs v1', () => {
     expect(f.runs.read(f.stranger, sweep.run_id)).toBeUndefined();
     expect(f.runs.readUnfenced(sweep.run_id)).toMatchObject({ run_id: sweep.run_id, actor: f.owner, scope: { kind: 'record' } });
     expect(f.runs.readUnfenced('run_missing')).toBeUndefined();
-    expect(f.runs.impactRunsFor([f.recordSha256]).map(row => row.event_ref)).toEqual([f.approvalId]);
+    expect(f.runs.impactRunsFor([f.recordSha256]).map(row => row.event_ref)).toEqual([f.recordApprovalId]);
     expect(f.runs.impactRunsFor(impact.map(row => row.record_sha256!)).map(row => row.run_id).sort()).toEqual(impact.map(row => row.run_id).sort());
     expect(f.runs.impactRunsFor([])).toEqual([]);
     finishImpactRuns(f);
