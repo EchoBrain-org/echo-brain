@@ -269,9 +269,11 @@ in the ECHO desktop app. The closed card names the destinations.
 ## Release
 
 Authority V15 is fresh state only. Staging needs the reset (replace-rehearsal,
-then initial-owner onboarding). The meetings API moves to `schema_version: 3`
-because the request and response shapes change, so the Authority, the person
-client and the desktop ship together.
+then initial-owner onboarding). The meetings API keeps `schema_version: 2`:
+its request and response shapes change, and the Authority, the person client
+and the desktop check exact shapes and negotiate no version, so a mismatched
+client fails as an invalid request with or without a new number. They ship
+together.
 
 ## Rulings made while writing
 

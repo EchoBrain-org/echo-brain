@@ -87,8 +87,8 @@ record. A record with one project researches in that project's scope.
 - Fresh state only: Authority baseline V15. Existing V14 state is refused at
   startup; staging is reset by the founder's replace-rehearsal procedure. The
   record log is reset with it, so the v1 reference has no records to read.
-- The meetings API moves to `schema_version: 3`; the Authority, the person
-  client and the desktop ship together.
+- The meetings API's shapes change under `schema_version: 2`; the Authority,
+  the person client and the desktop check exact shapes and ship together.
 - Rollback is the previous image on its own retained state.
 - Evidence: acceptance tests for private reads, watch modes and the Granola
   list contract, routes validation and its database trigger, multi-record
