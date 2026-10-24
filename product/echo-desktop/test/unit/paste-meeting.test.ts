@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PERSON_HAND_IN_MEETING_MAX_BYTES_V1 } from '@echo-brain/organization-api';
-import { isWriteCall, MAX_PASTED_MEETING_BYTES, type ConnectedTool } from '../../src/shared/protocol.js';
-import { ACCOUNT, flush, Held, ok, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { isWriteCall, MAX_PASTED_MEETING_BYTES, type AppStatus, type ConnectedTool } from '../../src/shared/protocol.js';
+import { ACCOUNT, cover, elements, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, type Node } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
+// The sheet is called as a function: its effects never run, as when the privacy cover has it away.
+vi.mock('preact/hooks', original => plainHooks(original));
 
 const granola = (status: ConnectedTool['status']): ConnectedTool => ({ tool_id: 'granola', name: 'Granola', status });
 const PASTE: ConnectedTool = { tool_id: 'hand-in', name: 'Paste a meeting', status: 'linked' };
@@ -13,13 +15,16 @@ const review = { approval_id: `apr_${'b'.repeat(64)}`, title: 'Supplier sync', p
 const meetingId = `hand-in-${'c'.repeat(64)}`;
 let held: Held;
 let tools: ConnectedTool[];
+let status: Pick<AppStatus, 'signed_in' | 'account'>;
 
 storeLifecycle();
 beforeEach(() => {
   held = new Held();
   tools = [granola('unavailable'), PASTE];
+  status = { signed_in: true, account: ACCOUNT };
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
+    'app.status': () => ok(status),
     'account.tools': () => ok({ tools }),
     'tools.meetings': params => {
       const request = params.request as { operation: string };
@@ -86,3 +91,37 @@ describe('Paste a meeting', () => {
 
 });
 
+describe('Paste a meeting\'s draft', () => {
+  /** The sheet as it shows now, and its Title field. */
+  const sheet = async () => render((await import('../../src/renderer/screens/paste-meeting.js')).PasteMeeting({ tool: PASTE }));
+  const title = (tree: unknown): Node => elements(tree).find(node => node.type === 'input')!;
+  const type = async (value: string) => { (title(await sheet()).props.onInput as (event: unknown) => void)({ currentTarget: { value } }); };
+
+  it('stays under the privacy cover, and goes when another account signs in, under the cover too', async () => {
+    const store = await startStore();
+    store.manageTool(PASTE);
+    await type('Supplier sync');
+    cover(store);
+    expect(title(await sheet()).props.value).toBe('Supplier sync');
+    status = { signed_in: true, account: { ...ACCOUNT, membership_id: 'another-member' } };
+    await store.refreshStatus();
+    await flush();
+    expect(store.getState().sheet).toBeNull();
+    expect(title(await sheet()).props.value).toBe('');
+  });
+
+  it('goes when its account signs out, and does not come back with it', async () => {
+    const store = await startStore();
+    store.manageTool(PASTE);
+    await type('Supplier sync');
+    cover(store);
+    status = { signed_in: false, account: null };
+    await store.refreshStatus();
+    await flush();
+    expect(title(await sheet()).props.value).toBe('');
+    status = { signed_in: true, account: ACCOUNT };
+    await store.refreshStatus();
+    await flush();
+    expect(title(await sheet()).props.value).toBe('');
+  });
+});
