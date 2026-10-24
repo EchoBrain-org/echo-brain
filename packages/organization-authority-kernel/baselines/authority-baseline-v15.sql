@@ -2383,6 +2383,8 @@ BEGIN SELECT RAISE(ABORT, 'held extraction identity is immutable'); END;
 -- A meeting a person handed in from any tool: the exact payload the submit route took, as canonical JSON, under the
 -- person's hand-in source and the id derived from the payload's digest, so the same meeting handed in twice is one row.
 -- It is written in the transaction that queues its import, and the source builds the meeting from it. Never changed.
+-- Cancelling the import deletes it, once its source's queue no longer names it and while no admitted source revision
+-- holds the meeting; nothing else deletes one.
 CREATE TABLE authority_person_hand_in_meetings_v1 (
   source_key TEXT NOT NULL REFERENCES authority_person_meeting_sources_v2(source_key),
   external_id TEXT NOT NULL CHECK (length(external_id) = 72 AND substr(external_id, 1, 8) = 'hand-in-'),
@@ -2404,4 +2406,9 @@ BEFORE UPDATE ON authority_person_hand_in_meetings_v1
 BEGIN SELECT RAISE(ABORT, 'handed-in meeting is immutable'); END;
 CREATE TRIGGER authority_person_hand_in_meetings_v1_delete_denied
 BEFORE DELETE ON authority_person_hand_in_meetings_v1
+WHEN NOT EXISTS (SELECT 1 FROM authority_live_source_progress_v2 p
+    WHERE p.source_key = OLD.source_key AND instr(p.cursor, '"' || OLD.external_id || '"') = 0)
+  OR EXISTS (SELECT 1 FROM authority_live_source_admission_v2 a JOIN authority_sources_v1 s
+    ON s.organization_id = a.organization_id AND s.adapter_id = a.source_adapter_id AND s.instance_id = a.source_adapter_instance_id
+    WHERE a.source_key = OLD.source_key AND s.external_id = OLD.external_id)
 BEGIN SELECT RAISE(ABORT, 'handed-in meeting deletion is denied'); END;

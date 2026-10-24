@@ -34,6 +34,18 @@ export class SqlitePersonHandInMeetingsV1 {
     return externalId;
   }
 
+  /**
+   * Forgets a cancelled meeting's payload, in the transaction that drops its queued import. A meeting an admitted source
+   * revision already holds keeps its payload; the delete trigger refuses every other delete.
+   */
+  forget(sourceKey: string, externalId: string): void {
+    if (!this.database.inTransaction) throw new Error('A handed-in meeting is forgotten only with its cancelled import');
+    this.database.prepare(`DELETE FROM authority_person_hand_in_meetings_v1 AS kept WHERE kept.source_key=? AND kept.external_id=? AND NOT EXISTS (
+      SELECT 1 FROM authority_live_source_admission_v2 a JOIN authority_sources_v1 s
+        ON s.organization_id=a.organization_id AND s.adapter_id=a.source_adapter_id AND s.instance_id=a.source_adapter_instance_id
+      WHERE a.source_key=kept.source_key AND s.external_id=kept.external_id)`).run(sourceKey, externalId);
+  }
+
   /** One source's meeting, checked against its digest and id; undefined when the source keeps none by that id. */
   get(sourceKey: string, externalId: string): StoredHandInMeetingV1 | undefined {
     const row = this.database.prepare('SELECT payload_json,payload_sha256,submitted_at FROM authority_person_hand_in_meetings_v1 WHERE source_key=? AND external_id=?')

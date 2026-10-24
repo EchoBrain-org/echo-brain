@@ -38,6 +38,11 @@ export interface PersonMeetingProviderV1 {
   readonly submitters?: 'members';
   readonly connection_http: ProviderHttpApplicationV1;
   readonly cursor: PersonalMeetingCheckpointCodecV1 & { readonly policy: AdmittedMeetingSourceCursorPolicyV1 };
+  /**
+   * Optional: forgets what a cancelled import kept (a handed-in payload no admitted source revision holds). It runs
+   * inside the Authority transaction that drops the import from its source's queue, and needs no provider session.
+   */
+  forget?(setting: MeetingIntakeSettingV1, meetingId: string): void;
   tool(token: string): OrganizationPersonToolV4;
   open(person: MeetingIntakePersonV1, current: () => void, signal?: AbortSignal): Promise<{
     readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown; readonly email: string | null; readonly workspace: string | null;
@@ -413,7 +418,10 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'cancel_import') {
           const setting = intake.list(person).find(s => s.source_key === input.source_key);
           if (!setting) throw new AuthorityOperationError('not_found', 'Meeting import unavailable');
-          ownerOf(setting.source_adapter_id).intake.cancelImport(setting, input.meeting_id, current); observed.delete(setting.source_key); return { status: 'cancelled' };
+          const owner = ownerOf(setting.source_adapter_id);
+          // What the import kept goes with it, in the same transaction: a handed-in payload no admitted revision holds.
+          db.transaction(() => { owner.intake.cancelImport(setting, input.meeting_id, current); owner.provider.forget?.(setting, input.meeting_id); }).immediate();
+          observed.delete(setting.source_key); return { status: 'cancelled' };
         }
         // Stopping needs no provider session and no project access.
         if (input.operation === 'watch' && input.watch === 'off') {

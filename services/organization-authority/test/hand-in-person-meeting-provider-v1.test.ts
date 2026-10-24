@@ -111,6 +111,30 @@ describe('the hand-in meeting source', () => {
     expect(f.count('authority_person_hand_in_meetings_v1')).toBe(1);
   });
 
+  it('forgets a cancelled paste with its import, and keeps one an admitted source revision holds', async () => {
+    const f = await fixture(), runtime = f.create();
+    const submit = { operation: 'submit', meeting, project_id: null, retain: true } as const;
+    const { meeting_id: id } = await f.call(runtime, submit);
+    const [source] = f.intake.list(f.member);
+    const cancel = { operation: 'cancel_import', source_key: source!.source_key, meeting_id: id } as const;
+    await expect(f.call(runtime, cancel)).resolves.toEqual({ status: 'cancelled' });
+    // Cancelled before it was pulled: its payload went with its import, so nothing of it is left to remove.
+    expect(f.intake.checkpoint(source!.source_key).manual).toEqual([]);
+    expect(f.count('authority_person_hand_in_meetings_v1')).toBe(0);
+    // Pasted again, it is kept again and processed.
+    await expect(f.call(runtime, submit)).resolves.toEqual({ status: 'queued', meeting_id: id });
+    await f.processUntilIdle(runtime);
+    expect(f.extracted).toHaveLength(1);
+    // Admitted, it stays: pasted once more and cancelled, its import goes but its payload stays with the revision that holds it.
+    await f.call(runtime, submit);
+    await expect(f.call(runtime, cancel)).resolves.toEqual({ status: 'cancelled' });
+    expect(f.intake.checkpoint(source!.source_key).manual).toEqual([]);
+    expect(new SqlitePersonHandInMeetingsV1(f.db).get(source!.source_key, id)).toMatchObject({ external_id: id, meeting });
+    expect(() => f.db.prepare('DELETE FROM authority_person_hand_in_meetings_v1').run()).toThrow('handed-in meeting deletion is denied');
+    // Forgetting outside the cancel's transaction is refused.
+    expect(() => new SqlitePersonHandInMeetingsV1(f.db).forget(source!.source_key, id)).toThrow('only with its cancelled import');
+  });
+
   it('is open to every member while the staging synthetic source stays owner-only', async () => {
     const f = await fixture(), storage = new Database(':memory:');
     try {

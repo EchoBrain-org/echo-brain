@@ -103,6 +103,8 @@ export function createHandInPersonMeetingProviderV1(options: { readonly database
   const provider: PersonMeetingProviderV1 = {
     id: PERSON_HAND_IN_TOOL_ID_V1, normalizer_version: NORMALIZER_VERSION, custodian_assurance: HAND_IN_CUSTODIAN_ASSURANCE_V1, submitters: 'members',
     connection_http,
+    // A cancelled hand-in's payload goes with its queued import, unless the meeting was already admitted.
+    forget: (setting, meetingId) => store.forget(setting.source_key, meetingId),
     // Nothing to watch: only `off` is a watch, and automatic import is never active.
     cursor: Object.freeze({ read: readHandInCheckpointV1, write: writeHandInCheckpointV1, policy: CURSOR_POLICY, initial,
       watch: (checkpoint: PersonalMeetingCheckpointV1, watch: { readonly watch: string }): PersonalMeetingCheckpointV1 => watch.watch === 'off' ? checkpoint : invalidCursor(),
