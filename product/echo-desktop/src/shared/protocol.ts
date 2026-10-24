@@ -472,6 +472,25 @@ export interface PastedMeeting {
 }
 /** The meetings API's bound on a pasted meeting (PERSON_HAND_IN_MEETING_MAX_BYTES_V1), which the page checks before sending. */
 export const MAX_PASTED_MEETING_BYTES = 60 * 1024;
+/**
+ * Pasted text as the meetings API keeps it (personHandInTextV1): line feeds only, other line breaks as line feeds, no
+ * control but tab, NFC, trimmed. The host and the client make it with the API's own function; the page measures with this.
+ */
+export function pastedText(value: string): string {
+  return value.replace(/\r\n?|[\u000b\u000c\u0085\u2028\u2029]/g, '\n').replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f]/g, '')
+    .normalize('NFC').trim();
+}
+/**
+ * A pasted meeting as the client sends it (personHandInMeetingV1): canonical text, and a whole day as its date at noon UTC
+ * or a start with this computer's time zone. Its JSON is what the meetings API bounds by MAX_PASTED_MEETING_BYTES.
+ */
+export function pastedMeetingAsSent(meeting: PastedMeeting, timeZone: string): {
+  readonly title: string; readonly notes: string; readonly transcript: string; readonly started_at?: string; readonly time_zone?: string; readonly all_day?: true;
+} {
+  return { title: pastedText(meeting.title), notes: pastedText(meeting.notes), transcript: pastedText(meeting.transcript),
+    ...(meeting.date === undefined ? {} : { started_at: `${meeting.date}T12:00:00.000Z`, all_day: true as const }),
+    ...(meeting.started_at === undefined ? {} : { started_at: meeting.started_at, time_zone: timeZone }) };
+}
 
 /** What a status check says about a save whose outcome was unknown. */
 export interface WriteStatus {

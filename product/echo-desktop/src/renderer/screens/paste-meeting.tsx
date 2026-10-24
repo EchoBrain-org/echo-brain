@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { MAX_PASTED_MEETING_BYTES, type ConnectedTool, type PastedMeeting } from '../../shared/protocol.js';
+import { MAX_PASTED_MEETING_BYTES, pastedMeetingAsSent, type ConnectedTool, type PastedMeeting } from '../../shared/protocol.js';
 import { closeSheet, getState, handInMeeting, loadHome, loadProjects, onAccountGone, useStore } from '../store.js';
 import { trapTab } from './compose.js';
 import { Caret, Close } from './icons.js';
@@ -77,8 +77,10 @@ export function PasteMeeting({ tool }: { tool: ConnectedTool }) {
   }, []);
   const busy = draft.status === 'adding';
   const time = when(draft.date, draft.time);
-  const tooLong = new TextEncoder().encode(JSON.stringify({ title: draft.title, notes: draft.notes, transcript: draft.transcript })).length > MAX_PASTED_MEETING_BYTES;
-  const ready = draft.title.trim() !== '' && (draft.notes.trim() !== '' || draft.transcript.trim() !== '') && draft.retain && time !== null && !tooLong && !busy;
+  // Measured as the client sends it, canonical and with its time, so the page refuses what the meetings API would and no more.
+  const sent = pastedMeetingAsSent({ title: draft.title, notes: draft.notes, transcript: draft.transcript, ...(time ?? {}) }, Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const tooLong = new TextEncoder().encode(JSON.stringify(sent)).length > MAX_PASTED_MEETING_BYTES;
+  const ready = sent.title !== '' && (sent.notes !== '' || sent.transcript !== '') && draft.retain && time !== null && !tooLong && !busy;
   const projects = state.projects.items;
   const line = busy ? 'Adding…' : tooLong ? 'Too long to add: up to 60 KB of text.' : draft.status === 'added' ? 'Added.' : '';
   return (

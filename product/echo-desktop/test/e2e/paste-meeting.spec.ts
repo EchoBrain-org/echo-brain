@@ -28,7 +28,8 @@ test('a meeting pasted from any tool reaches Home as a decision to approve', asy
   const add = sheet.getByRole('button', { name: 'Add', exact: true });
   await sheet.getByLabel('Title', { exact: true }).fill('Supplier sync');
   await sheet.getByLabel('Date', { exact: true }).fill('2026-10-21');
-  await sheet.getByLabel('Notes', { exact: true }).fill('Decision: move the pilot to Friday.\r\nAction: Mina sends the revised quote.\n');
+  // Pasted from another tool: a Windows line ending, a line separator, and a control character no one sees.
+  await sheet.getByLabel('Notes', { exact: true }).fill('Decision: move the pilot to Friday.\r\nAction: Mina sends\u0007 the revised quote.\u2028');
   // The transcript is folded away until it is asked for.
   await expect(sheet.getByLabel('Transcript', { exact: true })).toHaveCount(0);
   await sheet.getByRole('button', { name: 'Add a transcript' }).click();

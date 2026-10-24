@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { PERSON_HAND_IN_MEETING_MAX_BYTES_V1 } from '@echo-brain/organization-api';
-import { isWriteCall, MAX_PASTED_MEETING_BYTES, type AppStatus, type ConnectedTool } from '../../src/shared/protocol.js';
-import { ACCOUNT, cover, elements, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, type Node } from './harness.js';
+import { PERSON_HAND_IN_MEETING_MAX_BYTES_V1, personHandInMeetingV1, personHandInTextV1 } from '@echo-brain/organization-api';
+import { isWriteCall, MAX_PASTED_MEETING_BYTES, pastedMeetingAsSent, pastedText, type AppStatus, type ConnectedTool } from '../../src/shared/protocol.js';
+import { ACCOUNT, cover, elements, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, text, type Node } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -89,6 +89,18 @@ describe('Paste a meeting', () => {
     expect(MAX_PASTED_MEETING_BYTES).toBe(PERSON_HAND_IN_MEETING_MAX_BYTES_V1);
   });
 
+  it('measures the meeting as the client sends it: the API\'s canonical text, with its time', () => {
+    for (const value of ['\ufeff  Café notes\r\nline two\rline three \n\n', 'Decision:\u000bmove\u000cthe\u0085pilot\u2028to\u2029Friday.',
+      '\u0000Mina\u0007 sends\u001b the\u007f revised\u0080 quote\u009f.', '\tDecisions\n\t- Move the pilot.\u000c']) {
+      expect(pastedText(value)).toBe(personHandInTextV1(value));
+    }
+    const zone = 'Pacific/Auckland';
+    const text = { title: ' Supplier\u0007 sync ', notes: 'Decision:\u2028move the pilot.\r\n', transcript: '\u000cMina Patel: Friday works.' };
+    expect(pastedMeetingAsSent({ ...text, date: '2026-10-21' }, zone)).toEqual(personHandInMeetingV1({ ...text, date: '2026-10-21' }));
+    expect(pastedMeetingAsSent({ ...text, started_at: '2026-10-21T22:30:00.000Z' }, zone))
+      .toEqual(personHandInMeetingV1({ ...text, started_at: '2026-10-21T22:30:00.000Z', time_zone: zone }));
+    expect(pastedMeetingAsSent(text, zone)).toEqual(personHandInMeetingV1(text));
+  });
 });
 
 describe('Paste a meeting\'s draft', () => {
@@ -108,6 +120,28 @@ describe('Paste a meeting\'s draft', () => {
     await flush();
     expect(store.getState().sheet).toBeNull();
     expect(title(await sheet()).props.value).toBe('');
+  });
+
+  it('is measured as sent: its time counts, and line endings the API drops do not', async () => {
+    await startStore();
+    const field = async (match: (node: Node) => boolean, value: string) => {
+      (elements(await sheet()).find(match)!.props.onInput as (event: unknown) => void)({ currentTarget: { value } });
+    };
+    const notes = (value: string) => field(node => node.type === 'textarea', value);
+    const shown = async () => { const tree = await sheet(); return { line: text(elements(tree).find(node => node.props.role === 'status')),
+      add: elements(tree).find(node => node.type === 'button' && text(node) === 'Add')!.props.disabled }; };
+    await type('Supplier sync');
+    await field(node => node.type === 'input' && node.props.type === 'date', '2026-10-21');
+    (elements(await sheet()).find(node => node.props.type === 'checkbox')!.props.onChange as (event: unknown) => void)({ currentTarget: { checked: true } });
+    // The text alone is exactly the bound; the whole day it is sent with takes it over.
+    const fill = MAX_PASTED_MEETING_BYTES - JSON.stringify({ title: 'Supplier sync', notes: '', transcript: '' }).length;
+    await notes('n'.repeat(fill));
+    expect(await shown()).toEqual({ line: 'Too long to add: up to 60 KB of text.', add: true });
+    // Past the bound as typed, its Windows line endings are line feeds as sent, so it fits.
+    const typed = `${'n'.repeat(30_000)}${'\r\n'.repeat(500)}${'n'.repeat(30_000)}`;
+    expect(JSON.stringify({ title: 'Supplier sync', notes: typed, transcript: '' }).length).toBeGreaterThan(MAX_PASTED_MEETING_BYTES);
+    await notes(typed);
+    expect(await shown()).toEqual({ line: '', add: false });
   });
 
   it('goes when its account signs out, and does not come back with it', async () => {

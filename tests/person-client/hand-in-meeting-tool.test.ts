@@ -43,6 +43,13 @@ describe('hand-in meeting CLI', () => {
     expect(f.printed).toEqual([{ ok: true, result: { status: 'queued', meeting_id: meetingId } }]);
   });
 
+  it('hands in text with invisible characters from another tool: line breaks become line feeds and other controls go', async () => {
+    const f = fixture({ 'notes.md': 'Decision: move the pilot to Friday.\u000cAction: Mina sends\u0007 the revised quote.\u2028', 'transcript.txt': 'Mina Patel:\u0085I will send it.' });
+    await submit(f, { ...f.values, date: '2026-10-21' });
+    expect((f.requests[0] as { meeting: unknown }).meeting).toEqual({ title: 'Supplier sync', notes: 'Decision: move the pilot to Friday.\nAction: Mina sends the revised quote.',
+      transcript: 'Mina Patel:\nI will send it.', started_at: '2026-10-21T12:00:00.000Z', all_day: true });
+  });
+
   it('keeps a start in this machine\'s time zone, and takes notes or a transcript alone', async () => {
     const f = fixture();
     await submit(f, { 'meeting-title': 'Supplier sync', 'notes-file': f.values['notes-file'], 'started-at': '2026-10-21T15:30', retain: true });
