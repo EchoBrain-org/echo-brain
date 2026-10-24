@@ -17,7 +17,6 @@ const NOW = 1_800_000_000;
 const APPROVAL_ID = "apr_00000000-0000-4000-8000-000000000001";
 const SNAPSHOT = `sha256:${"a".repeat(64)}`;
 const PROJECT_A = "prj_11111111-1111-4111-8111-111111111111";
-const PROJECT_B = "prj_22222222-2222-4222-8222-222222222222";
 const plain = (text: string) => ({ type: "plain_text", text, emoji: false });
 
 function form(value: unknown): Uint8Array {
@@ -40,12 +39,10 @@ function verify(raw: Uint8Array, timestamp = NOW) {
     now_unix_seconds: NOW,
   });
 }
+/** A V4 click. The card's only state is its owner inputs; "owner-input" is a no-op edit of one. */
 function payload(
   input: {
-    readonly action?: "approve" | "reject" | "audience-select";
-    readonly audience?: "only-me" | "projects";
-    readonly projects?: readonly string[];
-    readonly project_options?: readonly unknown[];
+    readonly action?: "approve" | "reject" | "owner-input";
     readonly owners?: Readonly<Record<string, string | null>>;
     readonly snapshot?: string | null;
     readonly response_url?: string;
@@ -53,8 +50,7 @@ function payload(
     readonly state?: Record<string, unknown>;
   } = {},
 ) {
-  const action = input.action ?? "approve",
-    audience = input.audience ?? "only-me";
+  const action = input.action ?? "approve";
   const ownerState = Object.fromEntries(
     Object.entries(input.owners ?? {}).map(([signal_id, owner]) => [
       `owner-${signal_id}`,
@@ -66,34 +62,7 @@ function payload(
       },
     ]),
   );
-  const state = input.state ?? {
-    audience: {
-      [slackApprovalActionIdV4(APPROVAL_ID, "audience-select")]: {
-        type: "static_select",
-        selected_option: {
-          text: plain(audience === "projects" ? "Projects" : "Only me"),
-          value: audience,
-        },
-      },
-    },
-    projects: {
-      [slackApprovalActionIdV4(APPROVAL_ID, "projects-select")]: {
-        type: "multi_static_select",
-        selected_options: input.project_options ?? (input.projects ?? []).map((id) => ({
-          text: plain(id === PROJECT_A ? "Alpha" : "Beta"),
-          value: id,
-          description: plain("Current project members can read this record"),
-        })),
-      },
-    },
-    transcript: {
-      [slackApprovalActionIdV4(APPROVAL_ID, "transcript-checkbox")]: {
-        type: "checkboxes",
-        selected_options: [],
-      },
-    },
-    ...ownerState,
-  };
+  const state = input.state ?? ownerState;
   return {
     // These are ordinary Slack metadata fields, not ECHO authority inputs.
     type: "block_actions",
@@ -138,8 +107,8 @@ function payload(
       : { response_url: input.response_url }),
     actions: [
       {
-        type: action === "audience-select" ? "static_select" : "button",
-        action_id: slackApprovalActionIdV4(APPROVAL_ID, action),
+        type: action === "owner-input" ? "plain_text_input" : "button",
+        action_id: action === "owner-input" ? slackApprovalOwnerActionIdV4(APPROVAL_ID, "act_alpha") : slackApprovalActionIdV4(APPROVAL_ID, action),
         block_id: "actions",
         text: plain(action === "reject" ? "Reject" : "Approve"),
         value: JSON.stringify({
@@ -173,25 +142,22 @@ function rejected(value: unknown) {
 }
 
 describe("private Slack approval interaction V4", () => {
-  it("parses a signed V4 project approval with signal-keyed owners and no response URL retention", () => {
+  it("parses a signed V4 approval with signal-keyed owners, no destination and no response URL retention", () => {
     const result = parse(
       payload({
-        audience: "projects",
-        projects: [PROJECT_A, PROJECT_B],
-        owners: { act_alpha: "Ada Lovelace" },
+        owners: { act_alpha: "Ada Lovelace", act_beta: null },
         response_url: "https://hooks.slack.com/actions/T000/B000/fake",
       }),
     );
-    expect(result).toMatchObject({
+    expect(result).toEqual(expect.objectContaining({
+      schema_version: 4,
       disposition: "resolution",
       action: "approve",
       approval_id: APPROVAL_ID,
       snapshot_sha256: SNAPSHOT,
-      audience: "projects",
-      project_ids: [PROJECT_A, PROJECT_B],
-      share_transcript: false,
       owners: [{ signal_id: "act_alpha", owner: "Ada Lovelace" }],
-    });
+    }));
+    expect(Object.keys(result).sort()).toEqual(["action", "approval_id", "disposition", "lookup", "owners", "provider_action_key_sha256", "schema_version", "snapshot_sha256"]);
     expect(JSON.stringify(result)).not.toContain("response_url");
   });
   it("accepts signed Slack hash and token envelope metadata without retaining it", () => {
@@ -199,77 +165,32 @@ describe("private Slack approval interaction V4", () => {
     expect(result).toMatchObject({ disposition: "resolution" });
     expect(JSON.stringify(result)).not.toContain("deprecated-provider-token");
   });
-  it("round-trips the complete V4 project option emitted by the card", () => {
+  it("needs no state but the owner inputs, and maps a reject to no owners", () => {
+    expect(parse(payload())).toMatchObject({ disposition: "resolution", action: "approve", owners: [] });
+    expect(parse(payload({ action: "reject", owners: { act_alpha: "Ada" } }))).toMatchObject({ disposition: "resolution", action: "reject", owners: [] });
+  });
+  it("round-trips the owner inputs the card emits", () => {
     const card = buildSlackApprovalCardV4({
       approval_id: APPROVAL_ID,
       snapshot_sha256: SNAPSHOT,
-      review: {
-        schema_version: 1,
-        approval_id: APPROVAL_ID,
-        meeting_title: "Roadmap",
-        decision_groups: [],
-        ungrouped_actions: [
-          { text: "Send draft", evidence_reference: "Meeting transcript" },
-        ],
-      },
-      projects: [{ project_id: PROJECT_A, name: "Alpha" }],
-      suggested_project_ids: [PROJECT_A],
-      owners: [],
+      review: { schema_version: 1, approval_id: APPROVAL_ID, meeting_title: "Roadmap", decision_groups: [],
+        ungrouped_actions: [{ text: "Send draft", evidence_reference: "Meeting transcript" }] },
+      destination: ["Alpha"],
+      owners: [{ signal_id: "act_alpha", action: "Send draft", proposed: "Ada" }],
     });
-    const projects = (
-      card.blocks.find((block) =>
-        (block as { block_id?: string }).block_id?.endsWith("-projects"),
-      ) as { element: { options: readonly unknown[] } }
-    ).element.options;
-    expect(parse(payload({ audience: "projects", project_options: projects }))).toMatchObject({
-      disposition: "resolution",
-      audience: "projects",
-      project_ids: [PROJECT_A],
+    const inputs = card.blocks.flatMap((block) => {
+      const element = (block as { element?: { type: string; action_id: string } }).element;
+      return element?.type === "plain_text_input" ? [element.action_id] : [];
     });
+    expect(inputs).toEqual([slackApprovalOwnerActionIdV4(APPROVAL_ID, "act_alpha")]);
+    expect(parse(payload({ owners: { act_alpha: "Ada L." } }))).toMatchObject({ owners: [{ signal_id: "act_alpha", owner: "Ada L." }] });
   });
-  it("accepts only-me with zero project options and maps a reject to empty choices", () => {
-    expect(parse(payload())).toMatchObject({
-      disposition: "resolution",
-      audience: "only-me",
-      project_ids: [],
-      owners: [],
-    });
-    expect(
-      parse(payload({ audience: "only-me", projects: [PROJECT_A] })),
-    ).toMatchObject({
-      disposition: "resolution",
-      audience: "only-me",
-      project_ids: [],
-    });
-    expect(
-      parse(
-        payload({
-          action: "reject",
-          audience: "projects",
-          projects: [PROJECT_A],
-          owners: { act_alpha: "Ada" },
-        }),
-      ),
-    ).toMatchObject({
-      disposition: "resolution",
-      action: "reject",
-      project_ids: [],
-      share_transcript: false,
-      owners: [],
-    });
-  });
-  it("accepts an Only me card with the unavailable project picker omitted", () => {
-    const { projects: _projects, ...state } = payload().state.values;
-    expect(parse(payload({ state }))).toMatchObject({
-      disposition: "resolution",
-      action: "approve",
-      audience: "only-me",
-      project_ids: [],
-      share_transcript: false,
-    });
-  });
-  it("canonicalizes Slack selection order but refuses missing snapshots, legacy controls, unknown owners, duplicate or 21 project choices, and incomplete state", () => {
+  it("refuses missing snapshots, the retired audience, project and transcript controls, legacy controls and unknown owners", () => {
     rejected(payload({ snapshot: null }));
+    for (const retired of ["audience-select", "projects-select", "transcript-checkbox"]) {
+      rejected(payload({ state: { [retired]: { [`echo-approval-v4-${"0".repeat(32)}-${retired}`]: { type: "static_select", selected_option: null } } } }));
+    }
+    rejected(payload({ state: { projects: { [`echo-approval-v4-${"0".repeat(32)}-projects-select`]: { type: "multi_static_select", selected_options: [{ text: plain("Alpha"), value: PROJECT_A }] } } } }));
     rejected(
       payload({
         action: "approve",
@@ -284,25 +205,7 @@ describe("private Slack approval interaction V4", () => {
       }),
     );
     rejected(payload({ owners: { "not an authority signal": "Ada" } }));
-    expect(
-      parse(
-        payload({ audience: "projects", projects: [PROJECT_B, PROJECT_A] }),
-      ),
-    ).toMatchObject({ project_ids: [PROJECT_A, PROJECT_B] });
-    rejected(
-      payload({ audience: "projects", projects: [PROJECT_A, PROJECT_A] }),
-    );
-    rejected(
-      payload({
-        audience: "projects",
-        projects: Array.from(
-          { length: 21 },
-          (_, index) =>
-            `prj_${String(index).padStart(8, "0")}-1111-4111-8111-111111111111`,
-        ),
-      }),
-    );
-    rejected(payload({ state: {} }));
+    rejected(payload({ owners: { act_alpha: " padded " } }));
   });
   it("keeps original-byte HMAC, freshness and body-size enforcement before parsing", () => {
     const raw = form(payload());
@@ -314,26 +217,16 @@ describe("private Slack approval interaction V4", () => {
       PrivateSlackApprovalInteractionError,
     );
   });
-  it("accepts only the expected Slack type for each V4 no-op control", () => {
-    const cases: readonly [string, string][] = [
-      ["audience-select", "static_select"],
-      ["projects-select", "multi_static_select"],
-      ["transcript-checkbox", "checkboxes"],
-      ["owner-act_alpha", "plain_text_input"],
-    ];
-    for (const [name, type] of cases) {
-      const interaction = payload({ action: "audience-select" });
-      interaction.actions[0]!.action_id = slackApprovalActionIdV4(
-        APPROVAL_ID,
-        name as "audience-select",
-      );
-      interaction.actions[0]!.type = type;
-      expect(parse(interaction)).toMatchObject({
-        disposition: "presentation_change",
-      });
-    }
-    const malformed = payload({ action: "audience-select" });
-    malformed.actions[0]!.type = "plain_text_input";
+  it("accepts an owner input edit as a no-op, and no retired control", () => {
+    expect(parse(payload({ action: "owner-input" }))).toMatchObject({ disposition: "presentation_change" });
+    const malformed = payload({ action: "owner-input" });
+    malformed.actions[0]!.type = "static_select";
     rejected(malformed);
+    for (const [name, type] of [["audience-select", "static_select"], ["projects-select", "multi_static_select"], ["transcript-checkbox", "checkboxes"]] as const) {
+      const retired = payload({ action: "owner-input" });
+      retired.actions[0]!.action_id = slackApprovalOwnerActionIdV4(APPROVAL_ID, "x").replace(/owner-x$/, name);
+      retired.actions[0]!.type = type;
+      rejected(retired);
+    }
   });
 });

@@ -103,13 +103,14 @@ evidence still requires current access when opened.
 
 ## Current limits
 
-- An approved record is associated with a project only when its owner approved
-  it with the **Projects** audience
-  ([ADR-0017](../decisions/ADR-0017-project-meeting-approval-v1.md)). Project
-  Ask includes those records while their audience still admits the reader;
-  Only me, Team and older records remain global-only. A project name appearing
-  in an approved record is not sufficient to include it. The approval card
-  refuses projects chosen with another audience rather than dropping them.
+- An approved record is associated with a project only when its owner sent
+  its items to that project
+  ([ADR-0017](../decisions/ADR-0017-project-meeting-approval-v1.md),
+  [ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)):
+  each destination of a meeting is its own record. Project Ask includes those
+  records while their audience still admits the reader; Only me, Team and
+  older records remain global-only. A project name appearing in an approved
+  record is not sufficient to include it.
 - Raw meeting snapshots, meetings approved with transcript sharing off, and
   pending/rejected approvals are not exposed merely because they exist in the
   shared source tables.

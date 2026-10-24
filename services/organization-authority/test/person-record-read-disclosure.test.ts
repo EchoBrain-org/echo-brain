@@ -67,9 +67,10 @@ describe("Person Layer 1 record list disclosure", () => {
     const authority = protocolAuthority();
     const app = new OrganizationRecordAppenderV4(record, COORDINATES, SIGNED_APPROVAL_PROJECTORS);
     // Positions 1 and 3 are released to the member; position 2 is the owner's Only me record.
-    await appendSignedApprovalV1(app, authority, { approval_id: "approval-shared-and-unjoined", audit_sequence: 1, projects: [SHARED_PROJECT, UNJOINED_PROJECT], final_approver: OWNER });
+    // Each is an approval decision's one record, under its destination's own approval id.
+    const sharedAndUnjoined = await appendSignedApprovalV1(app, authority, { approval_id: "approval-shared-and-unjoined", audit_sequence: 1, projects: [SHARED_PROJECT, UNJOINED_PROJECT], final_approver: OWNER });
     await appendSignedApprovalV1(app, authority, { approval_id: "approval-owner-only", audit_sequence: 2, projects: [], final_approver: OWNER });
-    await appendSignedApprovalV1(app, authority, { approval_id: "approval-shared", audit_sequence: 3, projects: [SHARED_PROJECT], final_approver: OWNER });
+    const shared = await appendSignedApprovalV1(app, authority, { approval_id: "approval-shared", audit_sequence: 3, projects: [SHARED_PROJECT], final_approver: OWNER });
     const route = createPersonRecordReadRouteV1({
       ...COORDINATES,
       sessions: { authenticateAccess: () => member },
@@ -79,7 +80,7 @@ describe("Person Layer 1 record list disclosure", () => {
     });
     response = route.list({ access_token: "bearer-member" });
     // Guard the expected-failure cases below: only a correct fixture may reach them.
-    expect(response.records.map((item) => item.approval_id)).toEqual(["approval-shared", "approval-shared-and-unjoined"]);
+    expect(response.records.map((item) => item.approval_id)).toEqual([shared, sharedAndUnjoined]);
   });
 
   afterAll(() => {

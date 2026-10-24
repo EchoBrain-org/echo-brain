@@ -5,7 +5,9 @@ const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 
 const apollo = project(1, 30, { name: 'Apollo' });
-const opened = { snapshot_sha256: `sha256:${'a'.repeat(64)}`, suggested_projects: [], owners: [], review: { status: 'pending' } };
+const opened = { snapshot_sha256: `sha256:${'a'.repeat(64)}`, suggested_projects: [], participants: [], reasons: [], records: [],
+  items: [{ signal_id: 's1', kind: 'decision', text: 'Ship it', subject: null, status: 'decided', due_at: null, quotes: [], owner: null, owner_editable: false, project_ids: [] }],
+  review: { status: 'pending', records: [] } };
 let held: Held;
 /** Status reads say signed out while set: the session ended elsewhere. */
 let signedOut = false;

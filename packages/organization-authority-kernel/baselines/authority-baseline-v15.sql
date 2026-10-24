@@ -649,8 +649,10 @@ CREATE TABLE authority_live_approval_outbox_v2 (
 ) STRICT;
 
 -- One decision per proposal, from any surface; the first decision wins. Written only by the
--- approval core's decide(); the publisher fills receipt_json once with {record_sha256, receipt},
--- where receipt is the signed record receipt and record_sha256 equals receipt.body.record_sha256.
+-- approval core's decide(): an approval routes each decision and action to a destination (not
+-- kept, Only me, or projects). The publisher fills receipt_json once with {records: [...]}, one
+-- {approval_id, project_ids, record_sha256, receipt} per destination record, where receipt is the
+-- signed record receipt and record_sha256 equals receipt.body.record_sha256.
 CREATE TABLE authority_approval_decisions_v1 (
   sequence INTEGER PRIMARY KEY,
   approval_id TEXT NOT NULL UNIQUE REFERENCES authority_live_approval_outbox_v2(approval_id),
@@ -664,9 +666,8 @@ CREATE TABLE authority_approval_decisions_v1 (
     AND json_extract(body_json, '$.request.command_id') IS command_id
     AND json_extract(body_json, '$.surface') IS surface
     AND json_type(body_json, '$.request.snapshot_sha256') IS 'text'
-    AND json_type(body_json, '$.request.project_ids') IS 'array'
-    AND json_array_length(body_json, '$.request.project_ids') <= 20
-    AND coalesce(json_type(body_json, '$.request.share_transcript'), '') IN ('true', 'false')
+    AND json_type(body_json, '$.request.routes') IS 'array'
+    AND json_array_length(body_json, '$.request.routes') <= 500
     AND json_type(body_json, '$.request.owners') IS 'array'
     AND json_array_length(body_json, '$.request.owners') <= 40
     AND json_type(body_json, '$.actor.organization_id') IS 'text'
@@ -675,18 +676,21 @@ CREATE TABLE authority_approval_decisions_v1 (
     AND json_extract(body_json, '$.evidence.kind') IS CASE surface WHEN 'desktop' THEN 'person-session' ELSE 'slack-click' END
     AND json_type(body_json, '$.evidence.sha256') IS 'text'
     AND unixepoch(json_extract(body_json, '$.decided_at')) IS NOT NULL),
+  -- Each published record is checked by authority_approval_decision_receipt_v1 (a CHECK cannot iterate).
   receipt_json TEXT CHECK (receipt_json IS NULL OR (json_valid(receipt_json) AND json_type(receipt_json) = 'object'
-    AND json_type(receipt_json, '$.record_sha256') IS 'text'
-    AND json_type(receipt_json, '$.receipt') IS 'object'
-    AND json_extract(receipt_json, '$.receipt.body.record_sha256') IS json_extract(receipt_json, '$.record_sha256'))),
+    AND json_type(receipt_json, '$.records') IS 'array'
+    AND json_array_length(receipt_json, '$.records') BETWEEN 1 AND 500)),
   CHECK ((surface = 'slack') = (command_id GLOB 'slack:*')),
-  CHECK (action = 'approve' OR (json_array_length(body_json, '$.request.project_ids') = 0
-    AND json_type(body_json, '$.request.share_transcript') IS 'false'
+  CHECK (action = 'approve' OR (json_array_length(body_json, '$.request.routes') = 0
     AND json_array_length(body_json, '$.request.owners') = 0)),
   CHECK (receipt_json IS NULL OR action = 'approve')
 ) STRICT;
 CREATE INDEX authority_approval_decisions_v1_unpublished
   ON authority_approval_decisions_v1(sequence) WHERE receipt_json IS NULL AND action = 'approve';
+-- One reviewer's published approvals: an approved-record run finds its record among them.
+CREATE INDEX authority_approval_decisions_v1_published_by_reviewer
+  ON authority_approval_decisions_v1(json_extract(body_json, '$.actor.membership_id'))
+  WHERE receipt_json IS NOT NULL AND action = 'approve';
 
 -- A provider presentation is deliberately separate from the approval and its
 -- decision: delivery is best-effort and must never affect the durable record.
@@ -755,24 +759,68 @@ WHEN NOT EXISTS (
      AND admission.principal_id = json_extract(NEW.body_json, '$.actor.principal_id')
      AND admission.membership_id = json_extract(NEW.body_json, '$.actor.membership_id'))
 BEGIN SELECT RAISE(ABORT, 'approval decision needs the active reviewer'); END;
--- An approval's audience is sorted and unique; each project is active and the reviewer an active member of it.
+-- Each route names a signal and its destination: null (not kept), [] (Only me) or projects,
+-- sorted and unique. An approval keeps at least one item and names at most 20 projects in all.
+-- Each routed project is active and the reviewer an active member of it. A route that is not an
+-- object is read as {} wherever its fields are read, so JSON functions never see a bare value.
+CREATE TRIGGER authority_approval_decision_routes_v1
+BEFORE INSERT ON authority_approval_decisions_v1
+WHEN EXISTS (
+  SELECT 1 FROM json_each(NEW.body_json, '$.request.routes') AS route
+   WHERE CASE WHEN route.type != 'object' THEN 1
+     WHEN json_type(route.value, '$.signal_id') IS NOT 'text' THEN 1
+     WHEN coalesce(json_type(route.value, '$.project_ids'), '') NOT IN ('null', 'array') THEN 1
+     WHEN json_array_length(route.value, '$.project_ids') > 20 THEN 1 ELSE 0 END = 1)
+  OR (NEW.action = 'approve' AND NOT EXISTS (
+  SELECT 1 FROM json_each(NEW.body_json, '$.request.routes') AS route
+   WHERE json_type(iif(route.type = 'object', route.value, '{}'), '$.project_ids') = 'array'))
+  OR (SELECT count(DISTINCT chosen.value) FROM json_each(NEW.body_json, '$.request.routes') AS route,
+    json_each(iif(route.type = 'object', route.value, '{}'), '$.project_ids') AS chosen
+   WHERE json_type(iif(route.type = 'object', route.value, '{}'), '$.project_ids') = 'array') > 20
+BEGIN SELECT RAISE(ABORT, 'approval decision routes are invalid'); END;
 CREATE TRIGGER authority_approval_decision_audience_v1
 BEFORE INSERT ON authority_approval_decisions_v1
 WHEN EXISTS (
-  SELECT 1 FROM json_each(NEW.body_json, '$.request.project_ids') AS earlier
-    JOIN json_each(NEW.body_json, '$.request.project_ids') AS later ON later.key = earlier.key + 1
-   WHERE later.value <= earlier.value)
+  SELECT 1 FROM json_each(NEW.body_json, '$.request.routes') AS route,
+    json_each(iif(route.type = 'object', route.value, '{}'), '$.project_ids') AS earlier
+    JOIN json_each(iif(route.type = 'object', route.value, '{}'), '$.project_ids') AS later ON later.key = earlier.key + 1
+   WHERE json_type(iif(route.type = 'object', route.value, '{}'), '$.project_ids') = 'array' AND later.value <= earlier.value)
   OR EXISTS (
-  SELECT 1 FROM json_each(NEW.body_json, '$.request.project_ids') AS chosen
-   WHERE chosen.type != 'text' OR NOT EXISTS (
+  SELECT 1 FROM json_each(NEW.body_json, '$.request.routes') AS route,
+    json_each(iif(route.type = 'object', route.value, '{}'), '$.project_ids') AS chosen
+   WHERE json_type(iif(route.type = 'object', route.value, '{}'), '$.project_ids') = 'array' AND (chosen.type != 'text' OR NOT EXISTS (
      SELECT 1 FROM authority_project_memberships_v1 AS grant_row
        JOIN authority_projects_v1 AS project ON project.project_id = grant_row.project_id
         AND project.organization_id = grant_row.organization_id AND project.status = 'active'
       WHERE grant_row.project_id = chosen.value AND grant_row.status = 'active'
         AND grant_row.organization_id = json_extract(NEW.body_json, '$.actor.organization_id')
         AND grant_row.principal_id = json_extract(NEW.body_json, '$.actor.principal_id')
-        AND grant_row.membership_id = json_extract(NEW.body_json, '$.actor.membership_id')))
+        AND grant_row.membership_id = json_extract(NEW.body_json, '$.actor.membership_id'))))
 BEGIN SELECT RAISE(ABORT, 'approval decision audience needs active project membership'); END;
+-- A decision starts unpublished; its receipt is written once.
+CREATE TRIGGER authority_approval_decision_unpublished_v1
+BEFORE INSERT ON authority_approval_decisions_v1
+WHEN NEW.receipt_json IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'approval decision starts unpublished'); END;
+-- Each published record names its own apr_* approval id, its projects and its record digest,
+-- which its signed receipt names too; no two records share an approval id. The table CHECK
+-- guarantees a records array first only on a write the trigger lets through, so the trigger
+-- reads a receipt without one as having no records.
+CREATE TRIGGER authority_approval_decision_receipt_v1
+BEFORE UPDATE OF receipt_json ON authority_approval_decisions_v1
+WHEN NEW.receipt_json IS NOT NULL AND json_valid(NEW.receipt_json) AND json_type(NEW.receipt_json, '$.records') = 'array' AND (EXISTS (
+  SELECT 1 FROM json_each(NEW.receipt_json, '$.records') AS published
+   WHERE CASE WHEN published.type != 'object' THEN 1
+     WHEN json_type(published.value, '$.approval_id') IS NOT 'text' THEN 1
+     WHEN json_extract(published.value, '$.approval_id') NOT GLOB 'apr_*' THEN 1
+     WHEN json_type(published.value, '$.project_ids') IS NOT 'array' THEN 1
+     WHEN json_type(published.value, '$.record_sha256') IS NOT 'text' THEN 1
+     WHEN json_type(published.value, '$.receipt') IS NOT 'object' THEN 1
+     WHEN json_extract(published.value, '$.receipt.body.record_sha256') IS NOT json_extract(published.value, '$.record_sha256') THEN 1
+     ELSE 0 END = 1)
+  OR (SELECT count(DISTINCT json_extract(published.value, '$.approval_id')) FROM json_each(NEW.receipt_json, '$.records') AS published
+   WHERE published.type = 'object') != json_array_length(NEW.receipt_json, '$.records'))
+BEGIN SELECT RAISE(ABORT, 'approval receipt needs its published records'); END;
 
 CREATE TABLE authority_trigger_runs_v1 (
   run_id TEXT PRIMARY KEY CHECK (run_id GLOB 'run_*' AND length(run_id) BETWEEN 8 AND 64),
@@ -806,15 +854,18 @@ CREATE INDEX authority_trigger_runs_by_record_v1 ON authority_trigger_runs_v1 (r
 CREATE UNIQUE INDEX authority_trigger_runs_one_live_sweep_v1 ON authority_trigger_runs_v1
   (organization_id, principal_id, membership_id, scope_kind, ifnull(scope_id, ''))
   WHERE trigger = 'sweep' AND state IN ('pending', 'running');
+-- An approved-record run is one published record of its reviewer's approval: event_ref is the
+-- record's approval id, so each record of a decision gets its own run.
 CREATE TRIGGER authority_trigger_run_approved_record_v1
 BEFORE INSERT ON authority_trigger_runs_v1
 WHEN NEW.trigger = 'approved_record' AND NOT EXISTS (
-  SELECT 1 FROM authority_approval_decisions_v1 d
-  WHERE d.approval_id = NEW.event_ref AND d.action = 'approve' AND d.receipt_json IS NOT NULL
+  SELECT 1 FROM authority_approval_decisions_v1 d, json_each(d.receipt_json, '$.records') AS published
+  WHERE json_extract(d.body_json, '$.actor.membership_id') = NEW.membership_id
+    AND d.action = 'approve' AND d.receipt_json IS NOT NULL
     AND json_extract(d.body_json, '$.actor.organization_id') = NEW.organization_id
     AND json_extract(d.body_json, '$.actor.principal_id') = NEW.principal_id
-    AND json_extract(d.body_json, '$.actor.membership_id') = NEW.membership_id
-    AND json_extract(d.receipt_json, '$.record_sha256') = NEW.record_sha256)
+    AND json_extract(published.value, '$.approval_id') = NEW.event_ref
+    AND json_extract(published.value, '$.record_sha256') = NEW.record_sha256)
 BEGIN SELECT RAISE(ABORT, 'approved-record run needs its published approval'); END;
 CREATE TRIGGER authority_trigger_run_identity_immutable_v1
 BEFORE UPDATE ON authority_trigger_runs_v1

@@ -30,20 +30,23 @@ export function FollowUpsLabel({ words, open, class: name, testid }: Counted & {
  * section 5; follow-ups thread v1): queued or running; failed, with why and
  * Try again; or done, with the meeting's follow-ups counted in one line
  * ("Follow-ups · 4 not sent"), the whole line opening its list when it has
- * any.
+ * any. A meeting sent to several destinations has a record, and so a check,
+ * for each: `label` names the destination.
  */
-export function ImpactSection({ run, publishing, busy, followUps, onRetry }: {
+export function ImpactSection({ run, publishing, busy, followUps, onRetry, label }: {
   run: PersonRunV1 | undefined;
   publishing: boolean;
   busy: boolean;
   /** The meeting's follow-ups counted, once read, and what opens them when there are any. */
   followUps: Counted | null;
   onRetry(): void;
+  label?: string;
 }) {
   if (run === undefined && !publishing) return null;
-  return <section class="impact" aria-label="Impact">
+  const name = label === undefined ? 'Impact' : `Impact · ${label}`;
+  return <section class="impact" aria-label={name}>
     <div class="impact-head">
-      <h4 class="section-label">Impact</h4>
+      <h4 class="section-label">{name}</h4>
       {(run === undefined || run.state === 'pending') && <span class="notice-line">Check queued</span>}
       {run?.state === 'running' && <span class="asking"><i /><i /><i /><span>Checking what this changes · a few minutes</span></span>}
     </div>

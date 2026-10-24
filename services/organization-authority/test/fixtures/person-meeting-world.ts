@@ -166,8 +166,9 @@ export async function meetingWorld(options: {
   let sequence = 0;
   const digests = new Map<string, Sha256Digest>();
   const approve = async (input: WorldApprovalV1): Promise<Sha256Digest> => {
-    await appendSignedApprovalV1(app, signer, { ...input, audit_sequence: sequence += 1 });
-    const row = record.prepare("SELECT record_sha256 FROM organization_record_log WHERE approval_id = ?").get(input.approval_id) as { readonly record_sha256: Sha256Digest };
+    // An approval decision's record carries its destination's derived approval id, so it is found by what was appended.
+    const appended = await appendSignedApprovalV1(app, signer, { ...input, audit_sequence: sequence += 1 });
+    const row = record.prepare("SELECT record_sha256 FROM organization_record_log WHERE approval_id = ?").get(appended) as { readonly record_sha256: Sha256Digest };
     digests.set(input.name, row.record_sha256);
     return row.record_sha256;
   };

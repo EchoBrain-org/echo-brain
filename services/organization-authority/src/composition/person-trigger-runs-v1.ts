@@ -80,7 +80,8 @@ type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_ma
  * The open items a finished run makes (open items and Home v1, section 3;
  * follow-ups thread v1). From the card: one per affected item that conflicts
  * or needs updating, never one that confirms or was not assessed, never the
- * meeting's own record or its own transcript, and one per item however often
+ * meeting's own records (this one and its siblings, the same meeting sent to
+ * other destinations) or their transcripts, and one per item however often
  * the card cites it. The card's owner name comes from the item's own
  * details. Then one per action the approved meeting decided, in brief
  * order: it needs doing, its expected line is the action's own text on one
@@ -89,7 +90,9 @@ type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_ma
  * under the cap: at most `PERSON_RUN_MEETING_ACTIONS_MAX_V1` actions with a
  * line, the first ones (the rest stay in the record only).
  */
-function itemCandidates(record_sha256: Sha256Digest, card: PersonImpactCardV1, stored: StoredImpactCardV1, actions: readonly PersonRecordActionV1[]): readonly ItemCandidateV1[] {
+function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Digest[], card: PersonImpactCardV1, stored: StoredImpactCardV1,
+  actions: readonly PersonRecordActionV1[]): readonly ItemCandidateV1[] {
+  const own = new Set<unknown>([record_sha256, ...siblings]);
   const seen = new Set<Sha256Digest>();
   const fresh = (pointer: Readonly<Record<string, unknown>>): Sha256Digest | undefined => {
     const item_key = impactItemKeyV1(pointer);
@@ -103,9 +106,9 @@ function itemCandidates(record_sha256: Sha256Digest, card: PersonImpactCardV1, s
     if (relation === undefined || relation === 'confirms') return [];
     const cited = card.citations[row.citation_index]!;
     const pointer = cited.citation as unknown as Readonly<Record<string, unknown>>;
-    // The meeting is never a follow-up of itself, nor is the transcript its approver shared: its own actions are.
-    if (pointer.kind === 'approved_record' && pointer.record_sha256 === record_sha256) return [];
-    if (pointer.kind === 'source_revision' && cited.ref === `transcript:${record_sha256}`) return [];
+    // The meeting is never a follow-up of itself, in any of its records, nor is a transcript of one: its own actions are.
+    if (pointer.kind === 'approved_record' && own.has(pointer.record_sha256)) return [];
+    if (pointer.kind === 'source_revision' && [...own].some(record => cited.ref === `transcript:${String(record)}`)) return [];
     const item_key = fresh(pointer);
     if (item_key === undefined) return [];
     // The stored phrase: screened against outside titles.
@@ -155,7 +158,8 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     const outsideLabels = output.research.items
       .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
     const value = storableImpactCardV1(card, outsideLabels);
-    const candidates = itemCandidates(record_sha256, card, value, actions);
+    // The meeting's other records, read when the run finishes: its siblings never come back as follow-ups.
+    const candidates = itemCandidates(record_sha256, options.runs.siblingRecords(row.actor, record_sha256), card, value, actions);
     const owners = candidates.length === 0 ? [] : await matchImpactOwnersV1({
       candidates,
       approver: { organization_id: row.actor.organization_id, membership_id: row.actor.membership_id },

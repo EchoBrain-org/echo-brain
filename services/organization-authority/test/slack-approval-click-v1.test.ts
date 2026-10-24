@@ -1,4 +1,5 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import { approvalRecordIdV2 } from "@echo-brain/organization-protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
   approvalCoreFixture,
@@ -29,9 +30,6 @@ function click(
     action: "approve" as const,
     approval_id,
     snapshot_sha256,
-    audience: "projects" as const,
-    project_ids: [PROJECT_A],
-    share_transcript: false,
     owners: [{ signal_id: "act-1", owner: "Rafael Moreno" }],
     provider_action_key_sha256: canonicalSha256("click action"),
     lookup: {
@@ -47,10 +45,12 @@ function click(
     ...patch,
   };
 }
-async function fixture() {
+/** A proposal posted to the reviewer's Slack DM, suggesting project A unless `suggestions` says otherwise. */
+async function fixture(suggestions = 1) {
   const f = await approvalCoreFixture({
     owners: { "act-1": "Rafael Moreno" },
     projects: 2,
+    suggestions,
   });
   f.db
     .prepare(
@@ -105,7 +105,27 @@ async function fixtureWithRuns() {
 }
 
 describe("Slack approval click V1", () => {
-  it("decides through the real core with project choices and proposal-keyed owners", async () => {
+  it("approves every decision and action as suggested, with the owners typed on the card", async () => {
+    const f = await fixture();
+    expect(f.core.proposal(f.approvalId)!.project_ids).toEqual([PROJECT_A]);
+    expect(f.decide(click(f.approvalId, f.snapshotOf(f.approvalId)!, { owners: [{ signal_id: "act-1", owner: "Rafael M." }] }))).toEqual({ outcome: "decided" });
+    const body = JSON.parse(f.db.prepare("SELECT body_json FROM authority_approval_decisions_v1").pluck().get() as string);
+    expect(body.request.routes).toEqual(f.routes([PROJECT_A]));
+    expect(body.request.routes.map((route: { signal_id: string }) => route.signal_id)).toEqual(["decision-1", "act-1", "act-2"]);
+    expect(body.request.owners).toEqual([{ signal_id: "act-1", owner: "Rafael M." }]);
+    await f.core.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
+    expect(f.core.proposal(f.approvalId)!.records).toEqual([{ approval_id: approvalRecordIdV2(f.approvalId, [PROJECT_A]), project_ids: [PROJECT_A] }]);
+  });
+  it("approves every item for the reviewer alone when nothing is suggested, or the suggestion is no longer readable", async () => {
+    const f = await fixture(0);
+    expect(f.decide(click(f.approvalId, f.snapshotOf(f.approvalId)!))).toEqual({ outcome: "decided" });
+    expect(JSON.parse(f.db.prepare("SELECT body_json FROM authority_approval_decisions_v1").pluck().get() as string).request.routes).toEqual(f.routes([]));
+    const g = await fixture();
+    g.removeProjectMembership(PROJECT_A);
+    expect(g.decide(click(g.approvalId, g.snapshotOf(g.approvalId)!))).toEqual({ outcome: "decided" });
+    expect(JSON.parse(g.db.prepare("SELECT body_json FROM authority_approval_decisions_v1").pluck().get() as string).request.routes).toEqual(g.routes([]));
+  });
+  it("decides through the real core with proposal-keyed owners", async () => {
     const f = await fixture();
     expect(f.core.ownerProposals(f.approvalId)).toContainEqual({
       signal_id: "act-1",
@@ -198,9 +218,12 @@ describe("Slack approval click V1", () => {
       new AbortController().signal,
     );
     expect(f.recordCount()).toBe(1);
+    // Whichever surface won, its one record has its own run.
+    const [record] = f.core.proposal(f.approvalId)!.records;
+    expect(record!.approval_id).toBe(approvalRecordIdV2(f.approvalId, first === "slack" ? [PROJECT_A] : []));
     expect(f.runs.list(f.person, 10)).toEqual([
       expect.objectContaining({
-        event_ref: f.approvalId,
+        event_ref: record!.approval_id,
         actor: f.person,
         state: "pending",
       }),
@@ -217,8 +240,6 @@ describe("Slack approval click V1", () => {
       f.decide(
         click(f.approvalId, f.snapshotOf(f.approvalId)!, {
           action: "reject" as const,
-          audience: "only_me" as const,
-          project_ids: [],
           owners: [],
         }),
       ),

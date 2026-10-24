@@ -654,29 +654,8 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
     // This service started before Slack was connected. The route must still be
     // mounted so a just-linked owner can use the card without a restart.
     const approval_id = "apr_00000000-0000-4000-8000-000000000001";
-    const interaction_state = {
-      audience: {
-        [slackApprovalActionIdV4(approval_id, "audience-select")]: {
-          type: "static_select",
-          selected_option: {
-            text: { type: "plain_text", text: "Only me", emoji: false },
-            value: "only-me",
-          },
-        },
-      },
-      projects: {
-        [slackApprovalActionIdV4(approval_id, "projects-select")]: {
-          type: "multi_static_select",
-          selected_options: [],
-        },
-      },
-      transcript: {
-        [slackApprovalActionIdV4(approval_id, "transcript-checkbox")]: {
-          type: "checkboxes",
-          selected_options: [],
-        },
-      },
-    };
+    // Slack approves as suggested: the card's state holds only its owner inputs, none here.
+    const interaction_state = {};
     const interaction = {
       type: "block_actions",
       user: {

@@ -1137,9 +1137,12 @@ function stagingSyntheticSourceEvidence(
 ): { readonly proposal_staged: boolean; readonly fixture_mode: boolean; readonly fixtures_approved: boolean; readonly canary_approved: boolean } | undefined {
   const source = readStagingSyntheticSource(manifest, authority);
   if (source === undefined) return undefined;
+  // A proposal is approved once any of its records is in the log: each destination's record carries its own approval
+  // id and names the proposal it decided (echo-approval-decision-ref-v2).
   const approved = record.prepare(
     `SELECT 1 FROM organization_record_log
-      WHERE event_kind = 'approved' AND action = 'approve' AND approval_id = ?
+      WHERE event_kind = 'approved' AND action = 'approve'
+        AND json_extract(canonical_envelope, '$.body.human_act_resolution_ref.proposal_approval_id') = ?
       LIMIT 1`,
   );
   const approvedProposals = source.proposals.filter((proposal) => approved.get(proposal.approval_id) !== undefined);

@@ -14,7 +14,7 @@ afterEach(() => {
 type Outcome = 'opened' | 'retry_allowed' | 'posted' | 'uncertain' | 'done' | Error;
 function proposal(approval_id: string): ApprovalProposalViewV1 {
   return { approval_id, reviewer: { organization_id: 'org_1', principal_id: 'prn_1', membership_id: 'mem_1' }, reviewer_active: true, title: 'Roadmap', status: 'pending' as const, decided_on: null,
-    project_ids: [], snapshot_sha256: `sha256:${'b'.repeat(64)}`, snapshot_json: JSON.stringify({ approved_payload: { brief: { meeting: { title: 'Roadmap' }, decisions: [], actions: [{ text: 'Send draft', evidence: [{ block_id: 'blk_1' }] }], rationales: [] } } }) };
+    project_ids: [], routes: null, snapshot_sha256: `sha256:${'b'.repeat(64)}`, snapshot_json: JSON.stringify({ approved_payload: { brief: { meeting: { title: 'Roadmap' }, decisions: [], actions: [{ text: 'Send draft', evidence: [{ block_id: 'blk_1' }] }], rationales: [] } } }) };
 }
 function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresenterV1>[0]> = {}) {
   const db = new Database(':memory:'); databases.push(db);
@@ -22,6 +22,7 @@ function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresent
     CREATE TABLE authority_approval_decisions_v1(approval_id TEXT PRIMARY KEY,action TEXT);
     CREATE TABLE authority_approval_presentations_v1(approval_id TEXT,surface TEXT,target_json TEXT,dm_channel_id TEXT,delivery TEXT,marker_state TEXT,marker_started_at TEXT,message_ts TEXT,card_sha256 TEXT,shows TEXT,attempts INTEGER,retry_at TEXT,created_at TEXT,updated_at TEXT,PRIMARY KEY(approval_id,surface));`);
   const calls: string[] = [], outcomes: Record<string, Outcome[]> = { open: ['opened'], post: ['posted'], reconcile: ['posted'], publish: ['done'] };
+  const cards: { readonly text: string; readonly blocks: readonly Readonly<Record<string, unknown>>[] }[] = [];
   const views = new Map<string, ReturnType<typeof proposal>>();
   let projects: { project_id: string; name: string }[] = [];
   let linked = true, current = true, clock = new Date('2026-10-07T00:00:00.000Z');
@@ -37,14 +38,14 @@ function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresent
       async openDirectMessage() { const x = take('open'); afterOpen?.(); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1', user_id: 'U1' } : { kind: 'retry_allowed' as const }; },
       async postMarker() { const x = take('post'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async reconcileMarker(input) { reconcileInputs.push(input); const x = take('reconcile'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
-      async publish() { const x = take('publish'); return x === 'done' ? { kind: 'done' as const } : { kind: 'uncertain' as const }; },
+      async publish(input) { cards.push(input.card); const x = take('publish'); return x === 'done' ? { kind: 'done' as const } : { kind: 'uncertain' as const }; },
     }), ...overrides });
   const stage = (id = 'apr_live', patch: Partial<ReturnType<typeof proposal>> = {}) => {
     views.set(id, { ...proposal(id), ...patch });
     db.prepare('INSERT INTO authority_live_approval_outbox_v2 VALUES (?,?,?)').run(id, 'staged', clock.toISOString());
     return id;
   };
-  return { db, calls, outcomes, reconcileInputs, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, unlink: (principalId: string) => { unlinkedPrincipals.add(principalId); }, set proposal(value: ApprovalProposalViewV1) { views.set(value.approval_id, value); }, set afterOpen(value: (() => void) | undefined) { afterOpen = value; }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
+  return { db, calls, cards, outcomes, reconcileInputs, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, unlink: (principalId: string) => { unlinkedPrincipals.add(principalId); }, set proposal(value: ApprovalProposalViewV1) { views.set(value.approval_id, value); }, set afterOpen(value: (() => void) | undefined) { afterOpen = value; }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
 }
 function markInFlight(f: ReturnType<typeof fixture>) { f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight',marker_started_at='2026-10-07T00:00:00.000Z' WHERE approval_id='apr_live'").run(); }
 function row(f: ReturnType<typeof fixture>, id = 'apr_live') { return f.db.prepare('SELECT * FROM authority_approval_presentations_v1 WHERE approval_id=?').get(id) as { delivery: string; attempts: number; retry_at: string | null; dm_channel_id: string | null; shows: string; message_ts: string | null }; }
@@ -267,7 +268,8 @@ describe('Slack approval presenter V1', () => {
   });
 
   it('marks an oversized staged proposal unrepresentable without opening a DM', async () => {
-    const f = fixture(); f.projects = Array.from({ length: 101 }, (_, n) => ({ project_id: `prj_${n}`, name: `Project ${n}` })); f.stage('apr_large');
+    const f = fixture(); f.projects = Array.from({ length: 101 }, (_, n) => ({ project_id: `prj_${n}`, name: `Project ${n}` }));
+    f.stage('apr_large', { project_ids: Array.from({ length: 21 }, (_, n) => `prj_${n}`) });
     await f.presenter.reconcile(signal());
     expect(f.calls).toEqual([]); expect(row(f, 'apr_large')).toMatchObject({ delivery: 'unrepresentable' });
   });
@@ -290,5 +292,41 @@ describe('Slack approval presenter V1', () => {
     f.db.prepare('INSERT INTO authority_approval_decisions_v1 VALUES (?,?)').run(id, 'approve');
     await f.presenter.reconcile(signal());
     expect(f.calls).toEqual(['publish']); expect(row(f, id)).toMatchObject({ shows: 'approved' });
+  });
+  it('says Approve sends every item to the suggested projects by name, or to the reviewer alone', async () => {
+    const f = fixture();
+    f.projects = [{ project_id: 'prj_a', name: 'THERM' }, { project_id: 'prj_b', name: 'ECHO' }];
+    f.stage('apr_suggested', { project_ids: ['prj_a', 'prj_b'] });
+    // The first pass opens the DM; the second posts the marker and the card.
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(JSON.stringify(f.cards.at(-1)!.blocks)).toContain('Goes to: THERM, ECHO');
+    expect(f.cards.at(-1)!.text).toContain('choose per item in the ECHO desktop app');
+    const g = fixture();
+    g.stage('apr_alone');
+    await g.presenter.reconcile(signal()); await g.presenter.reconcile(signal());
+    expect(JSON.stringify(g.cards.at(-1)!.blocks)).toContain('Goes to: Only you');
+    // A suggestion the reviewer cannot name now is counted, never shown as Only you.
+    const h = fixture();
+    h.projects = [{ project_id: 'prj_a', name: 'THERM' }];
+    h.stage('apr_unnamed', { project_ids: ['prj_a', 'prj_gone'] });
+    await h.presenter.reconcile(signal()); await h.presenter.reconcile(signal());
+    expect(JSON.stringify(h.cards.at(-1)!.blocks)).toContain('Goes to: THERM, 1 other project');
+  });
+  it('names each destination of a decided approval on the closed card', async () => {
+    const f = fixture();
+    f.projects = [{ project_id: 'prj_a', name: 'THERM' }, { project_id: 'prj_b', name: 'ECHO' }];
+    const id = f.stage('apr_mixed', { status: 'approved', decided_on: 'slack', project_ids: ['prj_a', 'prj_b'], routes: [
+      { signal_id: 'd1', project_ids: ['prj_a'] }, { signal_id: 'd2', project_ids: null }, { signal_id: 'a1', project_ids: ['prj_a', 'prj_b'] },
+      { signal_id: 'a2', project_ids: [] }, { signal_id: 'a3', project_ids: ['prj_a'] }] });
+    f.db.prepare('INSERT INTO authority_approval_presentations_v1 VALUES (?,\'slack\',?,\'D1\',\'posted\',NULL,NULL,\'1.1\',\'hash\',\'open\',0,NULL,?,?)').run(id, JSON.stringify(target), '2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z');
+    f.db.prepare('INSERT INTO authority_approval_decisions_v1 VALUES (?,?)').run(id, 'approve');
+    await f.presenter.reconcile(signal());
+    expect(f.cards.at(-1)!.text).toBe('Approved in Slack\nSent to: THERM · THERM + ECHO · Only you');
+    const g = fixture();
+    const rejected = g.stage('apr_rejected', { status: 'rejected', decided_on: 'desktop', routes: [] });
+    g.db.prepare('INSERT INTO authority_approval_presentations_v1 VALUES (?,\'slack\',?,\'D1\',\'posted\',NULL,NULL,\'1.1\',\'hash\',\'open\',0,NULL,?,?)').run(rejected, JSON.stringify(target), '2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z');
+    g.db.prepare('INSERT INTO authority_approval_decisions_v1 VALUES (?,?)').run(rejected, 'reject');
+    await g.presenter.reconcile(signal());
+    expect(g.cards.at(-1)!.text).toBe('Rejected in the ECHO desktop');
   });
 });

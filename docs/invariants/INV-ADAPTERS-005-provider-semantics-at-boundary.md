@@ -185,7 +185,7 @@ Provider verification and wire/state interpretation are delegated to their
 provider folders. Adding a provider can require a new versioned domain capability,
 but cannot silently widen an existing canonical contract. V2 Person compatibility
 remains an explicit selection, with no permissive fallback. A meeting approval on
-any surface is recorded with the one neutral `echo-approval-decision-ref-v1`
+any surface is recorded with the one neutral `echo-approval-decision-ref-v2`
 proof. Historical signed bytes and SQL baselines remain unchanged.
 
 CODEOWNERS covers the provider tree, public contracts, bootstrap/source manifests,

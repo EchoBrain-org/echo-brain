@@ -23,7 +23,7 @@ import { FileOrganizationAuthoritySigner } from '../adapters/security/file-organ
 import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
-import { approvalProposalSummaryV1, approvalProposalTextV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
+import { approvalProposalSummaryV1, approvalReviewV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationAuthorityProcessingCycleV1 } from './organization-authority-service-lifecycle.js';
@@ -343,7 +343,23 @@ export function createPersonMeetingRuntimeV1(options: {
     catch (error) { if (error instanceof AuthorityOperationError) return false; throw error; }
   }
   function reviewView(view: ApprovalProposalViewV1): PersonMeetingReviewV2 {
-    return { approval_id: view.approval_id, title: view.title, project_ids: view.project_ids, status: view.status, decided_on: view.decided_on, ...approvalProposalSummaryV1(view.snapshot_json) };
+    return { approval_id: view.approval_id, title: view.title, project_ids: view.project_ids, status: view.status, decided_on: view.decided_on, ...approvalProposalSummaryV1(view.snapshot_json),
+      records: view.records.map(record => ({ approval_id: record.approval_id, project_ids: record.project_ids })) };
+  }
+  /**
+   * The card's items: every decision and action in brief order with where it goes. Pending, each starts at the suggestion
+   * the reviewer can read now ([] = Only me) and an action's owner is the meeting's proposal, editable; decided, each shows
+   * its route (null = not kept) and its confirmed owner. A rejection kept nothing.
+   */
+  function reviewItems(view: ApprovalProposalViewV1, proposed: ReadonlyMap<string, string>): PersonMeetingResultsV2['review_open']['items'] {
+    const routes = new Map((view.routes ?? []).map(route => [route.signal_id, route.project_ids]));
+    const confirmed = new Map((view.confirmed_owners ?? []).map(owner => [owner.signal_id, owner.owner]));
+    const decided = view.routes !== null;
+    return approvalReviewV1(view.snapshot_json).items.map(item => {
+      const owner = item.kind !== 'action' ? null : (decided ? confirmed.get(item.signal_id) : proposed.get(item.signal_id)) ?? null;
+      return { ...item, owner, owner_editable: view.status === 'pending' && owner !== null,
+        project_ids: decided ? routes.get(item.signal_id) ?? null : view.project_ids };
+    });
   }
   const application: ProviderHttpApplicationV1 = {
     routes: [{ route_id: 'personal-meetings', method: 'POST', path: PERSON_MEETINGS_PATH_V2 }],
@@ -372,16 +388,21 @@ export function createPersonMeetingRuntimeV1(options: {
             annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', input.approval_id), approval_surface: 'desktop' });
             const projects = new SqlitePersonListDirectoryV1(db).joinedProjects(options.sessions.authenticateAccess({ access_token: token })).projects;
             const names = new Map(projects.filter(project => project.status === 'active').map(project => [project.project_id, project.name]));
-            const opened = { review: reviewView(view), snapshot_sha256: view.snapshot_sha256, content: approvalProposalTextV1(view.snapshot_json),
-              owners: approvalCore.ownerProposals(input.approval_id), suggested_projects: view.project_ids.flatMap(project_id => {
+            const review = approvalReviewV1(view.snapshot_json);
+            const items = reviewItems(view, new Map(approvalCore.ownerProposals(input.approval_id).map(owner => [owner.signal_id, owner.proposed])));
+            // Names for the projects the items name, as far as the reviewer can read them: a suggestion is never access.
+            const named = [...new Set(items.flatMap(item => item.project_ids ?? []))].sort();
+            const row = reviewView(view);
+            const opened = { review: row, snapshot_sha256: view.snapshot_sha256, participants: review.participants, items, reasons: review.reasons,
+              suggested_projects: named.flatMap(project_id => {
                 const name = names.get(project_id as `prj_${string}`); return name === undefined ? [] : [{ project_id: project_id as `prj_${string}`, name }];
-              }) };
+              }), records: row.records };
             annotateCoreRuntimeV1({ result: 'returned' });
             return opened;
           });
           const action = input;
           const decided = approvalCore.decide('desktop', { approval_id: action.approval_id, command_id: action.command_id, snapshot_sha256: action.snapshot_sha256 as `sha256:${string}`,
-            action: action.action, project_ids: action.project_ids, share_transcript: action.share_transcript, owners: action.owners }, () => {
+            action: action.action, routes: action.routes, owners: action.owners }, () => {
             current(); const a = authenticate(token);
             return { actor: { organization_id: a.organization_id, principal_id: a.principal_id, membership_id: a.membership_id }, evidence: { kind: 'person-session', sha256: a.authorization_sha256 } };
           });

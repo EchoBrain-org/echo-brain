@@ -1,10 +1,11 @@
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
+import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { enqueueApprovedRecordRunV1, SqliteTriggerRunsV1 } from '../../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { approvalCoreFixture } from './approval-core.js';
 
 const signal = () => new AbortController().signal;
 
-/** Published approvals of the fixture's person, each with its pending approved-record run, on a clock the test moves. */
+/** Published approvals of the fixture's person, each routed Only me (one record) with its pending approved-record run, on a clock the test moves. */
 export async function approvedRunFixture(options: { readonly runs?: number; readonly now?: string } = {}) {
   let now = new Date(options.now ?? '2026-10-07T10:00:00.000Z');
   const f = await approvalCoreFixture();
@@ -19,8 +20,10 @@ export async function approvedRunFixture(options: { readonly runs?: number; read
   await publisher.appendFinalizedApprovalsToV4(signal());
   return {
     ...f, runs, approvals,
+    /** The first approval's one record: its own approval id, the run's event_ref. */
+    recordApprovalId: approvalRecordIdV2(f.approvalId, []),
     /** The first approval's published record. */
-    recordSha256: f.db.prepare('SELECT record_sha256 FROM authority_trigger_runs_v1 WHERE event_ref=?').pluck().get(f.approvalId) as Sha256Digest,
+    recordSha256: f.db.prepare('SELECT record_sha256 FROM authority_trigger_runs_v1 WHERE event_ref=?').pluck().get(approvalRecordIdV2(f.approvalId, [])) as Sha256Digest,
     owner: f.person,
     stranger: { ...f.person, principal_id: 'prn_00000000-0000-4000-8000-0000000000f1', membership_id: 'mem_00000000-0000-4000-8000-0000000000f2' },
     clock: () => now,

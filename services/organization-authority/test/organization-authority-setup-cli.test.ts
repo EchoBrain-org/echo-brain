@@ -18,6 +18,7 @@ import {
   sha256Digest,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
+import { approvalRecordIdV2 } from "@echo-brain/organization-protocol";
 import {
   buildReadableSearchGenerationV1,
   READABLE_SEARCH_CONTENT_BASELINE_V2,
@@ -278,7 +279,8 @@ function buildInputForCanary(
 type SetupManifest = ReturnType<typeof readOrganizationAuthoritySetupManifest>;
 type RecordHead = { position: number; record_sha256: Sha256Digest };
 
-/** Appends one approved V4 record per entry, each after the previous; returns the head. */
+/** Appends one approved V4 record per entry, each after the previous; returns the head. Each is its proposal's one record:
+ *  it carries its destination's approval id and names the proposal it decided. */
 function appendApprovedRecords(
   state: string,
   manifest: SetupManifest,
@@ -304,7 +306,7 @@ function appendApprovedRecords(
           envelope_id: entry.envelope_id,
           event: { kind: "approved" },
           semantic_idempotency_key: entry.semantic_sha256,
-          human_act_resolution_ref: { approval_id: entry.approval_id, action: "approve" },
+          human_act_resolution_ref: { approval_id: approvalRecordIdV2(entry.approval_id, []), proposal_approval_id: entry.approval_id, action: "approve" },
           predecessor_position: head?.position ?? null,
           predecessor_record_sha256: head?.record_sha256 ?? null,
         },
@@ -338,7 +340,7 @@ function appendApprovedRecords(
         .run(
           position,
           entry.envelope_id,
-          entry.approval_id,
+          approvalRecordIdV2(entry.approval_id, []),
           entry.semantic_sha256,
           envelope,
           sha256Digest(envelope),

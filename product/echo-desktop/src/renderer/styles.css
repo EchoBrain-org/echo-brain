@@ -915,6 +915,25 @@ button.items-line:hover { background: var(--raise); }
 .card-owner:focus-within { border-color: var(--control); }
 .card-owner input { width: 110px; padding: 0; border: 0; outline: none; font-size: 13.5px; background: transparent; user-select: text; }
 .card-owner input:focus-visible { outline: none; }
+/* Where an item goes: a chip that reads as a choice, opening Only me, your projects and Don't keep. Not kept is faint. */
+.route { position: relative; flex-shrink: 0; }
+.route-chip { max-width: 190px; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; font-size: 12.5px; font-weight: 500; color: var(--text); background: var(--field); white-space: nowrap; }
+.route-chip .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.route-chip svg { flex-shrink: 0; color: var(--muted); }
+.route-chip:hover:not(:disabled) { background: var(--hover); }
+.route-chip[aria-expanded="true"] { border-color: var(--control); }
+.route-chip:disabled { cursor: default; opacity: 0.6; }
+.route-chip.dropped { color: var(--faint); font-weight: 400; }
+.route-chip.still { border-color: transparent; background: var(--selected); }
+.route-menu { top: 32px; width: 260px; max-height: 340px; overflow-y: auto; gap: 2px; }
+/* A list clips its rows' corners; an open menu must not be clipped with them. */
+.card-list:has(.route-menu) { overflow: visible; }
+.route-menu .menu-item[aria-pressed="true"] { font-weight: 600; }
+.route-menu .project-ticks { max-height: 200px; }
+.route-all { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.route-all .route-chip { max-width: 200px; }
+.route-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
+.card-owner.still { padding-right: 10px; border-color: transparent; font-size: 13.5px; color: var(--muted); background: transparent; }
 .card-panel { display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
 .card-panel .primary-button { height: 40px; border-radius: 9px; font-size: 14px; }
 .card-panel .plain-button { height: 38px; border-radius: 9px; font-size: 14px; }

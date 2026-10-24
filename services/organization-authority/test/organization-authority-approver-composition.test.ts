@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { JsonObject } from "@echo-brain/federation-protocol";
-import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID } from "@echo-brain/organization-protocol";
+import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, approvalRecordIdV2 } from "@echo-brain/organization-protocol";
 import { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { verifyOrganizationRecordEnvelopeV4 } from "../../../packages/organization-protocol/src/record-envelope-v4.js";
 import { COORDINATES, database as recordDatabase, protocolAuthority } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
@@ -17,6 +17,8 @@ const config = {
 } as OrganizationAuthorityServiceConfig;
 const APPROVER = { principal_id: "prn_approver", membership_id: "mem_approver" };
 const SHARED = "prj_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+/** The one record of apr_composed, every item sent to SHARED, carries its destination's approval id. */
+const RECORD_ID = approvalRecordIdV2("apr_composed", [SHARED]);
 
 /** One approval decision, signed and appended as the publisher would, and its stored canonical envelope. */
 async function publishedDecision() {
@@ -40,15 +42,15 @@ describe("Authority record protocol composition", () => {
     const { envelope, signer } = await publishedDecision();
     const { runtimeConfig, approver } = await composed();
     const verified = verifyOrganizationRecordEnvelopeV4(envelope, signer.pinned, COORDINATES.state_lineage_id, runtimeConfig.record_input_codecs);
-    expect(verified.body.human_act_resolution_ref.kind).toBe("echo-approval-decision-ref-v1");
+    expect(verified.body.human_act_resolution_ref.kind).toBe("echo-approval-decision-ref-v2");
     expect(runtimeConfig.record_policy_fact_projectors!.policyBinding(verified as never).policy_id).toBe(PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID);
-    expect(approver(envelope)).toEqual({ ...COORDINATES, approval_id: "apr_composed", ...APPROVER });
+    expect(approver(envelope)).toEqual({ ...COORDINATES, approval_id: RECORD_ID, ...APPROVER });
   });
   it("composes an injected approver beside the approval decision approver", async () => {
     const { envelope } = await publishedDecision();
     const alternate = { ...COORDINATES, approval_id: "alternate", ...APPROVER };
     const { approver } = await composed({ api: { record_approver: value => value.protocol === "alternate" ? alternate : undefined } });
-    expect(approver(envelope)).toEqual({ ...COORDINATES, approval_id: "apr_composed", ...APPROVER });
+    expect(approver(envelope)).toEqual({ ...COORDINATES, approval_id: RECORD_ID, ...APPROVER });
     expect(approver({ protocol: "alternate" })).toEqual(alternate);
     expect(approver({ protocol: "unknown" })).toBeUndefined();
   });

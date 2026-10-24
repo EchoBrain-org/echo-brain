@@ -59,19 +59,25 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   decided, numbered (a decision still proposed or unresolved says so), and
   what is to be done, with a due date when the meeting set one and an owner
   you can retype where ECHO proposed one; what was said in the meeting, and
-  the reasons given, open on demand. On the right sit **Seen by** (Only me or
-  projects; it starts on the projects the meeting suggests, ticked, when any
-  is one of your active projects), transcript sharing, **Approve** (off while
-  Projects is chosen and none is ticked) and **Reject**, and who was in the
-  meeting. The card reads the proposal text the Authority sends, where every
-  line after the first of a text or quote is indented, so the meeting's own
-  words never read as another item; a text it cannot read shows as written.
-- **Checking**: a meeting you approved, while its record publishes and its
-  impact check runs. It has no action and is not counted.
-- **Check failed** (verb **Retry**): "Approved · the check did not finish". It
-  opens the decision with the reason and **Try again**; once the check
-  finishes, the page shows the meeting's follow-ups in one line ("Follow-ups ·
-  4 not sent"), the whole line opening their list.
+  the reasons given, open on demand. Each decision and action has a
+  destination chip: Only me, one or more of your projects, or Don't keep. It
+  starts on the projects the meeting suggests that you are still in, and on
+  Only me when there are none. On the right sit **All items** (one chip for
+  every kept item, "Mixed" when they differ), a line saying where Approve
+  sends them ("2 to Thermostat redesign · 1 not kept"), **Approve** (off while
+  nothing is kept) and **Reject**, and who was in the meeting. Nothing on the
+  card shares the transcript. The card reads each item, quote and reason as
+  its own field of the review the Authority sends, so the meeting's own words
+  never read as another item.
+- **Checking**: a meeting you approved, while its records publish (one per
+  destination) and their impact checks run. It has no action and is not
+  counted.
+- **Check failed** (verb **Retry**): "Approved · the check did not finish",
+  when any destination's check failed. It opens the decision, where each
+  destination has its own check: a failed one gives the reason and **Try
+  again**; a finished one shows that destination's follow-ups in one line
+  ("Follow-ups · 4 not sent"), the whole line opening their list. Below them,
+  every item shows where it went.
 - **Send**: a meeting you approved has follow-ups not sent yet ("Launch the
   pilot next week — 4 follow-ups to send"). It opens that meeting's
   follow-ups.
@@ -124,9 +130,10 @@ Pilot planning") until the read answers; live reads wait while another app is
 in front. A read of rows that fails says so, and **Try again** repeats that
 read; a live read that fails only leaves its rows saying ECHO couldn't read
 them just now. A meeting's list says when it was approved:
-"Approved Oct 6", a faint link to its decision page (over the list, so Back
-returns to it, and its follow-ups line goes back to the list) when you
-approved it. A Not sent row you may send has a tick, and a meeting's list
+"Approved Oct 6", a faint link to its decision page (the whole meeting, each
+destination with its own check; over the list, so Back returns to it, and that
+destination's follow-ups line goes back to the list) when you approved it. A
+meeting sent to several destinations has a record, and so a list, for each. A Not sent row you may send has a tick, and a meeting's list
 ticks them all when it opens; **Send N** sends the ticked rows to their
 owners and **Dismiss N** dismisses them, the rest stay Not sent. The owner
 chip changes the owner at once, before or after sending, from a people picker
