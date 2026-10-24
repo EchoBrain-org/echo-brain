@@ -244,7 +244,8 @@ sheet comes back only for one whose outcome needs you (Try again, Check status,
 Skip…), and otherwise closes by itself. Toasts that confirm something go after
 a few seconds; warnings stay until the next page.
 
-Tools → Granola manages folder watching and individual meeting imports. Home and
+Tools → Granola turns on automatic import (your meetings or one folder) and adds
+single meetings; both stay private until you approve their items. Home and
 decision content is covered while another app is in front, and is read again,
 unfinished checks included, when ECHO returns.
 
