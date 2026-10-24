@@ -199,27 +199,28 @@ The ordinary runtime no longer selects an organization Granola export bridge
 or requires its credentials. Generic source admission and the approval core
 remain, as does the staging-only synthetic personal meeting source. Meetings
 enter only through a person's own sources; no organization meeting source
-exists. Personal Granola OAuth and
-selected-folder intake are specified by the
+exists. Personal Granola OAuth is specified by the
 [Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)
-and implemented through [ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md).
+and [ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md);
+private intake, watches and pasted meetings by
+[ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md).
 The shared personal connection lifecycle, bounded JSON/MCP transport, Authority
 source processing, native review and original-context readers own the workflow.
-Granola supplies verified account/workspace, folder enumeration and meeting
-normalization. Imported notes are labeled unapproved; transcript release still
-requires an explicit approval choice. This is separate from the dormant general
-capture routes.
+Granola supplies verified account/workspace, folder enumeration, a paged
+`list_meetings` window and meeting normalization. A watch is off, the person's
+own meetings or one folder, over the last 7 days; a project named with it is
+only a suggestion. Imported notes are labeled unapproved and readable by their
+importer alone; nothing shares a transcript. The `hand-in` source takes a
+meeting pasted from any tool through the same custody. This is separate from
+the dormant general capture routes.
 
-Granola network cost is explicit: home uses 3 MCP calls; folder browse uses 4;
-a transient preview uses 3; an explicit background import uses 4. Watch setup
-uses 4 calls to validate account and folder access, then saves a pending baseline
-for the existing worker. A full background baseline or unchanged scan of N
-meetings uses `7 + ceil(N/10) + N` MCP calls
-(account, folder membership before/after, batched notes and individual transcripts).
-Each MCP call also uses one existing Nango connection lookup with current tag
-verification. A changed scan stops at its first differing meeting and a later
-worker turn continues. No request-level token cache hides remote revocation.
-Current limits and live qualification remain in the sprint brief.
+Granola network cost is explicit. A watch pass lists its window (one call per
+200 meetings, at most 200) and reads in detail only a meeting that is new or
+whose `updated_at` changed and has settled for 10 minutes: one notes call and
+one transcript call per 80,000 characters. Watch setup reads the same window to
+check its size. Each MCP call also uses one existing Nango connection lookup
+with current tag verification. No request-level token cache hides remote
+revocation.
 
 ## Ownership and Nango
 

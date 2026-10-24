@@ -225,7 +225,8 @@ Answer it directly rather than deflecting:
 
 - Approval is per-decision knowledge admission, not meeting review. The card
   already contains the extracted decisions, actions, dates, rationale, and
-  evidence; reading it and choosing a visibility takes seconds per meeting.
+  evidence; reading it and choosing where each item goes takes seconds per
+  meeting.
 - The owner approves once. After that, nobody downstream re-derives, re-checks,
   or re-shares the fact by hand.
 - That human moment is exactly what makes the answers trustworthy enough to act

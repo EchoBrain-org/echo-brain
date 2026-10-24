@@ -94,8 +94,10 @@ adapter binding or approve/reject grant. Meeting approvals are decided in the
 desktop app or, for a reviewer who linked Slack, on an optional signed Block
 Kit DM copy; the first decision wins. The
 [approval core](meeting-processing-core-and-adapters.md#current-composition)
-describes the audience, transcript and owner choices both surfaces offer
-([ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md)).
+describes the per-item destination and owner choices the desktop offers and
+the Slack copy's approve-as-suggested
+([ADR-0031](../decisions/ADR-0031-unified-meeting-approval-core.md),
+[ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)).
 
 Jira is a person-bound read connection, not an organization tool:
 `echo-brain person tools connect --tool jira` binds one membership's Nango-held
