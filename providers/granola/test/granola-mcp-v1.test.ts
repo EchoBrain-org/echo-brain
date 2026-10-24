@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
 import type { LlmProviderClient, StructuredGenerationRequest } from '@echo-brain/organization-processing/llm/llm-provider';
-import { createGranolaMcpV1, granolaMcpMeetingContentV1, granolaMeetingUnreadableV1, parseGranolaMeetingPageV1, type GranolaMeetingV1 } from '../src/granola-mcp-v1.js';
+import { createGranolaMcpV1, granolaMcpMeetingContentV1, granolaMeetingUnreadableV1, granolaTranscriptPendingV1, parseGranolaMeetingPageV1, type GranolaMeetingV1 } from '../src/granola-mcp-v1.js';
 import { normalizeGranolaMeetingV1 } from '../src/granola-meeting-normalizer-v1.js';
 
 const id = '00000000-0000-4000-8000-000000000001';
@@ -208,17 +208,35 @@ describe('one meeting\'s large or unnormalized fields never fail its read', () =
     expect(normalized.participants).toHaveLength(people);
     expect(normalized.participants.at(-1)).toMatchObject({ display_name: `Person ${people - 1}`, identities: [{ kind: 'email', value: `person${people - 1}@example.test` }] });
   });
+  it('reads a long transcript page by page from next_offset, joining turns, and continues a turn split across pages', async () => {
+    const page = (fields: Record<string, unknown>) => warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', ...fields });
+    const f = scripted(page({ transcript: 'Microphone: one.', truncated: true, next_offset: 16 }), page({ transcript: 'System audio: two, and', truncated: true, next_offset: 38, ends_mid_utterance: true }),
+      page({ transcript: ' three.', truncated: false, starts_mid_utterance: true }));
+    expect(await f.adapter.transcript(id)).toEqual({ text: 'Microphone: one.\n\nSystem audio: two, and three.', created_at: '2026-10-05T20:00:00.000Z' });
+    expect(f.calls().map(call => call.arguments)).toEqual([
+      { meeting_id: id, max_chars: 80_000 }, { meeting_id: id, max_chars: 80_000, offset: 16 }, { meeting_id: id, max_chars: 80_000, offset: 38 }]);
+  });
+  it('reads no transcript as none when Granola says so, as pending while it processes, and refuses an unexplained null', async () => {
+    const answer = (fields: Record<string, unknown>) => fixture(warning + JSON.stringify({ id, title: 'Fixture', transcript: null, ...fields })).adapter.transcript(id);
+    expect(await answer({ transcript_unavailable: { reason: 'no_transcript', message: 'No transcript.' } })).toBeNull();
+    expect(await answer({ transcript_unavailable: { reason: 'transcript_deleted', message: 'Deleted.' } })).toBeNull();
+    const pending = await answer({ transcript_unavailable: { reason: 'transcript_pending', message: 'Syncing.' } }).catch((error: unknown) => error);
+    expect(granolaTranscriptPendingV1(pending)).toBe(true);
+    expect(granolaMeetingUnreadableV1(pending)).toBe(false);
+    await expect(answer({})).rejects.toMatchObject({ code: 'invalid_output' });
+    await expect(answer({ transcript_unavailable: { reason: 'something_else' } })).rejects.toMatchObject({ code: 'invalid_output' });
+  });
   it('keeps the start of a transcript over 256 KiB, cut between turns or at a character boundary', async () => {
     const transcript = (text: string) => fixture(warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', transcript: text })).adapter.transcript(id);
     const turns = Array.from({ length: 300 }, (_, index) => `${index % 2 === 0 ? 'Microphone' : 'System audio'}: ${'We go over the plan once more. '.repeat(30)}Turn ${index}.`);
     expect(Buffer.byteLength(turns.join('\n\n'), 'utf8')).toBeGreaterThan(256 * 1024);
-    const { text } = await transcript(turns.join('\n\n'));
+    const { text } = (await transcript(turns.join('\n\n')))!;
     const head = text.split('\n\n');
     expect(head).toEqual(turns.slice(0, head.length));
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(256 * 1024);
     expect(Buffer.byteLength(turns.slice(0, head.length + 1).join('\n\n'), 'utf8')).toBeGreaterThan(256 * 1024);
     // One turn longer than the cap keeps whole characters: é is two bytes in UTF-8.
-    expect((await transcript('é'.repeat(140_000))).text).toBe('é'.repeat(128 * 1024));
+    expect((await transcript('é'.repeat(140_000)))!.text).toBe('é'.repeat(128 * 1024));
   });
   it('reads a title that is not NFC, has controls, or is over 1 KiB, without failing its page', () => {
     // 'Plan ' × 204 is 1,020 bytes; é makes 1,022, and the three-byte € would end past 1,024, so the cut falls before it.

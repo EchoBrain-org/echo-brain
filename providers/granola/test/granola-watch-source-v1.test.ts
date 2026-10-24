@@ -18,11 +18,19 @@ function granolaFailure(answer: string | number): Promise<unknown> {
   return createGranolaMcpV1({ binding, fetch }).meeting(a).then(() => { throw new Error('expected a failure'); }, (error: unknown) => error);
 }
 
+/** What Granola's transcript read raises or returns when it answers with `answer`. */
+function granolaTranscript(answer: Record<string, unknown>): Promise<unknown> {
+  const fetch = vi.fn(async (_url: string, init: RequestInit) => Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body as string).id, result: { content: [{ type: 'text', text: JSON.stringify({ id: a, ...answer }) }] } }));
+  return createGranolaMcpV1({ binding, fetch }).transcript(a).catch((error: unknown) => error);
+}
+
 function fixture() {
   let now = NOW, active = true, duringRead: (() => void) | undefined;
   // The window as Granola lists it, newest first, each meeting's summary, and the reads that fail.
   let listed: GranolaMeetingV1[] = [];
   const summaries = new Map<string, string>(), failures = new Map<string, unknown>(), reads: string[] = [], windows: unknown[] = [];
+  // A meeting's transcript read: an error, or null for a meeting Granola has no transcript of.
+  const transcripts = new Map<string, unknown>();
   const row = (id: string, updated_at?: string): GranolaMeetingV1 => ({ id, title: 'Fixture', date: 'Oct 24, 2026 9:00 AM PDT', url: `https://notes.granola.ai/d/${id}`,
     known_participants: '', ...(updated_at === undefined ? {} : { updated_at }) });
   const current = () => { if (!active) throw new Error('revoked'); };
@@ -35,7 +43,11 @@ function fixture() {
         if (failures.has(id)) throw failures.get(id);
         return { ...row(id), summary: summaries.get(id) ?? 'Decided to ship.' };
       },
-      transcript: async () => ({ text: 'Fixture transcript', created_at: '2026-10-24T16:00:00.000Z' }),
+      transcript: async (id: string) => {
+        const answer = transcripts.get(id);
+        if (answer instanceof Error) throw answer;
+        return answer === null ? null : { text: 'Fixture transcript', created_at: '2026-10-24T16:00:00.000Z' };
+      },
     },
   };
   const source = (watch: GranolaWatchV1 = MINE) => new GranolaWatchSourceV1(identity, watch, async () => session, current, () => now);
@@ -43,6 +55,7 @@ function fixture() {
     list: (...rows: GranolaMeetingV1[]) => { listed = rows; },
     edit: (id: string, summary: string) => { summaries.set(id, summary); },
     fail: (id: string, error: unknown) => { failures.set(id, error); }, readable: (id: string) => { failures.delete(id); },
+    transcript: (id: string, answer: Error | null | undefined) => { if (answer === undefined) transcripts.delete(id); else transcripts.set(id, answer); },
     later: (minutes: number) => { now += minutes * 60_000; },
     revoke: () => { active = false; }, duringRead: (fn: () => void) => { duringRead = fn; } };
 }
@@ -180,6 +193,32 @@ describe('Granola watch over a rolling window, through the shared source cursor'
     expect(f.reads).toEqual([d, d]);
     f.readable(d);
     expect(ids(await source.pull({ cursor: baseline.next_cursor }))).toEqual([d]);
+  });
+  it('leaves a meeting whose transcript Granola is still processing for a later pull, without passing it over', async () => {
+    const f = fixture(), source = f.source();
+    const baseline = await source.pull({});
+    const pending = await granolaTranscript({ transcript: null, transcript_unavailable: { reason: 'transcript_pending', message: 'Still syncing.' } });
+    expect(pending).toMatchObject({ code: 'unavailable' });
+    f.transcript(b, pending as Error); f.list(f.row(b, ago(30)), f.row(c, ago(40)));
+    // The pending meeting is neither imported nor recorded, and the next one still imports in the same pull.
+    const first = await source.pull({ cursor: baseline.next_cursor });
+    expect(ids(first)).toEqual([c]);
+    expect(readGranolaCheckpointV1(first.next_cursor!).seen).toEqual({ [c]: ago(40) });
+    expect((await source.pull({ cursor: first.next_cursor })).meetings).toEqual([]);
+    f.transcript(b, undefined);
+    expect(ids(await source.pull({ cursor: first.next_cursor }))).toEqual([b]);
+  });
+  it('imports a meeting Granola has no transcript of with its notes alone', async () => {
+    const f = fixture(), source = f.source();
+    const baseline = await source.pull({});
+    for (const reason of ['no_transcript', 'transcript_deleted']) {
+      expect(await granolaTranscript({ transcript: null, transcript_unavailable: { reason, message: 'None.' } })).toBeNull();
+    }
+    f.transcript(b, null); f.list(f.row(b, ago(30)));
+    const [meeting] = (await source.pull({ cursor: baseline.next_cursor })).meetings;
+    expect(meeting!.provenance.external_id).toBe(b);
+    expect(meeting!.content.some(block => block.kind === 'transcript')).toBe(false);
+    expect(meeting!.content.some(block => block.kind === 'summary')).toBe(true);
   });
   it('keeps a queued import that cannot be read queued: a failed read is not deletion evidence', async () => {
     const f = fixture(), off = f.source({ watch: 'off', folder_id: null }), unusable = await granolaFailure('<meetings_data count="2"></meetings_data>');

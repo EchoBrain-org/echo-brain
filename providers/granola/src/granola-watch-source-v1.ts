@@ -2,7 +2,7 @@ import { canonicalJson } from '@echo-brain/federation-protocol';
 import type { AdapterConfig, AdapterOperationContext, MeetingDocument, MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import type { GranolaPersonConnectionV1 } from './granola-person-connection-v1.js';
-import { GRANOLA_ID_V1, GRANOLA_PERSON_PROVIDER_V1, GRANOLA_TIMESTAMP_V1, granolaMcpMeetingContentV1, granolaMeetingUnreadableV1 } from './granola-mcp-v1.js';
+import { GRANOLA_ID_V1, GRANOLA_PERSON_PROVIDER_V1, GRANOLA_TIMESTAMP_V1, granolaMcpMeetingContentV1, granolaMeetingUnreadableV1, granolaTranscriptPendingV1 } from './granola-mcp-v1.js';
 import { normalizeGranolaMeetingV1 } from './granola-meeting-normalizer-v1.js';
 
 /** What a personal Granola source watches: nothing, the meetings its person captured, or one folder. */
@@ -33,6 +33,8 @@ const MAX_PASSED_OVER = 5;
 const MARK = /^sha256:[a-f0-9]{64}$/;
 /** The mark of a meeting without `updated_at` whose content cannot be read: never a real revision, so a readable one imports. */
 const UNREADABLE = `sha256:${'0'.repeat(64)}`;
+/** A meeting whose transcript Granola is still processing: neither seen nor passed over, so a later pull reads it again. */
+const PENDING = Symbol('transcript pending');
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const isInstant = (value: unknown): value is string => typeof value === 'string' && INSTANT.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 /** A Granola time as a UTC instant, so a changed time zone is no edit; undefined when it is missing or unreadable. */
@@ -142,7 +144,7 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
       const since = checkpoint.since === null ? Number.POSITIVE_INFINITY : Date.parse(checkpoint.since);
       for (const meeting of listed) {
         const at = instant(meeting.updated_at);
-        if (at === undefined) seen[meeting.id] = (await this.attempt(session, meeting.id, operation))?.provenance.canonical_revision ?? UNREADABLE;
+        if (at === undefined) { const read = await this.attempt(session, meeting.id, operation); seen[meeting.id] = read === undefined || read === PENDING ? UNREADABLE : read.provenance.canonical_revision; }
         else if (Date.parse(at) < since) seen[meeting.id] = at;
       }
     } else {
@@ -155,6 +157,7 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
         if (at !== undefined && (seen[meeting.id] === at || Date.parse(at) > now - SETTLE_MS)) continue;
         // Without a readable updated_at, only the content tells an edit apart; such a meeting counts as settled.
         const read = await this.attempt(session, meeting.id, operation);
+        if (read === PENDING) continue;
         const mark = at ?? read?.provenance.canonical_revision ?? UNREADABLE;
         if (seen[meeting.id] === mark) continue;
         // An unreadable meeting is recorded too: at its listed updated_at, so only a later edit tries it again; without
@@ -168,10 +171,17 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
     return { meetings: selected === undefined ? [] : [selected],
       next_cursor: writeGranolaCheckpointV1({ mode: checkpoint.mode, folder: checkpoint.folder, baseline: true, since: checkpoint.since, seen, manual: [] }) };
   }
-  /** The meeting, or undefined when Granola's answer for it can never be read (an outage or changed access still fails the pull). */
-  private async attempt(session: GranolaWatchReadSessionV1, meetingId: string, operation?: AdapterOperationContext): Promise<MeetingDocument | undefined> {
+  /**
+   * The meeting; undefined when Granola's answer for it can never be read; PENDING while its transcript is still processing.
+   * An outage or changed access still fails the pull.
+   */
+  private async attempt(session: GranolaWatchReadSessionV1, meetingId: string, operation?: AdapterOperationContext): Promise<MeetingDocument | undefined | typeof PENDING> {
     try { return await this.read(session, meetingId, operation); }
-    catch (error) { if (granolaMeetingUnreadableV1(error)) return undefined; throw error; }
+    catch (error) {
+      if (granolaTranscriptPendingV1(error)) return PENDING;
+      if (granolaMeetingUnreadableV1(error)) return undefined;
+      throw error;
+    }
   }
   private async read(session: GranolaWatchReadSessionV1, meetingId: string, operation?: AdapterOperationContext): Promise<MeetingDocument> {
     this.requireCurrent(); operation?.signal.throwIfAborted();

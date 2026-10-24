@@ -37,6 +37,10 @@ const MAX_LISTED = 200;
 const MAX_LISTED_PARTICIPANTS = 50;
 const MAX_FOLDERS = 200;
 const MAX_TEXT = 256 * 1024;
+/** Granola sends at most 80,000 transcript characters a call; eight pages more than cover the 256 KiB kept. */
+const TRANSCRIPT_PAGE_CHARS = 80_000;
+const MAX_TRANSCRIPT_PAGES = 8;
+const TRANSCRIPT_PENDING = 'Granola is still processing this transcript';
 const MAX_TITLE = 1024;
 const MAX_PARTICIPANTS = 16 * 1024;
 /** A detail read that answered without the meeting asked for: Granola no longer has it, or no longer shows it. */
@@ -94,6 +98,10 @@ function transcriptText(value: unknown): string {
  * A read of one meeting that fails the same way every time: Granola's answer for it is unusable, or a detail read
  * answered without it. A watch passes such a meeting over; an outage, a rate limit or changed access is not one.
  */
+/** A transcript Granola is still processing or syncing: a watch tries that meeting again on a later pull. */
+export function granolaTranscriptPendingV1(error: unknown): boolean {
+  return error instanceof AuthorityOperationError && error.code === 'unavailable' && error.message === TRANSCRIPT_PENDING;
+}
 export function granolaMeetingUnreadableV1(error: unknown): boolean {
   return error instanceof AuthorityOperationError && (error.code === 'invalid_output' || (error.code === 'not_found' && error.message === MEETING_MISSING));
 }
@@ -255,13 +263,33 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
     async meeting(meetingId: string, signal?: AbortSignal): Promise<GranolaMeetingV1> {
       return (await this.details([meetingId], signal))[0]!;
     },
-    async transcript(meetingId: string, signal?: AbortSignal): Promise<Readonly<{ text: string; created_at: string }>> {
+    /**
+     * The transcript's first whole turns within 256 KiB, read page by page, or null when the meeting has none: Granola's
+     * `no_transcript` and `transcript_deleted` are final. A transcript still processing fails as pending, for a later try.
+     */
+    async transcript(meetingId: string, signal?: AbortSignal): Promise<Readonly<{ text: string; created_at: string }> | null> {
       const key = id(meetingId);
-      const value = json(await rpc.call('get_meeting_transcript', { meeting_id: key }, signal));
-      if (value.id !== key) failure('invalid_output');
-      const created = string(value.created_at, 32);
-      if (!Number.isFinite(Date.parse(created)) || new Date(created).toISOString() !== created) failure('invalid_output');
-      return Object.freeze({ text: transcriptText(value.transcript), created_at: created });
+      let whole = '', created = '', offset = 0;
+      for (let page = 0; page < MAX_TRANSCRIPT_PAGES; page++) {
+        const value = json(await rpc.call('get_meeting_transcript', { meeting_id: key, max_chars: TRANSCRIPT_PAGE_CHARS, ...(page === 0 ? {} : { offset }) }, signal));
+        if (value.id !== key) failure('invalid_output');
+        if (value.transcript === null && page === 0) {
+          const reason = value.transcript_unavailable === undefined ? undefined : record(value.transcript_unavailable).reason;
+          if (reason === 'no_transcript' || reason === 'transcript_deleted') return null;
+          if (reason === 'transcript_pending') throw new AuthorityOperationError('unavailable', TRANSCRIPT_PENDING);
+          failure('invalid_output');
+        }
+        if (typeof value.transcript !== 'string') failure('invalid_output');
+        if (page === 0) {
+          created = string(value.created_at, 32);
+          if (!Number.isFinite(Date.parse(created)) || new Date(created).toISOString() !== created) failure('invalid_output');
+        }
+        // Pages end between turns, unless one turn runs past a page and the next page continues it.
+        whole += whole === '' || value.starts_mid_utterance === true ? value.transcript : `\n\n${value.transcript}`;
+        if (value.truncated !== true || Buffer.byteLength(whole, 'utf8') >= MAX_TEXT) break;
+        offset = count(value.next_offset, Number.MAX_SAFE_INTEGER);
+      }
+      return Object.freeze({ text: transcriptText(whole), created_at: created });
     },
   });
 }
@@ -329,7 +357,7 @@ function knownParticipants(value: string): { name: string; email?: string }[] {
  * audio labels prove neither identity nor attendance: the people get no role,
  * and the labels stay verbatim text.
  */
-export function granolaMcpMeetingContentV1(meeting: GranolaMeetingV1, transcript?: Readonly<{ text: string; created_at: string }>): GranolaMeetingContentInputV1 {
+export function granolaMcpMeetingContentV1(meeting: GranolaMeetingV1, transcript?: Readonly<{ text: string; created_at: string }> | null): GranolaMeetingContentInputV1 {
   return {
     id: meeting.id, title: meeting.title, web_url: meeting.url,
     ...meetingStart(meeting.date),
@@ -337,6 +365,6 @@ export function granolaMcpMeetingContentV1(meeting: GranolaMeetingV1, transcript
     ...(meeting.private_notes === undefined ? {} : { private_notes_markdown: meeting.private_notes }),
     ...(meeting.summary === undefined ? {} : { summary_markdown: meeting.summary }),
     provider_fields: { mcp_date_label: meeting.date, mcp_known_participants: meeting.known_participants },
-    ...(transcript === undefined ? {} : { created_at: transcript.created_at, transcript: [{ text: transcript.text }] }),
+    ...(transcript === undefined || transcript === null ? {} : { created_at: transcript.created_at, transcript: [{ text: transcript.text }] }),
   };
 }
