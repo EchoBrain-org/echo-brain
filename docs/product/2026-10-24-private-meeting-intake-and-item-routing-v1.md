@@ -205,9 +205,12 @@ group order, and runs the after-record hooks once per record. The approval is
 The after-record event names the record approval id, the proposal approval
 id, the record digest, the reviewer and the decision time. The impact-check
 hook enqueues one run per record with `event_ref` = the record approval id;
-the database trigger finds that record in the decision's receipt. A run never
-offers the meeting's own records (its siblings) or their transcripts as
-follow-ups. Open items and follow-ups already work per record and follow each
+the database trigger finds that record in the decision's receipt. A run's
+research desk never offers the meeting's other records (its siblings), their
+transcripts, or the meeting's own source (its unapproved notes): researching
+as the reviewer could read them, and the card's own words reach the record's
+audience. A run never offers its siblings or their transcripts as follow-ups
+either. Open items and follow-ups already work per record and follow each
 record's audience.
 
 ### 2.5 Desktop

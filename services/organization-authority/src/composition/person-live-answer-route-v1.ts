@@ -13,7 +13,7 @@ import type {
   PersonAnswerHttpInputV1, PersonAnswerV4HttpApplication, PersonAnswerV5HttpApplication, PersonAnswerV6HttpApplication, PersonAnswerV7HttpApplication,
 } from '../presentation/person-live-answer-http-application.js';
 import { askerOf, personResearchDriverV1, runPersonAskV1, scopeOf, type CreatePersonAnswerV3RouteOptions } from './person-answer-v3-route.js';
-import { createPersonEvidenceDeskV1 } from './person-evidence-desk-v1.js';
+import { createPersonEvidenceDeskV1, type PersonEvidenceDeskExclusionsV1 } from './person-evidence-desk-v1.js';
 import { createPersonFollowUpsEvidenceSourceV1, type PersonFollowUpsSourcesV1 } from './person-follow-ups-evidence-v1.js';
 import { createRegisteredPersonLiveEvidenceDeskV2, type RegisteredPersonLiveEvidenceSourceV2 } from './person-live-evidence-desk-v2.js';
 import { observePersonLiveEvidenceV1 } from './person-live-evidence-observation-v1.js';
@@ -56,6 +56,11 @@ export async function bindPersonLiveEvidenceDeskV1(
      * items and the evidence doors never pass one.
      */
     readonly response_version?: number;
+    /**
+     * What the desk's ECHO records and originals never offer (an impact run's sibling records and its meeting's own
+     * source). Only trigger research passes it, and it binds neither follow-ups nor the workspace.
+     */
+    readonly exclude?: PersonEvidenceDeskExclusionsV1;
   },
   context: PersonLiveRequestContextV1,
 ) {
@@ -84,7 +89,8 @@ export async function bindPersonLiveEvidenceDeskV1(
     if (result.value !== undefined) bound.push(result.value);
   }
   input.signal?.throwIfAborted();
-  const base = createPersonEvidenceDeskV1({ access_token: input.access_token, scope, originals: options.originals, records: options.records });
+  const base = createPersonEvidenceDeskV1({ access_token: input.access_token, scope, originals: options.originals, records: options.records,
+    ...(input.exclude === undefined ? {} : { exclude: input.exclude }) });
   return createRegisteredPersonLiveEvidenceDeskV2(base, bound, followUpsFor(options, input, context), workspaceFor(options, input, context));
 }
 
@@ -96,7 +102,8 @@ export async function bindPersonLiveEvidenceDeskV1(
 function followUpsFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Parameters<typeof bindPersonLiveEvidenceDeskV1>[2], context: PersonLiveRequestContextV1) {
   const sources = options.follow_ups;
   const { scope } = input;
-  if (sources === undefined || (input.response_version ?? 0) < FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine') return undefined;
+  // A desk with exclusions binds none: a follow-up could name an excluded record.
+  if (sources === undefined || (input.response_version ?? 0) < FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine' || input.exclude !== undefined) return undefined;
   const authenticate = () => options.sessions.authenticateAccess({ access_token: input.access_token });
   const asker = authenticate();
   if (!samePersonV1(asker, context)) throw new AuthorityOperationError('stale_access_state', 'Follow-ups belong to another person');
@@ -112,7 +119,7 @@ function followUpsFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
 function workspaceFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Parameters<typeof bindPersonLiveEvidenceDeskV1>[2], context: PersonLiveRequestContextV1) {
   const sources = options.workspace;
   const { scope } = input;
-  if (sources === undefined || (input.response_version ?? 0) < WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine') return undefined;
+  if (sources === undefined || (input.response_version ?? 0) < WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine' || input.exclude !== undefined) return undefined;
   const authenticate = () => options.sessions.authenticateAccess({ access_token: input.access_token });
   const asker = authenticate();
   if (!samePersonV1(asker, context)) throw new AuthorityOperationError('stale_access_state', 'The workspace belongs to another person');

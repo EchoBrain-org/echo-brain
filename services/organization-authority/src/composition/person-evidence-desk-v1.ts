@@ -31,6 +31,19 @@ import {
   type PersonRecordSearchReleasePointerV1,
 } from "./person-record-search-route.js";
 
+/**
+ * What one desk never offers, whatever its scope can read: an approved record's impact run fences off its meeting's other
+ * records and the meeting's own source, so nothing routed elsewhere, or kept for the reviewer alone, reaches the record's
+ * audience through the card. Every read drops them before an item is kept, shown or opened, and a citation of one is
+ * refused before it is read.
+ */
+export interface PersonEvidenceDeskExclusionsV1 {
+  /** Approved records: their items, and the transcripts they shared (`transcript:<record_sha256>`). */
+  readonly records: readonly Sha256Digest[];
+  /** Original sources by source_id: the notes of every revision, and every transcript of it. */
+  readonly sources: readonly string[];
+}
+
 /** The V3 route creates one desk per request; actor, bearer and scope never
  * enter the model-facing methods. */
 export interface CreatePersonEvidenceDeskV1Options {
@@ -38,6 +51,7 @@ export interface CreatePersonEvidenceDeskV1Options {
   readonly scope: PersonAskScopeV2;
   readonly originals: PersonOriginalContextEvidenceDeskPortV1;
   readonly records: PersonEvidenceDeskRecordsV1;
+  readonly exclude?: PersonEvidenceDeskExclusionsV1;
 }
 
 /**
@@ -150,6 +164,10 @@ function balanced<T>(left: readonly T[], right: readonly T[]): readonly T[] {
  * use `openCitation` below to make a fresh scoped desk release.
  */
 export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Options): PersonEvidenceDeskV1 {
+  const excludedRecords = new Set<string>(options.exclude?.records ?? []);
+  const excludedSources = new Set<string>(options.exclude?.sources ?? []);
+  const offeredOriginal = (item: { readonly citation: { readonly source_id: string }; readonly ref?: string }) =>
+    !excludedSources.has(item.citation.source_id) && !(item.ref?.startsWith("transcript:") === true && excludedRecords.has(item.ref.slice("transcript:".length)));
   const stored = new Map<string, Stored>();
   const originalReleases: OriginalContextDeskReleaseV1[] = [];
   /** How many of `originalReleases` a successful check of this desk has covered. */
@@ -176,7 +194,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const originals = (release: OriginalContextDeskReleaseV1): readonly EvidenceDeskItemV1[] => {
     originalReleases.push(release);
     readUnchecked = mergeUncheckedV1([readUnchecked, release.unchecked]);
-    return release.items.map((value) => save(Object.freeze({
+    return release.items.filter(offeredOriginal).map((value) => save(Object.freeze({
       id: itemId(sourceCitation(value)), citation: sourceCitation(value), kind: value.kind,
       ...(value.text === undefined ? {} : { text: value.text }), label: value.label,
       visibility: value.visibility, receipt_sha256: release.receipt,
@@ -191,7 +209,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (pointer.generation_id !== result.release.active_pointer.generation_id || pointer.manifest_sha256 !== result.release.active_pointer.manifest_sha256 || pointer.record_head.position !== result.release.active_pointer.record_head.position || pointer.record_head.record_sha256 !== result.release.active_pointer.record_head.record_sha256) throw new AuthorityOperationError("unavailable", "record evidence snapshot changed");
     recordReleases.push(result.release);
     if (result.desk_items === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
-    return result.desk_items.map((value) => {
+    return result.desk_items.filter((value) => !excludedRecords.has(value.record_sha256)).map((value) => {
       const citation = recordCitation(value);
       return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, list_label: value.list_label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonOpenRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
     });
@@ -293,6 +311,10 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const openCitation = async (input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
     initialize();
+    // An excluded record or source is not read at all, as if it did not exist.
+    if (input.citation.kind === "approved_record" ? excludedRecords.has(input.citation.record_sha256) : excludedSources.has(input.citation.source_id)) {
+      throw new AuthorityOperationError("not_found", "evidence item is not available");
+    }
     if (input.citation.kind === "approved_record") {
       const expanded = options.records.openDeskCitation({ access_token: options.access_token, atom_id: input.citation.atom_id, record_sha256: input.citation.record_sha256, policy_id: input.citation.policy_id, ...recordScope(options.scope) });
       latestRecordTruncated = false;

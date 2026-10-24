@@ -16,6 +16,7 @@ import {
   PersonRecordSearchIndexLagV1, personRecordRunScopeV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordIndexReadinessV1, type PersonRecordProjectsV1,
 } from './person-record-search-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
+import type { PersonEvidenceDeskExclusionsV1 } from './person-evidence-desk-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonDiagnosticCaptureHandleV1 } from './person-diagnostics-v1.js';
@@ -143,14 +144,20 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     principal_id: authorization.principal_id, membership_id: authorization.membership_id, session_family_id: authorization.session_family_id, request_id: `trigger_run_${randomUUID()}`,
   });
   /** An impact run: the card the approver's research renders, and the open items it found, written as the run finishes. */
-  const checkImpact = async (row: TriggerRunRowV1, token: string, research: (scope: DeskScope) => Promise<RunResearch>, signal: AbortSignal): Promise<RunOutput> => {
+  const checkImpact = async (row: TriggerRunRowV1, token: string, research: (scope: DeskScope, exclude?: PersonEvidenceDeskExclusionsV1) => Promise<RunResearch>,
+    signal: AbortSignal): Promise<RunOutput> => {
     const record_sha256 = impactRecord(row);
     const anchor = options.records.recordAnchor({ access_token: token, record_sha256 });
     // The meeting's own actions, read as the approver before any model call (`recordAnchor` has already refused a record they
     // cannot read, which fails the run as no_access).
     const actions = options.records.recordActions({ access_token: token, record_sha256 });
     const scope = personRecordRunScopeV1(options.records, token, record_sha256);
-    const run = await research(scope);
+    // The meeting's other records (its siblings: the same meeting sent to other destinations, or kept for the approver
+    // alone) and the meeting's own source (its unapproved notes, any transcript of it). Research as the approver could read
+    // them, and the card's own words reach this record's audience, so the run's desk never offers them.
+    const siblings = options.runs.siblingRecords(row.actor, record_sha256);
+    const source = options.runs.meetingSource(row.actor, record_sha256);
+    const run = await research(scope, { records: siblings, sources: source === undefined ? [] : [source] });
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
     const event = definition.parseEvent({ record: anchor });
     const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, scope), renderer: definition.renderer!, trigger_input: event, signal });
@@ -158,8 +165,8 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     const outsideLabels = output.research.items
       .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
     const value = storableImpactCardV1(card, outsideLabels);
-    // The meeting's other records, read when the run finishes: its siblings never come back as follow-ups.
-    const candidates = itemCandidates(record_sha256, options.runs.siblingRecords(row.actor, record_sha256), card, value, actions);
+    // Nor do its siblings come back as follow-ups (the receipt that names them was written before the run was queued).
+    const candidates = itemCandidates(record_sha256, siblings, card, value, actions);
     const owners = candidates.length === 0 ? [] : await matchImpactOwnersV1({
       candidates,
       approver: { organization_id: row.actor.organization_id, membership_id: row.actor.membership_id },
@@ -182,8 +189,8 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       try {
         const requestContext = { ...context(authorization), request_id: `${row.run_id}_${attemptId}` };
         // Either trigger's research reads as the person who started the run, on one desk; a capture checks access on the same desk.
-        const research = async (scope: DeskScope): Promise<RunResearch> => {
-          const desk = await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal }, requestContext);
+        const research = async (scope: DeskScope, exclude?: PersonEvidenceDeskExclusionsV1): Promise<RunResearch> => {
+          const desk = await options.bindDesk(options.bind_options, compatible, { access_token: token, scope, signal: controller.signal, ...(exclude === undefined ? {} : { exclude }) }, requestContext);
           capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
           return options.research({ desk, context: requestContext });
         };
