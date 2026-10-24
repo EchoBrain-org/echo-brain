@@ -62,10 +62,14 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   the reasons given, open on demand. Each decision and action has a
   destination chip: Only me, one or more of your projects, or Don't keep. It
   starts on the projects the meeting suggests that you are still in, and on
-  Only me when there are none. On the right sit **All items** (one chip for
-  every kept item, "Mixed" when they differ), a line saying where Approve
-  sends them ("2 to Thermostat redesign · 1 not kept"), **Approve** (off while
-  nothing is kept) and **Reject**, and who was in the meeting. Nothing on the
+  Only me when there are none. A meeting names at most 20 projects in all;
+  there, a chip offers only the projects it already names ("Up to 20
+  projects."). On the right sit **All items** (one chip for every kept item,
+  "Mixed" when they differ, where a project only some have is part-ticked and
+  a tick adds or removes that project on every kept item, each keeping its
+  others), a line saying where Approve sends them, one count per destination
+  ("2 to Thermostat redesign · 1 not kept"), **Approve** (off while nothing
+  is kept) and **Reject**, and who was in the meeting. Nothing on the
   card shares the transcript. The card reads each item, quote and reason as
   its own field of the review the Authority sends, so the meeting's own words
   never read as another item.

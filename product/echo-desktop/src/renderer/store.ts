@@ -5117,8 +5117,8 @@ function routedItems(decision: DecisionState): readonly ReviewOpen['items'][numb
 export function keptItems(decision: DecisionState): readonly ReviewOpen['items'][number][] {
   return routedItems(decision).filter(item => (decision.routes[item.signal_id] ?? null) !== null);
 }
-/** Every project the routes name, each once. */
-function routedProjects(routes: Readonly<Record<string, Destination>>): Set<string> {
+/** Every project the routes name, each once: what counts toward the meeting's MAX_CAPTURE_PROJECTS. */
+export function routedProjects(routes: Readonly<Record<string, Destination>>): Set<string> {
   return new Set(Object.values(routes).flatMap(destination => destination ?? []));
 }
 /** Routes the card may send: at most MAX_CAPTURE_PROJECTS projects in all, as at most so many in one item. */
@@ -5150,12 +5150,20 @@ export function setDecisionRoutes(destination: Destination): void {
   const routes = { ...decision.routes, ...Object.fromEntries(targets.map(item => [item.signal_id, value])) };
   if (withinProjects(routes)) editChoices({ routes });
 }
-/** A project ticked or unticked on every kept item at once, from what they share: unticking the last leaves them Only me. */
+/**
+ * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects:
+ * one every kept item has comes off each, leaving an item with no other Only me; any other goes on each.
+ */
 export function tickDecisionRoutes(projectId: string): void {
   const decision = state.decision;
   if (!decision) return;
-  const shared = sharedDestination(decision) ?? [];
-  setDecisionRoutes(shared.includes(projectId) ? shared.filter(id => id !== projectId) : [...shared, projectId]);
+  const kept = keptItems(decision);
+  const off = kept.length > 0 && kept.every(item => decision.routes[item.signal_id]!.includes(projectId));
+  const routes = { ...decision.routes, ...Object.fromEntries((kept.length > 0 ? kept : routedItems(decision)).map(item => {
+    const others = (decision.routes[item.signal_id] ?? []).filter(id => id !== projectId);
+    return [item.signal_id, off ? others : [...others, projectId].sort()];
+  })) };
+  if (withinProjects(routes)) editChoices({ routes });
 }
 /** The one destination every kept item has, or null when they differ ("Mixed") or nothing is kept. */
 export function sharedDestination(decision: DecisionState): readonly string[] | null {

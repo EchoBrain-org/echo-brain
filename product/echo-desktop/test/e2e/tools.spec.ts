@@ -222,6 +222,56 @@ test('sends each item to its own destination: a record and a check per destinati
   await page.screenshot({ path: testInfo.outputPath('decision-records.png') });
 });
 
+test('All items while kept items differ: nothing chosen, a project some have part-ticked, and a tick keeps what else each has', async () => {
+  run = await launch('granola');
+  const { page } = run;
+  await addMeeting(page);
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  const chips = card.getByTestId('route-chip');
+  const menu = card.getByTestId('route-menu');
+  // The decision to Supplier review too, the second action Only me.
+  await chips.nth(0).click();
+  await menu.getByRole('checkbox', { name: 'Supplier review' }).check();
+  await page.keyboard.press('Escape');
+  await chips.nth(2).click();
+  await menu.getByRole('button', { name: 'Only me', exact: true }).click();
+  await expect(chips).toHaveText(['Thermostat redesign +1', 'Thermostat redesign', 'Only me']);
+  const all = card.getByTestId('route-all');
+  const summary = card.getByTestId('route-summary');
+  await expect(summary).toHaveText('1 to Thermostat redesign +1 · 1 to Thermostat redesign · 1 to Only me');
+  // Mixed: every item is kept, so not the faint Not kept; neither Only me nor Don't keep is chosen, and each project on only some
+  // items is part-ticked.
+  await expect(all).toHaveText('Mixed');
+  await expect(all).not.toHaveClass(/dropped/);
+  await all.click();
+  await expect(menu.getByRole('button', { name: 'Only me', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(menu.getByRole('button', { name: 'Don\'t keep', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  const therm = menu.getByRole('checkbox', { name: 'Thermostat redesign' });
+  const supplier = menu.getByRole('checkbox', { name: 'Supplier review' });
+  await expect(therm).toBeChecked({ indeterminate: true });
+  await expect(supplier).toBeChecked({ indeterminate: true });
+  // Supplier review goes on every kept item, and each keeps what else it had.
+  await supplier.click();
+  await expect(chips).toHaveText(['Thermostat redesign +1', 'Thermostat redesign +1', 'Supplier review']);
+  await expect(supplier).toBeChecked();
+  await expect(therm).toBeChecked({ indeterminate: true });
+  await expect(summary).toHaveText('2 to Thermostat redesign +1 · 1 to Supplier review');
+  // Thermostat redesign goes on the one item without it: they agree. Ticked off then, it comes off every item at once.
+  await therm.click();
+  await expect(all).toHaveText('Thermostat redesign +1');
+  await expect(therm).toBeChecked();
+  await therm.click();
+  await expect(chips).toHaveText(['Supplier review', 'Supplier review', 'Supplier review']);
+  await expect(all).toHaveText('Supplier review');
+  await page.keyboard.press('Escape');
+  await card.getByTestId('decision-approve').click();
+  await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+  const supplierId = 'prj_44444444-4444-4444-8444-444444444444';
+  expect(run.calls().find(call => call.body?.operation === 'review')?.body).toMatchObject({ routes: [
+    { signal_id: 'dec-1', project_ids: [supplierId] }, { signal_id: 'act-1', project_ids: [supplierId] }, { signal_id: 'act-2', project_ids: [supplierId] }] });
+});
+
 test('opens the decision from another destination\'s follow-ups, away from Home and past the reviews Home lists, by that record', async () => {
   // granola-routes: once approved, the meeting is no longer in the reviews list; each further destination's check finds its actions.
   run = await launch('granola-routes');

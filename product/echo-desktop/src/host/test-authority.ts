@@ -209,7 +209,7 @@ function found(query: unknown, entry: { title: string; text?: string; excerpt?: 
 function excerpt(text: string): string { return [...text.trim()].slice(0, 300).join(''); }
 
 /** The modes whose project list comes ten at a time. */
-const LIST_PAGES = new Set(['many-projects', 'many-projects-lead', 'long-project-names', 'over-twenty-projects']);
+const LIST_PAGES = new Set(['many-projects', 'many-projects-lead', 'long-project-names', 'over-twenty-projects', 'hand-in-many-projects']);
 /** A project ID, as the API writes one. */
 const PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** The most projects a capture is filed in, or read by (PERSON_UPLOAD_PROJECT_SET_MAX). */
@@ -557,8 +557,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       .map((project, index) => mode === 'many-projects-lead' && index === 12 ? { ...project, role: 'lead' as const } : project);
     // Twenty in two pages, some with long names, one longer than Capture is wide.
     if (mode === 'long-project-names') return numbered(20, '2', index => LONG_NAMES[index]!);
-    // More than a capture can be filed in: twenty-two, in three pages.
-    if (mode === 'over-twenty-projects') return numbered(22, '3', index => `Project ${index + 1}`);
+    // More than a capture can be filed in, or one approval can name: twenty-two, in three pages.
+    if (mode === 'over-twenty-projects' || mode === 'hand-in-many-projects') return numbered(22, '3', index => `Project ${index + 1}`);
     // Added to a project made since the desktop first looked: the newest, it leads.
     if (mode === 'project-added' && elsewhere('project-added')) {
       return [{ project_id: 'prj_55555555-5555-4555-8555-555555555555', name: 'Comet', role: 'member' }, ...projects];

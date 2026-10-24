@@ -553,6 +553,37 @@ describe('Home decisions and impact checks', () => {
       owners: [{ signal_id: 'act-1', owner: 'R. Moreno' }] })]);
   });
 
+  it('ticks a project on every kept item from All items while they differ, each keeping its others, and unticks one they all have', async () => {
+    const store = await start();
+    await store.openDecision(approval);
+    await flush();
+    const [therm, echo, supplier] = ['prj_11111111-1111-4111-8111-111111111111', 'prj_22222222-2222-4222-8222-222222222222', 'prj_44444444-4444-4444-8444-444444444444'];
+    const routes = () => store.getState().decision?.routes;
+    store.setDecisionRoute('dec-1', [echo, therm]);
+    store.setDecisionRoute('act-1', [therm]);
+    // SUPPLIER goes on both, and neither loses what it had.
+    store.tickDecisionRoutes(supplier);
+    expect(routes()).toEqual({ 'dec-1': [therm, echo, supplier], 'act-1': [therm, supplier] });
+    // ECHO, on one of them, goes on the other too; on both, it comes off both.
+    store.tickDecisionRoutes(echo);
+    expect(routes()).toEqual({ 'dec-1': [therm, echo, supplier], 'act-1': [therm, echo, supplier] });
+    store.tickDecisionRoutes(echo);
+    expect(routes()).toEqual({ 'dec-1': [therm, supplier], 'act-1': [therm, supplier] });
+    // An item not kept stays so; a kept one left with no project is Only me.
+    store.setDecisionRoute('act-1', null);
+    store.tickDecisionRoutes(therm);
+    store.tickDecisionRoutes(supplier);
+    expect(routes()).toEqual({ 'dec-1': [], 'act-1': null });
+    // At most 20 projects in all: a 21st goes on no item, and one the meeting names already goes on every kept item.
+    const many = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    store.setDecisionRoute('dec-1', many.slice(0, 19));
+    store.setDecisionRoute('act-1', many.slice(19, 20));
+    store.tickDecisionRoutes(many[20]!);
+    expect(routes()).toEqual({ 'dec-1': many.slice(0, 19), 'act-1': many.slice(19, 20) });
+    store.tickDecisionRoutes(many[19]!);
+    expect(routes()).toEqual({ 'dec-1': many.slice(0, 20), 'act-1': many.slice(19, 20) });
+  });
+
   it('keeps a publishing approval visible and shows what its check found once it finishes', async () => {
     fx.review = { ...fx.review, status: 'publishing', decided_on: 'desktop' };
     const store = await start();
