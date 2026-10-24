@@ -252,24 +252,32 @@ function participantName(value: string): string {
 }
 
 /**
- * `Name (note creator) from Org <email>, Name <email>, Name` → reported people.
- * Each entry ends at its `>`, so commas inside names or organizations do not
- * split it; names after the last `>` are split on commas. An email is kept only
- * when it is a canonical person email, so a malformed one never becomes an identity.
+ * `Name (note creator) from Org <email>, Name <email>, Name`, or one person per
+ * line as Granola writes it now, `Name (note creator) from Org (email)` → reported
+ * people. An entry ends at its `>` or at its line's trailing `(email)`, so commas
+ * inside names or organizations do not split it; other names are split on commas.
+ * An email is kept only when it is a canonical person email, so a malformed one
+ * never becomes an identity.
  */
 function knownParticipants(value: string): { name: string; email?: string }[] {
   const people: { name: string; email?: string }[] = [];
-  let from = 0;
-  for (const match of value.matchAll(/<([^<>]*)>/g)) {
-    const name = participantName(value.slice(from, match.index).replace(/^\s*,/, ''));
-    const email = (match[1] ?? '').trim().toLowerCase();
+  const person = (text: string, address: string) => {
+    const name = participantName(text.replace(/^\s*,/, '')), email = address.trim().toLowerCase();
     if (isCanonicalPersonEmail(email)) people.push({ name, email });
     else if (name !== '') people.push({ name });
+  };
+  let from = 0;
+  for (const match of value.matchAll(/<([^<>]*)>/g)) {
+    person(value.slice(from, match.index), match[1] ?? '');
     from = match.index + match[0].length;
   }
-  for (const entry of value.slice(from).split(',')) {
-    const name = participantName(entry);
-    if (name !== '') people.push({ name });
+  for (const line of value.slice(from).split('\n')) {
+    const addressed = /^(.*)\(([^()\s]+@[^()\s]+)\)\s*$/.exec(line);
+    if (addressed !== null) { person(addressed[1]!, addressed[2]!); continue; }
+    for (const entry of line.split(',')) {
+      const name = participantName(entry);
+      if (name !== '') people.push({ name });
+    }
   }
   return people;
 }

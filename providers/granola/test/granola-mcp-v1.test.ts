@@ -108,6 +108,17 @@ describe('verified Granola MCP contract', () => {
     expect(normalized.content).toEqual([expect.objectContaining({ kind: 'summary', text: 'Ship it.' })]);
     expect(normalized.extensions?.['granola']).toMatchObject({ provider_fields: { mcp_known_participants: known } });
   });
+  it('structures known participants written one per line with a trailing (email), as Granola writes them now', () => {
+    const known = '\n    Maya Chen (note creator) from Lumen, Inc. (Maya@Lumen.test)\n    Tom Ross from Acme (tom@acme.test)\n    Ops (not an email)\n    Dana, Lee\n    ';
+    const normalized = normalizeMcp({ ...listed, known_participants: known });
+    expect(normalized.participants.map(person => [person.display_name, person.identities ?? []])).toEqual([
+      ['Maya Chen', [{ kind: 'email', value: 'maya@lumen.test' }]],
+      ['Tom Ross', [{ kind: 'email', value: 'tom@acme.test' }]],
+      ['Ops (not an email)', []],
+      ['Dana', []],
+      ['Lee', []],
+    ]);
+  });
   it('prepares a real-shaped meeting for extraction with its date, participants, and N/S/T units', async () => {
     const detail: GranolaMeetingV1 = { ...listed, title: 'Beta launch', known_participants: 'Zhen Ye (note creator) from Acme <zhen@acme.com>, Pat Lee <pat@y.com>',
       private_notes: '- Ship beta Friday\n- Pat owns the FAQ', summary: '### Decisions\n- Ship the beta on Friday\n\n### Next steps\n- Pat drafts the FAQ' };
