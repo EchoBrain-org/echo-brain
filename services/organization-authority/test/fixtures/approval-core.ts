@@ -17,7 +17,7 @@ import { database as sourceFixture, databases as fixtures, decisions as fixtureD
 import { createApprovalCoreV1, createApprovalPublisherV1, type AfterApprovedRecordHookV1, type ApprovalAuthorizationV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalDecisionRequestV1 } from '../../src/composition/approval-core-v1.js';
 import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from '../../src/composition/authority-record-protocols-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../../src/adapters/persistence/sqlite/source-admission-v1.js';
-import { SqlitePersonMeetingIntakeV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingCheckpointV1 } from '../../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
+import { SqlitePersonMeetingIntakeV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingCheckpointV1, type PersonalMeetingWatchV1 } from '../../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { addMembership } from './project-context-sqlite.js';
 
 const opened: Database.Database[] = [];
@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 const CURSOR_PREFIX = 'fixture-source:v1:live:';
-type FixtureCheckpointV1 = PersonalMeetingCheckpointV1 & { readonly baseline: boolean; readonly revisions: Readonly<Record<string, string>> };
+type FixtureCheckpointV1 = PersonalMeetingCheckpointV1 & { readonly folder: string | null; readonly baseline: boolean; readonly revisions: Readonly<Record<string, string>> };
 const write = (value: FixtureCheckpointV1): string => CURSOR_PREFIX + JSON.stringify({ folder: value.folder, baseline: value.baseline, revisions: value.revisions, manual: value.manual });
 /** The fixture source's live cursor carries a personal checkpoint; the admitted initial cursor reads as empty. */
 export const fixtureCheckpointCodec: PersonalMeetingCheckpointCodecV1 = {
@@ -38,7 +38,7 @@ export const fixtureCheckpointCodec: PersonalMeetingCheckpointCodecV1 = {
     return body.startsWith('{') ? JSON.parse(body) as FixtureCheckpointV1 : { folder: null, baseline: false, revisions: {}, manual: [] };
   },
   write, initial: () => write({ folder: null, baseline: false, revisions: {}, manual: [] }),
-  watch: (value: FixtureCheckpointV1, folder: string | null): FixtureCheckpointV1 => ({ ...value, folder, baseline: false, revisions: {} }),
+  watch: (value: FixtureCheckpointV1, watch: PersonalMeetingWatchV1): FixtureCheckpointV1 => ({ ...value, folder: watch.folder_id, baseline: false, revisions: {} }),
   ready: (value: FixtureCheckpointV1) => value.baseline,
 };
 
@@ -121,7 +121,7 @@ export async function approvalCoreFixture(options: ApprovalCoreFixtureOptionsV1 
 async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options: ApprovalCoreFixtureOptionsV1) {
   const { db, record, actor } = base;
   const person = { organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id };
-  db.prepare('INSERT INTO authority_person_meeting_sources_v2(source_key,person_key,folder_id,folder_project_id,settings_revision) VALUES (?,?,NULL,NULL,0)').run(FIXTURE_SOURCE_KEY, canonicalSha256(person));
+  db.prepare("INSERT INTO authority_person_meeting_sources_v2(source_key,person_key,watch,folder_id,suggested_project_id,settings_revision) VALUES (?,?,'off',NULL,NULL,0)").run(FIXTURE_SOURCE_KEY, canonicalSha256(person));
   db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(actor.organization_id, NOW);
   addMembership(db, { organization_id: actor.organization_id, ...OTHER, membership_type: 'employee' }, 'Other', 'other@example.test');
   let grants = 0;

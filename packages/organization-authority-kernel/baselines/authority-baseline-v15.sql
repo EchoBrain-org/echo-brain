@@ -552,16 +552,20 @@ CREATE TABLE authority_live_source_progress_v2 (
 ) STRICT;
 
 -- Personal intake configuration, one source per person and tool account, and import
--- project suggestions. Meeting text stays in the existing source store.
+-- project suggestions. Meeting text stays in the existing source store. A watch imports
+-- nothing ('off'), the meetings the person captured ('mine') or one folder's ('folder');
+-- its suggested project only pre-ticks destinations and grants no read.
 CREATE TABLE authority_person_meeting_sources_v2 (
   source_key TEXT PRIMARY KEY REFERENCES authority_live_source_admission_v2(source_key),
   person_key TEXT NOT NULL CHECK (person_key LIKE 'sha256:%'),
+  watch TEXT NOT NULL CHECK (watch IN ('off', 'mine', 'folder')),
   folder_id TEXT CHECK (folder_id IS NULL OR length(folder_id) BETWEEN 1 AND 256),
-  folder_project_id TEXT REFERENCES authority_projects_v1(project_id),
+  suggested_project_id TEXT REFERENCES authority_projects_v1(project_id),
   settings_revision INTEGER NOT NULL CHECK (settings_revision >= 0),
-  CHECK ((folder_id IS NULL) = (folder_project_id IS NULL))
+  CHECK ((folder_id IS NOT NULL) = (watch = 'folder')),
+  CHECK (watch != 'off' OR suggested_project_id IS NULL)
 ) STRICT;
-CREATE UNIQUE INDEX authority_person_meeting_one_watch_v2 ON authority_person_meeting_sources_v2(person_key) WHERE folder_id IS NOT NULL;
+CREATE UNIQUE INDEX authority_person_meeting_one_watch_v2 ON authority_person_meeting_sources_v2(person_key) WHERE watch != 'off';
 CREATE TRIGGER authority_person_meeting_settings_ordered_v2
 BEFORE UPDATE ON authority_person_meeting_sources_v2
 WHEN NEW.source_key != OLD.source_key OR NEW.person_key != OLD.person_key

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
 import type { LlmProviderClient, StructuredGenerationRequest } from '@echo-brain/organization-processing/llm/llm-provider';
-import { createGranolaMcpV1, granolaMcpMeetingContentV1, parseGranolaMeetingsV1, type GranolaMeetingV1 } from '../src/granola-mcp-v1.js';
+import { createGranolaMcpV1, granolaMcpMeetingContentV1, parseGranolaMeetingPageV1, type GranolaMeetingV1 } from '../src/granola-mcp-v1.js';
 import { normalizeGranolaMeetingV1 } from '../src/granola-meeting-normalizer-v1.js';
 
 const id = '00000000-0000-4000-8000-000000000001';
@@ -17,6 +17,38 @@ function fixture(text: string) {
   const fetch = vi.fn(async (_url: string, init: RequestInit) => Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body as string).id, result: { content: [{ type: 'text', text }] } }));
   return { fetch, adapter: createGranolaMcpV1({ binding, fetch }) };
 }
+/** Answers each call with the next text, and records each call's tool and arguments. */
+function scripted(...texts: string[]) {
+  const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+    const text = texts.shift();
+    if (text === undefined) throw new Error('unexpected Granola call');
+    return Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body as string).id, result: { content: [{ type: 'text', text }] } });
+  });
+  return { adapter: createGranolaMcpV1({ binding, fetch }), calls: () => fetch.mock.calls.map(call => JSON.parse(call[1].body as string).params) };
+}
+
+// The list_meetings shape observed live on 2026-10-24, with fictional values.
+const REVIEW = '11111111-2222-4333-8444-555555555555', WEEKLY = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff', PUMP = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+const RANGE = '<requested_range time_range="custom" timezone="America/Los_Angeles" start="2026-10-17T00:00:00-07:00" end="2026-10-25T00:00:00-07:00" end_inclusive="true">'
+  + 'Queried meetings from Oct 17, 2026 through Oct 24, 2026, America/Los_Angeles time. The from and to attributes on meetings_data are the dates of the oldest and newest meetings returned, not the queried range.</requested_range>\n\n';
+const reviewRow = `<meeting id="${REVIEW}" title="Pump test plan review" date="Oct 23, 2026 1:00 PM PDT" meeting_at="2026-10-23T13:00:00.000-07:00" created_at="2026-10-23T12:57:50.654-07:00" updated_at="2026-10-23T13:46:30.575-07:00" captured_by_me="true" listed_as_participant="true" is_workspace_visible="true" url="https://notes.granola.ai/d/${REVIEW}">
+    <known_participants total="2" omitted="1">
+    Maya Chen (note creator) from Lumen (maya@example.test)
+    </known_participants>
+    <folders>
+    <folder id="${PUMP}" title="Pump" visibility="workspace" audience="everyone in the workspace" role="owner" />
+    </folders>
+  </meeting>`;
+const weeklyRow = `<meeting id="${WEEKLY}" title="Weekly sync" date="Oct 22, 2026 11:31 PM PDT" meeting_at="2026-10-22T23:31:47.662-07:00" created_at="2026-10-22T23:31:47.662-07:00" updated_at="2026-10-23T00:02:05.424-07:00" captured_by_me="true" listed_as_participant="true" is_workspace_visible="false" url="https://notes.granola.ai/d/${WEEKLY}">
+    <known_participants>
+    Maya Chen (note creator) from Lumen (maya@example.test)
+    </known_participants>
+    <folders />
+  </meeting>`;
+const listPage = (rows: readonly string[], pagination = '') => `${RANGE}${warning}<meetings_data connected_user_email="maya@example.test" workspace_name="Lumen" from="Oct 22, 2026" to="Oct 23, 2026" count="${rows.length}">\n${rows.join('\n\n')}\n</meetings_data>${pagination === '' ? '' : `\n\n${pagination}`}`;
+const LIVE_PAGE = listPage([reviewRow, weeklyRow], '<pagination has_more="true" total_count="4" remaining_count="2" next_cursor="eyJ2ZXJzaW9uIjoxfQ" />');
+const plainRow = (meeting: string, title = 'Standup') => `<meeting id="${meeting}" title="${title}" date="Oct 20, 2026 9:00 AM PDT" updated_at="2026-10-20T09:31:00.000-07:00" url="https://notes.granola.ai/d/${meeting}"><known_participants>Maya Chen (note creator)</known_participants></meeting>`;
+const numbered = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
 
 describe('verified Granola MCP contract', () => {
   it('accepts JSON identity and binds the active workspace, without inventing an immutable account ID', async () => {
@@ -24,7 +56,7 @@ describe('verified Granola MCP contract', () => {
     expect(await adapter.account()).toEqual({ email: 'fixture@example.test', workspace_id: id, workspace_name: 'Fixture', scopes: ['personal', 'public'] });
   });
   it('accepts the distinct empty-list JSON shape, and checks folder counts', async () => {
-    expect(parseGranolaMeetingsV1(JSON.stringify({ count: 0, total_in_range: 0, meetings: [] }), false)).toEqual([]);
+    expect(parseGranolaMeetingPageV1(JSON.stringify({ count: 0, total_in_range: 0, meetings: [] }), false)).toEqual({ meetings: [], next_cursor: null, total_count: 0 });
     const f = fixture(JSON.stringify({ count: 1, folders: [{ id, title: 'ECHO', description: null, note_count: 5 }] }));
     expect(await f.adapter.folders()).toEqual([{ id, title: 'ECHO', description: null, note_count: 5 }]);
     await expect(fixture(JSON.stringify({ count: 2, folders: [] })).adapter.folders()).rejects.toMatchObject({ code: 'invalid_output' });
@@ -107,11 +139,90 @@ describe('verified Granola MCP contract', () => {
   it('pins the requested meeting ID and refuses incomplete, over-limit, duplicated, or redirected identities', async () => {
     await expect(fixture(meeting()).adapter.meeting(other)).rejects.toMatchObject({ code: 'not_found' });
     for (const value of [meeting().replace('count="1"', 'count="2"'), meeting().replace('https://notes.granola.ai', 'https://attacker.example'), '<!DOCTYPE meetings_data>' + meeting(), JSON.stringify({ count: 1, total_in_range: 1, meetings: [] })]) {
-      expect(() => parseGranolaMeetingsV1(value, true)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
+      expect(() => parseGranolaMeetingPageV1(value, true)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
     }
   });
   it('uses the observed transcript JSON and keeps audio labels as verbatim text', async () => {
     const f = fixture(warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', transcript: 'Microphone: hello', recording_context: { recorder: { name: 'someone' } } }));
     expect(await f.adapter.transcript(id)).toEqual({ text: 'Microphone: hello', created_at: '2026-10-05T20:00:00.000Z' });
+  });
+});
+
+describe('Granola list contract, as observed live', () => {
+  it('reads a page with its requested range, warning line and pagination, and ignores folders and unknown attributes', () => {
+    const url = (meeting: string) => `https://notes.granola.ai/d/${meeting}`;
+    expect(parseGranolaMeetingPageV1(LIVE_PAGE, false)).toEqual({ next_cursor: 'eyJ2ZXJzaW9uIjoxfQ', total_count: 4, meetings: [
+      { id: REVIEW, title: 'Pump test plan review', date: 'Oct 23, 2026 1:00 PM PDT', url: url(REVIEW), meeting_at: '2026-10-23T13:00:00.000-07:00',
+        created_at: '2026-10-23T12:57:50.654-07:00', updated_at: '2026-10-23T13:46:30.575-07:00', captured_by_me: true, known_participants: 'Maya Chen (note creator) from Lumen (maya@example.test)' },
+      { id: WEEKLY, title: 'Weekly sync', date: 'Oct 22, 2026 11:31 PM PDT', url: url(WEEKLY), meeting_at: '2026-10-22T23:31:47.662-07:00',
+        created_at: '2026-10-22T23:31:47.662-07:00', updated_at: '2026-10-23T00:02:05.424-07:00', captured_by_me: true, known_participants: 'Maya Chen (note creator) from Lumen (maya@example.test)' },
+    ] });
+  });
+  it('reads an untitled note as no title, a page without pagination as the last, and an empty page', () => {
+    const page = parseGranolaMeetingPageV1(listPage([plainRow(numbered(1), ''), plainRow(numbered(2), '  ')]), false);
+    expect(page).toMatchObject({ next_cursor: null, total_count: null, meetings: [{ id: numbered(1), title: null }, { id: numbered(2), title: null }] });
+    expect(page.meetings[0]).not.toHaveProperty('captured_by_me');
+    expect(parseGranolaMeetingPageV1(`${RANGE}${warning}<meetings_data count="0"></meetings_data>\n\n<pagination has_more="false" total_count="0" remaining_count="0" />`, false))
+      .toEqual({ meetings: [], next_cursor: null, total_count: 0 });
+    expect(parseGranolaMeetingPageV1(`${warning}<meetings_data count="0" />`, false)).toEqual({ meetings: [], next_cursor: null, total_count: null });
+    expect(parseGranolaMeetingPageV1(`<requested_range time_range="custom" />\n\n${warning}<meetings_data count="0" />`, false).meetings).toEqual([]);
+  });
+  it.each([
+    ['a count other than the page\'s', LIVE_PAGE.replace('count="2"', 'count="4"')],
+    ['an unreadable has_more', LIVE_PAGE.replace('has_more="true"', 'has_more="yes"')],
+    ['more without a cursor', LIVE_PAGE.replace(' next_cursor="eyJ2ZXJzaW9uIjoxfQ"', '')],
+    ['material after the pagination', `${LIVE_PAGE}\n<meetings_data count="0" />`],
+    ['a timestamp without an offset', LIVE_PAGE.replace('updated_at="2026-10-23T13:46:30.575-07:00"', 'updated_at="2026-10-23T13:46:30"')],
+    ['a capture flag that is not a boolean', LIVE_PAGE.replace('captured_by_me="true" listed_as_participant="true" is_workspace_visible="true"', 'captured_by_me="yes"')],
+    ['a redirected note', LIVE_PAGE.replace(`https://notes.granola.ai/d/${WEEKLY}`, 'https://notes.example.test/d/weekly')],
+  ])('refuses a page with %s', (_name, value) => {
+    expect(() => parseGranolaMeetingPageV1(value, false)).toThrow(expect.objectContaining({ code: 'invalid_output' }));
+  });
+  it('lists a window page by page with the live arguments, for my meetings or one folder', async () => {
+    const last = listPage([plainRow(numbered(3)), plainRow(numbered(4))], '<pagination has_more="false" total_count="4" remaining_count="0" />');
+    const mine = scripted(LIVE_PAGE, last);
+    expect((await mine.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).map(meeting => meeting.id))
+      .toEqual([REVIEW, WEEKLY, numbered(3), numbered(4)]);
+    const range = { time_range: 'custom', from_date: '2026-10-17', to_date: '2026-10-25', limit: 200 };
+    expect(mine.calls()).toEqual([
+      { name: 'list_meetings', arguments: { ...range, involvement: { captured_by_me: true } } },
+      { name: 'list_meetings', arguments: { ...range, cursor: 'eyJ2ZXJzaW9uIjoxfQ', involvement: { captured_by_me: true } } },
+    ]);
+    const folder = scripted(listPage([weeklyRow]));
+    expect(await folder.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP })).toHaveLength(1);
+    expect(folder.calls()).toEqual([{ name: 'list_meetings', arguments: { ...range, folder_id: PUMP } }]);
+    const browse = scripted(listPage([weeklyRow], '<pagination has_more="true" total_count="9" remaining_count="8" next_cursor="next" />'));
+    expect((await browse.adapter.page({ from_date: '1970-01-01', to_date: '2026-10-25', captured_by_me: true, limit: 50 })).next_cursor).toBe('next');
+    expect(browse.calls()).toEqual([{ name: 'list_meetings', arguments: { ...range, from_date: '1970-01-01', limit: 50, involvement: { captured_by_me: true } } }]);
+    for (const filter of [{}, { captured_by_me: true, folder_id: PUMP }]) {
+      await expect(scripted().adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', ...filter } as never)).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+  });
+  it('fails a window of more than 200 meetings closed, and a page that promises more without moving on', async () => {
+    const full = { code: 'unavailable', message: 'Granola lists more than 200 meetings to watch' };
+    const counted = scripted(listPage([reviewRow], '<pagination has_more="true" total_count="201" remaining_count="200" next_cursor="next" />'));
+    await expect(counted.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject(full);
+    expect(counted.calls()).toHaveLength(1);
+    const rows = (from: number) => Array.from({ length: 150 }, (_, index) => plainRow(numbered(from + index)));
+    const paged = scripted(listPage(rows(0), '<pagination has_more="true" next_cursor="second" />'), listPage(rows(150)));
+    await expect(paged.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP })).rejects.toMatchObject(full);
+    const stuck = scripted(listPage([], '<pagination has_more="true" next_cursor="again" />'));
+    await expect(stuck.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject({ code: 'invalid_output' });
+    const repeated = scripted(listPage([reviewRow], '<pagination has_more="true" next_cursor="again" />'), listPage([weeklyRow], '<pagination has_more="true" next_cursor="again" />'));
+    await expect(repeated.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject({ code: 'invalid_output' });
+  });
+  it('pages folders by offset, up to 200, and ignores the fields it does not read', async () => {
+    const folders = (from: number, length: number) => Array.from({ length }, (_, index) => ({ id: numbered(from + index), title: `Folder ${from + index}`, description: null, note_count: 3,
+      visibility: 'private', audience: 'only you', role: 'owner', parent_folder_id: null }));
+    const paged = scripted(JSON.stringify({ folders: folders(0, 100), truncated: true, total_count: 250, next_offset: 100 }),
+      JSON.stringify({ folders: folders(100, 100), truncated: true, total_count: 250, next_offset: 200 }));
+    const listed = await paged.adapter.folders();
+    expect(listed).toHaveLength(200);
+    expect(listed[199]).toEqual({ id: numbered(199), title: 'Folder 199', description: null, note_count: 3 });
+    expect(paged.calls()).toEqual([{ name: 'list_meeting_folders', arguments: { limit: 100, offset: 0 } }, { name: 'list_meeting_folders', arguments: { limit: 100, offset: 100 } }]);
+    const { description: _description, ...undescribed } = folders(0, 1)[0]!;
+    expect(await scripted(JSON.stringify({ count: 1, folders: [undescribed] })).adapter.folders()).toEqual([{ id: numbered(0), title: 'Folder 0', description: null, note_count: 3 }]);
+    await expect(scripted(JSON.stringify({ folders: folders(0, 2), truncated: true, next_offset: 0 })).adapter.folders()).rejects.toMatchObject({ code: 'invalid_output' });
+    await expect(scripted(JSON.stringify({ folders: folders(0, 2), truncated: 'yes', next_offset: 2 })).adapter.folders()).rejects.toMatchObject({ code: 'invalid_output' });
   });
 });

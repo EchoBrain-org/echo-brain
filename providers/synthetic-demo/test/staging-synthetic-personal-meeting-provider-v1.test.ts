@@ -108,5 +108,10 @@ describe("staging synthetic personal meeting provider", () => {
     expect(provider.tool("token")).toMatchObject({ tool_id: "synthetic", personal_status: "linked" });
     await expect(session.folders()).resolves.toEqual([]);
     await expect(session.browse("folder")).rejects.toMatchObject({ code: "not_found" });
+    await expect(session.browse(null)).rejects.toMatchObject({ code: "not_found" });
+    // Only stopping is a watch this source takes.
+    const initial = provider.cursor.read(provider.cursor.initial());
+    expect(provider.cursor.watch(initial, { watch: "off" })).toBe(initial);
+    expect(() => provider.cursor.watch(initial, { watch: "mine" })).toThrow("cursor is invalid");
   });
 });

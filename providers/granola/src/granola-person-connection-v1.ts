@@ -38,16 +38,21 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
         await verify();
         return normalizeGranolaMeetingV1(granolaMcpMeetingContentV1(detail, transcript), identity, new Date().toISOString());
       },
-      /** All-time folder enumeration must equal the provider's advertised membership count. */
-      async folder(folderId: string) {
-        const folders = await api.folders(signal);
-        const folder = folders.find(item => item.id === folderId);
-        if (folder === undefined) fail('not_found');
-        if (folder.note_count > 50) GRANOLA_PERSON_PROVIDER_V1.failure('unavailable');
-        const meetings = await api.meetings({ folder_id: folderId, since: '1970-01-01', until: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10), signal });
-        if (meetings.length !== folder.note_count) GRANOLA_PERSON_PROVIDER_V1.failure('unavailable');
+      /** The newest meetings, at most 50: the ones the person captured, or one of their listed folders'. */
+      async recent(folderId: string | null) {
+        if (folderId !== null && !(await api.folders(signal)).some(folder => folder.id === folderId)) fail('not_found');
+        const { meetings } = await api.page({ from_date: '1970-01-01', to_date: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10), limit: 50,
+          ...(folderId === null ? { captured_by_me: true as const } : { folder_id: folderId }), signal });
         await verify();
-        return Object.freeze({ folder, meetings });
+        return meetings;
+      },
+      /** Every meeting of a watch's window: the ones the person captured, or one folder's. Past 200 it fails closed. */
+      async window(input: { readonly mode: 'mine' | 'folder'; readonly folder: string | null; readonly from_date: string; readonly to_date: string }) {
+        if ((input.mode === 'folder') !== (input.folder !== null)) fail('invalid_request');
+        const meetings = await api.meetings({ from_date: input.from_date, to_date: input.to_date,
+          ...(input.folder === null ? { captured_by_me: true as const } : { folder_id: input.folder }), signal });
+        await verify();
+        return meetings;
       },
     });
   }

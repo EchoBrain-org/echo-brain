@@ -29,11 +29,14 @@ describe("Authority admitted meeting-source schema", () => {
   it('persists personal intake settings without another meeting body and requires ordered mapping changes', () => {
     const database = openedCurrentDatabase();
     seedOwnerWithAdmission(database, SOURCE_KEY, NOW);
-    database.prepare('INSERT INTO authority_person_meeting_sources_v2 VALUES (?, ?, NULL, NULL, 0)').run(SOURCE_KEY, DIGEST);
+    database.prepare("INSERT INTO authority_person_meeting_sources_v2 VALUES (?, ?, 'off', NULL, NULL, 0)").run(SOURCE_KEY, DIGEST);
     expect(() => database.prepare('UPDATE authority_person_meeting_sources_v2 SET settings_revision=2 WHERE source_key=?').run(SOURCE_KEY)).toThrow('ordered');
     expect(() => database.prepare('UPDATE authority_person_meeting_sources_v2 SET folder_id=?,settings_revision=1 WHERE source_key=?').run('folder', SOURCE_KEY)).toThrow('CHECK');
-    expect(database.prepare('SELECT settings_revision FROM authority_person_meeting_sources_v2').pluck().get()).toBe(0);
-    expect((database.pragma('table_info(authority_person_meeting_sources_v2)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'person_key', 'folder_id', 'folder_project_id', 'settings_revision']);
+    // A watch needs no folder and no project; a folder belongs to a folder watch only.
+    database.prepare("UPDATE authority_person_meeting_sources_v2 SET watch='mine',settings_revision=1 WHERE source_key=?").run(SOURCE_KEY);
+    expect(() => database.prepare("UPDATE authority_person_meeting_sources_v2 SET watch='folder',settings_revision=2 WHERE source_key=?").run(SOURCE_KEY)).toThrow('CHECK');
+    expect(database.prepare('SELECT settings_revision FROM authority_person_meeting_sources_v2').pluck().get()).toBe(1);
+    expect((database.pragma('table_info(authority_person_meeting_sources_v2)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'person_key', 'watch', 'folder_id', 'suggested_project_id', 'settings_revision']);
     expect((database.pragma('table_info(authority_person_meeting_suggestions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'external_id', 'project_id', 'created_at']);
     expect((database.pragma('table_info(authority_person_meeting_pending_suggestions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['source_key', 'external_id', 'project_id', 'created_at']);
     expect((database.pragma('table_info(authority_approval_decisions_v1)') as { name: string }[]).map(row => row.name)).toEqual(['sequence', 'approval_id', 'command_id', 'surface', 'action', 'body_json', 'receipt_json']);
