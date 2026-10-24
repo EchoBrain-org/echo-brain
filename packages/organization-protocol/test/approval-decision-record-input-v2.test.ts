@@ -6,6 +6,7 @@ import {
   APPROVAL_DECISION_RECORD_INPUT_CODEC_V2,
   APPROVAL_DECISION_REF_KIND_V2,
   APPROVAL_DECISION_SNAPSHOT_SURFACE_V1,
+  approvalDecisionSubsetSnapshotV2,
   approvalRecordIdV2,
   validateApprovalDecisionRecordInputV2,
 } from "../src/approval-decision-record-input-v2.js";
@@ -239,6 +240,28 @@ describe("approval decision record input v2", () => {
       const accepted = (() => { try { validateApprovalDecisionRecordInputV2(validInput({ owners: [{ signal_id: "act-1", owner }] })); return true; } catch { return false; } })();
       expect(accepted, JSON.stringify(owner)).toBe(isApprovalOwnerTextV1(owner));
     }
+  });
+  it("derives a destination's subset snapshot: its items, the reasons for them with their links pruned, and unsupported reasons for Only me", () => {
+    const proposal = snapshot({ rationales: [{ id: "why-1", supports: ["dec-1", "act-1"] }, { id: "why-2", supports: ["act-2"] }, { id: "why-3", supports: [] }] }, PROPOSAL_ID);
+    const before = canonicalJson(proposal as unknown as JsonValue);
+    const group = { approval_id: approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1]), project_ids: [PROJECT_1], signal_ids: ["act-1"] };
+    const subset = approvalDecisionSubsetSnapshotV2(proposal, group);
+    expect(subset.approval_id).toBe(group.approval_id);
+    expect(subset.staged_content_sha256).toBe(proposal.staged_content_sha256);
+    expect(subset.final_content_sha256).toBe(canonicalSha256(subset.approved_payload as unknown as JsonValue));
+    const brief = subset.approved_payload.brief;
+    expect([brief.decisions.length, brief.actions.map(action => action.id)]).toEqual([0, ["act-1"]]);
+    expect(brief.rationales.map(reason => [reason.id, reason.supports_signal_ids])).toEqual([["why-1", ["act-1"]]]);
+    const only = approvalDecisionSubsetSnapshotV2(proposal, { approval_id: approvalRecordIdV2(PROPOSAL_ID, []), project_ids: [], signal_ids: ["dec-1"] });
+    expect(only.approved_payload.brief.rationales.map(reason => [reason.id, reason.supports_signal_ids])).toEqual([["why-1", ["dec-1"]], ["why-3", []]]);
+    // Pure: the same bytes from a copy, and the proposal is untouched.
+    expect(canonicalJson(approvalDecisionSubsetSnapshotV2(JSON.parse(before), group) as unknown as JsonValue)).toBe(canonicalJson(subset as unknown as JsonValue));
+    expect(canonicalJson(proposal as unknown as JsonValue)).toBe(before);
+    // A group names decisions or actions of its proposal, each once; anything else is refused.
+    for (const signal_ids of [[], ["act-9"], ["why-1"], ["act-1", "act-1"]]) {
+      expect(() => approvalDecisionSubsetSnapshotV2(proposal, { ...group, signal_ids })).toThrow("group names items");
+    }
+    expect(() => approvalDecisionSubsetSnapshotV2({ ...proposal, kind: "other" }, group)).toThrow();
   });
   it("freezes its result and does not alias the input", () => {
     const input = validInput();

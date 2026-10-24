@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { coreRuntimeIdentityV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1, type ApprovalProposalViewV1 } from '../../src/private-approval/slack-approval-presenter-v1.js';
+import { slackApprovalDestinationSha256V4 } from '../../src/private-approval/slack-approval-card-v4.js';
 
 const databases: Database.Database[] = [];
 const signal = () => new AbortController().signal;
@@ -311,6 +312,28 @@ describe('Slack approval presenter V1', () => {
     h.stage('apr_unnamed', { project_ids: ['prj_a', 'prj_gone'] });
     await h.presenter.reconcile(signal()); await h.presenter.reconcile(signal());
     expect(JSON.stringify(h.cards.at(-1)!.blocks)).toContain('Goes to: THERM, 1 other project');
+  });
+  it('draws an open card once, and redraws one a click cleared with where Approve sends the items now', async () => {
+    const f = fixture();
+    f.projects = [{ project_id: 'prj_a', name: 'THERM' }, { project_id: 'prj_b', name: 'ECHO' }];
+    const id = f.stage('apr_open', { project_ids: ['prj_a'] });
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    const approve = () => JSON.parse(((f.cards.at(-1)!.blocks.find(block => block.type === 'actions') as { elements: { value: string }[] }).elements[0]!).value) as Record<string, unknown>;
+    expect(approve()).toMatchObject({ schema_version: 3, approval_id: id, destination_sha256: slackApprovalDestinationSha256V4(['prj_a']) });
+    // The reviewer joins a suggested project: the open card is not redrawn on its own.
+    f.proposal = { ...proposal(id), project_ids: ['prj_a', 'prj_b'] };
+    const published = f.cards.length;
+    await f.presenter.reconcile(signal());
+    expect(f.cards).toHaveLength(published);
+    // A click that found the destination changed clears the card's digest; the next pass draws it again.
+    f.db.prepare("UPDATE authority_approval_presentations_v1 SET card_sha256=NULL WHERE approval_id=?").run(id);
+    await f.presenter.reconcile(signal());
+    expect(f.cards).toHaveLength(published + 1);
+    expect(JSON.stringify(f.cards.at(-1)!.blocks)).toContain('Goes to: THERM, ECHO');
+    expect(approve()).toMatchObject({ destination_sha256: slackApprovalDestinationSha256V4(['prj_a', 'prj_b']) });
+    expect(row(f, id)).toMatchObject({ delivery: 'posted', shows: 'open' });
+    await f.presenter.reconcile(signal());
+    expect(f.cards).toHaveLength(published + 1);
   });
   it('names each destination of a decided approval on the closed card', async () => {
     const f = fixture();

@@ -5,7 +5,7 @@ import type { SlackBotTokenSourceV1 } from "../organization-control-plane/applic
 import type { StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import type { PrivateSlackApprovalBlockKitCardInputV1 } from "./private-slack-approval-block-kit-card-v1.js";
-import { buildClosedApprovalCardV4, buildSlackApprovalCardV4, slackApprovalDestinationV4, type SlackApprovalCardV4, type SlackApprovalOwnerProposalV4 } from "./slack-approval-card-v4.js";
+import { buildClosedApprovalCardV4, buildSlackApprovalCardV4, slackApprovalDestinationSha256V4, slackApprovalDestinationV4, type SlackApprovalCardV4, type SlackApprovalOwnerProposalV4 } from "./slack-approval-card-v4.js";
 
 export interface SlackApprovalTargetV1 {
   readonly connection_id: string;
@@ -248,6 +248,7 @@ export function createSlackApprovalPresenterV1(options: {
     snapshot_sha256: proposal.snapshot_sha256,
     review: reviewFromSnapshot(proposal),
     destination: named(proposal.reviewer, proposal.project_ids),
+    destination_sha256: slackApprovalDestinationSha256V4(proposal.project_ids),
     owners: options.core.ownerProposals(proposal.approval_id),
   });
   /** Where an approval sent its items: one entry per destination group, in the order of each group's first item. */
@@ -375,6 +376,8 @@ export function createSlackApprovalPresenterV1(options: {
         }
         if (row.delivery !== "posted" || proposal === undefined || row.dm_channel_id === null || row.message_ts === null) continue;
         const shows = outcome(proposal);
+        // An open card is drawn once. A click that found its suggestion changed clears card_sha256, so it is redrawn here with
+        // where Approve sends the items now (and buttons bound to that).
         if (shows === row.shows && row.card_sha256 !== null) continue;
         try {
           const redraw = shows === "open" ? card(proposal) : closed(proposal, shows);

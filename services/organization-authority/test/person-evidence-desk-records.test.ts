@@ -533,3 +533,58 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
     }
   });
 });
+
+describe('Person evidence desk: exclusions (an impact run\'s fence, ADR-0046)', () => {
+  const SIBLING_SOURCE = `source:${'c'.repeat(64)}`;
+  /** Originals with a shared transcript of `transcriptOf`, the meeting's own unapproved notes (SIBLING_SOURCE) and an unrelated note. */
+  function originalsWith(transcriptOf: Sha256Digest) {
+    const base = emptyOriginals();
+    const empty = base.deskSearch({ access_token: 'emp_a', scope: { kind: 'global' } });
+    const item = (kind: 'note' | 'imported_meeting', source_id: string, ref: string, text: string) => ({
+      kind, text, visibility: 'only_me' as const, label: text, received_at: '2026-09-27T00:00:00.000Z', version: '1', ref,
+      citation: { kind: 'source_revision' as const, source_id, revision_id: `revision-${text}`, source_sha256: digest(`source ${text}`),
+        representation_sha256: digest(`representation ${text}`), anchor_sha256: digest(`anchor ${text}`) },
+    });
+    const release = { ...empty, truncated: false, items: [
+      item('note', `source:${'a'.repeat(64)}`, `transcript:${transcriptOf}`, 'Sibling transcript decision'),
+      item('imported_meeting', SIBLING_SOURCE, `imported_meeting:cap_${'d'.repeat(64)}`, 'Own notes decision'),
+      item('note', `source:${'e'.repeat(64)}`, `note:ctx_${'f'.repeat(64)}`, 'Unrelated note decision'),
+    ] };
+    const deskOpen = vi.fn(() => release);
+    return { originals: { ...base, deskSearch: () => release, deskOpen } as unknown as PersonOriginalContextEvidenceDeskPortV1, deskOpen };
+  }
+  const recordsOf = (items: readonly { readonly citation: { readonly kind: string; readonly record_sha256?: string } }[]) =>
+    [...new Set(items.flatMap((item) => item.citation.kind === 'approved_record' ? [item.citation.record_sha256!] : []))];
+
+  it('never offers an excluded record, a transcript it shared or an excluded source, in any read, and refuses a citation of one unread', async () => {
+    const w = await meetingWorld();
+    closers.push(w.close);
+    const route = w.route();
+    const opened: string[] = [];
+    const records: PersonEvidenceDeskRecordsV1 = { ...route, openDeskCitation(input) { opened.push(input.record_sha256); return route.openDeskCitation(input); } };
+    const siblings = [w.digest('r1'), w.digest('r4')];
+    // Unfenced, the reader's search finds both records and every original.
+    const plain = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'global' }, originals: originalsWith(w.digest('r4')).originals, records });
+    const unfenced = await plain.search({ query: 'Decision' });
+    expect(recordsOf(unfenced.items)).toEqual(expect.arrayContaining(siblings));
+    expect(unfenced.items.filter((item) => item.citation.kind === 'source_revision')).toHaveLength(3);
+    const { originals, deskOpen } = originalsWith(w.digest('r4'));
+    const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'global' }, originals, records, exclude: { records: siblings, sources: [SIBLING_SOURCE] } });
+    for (const read of [() => desk.search({ query: 'Decision' }), () => desk.search({}), () => desk.list({ source: 'meeting' })]) {
+      const { items } = await read();
+      // Other records still come back, but never a sibling, its transcript, or the meeting's own notes.
+      expect(recordsOf(items).length).toBeGreaterThan(0);
+      expect(recordsOf(items).filter((record) => new Set<string>(siblings).has(record))).toEqual([]);
+      expect(items.filter((item) => item.citation.kind === 'source_revision').map((item) => item.ref)).toEqual([`note:ctx_${'f'.repeat(64)}`]);
+    }
+    // A citation of a sibling or of the meeting's source is refused before either store reads it.
+    const sibling = route.searchBatch({ access_token: 'emp_a', query: 'Decision', desk: true }).desk_items!.find((item) => item.record_sha256 === w.digest('r1'))!;
+    await expect(desk.openCitation({ citation: { kind: 'approved_record', atom_id: sibling.atom_id, record_sha256: sibling.record_sha256, policy_id: sibling.policy_id } as PersonAnswerCitationV3 }))
+      .rejects.toMatchObject({ code: 'not_found' });
+    await expect(desk.openCitation({ citation: { kind: 'source_revision', source_id: SIBLING_SOURCE, revision_id: 'revision-1', source_sha256: digest('s'), representation_sha256: digest('r'), anchor_sha256: digest('a') } as PersonAnswerCitationV3 }))
+      .rejects.toMatchObject({ code: 'not_found' });
+    expect(opened).toEqual([]);
+    expect(deskOpen).not.toHaveBeenCalled();
+    await desk.revalidate({});
+  });
+});

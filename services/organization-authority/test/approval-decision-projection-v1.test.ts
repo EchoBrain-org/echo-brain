@@ -5,11 +5,12 @@ import {
   organizationAuthorityPinSha256, organizationMemberReadablePersonPolicyContractSha256, projectMembersReadablePersonPolicyContractSha256, verifyOrganizationAuthorityPin,
   validateApprovalDecisionRecordInputV2, approvalRecordIdV2, APPROVAL_DECISION_CONSEQUENCE_KIND_V1,
 } from '@echo-brain/organization-protocol';
+import { validateApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
 import { approvalCoreFixture, type ApprovalCoreFixtureV1 } from './fixtures/approval-core.js';
 import type { ApprovalDecisionBodyV1 } from '../src/composition/approval-core-v1.js';
 import {
   approvalDecisionGroupsV1, approvalDecisionWitnessV1, buildApprovalDecisionRecordsV1, createApprovalDecisionPolicyProjectorV1, projectApprovalDecisionApproverV1,
-  type ApprovalDecisionWitnessV1,
+  type ApprovalDecisionWitnessV1, type BuiltApprovalDecisionRecordV1,
 } from '../src/composition/approval-decision-projection-v1.js';
 import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from '../src/composition/authority-record-protocols-v1.js';
 
@@ -41,6 +42,16 @@ async function appendRaw(f: ApprovalCoreFixtureV1, human_act_record_input: { rea
         processor_adapter_id: processor.adapter_id, processor_adapter_instance_id: processor.instance_id, processor_adapter_version: processor.version,
         processor_contract_sha256: frozen.admission.processor.configuration_sha256 as `sha256:${string}` } } as never, () => 'envelope-raw'),
     receipt_factory: createRecordReceiptFactoryV2(options) });
+}
+
+/** A built record whose subset brief was reshaped and kept internally consistent (its digests, reference and key follow it). */
+function reshaped(built: BuiltApprovalDecisionRecordV1, reshape: (brief: { decisions: Mutable[]; actions: Mutable[]; rationales: Mutable[] }) => void) {
+  const ref = clone(built.human_act_record_input.approval_decision_ref_v2) as unknown as Mutable;
+  const event = clone(built.human_act_record_input.event) as unknown as Mutable & { approved_snapshot: Mutable & { approved_payload: Mutable & { brief: { decisions: Mutable[]; actions: Mutable[]; rationales: Mutable[] } } } };
+  reshape(event.approved_snapshot.approved_payload.brief);
+  event.approved_snapshot.final_content_sha256 = canonicalSha256(event.approved_snapshot.approved_payload as unknown as JsonValue);
+  event.approved_snapshot_sha256 = ref.approved_snapshot_sha256 = canonicalSha256(event.approved_snapshot as unknown as JsonValue);
+  return { input: { [APPROVAL_DECISION_FIELD_V2]: ref, event }, key: canonicalSha256(ref as JsonValue) };
 }
 
 describe('approval decision projection', () => {
@@ -87,6 +98,10 @@ describe('approval decision projection', () => {
     ['audit.approved_at', w => { w.audit.approved_at = '2026-10-07T09:59:00.000Z'; }],
     ['audit.event_id', w => { w.audit.event_id = 'audit:other'; }],
     ['an extra witness key', w => { w.extra = {}; }],
+    ['no proposal snapshot', w => { delete w.proposal_snapshot; }],
+    ['a proposal snapshot that is not one', w => { w.proposal_snapshot = { note: 'x' }; }],
+    ['another text in the proposal snapshot', w => { ((w.proposal_snapshot as { approved_payload: { brief: { actions: Mutable[] } } }).approved_payload.brief.actions[0]!).text = 'Send it to everyone.'; }],
+    ['another proposal\'s snapshot', w => { (w.proposal_snapshot as Mutable).approval_id = `apr_${'b'.repeat(64)}`; }],
   ])('refuses a witness that differs from its record: %s', async (_label, tamper) => {
     const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno' } });
     f.core.decide('desktop', f.approve({ owners: [{ signal_id: 'act-1', owner: 'Rafael' }] }), () => f.session);
@@ -141,6 +156,28 @@ describe('approval decision projection', () => {
       canonicalSha256(ref as JsonValue))).rejects.toThrow();
     expect(f.recordCount()).toBe(0);
   });
+  it.each<[string, (brief: { decisions: Mutable[]; actions: Mutable[]; rationales: Mutable[] }, proposal: { rationales: readonly Mutable[] }) => void]>([
+    ['changed text', brief => { brief.actions[0]!.text = 'Send the pilot plan to every customer.'; }],
+    ['a reason moved from another group, its supports rewritten', (brief, proposal) => {
+      brief.rationales.push({ ...proposal.rationales.find(reason => reason.id === 'reason-decision')!, supports_signal_ids: ['act-1'] });
+    }],
+    ['a reason that supports nothing, in a project group', (brief, proposal) => { brief.rationales.push({ ...proposal.rationales.find(reason => reason.id === 'reason-loose')! }); }],
+  ])('refuses at append a project record whose content is not its share of the snapshot the reviewer saw: %s', async (_label, reshape) => {
+    const f = await approvalCoreFixture({ rationales: [{ id: 'reason-decision', supports: ['decision-1'] }, { id: 'reason-actions', supports: ['act-1', 'act-2'] }, { id: 'reason-loose', supports: [] }] });
+    // The decision goes to the reviewer alone and both actions to project A.
+    f.core.decide('desktop', f.approve({ routes: f.routes(id => id === 'decision-1' ? [] : [f.projectA]) }), () => f.session);
+    const built = buildApprovalDecisionRecordsV1(source(f));
+    const project = built.find(record => record.project_ids.length === 1)!;
+    expect(project.human_act_record_input.event.approved_snapshot.approved_payload.brief.rationales.map(reason => reason.id)).toEqual(['reason-actions']);
+    const proposal = clone(source(f).approved_snapshot) as { approved_payload: { brief: { rationales: readonly Mutable[] } } };
+    const { input, key } = reshaped(project, brief => reshape(brief, proposal.approved_payload.brief));
+    // The record codec alone accepts it: only the projector, recomputing the subset from the witness, can tell.
+    expect(() => validateApprovalDecisionRecordInputV2(input)).not.toThrow();
+    await expect(appendRaw(f, input, project.authorization_witness, key)).rejects.toThrow('Approval decision witness differs from its record');
+    expect(f.recordCount()).toBe(0);
+    // The record as built appends.
+    await expect(appendRaw(f, clone(project.human_act_record_input) as never, project.authorization_witness, project.semantic_idempotency_key)).resolves.toMatchObject({ outcome: 'appended' });
+  });
   it('approver projector returns the final approver under the record approval id and nothing for another kind or coordinates; policyBinding names the selected policy', async () => {
     const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve({ routes: f.routes([f.projectA]) }), () => f.session);
@@ -163,15 +200,19 @@ describe('approval decision projection', () => {
     const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno' } });
     f.core.decide('slack', f.approve({ command_id: 'slack:k1', routes: f.routes(id => id === 'act-1' ? [f.projectA] : []), owners: [{ signal_id: 'act-1', owner: 'Rafael' }] }), () => f.click);
     const input = source(f);
-    const witness: ApprovalDecisionWitnessV1 = approvalDecisionWitnessV1(input.decision);
-    expect(Object.keys(witness).sort()).toEqual(['audit', 'decision', 'evidence']);
+    const witness: ApprovalDecisionWitnessV1 = approvalDecisionWitnessV1(input.decision, validateApprovedDecisionSnapshotV2(input.approved_snapshot));
+    expect(Object.keys(witness).sort()).toEqual(['audit', 'decision', 'evidence', 'proposal_snapshot']);
+    // The snapshot the reviewer saw rides along, outside every digest the reference names.
+    expect(witness.proposal_snapshot).toEqual(input.approved_snapshot);
+    expect(canonicalSha256(witness.proposal_snapshot as unknown as JsonValue)).toBe(input.decision.body.request.snapshot_sha256);
     expect(witness.decision).toEqual(input.decision.body.request);
     expect(Object.keys(witness.decision).sort()).toEqual(['action', 'approval_id', 'command_id', 'owners', 'routes', 'snapshot_sha256']);
     expect(witness.evidence).toEqual({ surface: 'slack', organization_id: f.actor.organization_id, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id,
       kind: 'slack-click', sha256: f.click.evidence.sha256 });
     expect(witness.audit).toMatchObject({ approval_id: f.approvalId, event_id: 'audit:slack:k1', sequence: input.decision.sequence, approved_at: input.decision.body.decided_at,
       action_sha256: canonicalSha256(witness.decision as unknown as JsonValue), authorization_sha256: canonicalSha256(witness.evidence as unknown as JsonValue) });
-    expect(canonicalJson(approvalDecisionWitnessV1(clone(input.decision)) as unknown as JsonValue)).toBe(canonicalJson(witness as unknown as JsonValue));
+    expect(canonicalJson(approvalDecisionWitnessV1(clone(input.decision), validateApprovedDecisionSnapshotV2(clone(input.approved_snapshot))) as unknown as JsonValue))
+      .toBe(canonicalJson(witness as unknown as JsonValue));
     const once = buildApprovalDecisionRecordsV1(input), twice = buildApprovalDecisionRecordsV1(clone(input));
     expect(canonicalJson(twice as unknown as JsonValue)).toBe(canonicalJson(once as unknown as JsonValue));
     expect(once.map(record => record.project_ids)).toEqual([[], [f.projectA]]);

@@ -356,6 +356,18 @@ export function createPersonMeetingRuntimeV1(options: {
     try { check(); return true; }
     catch (error) { if (error instanceof AuthorityOperationError) return false; throw error; }
   }
+  /**
+   * The proposal one of this reviewer's published records decided, by the record's own approval id (a run's event_ref): the
+   * receipt of that reviewer's decision names it. Another reviewer's record, or one not yet published, has none.
+   */
+  function proposalOfRecord(reviewer: MeetingIntakePersonV1, recordApprovalId: string): string | undefined {
+    const proposal = db.prepare(`SELECT d.approval_id FROM authority_approval_decisions_v1 d, json_each(d.receipt_json, '$.records') AS published
+      WHERE json_extract(d.body_json, '$.actor.membership_id') = ? AND d.action = 'approve' AND d.receipt_json IS NOT NULL
+        AND json_extract(d.body_json, '$.actor.organization_id') = ? AND json_extract(d.body_json, '$.actor.principal_id') = ?
+        AND json_extract(published.value, '$.approval_id') = ? LIMIT 1`).pluck()
+      .get(reviewer.membership_id, reviewer.organization_id, reviewer.principal_id, recordApprovalId);
+    return typeof proposal === 'string' ? proposal : undefined;
+  }
   function reviewView(view: ApprovalProposalViewV1): PersonMeetingReviewV2 {
     return { approval_id: view.approval_id, title: view.title, project_ids: view.project_ids, status: view.status, decided_on: view.decided_on, ...approvalProposalSummaryV1(view.snapshot_json),
       records: view.records.map(record => ({ approval_id: record.approval_id, project_ids: record.project_ids })) };
@@ -395,15 +407,18 @@ export function createPersonMeetingRuntimeV1(options: {
           if (input.operation === 'reviews') return { reviews: reviewer === null ? [] : (await approvals()).proposals(reviewer).map(reviewView) };
           if (!reviewer) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
           const approvalCore = await approvals();
-          const view = approvalCore.proposal(input.approval_id);
+          // review_open also takes one of the proposal's published records' own approval ids (a run's event_ref, which a
+          // follow-ups list links): it opens the proposal's review, under the proposal's approval id. A decision never does.
+          const byRecord = (id: string) => { const proposal = proposalOfRecord(person, id); return proposal === undefined ? undefined : approvalCore.proposal(proposal); };
+          const view = approvalCore.proposal(input.approval_id) ?? (input.operation === 'review_open' ? byRecord(input.approval_id) : undefined);
           if (!view || view.reviewer.organization_id !== person.organization_id || view.reviewer.principal_id !== person.principal_id
             || view.reviewer.membership_id !== person.membership_id) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
           if (input.operation === 'review_open') return observeCoreRuntimeSyncV1('approval_review', () => {
-            annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', input.approval_id), approval_surface: 'desktop' });
+            annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', view.approval_id), approval_surface: 'desktop' });
             const projects = new SqlitePersonListDirectoryV1(db).joinedProjects(options.sessions.authenticateAccess({ access_token: token })).projects;
             const names = new Map(projects.filter(project => project.status === 'active').map(project => [project.project_id, project.name]));
             const review = approvalReviewV1(view.snapshot_json);
-            const items = reviewItems(view, new Map(approvalCore.ownerProposals(input.approval_id).map(owner => [owner.signal_id, owner.proposed])));
+            const items = reviewItems(view, new Map(approvalCore.ownerProposals(view.approval_id).map(owner => [owner.signal_id, owner.proposed])));
             // Names for the projects the items name, as far as the reviewer can read them: a suggestion is never access.
             const named = [...new Set(items.flatMap(item => item.project_ids ?? []))].sort();
             const row = reviewView(view);

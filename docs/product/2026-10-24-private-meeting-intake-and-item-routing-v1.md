@@ -152,6 +152,12 @@ The review rows of `reviews` gain `records`: the published records of a
 decided approval, each `{ approval_id, project_ids }`. It is empty until the
 approval is published.
 
+`review_open` also takes one of those record approval ids (a run's
+`event_ref`, which a follow-ups list links) and opens the proposal's review,
+whose `review.approval_id` is the proposal's. It resolves through the
+decision's receipt, for the reviewer who decided it only; `review` takes the
+proposal's approval id alone.
+
 ### 2.2 What the card sends (`review`)
 
 `review` carries `approval_id`, `command_id`, `snapshot_sha256`, `action`,
@@ -189,8 +195,12 @@ one record:
   false`, and the confirmed owners of this group's actions only.
 - Groups are ordered by the first item of each in brief order.
 
-Every group is built and validated before the first append. Appends are
-deterministic, so a retry returns `duplicate` for groups already in the log.
+Every group is built and validated before the first append. At append, the
+record log's policy projector recomputes the group's subset, with the
+publisher's own function, from the snapshot the reviewer saw (the append
+witness carries it; the log never stores it), and refuses a record whose
+content differs. Appends are deterministic, so a retry returns `duplicate`
+for groups already in the log.
 Once every group is in the log, one Authority transaction writes the receipt,
 `{ records: [{ approval_id, project_ids, record_sha256, receipt }, …] }` in
 group order, and runs the after-record hooks once per record. The approval is
@@ -201,9 +211,12 @@ group order, and runs the after-record hooks once per record. The approval is
 The after-record event names the record approval id, the proposal approval
 id, the record digest, the reviewer and the decision time. The impact-check
 hook enqueues one run per record with `event_ref` = the record approval id;
-the database trigger finds that record in the decision's receipt. A run never
-offers the meeting's own records (its siblings) or their transcripts as
-follow-ups. Open items and follow-ups already work per record and follow each
+the database trigger finds that record in the decision's receipt. A run's
+research desk never offers the meeting's other records (its siblings), their
+transcripts, or the meeting's own source (its unapproved notes): researching
+as the reviewer could read them, and the card's own words reach the record's
+audience. A run never offers its siblings or their transcripts as follow-ups
+either. Open items and follow-ups already work per record and follow each
 record's audience.
 
 ### 2.5 Desktop
@@ -221,7 +234,10 @@ record's audience.
 
 The DM card keeps its owner inputs, shows where the items go in one line, and
 offers Approve and Reject. Approve sends every item to the suggestion (Only
-me when there is none). Its fallback text says that choosing per item happens
+me when there is none). Its button carries a digest of the destination the
+card shows; when the suggestion the reviewer can read has changed since (a
+project joined or left), Approve decides nothing and the card is redrawn with
+the new destination. Its fallback text says that choosing per item happens
 in the ECHO desktop app. The closed card names the destinations.
 
 ## Part 3: hand in a meeting

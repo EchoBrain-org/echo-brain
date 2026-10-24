@@ -158,6 +158,21 @@ export class SqliteTriggerRunsV1 {
       approver.membership_id, approver.organization_id, approver.principal_id, recordSha256, recordSha256) as Sha256Digest[];
   }
 
+  /**
+   * The source the meeting of one of the approver's records was read from: the frozen transcript_source of the decision whose
+   * receipt names it, the custody that holds the meeting's unapproved notes and any transcript of it. undefined for any other
+   * digest.
+   */
+  meetingSource(approver: ApprovalActorV1, recordSha256: Sha256Digest): string | undefined {
+    const source = this.database.prepare(`SELECT json_extract(d.body_json, '$.transcript_source.source_id') FROM authority_approval_decisions_v1 d,
+        json_each(d.receipt_json, '$.records') AS own
+      WHERE json_extract(d.body_json, '$.actor.membership_id') = ? AND d.action = 'approve' AND d.receipt_json IS NOT NULL
+        AND json_extract(d.body_json, '$.actor.organization_id') = ? AND json_extract(d.body_json, '$.actor.principal_id') = ?
+        AND json_extract(own.value, '$.record_sha256') = ? LIMIT 1`).pluck().get(
+      approver.membership_id, approver.organization_id, approver.principal_id, recordSha256);
+    return typeof source === 'string' ? source : undefined;
+  }
+
   /** The approved-record runs of these records. Not fenced, as above. */
   impactRunsFor(recordSha256s: readonly Sha256Digest[]): readonly TriggerRunRowV1[] {
     if (recordSha256s.length === 0) return [];

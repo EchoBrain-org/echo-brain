@@ -5,7 +5,7 @@ import {
   type PrivateSlackApprovalInteractionHandlerInputV1,
 } from "../../src/private-approval/private-slack-approval-interaction-handler-v1.js";
 import { createPrivateSlackApprovalHttpAdapterV1 } from "../../src/private-approval/private-slack-approval-http-adapter-v1.js";
-import { slackApprovalActionIdV4 } from "../../src/private-approval/slack-approval-card-v4.js";
+import { slackApprovalActionIdV4, slackApprovalDestinationSha256V4 } from "../../src/private-approval/slack-approval-card-v4.js";
 
 const SECRET = "not-a-real-signing-secret",
   NOW = 1_800_000_000,
@@ -41,9 +41,10 @@ function body(response_url?: string) {
         action_id: id("approve"),
         text: { type: "plain_text", text: "Approve", emoji: false },
         value: JSON.stringify({
-          schema_version: 2,
+          schema_version: 3,
           approval_id: APPROVAL,
           snapshot_sha256: SNAPSHOT,
+          destination_sha256: slackApprovalDestinationSha256V4([]),
         }),
         action_ts: "1712345680.123456",
       },

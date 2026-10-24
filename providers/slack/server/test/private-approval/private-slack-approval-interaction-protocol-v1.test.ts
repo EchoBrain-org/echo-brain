@@ -9,6 +9,7 @@ import {
 import {
   buildSlackApprovalCardV4,
   slackApprovalActionIdV4,
+  slackApprovalDestinationSha256V4,
   slackApprovalOwnerActionIdV4,
 } from "../../src/private-approval/slack-approval-card-v4.js";
 
@@ -17,6 +18,7 @@ const NOW = 1_800_000_000;
 const APPROVAL_ID = "apr_00000000-0000-4000-8000-000000000001";
 const SNAPSHOT = `sha256:${"a".repeat(64)}`;
 const PROJECT_A = "prj_11111111-1111-4111-8111-111111111111";
+const DESTINATION = slackApprovalDestinationSha256V4([PROJECT_A]);
 const plain = (text: string) => ({ type: "plain_text", text, emoji: false });
 
 function form(value: unknown): Uint8Array {
@@ -45,6 +47,8 @@ function payload(
     readonly action?: "approve" | "reject" | "owner-input";
     readonly owners?: Readonly<Record<string, string | null>>;
     readonly snapshot?: string | null;
+    readonly destination?: string | null;
+    readonly schema_version?: number;
     readonly response_url?: string;
     readonly provider_metadata?: boolean;
     readonly state?: Record<string, unknown>;
@@ -112,11 +116,14 @@ function payload(
         block_id: "actions",
         text: plain(action === "reject" ? "Reject" : "Approve"),
         value: JSON.stringify({
-          schema_version: 2,
+          schema_version: input.schema_version ?? 3,
           approval_id: APPROVAL_ID,
           ...(input.snapshot === null
             ? {}
             : { snapshot_sha256: input.snapshot ?? SNAPSHOT }),
+          ...(input.destination === null
+            ? {}
+            : { destination_sha256: input.destination ?? DESTINATION }),
         }),
         action_ts: "1712345680.123456",
       },
@@ -142,7 +149,7 @@ function rejected(value: unknown) {
 }
 
 describe("private Slack approval interaction V4", () => {
-  it("parses a signed V4 approval with signal-keyed owners, no destination and no response URL retention", () => {
+  it("parses a signed V4 approval with signal-keyed owners, the card's destination digest and no response URL retention", () => {
     const result = parse(
       payload({
         owners: { act_alpha: "Ada Lovelace", act_beta: null },
@@ -155,9 +162,10 @@ describe("private Slack approval interaction V4", () => {
       action: "approve",
       approval_id: APPROVAL_ID,
       snapshot_sha256: SNAPSHOT,
+      destination_sha256: DESTINATION,
       owners: [{ signal_id: "act_alpha", owner: "Ada Lovelace" }],
     }));
-    expect(Object.keys(result).sort()).toEqual(["action", "approval_id", "disposition", "lookup", "owners", "provider_action_key_sha256", "schema_version", "snapshot_sha256"]);
+    expect(Object.keys(result).sort()).toEqual(["action", "approval_id", "destination_sha256", "disposition", "lookup", "owners", "provider_action_key_sha256", "schema_version", "snapshot_sha256"]);
     expect(JSON.stringify(result)).not.toContain("response_url");
   });
   it("accepts signed Slack hash and token envelope metadata without retaining it", () => {
@@ -169,13 +177,14 @@ describe("private Slack approval interaction V4", () => {
     expect(parse(payload())).toMatchObject({ disposition: "resolution", action: "approve", owners: [] });
     expect(parse(payload({ action: "reject", owners: { act_alpha: "Ada" } }))).toMatchObject({ disposition: "resolution", action: "reject", owners: [] });
   });
-  it("round-trips the owner inputs the card emits", () => {
+  it("round-trips the owner inputs and the button value the card emits", () => {
     const card = buildSlackApprovalCardV4({
       approval_id: APPROVAL_ID,
       snapshot_sha256: SNAPSHOT,
       review: { schema_version: 1, approval_id: APPROVAL_ID, meeting_title: "Roadmap", decision_groups: [],
         ungrouped_actions: [{ text: "Send draft", evidence_reference: "Meeting transcript" }] },
       destination: ["Alpha"],
+      destination_sha256: DESTINATION,
       owners: [{ signal_id: "act_alpha", action: "Send draft", proposed: "Ada" }],
     });
     const inputs = card.blocks.flatMap((block) => {
@@ -184,6 +193,18 @@ describe("private Slack approval interaction V4", () => {
     });
     expect(inputs).toEqual([slackApprovalOwnerActionIdV4(APPROVAL_ID, "act_alpha")]);
     expect(parse(payload({ owners: { act_alpha: "Ada L." } }))).toMatchObject({ owners: [{ signal_id: "act_alpha", owner: "Ada L." }] });
+    const buttons = card.blocks.flatMap((block) => (block as { elements?: readonly { type: string; value?: string }[] }).elements ?? []).filter((element) => element.type === "button");
+    expect(buttons.map((button) => JSON.parse(button.value!))).toEqual([0, 1].map(() => ({ schema_version: 3, approval_id: APPROVAL_ID, snapshot_sha256: SNAPSHOT, destination_sha256: DESTINATION })));
+    const emitted = payload(); emitted.actions[0]!.value = buttons[0]!.value!;
+    expect(parse(emitted)).toMatchObject({ approval_id: APPROVAL_ID, snapshot_sha256: SNAPSHOT, destination_sha256: DESTINATION });
+  });
+  it("refuses a button value without the destination its card showed, a malformed one, or the earlier value shape", () => {
+    rejected(payload({ destination: null }));
+    rejected(payload({ destination: "sha256:not-a-digest" }));
+    rejected(payload({ destination: null, schema_version: 2 }));
+    rejected(payload({ schema_version: 2 }));
+    const extra = payload(); extra.actions[0]!.value = JSON.stringify({ ...JSON.parse(extra.actions[0]!.value), project_ids: [PROJECT_A] });
+    rejected(extra);
   });
   it("refuses missing snapshots, the retired audience, project and transcript controls, legacy controls and unknown owners", () => {
     rejected(payload({ snapshot: null }));

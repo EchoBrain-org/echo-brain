@@ -5,6 +5,7 @@ import {
 } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { VerifiedSlackApprovalClickV1 } from "./private-slack-approval-interaction-protocol-v1.js";
+import { slackApprovalDestinationSha256V4 } from "./slack-approval-card-v4.js";
 import type { ApprovalActorV1, SlackApprovalTargetV1 as TargetV1 } from "./slack-approval-presenter-v1.js";
 
 type LinkV1 = ApprovalActorV1 & {
@@ -40,6 +41,7 @@ type CoreV1 = {
   ): { readonly kind: "decided" | "replayed" | "already_decided" | "stale" };
   proposal(id: string): {
     readonly reviewer: ApprovalActorV1;
+    readonly status: "pending" | "publishing" | "approved" | "rejected" | "superseded";
     readonly project_ids: readonly string[];
     readonly snapshot_json: string;
   } | undefined;
@@ -89,7 +91,10 @@ function target(value: unknown): TargetV1 | undefined {
     return undefined;
   return record as unknown as TargetV1;
 }
-/** A target-bound Slack click adapter. It writes only through approval core decide(), approving as suggested. */
+/**
+ * A target-bound Slack click adapter. It decides only through approval core decide(), approving as suggested, and only while
+ * the suggestion is the destination its card showed; otherwise it marks that open card for redraw and decides nothing.
+ */
 export function createSlackApprovalClickV1(options: {
   readonly database: Database.Database;
   readonly core: CoreV1;
@@ -103,6 +108,10 @@ export function createSlackApprovalClickV1(options: {
 } {
   const presentation = options.database.prepare(
     "SELECT target_json,dm_channel_id,message_ts FROM authority_approval_presentations_v1 WHERE approval_id=? AND surface='slack' AND delivery='posted'",
+  );
+  // The presenter redraws a posted card whose card_sha256 is cleared (its first-draw path); an open one is otherwise drawn once.
+  const redrawCard = options.database.prepare(
+    "UPDATE authority_approval_presentations_v1 SET card_sha256=NULL,updated_at=? WHERE approval_id=? AND surface='slack' AND delivery='posted' AND shows='open'",
   );
   return (click) => {
     const row = presentation.get(click.approval_id) as
@@ -154,6 +163,13 @@ export function createSlackApprovalClickV1(options: {
     const signals = routedSignals(proposal.snapshot_json);
     if (signals === undefined) return { outcome: "refused" };
     const suggestion = [...proposal.project_ids];
+    // Approve sends every item where the card said. A suggestion that changed since it was drawn (a project the reviewer
+    // joined or left) decides nothing: the card is redrawn with where Approve sends the items now.
+    if (click.action === "approve" && proposal.status === "pending" && slackApprovalDestinationSha256V4(suggestion) !== click.destination_sha256) {
+      redrawCard.run(new Date().toISOString(), click.approval_id);
+      options.redraw(click.approval_id);
+      return { outcome: "stale" };
+    }
     const ownerProposals = options.core.ownerProposals(click.approval_id);
     const permitted = new Set(ownerProposals.map((owner) => owner.signal_id));
     if (click.owners.some((owner) => !permitted.has(owner.signal_id)))
