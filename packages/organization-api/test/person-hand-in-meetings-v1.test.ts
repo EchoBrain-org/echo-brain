@@ -34,6 +34,8 @@ describe('handed-in meetings', () => {
     ['text that is not NFC', { notes: 'Café decision.' }, {}],
     ['a control character', { notes: 'Decision\u0007 move the pilot.' }, {}],
     ['a C1 control character', { transcript: 'Speaker\u0085 Friday works.' }, {}],
+    ['a form feed', { notes: 'Decision:\u000cmove the pilot.' }, {}],
+    ['a line separator', { notes: 'Decision:\u2028move the pilot.' }, {}],
     ['a lone surrogate', { notes: 'Decision \ud800 move the pilot.' }, {}],
     ['an empty title', { title: '' }, {}],
     ['a title over 200 characters', { title: 'T'.repeat(201) }, {}],
@@ -72,6 +74,17 @@ describe('handed-in meetings', () => {
     for (const input of [{ date: '2026-10-21', started_at: '2026-10-21T22:30:00.000Z' }, { date: '2026-10-21', time_zone: 'UTC' }, { date: '21/10/2026' }, { date: '2026-02-30' }]) {
       expect(() => personHandInMeetingV1({ title: 'Supplier sync', notes: 'Decision.', transcript: '', ...input })).toThrow();
     }
+  });
+
+  it('keeps text pasted from any tool: other line breaks become line feeds, invisible controls go, and tabs stay', () => {
+    expect(personHandInTextV1('Decision:\u000bmove\u000cthe\u0085pilot\u2028to\u2029Friday.')).toBe('Decision:\nmove\nthe\npilot\nto\nFriday.');
+    expect(personHandInTextV1('\u0000Mina\u0007 sends\u001b the\u007f revised\u0080 quote\u009f.\u0003')).toBe('Mina sends the revised quote.');
+    expect(personHandInTextV1('\u000c\tDecisions\n\t- Move the pilot.\u2029')).toBe('Decisions\n\t- Move the pilot.');
+    // The same meeting with or without them is one meeting, so it derives one id.
+    const clean = personHandInMeetingV1({ title: 'Supplier sync', notes: 'Decision:\nmove the pilot.', transcript: 'Mina Patel: Friday works.' });
+    expect(personHandInMeetingV1({ title: 'Supplier\u0007 sync', notes: 'Decision:\u2028move the pilot.\u000c', transcript: '\u0085Mina Patel: Friday works.\u0000' }))
+      .toEqual(clean);
+    expect(validatePersonHandInMeetingV1(clean)).toEqual(clean);
   });
 
   it('answers with the id derived from the content', () => {

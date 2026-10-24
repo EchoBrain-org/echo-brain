@@ -657,8 +657,9 @@ function applyStatus(status: AppStatus): void {
   weeklySignIn(next);
   // Signed out: the sign-in page covers everything until someone signs in. Mine, and what was read in it, goes.
   if (!next) {
-    // A sign-out the host lost mid-way did happen: the account goes as it would have.
-    if (signOutPending) { signOutPending = null; forgetAccount(); }
+    // A sign-out the host lost mid-way did happen: the account goes as it would have. Any other sign-out still drops what
+    // a screen keeps beside its sheet, as the sheet goes, even one the cover has away.
+    if (signOutPending) { signOutPending = null; forgetAccount(); } else dropAccountKeeps();
     // No one to check for: signing in again starts over, learning what is there.
     freshness.stop();
     emptyBar();
@@ -735,9 +736,16 @@ export async function signInAgain(): Promise<void> {
   await signIn(account.authority);
 }
 
+/** How each screen drops what it keeps of an account beside the state, such as Paste a meeting's draft under the cover. */
+const accountKeeps: (() => void)[] = [];
+/** Registers how a screen drops what it keeps of an account: whenever that account goes (forgotten, switched or signed out). */
+export function onAccountGone(drop: () => void): void { accountKeeps.push(drop); }
+function dropAccountKeeps(): void { for (const drop of accountKeeps) drop(); }
+
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
 function forgetAccount(): void {
   askedQuestions = [];
+  dropAccountKeeps();
   // Cleanup belongs to the previous account, even after status has changed. The host may refuse it once that session
   // is gone; never try an old request or connection with the newly signed-in account's authority.
   const account = lastAccount;
@@ -4715,7 +4723,7 @@ class ToolsFailed extends CommandFailed {}
 
 /** The meeting tools, in the order Home reads reviews through them: a review is the person's, whichever tool brought it. */
 const MEETING_TOOLS = ['granola', 'hand-in'] as const;
-/** The meeting tool Home reads reviews through, as its last load learned. */
+/** The meeting tool Home reads reviews through, as its last load learned; a card opens and decides through it too. */
 let reviewTool: string = MEETING_TOOLS[0];
 
 /**
@@ -5042,7 +5050,7 @@ function choicesOf(open: ReviewOpen): Pick<DecisionState, 'routes' | 'owners'> {
 async function readDecision(mine: number, approval_id: string, again = false): Promise<void> {
   let open: ReviewOpen;
   try {
-    open = await meetingCommand({ operation: 'review_open', approval_id });
+    open = await meetingCommand({ operation: 'review_open', approval_id }, reviewTool);
   } catch (error) {
     const decision = decisionShown(mine);
     if (decision && !again) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
@@ -5140,7 +5148,7 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
       routes: action === 'approve' ? items.map(item => ({ signal_id: item.signal_id, project_ids: decision.routes[item.signal_id] ?? null })) : [],
       owners: action === 'approve' ? items.flatMap(item => (item.owner_editable && (decision.routes[item.signal_id] ?? null) !== null && owner(item)
         ? [{ signal_id: item.signal_id, owner: owner(item) }] : [])) : [],
-    });
+    }, reviewTool);
     if (!decisionShown(mine)) return;
     const toast = result.decided_on === 'slack' ? `Already ${result.status === 'rejected' ? 'rejected' : 'approved'} in Slack`
       : result.status === 'rejected' ? 'Rejected' : 'Approved · checking what it changes';
@@ -6101,7 +6109,7 @@ async function proposalOf(recordApprovalId: string): Promise<string | null> {
     reviews.find(review => review.records.some(record => record.approval_id === recordApprovalId))?.approval_id ?? null;
   const known = named(state.home?.reviews ?? []);
   if (known !== null) return known;
-  try { return named((await meetingCommand({ operation: 'reviews' })).reviews); } catch { return null; }
+  try { return named((await meetingCommand({ operation: 'reviews' }, reviewTool)).reviews); } catch { return null; }
 }
 
 /**

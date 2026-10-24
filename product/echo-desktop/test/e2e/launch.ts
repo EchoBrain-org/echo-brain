@@ -20,8 +20,9 @@ export interface Launched {
 /**
  * The real app with a private temporary home: never the founder's session. `files` are written into that home before the
  * app starts, such as the fixture Authority's switches (`hold-live` holds every live read until the test removes it).
+ * `env` adds to the app's environment, such as `TZ` for the time zone it and its person client run in.
  */
-export async function launch(mode = '', files: Readonly<Record<string, string>> = {}): Promise<Launched> {
+export async function launch(mode = '', files: Readonly<Record<string, string>> = {}, env: Readonly<Record<string, string>> = {}): Promise<Launched> {
   // The session store requires a canonical private folder (macOS /var is a link).
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-desktop-home-')));
   for (const [name, text] of Object.entries(files)) writeFileSync(join(home, name), text);
@@ -34,6 +35,7 @@ export async function launch(mode = '', files: Readonly<Record<string, string>> 
     ],
     env: {
       ...process.env,
+      ...env,
       ECHO_HOME: home,
       ECHO_DESKTOP_USER_DATA: userData,
       ECHO_DESKTOP_TEST_FIXTURES: join(root, 'test', 'fixtures'),

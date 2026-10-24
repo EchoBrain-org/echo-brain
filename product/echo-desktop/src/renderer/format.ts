@@ -104,23 +104,28 @@ export function snippet(excerpt: string, terms: readonly string[]): string | nul
 
 /**
  * A meeting's time as the source pane shows it, "Sep 15, 2026, 10:00 AM PDT":
- * in the meeting's own time zone when it has one, and without the time for an
- * all-day meeting.
+ * in the meeting's own time zone when it has one. An all-day meeting is its
+ * date alone, the UTC date its time names, so it is the same day wherever the
+ * meeting or this computer is.
  */
 export function meetingTime(iso: string, timeZone?: string, allDay = false): string {
   const options: Intl.DateTimeFormatOptions = allDay
-    ? { year: 'numeric', month: 'short', day: 'numeric' }
+    ? { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }
     : { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' };
   const date = new Date(iso);
   try {
-    return new Intl.DateTimeFormat(undefined, timeZone ? { ...options, timeZone } : options).format(date);
+    return new Intl.DateTimeFormat(undefined, timeZone && !allDay ? { ...options, timeZone } : options).format(date);
   } catch {
     return new Intl.DateTimeFormat(undefined, options).format(date); // a time zone this computer does not know
   }
 }
 
-/** A date and time, "Sep 28, 3:00 PM": when an invitation stops working. */
-export function dateTime(iso: string): string {
+/**
+ * A date and time, "Sep 28, 3:00 PM": when an invitation stops working. A
+ * whole day (`allDay`) is its UTC date alone, "Sep 28", the same day anywhere.
+ */
+export function dateTime(iso: string, allDay = false): string {
   const time = Date.parse(iso);
-  return Number.isNaN(time) ? '' : new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return Number.isNaN(time) ? '' : new Date(time).toLocaleString(undefined, allDay ? { month: 'short', day: 'numeric', timeZone: 'UTC' }
+    : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }

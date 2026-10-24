@@ -3,6 +3,9 @@ import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/f
 import { validatePersonHandInMeetingV1, type PersonHandInMeetingV1 } from '@echo-brain/organization-api';
 import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 
+/** The source adapter of every hand-in source: its meetings, transcripts included, are what their person handed in. */
+export const HAND_IN_SOURCE_ADAPTER_ID_V1 = 'person-hand-in-meeting';
+
 /** A handed-in meeting as kept: its payload, the digest its id derives from, and when it was handed in. */
 export interface StoredHandInMeetingV1 {
   readonly external_id: string; readonly meeting: PersonHandInMeetingV1; readonly payload_sha256: Sha256Digest; readonly submitted_at: string;
@@ -32,6 +35,18 @@ export class SqlitePersonHandInMeetingsV1 {
     this.database.prepare(`INSERT INTO authority_person_hand_in_meetings_v1(source_key,external_id,payload_json,payload_sha256,submitted_at)
       VALUES (?,?,?,?,?) ON CONFLICT(source_key,external_id) DO NOTHING`).run(sourceKey, externalId, canonicalJson(meeting), digest, new Date().toISOString());
     return externalId;
+  }
+
+  /**
+   * Forgets a cancelled meeting's payload, in the transaction that drops its queued import. A meeting an admitted source
+   * revision already holds keeps its payload; the delete trigger refuses every other delete.
+   */
+  forget(sourceKey: string, externalId: string): void {
+    if (!this.database.inTransaction) throw new Error('A handed-in meeting is forgotten only with its cancelled import');
+    this.database.prepare(`DELETE FROM authority_person_hand_in_meetings_v1 AS kept WHERE kept.source_key=? AND kept.external_id=? AND NOT EXISTS (
+      SELECT 1 FROM authority_live_source_admission_v2 a JOIN authority_sources_v1 s
+        ON s.organization_id=a.organization_id AND s.adapter_id=a.source_adapter_id AND s.instance_id=a.source_adapter_instance_id
+      WHERE a.source_key=kept.source_key AND s.external_id=kept.external_id)`).run(sourceKey, externalId);
   }
 
   /** One source's meeting, checked against its digest and id; undefined when the source keeps none by that id. */

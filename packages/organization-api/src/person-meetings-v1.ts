@@ -78,6 +78,8 @@ export interface PersonMeetingReviewV2 {
   readonly action_count: number;
   /** When the meeting started, when the meeting tool says. */
   readonly meeting_at: string | null;
+  /** A whole-day meeting: `meeting_at`'s UTC date is its day, and it has no time of day to show. Never without `meeting_at`. */
+  readonly all_day: boolean;
   /** The published records, one per destination: empty until the approval is published. */
   readonly records: readonly PersonMeetingRecordV2[];
 }
@@ -134,9 +136,14 @@ export function validatePersonSyntheticMeetingV1(value: unknown): PersonSyntheti
       utf8ByteLength(JSON.stringify(row)) > PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1) fail('Invalid synthetic meeting');
   return Object.freeze({ ...row }) as unknown as PersonSyntheticMeetingV1;
 }
-/** Text as a handed-in meeting keeps it: line feeds only, NFC, no edge whitespace. Clients send it, so equal text derives one id. */
+/**
+ * Text as a handed-in meeting keeps it: line feeds only, NFC, no edge whitespace. Every other line break (vertical tab,
+ * form feed, NEL, U+2028, U+2029) becomes a line feed and every other control but tab goes, so text pasted from any tool
+ * is never refused for a character no one sees. Clients send it, so equal text derives one id.
+ */
 export function personHandInTextV1(value: string): string {
-  return value.replace(/\r\n?/g, '\n').normalize('NFC').trim();
+  return value.replace(/\r\n?|[\u000b\u000c\u0085\u2028\u2029]/g, '\n').replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f]/g, '')
+    .normalize('NFC').trim();
 }
 const handInLabel = 'Handed-in meeting';
 /** Canonical text with no control but tab and line feed; a title is also one line of 1 to `maximum` code units. */
@@ -262,11 +269,12 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
     }
   };
   const review = (value: unknown) => {
-    const item = object(value, ['approval_id','title','project_ids','status','decided_on','first_line','action_count','meeting_at','records']); text(item.approval_id); text(item.title, 1024); projectIds(item.project_ids);
+    const item = object(value, ['approval_id','title','project_ids','status','decided_on','first_line','action_count','meeting_at','all_day','records']); text(item.approval_id); text(item.title, 1024); projectIds(item.project_ids);
     if (!['pending','publishing','approved','rejected','superseded'].includes(String(item.status)) || ![null, 'desktop', 'slack'].includes(item.decided_on as string | null)) fail('Invalid meeting review state');
     if (item.first_line !== null) text(item.first_line, 300);
     if (!Number.isSafeInteger(item.action_count) || (item.action_count as number) < 0) fail('Invalid meeting review action count');
     if (item.meeting_at !== null) assertTimestamp(item.meeting_at, 'Meeting review time');
+    if (typeof item.all_day !== 'boolean' || (item.all_day && item.meeting_at === null)) fail('Invalid meeting review time');
     records(item.records);
     if (item.status !== 'approved' && (item.records as unknown[]).length > 0) fail('Invalid meeting review record');
   };

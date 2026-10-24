@@ -49,7 +49,8 @@ export function ReviewLine({ row }: { row: Extract<NeedRow, { review: unknown }>
   const review = row.review;
   if (row.kind === 'checking') return <>{review.status === 'publishing' && !row.run ? 'Approved · publishing to ECHO' : 'Approved · checking what it changes'}</>;
   if (row.kind === 'failed') return <>Approved · the check did not finish</>;
-  const day = review.meeting_at === null ? null : monthDay(review.meeting_at);
+  // A whole day is its UTC date, the same day wherever Home shows it.
+  const day = review.meeting_at === null ? null : monthDay(review.all_day ? review.meeting_at.slice(0, 10) : review.meeting_at);
   const actions = actionCount(review.action_count);
   return <>Decision{actions ? ` · ${actions}` : ''} · <b>{review.title}</b>{meetingSuffix(review.title)}{day ? `, ${day}` : ''}</>;
 }

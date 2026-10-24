@@ -56,9 +56,9 @@ function counts(items: readonly Item[]): string | null {
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-/** Where the meeting came from: "Meeting · Oct 13, 9:00 AM". */
-function meetingWhere(meetingAt: string | null): string {
-  const at = meetingAt ? dateTime(meetingAt) : '';
+/** Where the meeting came from: "Meeting · Oct 13, 9:00 AM", or a whole day's date alone, "Meeting · Oct 13". */
+function meetingWhere(meetingAt: string | null, allDay: boolean): string {
+  const at = meetingAt ? dateTime(meetingAt, allDay) : '';
   return at ? `Meeting · ${at}` : 'Meeting';
 }
 
@@ -164,7 +164,7 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   return (
     <div class="card-page" data-testid="decision">
       <article class="card-main" aria-labelledby="decision-ask">
-        <CardHead kind="approve" verb="Approve" where={meetingWhere(open.review.meeting_at)} title={open.review.title} id="decision-ask" meta={counts(open.items)} />
+        <CardHead kind="approve" verb="Approve" where={meetingWhere(open.review.meeting_at, open.review.all_day)} title={open.review.title} id="decision-ask" meta={counts(open.items)} />
         <Decided items={open.items}>{route}</Decided>
         <Reasons reasons={open.reasons} />
         <ToDo items={open.items}>{item => <>

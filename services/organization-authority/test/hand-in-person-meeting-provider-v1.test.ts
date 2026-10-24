@@ -9,6 +9,7 @@ import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../s
 import { createHandInPersonMeetingProviderV1, handInMeetingDocumentV1, readHandInCheckpointV1, writeHandInCheckpointV1, HAND_IN_SOURCE_ADAPTER_ID_V1 } from '../src/composition/hand-in-person-meeting-provider-v1.js';
 import { handInMeetingIdV1, SqlitePersonHandInMeetingsV1 } from '../src/adapters/persistence/sqlite/person-hand-in-meetings-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
+import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
 import { addMembership, authorization } from './fixtures/project-context-sqlite.js';
 import { decisions } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
@@ -21,7 +22,8 @@ const meeting: PersonHandInMeetingV1 = { title: 'Supplier sync', notes: '# Decis
 const ledgers: SqliteExtractionAttemptStoreV1[] = [];
 afterEach(() => { for (const ledger of ledgers.splice(0)) ledger.close(); });
 
-async function fixture() {
+/** `quiet`: the extractor finds no decision and no action, so a meeting makes no card. */
+async function fixture(options: { readonly quiet?: boolean } = {}) {
   const f = await approvalContextFixture();
   const now = new Date().toISOString();
   f.db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(f.actor.organization_id, now);
@@ -52,7 +54,7 @@ async function fixture() {
           async extract(document) {
             extracted.push(document);
             return { ...decisions, meeting_id: document.id, meeting_revision: document.provenance.canonical_revision, processor: identity,
-              signals: decisions.signals.map(signal => ({ ...signal, text: 'Move the pilot to Friday.', evidence: [{ meeting_id: document.id, block_id: document.content[0]!.id }] })) };
+              signals: options.quiet ? [] : decisions.signals.map(signal => ({ ...signal, text: 'Move the pilot to Friday.', evidence: [{ meeting_id: document.id, block_id: document.content[0]!.id }] })) };
           } };
       } },
     extraction_attempts: ledger });
@@ -68,7 +70,7 @@ async function fixture() {
     for (let pass = 0; pass < 10 && intake.list().some(s => intake.checkpoint(s.source_key).manual.length > 0); pass++) await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
   };
   const count = (table: string) => f.db.prepare(`SELECT count(*) FROM ${table}`).pluck().get();
-  return { ...f, owner, member, handIn, create, call, grantProject, intake, processUntilIdle, count, extracted };
+  return { ...f, owner, member, sessions, handIn, create, call, grantProject, intake, processUntilIdle, count, extracted };
 }
 
 describe('the hand-in meeting source', () => {
@@ -93,14 +95,19 @@ describe('the hand-in meeting source', () => {
     expect(f.extracted).toHaveLength(1);
     const [document] = f.extracted;
     // Honest custody: the text as handed in, its origin imported, the transcript a block per paragraph, nothing synthetic.
-    expect(document).toMatchObject({ id, title: 'Supplier sync', time: { actual_start_at: '2026-10-21T12:00:00.000Z', all_day: true }, participants: [], content: [
+    // A whole day is read in UTC, so no reader moves it to another day.
+    expect(document!.time).toEqual({ actual_start_at: '2026-10-21T12:00:00.000Z', timezone: 'UTC', all_day: true });
+    expect(document).toMatchObject({ id, title: 'Supplier sync', participants: [], content: [
       { id: `${id}:notes`, kind: 'note', origin: 'imported', text: meeting.notes },
       { id: `${id}:transcript:0`, kind: 'transcript', origin: 'imported', sequence: 0, text: 'Mina Patel: I will send the revised quote.\nRafael Moreno: Thanks.' },
       { id: `${id}:transcript:1`, kind: 'transcript', origin: 'imported', sequence: 1, text: 'Rafael Moreno: Friday works for the pilot.' },
     ] });
     expect(JSON.stringify(document).toLowerCase()).not.toContain('synthetic');
     const [review] = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    expect(review).toMatchObject({ title: 'Supplier sync', status: 'pending', project_ids: [project], first_line: 'Move the pilot to Friday.', meeting_at: '2026-10-21T12:00:00.000Z' });
+    expect(review).toMatchObject({ title: 'Supplier sync', status: 'pending', project_ids: [project], first_line: 'Move the pilot to Friday.', meeting_at: '2026-10-21T12:00:00.000Z',
+      all_day: true });
+    // The card reads the same row: its day, and no time of day.
+    expect((await f.call(runtime, { operation: 'review_open', approval_id: review!.approval_id })).review).toEqual(review);
     expect((await f.call(runtime, { operation: 'reviews' }, 'owner')).reviews).toEqual([]);
 
     // Handed in once more after processing: the frozen result is reused, so no second extraction and no second card.
@@ -109,6 +116,50 @@ describe('the hand-in meeting source', () => {
     expect(f.extracted).toHaveLength(1);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
     expect(f.count('authority_person_hand_in_meetings_v1')).toBe(1);
+  });
+
+  it('forgets a cancelled paste with its import, and keeps one an admitted source revision holds', async () => {
+    const f = await fixture(), runtime = f.create();
+    const submit = { operation: 'submit', meeting, project_id: null, retain: true } as const;
+    const { meeting_id: id } = await f.call(runtime, submit);
+    const [source] = f.intake.list(f.member);
+    const cancel = { operation: 'cancel_import', source_key: source!.source_key, meeting_id: id } as const;
+    await expect(f.call(runtime, cancel)).resolves.toEqual({ status: 'cancelled' });
+    // Cancelled before it was pulled: its payload went with its import, so nothing of it is left to remove.
+    expect(f.intake.checkpoint(source!.source_key).manual).toEqual([]);
+    expect(f.count('authority_person_hand_in_meetings_v1')).toBe(0);
+    // Pasted again, it is kept again and processed.
+    await expect(f.call(runtime, submit)).resolves.toEqual({ status: 'queued', meeting_id: id });
+    await f.processUntilIdle(runtime);
+    expect(f.extracted).toHaveLength(1);
+    // Admitted, it stays: pasted once more and cancelled, its import goes but its payload stays with the revision that holds it.
+    await f.call(runtime, submit);
+    await expect(f.call(runtime, cancel)).resolves.toEqual({ status: 'cancelled' });
+    expect(f.intake.checkpoint(source!.source_key).manual).toEqual([]);
+    expect(new SqlitePersonHandInMeetingsV1(f.db).get(source!.source_key, id)).toMatchObject({ external_id: id, meeting });
+    expect(() => f.db.prepare('DELETE FROM authority_person_hand_in_meetings_v1').run()).toThrow('handed-in meeting deletion is denied');
+    // Forgetting outside the cancel's transaction is refused.
+    expect(() => new SqlitePersonHandInMeetingsV1(f.db).forget(source!.source_key, id)).toThrow('only with its cancelled import');
+  });
+
+  it('lets its importer find and open a transcript-only paste that makes no card, and no one else', async () => {
+    const f = await fixture({ quiet: true }), runtime = f.create();
+    const pasted: PersonHandInMeetingV1 = { title: 'Kiln trial', notes: '', transcript: 'Mina Patel: The kiln trial slips a week.\n\nRafael Moreno: Then the glaze order waits.' };
+    await f.call(runtime, { operation: 'submit', meeting: pasted, project_id: null, retain: true });
+    await f.processUntilIdle(runtime);
+    expect(f.extracted).toHaveLength(1);
+    // No decision and no action: no card, and the meeting stays in its importer's custody.
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.member.organization_id);
+    const found = originals.deskSearch({ access_token: 'member', scope: { kind: 'global' }, query: 'kiln glaze', kinds: ['imported_meeting'] });
+    expect(found.items).toHaveLength(1);
+    expect(() => originals.revalidateDeskRelease({ access_token: 'member', release: found })).not.toThrow();
+    // The person supplied the transcript, so it is the text they open, whole.
+    expect(originals.deskOpen({ access_token: 'member', scope: { kind: 'mine' }, citation: found.items[0]!.citation }).items[0]?.text)
+      .toContain('Mina Patel: The kiln trial slips a week.\n\nRafael Moreno: Then the glaze order waits.');
+    expect(originals.deskSearch({ access_token: 'member', scope: { kind: 'mine' }, query: 'glaze' }).items).toHaveLength(1);
+    // Nobody else reads it, the owner included.
+    expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'kiln glaze' }).items).toEqual([]);
   });
 
   it('is open to every member while the staging synthetic source stays owner-only', async () => {

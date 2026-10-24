@@ -900,9 +900,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const sourceLimit = 100;
     const candidates = [
       ...this.textRows(actor, scope, [], { inventory: true, limit: sourceLimit }),
-      // Transcript-only imports remain visible in the original-item list, but
-      // have no notes passage to cite. Exclude them before applying the limit
-      // so they neither break packet construction nor hide readable notes.
+      // Transcript-only imports from a meeting tool remain visible in the
+      // original-item list, but have no passage to cite (a pasted transcript
+      // is text). Exclude them before applying the limit so they neither
+      // break packet construction nor hide readable notes.
       ...this.imported.rows(actor, scope).filter(row => row.text.length > 0).slice(0, sourceLimit),
       ...this.documentRows(actor, scope, [], { inventory: true, limit: sourceLimit, first_document_passage: true }),
     ]

@@ -19,7 +19,7 @@ const items = [
     project_ids: [THERM] },
 ];
 const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning', project_ids: [], status: 'pending' as const, decided_on: null, first_line: null,
-  action_count: 1, meeting_at: null, records: [] };
+  action_count: 1, meeting_at: null as string | null, all_day: false, records: [] };
 const open = { review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), participants: ['Ari', 'Mina Patel'], items, suggested_projects: [{ project_id: THERM, name: 'THERM' }],
   reasons: [{ signal_id: 'why-1', text: 'The freeze lifts on Friday.', supports: ['dec-1'], quotes: [] }], records: [] };
 const decision = (patch: Partial<DecisionState> = {}): DecisionState => ({
@@ -69,6 +69,16 @@ describe('the decision card', () => {
     expect(text(byTestId(tree, 'route-all')[0])).toBe('Not kept');
     expect(byTestId(tree, 'decision-approve')[0]!.props.disabled).toBe(true);
     expect(byTestId(tree, 'decision-reject')[0]!.props.disabled).toBe(false);
+  });
+
+  it('heads a whole day\'s card with its UTC date alone, the same day in any time zone, and a timed meeting\'s with its time', async () => {
+    const top = (tree: Node) => text(elements(tree).find(node => node.props.class === 'card-top'));
+    // A meeting tool's all-day event is midnight UTC and a pasted day noon UTC: both are Oct 21, wherever this computer is.
+    for (const meeting_at of ['2026-10-21T00:00:00.000Z', '2026-10-21T12:00:00.000Z']) {
+      expect(top(await page(decision({ open: { ...open, review: { ...review, meeting_at, all_day: true } } })))).toBe('Approve· Meeting · Oct 21');
+    }
+    expect(top(await page(decision({ open: { ...open, review: { ...review, meeting_at: '2026-10-21T16:30:00.000Z' } } })))).toMatch(/^Approve· Meeting · Oct 2\d, .*:30/);
+    expect(top(await page(decision()))).toBe('Approve· Meeting');
   });
 
   it('locks every chip while a decision may be on its way', async () => {

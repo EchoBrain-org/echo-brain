@@ -6,7 +6,7 @@ const projectA = 'prj_00000000-0000-4000-8000-000000000001';
 const projectB = 'prj_00000000-0000-4000-8000-000000000002';
 const digest = `sha256:${'b'.repeat(64)}`;
 const review = { approval_id: approval, title: 'Pilot planning', project_ids: [projectA], status: 'pending', decided_on: null,
-  first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', records: [] } as const;
+  first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false, records: [] } as const;
 const routes = (...destinations: (readonly string[] | null)[]) => destinations.map((project_ids, index) => ({ signal_id: `sig-${index + 1}`, project_ids }));
 const request = (value: Record<string, unknown>) => ({ schema_version: 2, tool_id: 'granola', operation: 'review', approval_id: approval, command_id: 'review-1', snapshot_sha256: digest,
   action: 'approve', routes: routes([projectA], null, []), owners: [], ...value });
@@ -107,12 +107,14 @@ describe('person meetings v2', () => {
     expect(() => validatePersonMeetingResultV2('review_open', body)).toThrow();
   });
 
-  it('requires the review row fields, records included', () => {
+  it('requires the review row fields, the whole-day flag and records included', () => {
     expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: approval, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null }] })).toThrow();
     expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: approval, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null,
-      first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z' }] })).toThrow();
+      first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false }] })).toThrow();
+    expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: approval, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null,
+      first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', records: [] }] })).toThrow();
     expect(validatePersonMeetingResultV2('reviews', { reviews: [{ approval_id: approval, title: 'Pilot planning', project_ids: [], status: 'pending', decided_on: null,
-      first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', records: [] }] }).reviews[0]!.action_count).toBe(2);
+      first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false, records: [] }] }).reviews[0]!.action_count).toBe(2);
   });
 
   it.each([
@@ -125,14 +127,18 @@ describe('person meetings v2', () => {
     ['an action count as text', { action_count: '2' }],
     ['a meeting time that is not a timestamp', { meeting_at: 'Oct 6' }],
     ['a meeting time without milliseconds', { meeting_at: '2026-10-06T16:00:00Z' }],
+    ['a whole-day flag as text', { all_day: 'true' }],
+    ['no whole-day flag', { all_day: null }],
+    ['a whole day without its time', { all_day: true, meeting_at: null }],
   ])('rejects a review row with %s, in reviews and review_open', (_name, value) => {
     expect(() => validatePersonMeetingResultV2('reviews', { reviews: [{ ...review, ...value }] })).toThrow();
     expect(() => validatePersonMeetingResultV2('review_open', opened({ review: { ...review, ...value } }))).toThrow();
   });
 
-  it('accepts a review row without a decision line or meeting time, the bounds themselves, and more than 40 actions', () => {
+  it('accepts a review row without a decision line or meeting time, a whole day, the bounds themselves, and more than 40 actions', () => {
     expect(validatePersonMeetingResultV2('reviews', { reviews: [{ ...review, first_line: null, action_count: 0, meeting_at: null },
-      { ...review, first_line: 'L'.repeat(300), action_count: 41 }, { ...review, action_count: Number.MAX_SAFE_INTEGER }] }).reviews).toHaveLength(3);
+      { ...review, first_line: 'L'.repeat(300), action_count: 41 }, { ...review, action_count: Number.MAX_SAFE_INTEGER },
+      { ...review, meeting_at: '2026-10-21T12:00:00.000Z', all_day: true }] }).reviews).toHaveLength(4);
     expect(() => validatePersonMeetingResultV2('review_open', opened({ review: { ...review, first_line: null, action_count: 0, meeting_at: null } }))).not.toThrow();
   });
 

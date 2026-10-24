@@ -17,7 +17,7 @@ test('a meeting pasted from any tool reaches Home as a decision to approve', asy
   await expect.poll(reviewReads).toContain('hand-in');
   await page.getByTestId('sidebar-tools').click();
   const row = page.locator('[data-tool="hand-in"]');
-  await expect(row).toHaveText('PPaste a meetingFrom any meeting toolPaste');
+  await expect(row).toHaveText('PPaste a meetingPaste');
   // Nothing to connect, manage or disconnect.
   await expect(row.getByTestId('tool-connect')).toHaveCount(0);
   await expect(row.getByTestId('tool-manage')).toHaveCount(0);
@@ -28,7 +28,8 @@ test('a meeting pasted from any tool reaches Home as a decision to approve', asy
   const add = sheet.getByRole('button', { name: 'Add', exact: true });
   await sheet.getByLabel('Title', { exact: true }).fill('Supplier sync');
   await sheet.getByLabel('Date', { exact: true }).fill('2026-10-21');
-  await sheet.getByLabel('Notes', { exact: true }).fill('Decision: move the pilot to Friday.\r\nAction: Mina sends the revised quote.\n');
+  // Pasted from another tool: a Windows line ending, a line separator, and a control character no one sees.
+  await sheet.getByLabel('Notes', { exact: true }).fill('Decision: move the pilot to Friday.\r\nAction: Mina sends\u0007 the revised quote.\u2028');
   // The transcript is folded away until it is asked for.
   await expect(sheet.getByLabel('Transcript', { exact: true })).toHaveCount(0);
   await sheet.getByRole('button', { name: 'Add a transcript' }).click();
@@ -38,7 +39,7 @@ test('a meeting pasted from any tool reaches Home as a decision to approve', asy
   await sheet.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await page.screenshot({ path: testInfo.outputPath('paste-meeting.png') });
   await add.click();
-  await expect(sheet.getByRole('status')).toHaveText('Added. It reaches Home once processed.');
+  await expect(sheet.getByRole('status')).toHaveText('Added.');
   // What was added clears; the project and the consent stay for the next one.
   await expect(sheet.getByLabel('Title', { exact: true })).toHaveValue('');
   await expect(sheet.getByRole('combobox', { name: 'Suggest project' })).toHaveValue(APOLLO);
@@ -53,7 +54,7 @@ test('a meeting pasted from any tool reaches Home as a decision to approve', asy
   await expect(need).toHaveCount(1);
   await expect(need).toHaveAttribute('data-kind', 'approve');
   await expect(need).toContainText('Decision: move the pilot to Friday');
-  // A whole day keeps its day wherever Home shows it, from UTC-11 to UTC+11.
+  // A whole day keeps its day wherever Home shows it.
   await expect(need).toContainText('Supplier sync meeting, Oct 21');
   await expect(page.getByTestId('sidebar-badge')).toHaveText('1');
 });
@@ -78,7 +79,7 @@ test('Paste a meeting keeps what was typed under the cover, sends a start time, 
   await sheet.getByLabel('Time', { exact: true }).fill('15:30');
   await sheet.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await sheet.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(sheet.getByRole('status')).toHaveText('Added. It reaches Home once processed.');
+  await expect(sheet.getByRole('status')).toHaveText('Added.');
   // The start is this computer's local time, sent in UTC with its time zone.
   expect(submits()).toEqual([{ schema_version: 2, tool_id: 'hand-in', operation: 'submit', retain: true, project_id: null, meeting: {
     title: 'Supplier sync', notes: 'Decision: move the pilot to Friday.', transcript: '',
@@ -89,7 +90,7 @@ test('Paste a meeting keeps what was typed under the cover, sends a start time, 
   await sheet.getByLabel('Date', { exact: true }).fill('2026-10-21');
   await sheet.getByLabel('Time', { exact: true }).fill('15:30');
   await sheet.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(sheet.getByRole('status')).toHaveText('Added. It reaches Home once processed.');
+  await expect(sheet.getByRole('status')).toHaveText('Added.');
   expect(submits()).toHaveLength(2);
   await sheet.getByLabel('Title', { exact: true }).fill('Draft to drop');
   await sheet.getByRole('button', { name: 'Close' }).click();
@@ -101,4 +102,37 @@ test('Paste a meeting keeps what was typed under the cover, sends a start time, 
   await expect(sheet).toHaveCount(0);
   await page.getByTestId('sidebar-home').click();
   await expect(page.getByTestId('need-row')).toHaveCount(1);
+});
+
+test('a pasted whole day opens its card on its day, east of UTC+11 too, through Paste a meeting', async ({}, testInfo) => {
+  // UTC+14, where noon UTC on Oct 21 is 2 AM on Oct 22: the meeting is still on Oct 21.
+  run = await launch('hand-in', {}, { TZ: 'Pacific/Kiritimati' });
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="hand-in"]').getByTestId('tool-paste').click();
+  const sheet = page.getByTestId('paste-sheet');
+  await sheet.getByLabel('Title', { exact: true }).fill('Supplier sync');
+  await sheet.getByLabel('Date', { exact: true }).fill('2026-10-21');
+  await sheet.getByLabel('Notes', { exact: true }).fill('Decision: move the pilot to Friday.\nAction: Mina sends the revised quote.');
+  await sheet.getByRole('combobox', { name: 'Suggest project' }).selectOption({ label: 'Apollo' });
+  await sheet.getByLabel('I allow ECHO to retain', { exact: false }).check();
+  await sheet.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(sheet.getByRole('status')).toHaveText('Added.');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('sidebar-home').click();
+  const need = page.getByTestId('need-row');
+  await expect(need).toContainText('Supplier sync meeting, Oct 21');
+  await need.click();
+  const card = page.getByTestId('decision');
+  await expect(card.getByRole('heading', { name: 'Supplier sync' })).toBeVisible();
+  // Its day alone: no time of day, and not the next day.
+  await expect(card.locator('.card-top')).toHaveText('Approve· Meeting · Oct 21');
+  await expect(card).toContainText('1 decision · 1 action');
+  await expect(card).toContainText('Action: Mina sends the revised quote.');
+  // Each item starts at the project the paste suggested.
+  await expect(card.getByTestId('route-chip')).toHaveText(['Apollo', 'Apollo']);
+  await expect(card.getByTestId('route-summary')).toHaveText('2 to Apollo');
+  await page.screenshot({ path: testInfo.outputPath('paste-meeting-card.png') });
+  // The card reads through the tool Home reads reviews through: Paste a meeting, with Granola not turned on.
+  expect(run.calls().filter(call => call.path === '/v1/person/meetings' && call.body?.operation === 'review_open').map(call => call.body?.tool_id)).toEqual(['hand-in']);
 });

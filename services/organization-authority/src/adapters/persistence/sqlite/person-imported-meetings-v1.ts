@@ -6,6 +6,7 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAskScopeV2 } from '../../../application/ports/person-original-context-retrieval-v1.js';
 import { personOriginalGrantedProjectIdsV1 } from './person-original-access-v1.js';
+import { HAND_IN_SOURCE_ADAPTER_ID_V1 } from './person-hand-in-meetings-v1.js';
 
 export interface ImportedMeetingTextV1 {
   readonly dates: EvidenceDatesV1;
@@ -20,9 +21,14 @@ interface SourceRow {
   adapter_id: string; instance_id: string; external_id: string;
 }
 function invalid(): never { throw new AuthorityOperationError('unavailable', 'Imported meeting is unavailable'); }
+/**
+ * What the importer reads of their own unapproved meeting. A handed-in meeting's transcript is text the person supplied
+ * themselves, so it is theirs to read with the notes. Any other source's transcript (Granola's) stays with the approved
+ * transcript grant reader.
+ */
 export function importedMeetingTextV1(meeting: MeetingDocument): string {
-  // Transcript access remains exclusively in the existing approved transcript grant reader.
-  return meeting.content.filter(block => block.kind !== 'transcript').map(block => block.text).join('\n\n');
+  const supplied = meeting.provenance.source.adapter_id === HAND_IN_SOURCE_ADAPTER_ID_V1;
+  return meeting.content.filter(block => supplied || block.kind !== 'transcript').map(block => block.text).join('\n\n');
 }
 /**
  * Read view over existing custody. There is no second meeting body or derived-content table.

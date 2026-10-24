@@ -5,11 +5,11 @@ import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authori
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { AdapterError, assertCanonicalMeetingDocument, type AdapterConfig, type MeetingDocument, type MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
-import { SqlitePersonHandInMeetingsV1, type StoredHandInMeetingV1 } from '../adapters/persistence/sqlite/person-hand-in-meetings-v1.js';
+import { HAND_IN_SOURCE_ADAPTER_ID_V1, SqlitePersonHandInMeetingsV1, type StoredHandInMeetingV1 } from '../adapters/persistence/sqlite/person-hand-in-meetings-v1.js';
 import type { PersonalMeetingCheckpointV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { meetingIntakePersonV1, type PersonMeetingProviderV1 } from './person-meeting-runtime-v1.js';
 
-export const HAND_IN_SOURCE_ADAPTER_ID_V1 = 'person-hand-in-meeting';
+export { HAND_IN_SOURCE_ADAPTER_ID_V1 };
 /** How a hand-in source's custodian is established: the person handed the meeting in themselves. */
 export const HAND_IN_CUSTODIAN_ASSURANCE_V1 = 'person_hand_in';
 const VERSION = '1.0.0';
@@ -70,8 +70,8 @@ export function handInMeetingDocumentV1(identity: MeetingSourceAdapter['identity
     title: meeting.title, lifecycle: 'completed' as const,
     ...(meeting.started_at === undefined ? {} : { time: { actual_start_at: meeting.started_at,
       ...(meeting.ended_at === undefined ? {} : { actual_end_at: meeting.ended_at }),
-      ...(meeting.time_zone === undefined ? {} : { timezone: meeting.time_zone }),
-      ...(meeting.all_day === true ? { all_day: true } : {}) } }),
+      // A whole day is its date at noon UTC, read in UTC, so no reader moves it to another day.
+      ...(meeting.all_day === true ? { timezone: 'UTC', all_day: true } : meeting.time_zone === undefined ? {} : { timezone: meeting.time_zone }) } }),
     capture: { state: 'complete' as const, components: [{ kind: 'metadata' as const, state: 'available' as const },
       { kind: 'notes' as const, state: meeting.notes === '' ? 'not_provided' as const : 'available' as const },
       { kind: 'transcript' as const, state: transcript.length === 0 ? 'not_provided' as const : 'available' as const }] },
@@ -103,6 +103,8 @@ export function createHandInPersonMeetingProviderV1(options: { readonly database
   const provider: PersonMeetingProviderV1 = {
     id: PERSON_HAND_IN_TOOL_ID_V1, normalizer_version: NORMALIZER_VERSION, custodian_assurance: HAND_IN_CUSTODIAN_ASSURANCE_V1, submitters: 'members',
     connection_http,
+    // A cancelled hand-in's payload goes with its queued import, unless the meeting was already admitted.
+    forget: (setting, meetingId) => store.forget(setting.source_key, meetingId),
     // Nothing to watch: only `off` is a watch, and automatic import is never active.
     cursor: Object.freeze({ read: readHandInCheckpointV1, write: writeHandInCheckpointV1, policy: CURSOR_POLICY, initial,
       watch: (checkpoint: PersonalMeetingCheckpointV1, watch: { readonly watch: string }): PersonalMeetingCheckpointV1 => watch.watch === 'off' ? checkpoint : invalidCursor(),

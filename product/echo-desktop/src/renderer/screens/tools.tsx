@@ -33,7 +33,7 @@ function ToolRow({ tool }: { tool: ConnectedTool }) {
       <Mark tool={tool} />
       <span class="lines">
         <span class="name">{tool.name}</span>
-        <span class="state" data-testid="tool-state">{tool.status === 'unavailable' ? TOOL_STATES.unavailable : 'From any meeting tool'}</span>
+        {tool.status === 'unavailable' && <span class="state" data-testid="tool-state">{TOOL_STATES.unavailable}</span>}
       </span>
       {tool.status !== 'unavailable' && (
         <button type="button" class="plain-button" data-testid="tool-paste" onClick={() => manageTool(tool)}>Paste</button>

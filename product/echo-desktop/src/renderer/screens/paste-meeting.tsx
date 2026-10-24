@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { MAX_PASTED_MEETING_BYTES, type ConnectedTool, type PastedMeeting } from '../../shared/protocol.js';
-import { closeSheet, getState, handInMeeting, loadHome, loadProjects, useStore } from '../store.js';
+import { MAX_PASTED_MEETING_BYTES, pastedMeetingAsSent, type ConnectedTool, type PastedMeeting } from '../../shared/protocol.js';
+import { closeSheet, getState, handInMeeting, loadHome, loadProjects, onAccountGone, useStore } from '../store.js';
 import { trapTab } from './compose.js';
 import { Caret, Close } from './icons.js';
 
@@ -15,10 +15,11 @@ interface Draft {
 const EMPTY: Draft = { title: '', date: '', time: '', notes: '', transcript: '', transcriptShown: false, project: '', retain: false, status: 'idle', failure: '' };
 /**
  * The draft lives beside the sheet, not in it: the privacy cover takes the sheet away while another app is in front,
- * which is where the text is copied from, and it must come back as it was. It goes when the sheet closes.
+ * which is where the text is copied from, and it must come back as it was. It goes when the sheet closes, and with its
+ * account (forgotten, switched or signed out), under the cover too.
  */
 let draft: Draft = EMPTY;
-/** Counts the sheet's closings: an Add's answer that comes after its sheet closed changes nothing. */
+/** Counts the sheet's closings: an Add's answer that comes after its sheet closed, or its account went, changes nothing. */
 let closings = 0;
 /** The sheet on screen re-renders when an Add it started settles, even one started before a cover. */
 let shown: (() => void) | null = null;
@@ -26,6 +27,7 @@ function update(patch: Partial<Draft>): void {
   draft = { ...draft, ...patch };
   shown?.();
 }
+onAccountGone(() => { draft = EMPTY; closings += 1; });
 
 /** No time, a whole day, or a start in this computer's time zone; null for a start that is not a real time. */
 function when(date: string, time: string): Pick<PastedMeeting, 'date' | 'started_at'> | null {
@@ -55,7 +57,8 @@ async function add(): Promise<void> {
 
 /**
  * Paste a meeting from any tool: a title, an optional date and time, notes, an optional transcript and an optional
- * suggested project. It enters your private custody; once processed, its decisions wait on Home like any meeting's.
+ * suggested project. It enters your private custody; once processed, any decisions and actions wait on Home like any
+ * meeting's.
  */
 export function PasteMeeting({ tool }: { tool: ConnectedTool }) {
   const state = useStore();
@@ -74,10 +77,12 @@ export function PasteMeeting({ tool }: { tool: ConnectedTool }) {
   }, []);
   const busy = draft.status === 'adding';
   const time = when(draft.date, draft.time);
-  const tooLong = new TextEncoder().encode(JSON.stringify({ title: draft.title, notes: draft.notes, transcript: draft.transcript })).length > MAX_PASTED_MEETING_BYTES;
-  const ready = draft.title.trim() !== '' && (draft.notes.trim() !== '' || draft.transcript.trim() !== '') && draft.retain && time !== null && !tooLong && !busy;
+  // Measured as the client sends it, canonical and with its time, so the page refuses what the meetings API would and no more.
+  const sent = pastedMeetingAsSent({ title: draft.title, notes: draft.notes, transcript: draft.transcript, ...(time ?? {}) }, Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const tooLong = new TextEncoder().encode(JSON.stringify(sent)).length > MAX_PASTED_MEETING_BYTES;
+  const ready = sent.title !== '' && (sent.notes !== '' || sent.transcript !== '') && draft.retain && time !== null && !tooLong && !busy;
   const projects = state.projects.items;
-  const line = busy ? 'Adding…' : tooLong ? 'Too long to add: up to 60 KB of text.' : draft.status === 'added' ? 'Added. It reaches Home once processed.' : '';
+  const line = busy ? 'Adding…' : tooLong ? 'Too long to add: up to 60 KB of text.' : draft.status === 'added' ? 'Added.' : '';
   return (
     <div class="overlay" onClick={() => { if (!busy) closeSheet(); }}>
       <div class="sheet confirm paste" role="dialog" aria-labelledby="paste-title" aria-busy={busy} data-testid="paste-sheet" ref={box} tabIndex={-1}
