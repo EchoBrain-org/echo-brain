@@ -189,8 +189,12 @@ one record:
   false`, and the confirmed owners of this group's actions only.
 - Groups are ordered by the first item of each in brief order.
 
-Every group is built and validated before the first append. Appends are
-deterministic, so a retry returns `duplicate` for groups already in the log.
+Every group is built and validated before the first append. At append, the
+record log's policy projector recomputes the group's subset, with the
+publisher's own function, from the snapshot the reviewer saw (the append
+witness carries it; the log never stores it), and refuses a record whose
+content differs. Appends are deterministic, so a retry returns `duplicate`
+for groups already in the log.
 Once every group is in the log, one Authority transaction writes the receipt,
 `{ records: [{ approval_id, project_ids, record_sha256, receipt }, …] }` in
 group order, and runs the after-record hooks once per record. The approval is

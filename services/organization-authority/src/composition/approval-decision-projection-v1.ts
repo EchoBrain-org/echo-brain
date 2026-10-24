@@ -1,10 +1,10 @@
 import { canonicalJson, canonicalSha256, type JsonObject, type JsonValue, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   APPROVAL_DECISION_CONSEQUENCE_KIND_V1, APPROVAL_DECISION_FIELD_V2, APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2, APPROVAL_DECISION_REF_KIND_V2,
-  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, approvalRecordIdV2, projectMembersReadablePersonPolicyContractSha256,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, approvalDecisionSubsetSnapshotV2, approvalRecordIdV2, projectMembersReadablePersonPolicyContractSha256,
   restrictedReviewerPersonPolicyContractSha256, validateApprovalDecisionRecordInputV2, type ApprovalDecisionRecordInputV2, type ApprovalDecisionRefV2,
 } from '@echo-brain/organization-protocol';
-import { validateApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
+import { validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
 import {
   projectApprovedMeetingPolicyFactsV1, type RecordApproverProjectorV1, type RecordPolicyFactEnvelopeV1, type RecordPolicyFactProjectorV1,
 } from '@echo-brain/organization-record/organization-record-api-v1';
@@ -27,16 +27,24 @@ export interface ApprovalDecisionAuditWitnessV1 {
   readonly action_sha256: Sha256Digest; readonly authorization_sha256: Sha256Digest; readonly approved_at: string;
 }
 /**
- * The append witness: the stored decision row, re-expressed. Never stored; each record carries its three digests, and every
- * record of one decision has the same witness. `decision` is body.request verbatim (6 keys); provider_action_sha256 =
- * canonicalSha256(decision). Slack decisions produce the same shape.
+ * The append witness: the stored decision row, re-expressed, and the frozen snapshot it decided. Never stored (the record log
+ * hands it to the policy projector only); each record carries the three digests of `decision`, `evidence` and `audit`, and
+ * every record of one decision has the same witness. `decision` is body.request verbatim (6 keys); provider_action_sha256 =
+ * canonicalSha256(decision). `proposal_snapshot` is what the reviewer saw; it enters none of those digests (the reference
+ * names its own, proposal_snapshot_sha256), and the projector recomputes each record's subset from it. Slack decisions
+ * produce the same shape.
  */
 export interface ApprovalDecisionWitnessV1 {
   readonly decision: ApprovalDecisionRequestV1; readonly evidence: ApprovalDecisionEvidenceWitnessV1; readonly audit: ApprovalDecisionAuditWitnessV1;
+  readonly proposal_snapshot: ApprovedDecisionSnapshotV2;
 }
 
-/** Pure. sequence = authority_approval_decisions_v1.sequence, body = the parsed body_json. */
-export function approvalDecisionWitnessV1(decision: { readonly sequence: number; readonly body: ApprovalDecisionBodyV1 }): ApprovalDecisionWitnessV1 {
+/**
+ * Pure. sequence = authority_approval_decisions_v1.sequence, body = the parsed body_json, proposal_snapshot = the validated
+ * frozen snapshot whose digest is body.request.snapshot_sha256 (the projector checks it).
+ */
+export function approvalDecisionWitnessV1(decision: { readonly sequence: number; readonly body: ApprovalDecisionBodyV1 },
+  proposal_snapshot: ApprovedDecisionSnapshotV2): ApprovalDecisionWitnessV1 {
   const { body, sequence } = decision, r = body.request;
   const request: ApprovalDecisionRequestV1 = Object.freeze({ approval_id: r.approval_id, command_id: r.command_id, snapshot_sha256: r.snapshot_sha256, action: r.action,
     routes: Object.freeze(r.routes.map(route => Object.freeze({ signal_id: route.signal_id, project_ids: route.project_ids === null ? null : Object.freeze([...route.project_ids]) }))),
@@ -45,7 +53,7 @@ export function approvalDecisionWitnessV1(decision: { readonly sequence: number;
     membership_id: body.actor.membership_id, kind: body.evidence.kind, sha256: body.evidence.sha256 });
   const audit: ApprovalDecisionAuditWitnessV1 = Object.freeze({ approval_id: r.approval_id, event_id: `audit:${r.command_id}`, sequence,
     action_sha256: canonicalSha256(request as unknown as JsonValue), authorization_sha256: canonicalSha256(evidence as unknown as JsonValue), approved_at: body.decided_at });
-  return Object.freeze({ decision: request, evidence, audit });
+  return Object.freeze({ decision: request, evidence, audit, proposal_snapshot });
 }
 
 /** One destination of a decision: the kept items routed to exactly one project set. */
@@ -88,21 +96,6 @@ export interface BuiltApprovalDecisionRecordV1 {
   readonly authorization_witness: ApprovalDecisionWitnessV1;
 }
 
-type BriefV1 = ReturnType<typeof validateApprovedDecisionSnapshotV2>['approved_payload']['brief'];
-/**
- * One group's brief: its decisions and actions, and every reason that supports one of them, its links pruned to the group.
- * A reason that supports nothing goes to the Only-me group; one that supports only items kept elsewhere, or not kept, is left out.
- */
-function subsetBrief(brief: BriefV1, group: ApprovalDecisionGroupV1): BriefV1 {
-  const ids = new Set(group.signal_ids);
-  const rationales = brief.rationales.flatMap(reason => {
-    if (reason.supports_signal_ids.length === 0) return group.project_ids.length === 0 ? [reason] : [];
-    const supports = reason.supports_signal_ids.filter(id => ids.has(id));
-    return supports.length === 0 ? [] : [{ ...reason, supports_signal_ids: supports }];
-  });
-  return { ...brief, decisions: brief.decisions.filter(signal => ids.has(signal.id)), actions: brief.actions.filter(signal => ids.has(signal.id)), rationales };
-}
-
 /**
  * Pure and deterministic: no clock, no randomness, no I/O. It reads only the immutable decision row (including its frozen
  * transcript_source) and the decided-final frozen proposal, so every retry rebuilds identical bytes and each append returns
@@ -125,11 +118,10 @@ export function buildApprovalDecisionRecordsV1(source: ApprovalDecisionRecordSou
   }
   const groups = approvalDecisionGroupsV1(body.request);
   if (groups.length === 0) throw new Error('Approval decision keeps nothing');
-  const witness = approvalDecisionWitnessV1(source.decision);
+  const witness = approvalDecisionWitnessV1(source.decision, snapshot);
   return Object.freeze(groups.map(group => {
-    const payload = { ...snapshot.approved_payload, brief: subsetBrief(brief, group) };
-    const subset = validateApprovedDecisionSnapshotV2({ ...snapshot, approval_id: group.approval_id,
-      final_content_sha256: canonicalSha256(payload as unknown as JsonValue), approved_payload: payload });
+    // The one subset function, which the append projector also runs on the witness's proposal snapshot.
+    const subset = approvalDecisionSubsetSnapshotV2(snapshot, group);
     const approved_snapshot_sha256 = canonicalSha256(subset as unknown as JsonValue);
     const ids = [...group.project_ids];
     const policy_id = ids.length === 0 ? RESTRICTED_REVIEWER_PERSON_POLICY_ID : PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
@@ -164,11 +156,12 @@ function parse(envelope: { readonly body: { readonly human_act_resolution_ref: u
 /**
  * That a record is one destination group of the stored, authorized decision: the proposal, the snapshot its reviewer saw,
  * the record's derived id, the routes to its project set, the owners of its actions and the policy its set selects, the
- * authorized actor, the audit entry, and the three digests that bind the witness to the signed reference.
+ * authorized actor, the audit entry, the three digests that bind the witness to the signed reference, and the record's
+ * content: its group's subset of that snapshot, recomputed.
  */
 function verifyApprovalDecisionWitnessV1(parsed: ReturnType<typeof validateApprovalDecisionRecordInputV2>, w: unknown): void {
   const ref: ApprovalDecisionRefV2 = parsed.approval_decision_ref_v2;
-  if (!keysAre(w, 'audit,decision,evidence')) refuse();
+  if (!keysAre(w, 'audit,decision,evidence,proposal_snapshot')) refuse();
   const d = w.decision, e = w.evidence, a = w.audit;
   // (a) the human choice equals the record: this record holds exactly the items routed to its project set, and the policy follows the set
   if (!keysAre(d, 'action,approval_id,command_id,owners,routes,snapshot_sha256')
@@ -193,11 +186,25 @@ function verifyApprovalDecisionWitnessV1(parsed: ReturnType<typeof validateAppro
   // (d) the three digests bind the witness to the signed reference
   if (canonicalSha256(d as JsonValue) !== ref.provider_action_sha256 || canonicalSha256(e as JsonValue) !== ref.authorization_proof_sha256
     || canonicalSha256(a as JsonValue) !== ref.audit_entry_sha256) refuse();
+  // (e) the record holds exactly its group's share of what the reviewer saw: the witness's snapshot is the proposal's and the
+  //     one the decision names, its routes name every decision and action of it once, in order, and the subset is recomputed
+  //     with the publisher's own function. Altered text, a reason moved from another group or one that supports nothing fail.
+  let proposal: ApprovedDecisionSnapshotV2, subset: ApprovedDecisionSnapshotV2;
+  try {
+    proposal = validateApprovedDecisionSnapshotV2(w.proposal_snapshot);
+    subset = approvalDecisionSubsetSnapshotV2(proposal, { approval_id: ref.approval_id, project_ids: ref.audience_project_ids, signal_ids: routed as string[] });
+  } catch { refuse(); }
+  const brief = proposal.approved_payload.brief;
+  const proposal_sha256 = canonicalSha256(proposal as unknown as JsonValue);
+  if (proposal.approval_id !== d.approval_id || proposal_sha256 !== ref.proposal_snapshot_sha256 || proposal_sha256 !== d.snapshot_sha256
+    || !same((d.routes as unknown[]).map(route => keysAre(route, 'project_ids,signal_id') ? route.signal_id : null), [...brief.decisions, ...brief.actions].map(signal => signal.id))
+    || canonicalSha256(subset as unknown as JsonValue) !== ref.approved_snapshot_sha256 || !same(subset, parsed.event.approved_snapshot)) refuse();
 }
 
 /**
- * Re-checks at append time that the record is one destination group of exactly what the stored, authorized decision chose.
- * The decision and its audit are committed in authority_approval_decisions_v1 before this witness is used.
+ * Re-checks at append time that the record is one destination group of exactly what the stored, authorized decision chose,
+ * holding exactly that group's share of the snapshot its reviewer saw. The decision and its audit are committed in
+ * authority_approval_decisions_v1 before this witness is used.
  */
 export function createApprovalDecisionPolicyProjectorV1(): RecordPolicyFactProjectorV1 {
   return Object.freeze({

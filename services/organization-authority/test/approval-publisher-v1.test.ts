@@ -441,6 +441,8 @@ describe('approval publisher: destinations', () => {
     const briefs = records.map(record => record.body.event.approved_snapshot.approved_payload.brief);
     expect(briefs.map(brief => [ids(brief.decisions), ids(brief.actions)])).toEqual([[['dec-1'], ['act-2']], [['dec-2'], ['act-1']], [[], ['act-3']]]);
     expect(JSON.stringify(records)).not.toContain('dec-3');
+    // The append witness carries the whole snapshot the reviewer saw, but the log never stores it: no row names the item not kept.
+    expect(JSON.stringify(f.record.prepare('SELECT * FROM organization_record_log').all())).not.toContain('dec-3');
     // A reason follows the items it supports, its links pruned; one supporting nothing goes to Only me; one supporting only an item not kept is left out.
     expect(briefs.map(brief => brief.rationales.map((reason: { id: string; supports_signal_ids: string[] }) => [reason.id, reason.supports_signal_ids]))).toEqual([
       [['why-1', ['dec-1']]], [['why-1', ['dec-2']]], [['why-3', []], ['why-4', ['act-3']]]]);

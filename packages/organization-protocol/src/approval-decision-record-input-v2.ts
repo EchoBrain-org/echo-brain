@@ -3,6 +3,7 @@ import { asRecord, assertExactKeys, assertDigest, assertPositiveSafeInteger, ass
 import { organizationProtocolValidationFailure as fail } from './validation-error.js';
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from './record-payload.js';
 import { validateMeetingApprovalEventV2, type MeetingApprovedEventV2, type MeetingApprovalTranscriptSourceV2 } from './meeting-approval-event-v2.js';
+import { validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from './human-act-record-input-v1.js';
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID } from './person-content-policy-v2.js';
 import { APPROVAL_OWNERS_MAX_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1 } from './approval-owner-choice-v1.js';
 import type { RecordInputCodecV4, ValidatedRecordInputV4 } from './record-input-codec-v4.js';
@@ -77,6 +78,34 @@ const SLACK_COMMAND = /^slack:[A-Za-z0-9._:-]+$/;
  */
 export function approvalRecordIdV2(proposalApprovalId: string, projectIds: readonly string[]): string {
   return `apr_${canonicalSha256({ kind: APPROVAL_ROUTE_KIND_V1, approval_id: proposalApprovalId, project_ids: [...projectIds] } as unknown as JsonValue).slice(7)}`;
+}
+
+/** One destination group of a decision: the record's own approval id, its project set ([] = Only me), its decisions then actions. */
+export interface ApprovalDecisionGroupV2 {
+  readonly approval_id: string; readonly project_ids: readonly string[]; readonly signal_ids: readonly string[];
+}
+/**
+ * The snapshot one destination group's record carries: the frozen proposal snapshot the reviewer saw, under the record's own
+ * approval id, holding only the group's decisions and actions and every reason that supports one of them, its links pruned
+ * to the group. A reason that supports nothing goes to the Only-me group; one that supports only items kept elsewhere, or
+ * not kept, is left out. Pure: the publisher builds each record with it and the append projector recomputes it from the
+ * proposal snapshot, so the two cannot drift. Throws unless every group item is a decision or action of the proposal.
+ */
+export function approvalDecisionSubsetSnapshotV2(proposal: unknown, group: ApprovalDecisionGroupV2): ApprovedDecisionSnapshotV2 {
+  const snapshot = validateApprovedDecisionSnapshotV2(proposal);
+  const brief = snapshot.approved_payload.brief;
+  const ids = new Set(group.signal_ids);
+  const items = new Set([...brief.decisions, ...brief.actions].map(signal => signal.id));
+  if (ids.size === 0 || ids.size !== group.signal_ids.length || group.signal_ids.some(id => !items.has(id))) fail('Approval decision group names items its proposal does not');
+  const rationales = brief.rationales.flatMap(reason => {
+    if (reason.supports_signal_ids.length === 0) return group.project_ids.length === 0 ? [reason] : [];
+    const supports = reason.supports_signal_ids.filter(id => ids.has(id));
+    return supports.length === 0 ? [] : [{ ...reason, supports_signal_ids: supports }];
+  });
+  const payload = { ...snapshot.approved_payload, brief: { ...brief, decisions: brief.decisions.filter(signal => ids.has(signal.id)),
+    actions: brief.actions.filter(signal => ids.has(signal.id)), rationales } };
+  return validateApprovedDecisionSnapshotV2({ ...snapshot, approval_id: group.approval_id,
+    final_content_sha256: canonicalSha256(payload as unknown as JsonValue), approved_payload: payload });
 }
 
 function exact(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {
