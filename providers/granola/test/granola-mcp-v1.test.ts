@@ -279,7 +279,7 @@ describe('Granola list contract, as observed live', () => {
     }
   });
   it('fails a window of more than 200 meetings closed, and a page that promises more without moving on', async () => {
-    const full = { code: 'unavailable', message: 'Granola lists more than 200 meetings to watch' };
+    const full = { code: 'quota_exceeded', message: 'Granola lists more than 200 meetings to watch' };
     const counted = scripted(listPage([reviewRow], '<pagination has_more="true" total_count="201" remaining_count="200" next_cursor="next" />'));
     await expect(counted.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject(full);
     expect(counted.calls()).toHaveLength(1);

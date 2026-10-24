@@ -4,6 +4,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { PersonConnectionStoreV1 } from '@echo-brain/provider-runtime/person-connection-store-v1';
 import { createGranolaPersonConnectionV1 } from '../src/granola-person-connection-v1.js';
 import { GRANOLA_PERSON_PROVIDER_V1 } from '../src/granola-mcp-v1.js';
+import { granolaWatchWindowV1 } from '../src/granola-watch-source-v1.js';
 
 const person = { organization_id: 'org-fixture', principal_id: 'person-fixture', membership_id: 'member-fixture' };
 const workspace = '00000000-0000-4000-8000-000000000001';
@@ -55,7 +56,7 @@ describe('Granola verified account and meeting listings', () => {
       expect(await current.window(window)).toEqual([]);
       changed = true;
       await expect(current.window(window)).rejects.toThrow();
-      if (change === 'full') await expect(current.window(window)).rejects.toMatchObject({ code: 'unavailable', message: 'Granola lists more than 200 meetings to watch' });
+      if (change === 'full') await expect(current.window(window)).rejects.toMatchObject({ code: 'quota_exceeded', message: 'Granola lists more than 200 meetings to watch' });
       if (change === 'account' || change === 'workspace') {
         expect(store.current(person)?.active).toBe(false);
         expect(() => current.current()).toThrow();
@@ -79,6 +80,28 @@ describe('Granola verified account and meeting listings', () => {
       ]);
       await expect(session.recent('00000000-0000-4000-8000-0000000000f2')).rejects.toMatchObject({ code: 'not_found' });
       await expect(session.window({ ...window, mode: 'mine' })).rejects.toMatchObject({ code: 'invalid_request' });
+    } finally { db.close(); }
+  });
+  it('checks a watch at Save with the listing its worker uses: a listed folder and a window of at most 200 meetings', async () => {
+    const db = new Database(':memory:');
+    try {
+      let full = false;
+      const { service, calls } = await connected(db, name => name === 'get_account_info' ? account() : name === 'list_meeting_folders' ? folders
+        : full ? '<meetings_data count="0"></meetings_data><pagination has_more="false" total_count="201" />' : empty);
+      const session = await service.open(person, () => {});
+      calls.length = 0;
+      await session.watchable({ watch: 'mine', folder_id: null });
+      await session.watchable({ watch: 'folder', folder_id: folder });
+      const days = { time_range: 'custom', ...granolaWatchWindowV1(Date.now()), limit: 200, max_participants: 50 };
+      expect(calls.filter(call => call.name !== 'get_account_info')).toEqual([
+        { name: 'list_meetings', arguments: { ...days, involvement: { captured_by_me: true } } },
+        { name: 'list_meeting_folders', arguments: { limit: 100, offset: 0 } },
+        { name: 'list_meetings', arguments: { ...days, folder_id: folder } },
+      ]);
+      await expect(session.watchable({ watch: 'folder', folder_id: '00000000-0000-4000-8000-0000000000f2' })).rejects.toMatchObject({ code: 'not_found' });
+      await expect(session.watchable({ watch: 'off', folder_id: null })).rejects.toMatchObject({ code: 'invalid_request' });
+      full = true;
+      await expect(session.watchable({ watch: 'mine', folder_id: null })).rejects.toMatchObject({ code: 'quota_exceeded' });
     } finally { db.close(); }
   });
 });

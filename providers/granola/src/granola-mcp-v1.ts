@@ -226,8 +226,8 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
     },
     page,
     /**
-     * Every meeting of a custom range, newest first, following Granola's cursor. More than 200 fails closed, so a watch
-     * never sees part of its window as all of it.
+     * Every meeting of a custom range, newest first, following Granola's cursor. More than 200 fails closed with its own
+     * code, so a watch never sees part of its window as all of it, and the window's size is never mistaken for an outage.
      */
     async meetings(input: GranolaMeetingRangeV1): Promise<readonly GranolaMeetingV1[]> {
       const listed: GranolaMeetingV1[] = [];
@@ -235,7 +235,7 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
         const next = await page({ ...input, limit: MAX_LISTED, ...(cursor === undefined ? {} : { cursor }) });
         listed.push(...next.meetings);
         if (listed.length > MAX_LISTED || (next.total_count ?? 0) > MAX_LISTED) {
-          throw new AuthorityOperationError('unavailable', 'Granola lists more than 200 meetings to watch');
+          throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch');
         }
         if (next.next_cursor === null) break;
         // A page that promises more must move on.
