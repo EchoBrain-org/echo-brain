@@ -39,6 +39,8 @@ const MAX_FOLDERS = 200;
 const MAX_TEXT = 256 * 1024;
 const MAX_TITLE = 1024;
 const MAX_PARTICIPANTS = 16 * 1024;
+/** A detail read that answered without the meeting asked for: Granola no longer has it, or no longer shows it. */
+const MEETING_MISSING = 'Granola meeting not found';
 /** A Granola timestamp: ISO 8601 with an offset. */
 export const GRANOLA_TIMESTAMP_V1 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const REQUESTED_RANGE = /^<requested_range(?:\s[^<>]*)?(?:\/>|>[^<>]*<\/requested_range>)/u;
@@ -87,6 +89,13 @@ function transcriptText(value: unknown): string {
   if (Buffer.byteLength(whole, 'utf8') <= MAX_TEXT) return text(whole);
   const head = boundUtf8V1(whole, MAX_TEXT), turn = head.lastIndexOf('\n\n'), line = head.lastIndexOf('\n');
   return text((turn > 0 ? head.slice(0, turn) : line > 0 ? head.slice(0, line) : head).trimEnd());
+}
+/**
+ * A read of one meeting that fails the same way every time: Granola's answer for it is unusable, or a detail read
+ * answered without it. A watch passes such a meeting over; an outage, a rate limit or changed access is not one.
+ */
+export function granolaMeetingUnreadableV1(error: unknown): boolean {
+  return error instanceof AuthorityOperationError && (error.code === 'invalid_output' || (error.code === 'not_found' && error.message === MEETING_MISSING));
 }
 function unwrap(text: string): string { return text.startsWith(WARNING) ? text.slice(WARNING.length) : text; }
 function json(text: string): Record<string, unknown> { try { return record(JSON.parse(unwrap(text))); } catch { failure('invalid_output'); } }
@@ -240,7 +249,7 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
       const keys = array(meetingIds, 10).map(id);
       if (keys.length === 0 || new Set(keys).size !== keys.length) failure('invalid_request');
       const { meetings } = parseGranolaMeetingPageV1(await rpc.call('get_meetings', { meeting_ids: keys }, signal), true);
-      if (meetings.length !== keys.length || meetings.some(meeting => !keys.includes(meeting.id))) failure('not_found');
+      if (meetings.length !== keys.length || meetings.some(meeting => !keys.includes(meeting.id))) throw new AuthorityOperationError('not_found', MEETING_MISSING);
       return meetings;
     },
     async meeting(meetingId: string, signal?: AbortSignal): Promise<GranolaMeetingV1> {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1, readGranolaCheckpointV1, writeGranolaCheckpointV1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
+import { GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1, readGranolaCheckpointV1, writeGranolaCheckpointV1, type GranolaCheckpointV1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
@@ -145,6 +145,36 @@ describe('personal meeting intake: one source per person and tool account', () =
     // One watching source per person.
     w.intake.watch(w.stored(notes), MINE, null, () => undefined);
     expect(update("watch='mine'")).toThrow('UNIQUE');
+  });
+
+  it('stamps a changed watch, and saving the same watch with another suggestion keeps its change detection', () => {
+    const w = world(), setting = w.ensure();
+    const checkpoint = () => w.intake.checkpoint(setting.source_key) as GranolaCheckpointV1;
+    const before = Date.now();
+    w.intake.watch(setting, MINE, null, () => undefined);
+    const started = checkpoint();
+    expect(started).toEqual({ mode: 'mine', folder: null, baseline: false, since: expect.any(String), seen: {}, manual: [] });
+    expect(Date.parse(started.since!)).toBeGreaterThanOrEqual(before);
+    // The worker's first pass, emulated: detection is ready with what the window held.
+    const ready = { ...started, baseline: true, seen: { [NOTE_1]: '2026-10-24T17:00:00.000Z' } };
+    w.db.prepare('UPDATE authority_live_source_progress_v2 SET cursor=?,cursor_version=cursor_version+1 WHERE source_key=?').run(writeGranolaCheckpointV1(ready), setting.source_key);
+    const revision = w.stored(setting).settings_revision;
+    w.intake.watch(w.stored(setting), MINE, PROJECT_ALPHA, () => undefined);
+    expect(w.stored(setting)).toMatchObject({ ...MINE, suggested_project_id: PROJECT_ALPHA, settings_revision: revision + 1 });
+    expect(checkpoint()).toEqual(ready);
+    // Saving it unchanged writes nothing; dropping the suggestion again changes only the suggestion.
+    w.intake.watch(w.stored(setting), MINE, PROJECT_ALPHA, () => undefined);
+    expect(w.stored(setting).settings_revision).toBe(revision + 1);
+    w.intake.watch(w.stored(setting), MINE, null, () => undefined);
+    expect(w.stored(setting)).toMatchObject({ suggested_project_id: null, settings_revision: revision + 2 });
+    expect(checkpoint()).toEqual(ready);
+    // A setting read before those changes is refused, and the suggestion is still checked for membership.
+    expect(() => w.intake.watch(setting, MINE, PROJECT_BETA, () => undefined)).toThrow(expect.objectContaining({ code: 'stale_access_state' }));
+    expect(() => w.intake.watch(w.stored(setting), MINE, FOREIGN, () => undefined)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    // Another folder is another watch: detection starts again from its own stamp.
+    w.intake.watch(w.stored(setting), IN_FOLDER, PROJECT_ALPHA, () => undefined);
+    expect(checkpoint()).toEqual({ mode: 'folder', folder: FOLDER, baseline: false, since: expect.any(String), seen: {}, manual: [] });
+    expect(Date.parse(checkpoint().since!)).toBeGreaterThanOrEqual(Date.parse(started.since!));
   });
 
   it('records the watch\'s suggested project for the meetings it delivers, not for queued imports, and never stops intake for it', () => {

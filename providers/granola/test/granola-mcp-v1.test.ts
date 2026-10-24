@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
 import type { LlmProviderClient, StructuredGenerationRequest } from '@echo-brain/organization-processing/llm/llm-provider';
-import { createGranolaMcpV1, granolaMcpMeetingContentV1, parseGranolaMeetingPageV1, type GranolaMeetingV1 } from '../src/granola-mcp-v1.js';
+import { createGranolaMcpV1, granolaMcpMeetingContentV1, granolaMeetingUnreadableV1, parseGranolaMeetingPageV1, type GranolaMeetingV1 } from '../src/granola-mcp-v1.js';
 import { normalizeGranolaMeetingV1 } from '../src/granola-meeting-normalizer-v1.js';
 
 const id = '00000000-0000-4000-8000-000000000001';
@@ -166,6 +166,21 @@ describe('verified Granola MCP contract', () => {
   it('uses the observed transcript JSON and keeps audio labels as verbatim text', async () => {
     const f = fixture(warning + JSON.stringify({ id, title: 'Fixture', created_at: '2026-10-05T20:00:00.000Z', transcript: 'Microphone: hello', recording_context: { recorder: { name: 'someone' } } }));
     expect(await f.adapter.transcript(id)).toEqual({ text: 'Microphone: hello', created_at: '2026-10-05T20:00:00.000Z' });
+  });
+  it('tells a meeting Granola cannot give apart from an outage, a rate limit or changed access', async () => {
+    const failed = (read: Promise<unknown>) => read.then(() => { throw new Error('expected a failure'); }, (error: unknown) => error);
+    const missing = await failed(fixture(meeting()).adapter.meeting(other));
+    expect(missing).toMatchObject({ code: 'not_found' });
+    expect(granolaMeetingUnreadableV1(missing)).toBe(true);
+    const unusable = await failed(fixture(meeting().replace('count="1"', 'count="2"')).adapter.meeting(id));
+    expect(unusable).toMatchObject({ code: 'invalid_output' });
+    expect(granolaMeetingUnreadableV1(unusable)).toBe(true);
+    for (const [status, code] of [[401, 'unauthorized'], [404, 'not_found'], [429, 'rate_limited'], [503, 'unavailable']] as const) {
+      const error = await failed(createGranolaMcpV1({ binding, fetch: vi.fn(async () => new Response('', { status })) }).meeting(id));
+      expect(error).toMatchObject({ code });
+      expect(granolaMeetingUnreadableV1(error)).toBe(false);
+    }
+    expect(granolaMeetingUnreadableV1(new Error('revoked'))).toBe(false);
   });
 });
 

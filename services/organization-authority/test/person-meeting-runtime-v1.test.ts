@@ -1039,6 +1039,25 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: next.settings_sha256 });
     expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', folder_id: null, project_id: null });
   });
+  it('changes only the suggestion of an unchanged watch, so its change detection carries on', async () => {
+    const f = await fixture(); f.grantProject(); f.grantProject(projectB);
+    const home = await f.call(f.create(), { operation: 'home' });
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
+    const watched = await f.call(f.create(), { operation: 'home' });
+    const [source] = watched.sources;
+    expect(source).toMatchObject({ project_id: project, baseline: true });
+    const checkpoint = f.intake.checkpoint(source!.source_key);
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: projectB, retain: true, settings_sha256: watched.settings_sha256 });
+    const changed = await f.call(f.create(), { operation: 'home' });
+    expect(changed.sources).toEqual([expect.objectContaining({ watch: 'folder', folder_id: folder, project_id: projectB, baseline: true })]);
+    expect(changed.settings_sha256).not.toBe(watched.settings_sha256);
+    expect(f.intake.checkpoint(source!.source_key)).toEqual(checkpoint);
+    // The next meeting the watch delivers takes the new suggestion.
+    f.folderDeliveries.push(id);
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([projectB]);
+  });
   it('imports a note saved to A and then B before processing as one source and one extraction, freezing both projects', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
