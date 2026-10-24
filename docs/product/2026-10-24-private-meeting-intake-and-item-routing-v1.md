@@ -237,6 +237,14 @@ in the ECHO desktop app. The closed card names the destinations.
   twice is one meeting.
 - The submitted payload and its queued import are saved in one Authority
   transaction (a V15 table), and the source pulls from that table.
+  Cancelling the queued import deletes the payload in the same transaction,
+  unless an admitted source revision already holds the meeting.
+- Line breaks of any kind become line feeds and other invisible control
+  characters are dropped before the id is derived, so no paste fails on them.
+- A whole day is its date at noon UTC, read in UTC: review rows carry
+  `all_day`, and the card and Home show that date with no time of day.
+- The importer reads a pasted meeting's transcript with its notes, since they
+  supplied it; a Granola transcript stays out of the importer's reads.
 - The desktop has a "Paste a meeting" sheet from the Tools page. Home shows
   meeting reviews whenever any meeting tool is there, not only Granola.
 - The person CLI gets a matching verb that reads the text from files.
