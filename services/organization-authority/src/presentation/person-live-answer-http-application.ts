@@ -6,6 +6,7 @@ import type {
 /** One Ask as the HTTP boundary hands it on, on the unchanged V3 request; the bearer and the cancellation signal stay in it. */
 export interface PersonAnswerHttpInputV1 {
   readonly access_token: string;
+  /** Carries the asker's previous turn only on `/v7` (ADR-0047): every older route refuses it before the Ask runs. */
   readonly request: PersonAnswerRequestV3;
   readonly time_context?: PersonAskTimeContextV1;
   /** The client asked for answer layout v1 (ADR-0045); only the V8 answer carries one. */

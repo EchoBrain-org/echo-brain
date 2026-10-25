@@ -146,6 +146,9 @@ export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAn
     // A streamed request spans every attempt a snapshot restart runs: one stream, each item named once, timed from here.
     const streamed = progress === undefined ? undefined : { on_progress: progress.on_progress, request: createAgenticAskProgressRequestV1() };
     const scope = scopeOf(input.request);
+    // The asker's previous turn rides only on the V8 Ask (ADR-0047); the HTTP boundary refuses it on every older route.
+    const { previous } = input.request;
+    if (previous !== undefined && response_version !== 8) throw new AuthorityOperationError('invalid_request', 'Ask previous is only on /v7');
     input.signal?.throwIfAborted();
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
     return runPersonAskV1(options, input, async ({ authorization, context, capture, signal }) => {
@@ -162,10 +165,11 @@ export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAn
       if (streamed !== undefined) {
         const question = { question: input.request.question, signal, request: streamed.request };
         return response_version === 8
-          ? createAgenticAskV5(askOptions).answerWithReceipt({ ...question, on_progress: streamed.on_progress as AgenticAskProgressSinkV3 })
+          ? createAgenticAskV5(askOptions).answerWithReceipt({ ...question, on_progress: streamed.on_progress as AgenticAskProgressSinkV3, ...(previous === undefined ? {} : { previous }) })
           : createAgenticAskV4(askOptions).answerWithReceipt({ ...question, on_progress: streamed.on_progress as AgenticAskProgressSinkV2 });
       }
-      const create = response_version === 8 ? createAgenticAskV5 : response_version === 7 ? createAgenticAskV4 : response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
+      if (response_version === 8) return createAgenticAskV5(askOptions).answer({ question: input.request.question, signal, ...(previous === undefined ? {} : { previous }) });
+      const create = response_version === 7 ? createAgenticAskV4 : response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
       return create(askOptions).answer({ question: input.request.question, signal });
     }, progress === undefined ? undefined : () => progress.on_start());
   }

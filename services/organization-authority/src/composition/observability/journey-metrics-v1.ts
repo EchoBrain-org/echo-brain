@@ -149,7 +149,7 @@ export function formatJourneyTelemetryMetricsV1(
       ["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"],
     ]));
     const outcome = diagnostic.phase === "research_run" &&
-      ["answered", "partial", "not_found", "off_scope", "completed"].includes(diagnostic.result ?? "")
+      ["answered", "partial", "not_found", "clarify", "completed"].includes(diagnostic.result ?? "")
       ? diagnostic.result : null;
     if (outcome !== null) {
       records.push(record(namespace, timestamp, {

@@ -173,7 +173,8 @@ export class SqlitePersonAgenticAskAuditV1 {
       entry.kind !== "echo-agentic-ask-audit-v1" ||
       (entry.trigger !== undefined && !AGENTIC_TRIGGER_NAMES_V1.includes(entry.trigger)) ||
       (entry.budget !== undefined && entry.budget !== "background") ||
-      !["answered", "partial", "not_found", "off_scope", "cancelled", "timed_out"].includes(entry.outcome) ||
+      // A follow-up that asked which one is released as `clarify` (ADR-0047).
+      !["answered", "partial", "not_found", "clarify", "cancelled", "timed_out"].includes(entry.outcome) ||
       !Array.isArray(entry.receipt_digests) || entry.receipt_digests.length > limits.receipts ||
       new Set(entry.receipt_digests).size !== entry.receipt_digests.length ||
       !entry.receipt_digests.every((digest) => /^sha256:[a-f0-9]{64}$/.test(digest)) ||
