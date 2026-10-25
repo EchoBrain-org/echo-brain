@@ -21,6 +21,9 @@ echo-brain person <command>
 The client has no background runtime, adapter registry, local processor,
 approval store, delivery outbox, database, installation key, access lease, or
 service manager.
+The desktop app keeps its Ask timeline in one owner-only file per account
+([ADR-0047](../decisions/ADR-0047-ask-timeline.md)); the client itself keeps
+none.
 
 The opt-in [client updater](../features/client-updates-v1.md) runs a bounded
 release check before command dispatch. Its public publisher trust and local

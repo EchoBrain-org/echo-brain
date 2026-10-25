@@ -43,8 +43,10 @@ still needs the project's lead grant.
 
 A valid Ask submission displays the submitted question and clears the input.
 Invalid input remains editable. A second submission must not silently replace
-a running request. This is one question and answer at a time; it does not add
-persistent chat history or conversational memory.
+a running request. The desktop keeps every question and answer in a
+device-only timeline that says when an old answer's sources changed, and a
+question can follow from the answer before it
+([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
 
 In the desktop app, Escape steps back one level: a sheet, then Capture, then
 the answer with the source beside it, then the reader, then the project, Mine
