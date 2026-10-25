@@ -3,6 +3,7 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import { createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
+import { impactUnreadNoteV1 } from "../../src/answer-composition/renderers/impact-card-renderer-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
@@ -156,18 +157,32 @@ async function run(name: string, scenario: Scenario) {
   };
 }
 
+/**
+ * A historical card as current notes say it: an item research saw and could not read is counted, never named, since every
+ * viewer of the record reads these notes (ADR-0046). The other notes keep their place.
+ */
+function countedUnread(card: unknown): unknown {
+  const value = card as { readonly unconfirmed: readonly string[] };
+  const named = (note: string) => note.endsWith(" could not be read.") && !/^The \S+ source could not be read\.$/.test(note) && !/^\d+ items? could not be read\.$/.test(note);
+  const unread = value.unconfirmed.filter(named).length;
+  const index = value.unconfirmed.findIndex(named);
+  const unconfirmed = value.unconfirmed.filter(note => !named(note));
+  if (unread > 0) unconfirmed.splice(index, 0, impactUnreadNoteV1(unread));
+  return { ...value, unconfirmed };
+}
+
 describe("impact card golden replay", () => {
   it("retains the historical impact-card control", () => {
     const recorded = JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8"));
     expect(canonicalSha256(recorded)).toBe(HISTORICAL_FIXTURE_SHA256);
   });
 
-  it("preserves historical cards outside the intentional planner-need removal and the fallback's decided lines", async () => {
+  it("preserves historical cards outside the intentional planner-need removal, the fallback's decided lines and counted unread items", async () => {
     const observed: Record<string, Awaited<ReturnType<typeof run>>> = {};
     for (const [name, scenario] of Object.entries(SCENARIOS)) observed[name] = await run(name, scenario);
     const recorded = JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as typeof observed;
     for (const name of Object.keys(observed).filter(name => name !== "research_stopped_on_budget" && name !== "fallback_after_two_bad_replies")) {
-      expect(observed[name]!.card).toEqual(recorded[name]!.card);
+      expect(observed[name]!.card).toEqual(countedUnread(recorded[name]!.card));
     }
   });
 

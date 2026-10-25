@@ -128,7 +128,8 @@ const REPLY = {
 };
 const NOTES = [
   "The tickets list was cut short at 25 items.",
-  "Gate review 99 could not be read.",
+  // Gate review 99 was listed and never opened: counted, never named, since every viewer of the record reads the notes.
+  "1 item could not be read.",
   "The documents source could not be read.",
   "A source representation notice limited this assessment.",
 ];

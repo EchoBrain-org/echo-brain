@@ -8,7 +8,7 @@ import {
   type PersonImpactRelationV1,
 } from "@echo-brain/organization-api";
 import { cleanLine } from "../agentic-ask-v1-model-protocol.js";
-import { detailsOfImpactItemV1, ownerOfImpactItemV1, statesImpactDateV1 } from "./impact-card-renderer-v1.js";
+import { detailsOfImpactItemV1, IMPACT_STOPPED_NOTE_V1, ownerOfImpactItemV1, statesImpactDateV1 } from "./impact-card-renderer-v1.js";
 
 /**
  * The impact card as a run keeps it (runs store and impact card v1, section
@@ -27,6 +27,17 @@ export interface StoredImpactCardV1 {
   readonly unconfirmed: readonly string[];
   readonly citations: readonly unknown[];   // citation pointers only (PersonAnswerCitationV6['citation'])
 }
+
+/** The fixed shapes of an unconfirmed note (impact-card-renderer-v1): source kinds and counts, never an item's words. */
+const SOURCE = "[a-z][a-z_-]{0,63}";
+const UNCONFIRMED_NOTES: readonly RegExp[] = Object.freeze([
+  new RegExp(`^${IMPACT_STOPPED_NOTE_V1.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`),
+  new RegExp(`^The ${SOURCE} list was cut short at \\d{1,9} items\\.$`),
+  /^\d{1,9} items? could not be read\.$/,
+  new RegExp(`^The ${SOURCE} source could not be read\\.$`),
+  new RegExp(`^A ${SOURCE} (?:search|list|open) result was cut short\\.$`),
+  /^(?:A source representation notice|\d{1,9} source representation notices) limited this assessment\.$/,
+]);
 
 /** An ECHO record or document: the only items whose text a stored card may keep. */
 const isLocal = (citation: PersonAnswerCitationV6["citation"]): boolean => citation.kind === "approved_record" || citation.kind === "source_revision";
@@ -97,14 +108,9 @@ export function storableImpactCardV1(input: PersonImpactCardV1, outsideLabels: r
 
   // Every line a model wrote is screened against the titles of outside items: the caller's, and those this card cites.
   const screen = screenFor([...outsideLabels, ...card.citations.filter((_, index) => !local[index]).map(entry => entry.label)]);
-  // A note that names an outside item becomes one count.
-  const unread = card.unconfirmed.filter(screen.names).length;
-  const countNote = unread === 1 ? "1 item could not be read." : `${unread} items could not be read.`;
-  const unconfirmed: string[] = [];
-  for (const note of card.unconfirmed) {
-    const kept = screen.names(note) ? countNote : note;
-    if (!unconfirmed.includes(kept)) unconfirmed.push(kept);
-  }
+  // Everyone who reads the record reads these notes, and they are not rebuilt per viewer: only a line of ECHO's own fixed shapes
+  // is kept, so no item's title (an approver-only one included) is ever stored. Any other line is dropped.
+  const unconfirmed = [...new Set(card.unconfirmed.filter(note => UNCONFIRMED_NOTES.some(shape => shape.test(note))))];
 
   return Object.freeze({
     schema_version: 1 as const,
