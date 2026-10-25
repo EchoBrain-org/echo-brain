@@ -49,12 +49,12 @@ export async function readConfluencePageVersionsV1(transport: ConfluenceCloudTra
 
 /**
  * The SHA-256 digest of each non-blank section of each page's current body, as the page reader releases and cites a section,
- * four pages at a time. A page Confluence answers 404 for, gone or hidden from the asker, is left out; any other failure fails
- * the read.
+ * four pages at a time. A page Confluence answers 404 for, gone or hidden from the asker, is left out; one whose body cannot be
+ * read as text is null, and the others keep theirs. Any other failure fails the read.
  */
-export async function readConfluencePageSectionsV1(transport: ConfluenceCloudTransportV1, input: { readonly page_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, readonly Sha256Digest[]>> {
+export async function readConfluencePageSectionsV1(transport: ConfluenceCloudTransportV1, input: { readonly page_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, readonly Sha256Digest[] | null>> {
   if (input.page_ids.length > SECTIONS_MAX_PAGES) confluenceFailure('invalid_request');
-  const found = new Map<string, readonly Sha256Digest[]>();
+  const found = new Map<string, readonly Sha256Digest[] | null>();
   await parallel(input.page_ids, async id => {
     let raw: unknown;
     try {
@@ -69,8 +69,9 @@ export async function readConfluencePageSectionsV1(transport: ConfluenceCloudTra
     const representation = confluenceRecord(confluenceRecord(page.body).atlas_doc_format);
     if (representation.representation !== undefined && representation.representation !== 'atlas_doc_format') confluenceFailure('invalid_output');
     if (typeof representation.value !== 'string') confluenceFailure('invalid_output');
-    const sections = normalizeConfluencePageDocumentV1(representation.value).sections;
-    found.set(id, Object.freeze(sections.filter(text => text.trim() !== '').map(text => sha256Digest(text))));
+    let sections: readonly string[] | undefined;
+    try { sections = normalizeConfluencePageDocumentV1(representation.value).sections; } catch { sections = undefined; }
+    found.set(id, sections === undefined ? null : Object.freeze(sections.filter(text => text.trim() !== '').map(text => sha256Digest(text))));
   });
   return found;
 }

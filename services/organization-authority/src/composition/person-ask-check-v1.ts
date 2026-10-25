@@ -181,8 +181,10 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
           for (const { index, item, citation } of entries) {
             if (!ids.has(citation.ticket_id)) continue;
             const marker = markers.get(citation.ticket_id);
-            // Without a marker of its own, the asker takes the ticket's current one as its baseline.
-            settle(index, marker === undefined ? UNREADABLE : Object.freeze({ state: item.marker === undefined || item.marker === marker ? 'same' : 'changed', marker }));
+            // Without a marker of its own, the asker takes the ticket's current one as its baseline. A ticket read with no marker
+            // to compare is readable, but nothing is known of it.
+            settle(index, marker === undefined ? UNREADABLE : marker === null ? UNKNOWN
+              : Object.freeze({ state: item.marker === undefined || item.marker === marker ? 'same' : 'changed', marker }));
           }
         };
         const readPages = async (check: PersonPageCheckV1, entries: readonly Entry<PersonPageCitationV1>[]): Promise<void> => {
@@ -204,14 +206,14 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
             if (!read.has(citation.page_id) && bodies.remaining > 0) { read.add(citation.page_id); bodies.remaining -= 1; }
           }
           if (read.size === 0) return;
-          let sections: ReadonlyMap<string, readonly Sha256Digest[]>;
+          let sections: ReadonlyMap<string, readonly Sha256Digest[] | null>;
           try { sections = await check.sections({ access_token, page_ids: [...read], signal }); }
           catch (error) { failed('page_bodies', error); return; }
           for (const { index, citation } of compared) {
             if (!read.has(citation.page_id)) continue;
             const digests = sections.get(citation.page_id);
             // Section numbers move when an edit above adds or removes one: the cited text anywhere on the page is unchanged.
-            settle(index, digests === undefined ? UNREADABLE : digests.includes(citation.text_sha256) ? SAME : CHANGED);
+            settle(index, digests === undefined ? UNREADABLE : digests === null ? UNKNOWN : digests.includes(citation.text_sha256) ? SAME : CHANGED);
           }
         };
         const reads = [

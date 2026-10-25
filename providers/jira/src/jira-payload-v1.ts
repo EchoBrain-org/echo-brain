@@ -84,9 +84,9 @@ function issueSummary(fields: Record<string, unknown>): string {
   return fields.summary;
 }
 
-/** An issue's description as text, empty when it has none. */
-function issueDescription(fields: Record<string, unknown>): string {
-  return fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1).text.trim();
+/** An issue's description as text, empty when it has none; embedded content it cannot read is refused unless `omit` leaves it out. */
+function issueDescription(fields: Record<string, unknown>, unsupported: 'reject' | 'omit' = 'reject'): string {
+  return fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1, { unsupported }).text.trim();
 }
 
 /** An issue's status name, its assignee's display name and its due day, when it has them. */
@@ -100,13 +100,14 @@ function issueState(fields: Record<string, unknown>): { readonly status: string;
 /**
  * A ticket's marker for the Ask source check (Ask timeline v1, C1; ADR-0047): `sha256:` and the hex SHA-256 of the canonical
  * JSON of its summary, description, status name, assignee display name and due date, each parsed as `parseJiraIssueV1` parses
- * it, so the marker moves exactly when what an answer read of the ticket does. Jira's `updated` is not in it: it moves on
- * every comment.
+ * it, so the marker moves when what an answer read of the ticket does. A description with embedded content the reader cannot
+ * read (an image, say), which an answer could only cite by its row, keeps the rest of its text with that content left out.
+ * Jira's `updated` is not in it: it moves on every comment.
  */
 export function jiraTicketMarkerV1(fields: unknown): Sha256Digest {
   const record = jiraRecord(fields);
   const { status, owner, due_at } = issueState(record);
-  return canonicalSha256({ summary: issueSummary(record), description: issueDescription(record), status, assignee: owner ?? null, due_date: due_at ?? null });
+  return canonicalSha256({ summary: issueSummary(record), description: issueDescription(record, 'omit'), status, assignee: owner ?? null, due_date: due_at ?? null });
 }
 
 export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: string; readonly origin: string; readonly inventory: boolean; readonly related?: boolean }): ParsedJiraIssueV1 {
@@ -148,12 +149,13 @@ const TICKET_CHECK_FIELDS = Object.freeze(['summary', 'description', 'status', '
 
 /**
  * Each readable ticket's check marker by its id (`jiraTicketMarkerV1`), for distinct valid issue ids, in bulk reads that apply
- * this person's current issue permissions. Hidden, deleted and unknown issues do not come back and are left out; an issue
- * Jira could not return just now (issueErrors) or any malformed page fails the whole read, never a partial answer.
+ * this person's current issue permissions. Hidden, deleted and unknown issues do not come back and are left out. A ticket that
+ * came back with fields its marker cannot be made from is readable with no marker (null), and the others keep theirs; an issue
+ * Jira could not return just now (issueErrors) or a malformed page fails the whole read, never a partial answer.
  */
-export async function readJiraTicketMarkersV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, Sha256Digest>> {
+export async function readJiraTicketMarkersV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, Sha256Digest | null>> {
   if (input.ticket_ids.length > TICKET_CHECK_MAX_IDS) jiraFailure('invalid_request');
-  const found = new Map<string, Sha256Digest>();
+  const found = new Map<string, Sha256Digest | null>();
   for (let offset = 0; offset < input.ticket_ids.length; offset += TICKET_CHECK_BATCH) {
     const batch = new Set(input.ticket_ids.slice(offset, offset + TICKET_CHECK_BATCH));
     const page = jiraRecord(await transport.request({ path: `/ex/jira/${input.cloud_id}/rest/api/3/issue/bulkfetch`, method: 'POST',
@@ -164,7 +166,9 @@ export async function readJiraTicketMarkersV1(transport: JiraCloudTransportV1, i
       const issue = jiraRecord(raw);
       const id = jiraString(issue.id, 20, JIRA_ID);
       if (!batch.has(id) || found.has(id)) jiraFailure('invalid_output');
-      found.set(id, jiraTicketMarkerV1(issue.fields));
+      let marker: Sha256Digest | null;
+      try { marker = jiraTicketMarkerV1(issue.fields); } catch { marker = null; }
+      found.set(id, marker);
     }
   }
   return found;

@@ -112,9 +112,10 @@ export function createJiraPersonConnectionV1(options: {
     },
     /**
      * The Ask source check's tickets (Ask timeline v1, C1; ADR-0047): each ticket's marker by its id, read in bulk with this
-     * person's own connection, at most 100 ids in two calls. A ticket they cannot read now does not come back and is left out.
+     * person's own connection, at most 100 ids in two calls. A ticket they cannot read now does not come back and is left out;
+     * one whose fields no marker can be made from is null.
      */
-    async ticketMarkers(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
+    async ticketMarkers(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string | null>> {
       const ticket_ids = [...new Set(input.ticket_ids)].filter(id => JIRA_ID.test(id));
       if (ticket_ids.length === 0) return new Map();
       const { transport } = await captureConnection(input);

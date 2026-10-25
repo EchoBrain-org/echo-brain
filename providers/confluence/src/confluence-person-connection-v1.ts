@@ -172,9 +172,9 @@ export function createConfluencePersonConnectionV1(options: {
     },
     /**
      * The Ask source check's page bodies: the digest of each non-blank section of each page's current body, read with this
-     * person's own connection, at most ten pages. A page they cannot read now is left out.
+     * person's own connection, at most ten pages. A page they cannot read now is left out; one whose body is not text is null.
      */
-    async pageSections(input: { readonly access_token: string; readonly page_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, readonly Sha256Digest[]>> {
+    async pageSections(input: { readonly access_token: string; readonly page_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, readonly Sha256Digest[] | null>> {
       const page_ids = [...new Set(input.page_ids)].filter(id => CONFLUENCE_ID.test(id));
       if (page_ids.length === 0) return new Map();
       return readConfluencePageSectionsV1(checkTransport(input), { page_ids, signal: input.signal });

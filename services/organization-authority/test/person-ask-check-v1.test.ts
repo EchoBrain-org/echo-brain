@@ -109,7 +109,7 @@ function askCheckOf(f: World, overrides: Partial<CreatePersonAskCheckV1Options> 
 const item = (citation: unknown, asked_at = '2026-10-08T09:00:00.000Z', marker?: string) => ({ asked_at, citation, ...(marker === undefined ? {} : { marker }) });
 
 /** A ticket tool whose markers are `markers` for every reader, or as `read` answers them. */
-function ticketTool(read: (input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<ReadonlyMap<string, string>>, tool_id = 'jira') {
+function ticketTool(read: (input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<ReadonlyMap<string, string | null>>, tool_id = 'jira') {
   return { kind: 'ticket' as const, tool_id, external_scope_id: CLOUD, markers: vi.fn(read) } satisfies PersonTicketCheckV1;
 }
 /** A page tool with these pages' versions and the section digests of their bodies. */
@@ -248,13 +248,14 @@ describe('Ask source check: tickets and pages', () => {
   it('returns a readable ticket same with its marker as the baseline, and compares a marker it is given', async () => {
     const f = await world();
     const now = canonicalSha256('ticket now');
-    const tickets = ticketTool(async ({ ticket_ids }) => new Map(ticket_ids.filter(id => id !== '10099').map(id => [id, now])));
+    // 10099 does not come back; 10077 came back with fields no marker could be made from.
+    const tickets = ticketTool(async ({ ticket_ids }) => new Map(ticket_ids.filter(id => id !== '10099').map(id => [id, id === '10077' ? null : now])));
     const { check } = askCheckOf(f, { live: [tickets] });
-    expect(await check('ari', [item(ticket('10012')), item(ticket('10012'), undefined, now), item(ticket('10012'), undefined, canonicalSha256('ticket then')), item(ticket('10099'), undefined, now)]))
-      .toEqual([{ state: 'same', marker: now }, { state: 'same', marker: now }, { state: 'changed', marker: now }, UNREADABLE]);
+    expect(await check('ari', [item(ticket('10012')), item(ticket('10012'), undefined, now), item(ticket('10012'), undefined, canonicalSha256('ticket then')), item(ticket('10099'), undefined, now), item(ticket('10077'), undefined, now)]))
+      .toEqual([{ state: 'same', marker: now }, { state: 'same', marker: now }, { state: 'changed', marker: now }, UNREADABLE, UNKNOWN]);
     // One read for the tool, of each ticket once, with the caller's own token.
     expect(tickets.markers).toHaveBeenCalledTimes(1);
-    expect(tickets.markers.mock.calls[0]![0]).toMatchObject({ access_token: 'ari', ticket_ids: ['10012', '10099'] });
+    expect(tickets.markers.mock.calls[0]![0]).toMatchObject({ access_token: 'ari', ticket_ids: ['10012', '10099', '10077'] });
   });
 
   it('compares a page by its version, then by its cited section on the current page', async () => {

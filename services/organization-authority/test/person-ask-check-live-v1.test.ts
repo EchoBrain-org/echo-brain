@@ -120,6 +120,19 @@ describe('Ask source check through the Jira connection', () => {
     }
   });
 
+  it('fingerprints a description with content the reader cannot read by the rest of its text', async () => {
+    const image = { type: 'mediaSingle', content: [{ type: 'media', attrs: { id: 'image-1', type: 'file', collection: 'jira' } }] };
+    const withImage = (text: string) => ({ ...fields('10012'), description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }, image] } });
+    const issues = new Map<string, Record<string, unknown>>([['10012', withImage('Ship 10012 after the review.')]]);
+    const f = jira(issues);
+    const [baseline] = await f.check([item(ticket('10012'))]);
+    expect(baseline).toEqual({ state: 'same', marker: jiraTicketMarkerV1(withImage('Ship 10012 after the review.')) });
+    expect(await f.check([item(ticket('10012'), baseline!.marker)])).toEqual([baseline]);
+    issues.set('10012', withImage('Ship 10012 after the second review.'));
+    expect((await f.check([item(ticket('10012'), baseline!.marker)]))[0]).toMatchObject({ state: 'changed' });
+    expect(f.failures).toEqual([]);
+  });
+
   it('answers a hidden, deleted or never-existing ticket unreadable, and reads no key or malformed id', async () => {
     const f = jira(new Map([['10012', fields('10012')]]));
     // 10013 was deleted or is hidden from the owner; 10099 never existed: Jira returns neither.
@@ -148,12 +161,18 @@ describe('Ask source check through the Jira connection', () => {
       ['a rate limit', () => json({}, 429), 'rate_limited'],
       ['an issue Jira could not return now', () => json({ issues: [issue('10012')], issueErrors: [{ id: '10013', errorMessage: 'Retry later' }] }), 'unavailable'],
       ['an issue nobody asked for', () => json({ issues: [issue('10777')], issueErrors: [] }), 'invalid_output'],
-      ['a malformed issue', () => json({ issues: [{ id: '10012', fields: { ...fields('10012'), status: null } }], issueErrors: [] }), 'invalid_output'],
+      ['an issue twice', () => json({ issues: [issue('10012'), issue('10012')], issueErrors: [] }), 'invalid_output'],
+      ['a page that is not a list', () => json({ issues: { 10012: issue('10012') }, issueErrors: [] }), 'invalid_output'],
     ] as const) {
       const f = jira(new Map([['10012', fields('10012')]]), reply);
       expect(await f.check([item(ticket('10012')), item(ticket('10013'))]), label).toEqual([{ state: 'unknown' }, { state: 'unknown' }]);
       expect(f.failures, label).toEqual([{ kind: 'person_ask_check_live_read', reason: 'tickets', code }]);
     }
+    // One issue whose fields no marker can be made from is unknown on its own; the others keep their answers.
+    const malformed = jira(new Map<string, Record<string, unknown>>([['10012', { ...fields('10012'), status: null }], ['10014', fields('10014')]]));
+    expect(await malformed.check([item(ticket('10012')), item(ticket('10013')), item(ticket('10014'))]))
+      .toEqual([{ state: 'unknown' }, { state: 'unreadable' }, { state: 'same', marker: jiraTicketMarkerV1(fields('10014')) }]);
+    expect(malformed.failures).toEqual([]);
     const f = jira(new Map([['10012', fields('10012')]]));
     f.store.revoke(person);
     expect(await f.check([item(ticket('10012'))])).toEqual([{ state: 'unknown' }]);
@@ -164,7 +183,7 @@ describe('Ask source check through the Jira connection', () => {
 
 describe('Ask source check through the Confluence connection', () => {
   const PREFIX = `/ex/confluence/${FIXTURE_CONFLUENCE_CLOUD_V1}/wiki`;
-  type Page = { id: string; status: string; version: number; paragraphs: readonly string[] };
+  type Page = { id: string; status: string; version: number; paragraphs: readonly string[]; body?: string };
 
   /** The real Confluence runtime over a fake Confluence Cloud holding these pages, all in space 42 and visible to the owner. */
   function confluence(pages: Map<string, Page>, fail: { readonly versions?: number; readonly bodies?: number } = {}) {
@@ -173,7 +192,7 @@ describe('Ask source check through the Confluence connection', () => {
     const nango = connected(store, FIXTURE_CONFLUENCE_CLOUD_V1, FIXTURE_CONFLUENCE_SITE_V1);
     const calls: { readonly path: string; readonly query: URLSearchParams }[] = [];
     const metadata = (page: Page, body: boolean) => ({ id: page.id, spaceId: '42', title: `Page ${page.id}`, status: page.status, version: { number: page.version, createdAt: '2026-10-20T09:00:00.000Z' },
-      ...(body ? { body: { atlas_doc_format: { representation: 'atlas_doc_format', value: JSON.stringify(adf(...page.paragraphs)) } } } : {}) });
+      ...(body ? { body: { atlas_doc_format: { representation: 'atlas_doc_format', value: page.body ?? JSON.stringify(adf(...page.paragraphs)) } } } : {}) });
     const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       expect(init?.redirect).toBe('error');
@@ -289,6 +308,11 @@ describe('Ask source check through the Confluence connection', () => {
     const bodiesDown = confluence(pages, { bodies: 503 });
     expect(await bodiesDown.check([item(page('200', '3', 'Gate one.')), item(page('201', '3', 'Gate two.'))])).toEqual([{ state: 'same' }, { state: 'unknown' }]);
     expect(bodiesDown.failures).toEqual([{ kind: 'person_ask_check_live_read', reason: 'page_bodies', code: 'unavailable' }]);
+    // A body that is not a document is unknown on its own; the other page keeps its answer.
+    pages.set('202', { id: '202', status: 'current', version: 4, paragraphs: [], body: 'not an Atlassian document' });
+    const unreadableBody = confluence(pages);
+    expect(await unreadableBody.check([item(page('202', '3', 'Gate three.')), item(page('201', '3', 'Gate two.'))])).toEqual([{ state: 'unknown' }, { state: 'same' }]);
+    expect(unreadableBody.failures).toEqual([]);
     const signedOut = confluence(pages);
     signedOut.store.revoke(person);
     expect(await signedOut.check([item(page('200', '3', 'Gate one.'))])).toEqual([{ state: 'unknown' }]);
