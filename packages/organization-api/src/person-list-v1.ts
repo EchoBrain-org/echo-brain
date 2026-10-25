@@ -6,7 +6,6 @@ import {
   type PersonDocumentExtractionStateV1,
   type PersonDocumentMediaTypeV1,
 } from './person-documents-v1.js';
-import { PERSON_MEETING_TRANSCRIPT_MAX_TEXT_BYTES_V1 } from './person-meeting-transcript-v1.js';
 import { PERSON_UPDATE_TEXT_MAX_BYTES } from './person-updates.js';
 import { PROJECT_NAME_MAX_BYTES, validateProjectIdV1, type ProjectIdV1, type ProjectRoleV1 } from './project-context-v1.js';
 import type { ProjectStatusV2 } from './project-context-v2.js';
@@ -40,9 +39,7 @@ export type PersonImportedMeetingRefV1 = `imported_meeting:cap_${string}`;
 export type PersonNoteRefV1 = `note:ctx_${string}`;
 export type PersonDocumentRefV1 = `document:doc_${string}`;
 export type PersonMeetingRefV1 = `meeting:sha256:${string}`;
-export type PersonTranscriptRefV1 = `transcript:sha256:${string}`;
 export type PersonItemRefV1 = PersonImportedMeetingRefV1 | PersonNoteRefV1 | PersonDocumentRefV1 | PersonMeetingRefV1;
-export type PersonOpenRefV1 = PersonItemRefV1 | PersonTranscriptRefV1;
 export type PersonListVisibilityV1 = 'only_me' | 'team' | 'project';
 export type PersonListNoticeV1 = 'meetings_unavailable';
 
@@ -113,7 +110,7 @@ export interface PersonListResponseV1 {
 
 export interface PersonOpenRequestV1 {
   readonly schema_version: 1;
-  readonly ref: PersonOpenRefV1;
+  readonly ref: PersonItemRefV1;
   /** Never with a note ref. */
   readonly cursor?: string;
 }
@@ -162,20 +159,13 @@ export interface PersonOpenMeetingV1 extends PersonOpenBaseV1 {
   /** Present iff the request had no cursor. */
   readonly meeting?: PersonOpenMeetingDetailV1;
   readonly atoms: readonly PersonOpenMeetingAtomV1[];
-  /** First page only, and only when the approver shared the transcript. */
-  readonly transcript_ref?: PersonTranscriptRefV1;
 }
-export interface PersonOpenTranscriptV1 extends PersonOpenBaseV1 {
-  readonly ref: PersonTranscriptRefV1;
-  readonly text: string;
-}
-export type PersonOpenResponseV1 = PersonOpenImportedMeetingV1 | PersonOpenNoteV1 | PersonOpenDocumentV1 | PersonOpenMeetingV1 | PersonOpenTranscriptV1;
+export type PersonOpenResponseV1 = PersonOpenImportedMeetingV1 | PersonOpenNoteV1 | PersonOpenDocumentV1 | PersonOpenMeetingV1;
 
 const IMPORTED_REF = /^imported_meeting:cap_[0-9a-f]{64}$/;
 const NOTE_REF = /^note:ctx_[0-9a-f]{64}$/;
 const DOCUMENT_REF = /^document:doc_[0-9a-f]{64}$/;
 const MEETING_REF = /^meeting:sha256:[0-9a-f]{64}$/;
-const TRANSCRIPT_REF = /^transcript:sha256:[0-9a-f]{64}$/;
 const CURSOR = /^[A-Za-z0-9_-]{1,512}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const TIMEZONE = /^[A-Za-z0-9_+\-/]{1,64}$/;
@@ -239,20 +229,14 @@ export function validatePersonItemRefV1(value: unknown, label = 'Person item ref
   return value as PersonItemRefV1;
 }
 
-/** A transcript ref is only ever handed out by an open meeting page or an Ask citation. */
-export function validatePersonOpenRefV1(value: unknown, label = 'Person open ref'): PersonOpenRefV1 {
-  if (typeof value === 'string' && TRANSCRIPT_REF.test(value)) return value as PersonTranscriptRefV1;
-  return validatePersonItemRefV1(value, label);
-}
-
-export function personRefKindV1(ref: PersonOpenRefV1): 'imported_meeting' | 'note' | 'document' | 'meeting' | 'transcript' {
-  const valid = validatePersonOpenRefV1(ref);
-  return valid.slice(0, valid.indexOf(':')) as 'imported_meeting' | 'note' | 'document' | 'meeting' | 'transcript';
+export function personRefKindV1(ref: PersonItemRefV1): PersonItemKindV1 {
+  const valid = validatePersonItemRefV1(ref);
+  return valid.slice(0, valid.indexOf(':')) as PersonItemKindV1;
 }
 
 /** The text after the first colon: a context_id, a document_id, or a record digest. */
-export function personRefIdV1(ref: PersonOpenRefV1): string {
-  const valid = validatePersonOpenRefV1(ref);
+export function personRefIdV1(ref: PersonItemRefV1): string {
+  const valid = validatePersonItemRefV1(ref);
   return valid.slice(valid.indexOf(':') + 1);
 }
 
@@ -271,7 +255,7 @@ function rowProject(value: unknown): PersonListProjectRefV1 {
 function row(value: unknown, label: string): PersonListRowV1 {
   const input = object(value, label);
   const ref = validatePersonItemRefV1(input.ref, `${label} ref`);
-  const kind = personRefKindV1(ref) as PersonItemKindV1;
+  const kind = personRefKindV1(ref);
   if (input.kind !== kind) fail(`${label} kind is inconsistent with its ref`);
   const extra = kind === 'document' ? ['media_type', 'extraction_state', 'size_bytes'] : kind === 'meeting' ? optionalKeys(input, ['meeting_date']) : [];
   assertExactKeys(input, ['ref', 'kind', 'title', 'added_at', 'visibility', 'projects', ...extra], label);
@@ -398,7 +382,7 @@ export function validatePersonOpenRequestV1(value: unknown): PersonOpenRequestV1
   const input = object(value, 'Person open request');
   assertExactKeys(input, ['schema_version', 'ref', ...optionalKeys(input, ['cursor'])], 'Person open request');
   if (input.schema_version !== 1) fail('Person open request schema_version is unsupported');
-  const ref = validatePersonOpenRefV1(input.ref, 'Person open request ref');
+  const ref = validatePersonItemRefV1(input.ref, 'Person open request ref');
   if (Object.hasOwn(input, 'cursor') && personRefKindV1(ref) === 'note') fail('Person open request cursor is invalid');
   return Object.freeze({ schema_version: 1 as const, ref, ...(Object.hasOwn(input, 'cursor') ? { cursor: cursor(input.cursor, 'Person open request cursor') } : {}) });
 }
@@ -505,12 +489,11 @@ function atom(value: unknown): PersonOpenMeetingAtomV1 {
 
 export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponseV1 {
   const input = object(value, 'Person open response');
-  const ref = validatePersonOpenRefV1(input.ref, 'Person open response ref');
+  const ref = validatePersonItemRefV1(input.ref, 'Person open response ref');
   const kind = personRefKindV1(ref);
   const keys = kind === 'note' || kind === 'imported_meeting' ? ['item', 'text']
     : kind === 'document' ? ['item', 'filename', 'chunks']
-    : kind === 'meeting' ? ['item', 'atoms', ...optionalKeys(input, ['meeting', 'transcript_ref'])]
-    : ['text'];
+    : ['item', 'atoms', ...optionalKeys(input, ['meeting'])];
   assertExactKeys(input, ['schema_version', 'kind', 'ref', 'next_cursor', ...keys], 'Person open response');
   if (input.schema_version !== 1 || input.kind !== 'echo-person-open-v1') fail('Person open response is invalid');
   const next_cursor = input.next_cursor === null ? null : cursor(input.next_cursor, 'Person open response next_cursor');
@@ -518,8 +501,8 @@ export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponse
   switch (kind) {
     case 'imported_meeting': {
       const item = openItem(input.item, ref as PersonImportedMeetingRefV1) as PersonListImportedMeetingRowV1;
-      // A valid import can contain only a transcript. That transcript remains
-      // unreleasable here, so its imported-notes representation is empty.
+      // A meeting tool's import can contain only a transcript, which is never
+      // released, so its imported-notes text is empty.
       body(input.text, 'Imported meeting notes', 8192, true);
       return bounded<PersonOpenImportedMeetingV1>({ ...base, ref: ref as PersonImportedMeetingRefV1, item, text: input.text, next_cursor }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
     }
@@ -544,17 +527,9 @@ export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponse
       const atoms = input.atoms.map(atom);
       // A cursor page always carries at least one part; only a zero-signal record's first page is empty.
       if (atoms.length === 0 && (meeting === undefined || next_cursor !== null)) fail('Person open meeting atoms is invalid');
-      if (Object.hasOwn(input, 'transcript_ref') && (meeting === undefined || input.transcript_ref !== `transcript:${ref.slice('meeting:'.length)}`)) {
-        fail('Person open meeting transcript_ref is invalid');
-      }
       return bounded<PersonOpenMeetingV1>({
-        ...base, ref: ref as PersonMeetingRefV1, item, ...(meeting === undefined ? {} : { meeting }), atoms: Object.freeze(atoms),
-        ...(Object.hasOwn(input, 'transcript_ref') ? { transcript_ref: input.transcript_ref as PersonTranscriptRefV1 } : {}), next_cursor,
+        ...base, ref: ref as PersonMeetingRefV1, item, ...(meeting === undefined ? {} : { meeting }), atoms: Object.freeze(atoms), next_cursor,
       }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
-    }
-    case 'transcript': {
-      body(input.text, 'Person open transcript text', PERSON_MEETING_TRANSCRIPT_MAX_TEXT_BYTES_V1);
-      return bounded<PersonOpenTranscriptV1>({ ...base, ref: ref as PersonTranscriptRefV1, text: input.text, next_cursor }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');
     }
   }
 }

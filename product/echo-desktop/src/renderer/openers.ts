@@ -11,15 +11,12 @@ import type { AnswerSource, ItemRef } from '../shared/protocol.js';
 export interface Opener {
   /**
    * What the panel shows: the meeting's approved record with the cited items
-   * lit (`record`), a meeting read by its ref (`meeting`, a transcript's),
-   * the cited passages (`passages`), a follow-up's title, owner, status and
-   * latest check (`follow_up`), a project's name (`project`), a person's
-   * name (`person`), a tool and how you are connected to it (`tool`), or Open
-   * in its own app (`external`).
+   * lit (`record`), the cited passages (`passages`), a follow-up's title,
+   * owner, status and latest check (`follow_up`), a project's name
+   * (`project`), a person's name (`person`), a tool and how you are connected
+   * to it (`tool`), or Open in its own app (`external`).
    */
-  readonly pane: 'record' | 'meeting' | 'passages' | 'follow_up' | 'project' | 'person' | 'tool' | 'external';
-  /** The meeting `meeting` reads, by its record digest. */
-  readonly meeting?: string;
+  readonly pane: 'record' | 'passages' | 'follow_up' | 'project' | 'person' | 'tool' | 'external';
   /** The full page Open goes to, or null for an item that opens only in its own app, or, as a person, nowhere. */
   readonly page: FullPage | null;
 }
@@ -37,8 +34,6 @@ const EXTERNAL: Opener = { pane: 'external', page: null };
 const OPENERS: { readonly [K in AnswerSource['kind']]: (source: Extract<AnswerSource, { kind: K }>) => Opener } = {
   // A meeting's decision, action or rationale: its meeting, scrolled to the item.
   record: source => ({ pane: 'record', page: reader({ kind: 'meeting', id: source.record.record_sha256 }) }),
-  // There is no transcript reader: a transcript opens its meeting.
-  transcript: source => ({ pane: 'meeting', meeting: source.meeting, page: reader({ kind: 'meeting', id: source.meeting }) }),
   // A document, note or imported meeting: its cited passages, and the reader by the Authority's ref.
   original: source => ({ pane: 'passages', page: source.item === undefined ? null : reader(source.item) }),
   // A follow-up: what it is now beside Ask, and its item page (openFollowUp), where it is read again as Home shows it.
@@ -61,7 +56,7 @@ export function openerOf(source: AnswerSource): Opener {
 
 /**
  * One item's identity among sources, so Ask names it once: its record item,
- * passage, transcript passage, follow-up, project, person, tool or link.
+ * passage, follow-up, project, person, tool or link.
  */
 export function sourceKey(source: AnswerSource): string {
   if (source.kind === 'record') return `record:${source.atom_id}`;
@@ -69,9 +64,9 @@ export function sourceKey(source: AnswerSource): string {
   if (source.kind === 'project') return `project:${source.project_id}`;
   if (source.kind === 'person') return `person:${source.membership_id}`;
   if (source.kind === 'tool') return `tool:${source.tool_id}`;
-  if (source.kind === 'original' || source.kind === 'transcript') {
+  if (source.kind === 'original') {
     const { ref } = source;
-    return `${source.kind}:${ref.source_id}:${ref.revision_id}:${ref.representation_sha256}:${ref.anchor_sha256}`;
+    return `original:${ref.source_id}:${ref.revision_id}:${ref.representation_sha256}:${ref.anchor_sha256}`;
   }
   return `${source.kind}:${source.tool_id}:${source.permalink}`;
 }

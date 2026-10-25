@@ -26,8 +26,7 @@ It can:
 - list the notes, documents and approved meetings they can read, newest
   first (all of them, one project's, or only their own), and open any of them
   by its ref;
-- list and search approved records and read explicitly shared meeting
-  transcripts;
+- list and search approved records;
 - create projects and manage their members, settings and associated context;
 - upload text notes and documents with a chosen audience, then read or
   download them;

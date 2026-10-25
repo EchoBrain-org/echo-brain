@@ -13,10 +13,9 @@ const EXPECT: Expect = { authority: ACCOUNT.authority, membership_id: ACCOUNT.me
 const coordinates = { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha('6') };
 const decision: AnswerSource = { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') };
 const note: AnswerSource = { kind: 'original', label: 'Launch notes', ref: coordinates, item: { kind: 'note', id: `ctx_${'8'.repeat(64)}` } };
-const transcript: AnswerSource = { kind: 'transcript', label: 'Tuesday sync transcript', ref: { ...coordinates, anchor_sha256: sha('7') }, meeting: sha('2') };
 const ticket: AnswerSource = { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' };
-const receipt: AskReceipt = { looked_through: 4, elapsed_ms: 48_000, rows: [
-  { type: 'searched', sources: [{ kind: 'meetings' }], found: 3 }, { type: 'read', items: [decision, note, transcript, ticket] },
+const receipt: AskReceipt = { looked_through: 3, elapsed_ms: 48_000, rows: [
+  { type: 'searched', sources: [{ kind: 'meetings' }], found: 3 }, { type: 'read', items: [decision, note, ticket] },
 ] };
 const answer = (withReceipt = true): Answer => ({
   text: 'Ship it.', scope: { kind: 'global' }, sources: [decision], outcome: 'answered',
@@ -160,7 +159,7 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     expect(store.getState().sources?.evidence).toMatchObject({ group: null, reads: { 0: { loading: false }, 1: { loading: false } } });
   });
 
-  it('a passage is read under the Ask\'s own scope, a transcript opens its meeting, and a ticket opens only in its app', async () => {
+  it('a passage is read under the Ask\'s own scope, and a ticket opens only in its app', async () => {
     const store = await startStore();
     const release = held.hold('ask.run');
     void store.ask('What did we agree?', { kind: 'project', project_id: project(1, 30).project_id });
@@ -169,12 +168,6 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     await flush();
     expect(calls('ask.source')).toEqual([{ expect: EXPECT, scope: { kind: 'project', project_id: project(1, 30).project_id }, ref: coordinates }]);
     expect(store.getState().sources?.evidence).toMatchObject({ group: null, reads: { 0: { loading: false, value: { text: 'We agreed to ship.' } } } });
-
-    store.openNamed([transcript]);
-    await flush();
-    expect(calls('open.ref')).toEqual([{ expect: EXPECT, ref: { kind: 'meeting', id: sha('2') } }]);
-    expect(store.getState().sources?.meetings[sha('2')]).toMatchObject({ loading: false, value: { record: { title: 'Tuesday sync' }, more: false } });
-    expect(store.getState().sources?.evidence).toBeNull();
 
     store.openNamed([ticket]);
     expect(await store.openExternalSource(ticket as Extract<AnswerSource, { kind: 'ticket' }>)).toBe(true);

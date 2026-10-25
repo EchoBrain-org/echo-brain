@@ -16,7 +16,7 @@ import {
   type EvidenceDeskScopeV1,
   type EvidenceDeskRevalidateInputV1,
 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
-import type { PersonAnswerCitationV3, PersonOpenRefV1 } from "@echo-brain/organization-api";
+import type { PersonAnswerCitationV3, PersonItemRefV1 } from "@echo-brain/organization-api";
 import type {
   OriginalContextDeskReleaseV1,
   PersonAskScopeV2,
@@ -38,9 +38,9 @@ import {
  * refused before it is read.
  */
 export interface PersonEvidenceDeskExclusionsV1 {
-  /** Approved records: their items, and the transcripts they shared (`transcript:<record_sha256>`). */
+  /** Approved records: their items. */
   readonly records: readonly Sha256Digest[];
-  /** Original sources by source_id: the notes of every revision, and every transcript of it. */
+  /** Original sources by source_id: the notes of every revision. */
   readonly sources: readonly string[];
 }
 
@@ -69,9 +69,8 @@ export interface PersonEvidenceDeskV1 extends EvidenceDeskPortV1 {
 }
 
 /**
- * Observability only: what one desk call returned, by source. A shared
- * transcript counts as a meeting item; the originals adapter adds
- * transcript_items for that subset. Never text, ids or labels.
+ * Observability only: what one desk call returned, by source. Never text, ids
+ * or labels.
  */
 function deskCounts(items: readonly EvidenceDeskItemV1[]): CoreRuntimeCountsV1 {
   let meeting = 0; let document = 0;
@@ -166,8 +165,7 @@ function balanced<T>(left: readonly T[], right: readonly T[]): readonly T[] {
 export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Options): PersonEvidenceDeskV1 {
   const excludedRecords = new Set<string>(options.exclude?.records ?? []);
   const excludedSources = new Set<string>(options.exclude?.sources ?? []);
-  const offeredOriginal = (item: { readonly citation: { readonly source_id: string }; readonly ref?: string }) =>
-    !excludedSources.has(item.citation.source_id) && !(item.ref?.startsWith("transcript:") === true && excludedRecords.has(item.ref.slice("transcript:".length)));
+  const offeredOriginal = (item: { readonly citation: { readonly source_id: string } }) => !excludedSources.has(item.citation.source_id);
   const stored = new Map<string, Stored>();
   const originalReleases: OriginalContextDeskReleaseV1[] = [];
   /** How many of `originalReleases` a successful check of this desk has covered. */
@@ -211,7 +209,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (result.desk_items === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
     return result.desk_items.filter((value) => !excludedRecords.has(value.record_sha256)).map((value) => {
       const citation = recordCitation(value);
-      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, list_label: value.list_label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonOpenRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
+      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, list_label: value.list_label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonItemRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
     });
   };
   const searchRecords = (query: string, kinds?: readonly EvidenceDeskKindV1[], dates: EvidenceDateFilterV1 = {}): readonly EvidenceDeskItemV1[] => {

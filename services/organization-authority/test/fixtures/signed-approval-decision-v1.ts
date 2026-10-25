@@ -1,25 +1,14 @@
-import { canonicalJson, canonicalSha256, sha256Digest, type JsonObject, type JsonValue, type Sha256Digest } from "@echo-brain/federation-protocol";
+import { canonicalJson, sha256Digest, type JsonObject, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
-  APPROVAL_DECISION_CONSEQUENCE_KIND_V1,
-  APPROVAL_DECISION_RECORD_INPUT_CODEC_V2,
   APPROVAL_DECISION_SNAPSHOT_SURFACE_V1,
-  HUMAN_ACT_RECORD_INPUT_CODEC_V1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-  createRecordInputCodecRegistryV4,
-  validateMeetingApprovalEventV2,
   type OrganizationRecordDecisionBriefV1,
-  type RecordInputCodecV4,
 } from "@echo-brain/organization-protocol";
 import {
   RecordRetrievalSourceSnapshotPortV1,
   composeRecordApproverProjectorsV1,
-  createPersonPolicyFactProjectorV2,
-  createRecordPolicyFactProjectorRegistryV1,
-  projectApprovedMeetingPolicyFactsV1,
   type OrganizationRecordAppenderV4,
-  type RecordApproverProjectorV1,
-  type RecordPolicyFactProjectorV1,
   type V4RecordEnvelopeView,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
@@ -53,64 +42,18 @@ import {
   type ProtocolAuthority,
 } from "../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import type { ApprovalDecisionBodyV1 } from "../../src/composition/approval-core-v1.js";
-import { buildApprovalDecisionRecordsV1, createApprovalDecisionPolicyProjectorV1 } from "../../src/composition/approval-decision-projection-v1.js";
-import { AUTHORITY_RECORD_APPROVER_PROJECTORS_V1 } from "../../src/composition/authority-record-protocols-v1.js";
+import { buildApprovalDecisionRecordsV1 } from "../../src/composition/approval-decision-projection-v1.js";
+import {
+  AUTHORITY_RECORD_APPROVER_PROJECTORS_V1, AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1,
+} from "../../src/composition/authority-record-protocols-v1.js";
 import { readableSearchGenerationContractV1 } from "../../src/composition/readable-search-generation-composition.js";
 
-/**
- * A test-only protocol for the one thing production no longer writes: an approved meeting that shares its transcript. An
- * approval decision never shares one (ADR-0046), but ADR-0017's grant reader stays, so the readers keep a record to read.
- * Its reference is an approval decision's audience, approver and transcript fields on the common V4 joins.
- */
-const TRANSCRIPT_SHARE_KIND = "echo-test-transcript-share-ref-v1";
-const TRANSCRIPT_SHARE_FIELD = "test_transcript_share_ref_v1";
-const TRANSCRIPT_SHARE_KEYS = ["schema_version", "kind", "authority_id", "organization_id", "state_lineage_id", "approval_id", "action", "final_approver",
-  "selected_policy_id", "policy_contract_sha256", "policy_consequence_sha256", "audience_project_ids", "association_project_ids", "share_transcript",
-  "transcript_source", "audit_event_id", "audit_sequence", "audit_entry_sha256", "provider_action_kind", "provider_action_schema_version",
-  "provider_action_sha256", "authorization_proof_sha256"].sort();
-function transcriptShare(reference: unknown, value: unknown) {
-  const ref = reference as Record<string, unknown> & { readonly final_approver: { readonly principal_id: string; readonly membership_id: string } };
-  if (ref === null || typeof ref !== "object" || Object.keys(ref).sort().join() !== TRANSCRIPT_SHARE_KEYS.join() || ref.kind !== TRANSCRIPT_SHARE_KIND
-    || ref.schema_version !== 1 || ref.action !== "approve" || ref.share_transcript !== true) throw new Error("test transcript share reference is invalid");
-  const event = validateMeetingApprovalEventV2(value, APPROVAL_DECISION_CONSEQUENCE_KIND_V1);
-  if (event.kind !== "approved" || ref.approval_id !== event.approved_snapshot.approval_id || ref.selected_policy_id !== event.policy_id
-    || ref.policy_consequence_sha256 !== event.policy_consequence_sha256
-    || (["audience_project_ids", "association_project_ids", "share_transcript", "transcript_source"] as const).some((key) =>
-      canonicalJson(ref[key] as JsonValue) !== canonicalJson(event.policy_consequence[key] as unknown as JsonValue))) throw new Error("test transcript share differs from its event");
-  return { human_act_resolution_ref: ref as never, event, semantic_idempotency_key: canonicalSha256(ref as JsonValue) };
-}
-const TRANSCRIPT_SHARE_CODEC: RecordInputCodecV4 = Object.freeze({
-  input_reference_field: TRANSCRIPT_SHARE_FIELD, reference_kind: TRANSCRIPT_SHARE_KIND, reference_schema_version: 1,
-  validateInput: (value: unknown) => transcriptShare((value as Record<string, unknown>)[TRANSCRIPT_SHARE_FIELD], (value as Record<string, unknown>).event),
-  fromReference: transcriptShare,
-});
-const transcriptShareProjector: RecordPolicyFactProjectorV1 = Object.freeze<RecordPolicyFactProjectorV1>({
-  id: TRANSCRIPT_SHARE_KIND,
-  matches: (envelope) => (envelope.body.human_act_resolution_ref as { readonly kind?: unknown }).kind === TRANSCRIPT_SHARE_KIND,
-  policyBinding: (envelope) => {
-    const { event } = transcriptShare(envelope.body.human_act_resolution_ref, envelope.body.event);
-    if (event.kind !== "approved" || event.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID) throw new Error("test transcript share is Only me or projects");
-    return { policy_id: event.policy_id, policy_contract_sha256: event.policy_contract_sha256 };
-  },
-  project: (input) => {
-    const { human_act_resolution_ref, event } = transcriptShare(input.envelope.body.human_act_resolution_ref, input.envelope.body.event);
-    return projectApprovedMeetingPolicyFactsV1({ ...input, event, reference: human_act_resolution_ref });
-  },
-});
-const transcriptShareApprover: RecordApproverProjectorV1 = (envelope) => {
-  const ref = (envelope.body as { readonly human_act_resolution_ref?: Record<string, unknown> & { readonly final_approver?: { readonly principal_id: string; readonly membership_id: string } } })
-    .human_act_resolution_ref;
-  if (ref?.kind !== TRANSCRIPT_SHARE_KIND || ref.final_approver === undefined) return undefined;
-  return { authority_id: ref.authority_id as string, organization_id: ref.organization_id as string, state_lineage_id: ref.state_lineage_id as string,
-    approval_id: ref.approval_id as string, principal_id: ref.final_approver.principal_id, membership_id: ref.final_approver.membership_id };
-};
-
-/** The Authority's record codecs (authority-record-protocols-v1.ts: generic human acts and approval decisions), plus the test transcript share. */
-export const SIGNED_APPROVAL_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, APPROVAL_DECISION_RECORD_INPUT_CODEC_V2, TRANSCRIPT_SHARE_CODEC]);
-/** The Authority's policy projectors, plus the test transcript share's. */
-export const SIGNED_APPROVAL_PROJECTORS = createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), createApprovalDecisionPolicyProjectorV1(), transcriptShareProjector]);
-/** The approver projectors production composes (organization-authority-composition-root.ts), plus the test transcript share's. */
-export const SIGNED_APPROVAL_APPROVER = composeRecordApproverProjectorsV1([...AUTHORITY_RECORD_APPROVER_PROJECTORS_V1, transcriptShareApprover]);
+/** The Authority's record codecs (authority-record-protocols-v1.ts: generic human acts and approval decisions). */
+export const SIGNED_APPROVAL_CODECS = AUTHORITY_RECORD_INPUT_CODECS_V1;
+/** The Authority's policy projectors. */
+export const SIGNED_APPROVAL_PROJECTORS = authorityRecordPolicyProjectorsV1();
+/** The approver projectors production composes (organization-authority-composition-root.ts). */
+export const SIGNED_APPROVAL_APPROVER = composeRecordApproverProjectorsV1(AUTHORITY_RECORD_APPROVER_PROJECTORS_V1);
 /** The prefix of every fixture command_id. It travels in the signed reference and must never be released. */
 export const SIGNED_APPROVAL_PRIVATE_MARKER = "cmd-fixture";
 export const SIGNED_APPROVAL_ISSUED_AT = "2026-08-21T12:02:00.000Z";
@@ -127,9 +70,6 @@ export interface SignedApprovalInputV1 {
   readonly issued_at?: string;
   /** A rejection is a generic human act. */
   readonly action?: "approve" | "reject";
-  /** True writes the test transcript share instead of an approval decision (which never shares one). */
-  readonly share_transcript?: boolean;
-  readonly transcript_source?: { readonly source_id: string; readonly revision_id: string; readonly source_sha256: Sha256Digest };
   /** Signal counts of the fixture brief (one decision by default). */
   readonly signals?: { readonly decisions?: number; readonly actions?: number; readonly rationales?: number };
   /** Reshapes the approved brief (title, time, participants, signals) before it is signed. */
@@ -145,8 +85,8 @@ type SignedEnvelopeInput = Parameters<typeof createOrganizationRecordEnvelopeV4>
 /**
  * One real signed record, appended through the record appender; returns the approval id it was appended under. An approval
  * with an array audience is an approval decision built by the production builder (buildApprovalDecisionRecordsV1) with every
- * item routed to that audience, so it is one record under its destination's derived id; with share_transcript it is the test
- * transcript share instead. A Team approval or a rejection is a generic human act (HUMAN_ACT_RECORD_INPUT_CODEC_V1):
+ * item routed to that audience, so it is one record under its destination's derived id. A Team approval or a rejection is a
+ * generic human act (HUMAN_ACT_RECORD_INPUT_CODEC_V1):
  * production writes neither for meetings, but the Authority still reads them.
  */
 export async function appendSignedApprovalV1(
@@ -187,36 +127,18 @@ export async function appendSignedApprovalV1(
         routes: [...brief.decisions, ...brief.actions].map((signal) => ({ signal_id: signal.id, project_ids: projects })), owners: input.action_owners ?? [] },
       surface, actor: { organization_id: COORDINATES.organization_id, ...final_approver },
       evidence: { kind: surface === "desktop" ? "person-session" : "slack-click", sha256: sha256Digest(`evidence-${approval_id}`) },
-      transcript_source: input.transcript_source ?? { source_id: `source-${approval_id}`, revision_id: "revision-1", source_sha256: sha256Digest(`source-${approval_id}`) },
+      transcript_source: { source_id: `source-${approval_id}`, revision_id: "revision-1", source_sha256: sha256Digest(`source-${approval_id}`) },
       decided_at: issued_at,
     };
     const [built] = buildApprovalDecisionRecordsV1({ coordinates: COORDINATES, decision: { sequence: audit_sequence, body },
       candidate_sha256: sha256Digest(`candidate-${approval_id}`), approved_snapshot: snapshot });
-    if (input.share_transcript === true) {
-      // The same approval, as the test transcript share: the proposal's own id, its audience, and the transcript granted.
-      const { approval_decision_ref_v2: ref, event } = built!.human_act_record_input;
-      const proposal = validateApprovedDecisionSnapshotV2({ ...event.approved_snapshot, approval_id });
-      const policy_consequence = { ...event.policy_consequence, share_transcript: true };
-      const policy_consequence_sha256 = canonicalSha256(policy_consequence as unknown as JsonValue);
-      const share = { schema_version: 1, kind: TRANSCRIPT_SHARE_KIND, authority_id: ref.authority_id, organization_id: ref.organization_id,
-        state_lineage_id: ref.state_lineage_id, approval_id, action: "approve", final_approver: ref.final_approver, selected_policy_id: ref.selected_policy_id,
-        policy_contract_sha256: ref.policy_contract_sha256, policy_consequence_sha256, audience_project_ids: ref.audience_project_ids,
-        association_project_ids: ref.association_project_ids, share_transcript: true, transcript_source: ref.transcript_source, audit_event_id: ref.audit_event_id,
-        audit_sequence: ref.audit_sequence, audit_entry_sha256: ref.audit_entry_sha256, provider_action_kind: "echo-test-transcript-share-v1",
-        provider_action_schema_version: 1, provider_action_sha256: ref.provider_action_sha256, authorization_proof_sha256: ref.authorization_proof_sha256 };
-      const shared = { ...event, approved_snapshot: proposal, approved_snapshot_sha256: approvedDecisionSnapshotV2Sha256(proposal), policy_consequence, policy_consequence_sha256 };
-      human_act_record_input = { [TRANSCRIPT_SHARE_FIELD]: share, event: shared } as unknown as SignedEnvelopeInput;
-      semantic_idempotency_key = canonicalSha256(share as unknown as JsonValue);
-      witness = {};
-    } else {
-      human_act_record_input = built!.human_act_record_input as unknown as SignedEnvelopeInput;
-      semantic_idempotency_key = built!.semantic_idempotency_key;
-      witness = built!.authorization_witness;
-      appended_as = built!.approval_id;
-    }
+    human_act_record_input = built!.human_act_record_input as unknown as SignedEnvelopeInput;
+    semantic_idempotency_key = built!.semantic_idempotency_key;
+    witness = built!.authorization_witness;
+    appended_as = built!.approval_id;
   } else {
-    if (input.action_owners !== undefined || input.share_transcript === true || input.surface !== undefined) {
-      throw new Error("owners, transcript and surface need an approval-decision record");
+    if (input.action_owners !== undefined || input.surface !== undefined) {
+      throw new Error("owners and surface need an approval-decision record");
     }
     const policy = input.projects === "team" ? ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID : RESTRICTED_REVIEWER_PERSON_POLICY_ID;
     const fixture = humanAct(approval_id, action, policy, 1, input.signals);

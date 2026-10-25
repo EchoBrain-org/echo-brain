@@ -20,8 +20,6 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
-import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
@@ -149,8 +147,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   const leave = (project_id: string, member: keyof typeof actors) => f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
     .run(new Date().toISOString(), project_id, actors[member].membership_id);
   const listRoute = () => createPersonListRouteV1({ organization_id: person.organization_id, sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(f.db), originals: new SqlitePersonOriginalItemsV1(f.db, sessions, person.organization_id),
-    meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, admitMeeting() {}, openMeeting() { throw new Error('unused'); } },
-    transcripts: { readApprovedMeetingTranscriptByRecordV1() { throw new Error('unused'); } },
+    meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, openMeeting() { throw new Error('unused'); } },
   });
   // Who can find and open the imported note through the list route and the original-context desk.
   const readers = async (tokens: readonly (keyof typeof actors)[] = ['owner', 'other', 'reader-a', 'reader-b']) => {
@@ -466,19 +463,15 @@ describe('personal meeting intake uses the shared processing path', () => {
       command_id: 'approve-no-transcript', action: 'approve', routes: f.routes(review, sharedWithProject ? [projectB] : []), owners: [] });
     await runtime.processing.recoverV4Appends(new AbortController().signal);
     f.disconnect(); // Reading retained evidence must not require a provider connection.
-    expect(f.record.prepare('SELECT count(*) FROM organization_record_meeting_transcript_grant_v1').pluck().get()).toBe(0);
-    expect(JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string).body.human_act_resolution_ref.share_transcript).toBe(false);
-    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id, {
-      ...f.context.coordinates, grants: new ApprovedMeetingTranscriptGrantReaderV1(f.record),
-      is_expected_policy_contract: grant => grant.policy_contract_sha256 === (sharedWithProject ? PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256 : RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256),
-    });
+    expect(JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string).body.human_act_resolution_ref).not.toHaveProperty('share_transcript');
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
     const scope = { kind: 'global' } as const;
     const notes = originals.deskSearch({ access_token: 'owner', scope, query: 'cohort', kinds: ['imported_meeting'] });
     expect(notes.items).toHaveLength(1);
     expect(JSON.stringify(notes.items)).not.toContain('TRANSCRIPT_SECRET');
     expect(originals.deskOpen({ access_token: 'owner', scope, citation: notes.items[0]!.citation }).items[0]?.kind).toBe('imported_meeting');
     for (const token of ['owner', 'reader-a', 'reader-b', 'other']) {
-      expect(originals.deskSearch({ access_token: token, scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE', kinds: ['note'] }).items).toEqual([]);
+      expect(originals.deskSearch({ access_token: token, scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
     }
   });
   it('keeps a meeting the watch delivers private to its importer, with the watch\'s project frozen only as a suggestion', async () => {

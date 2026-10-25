@@ -1,4 +1,5 @@
--- Record log baseline V4: project-audience and transcript-grant extension.
+-- Record log baseline V5: the V4 schema without the meeting transcript grant
+-- (ADR-0046: no approval shares a transcript).
 -- Frozen once released. Fresh initialization only; existing state uses the
 -- explicit offline schema-cleanup transition, never this file as an upgrade.
 
@@ -182,36 +183,6 @@ CREATE TABLE organization_record_project_association_v1 (
   record_sha256 TEXT NOT NULL CHECK (record_sha256 LIKE 'sha256:%'),
   project_id TEXT NOT NULL CHECK (length(project_id) > 0),
   PRIMARY KEY (record_position, project_id),
-  FOREIGN KEY (record_position, record_sha256)
-    REFERENCES organization_record_log (position, record_sha256)
-) STRICT;
-
--- This is only an immutable release witness.  It contains no transcript text;
--- Layer 3 must still resolve the declared policy against current membership.
-CREATE TABLE organization_record_meeting_transcript_grant_v1 (
-  authority_id TEXT NOT NULL CHECK (length(authority_id) > 0),
-  organization_id TEXT NOT NULL CHECK (length(organization_id) > 0),
-  state_lineage_id TEXT NOT NULL CHECK (length(state_lineage_id) > 0),
-  approval_id TEXT NOT NULL UNIQUE CHECK (length(approval_id) > 0),
-  record_position INTEGER NOT NULL UNIQUE CHECK (record_position > 0),
-  record_sha256 TEXT NOT NULL UNIQUE CHECK (record_sha256 LIKE 'sha256:%'),
-  policy_id TEXT NOT NULL CHECK (policy_id IN (
-    'restricted-reviewer-person-v2',
-    'organization-member-readable-person-v2',
-    'project-members-readable-person-v1'
-  )),
-  policy_contract_sha256 TEXT NOT NULL CHECK (policy_contract_sha256 LIKE 'sha256:%'),
-  source_id TEXT NOT NULL CHECK (length(source_id) > 0),
-  revision_id TEXT NOT NULL CHECK (length(revision_id) > 0),
-  source_sha256 TEXT NOT NULL CHECK (source_sha256 LIKE 'sha256:%'),
-  reviewer_principal_id TEXT,
-  reviewer_membership_id TEXT,
-  audit_event_id TEXT NOT NULL CHECK (length(audit_event_id) > 0),
-  audit_sequence INTEGER NOT NULL CHECK (audit_sequence > 0),
-  audit_entry_sha256 TEXT NOT NULL CHECK (audit_entry_sha256 LIKE 'sha256:%'),
-  provider_action_sha256 TEXT NOT NULL CHECK (provider_action_sha256 LIKE 'sha256:%'),
-  authorization_proof_sha256 TEXT NOT NULL CHECK (authorization_proof_sha256 LIKE 'sha256:%'),
-  CHECK ((reviewer_principal_id IS NULL) = (reviewer_membership_id IS NULL)),
   FOREIGN KEY (record_position, record_sha256)
     REFERENCES organization_record_log (position, record_sha256)
 ) STRICT;
@@ -474,34 +445,3 @@ WHEN NOT EXISTS (
     AND audience.project_id = NEW.project_id
 )
 BEGIN SELECT RAISE(ABORT, 'project association is not bound to its approved project audience'); END;
-
-CREATE TRIGGER organization_record_meeting_transcript_grant_immutable_update
-BEFORE UPDATE ON organization_record_meeting_transcript_grant_v1
-BEGIN SELECT RAISE(ABORT, 'organization record transcript grant is immutable'); END;
-
-CREATE TRIGGER organization_record_meeting_transcript_grant_immutable_delete
-BEFORE DELETE ON organization_record_meeting_transcript_grant_v1
-BEGIN SELECT RAISE(ABORT, 'organization record transcript grant cannot be deleted'); END;
-
-CREATE TRIGGER organization_record_meeting_transcript_grant_bound_insert
-BEFORE INSERT ON organization_record_meeting_transcript_grant_v1
-WHEN NOT EXISTS (
-  SELECT 1 FROM organization_record_log AS record
-  WHERE record.position = NEW.record_position
-    AND record.record_sha256 = NEW.record_sha256
-    AND record.event_kind = 'approved'
-    AND json_extract(record.canonical_envelope, '$.body.authority_id') = NEW.authority_id
-    AND json_extract(record.canonical_envelope, '$.body.organization_id') = NEW.organization_id
-    AND json_extract(record.canonical_envelope, '$.body.state_lineage_id') = NEW.state_lineage_id
-    AND json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.approval_id') = NEW.approval_id
-    AND COALESCE(
-      json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.policy_id'),
-      json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.selected_policy_id')
-    ) = NEW.policy_id
-    AND json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.policy_contract_sha256') = NEW.policy_contract_sha256
-    AND json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.share_transcript') = 1
-    AND json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.transcript_source.source_id') = NEW.source_id
-    AND json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.transcript_source.revision_id') = NEW.revision_id
-    AND json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.transcript_source.source_sha256') = NEW.source_sha256
-)
-BEGIN SELECT RAISE(ABORT, 'transcript grant is not bound to an exact approved source'); END;

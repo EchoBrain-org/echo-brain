@@ -264,7 +264,7 @@ function inventoryMore(state: ListState): boolean { return state.paged < state.i
 /** Identity of a cited object independent of the version or text released this time. */
 function citationIdentity(value: unknown): string {
   const citation = object(value) ?? {};
-  const pick = ["kind", "tool_id", "atom_id", "item_id", "ticket_id", "page_id", "document_id", "upload_id", "transcript_id"].filter(key => typeof citation[key] === "string");
+  const pick = ["kind", "tool_id", "atom_id", "item_id", "ticket_id", "page_id", "document_id", "upload_id"].filter(key => typeof citation[key] === "string");
   return JSON.stringify(pick.map(key => [key, citation[key]]));
 }
 /** Desk refusals a model can cause (a stale id, an invalid request) become tool results, not failures. */
@@ -565,8 +565,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const limitedOpens = new Set<string>();
   /**
    * Items whose own read already returned all an open of them can: the anchor of a planner open, and a starting item
-   * other than a document or transcript passage. A neighbour an open admitted, or a starting passage (read without its
-   * neighbours), opens to the passages around it.
+   * other than a source passage. A neighbour an open admitted, or a starting passage (read without its neighbours),
+   * opens to the passages around it.
    */
   const anchorsRead = new Set<string>();
   let touch = 0;

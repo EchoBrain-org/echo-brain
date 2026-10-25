@@ -208,7 +208,7 @@ addition preserves the client-first transition in the release guide.
 
 With the Mine chip, the desktop adds `--mine` to that command: Ask reads only
 the person's own notes and uploads and the meetings they approved, and no live
-tool, follow-up, workspace or shared transcript, and shows its progress as
+tool, follow-up or workspace, and shows its progress as
 every Ask does. A cited original from that answer is read under global scope,
 which contains mine.
 
@@ -271,8 +271,14 @@ The desktop app's **Tools** page (the sidebar's Tools row, or **Account →
 Connected tools…**) lists every tool the Authority returns from `person tools`,
 grouped by the signed-in person's connection: needs attention (revoked),
 connected, available, and not turned on. The list names no tool itself, so a
-tool the Authority adds appears without desktop changes; only Granola's Manage
-sheet differs, adding the meeting setup that chooses the folder ECHO watches.
+tool the Authority adds appears without desktop changes. Two rows differ.
+Granola's Manage sheet adds its meeting watch: Off, My meetings (the meetings
+the person recorded in the last 7 days) or One folder (a filter), with an
+optional suggested project that only pre-ticks a review's destinations
+([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)).
+**Paste a meeting** needs no account: its Paste opens a sheet for a meeting
+from any tool (a title, an optional date, notes and an optional transcript),
+which `person tools submit --tool hand-in` hands in.
 Connect, Reconnect and Disconnect run the same Person CLI tools verbs as the
 terminal:
 `person tools connect --tool <id> --no-wait` opens the tool's page and returns
@@ -321,9 +327,8 @@ person who runs them; an agent has no membership of its own
   and a tool's `tool:<tool>`, which `person tools` lists. A person and a tool
   container carry no ref
   ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)).
-  Documents, meetings and transcripts page with `--cursor` and the same ref. A
-  meeting's first page carries `transcript_ref` when its transcript was shared
-  with the reader. Anything the person cannot read is `not_found`.
+  Documents, imported meetings and approved meetings page with `--cursor` and
+  the same ref. Anything the person cannot read is `not_found`.
 - `person ask --question <text>` answers with citations in the same scopes.
 - With a valid session, a 401 on `--project` means the person is not a member
   or the project does not exist.

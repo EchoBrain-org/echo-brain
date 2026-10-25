@@ -83,7 +83,6 @@ import {
   PERSON_RESEARCH_EVAL_START_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
-  PERSON_MEETING_TRANSCRIPT_PATH_V1,
   validatePersonAnswerRequestV3,
   validatePersonCapabilitiesV1,
   validatePersonEvidenceOpenRequestV1,
@@ -93,9 +92,8 @@ import {
   validatePersonResearchEvalStartRequestV1,
   validatePersonEvidenceSearchRequestV1,
   validatePersonSourceEvidenceReadRequestV1,
-  validatePersonMeetingTranscriptReadRequestV1,
 } from "@echo-brain/organization-api";
-import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
+import type { PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
 import type {
   PersonAnswerHttpInputV1, PersonAnswerV4HttpApplication, PersonAnswerV5HttpApplication, PersonAnswerV6HttpApplication, PersonAnswerV7HttpApplication,
@@ -147,7 +145,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
   `GET ${PERSON_CHANGES_ROUTE_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
-  `POST ${PERSON_MEETING_TRANSCRIPT_PATH_V1}`,
   `POST ${PERSON_LIST_PATH_V1}`,
   `POST ${PERSON_OPEN_PATH_V1}`,
   `POST ${PERSON_RUNS_PATH_V1}`,
@@ -205,8 +202,6 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
   readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
-  /** Explicit transcript release uses the same originals gate but no Ask model. */
-  readonly person_meeting_transcript?: PersonMeetingTranscriptHttpApplicationV1;
   /** The person list and open by ref (ADR-0024); it needs no answer model. */
   readonly person_list?: PersonListHttpApplicationV1;
   /** The change check (ADR-0036); it needs no answer model and reads only the database. */
@@ -900,7 +895,6 @@ export function createOrganizationAuthorityHttpServer(
       })],
     ] as const),
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
-    [PERSON_MEETING_TRANSCRIPT_PATH_V1, personSourcePost(options.person_meeting_transcript, validatePersonMeetingTranscriptReadRequestV1, (application, input) => application.readTranscript(input))],
     [PERSON_LIST_PATH_V1, personCancellablePost(options.person_list, validatePersonListRequestV1, (application, input) => application.list(input))],
     [PERSON_OPEN_PATH_V1, personCancellablePost(options.person_list, validatePersonOpenRequestV1, (application, input) => application.open(input))],
   ]);

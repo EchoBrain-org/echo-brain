@@ -59,8 +59,8 @@ text in the cases.
    directly into the database. Keep each meeting's listed date as the
    meeting date. If intake cannot keep that date, record the actual date,
    because several keys depend on these dates. Before approving, edit each
-   record to match `expected_records`. Share each transcript to its own
-   project.
+   record to match `expected_records`. No transcript is shared (ADR-0046):
+   the keys cite only what a project member reads, the approved records.
 4. Run the S0 cases (all Ask and approved-record cases).
 5. For the Sweep cases only, apply `s1.apply`, run the Sweeps, then apply
    `s1.revert` and confirm that BUG-412 is In Progress and TRACE-01 is To Do,

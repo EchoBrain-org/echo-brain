@@ -24,7 +24,7 @@ export type PersonAnswerScopeV3 =
   | { readonly kind: 'global' }
   | { readonly kind: 'project'; readonly project_id: ProjectIdV1 }
   | { readonly kind: 'mine' };
-/** A cited original or a transcript page is read under global or project scope. mine ⊆ global, so a mine answer's citations open under global. */
+/** A cited original is read under global or project scope. mine ⊆ global, so a mine answer's citations open under global. */
 export type PersonSourceReadScopeV1 = Exclude<PersonAnswerScopeV3, { readonly kind: 'mine' }>;
 
 export type PersonAnswerCitationV3 =
@@ -78,7 +78,7 @@ export interface PersonSourceEvidenceV1 {
   readonly text: string;
 }
 
-/** A cited original or a transcript page is read under global or project scope, never mine. */
+/** A cited original is read under global or project scope, never mine. */
 export function validatePersonSourceReadScopeV1(value: unknown, label = 'Ask response scope'): PersonSourceReadScopeV1 {
   if (object(value, label).kind === 'mine') fail(`${label} is invalid`);
   return validatePersonAnswerScopeV3(value, label) as PersonSourceReadScopeV1;

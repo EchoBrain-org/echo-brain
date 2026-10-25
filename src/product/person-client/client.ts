@@ -4,7 +4,7 @@ import { validatePersonDocumentIdV1, validatePersonDocumentSearchV2, type Person
 import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { validatePersonQueryText } from '@echo-brain/organization-api';
-import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1, type PersonSourceEvidenceReadRequestV1, type PersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
+import { validatePersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import type { PersonChangesV1 } from '@echo-brain/organization-api';
@@ -44,7 +44,6 @@ import {
   type PersonAskProgressSinkV3,
   type PersonLiveAnswerV3,
   type PersonListV1,
-  type PersonMeetingTranscriptReadV1,
   type PersonOpenV1,
   type PersonRecordListV1,
   type PersonRecordSearchV2,
@@ -836,11 +835,6 @@ export class PersonClient {
   async askSourceEvidence(value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
     return this.withReadSession((authority, token) => authority.askSourceEvidence(token, request));
-  }
-
-  async readMeetingTranscript(value: PersonMeetingTranscriptReadRequestV1): Promise<PersonMeetingTranscriptReadV1> {
-    const request = validatePersonMeetingTranscriptReadRequestV1(value);
-    return this.withReadSession((authority, token) => authority.readMeetingTranscript(token, request));
   }
 
   async withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>, signal?: AbortSignal): Promise<T> {

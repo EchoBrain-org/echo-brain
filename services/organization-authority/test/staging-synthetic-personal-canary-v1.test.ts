@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
-import { applyOrganizationRecordLogBaselineV4, OrganizationRecordAppenderV4 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { applyOrganizationRecordLogBaselineV5, OrganizationRecordAppenderV4 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { createStagingSyntheticPersonalMeetingProviderV1, STAGING_SYNTHETIC_CANARY_MEETING_ID_V1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 import { testAuthority } from '../../../packages/organization-protocol/test/fixtures/record-v4-fixture.js';
 import { createPersonMeetingRuntimeV1 } from '../src/composition/person-meeting-runtime-v1.js';
@@ -30,7 +30,7 @@ async function syntheticWorld(options: { readonly signals?: boolean; readonly ho
   const organization_id = authority.descriptor.organization_id;
   const db = new Database(':memory:'); opened.push(db); db.pragma('foreign_keys = ON'); applyAuthorityBaseline(db);
   seedOwner(db, NOW, { authority_id: authority.descriptor.authority_id, organization_id, ...OWNER, organization_name: 'Test', name: 'Founder' });
-  const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys = ON'); applyOrganizationRecordLogBaselineV4(record);
+  const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys = ON'); applyOrganizationRecordLogBaselineV5(record);
   const coordinates = { authority_id: authority.descriptor.authority_id, organization_id, state_lineage_id: 'lineage-test' };
   record.prepare('INSERT INTO organization_record_log_metadata VALUES (1,?,?,?,?)').run(coordinates.authority_id, coordinates.organization_id, coordinates.state_lineage_id, NOW);
   let extracted = 0, envelopes = 0;

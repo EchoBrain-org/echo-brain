@@ -2,9 +2,11 @@ import { canonicalSha256, type JsonValue, type Sha256Digest } from '@echo-brain/
 import { asRecord, assertExactKeys, assertDigest, assertPositiveSafeInteger, assertTimestamp, canonicalSnapshot } from './validation-support.js';
 import { organizationProtocolValidationFailure as fail } from './validation-error.js';
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from './record-payload.js';
-import { validateMeetingApprovalEventV2, type MeetingApprovedEventV2, type MeetingApprovalTranscriptSourceV2 } from './meeting-approval-event-v2.js';
-import { validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from './human-act-record-input-v1.js';
-import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID } from './person-content-policy-v2.js';
+import { approvedDecisionSnapshotV2Sha256, validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from './human-act-record-input-v1.js';
+import {
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, projectMembersReadablePersonPolicyContractSha256,
+  restrictedReviewerPersonPolicyContractSha256,
+} from './person-content-policy-v2.js';
 import { APPROVAL_OWNERS_MAX_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1 } from './approval-owner-choice-v1.js';
 import type { RecordInputCodecV4, ValidatedRecordInputV4 } from './record-input-codec-v4.js';
 
@@ -45,27 +47,38 @@ export interface ApprovalDecisionRefV2 {
   readonly final_approver: { readonly principal_id: string; readonly membership_id: string };
   readonly selected_policy_id: ApprovalDecisionPolicyIdV1; readonly policy_contract_sha256: Sha256Digest; readonly policy_consequence_sha256: Sha256Digest;
   readonly audience_project_ids: readonly string[]; readonly association_project_ids: readonly string[];
-  /** Always false: the approval card never shares a transcript (ADR-0046). */
-  readonly share_transcript: false; readonly transcript_source: MeetingApprovalTranscriptSourceV2;
   /** Confirmed owners of this record's actions, in brief order, each once (the Slack V3 shape). [] = none confirmed. */
   readonly action_owners: readonly ApprovalDecisionActionOwnerV1[];
   readonly audit_event_id: string; readonly audit_sequence: number; readonly audit_entry_sha256: Sha256Digest;
   readonly provider_action_kind: typeof APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2; readonly provider_action_schema_version: 2;
   readonly provider_action_sha256: Sha256Digest; readonly authorization_proof_sha256: Sha256Digest; readonly approved_at: string;
 }
+/** What a destination's policy selects: its project audience, which is also its association ([] for Only me). */
+export interface ApprovalDecisionConsequenceV2 {
+  readonly schema_version: 2; readonly kind: typeof APPROVAL_DECISION_CONSEQUENCE_KIND_V1; readonly policy_id: ApprovalDecisionPolicyIdV1;
+  readonly audience_project_ids: readonly string[]; readonly association_project_ids: readonly string[];
+}
+/** One destination's approved event: its subset snapshot, its policy and the consequence that policy selects. */
+export interface ApprovalDecisionEventV2 {
+  readonly kind: 'approved'; readonly approved_snapshot: ApprovedDecisionSnapshotV2; readonly approved_snapshot_sha256: Sha256Digest;
+  readonly policy_id: ApprovalDecisionPolicyIdV1; readonly policy_contract_sha256: Sha256Digest;
+  readonly policy_consequence: ApprovalDecisionConsequenceV2; readonly policy_consequence_sha256: Sha256Digest;
+}
 export interface ApprovalDecisionRecordInputV2 {
   readonly approval_decision_ref_v2: ApprovalDecisionRefV2;
-  readonly event: MeetingApprovedEventV2 & { readonly policy_id: ApprovalDecisionPolicyIdV1 };
+  readonly event: ApprovalDecisionEventV2;
 }
 export interface ValidatedApprovalDecisionRecordInputV2 extends ApprovalDecisionRecordInputV2 { readonly semantic_idempotency_key: Sha256Digest }
 
 const REF_KEYS = ['schema_version', 'kind', 'authority_id', 'organization_id', 'state_lineage_id', 'approval_id', 'proposal_approval_id', 'command_id', 'action',
   'surface', 'candidate_sha256', 'proposal_snapshot_sha256', 'approved_snapshot_sha256', 'route_signal_ids', 'final_approver', 'selected_policy_id',
-  'policy_contract_sha256', 'policy_consequence_sha256', 'audience_project_ids', 'association_project_ids', 'share_transcript', 'transcript_source',
-  'action_owners', 'audit_event_id', 'audit_sequence', 'audit_entry_sha256', 'provider_action_kind', 'provider_action_schema_version',
-  'provider_action_sha256', 'authorization_proof_sha256', 'approved_at'] as const;
+  'policy_contract_sha256', 'policy_consequence_sha256', 'audience_project_ids', 'association_project_ids', 'action_owners', 'audit_event_id', 'audit_sequence',
+  'audit_entry_sha256', 'provider_action_kind', 'provider_action_schema_version', 'provider_action_sha256', 'authorization_proof_sha256', 'approved_at'] as const;
 const DIGEST_KEYS = ['candidate_sha256', 'proposal_snapshot_sha256', 'approved_snapshot_sha256', 'policy_contract_sha256', 'policy_consequence_sha256',
   'audit_entry_sha256', 'provider_action_sha256', 'authorization_proof_sha256'] as const;
+const EVENT_KEYS = ['kind', 'approved_snapshot', 'approved_snapshot_sha256', 'policy_id', 'policy_contract_sha256', 'policy_consequence', 'policy_consequence_sha256'] as const;
+const CONSEQUENCE_KEYS = ['schema_version', 'kind', 'policy_id', 'audience_project_ids', 'association_project_ids'] as const;
+const PROJECT_ID = /^prj_[0-9a-f-]{36}$/;
 /** The record identifier pattern (the Authority's CHECK pins the proposal's apr_* separately). */
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 /** The approval core's command rule. */
@@ -113,6 +126,50 @@ function exact(value: unknown, keys: readonly string[], label: string): Record<s
 }
 const same = (a: unknown, b: unknown) => canonicalSha256(a as JsonValue) === canonicalSha256(b as JsonValue);
 
+/** Only me (restricted reviewer) or projects; Team is not a destination (spec 1 ruling 2). */
+function policy(value: unknown): ApprovalDecisionPolicyIdV1 {
+  if (value !== RESTRICTED_REVIEWER_PERSON_POLICY_ID && value !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) fail('Approval decision audience is Only me or projects');
+  return value;
+}
+const policyContract = (policyId: ApprovalDecisionPolicyIdV1): Sha256Digest => policyId === RESTRICTED_REVIEWER_PERSON_POLICY_ID
+  ? restrictedReviewerPersonPolicyContractSha256() : projectMembersReadablePersonPolicyContractSha256();
+/** 0 to 20 canonical project ids, sorted and unique; 1 to 20 when required. */
+function projectIds(value: unknown, label: string, required: boolean): readonly string[] {
+  if (!Array.isArray(value) || value.length > 20 || (required && value.length === 0)) fail(`${label} has an invalid project count`);
+  value.forEach((id: unknown, index) => {
+    if (typeof id !== 'string' || !PROJECT_ID.test(id)) fail(`${label}[${index}] must be a canonical project ID`);
+    if (index > 0 && value[index - 1] >= id) fail(`${label} must be sorted and unique`);
+  });
+  return Object.freeze([...value as string[]]);
+}
+function consequenceOf(value: unknown): ApprovalDecisionConsequenceV2 {
+  const record = exact(value, CONSEQUENCE_KEYS, 'Approval decision consequence');
+  if (record.schema_version !== 2 || record.kind !== APPROVAL_DECISION_CONSEQUENCE_KIND_V1) fail('Approval decision consequence has an unsupported envelope');
+  const policyId = policy(record.policy_id);
+  const projects = policyId === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
+  const audience = projectIds(record.audience_project_ids, 'Approval decision consequence audience projects', projects);
+  const association = projectIds(record.association_project_ids, 'Approval decision consequence association projects', projects);
+  if (!same(audience, association)) fail('Approval decision consequence audience and association must match');
+  if (!projects && audience.length !== 0) fail('Approval decision consequence for Only me must not carry projects');
+  return Object.freeze({ schema_version: 2, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id: policyId, audience_project_ids: audience, association_project_ids: association });
+}
+/** The approved event, its snapshot digest, and the consequence and contract its policy selects. A rejection writes no record. */
+function eventOf(value: unknown): ApprovalDecisionEventV2 {
+  if (asRecord(value, 'Approval decision event').kind === 'rejected') fail('A rejection writes no approval decision record');
+  const event = exact(value, EVENT_KEYS, 'Approval decision event');
+  if (event.kind !== 'approved') fail('Approval decision event is unsupported');
+  const snapshot = validateApprovedDecisionSnapshotV2(event.approved_snapshot);
+  assertDigest(event.approved_snapshot_sha256, 'Approval decision event snapshot digest');
+  if (event.approved_snapshot_sha256 !== approvedDecisionSnapshotV2Sha256(snapshot)) fail('Approval decision event snapshot digest does not match');
+  const policyId = policy(event.policy_id);
+  const consequence = consequenceOf(event.policy_consequence);
+  assertDigest(event.policy_consequence_sha256, 'Approval decision event consequence digest');
+  if (event.policy_contract_sha256 !== policyContract(policyId) || consequence.policy_id !== policyId
+    || event.policy_consequence_sha256 !== canonicalSha256(consequence as unknown as JsonValue)) fail('Approval decision event policy consequence is invalid');
+  return Object.freeze({ kind: 'approved', approved_snapshot: snapshot, approved_snapshot_sha256: event.approved_snapshot_sha256 as Sha256Digest, policy_id: policyId,
+    policy_contract_sha256: event.policy_contract_sha256 as Sha256Digest, policy_consequence: consequence, policy_consequence_sha256: event.policy_consequence_sha256 as Sha256Digest });
+}
+
 export function validateApprovalDecisionRecordInputV2(value: unknown): ValidatedApprovalDecisionRecordInputV2 {
   const input = exact(canonicalSnapshot(value, 'Approval decision', MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES), [APPROVAL_DECISION_FIELD_V2, 'event'], 'Approval decision');
   const ref = exact(input[APPROVAL_DECISION_FIELD_V2], REF_KEYS, 'Approval decision reference');
@@ -132,15 +189,11 @@ export function validateApprovalDecisionRecordInputV2(value: unknown): Validated
   for (const key of DIGEST_KEYS) assertDigest(ref[key], `Approval decision ${key}`);
   assertPositiveSafeInteger(ref.audit_sequence, 'Approval decision audit sequence');
   assertTimestamp(ref.approved_at, 'Approval decision time');
-  // A transcript grant is never part of an approval (ADR-0046); the record log's grant reader stays for its own sake.
-  if (ref.share_transcript !== false) fail('An approval decision never shares the transcript');
-  const event = validateMeetingApprovalEventV2(input.event, APPROVAL_DECISION_CONSEQUENCE_KIND_V1);
-  if (event.kind !== 'approved') fail('A rejection writes no approval decision record');
-  if (event.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID && event.policy_id !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) fail('Approval decision audience is Only me or projects');
+  const event = eventOf(input.event);
   if (ref.approval_id !== event.approved_snapshot.approval_id || ref.approved_snapshot_sha256 !== event.approved_snapshot_sha256 || ref.selected_policy_id !== event.policy_id
     || ref.policy_contract_sha256 !== event.policy_contract_sha256 || ref.policy_consequence_sha256 !== event.policy_consequence_sha256) fail('Approval decision differs from its approved event');
-  for (const key of ['audience_project_ids', 'association_project_ids', 'share_transcript', 'transcript_source'] as const) {
-    if (!same(ref[key], event.policy_consequence[key])) fail('Approval decision audience or transcript choice differs from its event');
+  for (const key of ['audience_project_ids', 'association_project_ids'] as const) {
+    if (!same(ref[key], event.policy_consequence[key])) fail('Approval decision audience differs from its event');
   }
   // The audience is validated (sorted, unique, canonical) by the event's consequence, which the reference equals.
   if (ref.approval_id !== approvalRecordIdV2(ref.proposal_approval_id as string, event.policy_consequence.audience_project_ids)) {
@@ -169,8 +222,7 @@ export function validateApprovalDecisionRecordInputV2(value: unknown): Validated
     prior = at;
   });
   const reference = ref as unknown as ApprovalDecisionRefV2;
-  return Object.freeze({ approval_decision_ref_v2: reference, event: event as ApprovalDecisionRecordInputV2['event'],
-    semantic_idempotency_key: canonicalSha256(reference as unknown as JsonValue) });
+  return Object.freeze({ approval_decision_ref_v2: reference, event, semantic_idempotency_key: canonicalSha256(reference as unknown as JsonValue) });
 }
 
 function result(input: ValidatedApprovalDecisionRecordInputV2): ValidatedRecordInputV4 {

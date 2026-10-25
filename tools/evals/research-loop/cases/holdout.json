@@ -35,8 +35,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-6" }, { "ticket": "ECHO-23" }]
     },
@@ -91,8 +90,7 @@
             { "page": "1409025", "section": "Verification and gate acceptance" },
             { "page": "1409042", "section": "BUG-412 walkthrough" },
             { "page": "1212589", "section": "Delivery and gate strategy" },
-            { "meeting": "M3", "item": "decision" },
-            { "meeting": "M3", "item": "transcript" }
+            { "meeting": "M3", "item": "decision" }
           ]
         },
         {
@@ -123,8 +121,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-7" }, { "ticket": "ECHO-27" }]
     },
@@ -172,8 +169,7 @@
             { "page": "1409025", "section": "Release and change management" },
             { "page": "1212607", "section": "DVT round 2 and regression policy" },
             { "page": "1015989", "section": "Follow the failure thread" },
-            { "meeting": "M4", "item": "decision" },
-            { "meeting": "M4", "item": "transcript" }
+            { "meeting": "M4", "item": "decision" }
           ]
         }
       ],
@@ -190,8 +186,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
     },
@@ -211,7 +206,7 @@
           "id": "p1",
           "type": "change",
           "requirement": "The customer review approved a two-decimal (0.01 °C) display on 2026-09-30.",
-          "evidence": [{ "meeting": "M2", "item": "decision" }, { "meeting": "M2", "item": "transcript" }]
+          "evidence": [{ "meeting": "M2", "item": "decision" }]
         },
         {
           "id": "p2",
@@ -228,7 +223,7 @@
           "id": "p3",
           "type": "owner",
           "requirement": "The asker owns the PRD update, due 2026-10-07.",
-          "evidence": [{ "meeting": "M2", "item": "action" }, { "meeting": "M2", "item": "transcript" }]
+          "evidence": [{ "meeting": "M2", "item": "action" }]
         }
       ],
       "expected_needs": [
@@ -245,8 +240,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
     },
@@ -276,8 +270,7 @@
             { "page": "1409025", "section": "Seeded defect and retest" },
             { "page": "1212607", "section": "DVT round 2 and regression policy" },
             { "page": "1409042", "section": "BUG-412 walkthrough" },
-            { "meeting": "M4", "item": "action" },
-            { "meeting": "M4", "item": "transcript" }
+            { "meeting": "M4", "item": "action" }
           ]
         },
         {
@@ -286,8 +279,7 @@
           "requirement": "The failure review moved the likely fix to hardware, so a firmware build may not be the fix.",
           "evidence": [
             { "meeting": "M4", "item": "decision" },
-            { "meeting": "M4", "item": "action" },
-            { "meeting": "M4", "item": "transcript" }
+            { "meeting": "M4", "item": "action" }
           ]
         }
       ],
@@ -307,8 +299,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
     },
@@ -350,8 +341,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
     },
@@ -394,8 +384,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }]
     },
@@ -457,8 +446,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-5" }, { "ticket": "ECHO-17" }]
     },
@@ -490,8 +478,7 @@
             { "page": "1409025", "section": "Verification and gate acceptance" },
             { "page": "1409042", "section": "BUG-412 walkthrough" },
             { "page": "1212589", "section": "Delivery and gate strategy" },
-            { "meeting": "M3", "item": "decision" },
-            { "meeting": "M3", "item": "transcript" }
+            { "meeting": "M3", "item": "decision" }
           ]
         },
         {
@@ -535,8 +522,7 @@
             { "page": "1212589", "section": "Open decisions" },
             { "page": "1409025", "section": "Questions that prevent a real approved baseline" },
             { "page": "1015989", "section": "Reviews and outstanding decisions" },
-            { "meeting": "M3", "item": "action" },
-            { "meeting": "M3", "item": "transcript" }
+            { "meeting": "M3", "item": "action" }
           ]
         },
         {
@@ -545,8 +531,6 @@
           "requirement": "The later failure review moved the likely fix to hardware, putting DVT-R2's firmware-only assumption and date at risk.",
           "evidence": [
             { "meeting": "M4", "item": "decision" },
-            { "meeting": "M4", "item": "transcript" },
-            { "meeting": "M5", "item": "transcript" },
             { "ticket": "THERM-48" }
           ]
         },
@@ -563,7 +547,6 @@
             { "page": "1212589", "section": "Delivery and gate strategy" },
             { "page": "1015989", "section": "Reviews and outstanding decisions" },
             { "meeting": "M3", "item": "action" },
-            { "meeting": "M3", "item": "transcript" },
             { "ticket": "THERM-48" }
           ]
         }
@@ -606,8 +589,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }, { "ticket": "ECHO-6" }, { "ticket": "ECHO-23" }]
     },
@@ -672,8 +654,7 @@
       "never_appears": [
         { "meeting": "M6", "item": "decision" },
         { "meeting": "M6", "item": "action" },
-        { "meeting": "M6", "item": "rationale" },
-        { "meeting": "M6", "item": "transcript" }
+        { "meeting": "M6", "item": "rationale" }
       ],
       "distractors": [{ "jira_project": "ECHO" }, { "page": "589865" }],
       "verdicts": [
@@ -717,7 +698,7 @@
       "expected_needs": ["open follow-ups Rafael Moreno owns"],
       "gaps": [],
       "must_not": ["lists DVT-R2's follow-up, reassigned from Rafael Moreno to Mara Lindqvist, as his"],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": [{ "follow_up": "F3" }]
     },
     {
@@ -758,7 +739,7 @@
         "names someone as attending who is neither among the meeting's recorded participants nor a speaker in its transcript",
         "dates the hand-off by the meeting or its approval instead of by when the follow-up was sent"
       ],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": []
     },
     {
@@ -793,7 +774,7 @@
         "lists THERM or THERM EVT Archive, which {{TEST_PERSON}} leads",
         "names a project the asker is not in, such as THERM Supplier Review"
       ],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }, { "project": "THERM Supplier Review" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "project": "THERM Supplier Review" }],
       "distractors": [{ "project": "THERM EVT Archive" }]
     },
     {
@@ -815,7 +796,7 @@
         "says nothing was done yesterday in a source whose items could not all be checked against that day, without saying how many were not checked",
         "reports something dated another day as done yesterday"
       ],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": []
     },
     {
@@ -844,7 +825,7 @@
         "gives the link of a single page, or of another space, as THERM's space",
         "gives a link that no item research found carries"
       ],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": []
     },
     {
@@ -870,7 +851,7 @@
       "expected_needs": ["tickets assigned to the asker", "their due dates and status"],
       "gaps": [],
       "must_not": ["lists a ticket assigned to someone else or to no one, such as BUG-412, as the asker's"],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": []
     },
     {
@@ -896,7 +877,7 @@
       "expected_needs": ["the home page of the project's Confluence space"],
       "gaps": [],
       "must_not": ["names a page outside the project's space, such as ECHO Product Pipeline — Start Here, as its home page"],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": [{ "page": "589865" }]
     },
     {
@@ -918,7 +899,7 @@
         "dates a decision's approval by when its meeting happened",
         "presents an unapproved imported note as an approved decision"
       ],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": []
     },
     {
@@ -953,7 +934,7 @@
         "counts Rafael Moreno's actions that only mention {{TEST_PERSON}} as {{TEST_PERSON}}'s",
         "says an action is done, or not done, when its completion is not recorded"
       ],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": []
     },
     {
@@ -979,7 +960,7 @@
       "expected_needs": ["the Jira project and Confluence spaces mapped to Kestrel Pilot Launch"],
       "gaps": [],
       "must_not": ["names THERM's Jira project or Confluence space as Kestrel Pilot Launch's"],
-      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }, { "meeting": "M6", "item": "transcript" }],
+      "never_appears": [{ "meeting": "M6", "item": "decision" }, { "meeting": "M6", "item": "action" }, { "meeting": "M6", "item": "rationale" }],
       "distractors": []
     }
   ]

@@ -136,8 +136,8 @@ gap, and the cross-case planner and handed-over averages now leave Sweep cases
 out, so regrade any earlier baseline with the current `grade` before comparing
 those numbers.
 
-A case whose start request cannot be built (a meeting not bound, or a finding
-that cites only a transcript, which cannot start research in v1) is saved as a
+A case whose start request cannot be built (a meeting not bound, or a
+citation of a kind that cannot start research) is saved as a
 `case_not_startable` error and the run goes on; the report counts it in its
 first line as not started.
 

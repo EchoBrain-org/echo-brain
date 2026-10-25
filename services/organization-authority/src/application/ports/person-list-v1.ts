@@ -106,33 +106,13 @@ export interface PersonMeetingItemsPortV1 {
     readonly row: PersonStoreMeetingRowV1;
     /** Present iff `from` is undefined. */
     readonly meeting?: PersonOpenMeetingDetailV1;
-    /** Present iff `from` is undefined. */
-    readonly transcript_shared?: boolean;
     readonly atoms: readonly PersonOpenMeetingAtomV1[];
     readonly next: PersonMeetingPartPositionV1 | null;
     readonly release: PersonStoreReleaseV1;
   };
-  /** Layer 1 exact read with current grants; not_found on a miss; no audit (an internal lookup, like openDeskCitation). */
-  admitMeeting(input: { readonly access_token: string; readonly record_sha256: `sha256:${string}` }): void;
   /** Throws unauthorized when the session tuple or the caller's grants changed. */
   revalidateMeetingRelease(input: { readonly access_token: string; readonly release: PersonStoreReleaseV1 }): void;
 }
-
-/** A shared transcript opened by its approved record, after the caller admitted that record. */
-export interface PersonTranscriptByRecordPortV1 {
-  readApprovedMeetingTranscriptByRecordV1(input: {
-    readonly access_token: string;
-    readonly record_sha256: `sha256:${string}`;
-    readonly offset?: number;
-  }): { readonly text: string; readonly next_offset: number | null };
-}
-
-/** The content-free probe the meetings store asks before it offers a transcript ref. */
-export type PersonTranscriptProbeV1 = (input: {
-  readonly actor: PersonAccessAuthorization;
-  readonly approval_id: string;
-  readonly record_sha256: `sha256:${string}`;
-}) => boolean;
 
 export interface PersonListJoinedProjectV1 {
   readonly project_id: ProjectIdV1;

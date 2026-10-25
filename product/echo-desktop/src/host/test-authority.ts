@@ -645,7 +645,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const TUESDAY = desktop.record.record_sha256;
   const atomOf = (signal: string) => sha(JSON.stringify({ kind: 'echo-organization-record-atom', record_hash: TUESDAY, signal_id: signal }));
   if (mode.startsWith('ask-progress')) {
-    // The meeting opens by its ref too: from a transcript, and on its own page. The decision Ask cites is its second.
+    // The meeting opens by its ref too, on its own page. The decision Ask cites is its second.
     const brief = desktop.record.brief as unknown as { decisions: Record<string, unknown>[]; actions: { text: string }[]; rationales: { text: string }[] };
     brief.decisions.unshift({ id: 'd0', kind: 'decision', status: 'decided', text: 'Keep monthly plans until November.', evidence: [] });
     meetings.push({
@@ -658,17 +658,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }
   /**
    * What the Ask reads, each as a citation: Tuesday sync's decision, a note's
-   * passage, Tuesday sync's transcript, a Jira ticket, and Tuesday sync's
-   * other decision.
+   * passage, a Jira ticket, and Tuesday sync's other decision.
    */
   const progressItems = () => {
     const [record, passage] = desktop.answer.citations as { citation: Record<string, unknown>; label: string; visibility: string }[];
     return [
       { citation: { ...record!.citation, atom_id: atomOf('d1') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
       { ...passage!, kind: 'note', ref: `note:${desktop.notes[0]!.context_id}` },
-      { citation: { kind: 'source_revision', source_id: `source:${'a'.repeat(64)}`, revision_id: 'rev-t', source_sha256: sha('transcript'),
-        representation_sha256: sha('transcript text'), anchor_sha256: sha('transcript anchor') }, kind: 'note', label: 'Tuesday sync transcript', visibility: 'team',
-        ref: `transcript:${TUESDAY}` },
       { kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: { kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD,
         ticket_id: '10007', permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: sha('ECHO-7: Jira launch') } },
       { citation: { ...record!.citation, atom_id: atomOf('d0') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
@@ -711,9 +707,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   });
   /**
    * A streamed Ask, framed by the contract itself: a search of meetings,
-   * documents and Jira, its four reads, then, once the test lets it answer
-   * (`release-ask`), the writer, the final check and the answer with its
-   * receipt. `ask-progress-quick` answers at once. A cancelled Ask ends the
+   * documents and Jira, its reads of three places, then, once the test lets
+   * it answer (`release-ask`), the writer, the final check and the answer
+   * with its receipt. `ask-progress-quick` answers at once. A cancelled Ask ends the
    * stream. Once a test writes `more-steps`, an Ask still waiting searches
    * Jira once more. On `/v7` (progress V3,
    * `ask-progress-workspace`) it searches your projects, people and tools and

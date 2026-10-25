@@ -99,8 +99,6 @@ export interface SourcesState {
   listed: boolean;
   /** Approved records read for this answer, by digest. */
   records: Readonly<Record<string, Read<ApprovedRecord>>>;
-  /** Meetings read by their ref for a transcript the pane shows, by record digest: the first page, and whether more follows. */
-  meetings: Readonly<Record<string, Read<{ record: ApprovedRecord; more: boolean }>>>;
   /**
    * Follow-ups an answer cites or Ask named (ADR-0040), by item id: each its
    * row as Home reads it now (rows only), for the pane's owner, status and
@@ -3577,7 +3575,7 @@ async function openCitedProject(project_id: string, label: string): Promise<void
 
 /** Nothing open in the pane, nothing read for it yet. */
 function emptySources(): SourcesState {
-  return { gen: ++seq, open: null, focus: null, listed: false, named: null, records: {}, meetings: {}, followUps: {}, evidence: null };
+  return { gen: ++seq, open: null, focus: null, listed: false, named: null, records: {}, followUps: {}, evidence: null };
 }
 
 /**
@@ -3651,35 +3649,17 @@ async function readRecord(gen: number, record: RecordRef, background: boolean): 
   if (!result.ok && sourcesAt(gen) && (!background || ACCOUNT_GONE.includes(result.failure.code))) accountLost(result.failure);
 }
 
-/** A transcript's meeting, by its ref, as the reader reads it: its first page, and whether more follows. */
-async function readMeeting(gen: number, id: string): Promise<void> {
-  const account = expect();
-  if (!account || !sourcesAt(gen)) return;
-  const patch = (read: Read<{ record: ApprovedRecord; more: boolean }>) => {
-    const sources = sourcesAt(gen);
-    if (sources) set({ sources: { ...sources, meetings: { ...sources.meetings, [id]: read } } });
-  };
-  patch({ loading: true });
-  const result = await rpc('open.ref', { expect: account, ref: { kind: 'meeting', id } });
-  const opened = result.ok && result.value.kind === 'meeting' ? result.value : null;
-  patch(opened ? { loading: false, value: { record: opened.record, more: opened.next_cursor !== null } }
-    : { loading: false, failure: result.ok ? { code: 'invalid_output', retryable: true } : result.failure });
-  if (!result.ok && sourcesAt(gen)) accountLost(result.failure);
-}
-
 /**
  * What the pane needs read for `source`, unless it already was: its record,
- * its meeting, its passages, or its follow-up's row. A project, a person, a
- * tool or a link needs nothing read: the pane shows what Ask cited.
+ * its passages, or its follow-up's row. A project, a person, a tool or a link
+ * needs nothing read: the pane shows what Ask cited.
  */
 function readPane(gen: number, source: AnswerSource): void {
   const sources = sourcesAt(gen);
   if (!sources) return;
-  const opener = openerOf(source);
   const stale = (read: Read<unknown> | undefined) => !read || (!read.loading && 'failure' in read);
-  if (opener.pane === 'passages') void readEvidence(gen);
+  if (openerOf(source).pane === 'passages') void readEvidence(gen);
   else if (source.kind === 'record' && stale(sources.records[source.record.record_sha256])) void readRecord(gen, source.record, false);
-  else if (opener.pane === 'meeting' && opener.meeting !== undefined && stale(sources.meetings[opener.meeting])) void readMeeting(gen, opener.meeting);
   else if (source.kind === 'follow_up' && stale(sources.followUps[source.item_id])) void readFollowUpRow(gen, source.item_id);
 }
 
@@ -3778,14 +3758,12 @@ export function retryEvidence(): void {
   if (sources && paneTarget()) void readEvidence(sources.gen);
 }
 
-/** Try again, on an approved record, a transcript's meeting, or a follow-up, that could not be read. */
+/** Try again, on an approved record or a follow-up that could not be read. */
 export function retryRecord(): void {
   const sources = state.sources;
   const source = paneTarget()?.sources[0];
   if (!sources || !source) return;
-  const opener = openerOf(source);
   if (source.kind === 'record') void readRecord(sources.gen, source.record, false);
-  else if (opener.pane === 'meeting' && opener.meeting !== undefined) void readMeeting(sources.gen, opener.meeting);
   else if (source.kind === 'follow_up') void readFollowUpRow(sources.gen, source.item_id);
 }
 
@@ -4376,7 +4354,7 @@ function conceal(): void {
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
   set({
-    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, followUps: {}, evidence: null } } : {}),
+    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, followUps: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
     ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });

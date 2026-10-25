@@ -294,15 +294,19 @@ describe('approval publisher: records', () => {
       expect(canonicalJson(built[index]!.human_act_record_input.approval_decision_ref_v2 as unknown as JsonValue)).toBe(canonicalJson(record.body.human_act_resolution_ref));
     }
   });
-  it('never shares the transcript, whatever the destination', async () => {
+  it('records no transcript choice or source, whatever the destination (ADR-0046)', async () => {
     const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve({ routes: f.routes(id => id === 'decision-1' ? [] : [f.projectA]) }), () => f.session);
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
-    expect(f.records().map(record => record.body.human_act_resolution_ref.share_transcript)).toEqual([false, false]);
-    expect(f.records().map(record => record.body.event.policy_consequence.share_transcript)).toEqual([false, false]);
-    expect(f.record.prepare('SELECT count(*) FROM organization_record_meeting_transcript_grant_v1').pluck().get()).toBe(0);
+    expect(f.records()).toHaveLength(2);
+    for (const record of f.records()) {
+      for (const field of ['share_transcript', 'transcript_source']) {
+        expect(record.body.human_act_resolution_ref).not.toHaveProperty(field);
+        expect(record.body.event.policy_consequence).not.toHaveProperty(field);
+      }
+    }
   });
-  it('publishes with the transcript coordinate frozen at decide', async () => {
+  it('publishes from the decision frozen at decide, after the meeting\'s retained revision changes', async () => {
     const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve(), () => f.session);
     const body = decisionBody(f, f.approvalId);
@@ -311,7 +315,8 @@ describe('approval publisher: records', () => {
     f.db.prepare('UPDATE authority_source_revisions_v1 SET revision_sha256=?').run('0'.repeat(64));
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     expect(f.recordCount()).toBe(1);
-    expect(f.lastRecord().body.human_act_resolution_ref.transcript_source).toEqual(body.transcript_source);
+    // The impact run still finds the meeting's own source in the decision, never in the record.
+    expect(decisionBody(f, f.approvalId).transcript_source).toEqual(body.transcript_source);
   });
   it('keeps the snapshot owner-free and records only confirmed owners', async () => {
     const f = await approvalCoreFixture({ owners: { 'act-1': 'Rafael Moreno', 'act-2': 'Ana Lima' } });
@@ -356,7 +361,7 @@ describe('approval publisher: records', () => {
     await resumed.processing.recoverV4Appends(signal());
     expect(f.recordCount()).toBe(1);
     const envelope = f.lastRecord(), ref = envelope.body.human_act_resolution_ref;
-    expect(ref).toMatchObject({ kind: 'echo-approval-decision-ref-v2', schema_version: 2, surface: 'desktop', share_transcript: false,
+    expect(ref).toMatchObject({ kind: 'echo-approval-decision-ref-v2', schema_version: 2, surface: 'desktop',
       approval_id: approvalRecordIdV2(f.approvalId, ids), proposal_approval_id: f.approvalId, proposal_snapshot_sha256: request.snapshot_sha256,
       route_signal_ids: ['decision-1', 'act-1', 'act-2'], provider_action_kind: 'echo-approval-decision-v2', provider_action_schema_version: 2 });
     expect(ref.audience_project_ids).toEqual(ids);
@@ -431,7 +436,7 @@ describe('approval publisher: destinations', () => {
     expect(refs.map(ref => ref.approval_id)).toEqual([f.THERM, f.BOTH, []].map(projects => approvalRecordIdV2(f.approvalId, projects)));
     expect(new Set(refs.map(ref => ref.approval_id)).size).toBe(3);
     for (const ref of refs) {
-      expect(ref).toMatchObject({ proposal_approval_id: f.approvalId, proposal_snapshot_sha256: f.request.snapshot_sha256, share_transcript: false, command_id: 'desk-approve' });
+      expect(ref).toMatchObject({ proposal_approval_id: f.approvalId, proposal_snapshot_sha256: f.request.snapshot_sha256, command_id: 'desk-approve' });
       expect(ref.association_project_ids).toEqual(ref.audience_project_ids);
     }
     expect(refs.map(ref => ref.selected_policy_id)).toEqual(['project-members-readable-person-v1', 'project-members-readable-person-v1', 'restricted-reviewer-person-v2']);

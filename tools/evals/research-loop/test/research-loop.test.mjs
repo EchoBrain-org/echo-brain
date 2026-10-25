@@ -145,7 +145,6 @@ test("items match references by citation identity, never by E-number", () => {
   assert.equal(itemMatches(page, { page: "1212589" }, meetings), false, "a page never matches by title when its id differs");
   assert.equal(itemMatches(record("M2", "decision", "E2"), { meeting: "M2", item: "decision" }, meetings), true);
   assert.equal(itemMatches(record("M2", "action", "E2"), { meeting: "M2", item: "decision" }, meetings), false);
-  assert.equal(itemMatches({ kind: "document_passage", title: `Transcript: ${titleOf("M5")}` }, { meeting: "M5", item: "transcript" }, meetings), true);
 });
 
 test("a page section is carried by the chunk holding its heading or the next chunk, not by other chunks", () => {
@@ -202,8 +201,6 @@ test("start requests are envelopes the API and each trigger definition accept; a
   const { validatePersonResearchEvalStartRequestV1 } = await import("@echo-brain/organization-api");
   const { AGENTIC_TRIGGER_DEFINITIONS_V1 } = await import("@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1");
   for (const entry of dataset.cases) {
-    // This Sweep's last finding cites only the M5 transcript, which cannot start research in v1; the runner records it as not started.
-    if (entry.id === "sweep-bug-412-and-gate") continue;
     const request = startRequest(substitutePerson(entry, "Zhen Ye"), bindings);
     assert.deepEqual(validatePersonResearchEvalStartRequestV1(request), request, entry.id);
     assert.equal(Object.hasOwn(request, "project_id"), entry.scope.kind === "project", entry.id);
@@ -413,14 +410,16 @@ test("a sweep run is complete and supported only when every verdict in its resul
 
 test("a case whose request cannot be built is recorded as not started and the run goes on", async () => {
   const out = privateDirectory(mkdtempSync(join(tmpdir(), "research-loop-unstartable-")));
-  // M2 is not bound, so the approved-record case on M2 and the Sweep citing M2 cannot start; the other Sweep cites only a transcript.
+  // M2 is not bound, so the approved-record case on M2 and the Sweep citing M2 cannot start; the other Sweep can.
   const { M2: _unbound, ...meetingsBound } = bindings.meetings;
   writePrivateJson(out, "bindings.json", { ...bindings, meetings: meetingsBound, test_person: "Zhen Ye" });
   const askCase = caseById("bug-fix-dates-vs-dvt-review");
   const card = t1CardRun();
+  const gate = caseById("sweep-bug-412-and-gate");
   const results = {
     ask: completedRun(askCase, [ticket("THERM-46")], { writer_evidence: ["E1"], response: { outcome: "answered", parts: [{ statements: [{}] }], citations: [{}] } }).result,
     approved_record: card.run.result,
+    sweep: completedRun(gate, [ticket("THERM-46")], undefined, sweepResult([ticket("THERM-46")], [{ verdict: "still_open", line: "BUG-412 is still open.", cites: [0] }, ...[1, 2].map(() => ({ verdict: null, line: "Not assessed." }))])).result,
   };
   const started = [];
   const client = {
@@ -430,20 +429,20 @@ test("a case whose request cannot be built is recorded as not started and the ru
   const common = ["run", "--run", "--model", "loop-a", "--split", "development", "--trials", "1", "--out", out];
   await main([...common, "--state", "S0", "--only", "bug-fix-dates-vs-dvt-review,approved-record-t1-two-decimal-display,approved-record-t3-bug-412-likely-cause"], { client, poll_ms: 0 });
   await main([...common, "--state", "S1"], { client, poll_ms: 0 });
-  // The run went on past each unstartable case: Ask and the M4 approved record started, nothing else did.
-  assert.deepEqual(started.map(request => request.trigger), ["ask", "approved_record"]);
+  // The run went on past each unstartable case: Ask, the M4 approved record and the Sweep citing M4 started, nothing else did.
+  assert.deepEqual(started.map(request => request.trigger), ["ask", "approved_record", "sweep"]);
   const runs = new Map(savedRunFiles(out).map(entry => [entry.run.case_id, entry.run]));
   assert.equal(runs.size, 5);
-  for (const id of ["approved-record-t1-two-decimal-display", "sweep-two-decimal-propagation", "sweep-bug-412-and-gate"]) {
+  for (const id of ["approved-record-t1-two-decimal-display", "sweep-two-decimal-propagation"]) {
     assert.deepEqual([runs.get(id).outcome, runs.get(id).error.code, runs.get(id).model, typeof runs.get(id).source_sha], ["error", "case_not_startable", "loop-a", "string"], id);
   }
-  assert.match(runs.get("sweep-bug-412-and-gate").error.message, /cannot start research/u);
-  assert.equal(runs.get("approved-record-t3-bug-412-likely-cause").outcome, "completed");
+  assert.match(runs.get("sweep-two-decimal-propagation").error.message, /no decision citation bound for meeting M2/u);
+  for (const id of ["approved-record-t3-bug-412-likely-cause", "sweep-bug-412-and-gate"]) assert.equal(runs.get(id).outcome, "completed", id);
   await main(["grade", "--no-judge", "--out", out]);
   await main(["report", "--out", out]);
   const report = readJson(join(out, "report.json"));
-  assert.deepEqual([report.summary.runs_not_started, report.summary.runs_failed], [3, 3]);
-  assert.match(readFileSync(join(out, "report.md"), "utf8"), /Failed runs: 3, of which not started \(the case's request could not be built\): 3; rejected at ingress: 0\./u);
+  assert.deepEqual([report.summary.runs_not_started, report.summary.runs_failed], [2, 2]);
+  assert.match(readFileSync(join(out, "report.md"), "utf8"), /Failed runs: 2, of which not started \(the case's request could not be built\): 2; rejected at ingress: 0\./u);
 });
 
 test("a runner error that is not an unbound or unstartable citation still stops the run", async () => {
@@ -467,7 +466,7 @@ test("the judge sees the card as the answer, and its gap checks count for the ca
   const scores = runScores({ checks: codeChecks(testCase, run, dataset), judge: parseJudge(testCase, judgeReply(testCase)) });
   assert.deepEqual([scores.card_gaps_reported, scores.gaps_reported], [1, null]);
   const sweep = caseById("sweep-bug-412-and-gate");
-  const sweepRendered = sweepResult([ticket("THERM-46")], [{ verdict: "still_open", line: "BUG-412 is still open.", cites: [0] }, ...[1, 2].map(() => ({ verdict: null, line: "Not assessed." })), { verdict: "unreadable", line: "ECHO could not read this item." }]);
+  const sweepRendered = sweepResult([ticket("THERM-46")], [{ verdict: "still_open", line: "BUG-412 is still open.", cites: [0] }, ...[1, 2].map(() => ({ verdict: null, line: "Not assessed." }))]);
   const sweepScores = runScores({ checks: codeChecks(sweep, completedRun(sweep, [ticket("THERM-46")], undefined, sweepRendered), dataset), judge: parseJudge(sweep, judgeReply(sweep)) });
   // A sweep names no gaps (it has no plan to report them in), so none of its gap measures is known.
   assert.deepEqual([sweepScores.gaps_reported, sweepScores.card_gaps_reported, "research_gaps_reported" in sweepScores], [null, null, false]);
@@ -526,27 +525,26 @@ test("reports count sweep verdicts per case and over all sweep cases, among the 
     { verdict: "still_open", line: "PRD-D01 still shows one decimal place.", cites: [1] },
   ])), dataset);
   const failed = codeChecks(propagation, { trial: 2, budget: "background", outcome: "failed", result: { status: "failed", error: { code: "timed_out", message: "late" } } }, dataset);
-  // Key: not landed, landed, not landed, no evidence; all four right.
+  // Key: not landed, landed, not landed; all three right.
   const gate = caseById("sweep-bug-412-and-gate");
   const tickets = [ticket("THERM-46", { id: "E1" }), ticket("THERM-47", { id: "E2" }), ticket("THERM-50", { id: "E3" })];
   const allRight = codeChecks(gate, completedRun(gate, tickets, undefined, sweepResult(tickets, [
     { verdict: "still_open", line: "BUG-412 is still open.", cites: [0] },
     { verdict: "landed", line: "TRACE-01 now records the fix owner.", cites: [1] },
     { verdict: "changed", line: "GATE-DVT is on hold under a new review board.", cites: [2] },
-    { verdict: "unreadable", line: "No current item says when the reworked samples arrive." },
   ])), dataset);
   const report = aggregate([{ checks: assessed, judge: null }, { checks: failed, judge: null }, { checks: allRight, judge: null }]);
   const counts = entry => [entry.sweep_verdicts_right, entry.sweep_findings, entry.sweep_not_assessed];
   assert.deepEqual(counts(report.cases.find(entry => entry.case_id === propagation.id)), [2, 6, 1]);
-  assert.deepEqual(counts(report.cases.find(entry => entry.case_id === gate.id)), [4, 4, 0]);
-  assert.deepEqual(counts(report.summary), [6, 10, 1]);
+  assert.deepEqual(counts(report.cases.find(entry => entry.case_id === gate.id)), [3, 3, 0]);
+  assert.deepEqual(counts(report.summary), [5, 9, 1]);
   const identity = { split: "development+holdout", state: "S1", source_sha: "commit-a", model: "loop", world: "therm-v1", judge: null, graded_at: "2026-10-08T00:00:00.000Z" };
   const [loop, renderers] = markdownReport(identity, report).split("## Renderers");
   assert.doesNotMatch(loop, /verdicts right|not assessed|Sweep result/u, "the sweep result's numbers are renderer numbers");
-  assert.match(renderers, /\| Sweep result \| verdicts right \/ findings \| 6 \/ 10 \|/u);
+  assert.match(renderers, /\| Sweep result \| verdicts right \/ findings \| 5 \/ 9 \|/u);
   assert.match(renderers, /\| Sweep result \| findings not assessed \| 1 \|/u);
   assert.match(renderers, /\| sweep-two-decimal-propagation \| background \| 2 \| 2 \/ 6 \| 1 \|/u);
-  assert.match(renderers, /\| sweep-bug-412-and-gate \| background \| 1 \| 4 \/ 4 \| 0 \|/u);
+  assert.match(renderers, /\| sweep-bug-412-and-gate \| background \| 1 \| 3 \/ 3 \| 0 \|/u);
   assert.match(renderers, /"Sweep verdicts correct" under Research loop is a different measure: the judge's reading of the items research read\./u, "the two verdict measures are told apart");
   // Without a sweep case the counts are unknown, not zero.
   const askCase = caseById("bug-fix-dates-vs-dvt-review");

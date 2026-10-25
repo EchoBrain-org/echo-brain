@@ -11,7 +11,7 @@ import {
   validatePersonAnswerResponseV7,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceDeskResponseV1,
-  validatePersonOpenRefV1,
+  validatePersonItemRefV1,
   validatePersonWorkspaceCitationV1,
   validatePersonWorkspaceRefV1,
 } from '../src/index.js';
@@ -149,8 +149,8 @@ describe('Workspace refs V1', () => {
     for (const value of ['project:', `project:${projectId.toUpperCase()}`, `projects:${projectId}`, 'tool:', 'tool:-jira', `tool:${'a'.repeat(65)}`, `person:${membershipId}`, projectId, 42, undefined]) {
       expect(() => validatePersonWorkspaceRefV1(value)).toThrow();
     }
-    expect(() => validatePersonOpenRefV1(`project:${projectId}`)).toThrow();
-    expect(() => validatePersonOpenRefV1('tool:jira')).toThrow();
+    expect(() => validatePersonItemRefV1(`project:${projectId}`)).toThrow();
+    expect(() => validatePersonItemRefV1('tool:jira')).toThrow();
   });
 });
 

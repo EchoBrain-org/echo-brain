@@ -15,7 +15,7 @@ import {
 } from "../core/index.js";
 import type { ExtractionFailureStageV1 } from "./extraction-failure-stage-v1.js";
 
-/** Exact retained revision commitment shared by every approval surface's transcript choice. */
+/** The exact retained revision of a meeting, which every approval decision freezes. */
 export function retainedMeetingSourceCoordinateV1(database: Database.Database, organizationId: string, meeting: MeetingDocument) {
   const source = meetingSourceEnvelopeV1(meeting);
   const row = database.prepare('SELECT revision_sha256 FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=? AND revision_id=?')
