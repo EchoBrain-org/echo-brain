@@ -4,10 +4,10 @@
 // printed through the same validator, and copies explicitly only the fields
 // the renderer needs, so nothing else the client prints can reach it.
 import type {
-  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
+  Account, Answer, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, CheckCitation, ConnectedTools,
   CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
-  ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef,
-  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
+  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
+  RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
@@ -15,11 +15,11 @@ import {
   validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonSourceEvidenceV1, validatePersonUploadSearchResultV2,
   validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2, validateProjectMembersV1,
-  validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2,
-  type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
+  validateProjectIdV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2,
+  type PersonAnswerCitationV8, type PersonAskProgressResultLineV3, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
 } from '@echo-brain/organization-api';
-import { externalSourcePermalink } from '../shared/protocol.js';
+import { CHECK_KINDS, externalSourcePermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
 
@@ -300,6 +300,33 @@ export function isRecordRef(value: unknown): value is RecordRef {
     typeof record.policy_id === 'string' && POLICIES.has(record.policy_id);
 }
 
+/** What an answer to an Ask that carried `previous` adds (C3): the full question it answers, Ask again's "since", and "Which one?". */
+interface PreviousAnswered {
+  readonly question?: unknown;
+  readonly since?: unknown;
+  readonly choices?: unknown;
+}
+const OUTCOMES: ReadonlySet<string> = new Set<Answer['outcome']>(['answered', 'partial', 'not_found', 'clarify']);
+
+/** A statement as the page shows it: its text, the sources it cites, and whether one is only yours. */
+function statementOf(value: unknown): AnswerStatement {
+  const found = object(value);
+  if (!Array.isArray(found.citation_indexes) || !found.citation_indexes.every(at => Number.isSafeInteger(at) && at >= 0) || typeof found.private !== 'boolean') {
+    throw new ViewError();
+  }
+  return { text: text(found.text), citation_indexes: [...found.citation_indexes as number[]], private: found.private };
+}
+
+/** "Which one?": two to four choices, each a label and the full question it asks. */
+function choicesOf(value: unknown): Answer['choices'] {
+  const choices = list(value);
+  if (choices.length < 2 || choices.length > 4) throw new ViewError();
+  return choices.map(entry => {
+    const choice = object(entry);
+    return { label: text(choice.label), question: text(choice.question) };
+  });
+}
+
 /**
  * A versioned Agentic Ask answer: its statements, each with the exact
  * sources that support it, in the answer's order, and a streamed answer's
@@ -307,28 +334,99 @@ export function isRecordRef(value: unknown): value is RecordRef {
  * the last line `person ask --live --progress` printed, in every scope: the
  * answer of the newest route the Authority has, V8 on `/v7` down to V5 on
  * `/v4`, with the receipt of its version when the Authority streamed it
- * (ADR-0039, ADR-0040, research tool contract v1).
+ * (ADR-0039, ADR-0040, research tool contract v1). An answer to an Ask that
+ * carried `previous` (ADR-0047) also says the full question it answers, Ask
+ * again's "since" (its citations among the answer's), or, asking which one
+ * (`clarify`), the choices and no part. Its notice and its parts' gaps stay
+ * out of its plain reading: the page shows neither.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
-  const { direct, parts, outcome, assumption, notice } = result;
+  return answerOf(result, receipt, scope);
+}
+
+/**
+ * The answer the client validated, with a streamed answer's receipt, as the
+ * page has it (answerView's second half): what it adds for an Ask that carried
+ * `previous` is checked here too, its citations among the answer's own.
+ */
+export function answerOf(result: PersonAskProgressResultLineV3['result'], receipt: PersonAskProgressResultLineV3['receipt'], scope: AskScope): Answer {
+  const { direct, parts } = result;
+  const outcome = result.outcome as string;
+  if (!OUTCOMES.has(outcome)) throw new ViewError();
+  const added = result as unknown as PreviousAnswered;
+  const sources = (result.citations as readonly PersonAnswerCitationV8[]).map(citedSource);
+  const since = added.since === undefined ? undefined : list(object(added.since).statements).map(statementOf);
+  if (since?.some(statement => statement.citation_indexes.some(at => at >= sources.length))) throw new ViewError();
   // One part answers the question itself, so its question is not repeated.
   const single = parts.length === 1;
   const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
-    ...(part.records?.map(record => record.text) ?? []), part.gap])]
+    ...(part.records?.map(record => record.text) ?? [])])]
     .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
-  return { text: textValue, scope, sources: (result.citations as readonly PersonAnswerCitationV8[]).map(citedSource), ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }),
-    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) } }) };
+  return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome: outcome as Answer['outcome'],
+    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) } }),
+    ...(added.question === undefined ? {} : { question: text(added.question) }),
+    ...(since === undefined ? {} : { since }),
+    ...(outcome === 'clarify' ? { choices: choicesOf(added.choices) } : {}) };
 }
 
 /** Who alone may read an item cited as private: you, or the approver. */
 const PRIVATE_VISIBILITY: ReadonlySet<string> = new Set(['only_me', 'approver_only']);
+const CHECKABLE: ReadonlySet<string> = new Set(CHECK_KINDS);
 
-/** An answer's cited item, and whether only you can read it: a table row that cites it shows the lock (ADR-0045). */
+/**
+ * An answer's cited item, and whether only you can read it: a table row that
+ * cites it shows the lock (ADR-0045). It keeps the citation as the response
+ * carried it, for a later follow-up's `previous`, and a source that can change
+ * or go keeps its evidence citation, for a later check (ADR-0047).
+ */
 function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
-  const source = answerSource(citation);
-  return PRIVATE_VISIBILITY.has(citation.visibility) ? { ...source, private: true } : source;
+  const source = { ...answerSource(citation), cited: citation };
+  const checked = CHECKABLE.has(citation.citation.kind) ? { ...source, check: citation.citation as CheckCitation } : source;
+  return PRIVATE_VISIBILITY.has(citation.visibility) ? { ...checked, private: true } : checked;
+}
+
+const MARKER = /^sha256:[0-9a-f]{64}$/;
+const CHECK_STATES: ReadonlySet<unknown> = new Set<AskCheckResult['state']>(['same', 'changed', 'unreadable', 'unknown']);
+
+/**
+ * What `person ask-check` printed (C1), as the page may see it: one state per
+ * item asked, in their order, and a readable ticket's current marker. A reply
+ * with another number of items, or anything else, is not its output.
+ */
+export function askCheckView(raw: unknown, asked: number): { items: AskCheckResult[] } {
+  const value = object(raw);
+  if (Object.keys(value).sort().join() !== 'items,kind,schema_version' || value.schema_version !== 1 || value.kind !== 'echo-person-ask-check-v1') throw new ViewError();
+  const items = list(value.items);
+  if (items.length !== asked) throw new ViewError();
+  return { items: items.map(entry => {
+    const item = object(entry);
+    const keys = Object.keys(item).sort().join();
+    if (!CHECK_STATES.has(item.state) || (keys !== 'state' && !(keys === 'marker,state' && typeof item.marker === 'string' && MARKER.test(item.marker)))) {
+      throw new ViewError();
+    }
+    return { state: item.state as AskCheckResult['state'], ...(item.marker === undefined ? {} : { marker: item.marker as string }) };
+  }) };
+}
+
+/**
+ * What `person project-activity` printed (C2): per project you are in, the
+ * newest arrival from someone else that you can read, or null. At most 500,
+ * each project once.
+ */
+export function projectActivityView(raw: unknown): { items: ProjectActivity[] } {
+  const value = object(raw);
+  if (Object.keys(value).sort().join() !== 'items,kind,schema_version' || value.schema_version !== 1 || value.kind !== 'echo-person-project-activity-v1') throw new ViewError();
+  const items = list(value.items);
+  if (items.length > 500) throw new ViewError();
+  const activity = items.map(entry => {
+    const item = object(entry);
+    if (Object.keys(item).sort().join() !== 'latest_at,project_id' || (item.latest_at !== null && isoTime(item.latest_at) === undefined)) throw new ViewError();
+    try { validateProjectIdV1(item.project_id); } catch { throw new ViewError(); }
+    return { project_id: item.project_id as string, latest_at: item.latest_at as string | null };
+  });
+  if (new Set(activity.map(item => item.project_id)).size !== activity.length) throw new ViewError();
+  return { items: activity };
 }
 
 function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {

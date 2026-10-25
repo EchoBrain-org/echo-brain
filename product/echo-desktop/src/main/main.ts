@@ -13,8 +13,8 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  changesLogLine, externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_COPY_CHARACTERS, MAX_PARAMS_BYTES, MAX_PROJECT_FILES,
-  noticeOf, plainJsonBytes, remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
+  changesLogLine, externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES,
+  noticeOf, paramsLimit, plainJsonBytes, remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Notice, type Result, type UpdateState,
 } from '../shared/protocol.js';
@@ -440,7 +440,7 @@ async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Resu
   if (typeof method !== 'string') return refused();
   const value = params ?? {};
   // Plain JSON data only, by its UTF-8 bytes: JSON.stringify writes a Map or a buffer as `{}`.
-  if (typeof value !== 'object' || value === null || plainJsonBytes(value, MAX_PARAMS_BYTES) === null) return refused();
+  if (typeof value !== 'object' || value === null || plainJsonBytes(value, paramsLimit(method)) === null) return refused();
   if (mainMethods.has(method)) return mainMethod(method as keyof MainMethods, value as never);
   if (!hostMethods.has(method)) return refused();
   if (method === 'documents.upload') {
