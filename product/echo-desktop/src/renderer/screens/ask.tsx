@@ -18,7 +18,7 @@ import {
   type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
-  activeTurn, askAgain, askEverywhere, barSuggestions, cancelAsk, checksOf, chipName, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject,
+  activeTurn, askAgain, askEverywhere, barSuggestions, cancelAsk, checksOf, chipName, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleSourceList, toggleTurn, turnOf, widenScope, UNTITLED,
   type AskClarify, type PaneTarget, type Read, type RecordSectionKey, type ShownTurn, type State,
@@ -711,7 +711,7 @@ export function AskView({ state }: { state: State }) {
       {turns.map((turn, index) => (
         <Fragment key={turn.id}>
           {index === today && <Today />}
-          {shownInFull(turn, turns, thread.asked)
+          {shownInFull(turn, turns, fullTurns(thread))
             ? <FullTurn state={state} turn={{ ...turn, ...thread.took[turn.id] }} current={thread.asked.includes(turn.id)} line={lineFor(thread.took[turn.id]?.seq ?? -1)} />
             : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} />}
         </Fragment>

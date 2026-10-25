@@ -119,9 +119,13 @@ export function allOmitted(turn: TimelineTurn, checks: TurnChecks | undefined): 
   return all.length > 0 && all.every(statement => markOf(statement.citation_indexes, checks) === 'omitted');
 }
 
-/** Whether a turn shows in full: the latest, and every turn asked since Ask was opened. Every other turn folds. */
-export function shownInFull(turn: TimelineTurn, turns: readonly TimelineTurn[], asked: readonly string[]): boolean {
-  return turns.at(-1)?.id === turn.id || asked.includes(turn.id);
+/**
+ * Whether a turn shows in full: the latest, and `full`, the turns Ask shows
+ * in full since it opened (the latest then, which a follow-up continues, and
+ * every turn asked since). Every other turn folds.
+ */
+export function shownInFull(turn: TimelineTurn, turns: readonly TimelineTurn[], full: readonly string[]): boolean {
+  return turns.at(-1)?.id === turn.id || full.includes(turn.id);
 }
 
 /** The turn a follow-up continues: the earlier turn opened, or else the latest when it was asked in the last hour. */

@@ -76,6 +76,8 @@ export interface AskTook {
 export interface AskState {
   /** The question on its way; a reply for any other is dropped. */
   seq: number;
+  /** The latest turn when Ask was opened: it stays in full while Ask is open, as the turn a follow-up continues. */
+  latest: string | null;
   /** The turns asked since Ask was opened, oldest first. */
   asked: readonly string[];
   /** The earlier turn opened from its line, if any: a follow-up continues it. */
@@ -3591,9 +3593,14 @@ async function baseline(turn: TimelineTurn): Promise<void> {
   keepBaselines(checkedOf(plan, result.value.items).markers);
 }
 
-/** Ask, opened over the page: nothing asked or opened in it yet. */
+/** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet. */
 function newAsk(opened: string | null = null, focus: string | null = null): AskState {
-  return { seq: ++seq, asked: [], opened, focus, asking: null, clarify: null, failed: null, took: {} };
+  return { seq: ++seq, latest: state.timeline.turns.at(-1)?.id ?? null, asked: [], opened, focus, asking: null, clarify: null, failed: null, took: {} };
+}
+
+/** The turns Ask shows in full besides the latest: the latest when it opened, and those asked since. */
+export function fullTurns(view: AskState): readonly string[] {
+  return view.latest === null ? view.asked : [view.latest, ...view.asked];
 }
 
 /**
@@ -3757,7 +3764,7 @@ export function openTurn(id: string): void {
   emptyBar();
   const open = state.ask;
   const view = open ?? newAsk();
-  const full = shownInFull(turn, state.timeline.turns, view.asked);
+  const full = shownInFull(turn, state.timeline.turns, fullTurns(view));
   set({ ask: { ...view, opened: full ? view.opened : id, focus: id } });
   if (!open) {
     startSources(null, id);
@@ -3825,7 +3832,7 @@ function shownTurns(current: State = state): TimelineTurn[] {
   const view = current.ask;
   if (!view) return [];
   const { turns } = current.timeline;
-  const shown = turns.filter(turn => turn.id === view.opened || shownInFull(turn, turns, view.asked));
+  const shown = turns.filter(turn => turn.id === view.opened || shownInFull(turn, turns, fullTurns(view)));
   const active = activeTurn(current);
   return active && shown.includes(active) ? [active, ...shown.filter(turn => turn !== active)] : shown;
 }
