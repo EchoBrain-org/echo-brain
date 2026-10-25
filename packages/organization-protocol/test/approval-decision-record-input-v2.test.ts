@@ -41,10 +41,12 @@ interface Options {
   /** Puts the retired transcript fields (ADR-0046) back in the reference and its consequence, digests included. */
   readonly share_transcript?: boolean;
   readonly route_signal_ids?: readonly string[];
+  /** Every span quotes this text, as each item of a one-paragraph note quotes the whole note. */
+  readonly quote?: string;
 }
 
 function snapshot(options: Options, approval_id: string) {
-  const evidence = (block: string) => [{ meeting_id: "meeting-1", block_id: block }];
+  const evidence = (block: string) => [{ meeting_id: "meeting-1", block_id: block, ...(options.quote === undefined ? {} : { quote: options.quote }) }];
   return validateApprovedDecisionSnapshotV2({
     schema_version: 2, kind: "echo-approved-decision-snapshot-v2", approval_id,
     staged_content_sha256: sha256Digest("staged"), final_content_sha256: sha256Digest("final"),
@@ -267,6 +269,22 @@ describe("approval decision record input v2", () => {
       expect(() => approvalDecisionSubsetSnapshotV2(proposal, { ...group, signal_ids })).toThrow("group names items");
     }
     expect(() => approvalDecisionSubsetSnapshotV2({ ...proposal, kind: "other" }, group)).toThrow();
+  });
+  it("keeps no quote in a project's subset, since a quote is the cited note text and can speak of any item, and keeps every quote for Only me", () => {
+    const note = "Totals show two decimals. Project B runs the six-test matrix VIOLET-62. Keep the supplier reserve SILVER-95.";
+    const proposal = snapshot({ decisions: 3, actions: [{ id: "act-1" }], rationales: [{ id: "why-1", supports: ["dec-1"] }], quote: note }, PROPOSAL_ID);
+    const project = approvalDecisionSubsetSnapshotV2(proposal, { approval_id: approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1]), project_ids: [PROJECT_1], signal_ids: ["dec-1", "act-1"] });
+    const brief = project.approved_payload.brief;
+    const ids = (signals: readonly { readonly id: string }[]) => signals.map(signal => signal.id);
+    expect([ids(brief.decisions), ids(brief.actions), ids(brief.rationales)]).toEqual([["dec-1"], ["act-1"], ["why-1"]]);
+    // The whole record, not one field: no quote key anywhere, so no other item's words, and every span keeps its reference.
+    const whole = canonicalJson(project as unknown as JsonValue);
+    for (const leaked of ['"quote"', "VIOLET-62", "SILVER-95", "Totals show"]) expect(whole).not.toContain(leaked);
+    expect([...brief.decisions, ...brief.actions, ...brief.rationales].map(signal => signal.evidence))
+      .toEqual([[{ meeting_id: "meeting-1", block_id: "d0" }], [{ meeting_id: "meeting-1", block_id: "a0" }], [{ meeting_id: "meeting-1", block_id: "r0" }]]);
+    expect(project.final_content_sha256).toBe(canonicalSha256(project.approved_payload as unknown as JsonValue));
+    const only = approvalDecisionSubsetSnapshotV2(proposal, { approval_id: approvalRecordIdV2(PROPOSAL_ID, []), project_ids: [], signal_ids: ["dec-2"] });
+    expect(only.approved_payload.brief.decisions.map(signal => signal.evidence)).toEqual([[{ meeting_id: "meeting-1", block_id: "d1", quote: note }]]);
   });
   it("freezes its result and does not alias the input", () => {
     const input = validInput();

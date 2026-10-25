@@ -69,7 +69,9 @@ Adopt option 3, as specified in
 - **One record per destination group.** Kept items are grouped by their exact
   project set. Each group is one signed `echo-approval-decision-ref-v2` record
   holding only its items and their supporting rationales (a project's record
-  takes a rationale only when it holds every item the rationale supports), with
+  takes a rationale only when it holds every item the rationale supports, and
+  keeps each item's source reference but none of its quotes, since a quote can
+  speak of other items; Only me keeps them), with
   a derived record approval id, so the record log keeps one record per approval
   id. Audience equals association per record (ADR-0017), unchanged. Every
   group is validated before the first append, and the receipts of all groups

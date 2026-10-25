@@ -28,9 +28,11 @@ intentional.
   me, one or more projects, or not kept. Destinations start from the meeting's
   suggestion, so when the suggestion is right, Approve is still one click. One
   control in the side panel changes every item at once.
-- Each project sees only the items sent to it, with their supporting quotes.
-  The full notes and the transcript are never shared from the card; the
-  transcript checkbox is gone.
+- Each project sees only the items sent to it, without quotes: a quote is the
+  note line or paragraph an item cites, which can speak of other items. A
+  project's record keeps where each item came from (meeting and block), and
+  only an Only-me record keeps its quotes (ruling 22). The full notes and the
+  transcript are never shared from the card; the transcript checkbox is gone.
 - In Slack, Approve sends every item to the suggestion. Choosing per item
   happens in the desktop app.
 - Anyone can paste a meeting from any tool: title, optional date, notes, and an
@@ -179,13 +181,19 @@ The publisher groups kept items by their exact project set. Each group becomes
 one record:
 
 - Its subset snapshot holds only that group's decisions and actions and the
-  rationales for them. A rationale's text and quotes may speak of any item it
-  supports, so a project group takes a rationale, whole, only when every item
-  it supports is in that group. The Only-me group, which only the reviewer
-  reads, takes every rationale that supports one of its items, with
-  `supports_signal_ids` pruned to that group, and every rationale that
-  supports nothing at all. Any other rationale is dropped: one shared by items
-  with different destinations, or by an item not kept, reaches no project.
+  rationales for them. A rationale's text may speak of any item it supports,
+  so a project group takes a rationale only when every item it supports is in
+  that group. The Only-me group, which only the reviewer reads, takes every
+  rationale that supports one of its items, with `supports_signal_ids` pruned
+  to that group, and every rationale that supports nothing at all. Any other
+  rationale is dropped: one shared by items with different destinations, or
+  by an item not kept, reaches no project.
+- A project group's evidence spans keep `meeting_id`, `block_id` and their
+  times but drop `quote`, on its decisions, actions and rationales alike. A
+  quote is the text of the evidence unit the item cites (a note line, or up
+  to a few hundred characters of a paragraph or turn), so it can speak of any
+  item of the meeting, including one routed elsewhere, kept for Only me, or
+  not kept. The Only-me group keeps its quotes.
 - Its record approval id is derived: `apr_` + the hex of
   `canonicalSha256({ kind: 'echo-approval-route-v1', approval_id, project_ids })`.
   The record log's one-record-per-approval rule then holds per destination.
@@ -347,10 +355,20 @@ these were decided while building and reviewing it.
     result limit, so a fenced item never takes the place of one the run may
     read.
 21. A rationale reaches a project's record only when that record holds every
-    item it supports (section 2.3). Its text and quotes can speak of any of
-    those items, so one shared with an item routed elsewhere, kept for Only
-    me, or not kept reaches no project; the Only-me record keeps it when it
-    supports an item kept there.
+    item it supports (section 2.3). Its text can speak of any of those items,
+    so one shared with an item routed elsewhere, kept for Only me, or not kept
+    reaches no project; the Only-me record keeps it when it supports an item
+    kept there.
+22. A project's record carries no quote (section 2.3). An item quotes the
+    evidence unit it cites, not words chosen for that item: a one-paragraph
+    pasted note is one unit, so every item of it quotes the whole note, and an
+    item can cite a line about another item. A live test released another
+    project's decision and an Only-me item, inside the quote of a shared
+    decision, to a member of the shared project through `person records` and
+    the desktop record view. The record list returns the signed record whole,
+    so the quote is removed at publishing, in the subset function the publisher
+    and the append projector share. Records signed before this ruling keep
+    their quotes; their recovery is a founder decision.
 
 Known and left for the founder:
 

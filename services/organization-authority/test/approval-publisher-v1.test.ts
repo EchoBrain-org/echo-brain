@@ -448,7 +448,7 @@ describe('approval publisher: destinations', () => {
     expect(JSON.stringify(records)).not.toContain('dec-3');
     // The append witness carries the whole snapshot the reviewer saw, but the log never stores it: no row names the item not kept.
     expect(JSON.stringify(f.record.prepare('SELECT * FROM organization_record_log').all())).not.toContain('dec-3');
-    // A project reads a reason, whole, only when it holds every item the reason supports: why-1 speaks of dec-1 and dec-2,
+    // A project reads a reason only when it holds every item the reason supports: why-1 speaks of dec-1 and dec-2,
     // routed to different projects, so neither reads it. Only me keeps its own reasons and the one supporting nothing; one
     // supporting only an item not kept is left out.
     expect(briefs.map(brief => brief.rationales.map((reason: { id: string; supports_signal_ids: string[] }) => [reason.id, reason.supports_signal_ids]))).toEqual([
@@ -474,6 +474,26 @@ describe('approval publisher: destinations', () => {
     expect(f.record.prepare('SELECT DISTINCT record_sha256 FROM organization_record_restricted_reviewer_person_fact').pluck().all()).toEqual([records[2]!.record_sha256]);
     expect(f.core.proposal(f.approvalId)).toMatchObject({ status: 'approved', project_ids: f.BOTH,
       records: refs.map(ref => ({ approval_id: ref.approval_id, project_ids: ref.audience_project_ids })) });
+  });
+  it("stores no quote in a project's record, whole, since each item quotes note text that speaks of items routed elsewhere; Only me keeps it", async () => {
+    // A one-paragraph note is one evidence unit, so every item's quote is the whole note: A's decision quotes B's and the private one.
+    const note = 'Totals show two decimals. Project B runs the six-test matrix VIOLET-62. Keep the supplier reserve SILVER-95.';
+    const f = await approvalCoreFixture({ decisions: [{ id: 'dec-a' }, { id: 'dec-b' }, { id: 'dec-me' }], actions: [], rationales: [{ id: 'why-a', supports: ['dec-a'] }], note });
+    const to: Readonly<Record<string, readonly string[]>> = { 'dec-a': [f.projectA], 'dec-b': [f.projectB], 'dec-me': [] };
+    expect(f.core.decide('desktop', f.approve({ routes: f.routes(id => to[id]!) }), () => f.session).kind).toBe('decided');
+    await f.core.processing.appendFinalizedApprovalsToV4(signal());
+    // Every column of every stored row: the canonical envelope is what a reader of the record is released.
+    const rows = f.record.prepare('SELECT * FROM organization_record_log ORDER BY position').all();
+    const audiences = f.records().map(record => record.body.human_act_resolution_ref.audience_project_ids);
+    expect(audiences).toEqual([[f.projectA], [f.projectB], []]);
+    for (const row of rows.slice(0, 2)) {
+      const whole = JSON.stringify(row);
+      for (const leaked of ['\\"quote\\"', 'VIOLET-62', 'SILVER-95', 'Totals show']) expect(whole).not.toContain(leaked);
+      expect(whole).toContain('\\"block_id\\":\\"block-1\\"');
+    }
+    const [a, , only] = f.records().map(record => record.body.event.approved_snapshot.approved_payload.brief);
+    expect([a.decisions[0].evidence, a.rationales[0].evidence]).toEqual([[{ meeting_id: 'meeting-1', block_id: 'block-1' }], [{ meeting_id: 'meeting-1', block_id: 'block-1' }]]);
+    expect(only.decisions[0].evidence).toEqual([{ meeting_id: 'meeting-1', block_id: 'block-1', quote: note }]);
   });
   it('builds every group before the first append, so a group it cannot build appends nothing', async () => {
     const f = await approvalCoreFixture();
