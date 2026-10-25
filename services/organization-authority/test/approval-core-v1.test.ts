@@ -59,7 +59,7 @@ describe('approval core: freeze suggestions under R28', () => {
   it('pre-ticks but grants nothing when the import is cancelled after the freeze', async () => {
     const f = await approvalCoreFixture({ pending: ['A'] });
     f.intake.cancelImport(f.setting(), f.externalId, () => {});
-    const advanced = await f.state.advanceCursor({ expected_cursor: f.first.admission.source.cursor, next_cursor: 'fixture-source:v1:live:{"folder":null,"baseline":false,"revisions":{},"manual":[]}' });
+    const advanced = await f.state.advanceCursor({ expected_cursor: f.first.admission.source.cursor, next_cursor: 'fixture-source:v1:live:{"folder":null,"baseline":false,"manual":[]}' });
     expect(advanced).toBe('state_drift');
     expect(JSON.parse(outbox(f, f.approvalId).suggested_projects_json!)).toEqual([f.projectA]);
     expect(f.db.prepare('SELECT count(*) FROM authority_person_meeting_suggestions_v1').pluck().get()).toBe(0);

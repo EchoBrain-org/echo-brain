@@ -28,17 +28,17 @@ afterEach(() => {
 });
 
 const CURSOR_PREFIX = 'fixture-source:v1:live:';
-type FixtureCheckpointV1 = PersonalMeetingCheckpointV1 & { readonly folder: string | null; readonly baseline: boolean; readonly revisions: Readonly<Record<string, string>> };
-const write = (value: FixtureCheckpointV1): string => CURSOR_PREFIX + JSON.stringify({ folder: value.folder, baseline: value.baseline, revisions: value.revisions, manual: value.manual });
+type FixtureCheckpointV1 = PersonalMeetingCheckpointV1 & { readonly folder: string | null; readonly baseline: boolean };
+const write = (value: FixtureCheckpointV1): string => CURSOR_PREFIX + JSON.stringify({ folder: value.folder, baseline: value.baseline, manual: value.manual });
 /** The fixture source's live cursor carries a personal checkpoint; the admitted initial cursor reads as empty. */
 export const fixtureCheckpointCodec: PersonalMeetingCheckpointCodecV1 = {
   read(value: string): FixtureCheckpointV1 {
     if (!value.startsWith(CURSOR_PREFIX)) throw new Error('fixture cursor must be live');
     const body = value.slice(CURSOR_PREFIX.length);
-    return body.startsWith('{') ? JSON.parse(body) as FixtureCheckpointV1 : { folder: null, baseline: false, revisions: {}, manual: [] };
+    return body.startsWith('{') ? JSON.parse(body) as FixtureCheckpointV1 : { folder: null, baseline: false, manual: [] };
   },
-  write, initial: () => write({ folder: null, baseline: false, revisions: {}, manual: [] }),
-  watch: (value: FixtureCheckpointV1, watch: PersonalMeetingWatchV1): FixtureCheckpointV1 => ({ ...value, folder: watch.folder_id, baseline: false, revisions: {} }),
+  write, initial: () => write({ folder: null, baseline: false, manual: [] }),
+  watch: (value: FixtureCheckpointV1, watch: PersonalMeetingWatchV1): FixtureCheckpointV1 => ({ ...value, folder: watch.folder_id, baseline: false }),
   ready: (value: FixtureCheckpointV1) => value.baseline,
 };
 
