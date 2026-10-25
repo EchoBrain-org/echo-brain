@@ -300,7 +300,6 @@ describe('approval publisher: records', () => {
     await f.core.processing.appendFinalizedApprovalsToV4(signal());
     expect(f.records().map(record => record.body.human_act_resolution_ref.share_transcript)).toEqual([false, false]);
     expect(f.records().map(record => record.body.event.policy_consequence.share_transcript)).toEqual([false, false]);
-    expect(f.record.prepare('SELECT count(*) FROM organization_record_meeting_transcript_grant_v1').pluck().get()).toBe(0);
   });
   it('publishes with the transcript coordinate frozen at decide', async () => {
     const f = await approvalCoreFixture();

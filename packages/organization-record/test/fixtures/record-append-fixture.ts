@@ -58,7 +58,7 @@ import {
   type V4RecordEnvelopeView
 } from "../../src/log/record-log-v4-append.js";
 import { openOrganizationRecordDatabase } from "../../src/persistence/open-organization-record-database.js";
-import { applyOrganizationRecordLogBaselineV4 } from "../../src/persistence/record-log-baseline.js";
+import { applyOrganizationRecordLogBaselineV5 } from "../../src/persistence/record-log-baseline.js";
 
 export const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1]);
 
@@ -112,7 +112,7 @@ export function protocolAuthority(): ProtocolAuthority {
 
 export function database(): ReturnType<typeof openOrganizationRecordDatabase> {
   const value = openOrganizationRecordDatabase(":memory:");
-  applyOrganizationRecordLogBaselineV4(value);
+  applyOrganizationRecordLogBaselineV5(value);
   value
     .prepare(
       `INSERT INTO organization_record_log_metadata (

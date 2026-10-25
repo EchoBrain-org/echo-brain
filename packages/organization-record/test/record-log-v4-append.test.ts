@@ -31,28 +31,27 @@ import {
   type V4RecordEnvelopeView
 } from "../src/log/record-log-v4-append.js";
 import { PersonRecordReaderV1 } from "../src/retrieve/person-record-reader-v1.js";
-import { ApprovedMeetingTranscriptGrantReaderV1 } from "../src/retrieve/approved-meeting-transcript-grant-reader-v1.js";
 import {
   RecordRetrievalSourceSnapshotPortV1,
   type RecordRetrievalSourceVerifiedEnvelopeV1,
 } from "../src/retrieve/record-retrieval-source-snapshot-v1.js";
 import {
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
-  applyOrganizationRecordLogBaselineV4,
-  organizationRecordLogBaselineSha256V4,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5,
+  applyOrganizationRecordLogBaselineV5,
+  organizationRecordLogBaselineSha256V5,
 } from "../src/persistence/record-log-baseline.js";
 import { openOrganizationRecordDatabase } from "../src/persistence/open-organization-record-database.js";
 import { COORDINATES, RECORD_INPUT_CODECS, appendInput, authorizationWitness, database, humanAct, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
 
-describe("organization record log baseline V4", () => {
-  it("creates fresh immutable project audience, association, and transcript-grant facts", () => {
+describe("organization record log baseline V5", () => {
+  it("creates fresh immutable project audience and association facts, and no transcript grant", () => {
     const db = openOrganizationRecordDatabase(":memory:");
     try {
-      applyOrganizationRecordLogBaselineV4(db);
+      applyOrganizationRecordLogBaselineV5(db);
       expect(db.pragma("user_version", { simple: true })).toBe(
-        ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
+        ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5,
       );
-      expect(organizationRecordLogBaselineSha256V4()).toMatch(
+      expect(organizationRecordLogBaselineSha256V5()).toMatch(
         /^sha256:[0-9a-f]{64}$/,
       );
       expect(
@@ -64,23 +63,23 @@ describe("organization record log baseline V4", () => {
               'organization_record_meeting_transcript_grant_v1'
             ) ORDER BY name`,
         ).all(),
-      ).toHaveLength(3);
+      ).toEqual([{ name: "organization_record_project_association_v1" }, { name: "organization_record_project_members_readable_person_record_fact" }]);
     } finally {
       db.close();
     }
   });
 
-  it("never relabels occupied state as a V4 lineage", () => {
+  it("never relabels occupied state as a V5 lineage", () => {
     const occupied = openOrganizationRecordDatabase(":memory:");
     const current = openOrganizationRecordDatabase(":memory:");
     try {
       occupied.exec("CREATE TABLE occupied (id INTEGER PRIMARY KEY)");
       occupied.pragma("user_version = 1");
-      expect(() => applyOrganizationRecordLogBaselineV4(occupied)).toThrow(
+      expect(() => applyOrganizationRecordLogBaselineV5(occupied)).toThrow(
         "completely empty database",
       );
-      applyOrganizationRecordLogBaselineV4(current);
-      expect(() => applyOrganizationRecordLogBaselineV4(current)).toThrow(
+      applyOrganizationRecordLogBaselineV5(current);
+      expect(() => applyOrganizationRecordLogBaselineV5(current)).toThrow(
         "completely empty database",
       );
     } finally {
@@ -91,11 +90,10 @@ describe("organization record log baseline V4", () => {
 });
 
 describe("V4 organization-record append", () => {
-  it("append-atomically stores project audience, association, and exact transcript grant facts", async () => {
+  it("refuses a record that shares a meeting transcript, and append-atomically stores project audience and association facts", async () => {
     const db = database();
     try {
       const semantic = sha256Digest("project-facts-semantic-key");
-      const source_sha256 = sha256Digest("project-facts-source");
       const envelope: V4RecordEnvelopeView & JsonObject = {
         record_sha256: sha256Digest("project-facts-record"),
         body: {
@@ -109,8 +107,6 @@ describe("V4 organization-record append", () => {
             policy_contract_sha256: sha256Digest("project-policy-contract"),
             audience_project_ids: ["prj_alpha", "prj_beta"],
             association_project_ids: ["prj_alpha", "prj_beta"],
-            share_transcript: true,
-            transcript_source: { source_id: "source-1", revision_id: "revision-1", source_sha256 },
             audit_event_id: "audit-project-facts", audit_sequence: 1,
             audit_entry_sha256: sha256Digest("audit-project-facts"),
             provider_action_kind: "test-project-action-v1", provider_action_schema_version: 1,
@@ -127,15 +123,20 @@ describe("V4 organization-record append", () => {
         policyBinding: () => ({ policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, policy_contract_sha256: sha256Digest("project-policy-contract") }),
       }]);
       const app = new OrganizationRecordAppenderV4(db, COORDINATES, projectors);
-      await app.append({
+      const append = (appended: V4RecordEnvelopeView & JsonObject) => app.append({
         approval_id: "approval-project-facts", action: "approve", semantic_idempotency_key: semantic,
         receipt_issued_at: "2026-08-21T12:02:00.000Z", authorization_witness: {},
-        envelope_factory: { create: async () => envelope, verify: () => envelope },
+        envelope_factory: { create: async () => appended, verify: () => appended },
         receipt_factory: {
           createSeed: ({ envelope: receiptEnvelope, position, issued_at }) => ({ schema_version: 2, kind: "echo-organization-record-receipt-v2", ...COORDINATES, envelope_id: receiptEnvelope.body.envelope_id, semantic_idempotency_key: semantic, event_kind: "approved", record_position: position, record_sha256: receiptEnvelope.record_sha256, predecessor_record_sha256: null, record_head_position: position, record_head_sha256: receiptEnvelope.record_sha256, issued_at }),
           sign: async ({ receipt_seed }) => ({ body: receipt_seed as JsonObject }), verify: ({ receipt }) => receipt as JsonObject,
         },
       });
+      // No record shares a meeting transcript (ADR-0046): one that claims to is refused whole.
+      const shared = { ...envelope, body: { ...envelope.body, human_act_resolution_ref: { ...envelope.body.human_act_resolution_ref, share_transcript: true } } } as unknown as V4RecordEnvelopeView & JsonObject;
+      await expect(append(shared)).rejects.toThrow("never shares a meeting transcript");
+      expect(db.prepare("SELECT count(*) FROM organization_record_log").pluck().get()).toBe(0);
+      await append(envelope);
       expect(db.prepare("SELECT project_id FROM organization_record_project_members_readable_person_record_fact ORDER BY project_id").all()).toEqual([{ project_id: "prj_alpha" }, { project_id: "prj_beta" }]);
       expect(db.prepare("SELECT project_id FROM organization_record_project_association_v1 ORDER BY project_id").all()).toEqual([{ project_id: "prj_alpha" }, { project_id: "prj_beta" }]);
       expect(
@@ -146,18 +147,6 @@ describe("V4 organization-record append", () => {
           project_ids: ["prj_alpha", ...Array.from({ length: 20 }, (_, index) => `prj_other_${index}`)],
         }),
       ).toHaveLength(1);
-      expect(new ApprovedMeetingTranscriptGrantReaderV1(db).find({ ...COORDINATES, approval_id: "approval-project-facts" })).toMatchObject({ source_id: "source-1", revision_id: "revision-1", source_sha256, audience_project_ids: ["prj_alpha", "prj_beta"], association_project_ids: ["prj_alpha", "prj_beta"] });
-      const reader = new ApprovedMeetingTranscriptGrantReaderV1(db);
-      const listed = reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id });
-      expect(listed).toEqual([reader.find({ ...COORDINATES, approval_id: "approval-project-facts" })]);
-      expect(reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1", revision_id: "revision-1", source_sha256 })).toEqual(listed);
-      expect(reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1", revision_id: "revision-2", source_sha256 })).toEqual([]);
-      expect(() => reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1" })).toThrow("exact source tuple");
-      // By record: the same checked grant, and nothing for any other digest or lineage.
-      expect(reader.findByRecord({ ...COORDINATES, record_sha256: envelope.record_sha256 })).toEqual(listed[0]);
-      expect(reader.findByRecord({ ...COORDINATES, record_sha256: sha256Digest("unknown-record") })).toBeNull();
-      expect(reader.findByRecord({ ...COORDINATES, state_lineage_id: "state-lineage-2", record_sha256: envelope.record_sha256 })).toBeNull();
-      expect(() => reader.findByRecord({ ...COORDINATES, record_sha256: "record" as Sha256Digest })).toThrow("record_sha256");
     } finally { db.close(); }
   });
 
@@ -313,8 +302,6 @@ describe("V4 organization-record append", () => {
       ).toEqual(
         Array.from({ length: 11 }, (_, atom_order) => ({ atom_order })),
       );
-      // An approval that did not share its transcript has no grant to find.
-      expect(new ApprovedMeetingTranscriptGrantReaderV1(db).findByRecord({ ...COORDINATES, record_sha256: row.record_sha256 })).toBeNull();
     } finally {
       db.close();
     }
