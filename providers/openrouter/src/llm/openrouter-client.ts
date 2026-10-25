@@ -1,4 +1,5 @@
 import { AdapterError } from "@echo-brain/organization-processing/core";
+import { annotateCoreRuntimeV1, observeCoreModelMetadataV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import {
   createHostedLlmRequester,
   invalidProviderResponse,
@@ -99,21 +100,37 @@ export class OpenRouterClient implements LlmProviderClient {
       );
     }
     const attemptObservation = generationUsageObservation(payload);
+    const choices = Array.isArray(payload['choices']) ? payload['choices'] : [];
+    const first = choices.find(isRecord);
+    const finishReason = first?.['finish_reason'];
+    const message = first?.['message'];
+    const requestId = response.headers.get('x-request-id') ??
+      (nonEmptyString(payload['id']) ? payload['id'] : undefined);
+    // Record the bounded response envelope before any rejection throws. The
+    // observer hashes the request id; prompts, refusal text and error messages
+    // never enter operational telemetry or the thrown error's observation.
+    observeCoreModelMetadataV1({ provider: this.provider, model: request.model,
+      ...(requestId === undefined ? {} : { request_id: requestId }),
+      ...(nonEmptyString(finishReason) ? { finish_reason: finishReason } : {}) });
+    const providerError = isRecord(payload['error']) ? payload['error'] : first?.['error'];
+    const errorStatus = isRecord(providerError) ? providerError['code'] : undefined;
+    annotateCoreRuntimeV1({ counts: {
+      ...(isRecord(message) ? { provider_refusal: Number(nonEmptyString(message['refusal'])) } : {}),
+      ...(typeof errorStatus === 'number' && Number.isInteger(errorStatus) && errorStatus >= 100 && errorStatus <= 599
+        ? { provider_error_status: errorStatus } : {}),
+    } });
     if (isRecord(payload['error'])) {
       throw invalidProviderResponse(
         'OpenRouter',
         'response generation failed',
       );
     }
-    const choices = Array.isArray(payload['choices']) ? payload['choices'] : [];
-    const first = choices.find(isRecord);
     if (first === undefined || isRecord(first['error'])) {
       throw invalidProviderResponse(
         'OpenRouter',
         'response generation failed',
       );
     }
-    const finishReason = first['finish_reason'];
     if (finishReason === 'length') {
       throw new StructuredGenerationAttemptError(
         'temporarily_unavailable',
@@ -138,7 +155,6 @@ export class OpenRouterClient implements LlmProviderClient {
         { ...attemptObservation, stopReason: finishReason },
       );
     }
-    const message = first['message'];
     if (isRecord(message) && nonEmptyString(message['refusal'])) {
       throw new StructuredGenerationAttemptError(
         'permanently_rejected',
@@ -157,9 +173,6 @@ export class OpenRouterClient implements LlmProviderClient {
         'response did not contain message content',
       );
     }
-    const requestId =
-      response.headers.get('x-request-id') ??
-      (nonEmptyString(payload['id']) ? payload['id'] : undefined);
     return {
       content,
       ...(requestId === undefined ? {} : { requestId }),

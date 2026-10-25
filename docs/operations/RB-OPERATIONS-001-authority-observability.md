@@ -731,6 +731,25 @@ Renderers (`ask-renderer-v1.ts`, `impact-card-renderer-v1.ts`, `sweep-renderer-v
 | `sweep_line_withheld` | Withheld a sweep line that suggests an edit or claims ownership, keeping its verdict |
 | `sweep_fallback` | Left findings not assessed after a sweep with no usable reply |
 
+#### Failed OpenRouter meeting extraction
+
+The extraction `model_call` records the response envelope before rejecting it.
+`http_status: 200` means an HTTP reply arrived, not that a usable generation
+completed. `finish_reason: content_filter` and `counts.provider_refusal: 1`
+distinguish a filtered finish from a nonempty refusal field (both may occur).
+`counts.provider_refusal: 0` means a message was present without a nonempty
+refusal; a missing count means no message was observed. A numeric provider error
+code between 100 and 599 appears as `counts.provider_error_status`, separately
+from the HTTP status. These fields do not alter retry or billing classification.
+
+`provider_request` retains the existing opaque hash of the response request ID
+or generation ID when supplied, including failed calls. It is not the raw ID
+needed for a provider API lookup. No response content, refusal text, provider
+error message, or raw request ID is written to operational logs. Missing usage
+or a missing provider-dashboard entry does not establish whether inference ran
+or was billed. Earlier releases lose this failure metadata; their null fields
+cannot establish which rejection path ran.
+
 #### Live Jira and Confluence reads in Ask
 
 Every Person Ask route that reads live tools uses the existing `core_runtime`

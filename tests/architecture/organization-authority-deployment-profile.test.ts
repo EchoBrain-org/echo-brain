@@ -200,6 +200,10 @@ if [[ "$1" == compose ]]; then
       touch ${JSON.stringify(extractionStoppedMarker)}
       exit 0
       ;;
+    *" restart proxy "*)
+      [[ "$ECHO_FAKE_FAIL_PROXY_RESTART" != true ]] || exit 1
+      exit 0
+      ;;
     *"services/organization-authority/dist/clean-extraction-attempts-main.js "*)
       if [[ "$ECHO_FAKE_FAIL_EXTRACTION_GRANT" == true ]]; then exit 1; fi
       if [[ " $* " == *" retry "* ]]; then
@@ -327,6 +331,7 @@ exec /usr/bin/install "$@"
     ECHO_FAKE_RUNNING: "true",
     ECHO_FAKE_FAIL_EXTRACTION_STOP: "false",
     ECHO_FAKE_FAIL_EXTRACTION_GRANT: "false",
+    ECHO_FAKE_FAIL_PROXY_RESTART: "false",
     ECHO_FAKE_HEALTH: "healthy",
     ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY: "true",
     ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY: "true",
@@ -752,6 +757,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(stop).toBeGreaterThan(-1);
     expect(grant).toBeGreaterThan(stop);
     expect(restart).toBeGreaterThan(grant);
+    expect(calls.indexOf("restart proxy")).toBeGreaterThan(restart);
     expect(existsSync(join(fixture.deploy, ".staging-release-guard"))).toBe(false);
   });
 
@@ -765,6 +771,17 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       if (fault.endsWith("STOP")) expect(calls).not.toContain("clean-extraction-attempts-main.js retry");
       expect(existsSync(join(fixture.deploy, ".staging-release-guard"))).toBe(false);
     }
+  });
+
+  it("reports a proxy restart failure after the grant without granting another attempt", () => {
+    const fixture = preparedStatusFixture();
+    const result = fixture.run("retry-extraction", { ECHO_FAKE_FAIL_PROXY_RESTART: "true" }, extractionRetryArguments);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('proxy restart failed');
+    expect(result.stderr).toContain('never repeat the grant');
+    const calls = readFileSync(fixture.calls, "utf8");
+    expect(calls.match(/clean-extraction-attempts-main\.js retry/g)).toHaveLength(1);
+    expect(existsSync(join(fixture.deploy, ".staging-release-guard"))).toBe(false);
   });
 
   it("recovery refuses drift, staged releases, and concurrent operations before stopping", () => {
