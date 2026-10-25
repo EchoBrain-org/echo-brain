@@ -26,6 +26,7 @@ import type {
 import type { PersonAskScopeV2 } from "../../../application/ports/person-original-context-retrieval-v1.js";
 import {
   PERSON_ORIGINAL_NOTE_CUSTODY_V1,
+  PERSON_ORIGINAL_NOTE_NOT_QUARANTINED_V1,
   personOriginalAclV1,
   personOriginalGrantedProjectIdsV1,
   personOriginalScopeFilterV1,
@@ -44,7 +45,6 @@ const MAXIMUM_ORDINAL = 65_535;
 const NOTE_ID = /^(?:ctx|cap)_[0-9a-f]{64}$/;
 const DOCUMENT_ID = /^doc_[0-9a-f]{64}$/;
 const GLOBAL: PersonAskScopeV2 = Object.freeze({ kind: "global" });
-const NOT_QUARANTINED = "NOT EXISTS (SELECT 1 FROM authority_person_text_source_failures_v1 f WHERE f.organization_id=u.organization_id AND f.api_version=u.api_version AND f.context_id=u.context_id)";
 
 type DocumentCustodyRow = {
   readonly document_id: string;
@@ -277,7 +277,7 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
         ? { sql: "ORDER BY u.received_at DESC,u.context_id ASC LIMIT ?", args: [selection.limit] }
         : { sql: "AND (u.received_at < ? OR (u.received_at = ? AND u.context_id > ?)) ORDER BY u.received_at DESC,u.context_id ASC LIMIT ?", args: [selection.after.added_at, selection.after.added_at, selection.after.id, selection.limit] };
     const rows = this.database.prepare(`SELECT u.* FROM ${PERSON_ORIGINAL_NOTE_CUSTODY_V1} u
-      WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} AND ${NOT_QUARANTINED} ${tail.sql}`)
+      WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} AND ${PERSON_ORIGINAL_NOTE_NOT_QUARANTINED_V1} ${tail.sql}`)
       .all(actor.organization_id, ...acl.args, ...scoped.args, ...tail.args) as PersonTextCustodyRowV1[];
     for (const row of rows) {
       // A retained note that no longer binds its accepted request stops the list; the inbox quarantines it.

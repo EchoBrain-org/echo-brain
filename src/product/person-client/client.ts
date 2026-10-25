@@ -8,6 +8,7 @@ import { validatePersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceRea
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import type { PersonChangesV1 } from '@echo-brain/organization-api';
+import type { PersonProjectActivityV1 } from '@echo-brain/organization-api';
 import type { PersonResearchEvalReadResponseV1, PersonResearchEvalStartReceiptV1, PersonResearchEvalStartRequestV1 } from '@echo-brain/organization-api';
 import type { PersonRunsRequestV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import {
@@ -804,6 +805,11 @@ export class PersonClient {
   /** What moved in this person's own view, one fingerprint per area (ADR-0036); `not_supported` from an older Authority. */
   async changes(signal?: AbortSignal): Promise<PersonChangesV1> {
     return this.withReadSession((authority, token) => authority.changes(token, signal));
+  }
+
+  /** When each of this person's active projects last had news from someone else (Ask timeline v1, C2); `not_supported` from an older Authority. */
+  async projectActivity(signal?: AbortSignal): Promise<PersonProjectActivityV1> {
+    return this.withReadSession((authority, token) => authority.projectActivity(token, signal));
   }
 
   async runs<K extends PersonRunsRequestV1['operation']>(value: Extract<PersonRunsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonRunsResultsV1[K]> {

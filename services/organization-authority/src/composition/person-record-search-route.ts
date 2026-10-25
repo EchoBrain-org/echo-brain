@@ -353,6 +353,37 @@ export interface PersonReadableDecisionProjectsV1 {
     ReadonlyMap<Sha256Digest, Pick<PersonReadableDecisionV1, 'project_ids'>>;
 }
 
+/** The records filed in one of a person's projects, as the project activity read takes them (Ask timeline v1, C2). */
+export interface PersonProjectRecordsV1 {
+  /** When the newest record filed in the project that this person reads now and did not approve arrived (its receipt time), else null. */
+  readonly meeting_at: string | null;
+  /**
+   * The newest records filed in the project, at most the lookup's `limit`, newest first: a lookup of what is filed where, not a
+   * read. Nothing here says this person reads them, so the caller checks each one it uses (`readableDecisionProjects`).
+   */
+  readonly filed: readonly Sha256Digest[];
+}
+
+/** What arrived in a person's projects from approved meetings (Ask timeline v1, C2). */
+export interface PersonProjectRecordActivityV1 {
+  /**
+   * For each of these projects this person holds (any other is left out), the records filed in it, newest first by log
+   * position, and when the newest of them that this person reads and that is not theirs arrived. A record is theirs when it is
+   * in `own` (the records their published decisions name, skipped with no record read) or when its signed record names them its
+   * approver (as while the decision's receipt is not written yet). The exact Layer 1 check reads candidates only until that
+   * record is found. Nothing is audited. `projects` is this person's own grants, read inside the caller's own read
+   * transaction, as `readableDecisionProjects` takes them.
+   */
+  projectRecordActivity(input: {
+    readonly access_token: string;
+    readonly projects: RecordProjectAuthorizationV1;
+    readonly project_ids: readonly string[];
+    readonly own: ReadonlySet<string>;
+    /** How many of each project's newest records `filed` lists: 1 to 500. */
+    readonly limit: number;
+  }): ReadonlyMap<string, PersonProjectRecordsV1>;
+}
+
 export type PersonRecordSearchRouteV1 =
   PersonRecordSearchHttpApplicationV1 &
     PersonRecordSearchBatchApplicationV1 &
@@ -363,7 +394,8 @@ export type PersonRecordSearchRouteV1 =
     PersonRecordIndexReadinessV1 &
     PersonRecordActionsV1 &
     PersonReadableDecisionsV1 &
-    PersonReadableDecisionProjectsV1;
+    PersonReadableDecisionProjectsV1 &
+    PersonProjectRecordActivityV1;
 
 export interface CreatePersonRecordSearchRouteV1Options {
   readonly state_directory: string;
@@ -1625,6 +1657,40 @@ export function createPersonRecordSearchRouteV1(
       assertExpectedOrganization(authorization);
       const { readable, associations } = readableWithProjects(authorization, input.projects, input.record_sha256s);
       return new Map(readable.map((row) => [row.record_sha256, Object.freeze({ project_ids: Object.freeze([...(associations.get(row.record_sha256) ?? [])]) })]));
+    },
+    projectRecordActivity(input: Parameters<PersonProjectRecordActivityV1["projectRecordActivity"]>[0]): ReturnType<PersonProjectRecordActivityV1["projectRecordActivity"]> {
+      if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > PROJECT_RECORDS_MAX) invalidRequest();
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      assertExpectedOrganization(authorization);
+      const held = new Set(input.projects.project_ids);
+      const filedIn = options.record.prepare(`SELECT record_position, record_sha256 FROM organization_record_project_association_v1
+        WHERE project_id = ? AND record_position < ? ORDER BY record_position DESC LIMIT ?`);
+      const receipt = options.record.prepare("SELECT receipt_issued_at FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'").pluck();
+      const result = new Map<string, PersonProjectRecordsV1>();
+      for (const projectId of new Set(input.project_ids)) {
+        // A project the reader does not hold has nothing filed for them, as projectRecords answers it.
+        if (!held.has(projectId)) continue;
+        const filed: Sha256Digest[] = [];
+        let meeting_at: string | null = null;
+        // A page at a time, until the newest `limit` are listed and the newest that is not the reader's own is found, or none is left.
+        for (let before = Number.MAX_SAFE_INTEGER; ;) {
+          const page = filedIn.all(projectId, before, PROJECT_RECORDS_PAGE) as readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[];
+          for (const candidate of page) {
+            if (filed.length < input.limit) filed.push(candidate.record_sha256);
+            if (meeting_at !== null || input.own.has(candidate.record_sha256)) continue;
+            const row = readableRecord(authorization, input.projects, candidate.record_sha256);
+            if (row === undefined) continue;
+            if (row.position !== candidate.record_position) metadataUnavailable();
+            const approver = approverTupleV1(row.envelope, row.approval_id, options, options.record_approver);
+            if (approver !== undefined && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id) continue;
+            meeting_at = receiptTime(receipt.get(row.position, row.record_sha256));
+          }
+          if ((meeting_at !== null && filed.length === input.limit) || page.length < PROJECT_RECORDS_PAGE) break;
+          before = page.at(-1)!.record_position;
+        }
+        result.set(projectId, Object.freeze({ meeting_at, filed: Object.freeze(filed) }));
+      }
+      return result;
     },
     projectRecords(input: Parameters<PersonReadableDecisionsV1["projectRecords"]>[0]): readonly Sha256Digest[] {
       if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > PROJECT_RECORDS_MAX) invalidRequest();

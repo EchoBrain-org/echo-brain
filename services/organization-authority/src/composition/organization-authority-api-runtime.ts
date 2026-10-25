@@ -10,6 +10,8 @@ import { createPersonResearchEvalV1 } from './person-research-eval-v1.js';
 import { createPersonTriggerRunsV1 } from './person-trigger-runs-v1.js';
 import { createPersonOpenItemsV1 } from './person-open-items-v1.js';
 import { createPersonChangesV1 } from './person-changes-v1.js';
+import { createPersonProjectActivityV1 } from './person-project-activity-v1.js';
+import { SqlitePersonProjectActivityV1 } from '../adapters/persistence/sqlite/person-project-activity-v1.js';
 import type { PersonReviewStatusesV1 } from './person-meeting-runtime-v1.js';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
@@ -361,6 +363,11 @@ export async function startOrganizationAuthorityApiRuntime(
       database, sessions, projects: projectRepository, items, people, records: recordSearch,
       ...(reviewStatuses === undefined ? {} : { reviews: reviewStatuses }),
     });
+    // Project activity (Ask timeline v1, C2) reads the same way: only the database, in one read transaction.
+    const activityRows = new SqlitePersonProjectActivityV1(database);
+    const projectActivity = createPersonProjectActivityV1({
+      database, sessions, projects: projectRepository, originals: activityRows, approvals: activityRows, items, people, records: recordSearch,
+    });
     const projectContext = createProjectContextApplicationV1({
       authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
       repository: projectRepository,
@@ -438,6 +445,7 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(diagnostics === undefined ? {} : { person_diagnostics: diagnostics }),
       person_trigger_runs: triggerRuns,
       person_changes: personChanges,
+      person_project_activity: projectActivity,
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
         repository: documents,

@@ -427,6 +427,15 @@ plus `check_again_after_seconds`. It reads in one Authority read transaction
 with no live tool read and no audit row. Reviews that cannot be read just now
 count as none, and the other areas still answer.
 
+`GET /v1/person/project-activity` (`echo-brain person project-activity`) is
+project activity ([Ask timeline v1](../../docs/product/2026-10-25-ask-timeline-v1.md)
+C2): for each active project the caller is a member of, at most 500, the
+newest time a note or document was filed into it, a meeting was approved into
+it, or one of its follow-ups was sent, handed on or set, each by someone else
+and readable by the caller under the project page's own policy, else null. It
+reads like the change check: one Authority read transaction, no live tool read
+and no audit row.
+
 A sweep acts as the person who asked, with their access, and stores only
 verdicts and which items it could not read. It covers items on a Jira ticket
 or a page in a tool the caller has connected (a live source a desk binds is for
