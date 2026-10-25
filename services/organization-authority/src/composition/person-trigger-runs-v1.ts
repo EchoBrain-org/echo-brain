@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
+import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
 import { PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUN_MEETING_ACTIONS_MAX_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
@@ -156,7 +157,10 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     // card's own words reach this record's audience, so the run's desk never offers them.
     const siblings = options.runs.siblingRecords(row.actor, record_sha256);
     const source = options.runs.meetingSource(row.actor, record_sha256);
-    const run = await research(scope, { records: siblings, sources: source === undefined ? [] : [source] });
+    // A record shared beyond its approver: what only the approver may see (Only-me records, private notes, documents and
+    // unapproved meetings) never enters the research either, so no model-written line can carry it to the audience.
+    const shared = anchor.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID;
+    const run = await research(scope, { records: siblings, sources: source === undefined ? [] : [source], ...(shared ? { private: true } : {}) });
     const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
     const event = definition.parseEvent({ record: anchor });
     const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, scope), renderer: definition.renderer!, trigger_input: event, signal });

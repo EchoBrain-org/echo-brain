@@ -1,4 +1,5 @@
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
+import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
@@ -240,6 +241,17 @@ describe('durable approved-record trigger runs', () => {
     // A digest that is not one of the approver's records has neither.
     expect([f.runs.siblingRecords(f.person, canonicalSha256('another record')), f.runs.meetingSource(f.person, canonicalSha256('another record'))]).toEqual([[], undefined]);
     expect(f.runs.meetingSource({ ...f.person, membership_id: 'mem_00000000-0000-4000-8000-0000000000f2' }, f.row.record_sha256!)).toBeUndefined();
+  });
+
+  it('leaves what only the approver may see out of the research of a record shared beyond them, and keeps it for an Only-me record', async () => {
+    // The fixture's record is shared (organization-readable): its card's words reach more people than the approver.
+    const shared = await fixture();
+    await shared.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: shared.row.run_id } }); await shared.settled();
+    expect(shared.bindDesk.mock.calls[0]![2]).toMatchObject({ exclude: { private: true } });
+    const onlyMe = await fixture({ anchor: () => ({ ...record, policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }) as unknown as typeof record });
+    await onlyMe.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: onlyMe.row.run_id } }); await onlyMe.settled();
+    expect(onlyMe.bindDesk.mock.calls[0]![2]).toHaveProperty('exclude');
+    expect((onlyMe.bindDesk.mock.calls[0]![2] as { readonly exclude: object }).exclude).not.toHaveProperty('private');
   });
 
   it('reads the meeting\'s actions as the approver before research, and fails as no_access when they cannot read them', async () => {

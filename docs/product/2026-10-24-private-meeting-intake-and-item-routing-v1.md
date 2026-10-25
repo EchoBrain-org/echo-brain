@@ -334,14 +334,23 @@ these were decided while building and reviewing it.
     and the record's transcript fields. Record log V5 drops the grant table.
     The research-loop eval cites only what a project member can read.
 19. The meetings API keeps `schema_version: 2` (see Release).
+20. An impact card's unconfirmed notes name no item: an item research saw and
+    could not read is counted, and storage keeps only notes of ECHO's fixed
+    shapes, since every viewer of the record reads them unfiltered. The
+    research of a record shared beyond its approver leaves out what only the
+    approver may see (Only-me records, private notes and documents, unapproved
+    meetings), so no model-written card line or follow-up phrase can carry it.
 
 Known and left for the founder:
 
-- An impact check still researches with the reviewer's own access, so it can
-  read their other private context (other meetings' unapproved notes, other
-  Only-me records). Model-written unconfirmed notes are not filtered per
-  viewer, so that context could reach a record's audience. This predates
-  ADR-0046; narrowing what a check may read is a product decision.
+- An impact check of a shared record still reads outside tools (Jira,
+  Confluence, Slack) with the approver's own access, and a record shared with
+  two or more projects researches globally, so it can read items of the
+  approver's other projects. Outside titles are removed from what is stored and
+  rows are hidden per viewer, but a model-written line could still paraphrase
+  such an item for the record's audience. Closing that means researching only
+  what every member can read, a product decision (ruling 20 closed the
+  approver's private ECHO items).
 - Ask's prompts and source descriptions still mention shared transcripts.
   They are pinned byte for byte by ADR-0041's test and two quality baselines,
   so they change with a reviewed prompt change.

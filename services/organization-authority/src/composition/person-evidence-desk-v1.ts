@@ -42,6 +42,11 @@ export interface PersonEvidenceDeskExclusionsV1 {
   readonly records: readonly Sha256Digest[];
   /** Original sources by source_id: the notes of every revision. */
   readonly sources: readonly string[];
+  /**
+   * Every item only this reader may see: Only-me records, and private notes, documents and unapproved imported meetings.
+   * For research whose words reach a wider audience than the reader (an impact run of a shared record).
+   */
+  readonly private?: boolean;
 }
 
 /** The V3 route creates one desk per request; actor, bearer and scope never
@@ -165,7 +170,9 @@ function balanced<T>(left: readonly T[], right: readonly T[]): readonly T[] {
 export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Options): PersonEvidenceDeskV1 {
   const excludedRecords = new Set<string>(options.exclude?.records ?? []);
   const excludedSources = new Set<string>(options.exclude?.sources ?? []);
-  const offeredOriginal = (item: { readonly citation: { readonly source_id: string } }) => !excludedSources.has(item.citation.source_id);
+  const excludedPrivate = options.exclude?.private === true;
+  const offeredOriginal = (item: { readonly citation: { readonly source_id: string }; readonly visibility: string }) =>
+    !excludedSources.has(item.citation.source_id) && !(excludedPrivate && item.visibility === "only_me");
   const stored = new Map<string, Stored>();
   const originalReleases: OriginalContextDeskReleaseV1[] = [];
   /** How many of `originalReleases` a successful check of this desk has covered. */
@@ -207,7 +214,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (pointer.generation_id !== result.release.active_pointer.generation_id || pointer.manifest_sha256 !== result.release.active_pointer.manifest_sha256 || pointer.record_head.position !== result.release.active_pointer.record_head.position || pointer.record_head.record_sha256 !== result.release.active_pointer.record_head.record_sha256) throw new AuthorityOperationError("unavailable", "record evidence snapshot changed");
     recordReleases.push(result.release);
     if (result.desk_items === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
-    return result.desk_items.filter((value) => !excludedRecords.has(value.record_sha256)).map((value) => {
+    return result.desk_items.filter((value) => !excludedRecords.has(value.record_sha256) && !(excludedPrivate && value.visibility === "approver_only")).map((value) => {
       const citation = recordCitation(value);
       return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, list_label: value.list_label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonItemRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
     });

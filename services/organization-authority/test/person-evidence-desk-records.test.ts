@@ -361,6 +361,34 @@ describe('Person evidence desk over the real approved-record route', () => {
   });
 });
 
+describe('Person evidence desk: private items fenced off (ADR-0046)', () => {
+  it('never offers what only the reader may see when asked to leave private items out, and offers it otherwise', async () => {
+    const value = await fixture();
+    const originals = emptyOriginals();
+    const original = (visibility: 'only_me' | 'team', name: string) => ({
+      kind: 'note' as const, text: `${name} decision`, visibility, label: name, received_at: '2026-09-27T00:00:00.000Z', version: '1', ref: `note:ctx_${name.padEnd(64, 'a')}` as const,
+      citation: { kind: 'source_revision' as const, source_id: `source-${name}`, revision_id: `revision-${name}`,
+        source_sha256: digest(`source-${name}`), representation_sha256: digest(`representation-${name}`), anchor_sha256: digest(`anchor-${name}`) },
+    });
+    const release = { ...originals.deskSearch({ access_token: 'token', scope: { kind: 'global' } }), items: [original('only_me', 'private'), original('team', 'shared')], truncated: false };
+    // The meeting record as an Only-me one: what its approver alone reads.
+    const onlyMe = <T extends { readonly desk_items?: readonly { readonly visibility: string }[] }>(result: T): T =>
+      ({ ...result, desk_items: result.desk_items?.map(item => ({ ...item, visibility: 'approver_only' as const })) });
+    const searchBatch = (input: Parameters<typeof value.route.searchBatch>[0]) => onlyMe(value.route.searchBatch(input));
+    const openDeskCitation = (input: Parameters<typeof value.route.openDeskCitation>[0]) => onlyMe(value.route.openDeskCitation(input));
+    const desk = (exclude?: { readonly private: boolean }) => createPersonEvidenceDeskV1({
+      access_token: 'token', scope: { kind: 'global' }, originals: { ...originals, deskSearch: () => release }, records: { ...value.route, searchBatch, openDeskCitation },
+      ...(exclude === undefined ? {} : { exclude: { records: [], sources: [], ...exclude } }),
+    });
+    const kinds = async (made: ReturnType<typeof desk>) => (await made.search({ query: 'decision', kinds: ['note', 'decision'] })).items.map(item => `${item.citation.kind}:${item.label}`).sort();
+    expect(await kinds(desk({ private: true }))).toEqual(['source_revision:shared']);
+    expect(await kinds(desk())).toEqual(['approved_record:Approved meeting', 'source_revision:private', 'source_revision:shared']);
+    // Nor is a private record opened by its citation.
+    const hit = (await desk().search({ query: 'decision', kinds: ['decision'] })).items.find(item => item.citation.kind === 'approved_record')!;
+    expect((await desk({ private: true }).openCitation({ citation: hit.citation as PersonAnswerCitationV3 })).items).toEqual([]);
+  });
+});
+
 describe('Person evidence desk: one source at a time', () => {
   it('lists meeting records without text, one source only', async () => {
     const value = await fixture();
