@@ -279,6 +279,113 @@ export function layoutAnswer(question: string, scope: Record<string, unknown>, l
   };
 }
 
+// ---- the Ask timeline (ADR-0047) --------------------------------------------------
+
+/**
+ * The modes whose Authority has the Ask timeline's routes: `/v7` that takes
+ * `previous` (C3), the source check (C1) and project activity (C2). `changed`
+ * finds a cited page changed and a cited follow-up gone; `quiet` finds nothing
+ * different on Ask again. Every other mode's Authority predates all three:
+ * its client asks `/v5` without `previous`, and the two reads answer 404.
+ */
+export const TIMELINE_MODES: ReadonlySet<string> = new Set(['ask-timeline', 'ask-timeline-changed', 'ask-timeline-quiet']);
+/** An answer citation, as a V8 answer carries it. */
+type TimelineCitation = { kind: string; label: string; visibility: string; citation: Record<string, unknown>; ref?: string };
+/** What the timeline's answers cite: two THERM tickets (only yours), the DVT plan page (the team's), and a follow-up. */
+const THERM_482: TimelineCitation = thermTicket('THERM-482', 'Sensor drift', '20482');
+const THERM_490: TimelineCitation = thermTicket('THERM-490', 'DVT retest', '20490');
+const DVT_PLAN: TimelineCitation = thermPage('31010', 'DVT plan');
+const TRACE_FOLLOW_UP: TimelineCitation = { kind: 'follow_up', label: 'Confirm the trace', visibility: 'team', ref: 'follow_up:itm_timeline-1',
+  citation: { kind: 'follow_up', item_id: 'itm_timeline-1' } };
+
+/** A sentence citing some of `citations`: private exactly when one it cites is only yours, as the contract checks. */
+function cites(citations: readonly TimelineCitation[], text: string, cited: readonly number[]) {
+  return { text, citation_indexes: [...cited], private: cited.some(at => citations[at]!.visibility === 'only_me') };
+}
+
+/** A ticket's key, as its label begins: "THERM-482". */
+const ticketKey = (citation: TimelineCitation) => citation.label.split(' · ')[0]!;
+
+/** A follow-up's question with its subject named: "who owns it?" asked of THERM-482 is "Who owns THERM-482?". */
+function naming(question: string, key: string): string {
+  const named = question.replace(/\b(that ticket|that one|it)\b/iu, key);
+  const full = named === question ? `${question.replace(/\?$/u, '')} (${key})?` : named;
+  return full.charAt(0).toUpperCase() + full.slice(1);
+}
+
+/** A V8 answer of one part, answering `question` from `citations`. */
+function timelineV8(question: string, scope: Record<string, unknown>, citations: readonly TimelineCitation[], statements: readonly ReturnType<typeof cites>[]) {
+  return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered', citations: [...citations], parts: [{ question, status: 'answered', statements: [...statements] }] };
+}
+
+/**
+ * What the timeline's Authority answers (C3), by the question and the earlier
+ * turn it carries. On its own: a question about DVT cites both THERM tickets,
+ * one naming a ticket says who owns it, and any other cites THERM-482, the DVT
+ * plan and a follow-up. A follow-up finds its subject among the earlier
+ * answer's tickets: the one it names, the only one (resolved, its full
+ * question naming it), or, with several, "Which one?", one choice each, never
+ * a guess. Ask again answers the earlier question and says what is different
+ * since (nothing, when `quiet`).
+ */
+export function timelineAnswer(question: string, scope: Record<string, unknown>, previous: Record<string, unknown> | undefined, quiet = false): Record<string, unknown> {
+  const owns = (asked: string, ticket: TimelineCitation) => timelineV8(asked, scope, [ticket], [cites([ticket], `Dev owns ${ticketKey(ticket)}, since Oct 21.`, [0])]);
+  const alone = (asked: string) => {
+    const named = [THERM_482, THERM_490].find(ticket => asked.includes(ticketKey(ticket)));
+    if (named) return owns(asked, named);
+    if (/\bDVT\b/u.test(asked)) {
+      const citations = [THERM_482, THERM_490];
+      return timelineV8(asked, scope, citations, [cites(citations, 'THERM-482 tracks the sensor drift.', [0]), cites(citations, 'THERM-490 is the DVT retest.', [1])]);
+    }
+    const citations = [THERM_482, DVT_PLAN, TRACE_FOLLOW_UP];
+    return timelineV8(asked, scope, citations, [cites(citations, 'THERM-482, Sensor drift, is open.', [0]), cites(citations, 'The DVT plan moved the retest to Oct 30.', [1]),
+      cites(citations, 'Confirm the trace is still open.', [2])]);
+  };
+  if (previous?.purpose === 'follow_up') {
+    const tickets = (previous.citations as TimelineCitation[]).filter(citation => citation.citation.kind === 'ticket');
+    const named = tickets.find(ticket => question.includes(ticketKey(ticket)));
+    if (named) return { ...owns(question, named), question };
+    if (tickets.length === 1) {
+      const full = naming(question, ticketKey(tickets[0]!));
+      return { ...owns(full, tickets[0]!), question: full };
+    }
+    if (tickets.length > 1) {
+      return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'clarify', citations: [], parts: [],
+        choices: tickets.slice(0, 4).map(ticket => ({ label: ticket.label, question: naming(question, ticketKey(ticket)) })) };
+    }
+    return { ...alone(question), question };
+  }
+  if (previous?.purpose === 'ask_again') {
+    const answer = alone(question);
+    return { ...answer, question: String(previous.question), since: { statements: quiet ? [] : [cites(answer.citations, 'THERM-482 moved to In Progress.', [0])] } };
+  }
+  return alone(question);
+}
+
+/**
+ * The timeline's source check (C1), by citation: everything is as it was,
+ * and a readable ticket says its marker (changed only from a marker it no
+ * longer has). With `changed`, the DVT plan page changed and the follow-up is
+ * no longer yours to read.
+ */
+export function timelineCheck(items: readonly { citation: Record<string, unknown>; marker?: string }[], changed: boolean): Record<string, unknown> {
+  return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(item => {
+    const citation = item.citation;
+    if (citation.kind === 'ticket') {
+      const marker = digestOf(`marker:${String(citation.ticket_id)}`);
+      return { state: item.marker === undefined || item.marker === marker ? 'same' : 'changed', marker };
+    }
+    if (changed && citation.kind === 'page') return { state: 'changed' };
+    if (changed && citation.kind === 'follow_up') return { state: 'unreadable' };
+    return { state: 'same' };
+  }) };
+}
+
+/** Project activity (C2): every project you are in, with its newest arrival from someone else, or null. */
+export function projectActivityOf(projects: readonly { project_id: string }[], arrivals: ReadonlyMap<string, string>): Record<string, unknown> {
+  return { schema_version: 1, kind: 'echo-person-project-activity-v1', items: projects.map(project => ({ project_id: project.project_id, latest_at: arrivals.get(project.project_id) ?? null })) };
+}
+
 export function installTestAuthority(home: string, fixturesDirectory: string, SessionStore: new (home: string) => unknown) {
   const repository = join(process.env.ECHO_PERSON_CLIENT_ENTRY!, '..', '..', '..', '..', '..');
   const operations = (JSON.parse(readFileSync(join(repository, 'tests/fixtures/project-context-v1/operations.json'), 'utf8')) as {
@@ -1037,6 +1144,19 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * The change check (desktop refresh and notifications v1): one fingerprint per area of what Ari may read, as the Authority
    * builds them, and the pace the test's `changes-seconds` file says.
    */
+  // `project-activity`: once a test writes `activity-arrived`, Mina's note reached Apollo just then, by this computer's clock, the
+  // clock the page keeps when you last opened a project: Apollo's newest arrival, and a row of its list.
+  const arrivals = new Map<string, string>();
+  const arrive = () => {
+    if (mode !== 'project-activity' || arrivals.size > 0 || !elsewhere('activity-arrived')) return;
+    const apollo = desktop.projects[0]!.project_id;
+    const at = new Date().toISOString();
+    const id = `ctx_${'d'.repeat(64)}`;
+    catalog.set(id, { received_at: at, title: 'Launch checklist v2', text: 'Mina added the launch checklist v2.', audience: { kind: 'projects' } });
+    filed.set(apollo, [...filed.get(apollo) ?? [], id]);
+    arrivals.set(apollo, at);
+  };
+
   const changeCheck = () => {
     followUpsElsewhere();
     const digest = (rows: unknown) => sha(JSON.stringify(rows));
@@ -1524,6 +1644,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return failure('invalid_request', 400);
       }
       lists += 1;
+      arrive();
       if (request.mine === undefined && request.project_id === undefined) return failure('invalid_request', 400);
       const projectId = request.project_id;
       const project = projectId === undefined ? undefined : joined().find(entry => entry.project_id === projectId);
@@ -1898,9 +2019,36 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    // Only ask-progress-workspace's, ask-progress-listed's and ask-layout's Authority has `/v7` (research tool contract v1); every
-    // other mode's predates it and `/v6`, so its client asks `/v5`. Every Ask asks the newest route, Mine too: none asks `/v3`.
-    const v7 = (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed' || mode === 'ask-layout') && path === '/v7/person/ask';
+    // The Ask timeline's reads (ADR-0047): the source check, by citation, and what arrived in your projects. Each is checked
+    // by the contract's own validator where this checkout has it; every other mode's Authority predates both (404).
+    if (method === 'POST' && path === '/v1/person/ask/check' && TIMELINE_MODES.has(mode)) {
+      const api = await contract() as unknown as Record<string, unknown>;
+      const request = body as { schema_version?: unknown; kind?: unknown; items?: unknown } | undefined;
+      const items = request?.items;
+      try {
+        if (typeof api.validatePersonAskCheckRequestV1 === 'function') (api.validatePersonAskCheckRequestV1 as (value: unknown) => unknown)(body);
+      } catch {
+        return failure('invalid_request', 400);
+      }
+      if (request?.schema_version !== 1 || request.kind !== 'echo-person-ask-check-request-v1' || !Array.isArray(items) || items.length < 1 || items.length > 100) {
+        return failure('invalid_request', 400);
+      }
+      const checked = timelineCheck(items as { citation: Record<string, unknown>; marker?: string }[], mode === 'ask-timeline-changed');
+      if (typeof api.validatePersonAskCheckV1 === 'function') (api.validatePersonAskCheckV1 as (value: unknown) => unknown)(checked);
+      return json(checked);
+    }
+    if (method === 'GET' && path === '/v1/person/project-activity' && (mode === 'project-activity' || TIMELINE_MODES.has(mode))) {
+      const api = await contract() as unknown as Record<string, unknown>;
+      arrive();
+      const activity = projectActivityOf(listed(), arrivals);
+      if (typeof api.validatePersonProjectActivityV1 === 'function') (api.validatePersonProjectActivityV1 as (value: unknown) => unknown)(activity);
+      return json(activity);
+    }
+    // Only ask-progress-workspace's, ask-progress-listed's, ask-layout's and the Ask timeline's Authority has `/v7` (research tool
+    // contract v1); every other mode's predates it and `/v6`, so its client asks `/v5`. Every Ask asks the newest route, Mine too:
+    // none asks `/v3`.
+    const timeline = TIMELINE_MODES.has(mode) || mode === 'ask-timeline-refuses';
+    const v7 = (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed' || mode === 'ask-layout' || timeline) && path === '/v7/person/ask';
     if (method === 'POST' && (path === '/v5/person/ask' || v7)) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
@@ -1918,6 +2066,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // Ask progress: a client that asks for it gets the Ask's steps as they happen, then its answer and receipt.
       const api = await contract();
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
+      if (v7 && timeline) {
+        // An Authority from before `previous` (C3) refuses an Ask that carries it, as its exact-key validator would.
+        if (mode === 'ask-timeline-refuses' && body?.previous !== undefined) return failure('invalid_request', 400);
+        const answered = json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined, mode === 'ask-timeline-quiet'));
+        answered.headers.set('x-echo-person-ask-route', '7');
+        return answered;
+      }
       if (v7) {
         // Laid out only for an Ask that asked for it.
         const laidOut = new Headers(init?.headers).get(api.PERSON_ASK_ANSWER_LAYOUT_HEADER_V1) === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1;
@@ -1983,12 +2138,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return answered('A late answer.');
       }
       if (mode === 'ask-follow-ups' && asks === 3) return failure('unavailable', 503);
-      // Nothing in any project matches: the Authority's not-found answer, which
-      // cites nothing. A question about another subject is off scope.
+      // Nothing in any project matches: the Authority's not-found answer, which cites nothing.
       if (mode === 'ask-project-empty' && scope.kind === 'project') {
-        const offScope = question.startsWith('What is the weather');
         return json({
-          schema_version: answer.schema_version, kind: answer.kind, scope, outcome: offScope ? 'off_scope' : 'not_found', citations: [],
+          schema_version: answer.schema_version, kind: answer.kind, scope, outcome: 'not_found', citations: [],
           parts: [{ question, status: 'not_found', statements: [], gap: "I couldn't find this in the sources you can access." }],
         });
       }
