@@ -587,7 +587,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private deskItem(row: SourceRow | DocumentRow, atom: ReleasedSourceContextAtomV1, includeText: boolean): OriginalContextDeskItemV1 {
-    const visibility = row.visibility;
+    // An unapproved import is its importer's alone (ADR-0046); a note or document carries its own audience.
+    const visibility = !("document_id" in row) && row.api_version === 0 ? "only_me" : row.visibility;
     if (visibility !== "only_me" && visibility !== "team" && visibility !== "project" && visibility !== "projects") unavailable();
     const citation: OriginalContextCitationV1 = Object.freeze({ kind: "source_revision", source_id: atom.source_id, revision_id: atom.revision_id, source_sha256: atom.source_sha256, representation_sha256: atom.representation_sha256, anchor_sha256: atom.anchor_sha256, ...(atom.document_id === undefined ? {} : { document_id: atom.document_id }) });
     const kind = atom.document_id === undefined ? ((row as SourceRow).api_version === 0 ? "imported_meeting" : "note") : "document_passage";
