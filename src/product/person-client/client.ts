@@ -10,6 +10,7 @@ import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import type { PersonChangesV1 } from '@echo-brain/organization-api';
 import type { PersonResearchEvalReadResponseV1, PersonResearchEvalStartReceiptV1, PersonResearchEvalStartRequestV1 } from '@echo-brain/organization-api';
 import type { PersonRunsRequestV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import { validatePersonAskCheckRequestV1, type PersonAskCheckRequestV1, type PersonAskCheckV1 } from '@echo-brain/organization-api';
 import {
   validateProjectPageRequestV2, validateProjectCreateV1, validateProjectIdV1,
   validateProjectContextBrowseV1, validateProjectDirectorySearchV1,
@@ -808,6 +809,12 @@ export class PersonClient {
 
   async runs<K extends PersonRunsRequestV1['operation']>(value: Extract<PersonRunsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonRunsResultsV1[K]> {
     return this.withReadSession((authority, token) => authority.runs(token, value, signal));
+  }
+
+  /** Whether each source old answers cited is the same, changed, unreadable or unknown now (ADR-0047); `not_supported` from an older Authority. */
+  async askCheck(value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
+    const request = validatePersonAskCheckRequestV1(value);
+    return this.withReadSession((authority, token) => authority.askCheck(token, request, signal));
   }
 
   /** Each evidence invocation creates a new authenticated, scope-bound desk request. */

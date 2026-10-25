@@ -1,6 +1,7 @@
 import { PERSON_DIAGNOSTICS_PATH_V1, PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1, validatePersonDiagnosticsRequestV1, validatePersonDiagnosticsResultV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { PERSON_CHANGES_ROUTE_V1, validatePersonChangesV1, type PersonChangesV1 } from '@echo-brain/organization-api';
+import { PERSON_ASK_CHECK_LIMITS_V1, PERSON_ASK_CHECK_PATH_V1, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, type PersonAskCheckRequestV1, type PersonAskCheckV1 } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
@@ -113,6 +114,8 @@ import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const ASK_TIMEOUT_MS = 135_000;
+/** The Ask source check answers within its own 15 seconds; the client waits twice that. */
+const ASK_CHECK_TIMEOUT_MS = 30_000;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
@@ -1548,6 +1551,26 @@ export class PersonAuthorityClient {
     return this.json({ path: PERSON_RUNS_PATH_V1, body: request, validate_request: validatePersonRunsRequestV1,
       validate_response: value => validatePersonRunsResultV1(request.operation, value), access_token: accessToken,
       maximum_response_bytes: PERSON_RUNS_MAX_RESPONSE_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal }) as Promise<PersonRunsResultsV1[K]>;
+  }
+
+  /**
+   * The Ask source check (Ask timeline v1, C1; ADR-0047): whether each source old answers cited is the same, changed, unreadable
+   * or unknown now, and no content. An Authority without the route answers 404, which is `not_supported` here, never `not_found`.
+   */
+  async askCheck(accessToken: string, value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
+    const request = validatePersonAskCheckRequestV1(value);
+    try {
+      return await this.json({
+        path: PERSON_ASK_CHECK_PATH_V1, body: request, validate_request: validatePersonAskCheckRequestV1,
+        validate_response: response => validatePersonAskCheckV1(response, request), access_token: accessToken,
+        maximum_request_bytes: PERSON_ASK_CHECK_LIMITS_V1.body_bytes, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_CHECK_TIMEOUT_MS, signal,
+      });
+    } catch (error) {
+      if (error instanceof PersonAuthorityClientError && error.status === 404) {
+        throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no Ask source check");
+      }
+      throw error;
+    }
   }
 
   evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
