@@ -10,7 +10,7 @@ component_ids:
   - CMP-PERSON-CLIENT
 created_at: 2026-10-24
 reviewed_at: 2026-10-24
-reviewed_ref: 40cc67224c18d223834c85663f80fdfa46107a15
+reviewed_ref: 915761ccd0f53978ff461a8fc6403118d32fbd42
 status: proposed
 supersedes: []
 superseded_by: []
