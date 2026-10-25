@@ -102,8 +102,8 @@ describe('Agentic Ask V1 public contracts', () => {
     base.parts[0]!.statements[0]!.private = true;
     expect(validatePersonAnswerResponseV4(base).parts[0]?.statements[0]?.private).toBe(true);
     expect(() => validatePersonAnswerResponseV4({
-      ...base, outcome: 'off_scope', direct: { text: 'A direct answer.', citation_indexes: [0], private: true },
-    })).toThrow();
+      ...base, outcome: 'not_found', direct: { text: 'A direct answer.', citation_indexes: [0], private: true },
+    })).toThrow('No-evidence outcome is inconsistent');
   });
 
   it('requires one to five consistent parts', () => {
