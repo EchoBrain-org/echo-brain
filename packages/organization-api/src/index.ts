@@ -44,6 +44,7 @@ export { PersonToolOutcomeErrorV1, PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, PERS
 export { PersonQueryInputError, validatePersonQueryText } from "./person-query.js";
 
 export * from './person-changes-v1.js';
+export * from './person-project-activity-v1.js';
 export * from './person-updates.js';
 export * from './person-updates-v2.js';
 export * from './person-updates-v3.js';
