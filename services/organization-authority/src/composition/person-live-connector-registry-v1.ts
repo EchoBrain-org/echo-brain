@@ -90,14 +90,14 @@ function sharePersonLiveRuntimeV1<R extends { close(): void }>(open: (...paramet
 }
 
 /** A connected tool's runtime: its connection, which reads its items and containers, its routes and the person's link to it. */
-type PersonToolLiveRuntimeV1 = Pick<OpenedPersonLiveConnectorV1, 'owners' | 'close'> & Required<Pick<OpenedPersonLiveConnectorV1, 'connection_http' | 'tools'>> & {
+type PersonToolLiveRuntimeV1 = Pick<OpenedPersonLiveConnectorV1, 'owners' | 'checks' | 'close'> & Required<Pick<OpenedPersonLiveConnectorV1, 'connection_http' | 'tools'>> & {
   readonly application: OpenedPersonLiveConnectorV1['application'] & { containerSource: PersonContextLiveApplicationV1<PersonToolContainerCitationV1>['source'] };
 };
 
 /**
  * A tool's live connectors (research tool contract v1): its items and, for the V8 answer, its containers, over one runtime
- * that `open` opens. The tool, its connection routes and its assignee accounts are the items connector's alone, so the
- * person's tools and routes list each once.
+ * that `open` opens. The tool, its connection routes, its assignee accounts and its Ask source checks are the items
+ * connector's alone, so the person's tools and routes list each once.
  */
 export function personToolLiveConnectorsV1<R extends PersonToolLiveRuntimeV1>(connectors: {
   readonly items: Omit<PersonLiveConnectorDefinitionV1, 'open'>; readonly containers: Omit<PersonLiveConnectorDefinitionV1, 'open'>;
@@ -107,6 +107,7 @@ export function personToolLiveConnectorsV1<R extends PersonToolLiveRuntimeV1>(co
     Object.freeze({ ...connectors.items, open: (...parameters: OpenParametersV1) => {
       const { runtime, close } = share(...parameters);
       return Object.freeze({ application: runtime.application, connection_http: runtime.connection_http, ...(runtime.owners === undefined ? {} : { owners: runtime.owners }),
+        ...(runtime.checks === undefined ? {} : { checks: runtime.checks }),
         tools: (access_token: string) => runtime.tools(access_token), close });
     } }),
     Object.freeze({ ...connectors.containers, open: (...parameters: OpenParametersV1) => {

@@ -5,6 +5,7 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceCitationV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import type { TicketOwnerAccountsV1 } from './ticket-owner-accounts-v1.js';
+import type { PersonSourceCheckV1 } from './person-source-check-v1.js';
 
 /** Current ECHO-project grant; each provider resolves its own external mapping. */
 export type PersonContextProjectAuthorizationV1 = (access_token: string, project_id: string) => Readonly<{ role: 'lead' | 'member'; authorization_sha256: Sha256Digest }>;
@@ -41,6 +42,8 @@ export interface OpenedPersonLiveConnectorV1 extends Omit<OpenedPersonContextLiv
   readonly connection_http?: ProviderHttpApplicationV1;
   /** A ticket tool's assignee accounts, for matching an impact check's owners to members; absent for tools without them. */
   readonly owners?: TicketOwnerAccountsV1;
+  /** What the Ask source check reads of the tool's tickets or pages (ADR-0047); absent for tools it does not check. */
+  readonly checks?: PersonSourceCheckV1;
 }
 export interface PersonLiveConnectorSourceV1 extends Omit<PersonLiveConnectorDefinitionV1, 'open'> {
   readonly application: PersonContextLiveApplicationV1<PersonLiveEvidenceCitationV1>;

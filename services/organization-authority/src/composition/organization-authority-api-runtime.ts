@@ -10,6 +10,7 @@ import { createPersonResearchEvalV1 } from './person-research-eval-v1.js';
 import { createPersonTriggerRunsV1 } from './person-trigger-runs-v1.js';
 import { createPersonOpenItemsV1 } from './person-open-items-v1.js';
 import { createPersonChangesV1 } from './person-changes-v1.js';
+import { createPersonAskCheckV1 } from './person-ask-check-v1.js';
 import type { PersonReviewStatusesV1 } from './person-meeting-runtime-v1.js';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
@@ -361,6 +362,12 @@ export async function startOrganizationAuthorityApiRuntime(
       database, sessions, projects: projectRepository, items, people, records: recordSearch,
       ...(reviewStatuses === undefined ? {} : { reviews: reviewStatuses }),
     });
+    // The Ask source check (ADR-0047) needs no answer model either: the database in one read transaction, then each connected
+    // tool's own check through the caller's connection.
+    const askCheck = createPersonAskCheckV1({
+      database, sessions, projects: projectRepository, records: recordSearch, originals, items, people,
+      live: liveConnectors.flatMap(({ runtime }) => (runtime.checks === undefined ? [] : [runtime.checks])),
+    });
     const projectContext = createProjectContextApplicationV1({
       authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
       repository: projectRepository,
@@ -437,6 +444,7 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
       ...(diagnostics === undefined ? {} : { person_diagnostics: diagnostics }),
       person_trigger_runs: triggerRuns,
+      person_ask_check: askCheck,
       person_changes: personChanges,
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),

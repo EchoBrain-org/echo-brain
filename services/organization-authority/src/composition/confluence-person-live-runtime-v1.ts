@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { bindConfluencePersonLiveStateV1 } from './confluence-person-live-state-v1.js';
 import { openPersonProviderDatabaseV1 } from './person-provider-state-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
+import type { PersonPageCheckV1 } from '../application/ports/person-source-check-v1.js';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 
 /** Explicit selecting configuration, absent until enabled by an operator. */
@@ -29,6 +30,8 @@ export interface ConfluencePersonLiveRuntimeSeamsV1 {
 export interface OpenedConfluencePersonLiveRuntimeV1 {
   readonly application: ConfluencePersonConnectionV1;
   readonly connection_http: ProviderHttpApplicationV1;
+  /** The Ask source check's page versions and section digests (ADR-0047), read with the caller's own connection. */
+  readonly checks: PersonPageCheckV1;
   tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]>;
   close(): void;
 }
@@ -66,8 +69,12 @@ export function openConfluencePersonLiveRuntimeV1(options: {
       fetch: transport,
       authenticate: personToolAuthenticationV1(options.sessions),
     });
+    // A failed read rejects, so the check answers its pages unknown.
+    const checks: PersonPageCheckV1 = Object.freeze({ kind: 'page', tool_id: 'confluence', external_scope_id: options.configuration.cloud_id,
+      versions: (input: Parameters<PersonPageCheckV1['versions']>[0]) => application.pageVersions(input),
+      sections: (input: Parameters<PersonPageCheckV1['sections']>[0]) => application.pageSections(input) });
     return Object.freeze({
-      application, connection_http: createConfluencePersonConnectionHttpApplicationV1(application),
+      application, connection_http: createConfluencePersonConnectionHttpApplicationV1(application), checks,
       async tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]> {
         return Object.freeze([application.tool({ access_token })]);
       },
