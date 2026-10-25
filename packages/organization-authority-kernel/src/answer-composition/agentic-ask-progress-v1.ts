@@ -1,5 +1,6 @@
 import type {
-  PersonAnswerResponseV7, PersonAnswerResponseV8, PersonAskProgressStepEventV2, PersonAskProgressStepEventV3, PersonAskReceiptV2, PersonAskReceiptV3,
+  PersonAnswerPreviousV1, PersonAnswerResponseV7, PersonAnswerResponseV8, PersonAskProgressStepEventV2, PersonAskProgressStepEventV3, PersonAskReceiptV2,
+  PersonAskReceiptV3,
 } from "@echo-brain/organization-api";
 
 /**
@@ -47,9 +48,10 @@ export interface AgenticAskProgressInputV2 {
   /** The request this run is an attempt of; without it, the run is the whole request. */
   readonly request?: AgenticAskProgressRequestV1;
 }
-/** One streamed V8 Ask: the V2 input with the V3 sink. */
+/** One streamed V8 Ask: the V2 input with the V3 sink, and the asker's previous turn when the request carried it (ADR-0047). */
 export interface AgenticAskProgressInputV3 extends Omit<AgenticAskProgressInputV2, "on_progress"> {
   readonly on_progress: AgenticAskProgressSinkV3;
+  readonly previous?: PersonAnswerPreviousV1;
 }
 
 /**

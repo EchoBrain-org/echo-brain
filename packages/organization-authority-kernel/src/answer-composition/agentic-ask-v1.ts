@@ -5,6 +5,7 @@ import type {
   PersonAnswerResponseV7,
   PersonAnswerResponseV8,
   PersonAnswerResponseV4,
+  PersonAnswerPreviousV1,
   PersonAskReceiptV3,
 } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
@@ -16,6 +17,7 @@ import { DOCUMENTS_SOURCE_CAPABILITIES_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } fro
 import { evidenceDayV1 } from "../shared/temporal-query-v1.js";
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from "../shared/workspace-evidence-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1 } from "../shared/core-runtime-observation-v1.js";
+import { AuthorityOperationError } from "../domain/errors.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
@@ -39,15 +41,20 @@ import {
   object,
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
+import { agenticAskAnswerSha256V1 } from "./agentic-ask-v1-response.js";
+import { agenticClarifyResponseV1, agenticFollowUpStartingV1, resolveAgenticFollowUpV1 } from "./agentic-follow-up-resolver-v1.js";
 import type {
   AgenticAskAnswerWithReceiptV2, AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV2, AgenticAskProgressInputV3,
   AgenticAskProgressRequestV1, AgenticAskProgressSinkV2, AgenticAskProgressSinkV3,
 } from "./agentic-ask-progress-v1.js";
 import { createAgenticAskProgressRecorderV1 } from "./agentic-ask-progress-recorder-v1.js";
 import type { AgenticRendererV1, AgenticRenderOutputV1 } from "./agentic-renderer-v1.js";
-import { createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchSourceV1 } from "./agentic-research-loop-v1.js";
+import {
+  createAgenticResearchLoopV1, type AgenticResearchCatalogEntryV1, type AgenticResearchCatalogV1, type AgenticResearchLoopV1, type AgenticResearchProgressV1,
+  type AgenticResearchSourceV1,
+} from "./agentic-research-loop-v1.js";
 import type { AgenticResearchDriverV1 } from './agentic-research-driver-v1.js';
-import { createAskRendererV1 } from "./renderers/ask-renderer-v1.js";
+import { createAskRendererV1, type AskEarlierAnswerV1 } from "./renderers/ask-renderer-v1.js";
 import {
   AGENTIC_RESEARCH_LIVE_BUDGET_V1,
   type AgenticAskWithResearchV1,
@@ -65,6 +72,8 @@ export type {
   AgenticAskProgressRequestV1, AgenticAskProgressSinkV2, AgenticAskProgressSinkV3,
 } from "./agentic-ask-progress-v1.js";
 export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-recorder-v1.js";
+// The follow-up resolution eval (ADR-0047) runs the product's resolver on its own.
+export { resolveAgenticFollowUpOnceV1, type AgenticFollowUpResolutionV1, type AgenticFollowUpResolvedV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
  * The whole request, research through audit (ADR-0022). The Authority is
@@ -173,6 +182,20 @@ function researchOnlyOutput(bundle: AgenticEvidenceBundleV1, researched: Agentic
 function questionBrief(question: string, budget: AgenticResearchBudgetV1): AgenticBriefV1 {
   return { goal: { kind: "question", question }, starting: [], budget, options: {} };
 }
+/** Research that never ran: a follow-up that asked which one (ADR-0047), or a request stopped before research began. */
+const NO_RESEARCH: AgenticResearchProgressV1 = Object.freeze({
+  receipts: Object.freeze([]), rounds: 0, fallbacks: 0, searches: 0, search_hits: 0, retrieved_tickets: 0,
+  refused_reads: 0, repeated_refusals: 0, unchecked_items: 0, sources_looked_at: 0, most_reads_in_a_step: 0,
+});
+/** The earlier answer an Ask again's writer compares with (ADR-0047): its day where the asker is, and its sentences with their sources' labels. */
+function earlierAnswer(previous: PersonAnswerPreviousV1, timeZone: string): AskEarlierAnswerV1 {
+  return Object.freeze({
+    asked_on: evidenceDayV1(previous.asked_at, timeZone) ?? previous.asked_at.slice(0, 10),
+    statements: Object.freeze(previous.statements.map(statement => Object.freeze({
+      text: statement.text, sources: Object.freeze(statement.citation_indexes.map(index => previous.citations[index]!.label)),
+    }))),
+  });
+}
 /** What the model is told the desk reads. Adding a scope kind is a compile error here. */
 function scopeText(scope: EvidenceDeskPortV2["scope"]): string {
   switch (scope.kind) {
@@ -239,7 +262,8 @@ export function createAgenticAskV4(options: CreateAgenticAskV2Options) {
  */
 export function createAgenticAskV5(options: CreateAgenticAskV2Options) {
   return createAgenticAskCore(options, 8) as unknown as {
-    answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV8>;
+    /** `previous`: the asker's previous turn (ADR-0047), which only this core takes. */
+    answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1 }): Promise<PersonAnswerResponseV8>;
     answerWithReceipt(input: AgenticAskProgressInputV3): Promise<AgenticAskAnswerWithReceiptV3>;
     answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV8>>;
   };
@@ -306,8 +330,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
    * access fences, audit), the research loop, then a renderer (Ask's for a
    * question, the trigger's own for a task, or none) and the shared release step.
    */
-  type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8; readonly rendered?: unknown; readonly research: AgenticResearchResultV1; readonly writer_evidence: readonly string[]; readonly receipt?: PersonAskReceiptV3 };
-  const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">): Promise<RequestOutput> => observeAgenticLifecycleV1<RequestOutput>('run', undefined, { trigger: input.trigger }, async () => {
+  /** Every request researches, except a follow-up that asked which one (ADR-0047). */
+  type RequestOutput = { readonly response?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8; readonly rendered?: unknown; readonly research?: AgenticResearchResultV1; readonly writer_evidence: readonly string[]; readonly receipt?: PersonAskReceiptV3 };
+  /** `previous`: the asker's previous turn, which only a V8 Ask carries (ADR-0047). */
+  const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">, previous?: PersonAnswerPreviousV1): Promise<RequestOutput> => observeAgenticLifecycleV1<RequestOutput>('run', undefined, { trigger: input.trigger }, async () => {
       const brief = await observeAgenticLifecycleV1('brief', 'research_brief', { trigger: input.trigger, brief: input.brief, scope: options.desk.scope }, async () => {
         const selected = runnableBrief(input.brief);
         if (selected === null) throw new AgenticAskOutputErrorV1(input.brief.goal.kind === "question" ? "question is invalid" : "research goal is invalid");
@@ -366,17 +392,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         if (activeSignal.aborted) throw new DOMException("Ask stopped", "AbortError");
       };
 
-      // ---- research: the loop owns its state; the runner reads its progress and its bundle ----
-      const researchStep = !researchOnly ? prompts.ask : brief.options.list === false ? prompts.search_only_task : prompts.task;
-      const loop = createAgenticResearchLoopV1({
-        desk, brief,
-        ...(options.research_driver === undefined ? {} : { driver: options.research_driver }),
-        ...researchStep, step_span: "ask_planner",
-        context: context(requestDay), scope, catalog,
-        now, remaining, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),
-        observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
-        ...(progress === undefined ? {} : { report: progress.research }),
-      });
+      // ---- the model gate: research's hooks bind once research starts, after a follow-up is resolved (ADR-0047) ----
+      let loop: AgenticResearchLoopV1 | undefined;
       const gate = createAgenticModelGateV1({
         generation: options.generation, model: options.model,
         desk_revalidate: request => desk.revalidate(request),
@@ -388,11 +405,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           if (event.phase === "enter") { if (event.role === "answer") ticketContextCount = selectedTicketCount; return; }
           if (event.role === "step") stepModelMs += event.elapsed_ms;
         },
-        ...loop.gate_hooks,
+        // Only a research step has a hook: the loop's, once it exists.
+        before_call: role => loop?.gate_hooks.before_call?.(role),
       });
+      /** What research has done: nothing before it starts, and nothing for a follow-up that asked which one. */
+      const researchProgress = (): AgenticResearchProgressV1 => loop?.progress() ?? NO_RESEARCH;
       /** What every audit record of this request carries, taken when its release or terminal witness starts. */
       const auditContext = (): AgenticAuditContextV1 => {
-        const { receipts, rounds, fallbacks } = loop.progress();
+        const { receipts, rounds, fallbacks } = researchProgress();
         return {
           audit: options.audit, generation_adapter_id: options.generation.generation_adapter_id, gate_stats: gate.stats,
           ...(researchOnly ? { trigger: input.trigger } : {}),
@@ -402,8 +422,54 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       };
 
       try {
+        // ---- a follow-up (ADR-0047): what it refers to, before research; an Ask again researches the question as asked ----
+        let researchBrief = brief;
+        let resolvedQuestion: string | undefined;
+        if (previous?.purpose === "follow_up" && goal.kind === "question") {
+          const { resolution } = await resolveAgenticFollowUpV1({
+            gate, previous, question: goal.question, today: requestDay, time_zone: temporal?.time_zone ?? "UTC",
+            max_model_calls: budget.max_model_calls, remaining, writer_reserve_ms: budget.writer_reserve_ms, signal: activeSignal,
+          });
+          if (resolution.resolution === "clarify") {
+            // More than one thing could fit: no research runs, and the answer asks which one, released as every answer is.
+            phase = "final";
+            const clarified = agenticClarifyResponseV1(options.desk.scope, goal.question, resolution.choices);
+            progress?.stage("checking_access");
+            const response = await releaseAgenticResultV1({
+              ...auditContext(), desk, outcome: clarified.outcome, citation_count: 0, result: clarified, answer_sha256: agenticAskAnswerSha256V1(clarified),
+              fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive,
+              on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
+            });
+            annotateCoreRuntimeV1({ result: clarified.outcome, counts: { citation_count: 0 } });
+            clearTimeout(deadlineTimer);
+            const receipt = progress?.receipt(input.progress_request?.elapsed() ?? now() - startedAt);
+            return Object.freeze({ response, writer_evidence: Object.freeze([]), ...(receipt === undefined ? {} : { receipt }) });
+          }
+          // Exactly one thing fits: research answers the full question that names it, starting from what it is about.
+          if (resolution.resolution === "resolved") {
+            resolvedQuestion = resolution.question;
+            researchBrief = Object.freeze({
+              ...brief, goal: Object.freeze({ kind: "question" as const, question: resolution.question }),
+              starting: options.desk.openCitation === undefined ? [] : agenticFollowUpStartingV1(previous, resolution.about, options.desk.scope),
+            });
+            if (runnableBrief(researchBrief) === null) throw new AgenticAskOutputErrorV1("question is invalid");
+          }
+        }
+
+        // ---- research: the loop owns its state; the runner reads its progress and its bundle ----
+        const researchStep = !researchOnly ? prompts.ask : brief.options.list === false ? prompts.search_only_task : prompts.task;
+        const researching = createAgenticResearchLoopV1({
+          desk, brief: researchBrief,
+          ...(options.research_driver === undefined ? {} : { driver: options.research_driver }),
+          ...researchStep, step_span: "ask_planner",
+          context: context(requestDay), scope, catalog,
+          now, remaining, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),
+          observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
+          ...(progress === undefined ? {} : { report: progress.research }),
+        });
+        loop = researching;
         // The loop never sees the trigger; its name is a label for the audit and the evaluation.
-        const { schema_version, kind, ...gathered } = await observeAgenticLifecycleV1('research', 'research_loop', {}, () => loop.run(gate), value => {
+        const { schema_version, kind, ...gathered } = await observeAgenticLifecycleV1('research', 'research_loop', {}, () => researching.run(gate), value => {
           annotateCoreRuntimeV1({ research_stop_reason: value.stop.reason, ...(value.stop.admission === undefined ? {} : { research_admission: value.stop.admission }) });
           return { research: trimAgenticEvidenceBundleV1({ ...value, trigger: input.trigger }) };
         });
@@ -449,11 +515,15 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           response_version: responseVersion, answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
           layout: responseVersion === 8 && options.answer_layout === true,
+          // An answer to an Ask that carried its previous turn names the question it answers, and an Ask again's writer also
+          // says what is different since the earlier answer (ADR-0047).
+          ...(previous === undefined ? {} : { answers: resolvedQuestion ?? goal.question }),
+          ...(previous?.purpose === "ask_again" ? { earlier: earlierAnswer(previous, temporal?.time_zone ?? "UTC") } : {}),
         });
         let selectedEvidence: readonly string[] = [];
         progress?.stage("writing");
         const rendered = await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'answer' }, () => writer.render({
-          bundle, trigger_input: { question: goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,
+          bundle, trigger_input: { question: resolvedQuestion ?? goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,
           // The release step keeps its reserve after the writer.
           remaining: () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
           on_context: selected => {
@@ -496,18 +566,23 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         throw error;
       } finally {
         progress?.settle();
-        const { searches, search_hits, refused_reads, repeated_refusals, unchecked_items, sources_looked_at, most_reads_in_a_step } = loop.progress();
+        const { searches, search_hits, refused_reads, repeated_refusals, unchecked_items, sources_looked_at, most_reads_in_a_step, retrieved_tickets } = researchProgress();
         annotateCoreRuntimeV1({ counts: { planned_query_count: searches, query_hit_count: search_hits } });
         // Ask's read accounting (research tool contract v1), beside planned_query_count for operators (RB-OPERATIONS-001).
         // The release check counts its own from the research rounds.
         if (goal.kind === "question") annotateCoreRuntimeV1({ counts: { refused_read_count: refused_reads, repeated_refusal_count: repeated_refusals, unchecked_item_count: unchecked_items, sources_looked_at, most_reads_in_a_step } });
-        if (tickets) annotateCoreRuntimeV1({ counts: { ticket_retrieved_items: loop.progress().retrieved_tickets, ticket_context_items: ticketContextCount, ticket_citations: ticketCitationCount } });
+        if (tickets) annotateCoreRuntimeV1({ counts: { ticket_retrieved_items: retrieved_tickets, ticket_context_items: ticketContextCount, ticket_citations: ticketCitationCount } });
       }
   }, value => ({ trigger: input.trigger, output_kind: value.response !== undefined ? 'answer' : value.rendered !== undefined ? 'rendered' : 'research', result: value.response ?? value.rendered ?? value.research }));
   const signalOf = (signal: AbortSignal | undefined) => signal === undefined ? {} : { signal };
+  /** The asker's previous turn (ADR-0047): only the V8 Ask takes it. */
+  const previousOf = (previous: PersonAnswerPreviousV1 | undefined) => {
+    if (previous !== undefined && responseVersion !== 8) throw new AuthorityOperationError("invalid_request", "Ask previous is only for the V8 answer");
+    return previous;
+  };
   return Object.freeze({
-    async answer(input: { readonly question: string; readonly signal?: AbortSignal }) {
-      return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) })).response!;
+    async answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1 }) {
+      return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) }, undefined, previousOf(input.previous))).response!;
     },
     /**
      * Ask with its progress sent to `on_progress` while it runs, and the receipt
@@ -517,23 +592,23 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     async answerWithReceipt(input: AgenticAskProgressInputV2 | AgenticAskProgressInputV3): Promise<AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3> {
       if ((responseVersion !== 7 && responseVersion !== 8) || typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");
       const output = await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal), on_progress: input.on_progress,
-        ...(input.request === undefined ? {} : { progress_request: input.request }) });
+        ...(input.request === undefined ? {} : { progress_request: input.request }) }, undefined, previousOf((input as AgenticAskProgressInputV3).previous));
       return Object.freeze({ response: output.response as PersonAnswerResponseV7 | PersonAnswerResponseV8, receipt: output.receipt! }) as AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3;
     },
     /** Ask plus its research result and writer input, for the research evaluation. */
     async answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }) {
       const output = await request({ trigger: "ask", brief: questionBrief(input.question, input.budget ?? AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) });
-      return Object.freeze({ response: output.response!, research: output.research, writer_evidence: output.writer_evidence });
+      return Object.freeze({ response: output.response!, research: output.research!, writer_evidence: output.writer_evidence });
     },
     /** One trigger's brief: a task brief runs research only and its trimmed result is audited and returned. */
     async research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1> {
-      return (await request(input)).research;
+      return (await request(input)).research!;
     },
     /** A task brief with its trigger's renderer: the released result, and the research it read (for the evaluation). */
     async renderWithResearch<In, Out>(input: AgenticRenderedResearchInputV1<In, Out>): Promise<{ readonly rendered: Out; readonly research: AgenticResearchResultV1 }> {
       const { renderer, trigger_input: triggerInput, ...run } = input;
       const output = await request(run, { renderer: renderer as AgenticRendererV1<unknown, unknown>, trigger_input: triggerInput });
-      return Object.freeze({ rendered: output.rendered as Out, research: output.research });
+      return Object.freeze({ rendered: output.rendered as Out, research: output.research! });
     },
   });
 }

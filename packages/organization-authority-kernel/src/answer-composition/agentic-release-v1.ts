@@ -1,5 +1,5 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonAnswerResponseV4 } from "@echo-brain/organization-api";
+import type { PersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import type { StructuredGenerationUsageV1 } from "./structured-generation-v1.js";
 import { raceAbort, revalidateWithTransientRetryV1, type AgenticAskGenerationObservationV1, type AgenticModelGateStatsV1 } from "./agentic-model-gate-v1.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
@@ -19,7 +19,8 @@ export interface AgenticAskAuditEntryV1 {
   readonly trigger?: string;
   /** Present only when the request ran beyond the live budget (research evaluation). */
   readonly budget?: "background";
-  readonly outcome: PersonAnswerResponseV4["outcome"] | "cancelled" | "timed_out";
+  /** An answer's outcome, a follow-up's `clarify` among them (ADR-0047), or the terminal witness's. */
+  readonly outcome: PersonAnswerResponseV8["outcome"] | "cancelled" | "timed_out";
   readonly receipt_digests: readonly Sha256Digest[];
   /** Research steps run. */
   readonly rounds: number;
@@ -71,7 +72,7 @@ export interface AgenticAuditContextV1 {
 export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 {
   /** The request's access-checked desk; only its cumulative revalidation is used. */
   readonly desk: { revalidate(input: { readonly signal: AbortSignal }): Promise<{ readonly checked_at: string }> };
-  readonly outcome: PersonAnswerResponseV4["outcome"];
+  readonly outcome: PersonAnswerResponseV8["outcome"];
   readonly citation_count: number;
   /** What is handed over once every check has passed; the audit binds its fingerprint. */
   readonly result: R;
