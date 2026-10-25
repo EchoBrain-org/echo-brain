@@ -82,7 +82,7 @@ type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_ma
  * follow-ups thread v1). From the card: one per affected item that conflicts
  * or needs updating, never one that confirms or was not assessed, never the
  * meeting's own records (this one and its siblings, the same meeting sent to
- * other destinations) or their transcripts, and one per item however often
+ * other destinations), and one per item however often
  * the card cites it. The card's owner name comes from the item's own
  * details. Then one per action the approved meeting decided, in brief
  * order: it needs doing, its expected line is the action's own text on one
@@ -107,9 +107,8 @@ function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Di
     if (relation === undefined || relation === 'confirms') return [];
     const cited = card.citations[row.citation_index]!;
     const pointer = cited.citation as unknown as Readonly<Record<string, unknown>>;
-    // The meeting is never a follow-up of itself, in any of its records, nor is a transcript of one: its own actions are.
+    // The meeting is never a follow-up of itself, in any of its records: its own actions are.
     if (pointer.kind === 'approved_record' && own.has(pointer.record_sha256)) return [];
-    if (pointer.kind === 'source_revision' && [...own].some(record => cited.ref === `transcript:${String(record)}`)) return [];
     const item_key = fresh(pointer);
     if (item_key === undefined) return [];
     // The stored phrase: screened against outside titles.
@@ -153,8 +152,8 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     const actions = options.records.recordActions({ access_token: token, record_sha256 });
     const scope = personRecordRunScopeV1(options.records, token, record_sha256);
     // The meeting's other records (its siblings: the same meeting sent to other destinations, or kept for the approver
-    // alone) and the meeting's own source (its unapproved notes, any transcript of it). Research as the approver could read
-    // them, and the card's own words reach this record's audience, so the run's desk never offers them.
+    // alone) and the meeting's own source (its unapproved notes). Research as the approver could read them, and the
+    // card's own words reach this record's audience, so the run's desk never offers them.
     const siblings = options.runs.siblingRecords(row.actor, record_sha256);
     const source = options.runs.meetingSource(row.actor, record_sha256);
     const run = await research(scope, { records: siblings, sources: source === undefined ? [] : [source] });

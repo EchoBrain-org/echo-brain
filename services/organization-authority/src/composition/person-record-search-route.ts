@@ -68,7 +68,6 @@ import type {
   PersonStoreMeetingRowV1,
   PersonStoreReleaseV1,
   PersonStoreVisibilityV1,
-  PersonTranscriptProbeV1,
 } from "../application/ports/person-list-v1.js";
 import type { PersonAskScopeV2 } from "../application/ports/person-original-context-retrieval-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
@@ -373,25 +372,21 @@ export interface CreatePersonRecordSearchRouteV1Options {
   readonly record_approver?: RecordApproverProjectorV1;
   /** Resolves only the approver named by a record already released to this reader. */
   readonly memberships?: ApproverMembershipsV1;
-  /** Content-free: whether the reader may open an admitted record's shared transcript now. */
-  readonly transcript_probe?: PersonTranscriptProbeV1;
 }
 
 /**
  * What the person list and open need beyond the records: the approver (mine
- * and `approved_by`), the directory that names it, and the shared-transcript
- * probe (`transcript_ref`). The runtime and the disclosure test compose them
- * through this one function, so a dropped option fails that test.
+ * and `approved_by`) and the directory that names it. The runtime and the
+ * disclosure test compose them through this one function, so a dropped
+ * option fails that test.
  */
 export function personMeetingReleaseOptionsV1(input: {
   readonly record_approver: RecordApproverProjectorV1 | undefined;
   readonly memberships: ApproverMembershipsV1;
-  readonly originals: { probeApprovedMeetingTranscriptV1: PersonTranscriptProbeV1 };
-}): Pick<CreatePersonRecordSearchRouteV1Options, "record_approver" | "memberships" | "transcript_probe"> {
+}): Pick<CreatePersonRecordSearchRouteV1Options, "record_approver" | "memberships"> {
   return {
     ...(input.record_approver === undefined ? {} : { record_approver: input.record_approver }),
     memberships: input.memberships,
-    transcript_probe: (probe) => input.originals.probeApprovedMeetingTranscriptV1(probe),
   };
 }
 
@@ -1530,7 +1525,6 @@ export function createPersonRecordSearchRouteV1(
       const meeting = from === undefined
         ? meetingDetailV1(record.brief, boundedTextV1(approverDisplayNameV1(record.envelope, admitted.approval_id, options, options.record_approver, options.memberships), PERSON_LIST_TEXT_MAX_BYTES_V1))
         : undefined;
-      const transcript_shared = from === undefined && options.transcript_probe?.({ actor: authorization, approval_id: admitted.approval_id, record_sha256: admitted.record_sha256 }) === true;
       const released = fencedMeetingRelease(input.access_token, releaseAuthorization(authorization), projects.grants_sha256);
       const receipt = options.audit.append({
         read_mode: "person_open", authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
@@ -1540,10 +1534,7 @@ export function createPersonRecordSearchRouteV1(
       });
       const release: PersonStoreReleaseV1 = Object.freeze({ receipt });
       meetingReleases.set(release, { initial: releaseAuthorization(authorization), current: released, grants_sha256: projects.grants_sha256 });
-      return Object.freeze({ row, ...(meeting === undefined ? {} : { meeting, transcript_shared }), atoms: Object.freeze(atoms), next, release });
-    },
-    admitMeeting(input: Parameters<PersonMeetingItemsPortV1["admitMeeting"]>[0]): void {
-      admit(input);
+      return Object.freeze({ row, ...(meeting === undefined ? {} : { meeting }), atoms: Object.freeze(atoms), next, release });
     },
     recordAnchor(input: Parameters<PersonRecordAnchorV1["recordAnchor"]>[0]): ReturnType<PersonRecordAnchorV1["recordAnchor"]> {
       // The exact Layer 1 read first, so index lag never tells a reader that a record exists.

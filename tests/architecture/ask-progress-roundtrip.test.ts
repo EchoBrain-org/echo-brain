@@ -43,7 +43,7 @@ type Json = Record<string, unknown>;
 type Scope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'mine' };
 type Expect = { readonly authority: string; readonly membership_id: string };
 interface CliRun { readonly exit: number; readonly stdout: string; readonly stderr: string; readonly overflow: boolean }
-type Source = Json & { readonly kind: 'record' | 'original' | 'transcript' | 'follow_up' | 'ticket' | 'page' | 'project' | 'person' | 'tool' | 'container'; readonly label: string };
+type Source = Json & { readonly kind: 'record' | 'original' | 'follow_up' | 'ticket' | 'page' | 'project' | 'person' | 'tool' | 'container'; readonly label: string };
 interface Row { readonly type: 'searched' | 'read'; readonly sources?: readonly Json[]; readonly found?: number; readonly items?: readonly Source[] }
 interface Progress { readonly started: number; readonly stage: string | null; readonly pending: number; readonly rows: readonly Row[] }
 interface Receipt { readonly looked_through: number; readonly elapsed_ms: number; readonly rows: readonly Row[] }

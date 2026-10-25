@@ -23,8 +23,8 @@ interface SourceRow {
 function invalid(): never { throw new AuthorityOperationError('unavailable', 'Imported meeting is unavailable'); }
 /**
  * What the importer reads of their own unapproved meeting. A handed-in meeting's transcript is text the person supplied
- * themselves, so it is theirs to read with the notes. Any other source's transcript (Granola's) stays with the approved
- * transcript grant reader.
+ * themselves, so it is theirs to read with the notes. Any other source's transcript (Granola's) stays out of every
+ * person's reads: only extraction uses it, and only approved records leave a meeting (ADR-0046).
  */
 export function importedMeetingTextV1(meeting: MeetingDocument): string {
   const supplied = meeting.provenance.source.adapter_id === HAND_IN_SOURCE_ADAPTER_ID_V1;

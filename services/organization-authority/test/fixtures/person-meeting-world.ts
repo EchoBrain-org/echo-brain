@@ -7,14 +7,12 @@ import { applyAuthorityBaseline } from "@echo-brain/organization-authority-kerne
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
 import type { OrganizationRecordDecisionBriefV1, OrganizationRecordMeetingTimeV1 } from "@echo-brain/organization-protocol";
 import { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
 import type { ReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
 import { COORDINATES, database as recordDatabase, protocolAuthority, type ProtocolAuthority } from "../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { SqlitePersonRecordReadAuditV1 } from "../../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { SqliteSourceAdmissionStoreV1 } from "../../src/adapters/persistence/sqlite/source-admission-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createRecordProjectAuthorizationV1 } from "../../src/composition/person-record-project-scope-v1.js";
 import type { ApproverMembershipsV1 } from "../../src/composition/person-meeting-items-v1.js";
@@ -66,39 +64,12 @@ export const STANDARD_RECORDS: readonly WorldApprovalV1[] = [
   { name: "r1", approval_id: "apr_r1", projects: "team", final_approver: EMP_B, issued_at: T(1), brief: meeting("Weekly sync", { actual_start_at: "2026-09-01T02:00:00.000Z", timezone: "America/Los_Angeles" }) },
   { name: "r2", approval_id: "apr_r2", projects: [], final_approver: OWNER, issued_at: T(2), brief: meeting(undefined, { scheduled_start_at: "2026-09-02T00:00:00.000Z", all_day: true }) },
   { name: "r3", approval_id: "apr_r3", projects: [SHARED, UNJOINED], final_approver: OWNER, issued_at: T(3) },
-  { name: "r4", approval_id: "apr_r4", projects: [SHARED], final_approver: EMP_A, issued_at: T(4), share_transcript: true, brief: meeting("Pricing review", { actual_start_at: T(4) }) },
+  { name: "r4", approval_id: "apr_r4", projects: [SHARED], final_approver: EMP_A, issued_at: T(4), brief: meeting("Pricing review", { actual_start_at: T(4) }) },
   { name: "r5", approval_id: "apr_r5", projects: [], final_approver: OWNER, issued_at: T(5), action: "reject" },
   { name: "r6", approval_id: "apr_r6", projects: [PROJ_X], final_approver: EMP_A, issued_at: T(6) },
   { name: "r7a", approval_id: "apr_r7a", projects: "team", final_approver: APPROVER_X, issued_at: T(7) },
   { name: "r7b", approval_id: "apr_r7b", projects: "team", final_approver: APPROVER_X, issued_at: T(7) },
 ];
-
-/**
- * Admits one meeting whose transcript is `text` into the Authority's source
- * custody, for r4's shared transcript; returns its exact revision.
- */
-export function admittedTranscriptV1(text: string) {
-  return async (authority: Database.Database): Promise<{ source_id: string; revision_id: string; source_sha256: Sha256Digest }> => {
-    const meeting = {
-      schema_version: 1 as const, id: "meeting-shared-transcript",
-      provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-shared-transcript", canonical_revision: "revision-1", observed_at: T(4), normalizer_version: "1" },
-      capture: { state: "complete" as const, components: [{ kind: "transcript" as const, state: "available" as const }] },
-      participants: [], artifacts: [], title: "Pricing review",
-      content: [{ id: "transcript-1", kind: "transcript" as const, text }],
-    };
-    await pullAndAdmitSourceBatchV1({
-      source: new MeetingSourceBridgeV1({
-        identity: meeting.provenance.source,
-        validateConfig: () => ({ ok: true, errors: [] }),
-        healthCheck: async () => ({ status: "healthy" as const, checked_at: T(4) }),
-        pull: async () => ({ meetings: [meeting], next_cursor: "meeting-next" }),
-      }),
-      request: { limit: 1 },
-      admission: { store: new SqliteSourceAdmissionStoreV1(authority), scope: { organization_id: COORDINATES.organization_id, custody_ref: `organization:${COORDINATES.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
-    });
-    return authority.prepare("SELECT source_id,revision_id,('sha256:' || revision_sha256) AS source_sha256 FROM authority_source_revisions_v1").get() as { source_id: string; revision_id: string; source_sha256: Sha256Digest };
-  };
-}
 
 function grant(database: Database.Database, projectId: string, actor: AuthorityPersonMembershipBinding, role: "lead" | "member"): void {
   database.prepare(`INSERT INTO authority_project_memberships_v1
@@ -130,8 +101,6 @@ export interface MeetingWorldV1 {
 }
 
 export async function meetingWorld(options: {
-  /** Admits r4's shared transcript into the Authority before r4 is approved; returns its exact revision. */
-  readonly r4_transcript?: (authority: Database.Database) => Promise<NonNullable<SignedApprovalInputV1["transcript_source"]>>;
   /** Appended after STANDARD_RECORDS, before the first generation is built. */
   readonly extra?: readonly WorldApprovalV1[];
 } = {}): Promise<MeetingWorldV1> {
@@ -155,7 +124,6 @@ export async function meetingWorld(options: {
   grant(authority, PROJ_X, APPROVER_X, "lead");
   grant(authority, SHARED, EMP_A, "member");
   grant(authority, PROJ_X, EMP_A, "member");
-  const r4TranscriptSource = await options.r4_transcript?.(authority);
 
   const record: Database.Database = recordDatabase();
   const signer = protocolAuthority();
@@ -172,9 +140,7 @@ export async function meetingWorld(options: {
     digests.set(input.name, row.record_sha256);
     return row.record_sha256;
   };
-  for (const input of STANDARD_RECORDS) {
-    await approve(input.name === "r4" && r4TranscriptSource !== undefined ? { ...input, transcript_source: r4TranscriptSource } : input);
-  }
+  for (const input of STANDARD_RECORDS) await approve(input);
   for (const input of options.extra ?? []) await approve(input);
   // EMP_A left PROJ_X after approving r6.
   const leave = (projectId: string, actor: AuthorityPersonMembershipBinding): void => {

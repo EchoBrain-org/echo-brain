@@ -354,41 +354,19 @@ describe('open items written when an impact check finishes', () => {
     expect(f.items.forRun(f.runId).map(item => item.pointer.kind)).toEqual(['meeting_action']);
   });
 
-  it('never makes a follow-up of the transcript the approved meeting shared, and keeps another meeting\'s transcript', async () => {
-    const transcript = (record_sha256: string, anchor: string) => ({
-      citation: { kind: 'source_revision' as const, source_id: `source:${'a'.repeat(64)}`, revision_id: `rev-${anchor}`, source_sha256: canonicalSha256('source'),
-        representation_sha256: canonicalSha256('representation'), anchor_sha256: canonicalSha256(anchor) },
-      kind: 'note' as const, label: 'Transcript', visibility: 'only_me' as const, ref: `transcript:${record_sha256}`,
-    });
-    let own = '';
-    const f = await fixture({ render: async () => ({ ...card,
-      affected: [...card.affected, { citation_index: 2, says_now: 'The meeting said so.', relation: 'needs_updating' as const }, { citation_index: 3, says_now: 'An earlier meeting said otherwise.', relation: 'conflicts' as const }],
-      citations: [...card.citations, transcript(own, 'own'), transcript(canonicalSha256('another record'), 'other')] }) });
-    own = f.row.record_sha256!;
-    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
-    expect(f.runs.read(f.person, f.row.run_id)!.state).toBe('done');
-    const pointers = (f.db.prepare('SELECT pointer_json FROM authority_impact_items_v1 WHERE run_id=?').pluck().all(f.row.run_id) as string[]).map(value => JSON.parse(value) as { kind: string; revision_id?: string });
-    expect(pointers.map(pointer => [pointer.kind, pointer.revision_id ?? null]).sort()).toEqual([['source_revision', 'rev-other'], ['ticket', null]]);
-  });
-
-  it('never makes a follow-up of the meeting\'s other records or their transcripts (impact runs per record, ADR-0046)', async () => {
-    const transcript = (record_sha256: string) => ({
-      citation: { kind: 'source_revision' as const, source_id: `source:${'b'.repeat(64)}`, revision_id: 'rev-sibling', source_sha256: canonicalSha256('source'),
-        representation_sha256: canonicalSha256('representation'), anchor_sha256: canonicalSha256('sibling transcript') },
-      kind: 'note' as const, label: 'Transcript', visibility: 'only_me' as const, ref: `transcript:${record_sha256}`,
-    });
+  it('never makes a follow-up of the meeting\'s other records (impact runs per record, ADR-0046)', async () => {
     let sibling = '';
     const f = await fixture({ split: true, render: async () => ({ ...card,
-      affected: [...card.affected, { citation_index: 2, says_now: 'The same meeting decided this.', relation: 'conflicts' as const }, { citation_index: 3, says_now: 'Its transcript says so.', relation: 'needs_updating' as const }],
-      citations: [...card.citations, { citation: { ...record, record_sha256: sibling }, kind: 'decision' as const, label: 'Sibling', visibility: 'only_me' as const }, transcript(sibling)] }) });
+      affected: [...card.affected, { citation_index: 2, says_now: 'The same meeting decided this.', relation: 'conflicts' as const }],
+      citations: [...card.citations, { citation: { ...record, record_sha256: sibling }, kind: 'decision' as const, label: 'Sibling', visibility: 'only_me' as const }] }) });
     const published = (JSON.parse(f.receipt()!) as { records: { record_sha256: string }[] }).records.map(entry => entry.record_sha256);
     expect(published).toHaveLength(2);
     sibling = published.find(digest => digest !== f.row.record_sha256)!;
     expect(f.runs.siblingRecords(f.person, f.row.record_sha256!)).toEqual([sibling]);
     await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
     expect(f.runs.read(f.person, f.row.run_id)!.state).toBe('done');
-    // The card itself keeps both rows; only the outside ticket becomes a follow-up.
-    expect(readStoredImpactCardV1(f.runs.read(f.person, f.row.run_id)!.result_json!).affected).toHaveLength(3);
+    // The card itself keeps the row; only the outside ticket becomes a follow-up.
+    expect(readStoredImpactCardV1(f.runs.read(f.person, f.row.run_id)!.result_json!).affected).toHaveLength(2);
     const pointers = (f.db.prepare('SELECT pointer_json FROM authority_impact_items_v1 WHERE run_id=?').pluck().all(f.row.run_id) as string[]).map(value => JSON.parse(value) as { kind: string });
     expect(pointers.map(pointer => pointer.kind)).toEqual(['ticket']);
   });

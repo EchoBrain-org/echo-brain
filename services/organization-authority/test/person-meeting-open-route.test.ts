@@ -1,28 +1,18 @@
 import { sha256Digest, type Sha256Digest } from "@echo-brain/federation-protocol";
-import {
-  organizationMemberReadablePersonPolicyContractSha256,
-  projectMembersReadablePersonPolicyContractSha256,
-  restrictedReviewerPersonPolicyContractSha256,
-  type OrganizationRecordDecisionBriefV1,
-} from "@echo-brain/organization-protocol";
-import { ApprovedMeetingTranscriptGrantReaderV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+import type { OrganizationRecordDecisionBriefV1 } from "@echo-brain/organization-protocol";
 import { afterEach, describe, expect, it } from "vitest";
-import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import type { PersonMeetingPartPositionV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import { releasableBodyV1 } from "../src/application/person-item-text-v1.js";
 import { validatePersonOpenResponseV1 } from "@echo-brain/organization-api";
-import { COORDINATES } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { failure } from "./authority-failure.js";
-import { EMP_A, EMP_B, OWNER, SHARED, T, UNJOINED, admittedTranscriptV1, meetingWorld, type ReaderToken } from "./fixtures/person-meeting-world.js";
+import { EMP_A, EMP_B, OWNER, SHARED, T, UNJOINED, meetingWorld, type ReaderToken } from "./fixtures/person-meeting-world.js";
 import { SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
 
 type World = Awaited<ReturnType<typeof meetingWorld>>;
 const worlds: World[] = [];
 afterEach(() => { for (const world of worlds.splice(0)) world.close(); });
 
-/** A shared transcript long enough to take two pages. */
-const TRANSCRIPT = Array.from({ length: 700 }, (_, index) => `word${index}`).join(" ");
 const QUOTE = "QUOTE-SECRET-EVIDENCE";
 /** 2 + 3,499 × 2 bytes: parts of 3,072, 3,072 and 856 bytes. */
 const LONG_ACTION = `ab${"é".repeat(3_499)}`;
@@ -35,7 +25,7 @@ const quoted = <T extends { readonly evidence: readonly { readonly meeting_id: s
 
 /** The standard world, plus the meetings open needs. `long` exceeds the generation's atom bound, so it is appended last and never listed. */
 async function world(options: { readonly long?: boolean } = {}) {
-  const w = await meetingWorld({ r4_transcript: admittedTranscriptV1(TRANSCRIPT) });
+  const w = await meetingWorld();
   worlds.push(w);
   await w.approve({
     name: "detail", approval_id: "apr_detail", projects: [SHARED], final_approver: OWNER, issued_at: T(11),
@@ -72,8 +62,6 @@ async function world(options: { readonly long?: boolean } = {}) {
     brief: withMeeting((brief) => ({ actions: brief.actions.map((signal) => ({ ...signal, owner: "Mallory" })) })),
   });
   await w.approve({ name: "emp_a_only", approval_id: "apr_emp_a_only", projects: [], final_approver: EMP_A, issued_at: T(15) });
-  // Shared, but its revision was never admitted to this Authority's custody.
-  await w.approve({ name: "unadmitted", approval_id: "apr_unadmitted", projects: [], final_approver: EMP_B, issued_at: T(17), share_transcript: true });
   w.rebuild();
   if (options.long === true) {
     await w.approve({
@@ -92,15 +80,7 @@ async function world(options: { readonly long?: boolean } = {}) {
       brief: withMeeting((brief) => ({ decisions: brief.decisions.map((signal) => ({ ...signal, text: CONTROLS })) })),
     });
   }
-  const originals = new SqlitePersonOriginalContextRetrievalV1(w.authority, w.sessions, COORDINATES.organization_id, {
-    authority_id: COORDINATES.authority_id, state_lineage_id: COORDINATES.state_lineage_id,
-    grants: new ApprovedMeetingTranscriptGrantReaderV1(w.record),
-    is_expected_policy_contract: (grant) =>
-      (grant.policy_id === "organization-member-readable-person-v2" && grant.policy_contract_sha256 === organizationMemberReadablePersonPolicyContractSha256()) ||
-      (grant.policy_id === "restricted-reviewer-person-v2" && grant.policy_contract_sha256 === restrictedReviewerPersonPolicyContractSha256()) ||
-      (grant.policy_id === "project-members-readable-person-v1" && grant.policy_contract_sha256 === projectMembersReadablePersonPolicyContractSha256()),
-  });
-  return { ...w, originals, probed: () => w.route({ transcript_probe: (input) => originals.probeApprovedMeetingTranscriptV1(input) }) };
+  return w;
 }
 
 function pages(route: PersonRecordSearchRouteV1, token: ReaderToken, record_sha256: Sha256Digest) {
@@ -145,7 +125,6 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
       { kind: "rationale", text: "Rationale 0" },
     ]);
     expect(opened.next).toBeNull();
-    expect(opened.transcript_shared).toBe(false);
     const serialized = JSON.stringify(opened);
     for (const hidden of [
       "participant-", "ari-identity", "host", "Acme Org", "META-SECRET", "meeting-apr", "brief-apr", "decision-apr", "action-apr", "block-",
@@ -174,7 +153,6 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     expect(second!.atoms).toHaveLength(5);
     expect(second!.next).toBeNull();
     expect(second).not.toHaveProperty("meeting");
-    expect(second).not.toHaveProperty("transcript_shared");
     expect([first!, second!].flatMap((page) => page.atoms.map((atom) => atom.text))).toEqual(Array.from({ length: 30 }, (_, index) => `Decision ${index}`));
     const budget = pages(route, "emp_b", w.digest("budget"));
     expect(budget.map((page) => page.atoms.length)).toEqual([10, 2]);
@@ -228,7 +206,6 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
       for (const record_sha256 of records) {
         expect(failure(() => route.openMeeting({ access_token: token, record_sha256 }))).toEqual(NOT_FOUND);
         expect(failure(() => route.openMeeting({ access_token: token, record_sha256, from: { atom_order: 0, part: 1 } }))).toEqual(NOT_FOUND);
-        expect(failure(() => route.admitMeeting({ access_token: token, record_sha256 }))).toEqual(NOT_FOUND);
       }
       // A position beyond a readable record is the same miss.
       for (const from of [{ atom_order: 1, part: 1 }, { atom_order: 0, part: 2 }]) {
@@ -239,35 +216,9 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     }
     expect(w.audits("person_open")).toEqual([]);
     // After leaving SHARED, EMP_A's own r4 is unreadable, and so unopenable.
-    route.admitMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") });
+    route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") });
     w.leave(SHARED, EMP_A);
     expect(failure(() => route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") }))).toEqual(NOT_FOUND);
-    expect(failure(() => route.admitMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") }))).toEqual(NOT_FOUND);
-  });
-
-  it("offers a transcript only when the probe passes, and reads it by record only while the reader may", async () => {
-    const w = await world();
-    const route = w.probed();
-    for (const token of ["emp_a", "owner"] as const) expect(route.openMeeting({ access_token: token, record_sha256: w.digest("r4") }).transcript_shared).toBe(true);
-    expect(route.openMeeting({ access_token: "emp_b", record_sha256: w.digest("r1") }).transcript_shared).toBe(false);
-    expect(route.openMeeting({ access_token: "emp_b", record_sha256: w.digest("unadmitted") }).transcript_shared).toBe(false);
-    expect(w.route({ transcript_probe: () => false }).openMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") }).transcript_shared).toBe(false);
-    expect(w.route().openMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") }).transcript_shared).toBe(false);
-
-    const first = w.originals.readApprovedMeetingTranscriptByRecordV1({ access_token: "emp_a", record_sha256: w.digest("r4") });
-    expect(first.next_offset).not.toBeNull();
-    const second = w.originals.readApprovedMeetingTranscriptByRecordV1({ access_token: "emp_a", record_sha256: w.digest("r4"), offset: first.next_offset! });
-    expect(second.next_offset).toBeNull();
-    expect(first.text + second.text).toBe(TRANSCRIPT);
-    expect(Object.keys(first).sort()).toEqual(["next_offset", "text"]);
-    const denied = { code: "unauthorized", message: "person authentication failed" };
-    for (const record of [w.digest("r1"), sha256Digest("guessed-record")]) {
-      expect(failure(() => w.originals.readApprovedMeetingTranscriptByRecordV1({ access_token: "emp_a", record_sha256: record }))).toEqual(denied);
-    }
-    w.leave(SHARED, EMP_A);
-    expect(failure(() => w.originals.readApprovedMeetingTranscriptByRecordV1({ access_token: "emp_a", record_sha256: w.digest("r4") }))).toEqual(denied);
-    expect(w.originals.probeApprovedMeetingTranscriptV1({ actor: w.sessions.authenticateAccess({ access_token: "emp_a" }), approval_id: "apr_r4", record_sha256: w.digest("r4") })).toBe(false);
-    expect(w.originals.probeApprovedMeetingTranscriptV1({ actor: w.sessions.authenticateAccess({ access_token: "owner" }), approval_id: "apr_r4", record_sha256: w.digest("r1") })).toBe(false);
   });
 
   it("opens every listed row with the identical row", async () => {
@@ -287,11 +238,13 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
   it("releases nothing when the session or the reader's grants change during an open", async () => {
     const w = await world();
     const audits = () => w.audits("person_open").length;
-    const rotating = w.route({ transcript_probe: () => { w.session.state = "rotated during open"; return true; } });
+    // Naming the approver is the open's last read before its fence.
+    const during = (change: () => void) => w.route({ memberships: { membership: (id) => { change(); return w.memberships.membership(id); } } });
+    const rotating = during(() => { w.session.state = "rotated during open"; });
     expect(failure(() => rotating.openMeeting({ access_token: "emp_a", record_sha256: w.digest("r4") })).code).toBe("unauthorized");
     w.session.state = "meeting session";
-    const leaving = w.route({ transcript_probe: () => { w.leave(SHARED, OWNER); return true; } });
-    expect(failure(() => leaving.openMeeting({ access_token: "owner", record_sha256: w.digest("r1") })).code).toBe("unauthorized");
+    const leaving = during(() => w.leave(SHARED, OWNER));
+    expect(failure(() => leaving.openMeeting({ access_token: "owner", record_sha256: w.digest("r2") })).code).toBe("unauthorized");
     expect(audits()).toBe(0);
     const route = w.route();
     const opened = route.openMeeting({ access_token: "emp_a", record_sha256: w.digest("r1") });

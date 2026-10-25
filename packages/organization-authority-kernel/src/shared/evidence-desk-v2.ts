@@ -90,7 +90,7 @@ export function evidenceDeskSourceV2(item: { readonly kind: EvidenceDeskKindV2; 
   if (item.kind === 'tool') return 'tools';
   // A tool container's source is its connector's, which the dispatcher always attaches.
   if (item.kind === 'tool_container') return 'tool_container';
-  return evidenceDeskSourceV1(item as { kind: EvidenceDeskKindV1; ref?: string });
+  return evidenceDeskSourceV1(item as { kind: EvidenceDeskKindV1 });
 }
 
 export interface EvidenceDeskItemV2 extends Omit<EvidenceDeskItemV1, 'citation' | 'kind' | 'ref'> {

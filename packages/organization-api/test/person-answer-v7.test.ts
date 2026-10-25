@@ -11,7 +11,7 @@ import {
   validatePersonFollowUpCitationV1,
   validatePersonFollowUpEvidenceV1,
   validatePersonFollowUpRefV1,
-  validatePersonOpenRefV1,
+  validatePersonItemRefV1,
   validatePersonEvidenceDeskResponseV1,
 } from '../src/index.js';
 
@@ -103,7 +103,7 @@ describe('Follow-up citation and ref V1', () => {
     expect(personFollowUpRefV1(followUp)).toBe(ref);
     expect(validatePersonFollowUpRefV1(ref)).toBe(ref);
     for (const value of [`follow_up:${itemId} `, `follow-up:${itemId}`, `follow_up:run_${itemId.slice(4)}`, itemId, 42]) expect(() => validatePersonFollowUpRefV1(value)).toThrow();
-    expect(() => validatePersonOpenRefV1(ref)).toThrow();
+    expect(() => validatePersonItemRefV1(ref)).toThrow();
   });
 });
 

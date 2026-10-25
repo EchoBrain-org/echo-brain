@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { observeCoreRuntimeSyncV1, type CoreRuntimeObservationV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
-import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID } from "@echo-brain/organization-record/organization-record-api-v1";
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1, type MeetingDocument } from "@echo-brain/organization-processing/core";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
@@ -388,7 +386,7 @@ describe("adversarial original-context retrieval", () => {
     expect(() => fixedSession.deskSearch(input)).not.toThrow();
   });
 
-  it("uses actual V8 source admission for notes and excludes a raw meeting source", async () => {
+  it("uses actual V8 source admission for notes and excludes a raw meeting source, its transcript included", async () => {
     const f = fixture();
     await f.admitTeamNote("Legacy handoff", "legacycontextmarker is retained through the common Person source adapter");
     const legacy = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "legacycontextmarker" });
@@ -398,138 +396,17 @@ describe("adversarial original-context retrieval", () => {
       schema_version: 1 as const, id: "meeting-adversarial-1",
       provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-adversarial-1", canonical_revision: "revision-1", observed_at: PROJECT_CONTEXT_NOW, normalizer_version: "1" },
       capture: { state: "complete" as const, components: [] }, participants: [], artifacts: [],
-      content: [{ id: "note-1", kind: "note" as const, text: "rawmeetingsecretmarker must never enter Ask originals" }],
-    };
-    await f.admit(meeting);
-    const raw = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "rawmeetingsecretmarker" });
-    expect(raw.items).toEqual([]);
-    expect(texts(raw).join(" ")).not.toContain("rawmeetingsecretmarker");
-  });
-
-  it("retains an approved transcript through archive and revokes it on leave under its exact source and current policy", async () => {
-    const f = fixture();
-    const meeting = {
-      schema_version: 1 as const, id: "meeting-transcript-1",
-      provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-transcript-1", canonical_revision: "revision-1", observed_at: PROJECT_CONTEXT_NOW, normalizer_version: "1" },
-      capture: { state: "complete" as const, components: [{ kind: "transcript" as const, state: "available" as const }] },
-      participants: [{ id: "omar", display_name: "Omar\u200b  Haddad\n", identities: [{ kind: "email" as const, value: "omar@example.test" }] }, { id: "unnamed" }], artifacts: [],
-      title: "Pricing sync", time: { actual_start_at: "2026-10-17T01:00:00.000Z", timezone: "America/Los_Angeles" },
       content: [
-        { id: "transcript-1", kind: "transcript" as const, text: "approved transcript marker: I will send the revised quote by Friday", speaker_participant_id: "omar" },
-        { id: "transcript-2", kind: "transcript" as const, text: "Thanks.", speaker_participant_id: "unnamed" },
-        { id: "transcript-3", kind: "transcript" as const, text: "An unattributed line." },
+        { id: "note-1", kind: "note" as const, text: "rawmeetingsecretmarker must never enter Ask originals" },
+        { id: "transcript-1", kind: "transcript" as const, text: "rawtranscriptsecretmarker: nor may a transcript (ADR-0046)" },
       ],
     };
     await f.admit(meeting);
-    const source = f.database.prepare("SELECT source_id,revision_id,('sha256:' || revision_sha256) AS source_sha256 FROM authority_source_revisions_v1").get() as { source_id: `source:${string}`; revision_id: string; source_sha256: `sha256:${string}` };
-    let enabled = true;
-    let validPolicyContract = true;
-    let revokeAtFinalFence = false;
-    let armedGrantLookups = 0;
-    const retrieval = new SqlitePersonOriginalContextRetrievalV1(f.database, {
-      authenticateAccess: ({ access_token }) => authorization(access_token === "member" ? MEMBER : OWNER),
-    }, OWNER.organization_id, {
-      authority_id: "oau_original_context", state_lineage_id: "lineage_fixture",
-      is_expected_policy_contract: () => validPolicyContract,
-      grants: { list: (input: { source_id?: string }) => {
-        const found = enabled ? [transcriptGrant()] : [];
-        return found.filter(value => input.source_id === undefined || value.source_id === input.source_id);
-      }, find: () => {
-        if (revokeAtFinalFence && ++armedGrantLookups === 2) {
-          f.leave(PROJECT_ALPHA);
-          grant(f.database, PROJECT_ALPHA, MEMBER, "member");
-        }
-        return enabled ? transcriptGrant() : null;
-      } },
-    });
-    function transcriptGrant() {
-      return {
-        approval_id: "apr_transcript_fixture", record_position: 1,
-        record_sha256: sha256Digest("transcript-record"),
-        policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
-        policy_contract_sha256: sha256Digest("transcript-contract"),
-        source_id: source.source_id, revision_id: source.revision_id, source_sha256: source.source_sha256,
-        reviewer_principal_id: null, reviewer_membership_id: null,
-        audience_project_ids: [PROJECT_ALPHA, PROJECT_BETA], association_project_ids: [PROJECT_ALPHA, PROJECT_BETA],
-      } as const;
+    for (const marker of ["rawmeetingsecretmarker", "rawtranscriptsecretmarker"]) {
+      const raw = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: marker });
+      expect(raw.items).toEqual([]);
+      expect(texts(raw).join(" ")).not.toContain(marker);
     }
-    const citation = { kind: "approved_meeting_transcript" as const, approval_id: "apr_transcript_fixture", ...source };
-    const dateFilter = { access_token: 'member', scope: { kind: 'global' as const }, source: 'meeting' as const, since: '2026-10-16', until: '2026-10-16', time_zone: 'America/Los_Angeles' };
-    expect(retrieval.deskSearch(dateFilter).items).toEqual([expect.objectContaining({ ref: `transcript:${transcriptGrant().record_sha256}`, dates: { occurred: '2026-10-17T01:00:00.000Z' } })]);
-    expect(retrieval.deskSearch({ ...dateFilter, query: 'quote' }).items).toHaveLength(1);
-    expect(retrieval.deskSearch({ ...dateFilter, source: 'document', date_field: 'received' }).items).toEqual([]);
-    expect(retrieval.deskSearch({ ...dateFilter, time_zone: 'UTC' }).items).toEqual([]);
-    // A shared transcript records when its meeting happened and when ECHO received it, never an approval (research tool contract v1).
-    expect(retrieval.deskSearch({ ...dateFilter, date_field: 'any' }).items).toHaveLength(1);
-    expect(retrieval.deskSearch({ ...dateFilter, date_field: 'approved' })).toMatchObject({ items: [], unchecked: { count: 1, dates: ['occurred', 'received'] } });
-    expect(retrieval.deskSearch({ ...dateFilter, date_field: 'approved', query: 'quote' })).toMatchObject({ items: [], unchecked: { count: 1 } });
-    expect(retrieval.deskSearch(dateFilter)).not.toHaveProperty('unchecked');
-
-    // ADR-0017 amendment: a transcript shared at approval is Ask evidence
-    // under its grant, cited by exact revision and a packet anchor.
-    // Each turn is led by its speaker's display name, so "who will send the
-    // quote" is answerable; identities stay out, and unnamed turns stay bare.
-    // Observability: the enclosing evidence span learns how many packets were transcripts.
-    const spans: CoreRuntimeObservationV1[] = [];
-    const asked = observeCoreRuntimeSyncV1("evidence_search", () => retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "Haddad revised quote" }), { observer: (event) => { spans.push(event); } });
-    expect(spans.find(span => span.event === "succeeded")?.counts.transcript_items).toBe(1);
-    expect(asked.items).toHaveLength(1);
-    const packet = asked.release.released_atoms[0]!;
-    expect(packet).toMatchObject({ source_id: source.source_id, revision_id: source.revision_id, label: "Transcript: Pricing sync" });
-    expect(packet.text).toBe("Transcript: Pricing sync\nOmar Haddad: approved transcript marker: I will send the revised quote by Friday\n\nThanks.\n\nAn unattributed line.");
-    expect(packet.text).not.toContain("omar@example.test");
-    expect(retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "revised quote" }).items).toHaveLength(1);
-    expect(retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: citationOf(packet) }).atom).toEqual(packet);
-    expect(() => retrieval.revalidate({ access_token: "member", release: asked.release })).not.toThrow();
-    // The agentic desk reads the same transcript as a labeled note, and opens it.
-    const desk = observeCoreRuntimeSyncV1("evidence_search", () => retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "revised quote" }), { observer: (event) => { spans.push(event); } });
-    expect(spans.filter(span => span.event === "succeeded").at(-1)?.counts.transcript_items).toBe(1);
-    expect(desk.items).toEqual([expect.objectContaining({ kind: "note", label: "Transcript: Pricing sync", visibility: "projects", text: packet.text })]);
-    expect(retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "revised quote", kinds: ["document_passage"] }).items).toEqual([]);
-    const opened = retrieval.deskOpen({ access_token: "member", scope: { kind: "global" }, citation: desk.items[0]!.citation, neighbours: 2 });
-    expect(opened.items.map(item => item.text)).toEqual([packet.text]);
-    expect(() => retrieval.revalidateDeskRelease({ access_token: "member", release: desk })).not.toThrow();
-    const released = retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation });
-    expect(released.text).toContain("approved transcript marker");
-    const projects = createProjectContextApplicationV1({ authenticate: token => authorization(token === "member" ? MEMBER : OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
-    projects.archiveProject("owner", { schema_version: 1, kind: "echo-project-archive-v1", request_id: randomUUID(), project_id: PROJECT_ALPHA, archived: true });
-    expect(retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation }).text).toBe(released.text);
-    expect(retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation }).text).toBe(released.text);
-    const transcriptAudit = (f.database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1").all() as Array<{ body_json: string }>)
-      .map(row => JSON.parse(row.body_json) as Record<string, unknown>)
-      .find(row => row.kind === "echo-person-approved-meeting-transcript-read-audit-v1");
-    expect(transcriptAudit).toMatchObject({
-      page_sha256: canonicalSha256(released.text),
-      response_sha256: canonicalSha256({ schema_version: 1, kind: "echo-person-meeting-transcript-v1", ...released }),
-    });
-    expect(() => retrieval.readApprovedMeetingTranscript({
-      access_token: "member", scope: { kind: "global" },
-      citation: { ...citation, revision_id: "a-different-retained-revision" },
-    })).toThrow();
-    validPolicyContract = false;
-    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation })).toThrow();
-    validPolicyContract = true;
-    expect(retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation }).text).toContain("approved transcript marker");
-    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_BETA }, citation })).toThrow();
-    revokeAtFinalFence = true;
-    const auditsBeforeFinalFence = f.database.prepare("SELECT COUNT(*) AS count FROM authority_person_upload_read_audit_v1 WHERE body_json LIKE '%echo-person-approved-meeting-transcript-read-audit-v1%'").get() as { count: number };
-    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation })).toThrow();
-    const auditsAfterFinalFence = f.database.prepare("SELECT COUNT(*) AS count FROM authority_person_upload_read_audit_v1 WHERE body_json LIKE '%echo-person-approved-meeting-transcript-read-audit-v1%'").get() as { count: number };
-    expect(auditsAfterFinalFence.count).toBe(auditsBeforeFinalFence.count);
-    revokeAtFinalFence = false;
-    projects.leaveProject("member", { schema_version: 1, kind: "echo-project-leave-v1", request_id: randomUUID(), project_id: PROJECT_ALPHA });
-    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation })).toThrow();
-    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation })).toThrow();
-    // Leaving every audience project withdraws the transcript from Ask too.
-    expect(() => retrieval.revalidate({ access_token: "member", release: asked.release })).toThrow();
-    expect(() => retrieval.revalidateDeskRelease({ access_token: "member", release: desk })).toThrow();
-    expect(() => retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: citationOf(packet) })).toThrow();
-    expect(retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "revised quote" }).items).toEqual([]);
-    expect(retrieval.deskSearch({ access_token: "owner", scope: { kind: "global" }, query: "revised quote" }).items).toHaveLength(1);
-    enabled = false;
-    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "owner", scope: { kind: "global" }, citation })).toThrow();
-    // With no grant (the share toggle off), the same meeting is not Ask evidence.
-    expect(retrieval.deskSearch({ access_token: "owner", scope: { kind: "global" }, query: "revised quote" }).items).toEqual([]);
   });
 
   it("enforces audience separately from project association in global and project-scoped reads", () => {

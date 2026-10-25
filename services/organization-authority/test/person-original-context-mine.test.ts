@@ -4,13 +4,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
-import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { personOriginalScopeFilterV1 } from "../src/adapters/persistence/sqlite/person-original-access-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonTextSourceInboxV1 } from "../src/adapters/persistence/sqlite/person-text-source-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
-import { SqliteSourceAdmissionStoreV1 } from "../src/adapters/persistence/sqlite/source-admission-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import type { OriginalContextDeskItemV1, PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
@@ -19,9 +17,6 @@ import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, author
 
 const GLOBAL: PersonAskScopeV2 = { kind: "global" };
 const MINE: PersonAskScopeV2 = { kind: "mine" };
-const RECORD_SHA256 = sha256Digest("transcript-record");
-/** Only the raw-meeting read selects from the source table under this alias. */
-const MEETING_SOURCE_READ = "FROM authority_sources_v1 source";
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
@@ -45,46 +40,7 @@ async function fixture() {
   const documents = createPersonDocumentApplicationV1({ repository, authenticate });
   const worker = new PersonDocumentProcessingV1(repository, undefined, new SqlitePersonTextSourceInboxV1(database, now));
 
-  // An approved meeting whose approver shared the transcript with the whole team.
-  const meeting = {
-    schema_version: 1 as const, id: "meeting-mine-1",
-    provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-mine-1", canonical_revision: "revision-1", observed_at: PROJECT_CONTEXT_NOW, normalizer_version: "1" },
-    capture: { state: "complete" as const, components: [{ kind: "transcript" as const, state: "available" as const }] },
-    participants: [], artifacts: [], title: "Pricing sync",
-    content: [{ id: "transcript-1", kind: "transcript" as const, text: "sharedterm the revised quote goes out Friday" }],
-  };
-  await pullAndAdmitSourceBatchV1({
-    source: new MeetingSourceBridgeV1({
-      identity: meeting.provenance.source,
-      validateConfig: () => ({ ok: true, errors: [] }),
-      healthCheck: async () => ({ status: "healthy" as const, checked_at: PROJECT_CONTEXT_NOW }),
-      pull: async () => ({ meetings: [meeting], next_cursor: "meeting-mine-next" }),
-    }),
-    request: { limit: 1 },
-    admission: { store: new SqliteSourceAdmissionStoreV1(database), scope: { organization_id: OWNER.organization_id, custody_ref: `organization:${OWNER.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
-  });
-  const source = database.prepare("SELECT source_id,revision_id,('sha256:' || revision_sha256) AS source_sha256 FROM authority_source_revisions_v1").get() as { source_id: `source:${string}`; revision_id: string; source_sha256: `sha256:${string}` };
-  const transcriptGrant = {
-    approval_id: "apr_mine_fixture", record_position: 1, record_sha256: RECORD_SHA256,
-    policy_id: "organization-member-readable-person-v2" as const, policy_contract_sha256: sha256Digest("transcript-contract"),
-    ...source, reviewer_principal_id: null, reviewer_membership_id: null, audience_project_ids: [], association_project_ids: [],
-  };
-  const transcriptCitation = { kind: "approved_meeting_transcript" as const, approval_id: transcriptGrant.approval_id, ...source };
-
-  // Every statement the originals adapter prepares, to prove what it never reads.
-  const statements: string[] = [];
-  const observed = new Proxy(database, {
-    get(target, key) {
-      if (key === "prepare") return (sql: string) => { statements.push(sql); return target.prepare(sql); };
-      const value = Reflect.get(target, key, target) as unknown;
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-  const retrieval = new SqlitePersonOriginalContextRetrievalV1(observed, { authenticateAccess: ({ access_token }) => authenticate(access_token) }, OWNER.organization_id, {
-    authority_id: "oau_project_fixture", state_lineage_id: "lineage_fixture",
-    is_expected_policy_contract: () => true,
-    grants: { list: () => [transcriptGrant], find: () => transcriptGrant },
-  });
+  const retrieval = new SqlitePersonOriginalContextRetrievalV1(database, { authenticateAccess: ({ access_token }) => authenticate(access_token) }, OWNER.organization_id);
 
   const authors = new Map<string, "owner" | "member">();
   const note = async (token: "owner" | "member", text: string) => {
@@ -102,7 +58,7 @@ async function fixture() {
     return saved.document_id;
   };
   const ownedBy = (items: readonly OriginalContextDeskItemV1[]) => items.map((item) => authors.get(item.ref ?? "") ?? item.ref?.split(":")[0]);
-  return { database, retrieval, statements, note, document, ownedBy, transcriptCitation };
+  return { database, retrieval, note, document, ownedBy };
 }
 
 describe("originals under the mine scope", () => {
@@ -115,7 +71,7 @@ describe("originals under the mine scope", () => {
     const search = (token: string, scope: PersonAskScopeV2) => f.retrieval.deskSearch({ access_token: token, scope, query: "sharedterm" });
 
     const global = search("owner", GLOBAL);
-    expect(f.ownedBy(global.items).sort()).toEqual(["member", "member", "owner", "owner", "transcript"]);
+    expect(f.ownedBy(global.items).sort()).toEqual(["member", "member", "owner", "owner"]);
     const mine = search("owner", MINE);
     expect(f.ownedBy(mine.items).sort()).toEqual(["owner", "owner"]);
     expect(f.ownedBy(search("member", MINE).items).sort()).toEqual(["member", "member"]);
@@ -131,24 +87,6 @@ describe("originals under the mine scope", () => {
     for (const item of mine.items) {
       expect(f.retrieval.deskOpen({ access_token: "owner", scope: MINE, citation: item.citation }).items[0]).toEqual(item);
     }
-  });
-
-  it("never returns or reads a shared transcript under mine, while global still does", async () => {
-    const f = await fixture();
-    await f.note("owner", "sharedterm owner note");
-    f.statements.length = 0;
-    const globalSearch = f.retrieval.deskSearch({ access_token: "owner", scope: GLOBAL, query: "revised quote" });
-    expect(globalSearch.items).toEqual([expect.objectContaining({ label: "Transcript: Pricing sync", ref: `transcript:${RECORD_SHA256}` })]);
-    expect(f.retrieval.readApprovedMeetingTranscript({ access_token: "owner", scope: GLOBAL, citation: f.transcriptCitation }).text).toContain("revised quote");
-    expect(f.statements.some((sql) => sql.includes(MEETING_SOURCE_READ))).toBe(true);
-
-    f.statements.length = 0;
-    expect(f.retrieval.deskSearch({ access_token: "owner", scope: MINE, query: "revised quote" }).items).toEqual([]);
-    expect(() => f.retrieval.deskOpen({ access_token: "owner", scope: MINE, citation: globalSearch.items[0]!.citation })).toThrow(AuthorityOperationError);
-    expect(() => f.retrieval.read({ access_token: "owner", scope: MINE, citation: globalSearch.items[0]!.citation })).toThrow(AuthorityOperationError);
-    expect(() => f.retrieval.readApprovedMeetingTranscript({ access_token: "owner", scope: MINE, citation: f.transcriptCitation })).toThrow(AuthorityOperationError);
-    expect(f.statements.length).toBeGreaterThan(0);
-    expect(f.statements.filter((sql) => sql.includes(MEETING_SOURCE_READ))).toEqual([]);
   });
 
   it("keeps the project scope SQL byte-identical and makes an unknown scope a compile error", () => {
@@ -172,7 +110,7 @@ describe("originals under the mine scope", () => {
     const contextId = await f.note("owner", "sharedterm owner note");
     const documentId = f.document("owner", "sharedterm owner document");
     const desk = f.retrieval.deskSearch({ access_token: "owner", scope: GLOBAL, query: "sharedterm" });
-    expect(desk.items.map((item) => item.ref).sort()).toEqual([`document:${documentId}`, `note:${contextId}`, `transcript:${RECORD_SHA256}`].sort());
+    expect(desk.items.map((item) => item.ref).sort()).toEqual([`document:${documentId}`, `note:${contextId}`].sort());
     const audit = JSON.parse((f.database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1 WHERE row_sha256=?").get(desk.receipt) as { body_json: string }).body_json) as { released_metadata_sha256: string };
     expect(audit.released_metadata_sha256).toBe(canonicalSha256(desk.items.map(({ citation, kind, visibility, label, received_at, version, text, ref, dates }) => ({ citation, kind, visibility, label, received_at, version, ...(dates === undefined ? {} : { dates }), ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ref }))));
   });
