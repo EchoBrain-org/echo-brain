@@ -97,6 +97,8 @@ export interface ApprovalCoreFixtureOptionsV1 {
   readonly decisions?: readonly { readonly id: string; readonly text?: string; readonly status?: DecisionSignal['status'] }[];
   /** Rationale signals (none by default), each supporting the signal ids it names. */
   readonly rationales?: readonly { readonly id: string; readonly supports: readonly string[]; readonly text?: string }[];
+  /** The note's text, which every item quotes whole, as each item of a one-paragraph pasted note does. */
+  readonly note?: string;
   /** The actor is an active member of the first `projects` of A and B (default 2). */
   readonly projects?: number;
   /** Recorded suggestion rows for the first `suggestions` of A and B (default 0). */
@@ -152,7 +154,8 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
       db.prepare('INSERT INTO authority_person_meeting_pending_suggestions_v1 VALUES (?,?,?,?)').run(FIXTURE_SOURCE_KEY, externalId, PROJECTS[name], NOW);
     }
   }
-  const evidence = [{ meeting_id: fixtureMeeting.id, block_id: 'block-1' }];
+  const evidence = [{ meeting_id: fixtureMeeting.id, block_id: 'block-1', ...(options.note === undefined ? {} : { quote: options.note }) }];
+  const content = options.note === undefined ? fixtureMeeting.content : fixtureMeeting.content.map(block => block.id === 'block-1' ? { ...block, text: options.note! } : block);
   const signals = (options.actions ?? [{ id: 'act-1' }, { id: 'act-2', due_at: '2026-10-20T00:00:00.000Z' }]).map((action, index): ActionSignal => ({
     id: action.id, kind: 'action', text: action.text ?? `Follow up on item ${index + 1}.`, subject: null, confidence: 1,
     owner: action.owner !== undefined ? action.owner : options.owners?.[action.id] ?? null, due_at: action.due_at ?? null, evidence }));
@@ -162,7 +165,7 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
     id: reason.id, kind: 'rationale', text: reason.text ?? `Reason ${index + 1}.`, subject: null, confidence: 1, evidence, supports_signal_ids: [...reason.supports] }));
   let revisions = 0;
   const build = (label: string, title?: string, external = externalId) => {
-    const meeting: MeetingDocument = { ...fixtureMeeting, ...(title === undefined ? {} : { title }), provenance: { ...fixtureMeeting.provenance, external_id: external, canonical_revision: canonicalSha256(label) } };
+    const meeting: MeetingDocument = { ...fixtureMeeting, content, ...(title === undefined ? {} : { title }), provenance: { ...fixtureMeeting.provenance, external_id: external, canonical_revision: canonicalSha256(label) } };
     const decisions: DecisionSet = { ...fixtureDecisions, meeting_revision: meeting.provenance.canonical_revision, signals: [...decided, ...signals, ...reasons] };
     return { meeting, decisions };
   };

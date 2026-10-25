@@ -9,6 +9,7 @@ import {
 } from './person-content-policy-v2.js';
 import { APPROVAL_OWNERS_MAX_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1 } from './approval-owner-choice-v1.js';
 import type { RecordInputCodecV4, ValidatedRecordInputV4 } from './record-input-codec-v4.js';
+import type { OrganizationRecordSignalV1 } from './contracts.js';
 
 /**
  * The one neutral record proof of a meeting approval decided in the approval core, on any surface (desktop or Slack).
@@ -99,12 +100,13 @@ export interface ApprovalDecisionGroupV2 {
 }
 /**
  * The snapshot one destination group's record carries: the frozen proposal snapshot the reviewer saw, under the record's own
- * approval id, holding only the group's decisions and actions and the reasons for them. A reason's text and quotes may speak
- * of any item it supports, so a project group takes a reason, whole, only when every item it supports is the group's. The
- * Only-me group, which only its approver reads, takes every reason that supports one of its items, its links pruned to them,
- * and every reason that supports nothing. Any other reason is left out. Pure: the publisher builds each record with it and
- * the append projector recomputes it from the proposal snapshot, so the two cannot drift. Throws unless every group item is
- * a decision or action of the proposal.
+ * approval id, holding only the group's decisions and actions and the reasons for them. A reason's text may speak of any
+ * item it supports, so a project group takes a reason only when every item it supports is the group's. A quote is the text
+ * of the evidence unit the item cites (a note line, or part of a paragraph or turn), which may speak of any item of the
+ * meeting, so a project group's spans keep their meeting, block and times but never a quote. The Only-me group, which only its approver reads, keeps its quotes and
+ * takes every reason that supports one of its items, its links pruned to them, and every reason that supports nothing. Any
+ * other reason is left out. Pure: the publisher builds each record with it and the append projector recomputes it from the
+ * proposal snapshot, so the two cannot drift. Throws unless every group item is a decision or action of the proposal.
  */
 export function approvalDecisionSubsetSnapshotV2(proposal: unknown, group: ApprovalDecisionGroupV2): ApprovedDecisionSnapshotV2 {
   const snapshot = validateApprovedDecisionSnapshotV2(proposal);
@@ -112,14 +114,17 @@ export function approvalDecisionSubsetSnapshotV2(proposal: unknown, group: Appro
   const ids = new Set(group.signal_ids);
   const items = new Set([...brief.decisions, ...brief.actions].map(signal => signal.id));
   if (ids.size === 0 || ids.size !== group.signal_ids.length || group.signal_ids.some(id => !items.has(id))) fail('Approval decision group names items its proposal does not');
+  const project = group.project_ids.length > 0;
+  const unquoted = <T extends OrganizationRecordSignalV1>(signal: T): T => project
+    ? { ...signal, evidence: signal.evidence.map(({ quote, ...span }) => span) } : signal;
   const rationales = brief.rationales.flatMap(reason => {
-    if (group.project_ids.length > 0) return reason.supports_signal_ids.length > 0 && reason.supports_signal_ids.every(id => ids.has(id)) ? [reason] : [];
+    if (project) return reason.supports_signal_ids.length > 0 && reason.supports_signal_ids.every(id => ids.has(id)) ? [unquoted(reason)] : [];
     if (reason.supports_signal_ids.length === 0) return [reason];
     const supports = reason.supports_signal_ids.filter(id => ids.has(id));
     return supports.length === 0 ? [] : [{ ...reason, supports_signal_ids: supports }];
   });
-  const payload = { ...snapshot.approved_payload, brief: { ...brief, decisions: brief.decisions.filter(signal => ids.has(signal.id)),
-    actions: brief.actions.filter(signal => ids.has(signal.id)), rationales } };
+  const payload = { ...snapshot.approved_payload, brief: { ...brief, decisions: brief.decisions.filter(signal => ids.has(signal.id)).map(unquoted),
+    actions: brief.actions.filter(signal => ids.has(signal.id)).map(unquoted), rationales } };
   return validateApprovedDecisionSnapshotV2({ ...snapshot, approval_id: group.approval_id,
     final_content_sha256: canonicalSha256(payload as unknown as JsonValue), approved_payload: payload });
 }
