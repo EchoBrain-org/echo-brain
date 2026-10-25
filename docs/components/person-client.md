@@ -145,6 +145,15 @@ without the route answers 404, which the client reports as code
 `not_supported`, never `not_found`
 ([`person-changes.test.ts`](../../tests/person-client/person-changes.test.ts)).
 
+`person project-activity` takes no options and reads the Authority's project
+activity ([Ask timeline v1](../product/2026-10-25-ask-timeline-v1.md) C2) under
+the signed-in session. It prints `echo-person-project-activity-v1` (for each
+active project, when something new last arrived from someone else that the
+caller can read, or null) as its last stdout line, exactly as the API validator
+accepts it. An Authority without the route answers 404, which the client
+reports as code `not_supported`
+([`person-project-activity.test.ts`](../../tests/person-client/person-project-activity.test.ts)).
+
 The shared `person tools <verb> --tool <id>` dispatcher selects client-only
 provider fragments at composition. Slack and the Jira and Confluence flows (Jira
 under accepted [ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md))

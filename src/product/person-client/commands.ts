@@ -143,6 +143,7 @@ const RULES: Readonly<
   open: { accepts: ["ref", "cursor"], requires: ["ref"] },
   runs: { accepts: ["request"], requires: ["request"] },
   changes: {},
+  "project-activity": {},
   "evidence-search": { accepts: ["query", "project", "kind", "limit"], requires: [] },
   "evidence-open": { accepts: ["item", "project", "neighbours"], requires: ["item"] },
   "ask-source": {
@@ -197,6 +198,7 @@ Commands:
   employee    List, invite, reissue, or revoke an employee.
   tools       List tools, or set up, connect and disconnect one.
   changes     Check what moved in your own view, with no content.
+  project-activity  When each of your projects last had something new from someone else, with no content.
 
 Run \`echo-brain person <command> --help\` for command options.
 `,
@@ -252,6 +254,10 @@ Runs a versioned request against approved-record impact runs, the open items the
   set_state            with item_id and state open, done or not_relevant; the approver or the owner
   assign               with item_id and owner_membership_id; before send the approver only, then the approver, the owner or a lead of the decision's projects
   sweep                with scope mine, record or project, and an id for record and project; re-checks the open items you can see
+`,
+  "project-activity": `usage: echo-brain person project-activity
+
+Reads when something new last arrived in each of your active projects from someone else, with no content: a meeting approved into it, a note or document filed into it, or a follow-up of its meetings sent, handed on or set to a new state. Each counts only when you can read it, and your own never counts. Prints echo-person-project-activity-v1 as its last line: one item per project, latest_at a UTC time or null when nothing arrived. An Authority without it fails with code not_supported.
 `,
   changes: `usage: echo-brain person changes
 
@@ -1227,6 +1233,10 @@ export async function runPersonClientCli(
       case 'changes':
         // The bare change check is the last line, as the desktop reads it.
         print(stdout, await client.changes(dependencies.abort_signal));
+        break;
+      case 'project-activity':
+        // The bare project activity is the last line, as the desktop reads it.
+        print(stdout, await client.projectActivity(dependencies.abort_signal));
         break;
       case 'evidence-search': {
         const project_id = optionalProject(values);

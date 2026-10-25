@@ -1,6 +1,7 @@
 import { PERSON_DIAGNOSTICS_PATH_V1, PERSON_DIAGNOSTICS_MAX_RESPONSE_BYTES_V1, validatePersonDiagnosticsRequestV1, validatePersonDiagnosticsResultV1, type PersonDiagnosticCaptureIdV1, type PersonDiagnosticsRequestV1, type PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { PERSON_CHANGES_ROUTE_V1, validatePersonChangesV1, type PersonChangesV1 } from '@echo-brain/organization-api';
+import { PERSON_PROJECT_ACTIVITY_PATH_V1, validatePersonProjectActivityV1, type PersonProjectActivityV1 } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
@@ -1419,6 +1420,28 @@ export class PersonAuthorityClient {
     } catch (error) {
       if (error instanceof PersonAuthorityClientError && error.status === 404) {
         throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no change check");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Project activity (Ask timeline v1, C2): when each of this person's active projects last had something new from someone
+   * else that they can read, and no content; 500 projects fit the ordinary bound. An Authority without the route answers 404,
+   * which is `not_supported` here, never `not_found`.
+   */
+  async projectActivity(accessToken: string, signal?: AbortSignal): Promise<PersonProjectActivityV1> {
+    try {
+      return await this.getJson({
+        path: PERSON_PROJECT_ACTIVITY_PATH_V1,
+        access_token: accessToken,
+        validate_response: validatePersonProjectActivityV1,
+        maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+        signal,
+      });
+    } catch (error) {
+      if (error instanceof PersonAuthorityClientError && error.status === 404) {
+        throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no project activity");
       }
       throw error;
     }
