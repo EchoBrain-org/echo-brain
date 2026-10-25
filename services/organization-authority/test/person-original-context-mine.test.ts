@@ -43,8 +43,8 @@ async function fixture() {
   const retrieval = new SqlitePersonOriginalContextRetrievalV1(database, { authenticateAccess: ({ access_token }) => authenticate(access_token) }, OWNER.organization_id);
 
   const authors = new Map<string, "owner" | "member">();
-  const note = async (token: "owner" | "member", text: string) => {
-    const receipt = projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: `${token} note`, text, association_project_ids: [], audience: { kind: "team" } });
+  const note = async (token: "owner" | "member", text: string, audience: "team" | "only_me" = "team") => {
+    const receipt = projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: `${token} note`, text, association_project_ids: [], audience: { kind: audience } });
     expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
     authors.set(`note:${receipt.context_id}`, token);
     return receipt.context_id;
@@ -60,6 +60,29 @@ async function fixture() {
   const ownedBy = (items: readonly OriginalContextDeskItemV1[]) => items.map((item) => authors.get(item.ref ?? "") ?? item.ref?.split(":")[0]);
   return { database, retrieval, note, document, ownedBy };
 }
+
+describe("originals a desk read leaves out (ADR-0046)", () => {
+  it("leaves out excluded sources and Only-me items before the limit, in search and inventory alike", async () => {
+    const f = await fixture();
+    // Ten of the owner's private notes outrank and postdate their one shared note.
+    const shared = await f.note("owner", "sharedterm once");
+    for (let index = 0; index < 10; index += 1) await f.note("owner", `sharedterm sharedterm sharedterm private ${index}`, "only_me");
+    const search = (exclude?: { readonly source_ids: readonly string[]; readonly only_me: boolean }) =>
+      f.retrieval.deskSearch({ access_token: "owner", scope: GLOBAL, query: "sharedterm", ...(exclude === undefined ? {} : { exclude }) });
+    const sharedRef = `note:${shared}`;
+    expect(search().items.map((item) => item.ref)).not.toContain(sharedRef);
+    const fenced = search({ source_ids: [], only_me: true });
+    expect(fenced.items.map((item) => [item.ref, item.visibility])).toEqual([[sharedRef, "team"]]);
+    expect(fenced.truncated).toBe(false);
+    // The inventory, whose rows come from a limited query, leaves them out before its limit too.
+    const inventory = f.retrieval.deskSearch({ access_token: "owner", scope: GLOBAL, limit: 1, exclude: { source_ids: [], only_me: true } });
+    expect(inventory.items.map((item) => item.ref)).toEqual([sharedRef]);
+    // A source left out by id is never offered either.
+    const sourceId = fenced.items[0]!.citation.source_id;
+    expect(search({ source_ids: [sourceId], only_me: true }).items).toEqual([]);
+    expect(f.retrieval.deskSearch({ access_token: "owner", scope: GLOBAL, exclude: { source_ids: [sourceId], only_me: true } }).items).toEqual([]);
+  });
+});
 
 describe("originals under the mine scope", () => {
   it("searches, opens and revalidates only the caller's own notes and documents", async () => {

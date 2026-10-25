@@ -35,9 +35,11 @@ import {
   listReadableSearchGenerationRecordsV1,
   listReadableSearchGenerationV1,
   readReadableSearchGenerationAtomsV1,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
   searchReadableSearchGenerationV1,
   warmReadableSearchActiveGenerationV1,
   type ReadableSearchActiveGenerationV1,
+  type ReadableSearchExclusionV1,
   type ReadableSearchGenerationRecordV1,
   type ReadableSearchReaderV1,
   type ReadableSearchResultItemV1,
@@ -132,6 +134,14 @@ export interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
    * mixing evidence from two record heads.
    */
   readonly expected_pointer?: PersonRecordSearchReleasePointerV1;
+  /** Desk-only: records and approver-only records a research run must not read, left out before the cap. */
+  readonly exclude?: PersonRecordDeskExclusionV1;
+}
+
+/** What a desk read leaves out before its limit: records by digest, and every record only its approver may read. */
+export interface PersonRecordDeskExclusionV1 {
+  readonly record_sha256s: readonly Sha256Digest[];
+  readonly approver_only: boolean;
 }
 
 export type PersonRecordSearchReleaseAuthorizationV1 =
@@ -234,6 +244,7 @@ export interface PersonEvidenceDeskRecordsV1 extends Pick<
     readonly expected_pointer?: PersonRecordSearchReleasePointerV1;
     readonly limit?: number;
     readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
+    readonly exclude?: PersonRecordDeskExclusionV1;
   }): PersonRecordSearchBatchResultV1;
   initializeDesk(input: {
     readonly access_token: string;
@@ -495,6 +506,13 @@ function assertValidMine(input: { readonly mine?: unknown; readonly project_id?:
   if ((input.mine !== undefined && input.mine !== true) || (input.mine === true && input.project_id !== undefined)) {
     invalidRequest();
   }
+}
+
+/** The engine's form of a desk exclusion: sorted unique digests, and the restricted-reviewer policy for approver-only records. */
+function engineExclusion(exclude: PersonRecordDeskExclusionV1 | undefined): ReadableSearchExclusionV1 | undefined {
+  if (exclude === undefined) return undefined;
+  if (!Array.isArray(exclude.record_sha256s) || typeof exclude.approver_only !== "boolean" || exclude.record_sha256s.some((record) => typeof record !== "string" || !/^sha256:[0-9a-f]{64}$/.test(record))) invalidRequest();
+  return Object.freeze({ record_sha256s: Object.freeze([...new Set(exclude.record_sha256s)].sort()), policy_ids: Object.freeze(exclude.approver_only ? [RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2] : []) });
 }
 
 function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
@@ -1179,6 +1197,7 @@ export function createPersonRecordSearchRouteV1(
     }
     const dated = datedSelection(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
     const mine = dated.records;
+    const excluded = engineExclusion(input.exclude);
     const result = readGeneration(() =>
       search({
         state_directory: options.state_directory,
@@ -1190,6 +1209,7 @@ export function createPersonRecordSearchRouteV1(
         query: input.query,
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
+        ...(excluded === undefined ? {} : { exclude: excluded }),
       }),
     );
     assertGeneration(result, pointer);
@@ -1332,6 +1352,7 @@ export function createPersonRecordSearchRouteV1(
       readonly expected_pointer?: PersonRecordSearchReleasePointerV1;
       readonly limit?: number;
       readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
+      readonly exclude?: PersonRecordDeskExclusionV1;
     }): PersonRecordSearchBatchResultV1 {
       assertValidMine(input);
       const limit = input.limit ?? 50;
@@ -1345,6 +1366,7 @@ export function createPersonRecordSearchRouteV1(
       if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head) || (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer))) unavailable();
       const dated = datedSelection(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
       const mine = dated.records;
+      const excluded = engineExclusion(input.exclude);
       const inventory = readGeneration(() => listReadableSearchGenerationV1({
         state_directory: options.state_directory,
         active_generation: activeGenerationAt(pointer),
@@ -1353,6 +1375,7 @@ export function createPersonRecordSearchRouteV1(
         ...(mine === undefined ? {} : { record_sha256s: mine }),
         ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
+        ...(excluded === undefined ? {} : { exclude: excluded }),
       }));
       assertGeneration(inventory, pointer);
       const released = options.sessions.authenticateAccess({ access_token: input.access_token });

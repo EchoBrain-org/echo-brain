@@ -340,6 +340,9 @@ these were decided while building and reviewing it.
     research of a record shared beyond its approver leaves out what only the
     approver may see (Only-me records, private notes and documents, unapproved
     meetings), so no model-written card line or follow-up phrase can carry it.
+    These fences and those of ruling 17 apply inside each store before its
+    result limit, so a fenced item never takes the place of one the run may
+    read.
 
 Known and left for the founder:
 

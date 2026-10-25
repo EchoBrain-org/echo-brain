@@ -1121,6 +1121,16 @@ export interface SearchReadableSearchGenerationV1Input {
   readonly record_sha256s?: readonly Sha256Digest[];
   /** Optional Authority-derived atom order selection; applied after ACL and before result limits. */
   readonly atom_orders?: ReadonlyMap<Sha256Digest, ReadonlySet<number>>;
+  /**
+   * Authority-derived exclusions, applied after ACL and scoring and before result limits, so an excluded item never takes a
+   * result's place: records (sorted, unique) and policies a research run must not read. Never client input.
+   */
+  readonly exclude?: ReadableSearchExclusionV1;
+}
+
+export interface ReadableSearchExclusionV1 {
+  readonly record_sha256s: readonly Sha256Digest[];
+  readonly policy_ids: readonly ReadableSearchPolicyIdV1[];
 }
 
 /**
@@ -1141,6 +1151,11 @@ export interface ListReadableSearchGenerationV1Input {
   readonly record_sha256s?: readonly Sha256Digest[];
   /** Optional Authority-derived atom order selection; applied after ACL and before result limits. */
   readonly atom_orders?: ReadonlyMap<Sha256Digest, ReadonlySet<number>>;
+  /**
+   * Authority-derived exclusions, applied after ACL and scoring and before result limits, so an excluded item never takes a
+   * result's place: records (sorted, unique) and policies a research run must not read. Never client input.
+   */
+  readonly exclude?: ReadableSearchExclusionV1;
 }
 
 /**
@@ -1345,6 +1360,17 @@ function readerRecordNarrowing(
       throw new Error("record narrowing must be sorted and unique");
   });
   return new Set(value);
+}
+/** Whether a fact is excluded: `undefined` excludes nothing. */
+function readerExclusion(value: ReadableSearchExclusionV1 | undefined): (fact: ReadableSearchFactRow) => boolean {
+  if (value === undefined) return () => false;
+  if (!Array.isArray(value.record_sha256s) || !Array.isArray(value.policy_ids) || value.policy_ids.some(policy => policy !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2
+    && policy !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 && policy !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1) || new Set(value.policy_ids).size !== value.policy_ids.length) {
+    throw new Error("readable-search exclusion must name a record array and known policies once each");
+  }
+  const records = readerRecordNarrowing(value.record_sha256s)!;
+  const policies = new Set<string>(value.policy_ids);
+  return fact => records.has(fact.record_hash) || policies.has(fact.policy_id);
 }
 function factProjectIds(
   fact: ReadableSearchFactRow,
@@ -2163,6 +2189,7 @@ export function searchReadableSearchGenerationV1(
 ): ReadableSearchResultV1 {
   assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
+  const excluded = readerExclusion(input.exclude);
   const limit = input.limit ?? 10;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
     throw new Error(
@@ -2177,7 +2204,8 @@ export function searchReadableSearchGenerationV1(
     records,
   );
   const candidates = scoreAdmittedCandidates(admitted, terms).filter((candidate) =>
-    (input.kinds === undefined || input.kinds.includes(candidate.content.item_kind)) && (input.atom_orders === undefined || input.atom_orders.get(candidate.fact.record_hash)?.has(candidate.fact.atom_order) === true),
+    (input.kinds === undefined || input.kinds.includes(candidate.content.item_kind)) && (input.atom_orders === undefined || input.atom_orders.get(candidate.fact.record_hash)?.has(candidate.fact.atom_order) === true)
+      && !excluded(candidate.fact),
   );
   candidates.sort(compareScoredRows);
   return Object.freeze({
@@ -2201,6 +2229,7 @@ export function listReadableSearchGenerationV1(
 ): ReadableSearchResultV1 {
   assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
+  const excluded = readerExclusion(input.exclude);
   const limit = input.limit ?? 50;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)
     throw new Error("readable-search inventory limit must be a safe integer from one through fifty");
@@ -2215,7 +2244,8 @@ export function listReadableSearchGenerationV1(
   for (const segment of admitted) {
     for (const fact of segment.facts) {
       const content = segment.content_by_atom.get(fact.atom_id);
-      if (content !== undefined && (input.kinds === undefined || input.kinds.includes(content.item_kind)) && (input.atom_orders === undefined || input.atom_orders.get(fact.record_hash)?.has(fact.atom_order) === true)) candidates.push({ fact, content });
+      if (content !== undefined && (input.kinds === undefined || input.kinds.includes(content.item_kind)) && (input.atom_orders === undefined || input.atom_orders.get(fact.record_hash)?.has(fact.atom_order) === true)
+        && !excluded(fact)) candidates.push({ fact, content });
     }
   }
   candidates.sort((left, right) =>

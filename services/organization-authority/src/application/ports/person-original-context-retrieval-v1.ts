@@ -79,6 +79,12 @@ export interface OriginalContextDeskReleaseV1 {
   readonly unchecked?: EvidenceDeskUncheckedV1;
 }
 
+/** What a desk read leaves out before its limit: sources by id, and every item only its reader may see. */
+export interface OriginalContextDeskExclusionV1 {
+  readonly source_ids: readonly string[];
+  readonly only_me: boolean;
+}
+
 export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalContextRetrievalPortV1 {
   /** Authenticates the request-bound desk before its first model call. */
   deskAuthorize(input: {
@@ -92,6 +98,7 @@ export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalC
     readonly query?: string;
     readonly kinds?: readonly OriginalContextDeskKindV1[];
     readonly limit?: number;
+    readonly exclude?: OriginalContextDeskExclusionV1;
   }): OriginalContextDeskReleaseV1;
   deskOpen(input: {
     readonly access_token: string;

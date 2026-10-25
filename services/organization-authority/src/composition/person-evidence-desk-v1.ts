@@ -171,6 +171,10 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const excludedRecords = new Set<string>(options.exclude?.records ?? []);
   const excludedSources = new Set<string>(options.exclude?.sources ?? []);
   const excludedPrivate = options.exclude?.private === true;
+  // Each store leaves these out before its limit, so an excluded item never takes a permitted item's place; the filters below
+  // stay as a backstop over what comes back.
+  const recordExclusion = excludedRecords.size === 0 && !excludedPrivate ? {} : { exclude: Object.freeze({ record_sha256s: Object.freeze([...excludedRecords] as Sha256Digest[]), approver_only: excludedPrivate }) };
+  const originalExclusion = excludedSources.size === 0 && !excludedPrivate ? {} : { exclude: Object.freeze({ source_ids: Object.freeze([...excludedSources]), only_me: excludedPrivate }) };
   const offeredOriginal = (item: { readonly citation: { readonly source_id: string }; readonly visibility: string }) =>
     !excludedSources.has(item.citation.source_id) && !(excludedPrivate && item.visibility === "only_me");
   const stored = new Map<string, Stored>();
@@ -224,7 +228,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     try {
       const recordKinds = recordKindsOf(kinds);
       if (recordKinds !== undefined && recordKinds.length === 0) return [];
-      return records(options.records.searchBatch({ ...dates, access_token: options.access_token, query, limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }));
+      return records(options.records.searchBatch({ ...dates, access_token: options.access_token, query, limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }), ...recordExclusion }));
     } catch (error) {
       if (pointer === undefined && unavailableAtStart(error)) { recordsUnavailableAtStart = true; return []; }
       throw error;
@@ -273,16 +277,17 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
         scope: options.scope,
         limit,
         ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }),
+        ...originalExclusion,
       });
       const beforeRecords = recordReleases.length;
       const recordKinds = recordKindsOf(input.kinds);
-      const recordInventory = recordsUnavailableAtStart || input.source === "document" ? [] : records(options.records.listDeskBatch({ ...evidenceDateFilterV1(input), access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
+      const recordInventory = recordsUnavailableAtStart || input.source === "document" ? [] : records(options.records.listDeskBatch({ ...evidenceDateFilterV1(input), access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }), ...recordExclusion }), false);
       const items = balanced(originals(released), recordInventory).filter((item) => input.kinds === undefined || input.kinds.includes(item.kind));
       return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
     }
     latestRecordTruncated = false;
     const sourceKinds = sourceKindsOf(input.kinds);
-    const released = options.originals.deskSearch({ ...evidenceDateFilterV1(input), ...(input.source === "meeting" || input.source === "document" ? { source: input.source } : {}), access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
+    const released = options.originals.deskSearch({ ...evidenceDateFilterV1(input), ...(input.source === "meeting" || input.source === "document" ? { source: input.source } : {}), access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }), ...originalExclusion });
     const beforeRecords = recordReleases.length;
     const echoItems = [originals(released), input.source === "document" ? [] : searchRecords(input.query, input.kinds, evidenceDateFilterV1(input))].map((list) => list.filter((item) => input.kinds === undefined || input.kinds.includes(item.kind)));
     const items = balanced(echoItems[0]!, echoItems[1]!);

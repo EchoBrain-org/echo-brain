@@ -389,6 +389,34 @@ describe('Person evidence desk: private items fenced off (ADR-0046)', () => {
   });
 });
 
+describe('Person evidence desk: exclusions reach each store before its limit', () => {
+  it('passes its fenced records, sources and Only-me rule to every search and inventory read, and nothing when it fences nothing', async () => {
+    const value = await fixture();
+    const originals = emptyOriginals();
+    const deskSearch = vi.fn((input: Parameters<typeof originals.deskSearch>[0]) => originals.deskSearch(input));
+    const searchBatch = vi.fn((input: Parameters<typeof value.route.searchBatch>[0]) => value.route.searchBatch(input));
+    const listDeskBatch = vi.fn((input: Parameters<typeof value.route.listDeskBatch>[0]) => value.route.listDeskBatch(input));
+    const sibling = canonicalSha256('a sibling record');
+    const make = (exclude?: { readonly records: readonly Sha256Digest[]; readonly sources: readonly string[]; readonly private?: boolean }) => createPersonEvidenceDeskV1({
+      access_token: 'token', scope: { kind: 'global' }, originals: { ...originals, deskSearch }, records: { ...value.route, searchBatch, listDeskBatch }, ...(exclude === undefined ? {} : { exclude }),
+    });
+    const fenced = make({ records: [sibling], sources: ['source-meeting'], private: true });
+    await fenced.search({ query: 'Decision' });
+    await fenced.search({ limit: 5 });
+    const records = { exclude: { record_sha256s: [sibling], approver_only: true } };
+    const sources = { exclude: { source_ids: ['source-meeting'], only_me: true } };
+    expect(searchBatch).toHaveBeenLastCalledWith(expect.objectContaining(records));
+    expect(listDeskBatch).toHaveBeenLastCalledWith(expect.objectContaining(records));
+    expect(deskSearch.mock.calls.map(([input]) => input)).toEqual([expect.objectContaining(sources), expect.objectContaining(sources)]);
+    // A desk that fences nothing sends no exclusion at all.
+    deskSearch.mockClear(); searchBatch.mockClear(); listDeskBatch.mockClear();
+    const open = make();
+    await open.search({ query: 'Decision' });
+    await open.search({ limit: 5 });
+    for (const spy of [deskSearch, searchBatch, listDeskBatch]) for (const [input] of spy.mock.calls) expect(input).not.toHaveProperty('exclude');
+  });
+});
+
 describe('Person evidence desk: one source at a time', () => {
   it('lists meeting records without text, one source only', async () => {
     const value = await fixture();
