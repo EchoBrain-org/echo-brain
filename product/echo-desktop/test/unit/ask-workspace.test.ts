@@ -104,12 +104,13 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     await flush();
     expect(called('projects.read')).toEqual([]);
     expect(byTestId(pane(), 'source-open')).toHaveLength(1);
-    const answer = store.getState().ask!.shown;
+    const answer = store.latestTurn();
     store.openFullPage();
     await flush();
     expect(called('projects.read')).toEqual([{ expect: EXPECT, project_id: thermal.project_id }]);
-    // Ask goes only once the project is read: a project that could not be read leaves the answer as it was.
-    expect(store.getState().ask?.shown ?? null).toBe(opened ? null : answer);
+    // Ask goes only once the project is read: a project that could not be read leaves the answer as it was. The timeline stays either way.
+    expect(store.getState().ask === null).toBe(opened);
+    expect(store.latestTurn()).toEqual(answer);
     expect(store.getState().route).toEqual(route);
     expect(store.getState().toast).toBe(toast);
   });
@@ -122,7 +123,8 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     const read = held.hold('projects.read');
     store.openFullPage();
     await flush();
-    expect(store.getState().ask?.shown?.answer.sources).toEqual([unlisted]);
+    expect(store.getState().ask).not.toBeNull();
+    expect(store.latestTurn()?.answer.sources).toEqual([unlisted]);
     const again = held.hold('ask.run');
     void store.ask('Who else is in Thermal recovery?');
     await flush();

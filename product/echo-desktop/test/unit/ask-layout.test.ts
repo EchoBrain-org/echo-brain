@@ -2,8 +2,8 @@
 // headings, bullets and tables in the desktop's own type, each sentence and
 // row with its sources' numbers and lit on its own; a part without a layout
 // as it always read. For every answer: the sources start as one closed line,
-// what research did not cover is one quiet note after the answer, and Copy
-// answer writes Markdown.
+// what research did not cover is not shown (ADR-0047), and Copy answer writes
+// Markdown.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerBlock } from '../../src/shared/protocol.js';
 import { layoutAnswer } from '../../src/host/test-authority.js';
@@ -121,7 +121,7 @@ describe('a laid-out part reads as its blocks', () => {
     const { store, thread } = await answered(therm());
     const [row] = byTestId(thread(), 'answer-row');
     click(byTestId(row, 'citation')[0]);
-    expect(store.getState().sources).toMatchObject({ open: 3, focus: '0.t4.0', listed: false });
+    expect(store.getState().sources).toMatchObject({ open: 3, focus: '0.t4.0', listed: [] });
     expect(store.paneTarget()?.number).toBe(3);
     const rows = byTestId(thread(), 'answer-row');
     expect(rows.map(node => classes(node).includes('on'))).toEqual([true, false, false, false]);
@@ -141,7 +141,8 @@ describe('a laid-out part reads as its blocks', () => {
     expect(byClass(first, 'answer-lead').map(text)).toEqual(['Four steps before DVT-R2']);
     expect(byClass(first, 'answer-table')[0]!.props['aria-label']).toBe('Four steps before DVT-R2');
     const later = { ...base, parts: [{ ...part!, layout: [...part!.layout!.slice(0, 4), table] }] };
-    const shown = byTestId((await answered(later)).thread(), 'answer')[0]!;
+    // Asked in the same Ask, it is the latest turn: the last answer shown.
+    const shown = byTestId((await answered(later)).thread(), 'answer').at(-1)!;
     expect(byClass(shown, 'answer-caption').map(text)).toEqual(['Four steps before DVT-R2']);
     expect(byClass(shown, 'answer-lead')).toHaveLength(1);
   });
@@ -172,10 +173,10 @@ describe('every answer\'s sources start closed, as one line', () => {
       '4TRACE-01 · Confirm TC-D-03 traces to MRD-01', '5HW-11 · Fix BUG-412 on the board', '6DVT-R2 · Run DVT-R2']);
     click(byTestId(thread(), 'sources-toggle')[0]);
     expect(byTestId(thread(), 'source-row')).toEqual([]);
-    expect(store.getState().sources?.listed).toBe(false);
+    expect(store.getState().sources?.listed).toEqual([]);
   });
 
-  it('keeps the source list choice when citations open, and starts closed again for the next answer', async () => {
+  it('keeps the source list choice when citations open, and the next answer\'s starts closed beside it', async () => {
     const { store, thread } = await answered(therm(false));
     click(byTestId(thread(), 'citation')[0]);
     expect(byTestId(thread(), 'source-row')).toHaveLength(0);
@@ -191,8 +192,11 @@ describe('every answer\'s sources start closed, as one line', () => {
     await flush();
     again(ok(therm()));
     await flush();
-    expect(byTestId(thread(), 'sources-toggle')[0]!.props['aria-expanded']).toBe(false);
-    expect(byTestId(thread(), 'source-row')).toEqual([]);
+    // Both answers show in full, each with its own list: the earlier one stays open, the new one starts closed.
+    expect(byTestId(thread(), 'sources-toggle').map(toggle => toggle.props['aria-expanded'])).toEqual([true, false]);
+    expect(byTestId(thread(), 'source-row')).toHaveLength(6);
+    click(byTestId(thread(), 'sources-toggle')[1]);
+    expect(byTestId(thread(), 'source-row')).toHaveLength(12);
   });
 
   it('says "1 source" for one', async () => {
@@ -203,38 +207,32 @@ describe('every answer\'s sources start closed, as one line', () => {
   });
 });
 
-describe('what research did not cover is one quiet note after the answer', () => {
-  it('joins the notice and the gap after the last block, never as a banner over the answer', async () => {
+describe('what research did not cover is not shown (ADR-0047)', () => {
+  it('ends the answer with its last block: no note, no banner, and no Try again on an answer that came', async () => {
     const { thread } = await answered(therm());
     const answer = byTestId(thread(), 'answer')[0]!;
     const children = (answer.props.children as unknown[]).flat(2).filter(Boolean) as Node[];
-    const note = children.at(-1)!;
-    expect(note.props['data-testid']).toBe('coverage-note');
-    expect(text(byTestId(note, 'answer-notice'))).toBe('One of three THERM meetings in range was not read before the time limit.');
-    expect(text(byTestId(note, 'answer-gap'))).toBe('Who proposed the reduced scope was not found in the evidence read.');
-    expect(text(note)).toBe('One of three THERM meetings in range was not read before the time limit. Who proposed the reduced scope was not found in the evidence read.');
+    expect(children.at(-1)!.props.class).toBe('answer-part');
+    expect(text(thread())).not.toContain('THERM meetings in range');
+    expect(text(thread())).not.toContain('Who proposed the reduced scope was not found');
+    for (const gone of ['coverage-note', 'answer-notice', 'answer-gap', 'answer-assumption', 'answer-off-scope', 'ask-again']) expect(byTestId(thread(), gone)).toEqual([]);
     expect(byClass(answer, 'answer-banner')).toEqual([]);
   });
 
-  it('keeps the assumption and the off-scope line on top, and gives each part\'s gap its question when there are several', async () => {
+  it('leaves out a part with nothing to show, and heads the others with their questions', async () => {
     const base = therm(false);
-    const answer: Answer = { ...base, assumption: 'Assuming THERM means the thermal test plan.', parts: [
-      base.parts[0]!, { question: 'Who proposed it?', status: 'not_found', statements: [], gap: 'This was not found.' },
-    ] };
+    const answer: Answer = { ...base, parts: [base.parts[0]!, { question: 'Who proposed it?', status: 'not_found', statements: [], gap: 'This was not found.' }] };
     const shown = byTestId((await answered(answer)).thread(), 'answer')[0]!;
-    const children = (shown.props.children as unknown[]).flat(2).filter(Boolean) as Node[];
-    expect(children[0]!.props['data-testid']).toBe('answer-assumption');
-    const note = children.at(-1)!;
-    expect(byTestId(note, 'answer-gap').map(text)).toEqual(['Who proposed the reduced scope was not found in the evidence read.', 'This was not found.']);
-    expect(text(note)).toBe('One of three THERM meetings in range was not read before the time limit. Can DVT-R2 run on the reduced test scope? '
-      + 'Who proposed the reduced scope was not found in the evidence read. Who proposed it? This was not found.');
+    expect(byClass(shown, 'answer-part')).toHaveLength(1);
+    expect(byClass(shown, 'section-label').map(text)).toEqual(['Can DVT-R2 run on the reduced test scope?']);
+    expect(text(shown)).not.toContain('This was not found.');
   });
 
-  it('shows no note when research covered everything', async () => {
+  it('says nothing you can see matched when the answer has nothing to say', async () => {
     const base = therm(false);
-    const { notice: _notice, ...rest } = base;
-    const { thread } = await answered({ ...rest, outcome: 'answered', parts: [{ ...base.parts[0]!, status: 'answered', gap: undefined }] });
-    expect(byTestId(thread(), 'coverage-note')).toEqual([]);
+    const { thread } = await answered({ ...base, sources: [], outcome: 'not_found', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap: 'Not found.' }] });
+    expect(byTestId(thread(), 'answer-empty').map(text)).toEqual(['Nothing you can see matched.']);
+    expect(text(thread())).not.toContain('Not found.');
   });
 });
 

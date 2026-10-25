@@ -63,7 +63,7 @@ describe('the steps of the Ask on its way', () => {
     await flush();
     step({ type: 'stage', stage: 'writing' });
     expect(store.getState().ask?.asking).toBeNull();
-    expect(store.getState().ask?.shown?.question).toBe('What did we agree?');
+    expect(store.latestTurn()?.text).toBe('What did we agree?');
   });
 
   it('cancelled, takes no step more, and Ask closes with what it named', async () => {
@@ -199,7 +199,7 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     await flush();
     store.openNamed([note]);
     store.cancelAsk();
-    expect(store.getState().ask?.shown?.question).toBe('First?');
+    expect(store.latestTurn()?.text).toBe('First?');
     expect(store.getState().sources?.named).toBeNull();
     expect(store.paneTarget()).toBeNull();
     second(ok(answer()));
@@ -215,7 +215,7 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     vi.advanceTimersByTime(3_000);
     release(ok({ ...answer(), receipt: { ...receipt, rows: [{ type: 'read', items: [decision] }] } }));
     await flush();
-    expect(store.getState().ask?.shown?.question).toBe('What did we agree?');
+    expect(store.latestTurn()?.text).toBe('What did we agree?');
     expect(store.getState().sources?.named).toBeNull();
     expect(store.getState().sources?.evidence).toBeNull();
     expect(store.paneTarget()).toBeNull();
@@ -235,9 +235,9 @@ describe('the receipt above an answer', () => {
     const quick = await asking('Quick?');
     quick.release(ok(answer()));
     await flush();
-    expect(quick.store.getState().ask?.shown?.receipt).toBeUndefined();
+    expect(quick.store.latestTurn()?.receipt).toBeUndefined();
     // The answer itself still came with it.
-    expect(quick.store.getState().ask?.shown?.answer.receipt).toEqual(receipt);
+    expect(quick.store.latestTurn()?.answer.receipt).toEqual(receipt);
 
     const slow = held.hold('ask.run');
     void quick.store.ask('Slow?');
@@ -245,7 +245,7 @@ describe('the receipt above an answer', () => {
     vi.advanceTimersByTime(3_000);
     slow(ok(answer()));
     await flush();
-    expect(quick.store.getState().ask?.shown?.receipt).toEqual(receipt);
+    expect(quick.store.latestTurn()?.receipt).toEqual(receipt);
   });
 
   it('times the wait by the page\'s clock: an Authority that researched under three seconds still keeps the receipt of a longer wait', async () => {
@@ -253,7 +253,7 @@ describe('the receipt above an answer', () => {
     vi.advanceTimersByTime(3_400);
     release(ok({ ...answer(), receipt: { ...receipt, elapsed_ms: 1_800 } }));
     await flush();
-    expect(store.getState().ask?.shown).toMatchObject({ receipt: { elapsed_ms: 1_800 }, took: 3_400 });
+    expect(store.latestTurn()).toMatchObject({ receipt: { elapsed_ms: 1_800 }, took: 3_400 });
   });
 
   it('an older Authority sends none, and the answer shows as it always did', async () => {
@@ -261,7 +261,7 @@ describe('the receipt above an answer', () => {
     vi.advanceTimersByTime(10_000);
     release(ok(answer(false)));
     await flush();
-    expect(store.getState().ask?.shown).toMatchObject({ question: 'What did we agree?' });
-    expect(store.getState().ask?.shown?.receipt).toBeUndefined();
+    expect(store.latestTurn()).toMatchObject({ question: 'What did we agree?' });
+    expect(store.latestTurn()?.receipt).toBeUndefined();
   });
 });

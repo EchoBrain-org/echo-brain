@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import type { AppStatus } from '../../src/shared/protocol.js';
-import { ACCOUNT, byTestId, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
+import type { AppStatus, Expect } from '../../src/shared/protocol.js';
+import { ACCOUNT, byTestId, fileOf, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, text, timelineFiles } from './harness.js';
 import { followUp } from './changes-fixture.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -14,7 +14,17 @@ beforeEach(() => {
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(new Held(), {
     'app.status': () => ok(status),
-    'account.signOut': () => { status = { signed_in: false, account: null, client_version: 'test' }; return ok(status); },
+    // As the host does (ADR-0047): our own sign-out deletes the account's timeline, and reading one account's deletes every other's.
+    'account.signOut': params => {
+      if ((params as { again?: true }).again !== true) timelineFiles.delete(fileOf(params.expect as Expect));
+      status = { signed_in: false, account: null, client_version: 'test' };
+      return ok(status);
+    },
+    'timeline.read': params => {
+      const own = fileOf(params.expect as Expect);
+      for (const file of [...timelineFiles.keys()]) if (file !== own) timelineFiles.delete(file);
+      return ok({ turns: structuredClone(timelineFiles.get(own) ?? []) });
+    },
     'ask.run': () => ok({ text: 'Synthetic answer.', scope: { kind: 'global' }, sources: [], outcome: 'answered', parts: [] }),
   }, () => ({ active: [], archived: [] })));
 });
@@ -32,29 +42,37 @@ it('keeps identical actions from different meetings distinguishable on Home', as
   expect(new Set(rows).size, JSON.stringify(rows)).toBe(2);
 });
 
-it('forgets recent question text when explicit sign-out forgets the account', async () => {
+it('forgets recent question text when explicit sign-out forgets the account, and its timeline with it', async () => {
   const store = await startStore();
   const question = 'What is the confidential acquisition plan?';
   await store.ask(question);
   store.closeAsk();
-  expect(store.barSuggestions()).toContain(question);
+  expect(store.barSuggestions().map(suggestion => suggestion.question)).toContain(question);
   store.accountCommand('signout');
   await store.signOut();
   expect(store.getState().status?.signed_in).toBe(false);
   status = { signed_in: true, account: ACCOUNT, client_version: 'test' };
   await store.refreshStatus();
   await flush();
-  expect(store.barSuggestions()).not.toContain(question);
+  expect(store.barSuggestions().map(suggestion => suggestion.question)).not.toContain(question);
 });
 
-it('keeps recent questions through an ordinary status refresh', async () => {
+it('keeps recent questions through an ordinary status refresh, and through an expired session signed in again', async () => {
   const store = await startStore();
   const question = 'What changed this week?';
   await store.ask(question);
   store.closeAsk();
   await store.refreshStatus();
   await flush();
-  expect(store.barSuggestions()).toContain(question);
+  expect(store.barSuggestions().map(suggestion => suggestion.question)).toContain(question);
+  // A session that merely ended keeps the file: the same person signing in again reads it back.
+  status = { signed_in: false, account: null, client_version: 'test' };
+  await store.refreshStatus();
+  expect(store.getState().timeline.turns).toEqual([]);
+  status = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+  await store.refreshStatus();
+  await flush();
+  expect(store.barSuggestions().map(suggestion => suggestion.question)).toContain(question);
 });
 
 it('forgets prior questions when another account signs in', async () => {
@@ -65,9 +83,9 @@ it('forgets prior questions when another account signs in', async () => {
   status = { signed_in: true, account: { ...ACCOUNT, membership_id: 'another-member' }, client_version: 'test' };
   await store.refreshStatus();
   await flush();
-  expect(store.barSuggestions()).not.toContain(question);
+  expect(store.barSuggestions().map(suggestion => suggestion.question)).not.toContain(question);
   status = { signed_in: true, account: ACCOUNT, client_version: 'test' };
   await store.refreshStatus();
   await flush();
-  expect(store.barSuggestions()).not.toContain(question);
+  expect(store.barSuggestions().map(suggestion => suggestion.question)).not.toContain(question);
 });

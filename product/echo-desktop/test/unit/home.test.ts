@@ -66,7 +66,7 @@ const opened = (id: string, extra: Partial<OpenItemView> = {}): OpenItemView => 
 const notificationScan = (request: { operation?: string; scope?: string; read?: string; states?: readonly string[]; changed_since?: string }) => request.operation === 'items'
   && (request.scope === 'mine' || request.scope === 'involved') && request.read === 'rows' && (request.states?.join() === 'open' || request.changed_since !== undefined);
 /** Every request but the change check's, which goes on at the server's pace whatever Home does (desktop refresh v1). */
-const polls = () => rpc.mock.calls.filter(([method]) => method !== 'changes.read');
+const polls = () => rpc.mock.calls.filter(([method]) => method !== 'changes.read' && method !== 'projects.activity');
 const homeCalls = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && !(params.request.operation === 'home' && params.request.read === 'rows') && !notificationScan(params.request));
 /** Reads of what waits on you: each Home read starts with its rows. */
 const rowsReads = () => rpc.mock.calls.filter(([method, params]) => method === 'runs' && params.request.operation === 'home' && params.request.read === 'rows').length;
@@ -155,6 +155,9 @@ async function authority(method: string, params: { project_id?: string; request?
     // A project's tools line: it reads nothing.
     case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
     case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
+    // The Ask timeline has nothing in it, and this Authority predates project activity and the source check (ADR-0047).
+    case 'timeline.read': return ok({ turns: [] });
+    case 'projects.activity': case 'ask.check': return fail('not_supported');
     // The change check: nothing moves unless a test says.
     case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60,
       areas: { projects: `sha256:${'0'.repeat(64)}`, follow_ups: `sha256:${'1'.repeat(64)}`, reviews: `sha256:${'2'.repeat(64)}` } });

@@ -4,7 +4,7 @@
 // as plain functions, hooks that do so and the tree those calls show.
 import type { VNode } from 'preact';
 import { afterEach, beforeEach, vi } from 'vitest';
-import type { AnswerSource, AskStep, Expect, OpenItemsView, ProjectSummary } from '../../src/shared/protocol.js';
+import type { AnswerSource, AskStep, Expect, OpenItemsView, ProjectSummary, TimelineTurn } from '../../src/shared/protocol.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
 export const fail = (code: string, extra: Record<string, unknown> = {}) => ({ ok: false, failure: { code, retryable: false, ...extra } });
@@ -86,17 +86,36 @@ export function changesFor(lists: { active: ProjectSummary[]; archived: ProjectS
 }
 
 /**
+ * The host's Ask timeline files (ADR-0047), by account, as `timeline.put` keeps
+ * turns and `timeline.read` reads them: in place, or at the end. A test reads
+ * or seeds them, or deletes one as the host's own sign-out does.
+ */
+export const timelineFiles = new Map<string, TimelineTurn[]>();
+export const fileOf = (account: Expect) => `${account.authority} ${account.membership_id}`;
+
+/**
  * An rpc for the store: held replies first, then the test's own handlers,
  * then what every page needs to open quietly. Anything else is a test error.
+ * Its Authority predates the source check and project activity (`not_supported`).
  */
 export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () => { active: ProjectSummary[]; archived: ProjectSummary[] }) {
   Object.assign(moved, { projects: 0, follow_ups: 0, reviews: 0 });
+  timelineFiles.clear();
   return async (method: string, params: Record<string, unknown>) => {
     const pending = held.take(method);
     if (pending) return pending;
     const handler = handlers[method];
     if (handler) return handler(params);
     switch (method) {
+      case 'timeline.read': return ok({ turns: structuredClone(timelineFiles.get(fileOf(params.expect as Expect)) ?? []) });
+      case 'timeline.put': {
+        const turn = structuredClone(params.turn as TimelineTurn);
+        const kept = timelineFiles.get(fileOf(params.expect as Expect)) ?? [];
+        const at = kept.findIndex(other => other.id === turn.id);
+        timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? turn : other)) : [...kept, turn]);
+        return ok({});
+      }
+      case 'ask.check': case 'projects.activity': return fail('not_supported');
       case 'app.status': return ok({ signed_in: true, account: ACCOUNT });
       case 'app.setUnresolved': return ok(null);
       case 'account.tools': return ok({ tools: [] });

@@ -8,8 +8,9 @@ import type { PersonChangesAreaV1, PersonChangesV1 } from '@echo-brain/organizat
 // quiet read. Coming back to ECHO, a page opened and the machine waking each
 // run a check; between them the server sets the pace. A change someone
 // else made to a follow-up you are involved in, and being added to a project,
-// come as one system notification per check. The store keeps its loaders;
-// this module only says when they run.
+// come as one system notification per check. Each check also reads what
+// arrived in your projects, for the sidebar's dots (ADR-0047). The store keeps
+// its loaders; this module only says when they run.
 import type { Expect, Failure, Notice, NoticeTarget, OpenItemView, ProjectSummary } from '../shared/protocol.js';
 import { ACCOUNT_GONE, CHANGE_AREAS, NOTICE_ITEMS_MAX, NOTICE_TEXT_MAX, sameExpect } from '../shared/protocol.js';
 import { rpc } from './api.js';
@@ -64,6 +65,8 @@ export interface Surfaces {
   /** The follow-up whose page shows, if one does. */
   itemShown(): string | null;
   accountLost(failure: Failure): void;
+  /** What arrived in your projects (ADR-0047), read with every check: the sidebar's dots. Quiet, and never thrown. */
+  readActivity(): Promise<void>;
 }
 
 /** Why a check ran. */
@@ -202,8 +205,10 @@ function schedule(run: Loop): void {
 async function once(run: Loop): Promise<Checked> {
   run.began = Date.now();
   if (run.timer) { clearTimeout(run.timer); run.timer = null; }
-  if (run.older) { await scan(run); return { outcome: 'older', moved: [] }; }
-  const result = await ask<PersonChangesV1>(() => rpc('changes.read', { expect: run.account }));
+  // Each check also reads what arrived in your projects, side by side (ADR-0047).
+  const activity = surfaces.readActivity().catch(() => undefined);
+  if (run.older) { await Promise.all([scan(run), activity]); return { outcome: 'older', moved: [] }; }
+  const [result] = await Promise.all([ask<PersonChangesV1>(() => rpc('changes.read', { expect: run.account })), activity]);
   if (loop !== run) return { outcome: 'failed', moved: [] };
   if (!result.ok) {
     if (result.failure.code === 'not_supported') {

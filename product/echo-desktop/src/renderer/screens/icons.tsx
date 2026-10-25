@@ -90,6 +90,10 @@ export const Meeting = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2.5" stroke="currentColor" stroke-width="1.6" fill="none" /><path d="M4 10h16M9 3v4M15 3v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none" /></svg>
 );
 /** Tools: a plug, in the sidebar's outline. */
+/** Ask again: a turn of the arrow back on itself. */
+export const Refresh = () => (
+  <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M11.6 6.2A4.7 4.7 0 1 0 10.2 10M11.8 2.6v3.6H8.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
+);
 export const Plug = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3.5v4.5M15 3.5v4.5M6 8h12v3.5a6 6 0 0 1-12 0zM12 17.5v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
 );
