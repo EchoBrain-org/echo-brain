@@ -463,7 +463,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       command_id: 'approve-no-transcript', action: 'approve', routes: f.routes(review, sharedWithProject ? [projectB] : []), owners: [] });
     await runtime.processing.recoverV4Appends(new AbortController().signal);
     f.disconnect(); // Reading retained evidence must not require a provider connection.
-    expect(JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string).body.human_act_resolution_ref.share_transcript).toBe(false);
+    expect(JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string).body.human_act_resolution_ref).not.toHaveProperty('share_transcript');
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
     const scope = { kind: 'global' } as const;
     const notes = originals.deskSearch({ access_token: 'owner', scope, query: 'cohort', kinds: ['imported_meeting'] });

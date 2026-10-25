@@ -38,6 +38,7 @@ interface Options {
   readonly actions?: readonly { readonly id: string; readonly owner?: string | null }[];
   readonly rationales?: readonly { readonly id: string; readonly supports: readonly string[] }[];
   readonly snapshot_surface?: string;
+  /** Puts the retired transcript fields (ADR-0046) back in the reference and its consequence, digests included. */
   readonly share_transcript?: boolean;
   readonly route_signal_ids?: readonly string[];
 }
@@ -77,9 +78,9 @@ function validInput(options: Options = {}) {
   const approved = snapshot(options, approval_id);
   const approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(approved);
   const brief = approved.approved_payload.brief;
-  const transcript_source = { source_id: "source-1", revision_id: "revision-1", source_sha256: sha256Digest("source-1") };
-  const consequence = { schema_version: 2, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id, audience_project_ids: projects, association_project_ids: projects,
-    share_transcript: options.share_transcript ?? false, transcript_source };
+  const transcript = options.share_transcript === undefined ? {}
+    : { share_transcript: options.share_transcript, transcript_source: { source_id: "source-1", revision_id: "revision-1", source_sha256: sha256Digest("source-1") } };
+  const consequence = { schema_version: 2, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id, audience_project_ids: projects, association_project_ids: projects, ...transcript };
   const policy_consequence_sha256 = canonicalSha256(consequence as unknown as JsonValue);
   const surface = options.surface ?? "desktop";
   const command_id = options.command_id ?? (surface === "slack" ? "slack:k1" : "cmd-1");
@@ -91,7 +92,7 @@ function validInput(options: Options = {}) {
     route_signal_ids: options.route_signal_ids ?? [...brief.decisions, ...brief.actions].map(signal => signal.id),
     final_approver: { principal_id: "prn_1", membership_id: "mem_1" },
     selected_policy_id: policy_id, policy_contract_sha256, policy_consequence_sha256,
-    audience_project_ids: projects, association_project_ids: projects, share_transcript: consequence.share_transcript, transcript_source,
+    audience_project_ids: projects, association_project_ids: projects, ...transcript,
     action_owners: options.owners ?? [],
     audit_event_id: `audit:${command_id}`, audit_sequence: 7, audit_entry_sha256: sha256Digest("audit"),
     provider_action_kind: "echo-approval-decision-v2", provider_action_schema_version: 2,
@@ -155,9 +156,11 @@ describe("approval decision record input v2", () => {
     const input = validInput();
     refuses({ approval_decision_ref_v1: input.approval_decision_ref_v2, event: input.event });
   });
-  it("refuses a shared transcript, even when reference and event agree", () => {
-    refuses(validInput({ share_transcript: true }), "never shares the transcript");
-    refuses(validInput({ projects: [PROJECT_1], share_transcript: true }), "never shares the transcript");
+  it("refuses the retired transcript fields (ADR-0046), even when reference and event agree", () => {
+    for (const share_transcript of [true, false]) {
+      refuses(validInput({ share_transcript }), "unexpected shape");
+      refuses(validInput({ projects: [PROJECT_1], share_transcript }), "unexpected shape");
+    }
   });
   it("refuses Team even when reference and event agree", () => {
     refuses(validInput({ policy: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID }), "Only me or projects");
@@ -224,7 +227,6 @@ describe("approval decision record input v2", () => {
   it.each([
     ["audience", (ref: Mutable) => { ref.audience_project_ids = [PROJECT_2]; }],
     ["association", (ref: Mutable) => { ref.association_project_ids = [PROJECT_2]; }],
-    ["transcript_source", (ref: Mutable) => { ref.transcript_source = { source_id: "source-2", revision_id: "revision-1", source_sha256: sha256Digest("source-2") }; }],
     ["consequence digest", (ref: Mutable) => { ref.policy_consequence_sha256 = sha256Digest("other"); }],
     ["snapshot digest", (ref: Mutable) => { ref.approved_snapshot_sha256 = sha256Digest("other"); }],
     ["policy id", (ref: Mutable) => { ref.selected_policy_id = RESTRICTED_REVIEWER_PERSON_POLICY_ID; }],

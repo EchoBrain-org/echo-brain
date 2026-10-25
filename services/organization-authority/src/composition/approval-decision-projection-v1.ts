@@ -97,8 +97,8 @@ export interface BuiltApprovalDecisionRecordV1 {
 }
 
 /**
- * Pure and deterministic: no clock, no randomness, no I/O. It reads only the immutable decision row (including its frozen
- * transcript_source) and the decided-final frozen proposal, so every retry rebuilds identical bytes and each append returns
+ * Pure and deterministic: no clock, no randomness, no I/O. It reads only the immutable decision row (which must hold its
+ * frozen transcript_source) and the decided-final frozen proposal, so every retry rebuilds identical bytes and each append returns
  * `duplicate`. One record per destination group, in group order, each holding only its own items; every group is built and
  * checked (record codec and projector) before any is returned, so a publish never appends some groups of a decision it
  * cannot finish. The publisher and the test fixtures use it.
@@ -126,8 +126,7 @@ export function buildApprovalDecisionRecordsV1(source: ApprovalDecisionRecordSou
     const ids = [...group.project_ids];
     const policy_id = ids.length === 0 ? RESTRICTED_REVIEWER_PERSON_POLICY_ID : PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
     const policy_contract_sha256 = ids.length === 0 ? restrictedReviewerPersonPolicyContractSha256() : projectMembersReadablePersonPolicyContractSha256();
-    const consequence = { schema_version: 2 as const, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id,
-      audience_project_ids: ids, association_project_ids: ids, share_transcript: false as const, transcript_source: body.transcript_source };
+    const consequence = { schema_version: 2 as const, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id, audience_project_ids: ids, association_project_ids: ids };
     const policy_consequence_sha256 = canonicalSha256(consequence as unknown as JsonValue);
     const actions = new Set(subset.approved_payload.brief.actions.map(action => action.id));
     const ref = { schema_version: 2, kind: APPROVAL_DECISION_REF_KIND_V2, ...source.coordinates,
@@ -135,7 +134,7 @@ export function buildApprovalDecisionRecordsV1(source: ApprovalDecisionRecordSou
       candidate_sha256: source.candidate_sha256, proposal_snapshot_sha256, approved_snapshot_sha256, route_signal_ids: [...group.signal_ids],
       final_approver: { principal_id: body.actor.principal_id, membership_id: body.actor.membership_id },
       selected_policy_id: policy_id, policy_contract_sha256, policy_consequence_sha256, audience_project_ids: ids, association_project_ids: ids,
-      share_transcript: false, transcript_source: consequence.transcript_source, action_owners: witness.decision.owners.filter(owner => actions.has(owner.signal_id)),
+      action_owners: witness.decision.owners.filter(owner => actions.has(owner.signal_id)),
       audit_event_id: witness.audit.event_id, audit_sequence: witness.audit.sequence, audit_entry_sha256: canonicalSha256(witness.audit as unknown as JsonValue),
       provider_action_kind: APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2, provider_action_schema_version: 2,
       provider_action_sha256: witness.audit.action_sha256, authorization_proof_sha256: witness.audit.authorization_sha256, approved_at: body.decided_at };

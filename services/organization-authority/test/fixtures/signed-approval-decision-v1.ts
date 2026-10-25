@@ -70,8 +70,6 @@ export interface SignedApprovalInputV1 {
   readonly issued_at?: string;
   /** A rejection is a generic human act. */
   readonly action?: "approve" | "reject";
-  /** The meeting's retained source, frozen into an approval decision (default: one named after the approval). */
-  readonly transcript_source?: { readonly source_id: string; readonly revision_id: string; readonly source_sha256: Sha256Digest };
   /** Signal counts of the fixture brief (one decision by default). */
   readonly signals?: { readonly decisions?: number; readonly actions?: number; readonly rationales?: number };
   /** Reshapes the approved brief (title, time, participants, signals) before it is signed. */
@@ -129,7 +127,7 @@ export async function appendSignedApprovalV1(
         routes: [...brief.decisions, ...brief.actions].map((signal) => ({ signal_id: signal.id, project_ids: projects })), owners: input.action_owners ?? [] },
       surface, actor: { organization_id: COORDINATES.organization_id, ...final_approver },
       evidence: { kind: surface === "desktop" ? "person-session" : "slack-click", sha256: sha256Digest(`evidence-${approval_id}`) },
-      transcript_source: input.transcript_source ?? { source_id: `source-${approval_id}`, revision_id: "revision-1", source_sha256: sha256Digest(`source-${approval_id}`) },
+      transcript_source: { source_id: `source-${approval_id}`, revision_id: "revision-1", source_sha256: sha256Digest(`source-${approval_id}`) },
       decided_at: issued_at,
     };
     const [built] = buildApprovalDecisionRecordsV1({ coordinates: COORDINATES, decision: { sequence: audit_sequence, body },
@@ -139,8 +137,8 @@ export async function appendSignedApprovalV1(
     witness = built!.authorization_witness;
     appended_as = built!.approval_id;
   } else {
-    if (input.action_owners !== undefined || input.transcript_source !== undefined || input.surface !== undefined) {
-      throw new Error("owners, a meeting source and a surface need an approval-decision record");
+    if (input.action_owners !== undefined || input.surface !== undefined) {
+      throw new Error("owners and surface need an approval-decision record");
     }
     const policy = input.projects === "team" ? ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID : RESTRICTED_REVIEWER_PERSON_POLICY_ID;
     const fixture = humanAct(approval_id, action, policy, 1, input.signals);

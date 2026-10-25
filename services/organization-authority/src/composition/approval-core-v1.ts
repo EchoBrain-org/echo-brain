@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeSyncV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { canonicalJson, canonicalSha256, type JsonValue, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
-  APPROVAL_DECISION_SNAPSHOT_SURFACE_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1, APPROVAL_OWNERS_MAX_V1, type MeetingApprovalTranscriptSourceV2,
+  APPROVAL_DECISION_SNAPSHOT_SURFACE_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1, APPROVAL_OWNERS_MAX_V1,
 } from '@echo-brain/organization-protocol';
 import { validateApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
 import { validateProjectIdV1 } from '@echo-brain/organization-api';
@@ -83,15 +83,17 @@ export interface ApprovalProposalViewV1 {
   readonly snapshot_sha256: Sha256Digest;
   readonly snapshot_json: string;
 }
+/** The exact retained revision of a reviewed meeting's source. */
+export type ApprovalMeetingSourceV1 = NonNullable<ReturnType<typeof retainedMeetingSourceCoordinateV1>>;
 /** Exact canonical JSON stored in authority_approval_decisions_v1.body_json; Task 8's publisher reads it. */
 export interface ApprovalDecisionBodyV1 {
   readonly request: ApprovalDecisionRequestV1;
   readonly surface: ApprovalSurfaceV1;
   readonly actor: ApprovalActorV1;
   readonly evidence: ApprovalAuthorizationV1['evidence'];
-  /** The retained source coordinate of the reviewed meeting, frozen at decide so publishing reads nothing mutable;
-   *  non-null exactly for an approval. */
-  readonly transcript_source: MeetingApprovalTranscriptSourceV2 | null;
+  /** The retained source coordinate of the reviewed meeting, frozen at decide; non-null exactly for an approval. No
+   *  record carries it (ADR-0046): an impact run reads its source_id to keep the run off the meeting's own source. */
+  readonly transcript_source: ApprovalMeetingSourceV1 | null;
   /** Canonical UTC milliseconds. */
   readonly decided_at: string;
 }
@@ -400,7 +402,7 @@ export async function createApprovalCoreV1(database: Database.Database, context:
         const answered = answer(surface, req, existing(req.approval_id, req.command_id));
         if (answered !== undefined) return answered;
         if (row.state !== 'staged' || row.approved_snapshot_sha256 !== req.snapshot_sha256) return { kind: 'stale' };
-        let retained: MeetingApprovalTranscriptSourceV2 | undefined;
+        let retained: ApprovalMeetingSourceV1 | undefined;
         if (req.action === 'approve') {
           const { meeting, decisions } = extractionOf(row);
           // The routes name what the reviewer saw: every decision and action of the frozen snapshot, once, in its order.
