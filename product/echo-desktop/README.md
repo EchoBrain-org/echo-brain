@@ -27,7 +27,7 @@ the Authority audited. Cancel, a timeout or a refused answer removes them all.
 Every name, and every source of an answer, opens beside Ask, which keeps
 working: a meeting's decision, action or rationale opens its meeting with that
 item lit; a note, document or imported meeting its cited passages; a
-transcript its meeting; a follow-up its title, owner, status and latest check
+follow-up its title, owner, status and latest check
 (ADR-0040); one of your projects its name; a person in your organization their
 name only; one of your tools its name only (the answer says how you are
 connected, as ECHO read it for that Ask); a Jira ticket or Confluence page,
@@ -69,8 +69,9 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   a tick adds or removes that project on every kept item, each keeping its
   others), a line saying where Approve sends them, one count per destination
   ("2 to Thermostat redesign · 1 not kept"), **Approve** (off while nothing
-  is kept) and **Reject**, and who was in the meeting. Nothing on the
-  card shares the transcript. The card reads each item, quote and reason as
+  is kept) and **Reject**, and who was in the meeting. No transcript is ever
+  shared (ADR-0046), so the card has no transcript choice. The card reads each
+  item, quote and reason as
   its own field of the review the Authority sends, so the meeting's own words
   never read as another item.
 - **Checking**: a meeting you approved, while its records publish (one per

@@ -129,7 +129,7 @@ with no capability switch. Live qualification is separate.
 [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md) routes and
 print one JSON line. List rows carry a ref, title, time, who can read it and
 the caller's projects it is filed in, never text; open pages a note, document,
-approved meeting or shared transcript by that ref. `person ask --mine` narrows
+imported meeting or approved meeting by that ref. `person ask --mine` narrows
 Ask to what the caller added or approved, and every citation that carries a
 `ref` opens with `person open`. `--project` and `--mine` are exclusive, and
 the request is validated before any session or network use
