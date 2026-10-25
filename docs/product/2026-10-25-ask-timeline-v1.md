@@ -234,9 +234,11 @@ interface PersonAnswerPreviousV1 {
 }
 ```
 
-- `previous` is accepted on every route that takes request V3. It is the
-  asker's own context: the server neither verifies nor stores it, and it never
-  becomes evidence.
+- `previous` is accepted only on `/v7/person/ask`, plain and streamed, whose
+  answers are V8. The older routes that share request V3 reject a request
+  carrying it with `invalid_request`, and the person client never falls back to
+  them when it sends `previous`. It is the asker's own context: the server
+  neither verifies nor stores it, and it never becomes evidence.
 - **`follow_up`:** before research, one resolver call (role `answer`, span
   `ask_resolve`, through the existing model gate) reads the previous question,
   the numbered statements with their sources' labels, and the new question.
