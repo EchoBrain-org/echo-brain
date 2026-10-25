@@ -16,7 +16,7 @@ import { privateDirectory, readJson, writePrivateJson } from "../lib/private-fil
 const dataset = loadDataset();
 const meetings = meetingIndex(dataset.additions);
 const caseById = id => substitutePerson(dataset.cases.find(entry => entry.id === id), "Zhen Ye");
-const M6 = ["decision", "action", "rationale", "transcript"].map(item => ({ meeting: "M6", item }));
+const M6 = ["decision", "action", "rationale"].map(item => ({ meeting: "M6", item }));
 
 /** One read as a round records it (AgenticResearchActionV1). */
 const action = (tool, args, result = {}) => ({ tool, args, result: { items: [], opened: [], ...result } });

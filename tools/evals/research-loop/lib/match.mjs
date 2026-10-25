@@ -40,7 +40,7 @@ function followUpMatches(item, spec) {
 /**
  * True when the item is the referenced evidence. A page matches by id; a
  * section, when named, must appear in the released section text or title.
- * Meeting records match by kind and meeting title; transcripts by title.
+ * Meeting records match by kind and meeting title.
  * Workspace items (research tool contract v1) match by name (a project, a
  * person) or id (a tool, a tool container), and follow-ups by what they follow.
  */
@@ -54,10 +54,7 @@ export function itemMatches(item, ref, meetings) {
   if (ref.jira_project !== undefined) return item.kind === "ticket" && (ticketKey(item) ?? "").startsWith(`${ref.jira_project}-`);
   if (ref.page !== undefined) return item.kind === "page" && String(item.citation?.page_id ?? "") === ref.page;
   if (ref.meeting !== undefined) {
-    const title = meetingTitle(meetings, ref.meeting);
-    const label = lower(item.title);
-    if (ref.item === "transcript") return label.startsWith("transcript:") && label.includes(title);
-    return item.kind === ref.item && label.includes(title);
+    return item.kind === ref.item && lower(item.title).includes(meetingTitle(meetings, ref.meeting));
   }
   throw new Error(`unknown reference ${JSON.stringify(ref)}`);
 }

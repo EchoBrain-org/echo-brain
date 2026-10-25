@@ -328,7 +328,7 @@ function cardChecks(testCase, card, items, meetings) {
   const labelOf = index => card.citations[index]?.label ?? null;
   const rows = card.affected.map(row => ({ row, item: itemOf(row.citation_index) }));
   // Connected to the record: its own meeting and every item the key cites (affected items are part evidence too).
-  const connected = [...testCase.parts.flatMap(part => part.evidence), ...["decision", "action", "rationale", "transcript"].map(item => ({ meeting: testCase.record.meeting, item }))];
+  const connected = [...testCase.parts.flatMap(part => part.evidence), ...["decision", "action", "rationale"].map(item => ({ meeting: testCase.record.meeting, item }))];
   const invented = [
     ...card.decided.filter(entry => itemOf(entry.citation_index) === undefined).map(entry => ({ kind: "item", label: labelOf(entry.citation_index) })),
     ...rows.filter(({ item }) => item === undefined || !connected.some(ref => itemMatches(item, ref, meetings))).map(({ row }) => ({ kind: "item", label: labelOf(row.citation_index) })),

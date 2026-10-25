@@ -13,7 +13,8 @@ const BUDGETS = new Set(["live", "background"]);
 const OUTCOMES = new Set(["answerable", "partial", "not_found"]);
 /** `list` (ADR-0041): which items exist; its evidence names every member, and it scores only on naming them all. */
 const PART_TYPES = new Set(["fact", "date", "owner", "status", "conflict", "change", "list"]);
-const MEETING_ITEMS = new Set(["decision", "action", "rationale", "transcript"]);
+/** What a project member reads of a meeting: its approved records. No transcript is ever shared (ADR-0046). */
+const MEETING_ITEMS = new Set(["decision", "action", "rationale"]);
 const VERDICTS = new Set(["landed", "not_landed", "no_evidence"]);
 /** The kinds an Ask need declares (ADR-0041): a case may name those its plan should declare. */
 export const NEED_KINDS = Object.freeze(["which_items", "which_say", "content"]);
