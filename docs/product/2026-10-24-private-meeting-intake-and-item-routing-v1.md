@@ -185,14 +185,13 @@ one record:
   and is dropped otherwise.
 - Its record approval id is derived: `apr_` + the hex of
   `canonicalSha256({ kind: 'echo-approval-route-v1', approval_id, project_ids })`.
-  The record log's one-record-per-approval rule then holds per destination,
-  and the record log baseline does not change.
+  The record log's one-record-per-approval rule then holds per destination.
 - It carries a new reference, `echo-approval-decision-ref-v2`, which replaces
   v1 (fresh state). It names the record's own approval id and
   `proposal_approval_id`, `proposal_snapshot_sha256` (what the reviewer saw),
   `approved_snapshot_sha256` (this record's subset), `route_signal_ids`, the
-  group's audience as both audience and association, `share_transcript:
-  false`, and the confirmed owners of this group's actions only.
+  group's audience as both audience and association, and the confirmed owners
+  of this group's actions only. It has no transcript fields.
 - Groups are ordered by the first item of each in brief order.
 
 Every group is built and validated before the first append. At append, the
@@ -268,8 +267,9 @@ in the ECHO desktop app. The closed card names the destinations.
 
 ## Release
 
-Authority V15 is fresh state only. Staging needs the reset (replace-rehearsal,
-then initial-owner onboarding). The meetings API keeps `schema_version: 2`:
+Authority V15 and record log V5 are fresh state only. Staging needs the reset
+(replace-rehearsal, then initial-owner onboarding), which empties the record
+log too. The meetings API keeps `schema_version: 2`:
 its request and response shapes change, and the Authority, the person client
 and the desktop check exact shapes and negotiate no version, so a mismatched
 client fails as an invalid request with or without a new number. They ship
@@ -279,14 +279,14 @@ together.
 
 1. Unapproved imported notes are readable by their importer only. This
    reverses ADR-0030's project read of unapproved notes.
-2. The transcript is not shared from the approval card. Records carry
-   `share_transcript: false`; ADR-0017's grant reader stays for its own sake.
+2. The transcript is not shared from the approval card. (Superseded while
+   building, ruling 18: the whole transcript-sharing path is removed.)
 3. Items kept for the reviewer become an Only-me record, searchable as the
    reviewer's approved decisions.
 4. One record per destination group, not per item and not one record with
    per-item permissions.
-5. Record approval ids are derived per destination, so the record log keeps
-   its baseline.
+5. Record approval ids are derived per destination, so the record log's
+   one-record-per-approval rule holds without a schema change for routing.
 6. The rolling window is 7 days, the settle time 10 minutes, and the window
    cap 200 meetings.
 7. One impact check per record. A meeting with three destinations costs three
@@ -296,3 +296,57 @@ together.
 9. A record with one project researches in that project's scope, where a
    meeting shared with two projects researched globally before.
 10. The pasted-meeting payload stays within the existing 64 KiB route limit.
+
+## Rulings made while building
+
+The founder asked for the build end to end and for stale code to be removed;
+these were decided while building and reviewing it.
+
+11. A watch stamps when it changed. Its first pass records only what the
+    window held before that moment, so a meeting that ends between Save and
+    the first pass is still imported. Changing only the suggested project
+    keeps change detection; Save updates an active watch.
+12. A meeting Granola can never give (unusable output) is passed over at its
+    listed version, at most five per pull, and the watch moves on; an outage,
+    a rate limit or changed access still fails the pull. Titles, participant
+    lists and transcripts are trimmed to their caps instead of failing.
+13. A transcript Granola says is pending is left for a later pull, without
+    passing the meeting over. A meeting with no transcript (`no_transcript`,
+    `transcript_deleted`) imports with its notes and summary alone.
+    Transcripts are read in 80,000-character pages up to the 256 KiB kept.
+14. The 200-meeting window cap is checked at Save and has its own status line.
+15. A whole-day pasted meeting is its date at noon UTC; review rows carry
+    `all_day`, and the card and Home show the UTC date only. The importer
+    reads a pasted transcript with its notes, since they supplied it.
+    Cancelling a queued paste deletes its payload unless custody holds it.
+16. At append, each destination record is recomputed from the snapshot the
+    reviewer saw and must match. Slack's Approve carries a digest of the
+    destination its card showed; a different suggestion at click time is
+    stale and redraws the card.
+17. An impact run's research is fenced off from its meeting's other records
+    and from the meeting's own unapproved notes, not only from its follow-up
+    candidates. `review_open` also accepts a record's approval id, so a
+    follow-up's Approved link opens its meeting even outside the newest 100
+    reviews.
+18. Transcript sharing is removed, not kept dormant: the grant writer and
+    reader, Ask's reach over shared transcripts, the transcript open and list
+    kinds, the `person transcript` verb, the desktop's transcript source kind
+    and the record's transcript fields. Record log V5 drops the grant table.
+    The research-loop eval cites only what a project member can read.
+19. The meetings API keeps `schema_version: 2` (see Release).
+
+Known and left for the founder:
+
+- An impact check still researches with the reviewer's own access, so it can
+  read their other private context (other meetings' unapproved notes, other
+  Only-me records). Model-written unconfirmed notes are not filtered per
+  viewer, so that context could reach a record's audience. This predates
+  ADR-0046; narrowing what a check may read is a product decision.
+- Ask's prompts and source descriptions still mention shared transcripts.
+  They are pinned byte for byte by ADR-0041's test and two quality baselines,
+  so they change with a reviewed prompt change.
+- The HUMAN_ACT v1 record codec stays: the authority-core eval's capacity
+  corpus relies on its organization-readable records.
+- Two different destinations can read alike in the card's summary line
+  ("1 to THERM +1 · 1 to THERM +1"); the counts are right, and the labels stay
+  short by design.

@@ -16,6 +16,8 @@ supersedes: []
 superseded_by: []
 updates:
   - ADR-0017
+  - ADR-0021
+  - ADR-0024
   - ADR-0030
   - ADR-0031
 ---
@@ -67,13 +69,14 @@ Adopt option 3, as specified in
 - **One record per destination group.** Kept items are grouped by their exact
   project set. Each group is one signed `echo-approval-decision-ref-v2` record
   holding only its items and their supporting rationales, with a derived record
-  approval id, so the record log baseline does not change. Audience equals
+  approval id, so the record log keeps one record per approval id. Audience equals
   association per record (ADR-0017), unchanged. Every group is validated
   before the first append, and the receipts of all groups are written in one
   Authority transaction.
-- **No transcript sharing from the card.** Records carry `share_transcript:
-  false`. This replaces ADR-0017's explicit transcript release at approval;
-  its grant reader remains.
+- **No transcript sharing.** Nothing shares a transcript, so the whole
+  transcript-sharing path goes: ADR-0017's explicit release at approval and its
+  grant table, ADR-0021's Ask reach over shared transcripts, and ADR-0024's
+  transcript open kind. Records carry no transcript fields.
 - **Slack approves as suggested.** Per-item choice happens on the desktop.
 - **A pasted meeting is a source.** Every member can hand in a meeting's notes
   and optional transcript. It enters private custody and gets the same card.
@@ -84,9 +87,11 @@ record. A record with one project researches in that project's scope.
 
 ## Migration, rollback, and evidence
 
-- Fresh state only: Authority baseline V15. Existing V14 state is refused at
-  startup; staging is reset by the founder's replace-rehearsal procedure. The
-  record log is reset with it, so the v1 reference has no records to read.
+- Fresh state only: Authority baseline V15 and record log baseline V5, which
+  drops the transcript grant table. Existing state is refused at startup;
+  staging is reset by the founder's replace-rehearsal procedure, which empties
+  the record log too, so neither the v1 reference nor any grant has records to
+  read.
 - The meetings API's shapes change under `schema_version: 2`; the Authority,
   the person client and the desktop check exact shapes and ship together.
 - Rollback is the previous image on its own retained state.
