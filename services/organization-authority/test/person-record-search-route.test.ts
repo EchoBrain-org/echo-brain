@@ -9,8 +9,9 @@ import {
   sha256Digest,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
+import { approvalRecordIdV2 } from "@echo-brain/organization-protocol";
 import {
-  applyOrganizationRecordLogBaselineV4,
+  applyOrganizationRecordLogBaselineV5,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
@@ -276,7 +277,7 @@ function setup(pointer = true) {
       "2026-08-22T11:00:00.000Z",
     );
   const record = openOrganizationRecordDatabase(":memory:");
-  applyOrganizationRecordLogBaselineV4(record);
+  applyOrganizationRecordLogBaselineV5(record);
   if (pointer) pointAt(authority, { generation_id: digest("generation"), manifest_sha256: digest("manifest"), exact_head: HEAD });
   return { authority, record, state_directory: root() };
 }
@@ -1172,7 +1173,7 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
       const found = route.readableDecisions({ access_token: "emp_a", record_sha256s: [w.digest("r4"), w.digest("r1"), w.digest("r3"), w.digest("r6"), canonicalSha256("missing"), w.digest("r4"), "sha256:nope" as Sha256Digest] });
       // r6 is in a project emp_a left; a missing or malformed digest is the same miss.
       expect([...found.keys()].sort()).toEqual([w.digest("r1"), w.digest("r3"), w.digest("r4")].sort());
-      expect(found.get(w.digest("r4"))).toEqual({ approval_id: "apr_r4", record_sha256: w.digest("r4"), title: "Pricing review", approved_at: expect.any(String), project_ids: [SHARED], visibility: "project" });
+      expect(found.get(w.digest("r4"))).toEqual({ approval_id: approvalRecordIdV2("apr_r4", [SHARED]), record_sha256: w.digest("r4"), title: "Pricing review", approved_at: expect.any(String), project_ids: [SHARED], visibility: "project" });
       expect(found.get(w.digest("r1"))).toMatchObject({ approval_id: "apr_r1", title: "Weekly sync", project_ids: [], visibility: "team" });
       // r3 is also in a project emp_a never joined; that project's id never leaves the route, though its audience counts both.
       expect(found.get(w.digest("r3"))).toMatchObject({ project_ids: [SHARED], visibility: "projects" });

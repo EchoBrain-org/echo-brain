@@ -122,8 +122,8 @@ an interrupted attempt, or a paid result that was not saved), the cycle parks
 the meeting in `authority_live_source_held_extractions_v1` with an allowlisted
 failure stage (IDs and the stage only, never meeting text) and advances the
 cursor past it, so the source's later meetings continue. A parked import is
-consumed like a staged one: its "Save to" projects become suggestions, so
-current members of those projects can read its notes. Cancelling an import
+consumed like a staged one: its suggested projects become suggestions, which
+only pre-tick its destinations; nobody but the importer reads its notes. Cancelling an import
 deletes its held row. A run cut off by shutdown is not parked by that run; the
 next poll parks it as `cancelled`. The owner's meetings status reads "Meeting
 `<id>` is held after extraction attempt `<n>` failed at `<stage>`…", and the
@@ -152,7 +152,7 @@ import cancelled, while a meeting is being extracted does not discard the paid
 result. Staging and parking accept a queue changed only by other imports,
 and the cursor advance rebases onto the current queue at the intake boundary
 (the person intake's `rebase`), keeping those changes. A cancel of the
-meeting's own import, or a folder or baseline change, still refuses.
+meeting's own import, or a watch or baseline change, still refuses.
 
 **Writer gate.** The worker's single-file gate covers only recovery and
 approval publication: record-log appends and their after-record hooks. An
@@ -180,7 +180,7 @@ briefly make a fourth. Lanes outlive the cycle that started them, top up as
 each one settles and wake card presentation as they settle; drain waits for
 them. A source whose queued head is still in flight elsewhere (another
 process, or a crashed attempt's unexpired lease) waits 60 s before its next
-pull; a folder source with no queued import waits its 5-minute idle poll
+pull; a watching source with no queued import waits its 5-minute idle poll
 instead.
 
 **Breaker.** An extraction that ends held or retried at `rate_limited`,
@@ -226,7 +226,7 @@ The shared approval path keeps no presentation reference on a proposal. A
 surface keeps its own record of where it showed one (for Slack,
 `authority_approval_presentations_v1`). The approved-record path receives a
 policy projector that translates a canonical approval decision
-(`echo-approval-decision-ref-v1`) into the record facts appropriate for the
+(`echo-approval-decision-ref-v2`, one record per destination) into the record facts appropriate for the
 selected product policy; it does not inspect an approval-surface payload.
 
 Approval and any future delivery remain separate capabilities. They may share
@@ -346,16 +346,21 @@ Person request and cannot read lower
 layers directly.
 
 Current live composition reviews each meeting once, in the approval core. The
-desktop card and, for a reviewer who linked Slack, the Slack DM copy offer the
-same choices, and the first decision wins. The audience (**Seen by** on the
-desktop card) is **Only me**, binding `restricted-reviewer-person-v2`, or one to twenty of the
-reviewer's active projects, binding `project-members-readable-person-v1`;
-there is no Team choice. It starts on the meeting's suggested projects,
-ticked, when any is still one of the reviewer's active projects, and on
-**Only me** otherwise. A separate **Share the transcript** checkbox, off by
-default, also releases the exact retained transcript to that audience. Owners
-are recorded only when the approver confirms them. The selected policy is
-frozen with the approved record; rejection creates no record.
+desktop card and, for a reviewer who linked Slack, the Slack DM copy decide the
+same approval, and the first decision wins. Every decision and action has its
+own destination: **Only me**, binding `restricted-reviewer-person-v2`, one to
+twenty of the reviewer's active projects, binding
+`project-members-readable-person-v1`, or not kept; there is no Team choice,
+and the card names at most twenty projects in all. Each item starts on the
+meeting's suggested projects that are still among the reviewer's active
+projects, and on **Only me** when none is. The desktop card chooses per item;
+Slack approves every item as suggested. The publisher writes one signed record
+per destination group (the kept items with exactly the same projects), holding
+only that group's items and the reasons that support them, under an approval
+id derived from the proposal and the group's projects. No approval shares the
+transcript. Owners are recorded only when the approver confirms them, on the
+record that holds their action. Each record freezes its policy; rejection
+creates no record.
 
 ## Shared connector capabilities
 
@@ -399,8 +404,8 @@ Revalidation checks every released source, then all local grants synchronously.
 Older construction inputs translate into this same dispatch path, while older
 answer versions retain their strict citation contracts.
 
-Granola provides the person-bound MCP connection, the selected-folder meeting
-source and meeting normalization. Its organization acquisition and
+Granola provides the person-bound MCP connection, the watched-meetings source
+(the person's own meetings or one folder) and meeting normalization. Its organization acquisition and
 owner-admission code is retired;
 shared meeting custody and processing contracts remain distinct from personal
 live reads. Slack's organization app and approval DM copies likewise retain

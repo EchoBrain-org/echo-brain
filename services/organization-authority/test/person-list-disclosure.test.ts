@@ -9,17 +9,10 @@ import {
   type PersonListResponseV1,
   type PersonOpenMeetingV1,
   type PersonOpenResponseV1,
-  type PersonOpenTranscriptV1,
 } from "@echo-brain/organization-api";
 import type { StructuredGenerationInput, StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
-import {
-  organizationMemberReadablePersonPolicyContractSha256,
-  projectMembersReadablePersonPolicyContractSha256,
-  restrictedReviewerPersonPolicyContractSha256,
-  type OrganizationRecordDecisionBriefV1,
-} from "@echo-brain/organization-protocol";
-import { ApprovedMeetingTranscriptGrantReaderV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+import type { OrganizationRecordDecisionBriefV1 } from "@echo-brain/organization-protocol";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { COORDINATES } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
@@ -38,7 +31,7 @@ import { decodePersonListCursorV1, encodePersonListCursorV1, type PersonListPosi
 import { createPersonListRouteV1 } from "../src/composition/person-list-v1-route.js";
 import { personMeetingReleaseOptionsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
-import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, STANDARD_RECORDS, T, UNJOINED, admittedTranscriptV1, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
+import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, STANDARD_RECORDS, T, UNJOINED, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
 import { addMembership, authorization } from "./fixtures/project-context-sqlite.js";
 import { SIGNED_APPROVAL_APPROVER, SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
 
@@ -58,10 +51,10 @@ const RETURNED: Actor = { ...EMP_A, membership_id: "mem_emp_a_returned" };
 /** A second project the owner leads, so project cursors have two scopes to cross. */
 const OWNER_B = "prj_dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const NONEXISTENT = "prj_eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
-const TRANSCRIPT = Array.from({ length: 700 }, (_, index) => `word${index}`).join(" ");
 const QUOTE = "QUOTE-SECRET-EVIDENCE";
 const FORBIDDEN_KEYS = new Set(["count", "total", "position", "log_position", "record_position", "generation_id", "audit_sequence", "approval_id", "request_id", "envelope", "source_id", "revision_id", "source_sha256"]);
 const NOT_FOUND_BODY = '{"error":{"code":"not_found","message":"request failed"}}';
+const INVALID_BODY = '{"error":{"code":"invalid_request","message":"request failed"}}';
 const UNAUTHORIZED_BODY = '{"error":{"code":"unauthorized","message":"request failed"}}';
 
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -87,7 +80,7 @@ function counted<T extends object>(target: T, calls: string[]): T {
 }
 
 async function disclosureWorld() {
-  const w: MeetingWorldV1 = await meetingWorld({ r4_transcript: admittedTranscriptV1(TRANSCRIPT) });
+  const w: MeetingWorldV1 = await meetingWorld();
   cleanups.push(() => w.close());
   const org = COORDINATES.organization_id;
   // APPROVER_X authors across SHARED and UNJOINED; no reader holds UNJOINED.
@@ -98,7 +91,7 @@ async function disclosureWorld() {
   w.grant(OWNER_B, OWNER);
   addMembership(w.authority, RETURNED, "Ari Employee", "ari-returned@example.test");
   await w.approve({
-    name: "quoted", approval_id: "apr_quoted", projects: "team", final_approver: EMP_B, issued_at: T(8), share_transcript: false,
+    name: "quoted", approval_id: "apr_quoted", projects: "team", final_approver: EMP_B, issued_at: T(8),
     brief: (brief: OrganizationRecordDecisionBriefV1) => ({
       ...brief,
       decisions: brief.decisions.map((signal) => ({ ...signal, evidence: signal.evidence.map((span) => ({ ...span, quote: `${QUOTE} ${span.block_id}` })) })),
@@ -170,36 +163,16 @@ async function disclosureWorld() {
       ? authorization(RETURNED, { session_state_sha256: canonicalSha256(w.session.state), checked_at: new Date(returnedChecks += 1).toISOString() })
       : w.sessions.authenticateAccess({ access_token }),
   };
-  const grantReads = { count: 0, fault: false };
-  const grantReader = new ApprovedMeetingTranscriptGrantReaderV1(w.record);
-  const grants = new Proxy(grantReader, {
-    get(object, property, receiver) {
-      const value: unknown = Reflect.get(object, property, receiver);
-      if (typeof value !== "function") return value;
-      return (...args: unknown[]) => {
-        grantReads.count += 1;
-        if (grantReads.fault) throw new TypeError("grant reader fault");
-        return (value as (...input: unknown[]) => unknown).apply(object, args);
-      };
-    },
-  });
-  const originals = new SqlitePersonOriginalContextRetrievalV1(w.authority, sessions, org, {
-    authority_id: COORDINATES.authority_id, state_lineage_id: COORDINATES.state_lineage_id, grants,
-    is_expected_policy_contract: (grant) =>
-      (grant.policy_id === "organization-member-readable-person-v2" && grant.policy_contract_sha256 === organizationMemberReadablePersonPolicyContractSha256()) ||
-      (grant.policy_id === "restricted-reviewer-person-v2" && grant.policy_contract_sha256 === restrictedReviewerPersonPolicyContractSha256()) ||
-      (grant.policy_id === "project-members-readable-person-v1" && grant.policy_contract_sha256 === projectMembersReadablePersonPolicyContractSha256()),
-  });
+  const originals = new SqlitePersonOriginalContextRetrievalV1(w.authority, sessions, org);
   const storeCalls: string[] = [];
   const hooks: { afterCollect?: () => void } = {};
   const items: PersonOriginalItemsPortV1 = counted(new SqlitePersonOriginalItemsV1(w.authority, sessions, org), storeCalls);
-  // The runtime's own meeting options: approver, directory and transcript probe.
-  const records = w.route({ sessions, record_approver: undefined, memberships: undefined, ...personMeetingReleaseOptionsV1({ record_approver: SIGNED_APPROVAL_APPROVER, memberships: w.memberships, originals }) });
+  // The runtime's own meeting options: the approver and the directory that names it.
+  const records = w.route({ sessions, record_approver: undefined, memberships: undefined, ...personMeetingReleaseOptionsV1({ record_approver: SIGNED_APPROVAL_APPROVER, memberships: w.memberships }) });
   const meetings: PersonMeetingItemsPortV1 = counted({
     collectMeetings: (input) => { const collected = records.collectMeetings(input); hooks.afterCollect?.(); return collected; },
     commitMeetings: (input) => records.commitMeetings(input),
     openMeeting: (input) => records.openMeeting(input),
-    admitMeeting: (input) => records.admitMeeting(input),
     revalidateMeetingRelease: (input) => records.revalidateMeetingRelease(input),
   } satisfies PersonMeetingItemsPortV1, storeCalls);
   // N-16's Ask model lists both sources, opens everything they list, four reads a step, and cites all of it.
@@ -223,7 +196,7 @@ async function disclosureWorld() {
     descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: "https://issuer.example",
     person_list: createPersonListRouteV1({
       organization_id: org, sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(w.authority),
-      originals: items, meetings, transcripts: originals,
+      originals: items, meetings,
     }),
     person_answer_v3: createPersonAnswerV3Route({
       authority_id: COORDINATES.authority_id, organization_id: org, state_lineage_id: COORDINATES.state_lineage_id,
@@ -280,7 +253,7 @@ async function disclosureWorld() {
     .map((row) => JSON.parse(row.body_json) as Record<string, unknown>).filter((body) => body.kind === "echo-person-original-item-release-audit-v1");
   const meeting = (name: string) => `meeting:${w.digest(name)}`;
   const ask = async (token: Token, request: Readonly<Record<string, unknown>> = {}) => post(PERSON_ANSWER_PATH_V3, token, { schema_version: 3, question: "What did I add?", ...request });
-  return { w, refs, requestIds, list, open, walk, listed, refsOf, openAll, ask, admitNotes, bodies, pageAudits, originalAudits, meeting, storeCalls, hooks, grantReads };
+  return { w, refs, requestIds, list, open, walk, listed, refsOf, openAll, ask, admitNotes, bodies, pageAudits, originalAudits, meeting, storeCalls, hooks };
 }
 
 type World = Awaited<ReturnType<typeof disclosureWorld>>;
@@ -288,7 +261,6 @@ const guessed = {
   note: `note:ctx_${"0".repeat(64)}`,
   document: `document:doc_${"0".repeat(64)}`,
   meeting: `meeting:${sha256Digest("pending-approval-without-a-record")}`,
-  transcript: `transcript:${sha256Digest("pending-approval-without-a-record")}`,
 };
 
 /** Every scope a reader can list: global, mine and each joined project. */
@@ -312,7 +284,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       for (const ref of gone) expect(items.map((item) => item.ref)).not.toContain(ref);
       expect(items.find((item) => item.ref === f.refs.empATeamNote)).toMatchObject({ visibility: "team", projects: [] });
     }
-    for (const ref of [...gone, `transcript:${f.w.digest("r4")}`]) expect(await f.open("emp_a", ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
+    for (const ref of gone) expect(await f.open("emp_a", ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
     for (const project_id of [SHARED, PROJ_X]) expect(await f.list("emp_a", { project_id })).toEqual({ status: 401, text: UNAUTHORIZED_BODY });
     // Another member of SHARED still sees the association.
     expect((await f.listed("owner")).find((item) => item.ref === f.refs.empATeamNote)?.projects).toEqual([{ project_id: SHARED, name: PROJECT_NAMES[SHARED] }]);
@@ -329,7 +301,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       for (const ref of gone) expect({ scope, ref, listed: items.some((item) => item.ref === ref) }).toEqual({ scope, ref, listed: false });
     }
     expect((await f.listed("owner")).find((item) => item.ref === f.refs.empATeamNote)).toMatchObject({ visibility: "team", projects: [] });
-    for (const ref of [...gone, `transcript:${f.w.digest("r4")}`]) expect(await f.open("owner", ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
+    for (const ref of gone) expect(await f.open("owner", ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
     expect(await f.list("owner", { project_id: SHARED })).toEqual({ status: 401, text: UNAUTHORIZED_BODY });
     expect((await f.list("owner", { project_id: OWNER_B })).status).toBe(200);
     // A member who stayed still sees the owner's item there.
@@ -364,8 +336,8 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
         }
       }
       // N-8: a guess and an existing unreadable ref of each kind answer byte for byte alike.
-      const unreadable = { note: f.refs.ownerOnlyNote, document: f.refs.ownerOnlyDocument, meeting: f.meeting("r2"), transcript: `transcript:${f.w.digest("r4")}` };
-      for (const kind of ["note", "document", "meeting", "transcript"] as const) {
+      const unreadable = { note: f.refs.ownerOnlyNote, document: f.refs.ownerOnlyDocument, meeting: f.meeting("r2") };
+      for (const kind of ["note", "document", "meeting"] as const) {
         expect((await f.open("emp_b", unreadable[kind])).text).toBe((await f.open("emp_b", guessed[kind])).text);
       }
       expect(f.pageAudits().filter((audit) => audit.operation === "person_open")).toHaveLength(0);
@@ -379,11 +351,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
             if (page.next_cursor !== null) expect(JSON.stringify(decodePersonListCursorV1(page.next_cursor, { scope: page.scope, organization_id: COORDINATES.organization_id, membership_id: `mem_${token}` }))).not.toContain(UNJOINED);
           }
         }
-        for (const item of await f.listed(token)) {
-          const pages = await f.openAll(token, item.ref);
-          const first = pages[0] as PersonOpenMeetingV1;
-          if (first.transcript_ref !== undefined) await f.openAll(token, first.transcript_ref);
-        }
+        for (const item of await f.listed(token)) await f.openAll(token, item.ref);
       }
       for (const token of ["owner", "emp_a"] as const) {
         const multi = (await f.listed(token)).filter((item) => item.ref === f.refs.unjoinedNote || item.ref === f.refs.unjoinedDocument || item.ref === f.meeting("r3"));
@@ -400,7 +368,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
         for (const value of hiddenValues) expect(body).not.toContain(value);
         expect(keys(JSON.parse(body)).filter((key) => FORBIDDEN_KEYS.has(key) || key.startsWith("predecessor"))).toEqual([]);
         // The only digests that leave are the record refs themselves.
-        expect(body.replace(/"(?:meeting|transcript):sha256:[0-9a-f]{64}"/g, "\"\"")).not.toContain("sha256:");
+        expect(body.replace(/"meeting:sha256:[0-9a-f]{64}"/g, "\"\"")).not.toContain("sha256:");
       }
     });
 
@@ -476,29 +444,17 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     });
   });
 
-  it("N-13: a transcript opens only by a shared, readable record; every other transcript ref is the same 404", async () => {
+  it("N-13: no meeting offers a transcript, and a transcript ref, the retired open kind (ADR-0046), is an invalid request for every reader", async () => {
     const f = await disclosureWorld();
     const r4 = (await f.openAll("emp_a", f.meeting("r4")))[0] as PersonOpenMeetingV1;
-    expect(r4.transcript_ref).toBe(`transcript:${f.w.digest("r4")}`);
     // The final approver's current directory name, the only approver attribution.
     expect(r4.meeting?.approved_by).toBe("Ari Employee");
-    const pages = await f.openAll("emp_a", r4.transcript_ref!) as PersonOpenTranscriptV1[];
-    expect(pages.length).toBeGreaterThan(1);
-    expect(pages.map((page) => page.text).join("")).toBe(TRANSCRIPT);
-    for (const name of ["r1", "quoted"]) expect((await f.openAll("emp_a", f.meeting(name)))[0]).not.toHaveProperty("transcript_ref");
-    const misses = [
-      ["emp_a", `transcript:${f.w.digest("r1")}`], ["emp_b", `transcript:${f.w.digest("r4")}`], ["emp_b", guessed.transcript],
-      ["owner", `transcript:${f.w.digest("r2")}`], ["owner", guessed.transcript],
+    for (const name of ["r1", "r4", "quoted"]) expect((await f.openAll("emp_a", f.meeting(name)))[0]).not.toHaveProperty("transcript_ref");
+    const refused = [
+      ["emp_a", `transcript:${f.w.digest("r4")}`], ["emp_b", `transcript:${f.w.digest("r4")}`],
+      ["owner", `transcript:${f.w.digest("r2")}`], ["owner", `transcript:${sha256Digest("pending-approval-without-a-record")}`],
     ] as const;
-    for (const [token, ref] of misses) expect(await f.open(token, ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
-    // A faulting grant reader is reached only after Layer 1 admitted the record.
-    f.grantReads.fault = true;
-    f.grantReads.count = 0;
-    expect(await f.open("emp_b", `transcript:${f.w.digest("r4")}`)).toEqual({ status: 404, text: NOT_FOUND_BODY });
-    expect(await f.open("emp_b", guessed.transcript)).toEqual({ status: 404, text: NOT_FOUND_BODY });
-    expect(f.grantReads.count).toBe(0);
-    expect((await f.open("emp_a", `transcript:${f.w.digest("r4")}`)).status).toBe(500);
-    expect(f.grantReads.count).toBe(1);
+    for (const [token, ref] of refused) expect(await f.open(token, ref)).toEqual({ status: 400, text: INVALID_BODY });
   });
 
   it("N-14: a session revoked or a grant changed after collect releases nothing and audits nothing", async () => {
@@ -521,7 +477,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     }
   });
 
-  it("N-16, N-17: Ask with mine cites only what the reader added or approved, every citation opens, and no transcript is read", async () => {
+  it("N-16, N-17: Ask with mine cites only what the reader added or approved, and every citation opens", async () => {
     const f = await disclosureWorld();
     await f.admitNotes();
     const approvers = new Map<string, { readonly principal_id: string; readonly membership_id: string }>([
@@ -559,10 +515,8 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       }
       for (const ref of teammates) expect({ token, ref, cited: refs.includes(ref) }).toEqual({ token, ref, cited: false });
     }
-    // EMP_A may read r4's shared transcript globally; mine never reads it.
-    expect((await f.openAll("emp_a", `transcript:${f.w.digest("r4")}`)).length).toBeGreaterThan(0);
     for (const token of ["owner", "emp_a"] as const) {
-      expect(await f.ask(token, { mine: true, project_id: SHARED })).toEqual({ status: 400, text: '{"error":{"code":"invalid_request","message":"request failed"}}' });
+      expect(await f.ask(token, { mine: true, project_id: SHARED })).toEqual({ status: 400, text: INVALID_BODY });
     }
     for (const body of f.bodies) expect(body).not.toContain(QUOTE);
   });

@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
+import { publishedApprovalOfRecordV1 } from './published-approval-records-v1.js';
 
 /** Kept structural so this persistence adapter does not depend on approval composition. */
 export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
+/** `approval_id` is the record's own (the run's event_ref); `proposal_approval_id` the decided proposal its sibling records share. */
 export interface AfterApprovedRecordEventV1 {
-  readonly approval_id: string; readonly record_sha256: Sha256Digest; readonly reviewer: ApprovalActorV1; readonly decided_at: string;
+  readonly approval_id: string; readonly proposal_approval_id: string; readonly record_sha256: Sha256Digest; readonly reviewer: ApprovalActorV1; readonly decided_at: string;
 }
 export type AfterApprovedRecordHookV1 = (transaction: Database.Database, event: AfterApprovedRecordEventV1) => void;
 
@@ -142,6 +144,23 @@ export class SqliteTriggerRunsV1 {
   readUnfenced(runId: string): TriggerRunRowV1 | undefined {
     const found = this.database.prepare(`${selectRows} WHERE run_id=?`).get(runId) as StoredRowV1 | undefined;
     return found === undefined ? undefined : publicRow(found);
+  }
+
+  /**
+   * The other records published with one of the approver's records: the receipt records of the decision whose receipt names
+   * it (its siblings: the same meeting sent to other destinations), never that record itself. [] for any other digest.
+   */
+  siblingRecords(approver: ApprovalActorV1, recordSha256: Sha256Digest): readonly Sha256Digest[] {
+    const published = publishedApprovalOfRecordV1(this.database, approver, { record_sha256: recordSha256 });
+    return (published?.records ?? []).map(record => record.record_sha256 as Sha256Digest).filter(record => record !== recordSha256);
+  }
+
+  /**
+   * The source the meeting of one of the approver's records was read from: the custody that holds the meeting's unapproved
+   * notes and any transcript of it. undefined for any other digest.
+   */
+  meetingSource(approver: ApprovalActorV1, recordSha256: Sha256Digest): string | undefined {
+    return publishedApprovalOfRecordV1(this.database, approver, { record_sha256: recordSha256 })?.meeting_source ?? undefined;
   }
 
   /** The approved-record runs of these records. Not fenced, as above. */

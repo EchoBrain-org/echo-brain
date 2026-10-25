@@ -1,5 +1,5 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import type { PersonAnswerScopeV3, PersonOpenRefV1 } from "@echo-brain/organization-api";
+import type { PersonAnswerScopeV3, PersonItemRefV1 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { describe, expect, it } from "vitest";
 import { encodeProjectCursorV1, frameCursorV1 } from "../src/adapters/persistence/sqlite/project-context-cursor-v1.js";
@@ -23,13 +23,14 @@ const TIME = "2026-09-21T21:30:00.000Z";
 const NOTE = `ctx_${"a".repeat(64)}`;
 const DOCUMENT = `doc_${"b".repeat(64)}`;
 const MEETING = `sha256:${"c".repeat(64)}`;
+const IMPORTED = `cap_${"d".repeat(64)}`;
 const SCOPES: readonly PersonAnswerScopeV3[] = [
   { kind: "global" }, { kind: "mine" }, { kind: "project", project_id: PROJECT_A }, { kind: "project", project_id: PROJECT_B },
 ];
 const list = (scope: PersonAnswerScopeV3 = { kind: "global" }, changes: Partial<PersonListCursorBindingV1> = {}): PersonListCursorBindingV1 =>
   ({ scope, organization_id: ORGANIZATION, membership_id: MEMBERSHIP, ...changes });
 const open = (ref: string, changes: Partial<PersonOpenCursorBindingV1> = {}): PersonOpenCursorBindingV1 =>
-  ({ ref: ref as PersonOpenRefV1, organization_id: ORGANIZATION, membership_id: MEMBERSHIP, ...changes });
+  ({ ref: ref as PersonItemRefV1, organization_id: ORGANIZATION, membership_id: MEMBERSHIP, ...changes });
 const after = (added_at: string, id: string) => ({ state: "after", added_at, id }) as const;
 const WORST: PersonListPositionsV1 = {
   note: after(TIME, NOTE), document: after(TIME, DOCUMENT), meeting: after(TIME, MEETING),
@@ -82,8 +83,8 @@ describe("person list and open cursors", () => {
       [`document:${DOCUMENT}`, { kind: "document", from_ordinal: 65_535 }],
       [`meeting:${MEETING}`, { kind: "meeting", atom_order: 0, part: 1 }],
       [`meeting:${MEETING}`, { kind: "meeting", atom_order: 65_535, part: 65_535 }],
-      [`transcript:${MEETING}`, { kind: "transcript", offset: 1 }],
-      [`transcript:${MEETING}`, { kind: "transcript", offset: 10_000_000 }],
+      [`imported_meeting:${IMPORTED}`, { kind: "imported_meeting", offset: 1 }],
+      [`imported_meeting:${IMPORTED}`, { kind: "imported_meeting", offset: 10_000_000 }],
     ];
     for (const [ref, position] of cases) {
       const cursor = encodePersonOpenCursorV1(open(ref), position);
@@ -112,10 +113,10 @@ describe("person list and open cursors", () => {
     refused(() => decodePersonOpenCursorV1(openCursor, open(`document:doc_${"d".repeat(64)}`)));
     refused(() => decodePersonOpenCursorV1(openCursor, open(`document:${DOCUMENT}`, { membership_id: OTHER_MEMBERSHIP })));
     refused(() => decodePersonOpenCursorV1(openCursor, open(`document:${DOCUMENT}`, { organization_id: "org_other" })));
-    // A meeting's transcript is another ref than the meeting.
+    // One kind's position is never another kind's, and the retired transcript ref (ADR-0046) has none.
     const meetingCursor = encodePersonOpenCursorV1(open(`meeting:${MEETING}`), { kind: "meeting", atom_order: 1, part: 1 });
     refused(() => decodePersonOpenCursorV1(meetingCursor, open(`transcript:${MEETING}`)));
-    refused(() => encodePersonOpenCursorV1(open(`meeting:${MEETING}`), { kind: "transcript", offset: 1 }));
+    refused(() => encodePersonOpenCursorV1(open(`meeting:${MEETING}`), { kind: "imported_meeting", offset: 1 }));
   });
 
   it("refuses malformed list fields, a finished walk and a non-canonical time", () => {
@@ -145,11 +146,11 @@ describe("person list and open cursors", () => {
     refused(() => encodePersonOpenCursorV1(note, { kind: "document", from_ordinal: 1 }));
     const document = open(`document:${DOCUMENT}`);
     const meeting = open(`meeting:${MEETING}`);
-    const transcript = open(`transcript:${MEETING}`);
+    const imported = open(`imported_meeting:${IMPORTED}`);
     for (const [binding, fields] of [
       [document, ["0"]], [document, ["65536"]], [document, ["01"]], [document, ["1", "1"]], [document, [""]],
       [meeting, ["0", "0"]], [meeting, ["65536", "1"]], [meeting, ["0"]], [meeting, ["-1", "1"]],
-      [transcript, ["0"]], [transcript, ["10000001"]], [transcript, ["1e3"]],
+      [imported, ["0"]], [imported, ["10000001"]], [imported, ["1e3"]],
     ] as const) {
       refused(() => decodePersonOpenCursorV1(frameCursorV1(3, openDigest(binding), fields), binding));
     }

@@ -17,15 +17,13 @@ export interface SourceGroup {
 
 /**
  * The place a source opens, as a person reads it: a meeting (whichever of its
- * items is cited), a document or note (whichever passage), a transcript's
- * meeting, a follow-up, a project, a person, a tool, or one link: an item's in
- * its tool, or a Jira project's or Confluence space's. Sources of one place are
- * one source.
+ * items is cited), a document or note (whichever passage), a follow-up, a
+ * project, a person, a tool, or one link: an item's in its tool, or a Jira
+ * project's or Confluence space's. Sources of one place are one source.
  */
 export function groupKey(source: AnswerSource): string {
   if (source.kind === 'record') return `record:${source.record.record_sha256}`;
   if (source.kind === 'original') return `original:${source.ref.source_id}`;
-  if (source.kind === 'transcript') return `transcript:${source.meeting}`;
   // Any other source is one place already: the item itself.
   return sourceKey(source);
 }

@@ -613,6 +613,29 @@ describe("immutable readable-search generation v1", () => {
       }
     });
 
+    it("leaves excluded records and policies out after scoring and before the limit, so none takes a result's place", () => {
+      const directory = tempDirectory();
+      // The reviewer reads three launch atoms of record A, record R (theirs alone) and record B; A's outrank B's.
+      const many = [0, 1, 2].map((order) => inRecord("a", 1, order, `launch launch launch ${order}`));
+      const active = warmed(directory, [...many, R0, B0]);
+      const texts = (items: readonly { readonly text: string }[]) => items.map((item) => item.text);
+      const search = (exclude?: { readonly record_sha256s: readonly `sha256:${string}`[]; readonly policy_ids: readonly (typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)[] }) =>
+        searchReadableSearchGenerationV1({ ...active, reader: REVIEWER, query: "launch", limit: 2, ...(exclude === undefined ? {} : { exclude }) });
+      expect(texts(search().items)).toHaveLength(2);
+      expect(texts(search().items).every((text) => text.startsWith("launch launch"))).toBe(true);
+      // Record A left out: the next permitted atoms fill the page, and the page is complete.
+      const withoutA = search({ record_sha256s: [many[0]!.record_sha256], policy_ids: [] });
+      expect(texts(withoutA.items).sort()).toEqual(["beta launch", "reviewer launch"]);
+      expect(withoutA.truncated).toBe(false);
+      // The reviewer's own restricted record left out by its policy, as for a shared record's research.
+      expect(texts(search({ record_sha256s: [many[0]!.record_sha256], policy_ids: [RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2] }).items)).toEqual(["beta launch"]);
+      // The inventory leaves them out before its limit too.
+      expect(texts(listReadableSearchGenerationV1({ ...active, reader: REVIEWER, limit: 1, exclude: { record_sha256s: [many[0]!.record_sha256], policy_ids: [RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2] } }).items)).toEqual(["beta launch"]);
+      // An exclusion never admits: unknown policies and unsorted records are refused.
+      expect(() => search({ record_sha256s: [B0.record_sha256, many[0]!.record_sha256].sort().reverse(), policy_ids: [] })).toThrow("record narrowing");
+      expect(() => search({ record_sha256s: [], policy_ids: ["team" as never] })).toThrow("known policies");
+    });
+
     it("recomputes BM25 statistics over the narrowed records, as a project scope does", () => {
       const directory = tempDirectory();
       // Across the generation "alpha" is common and "beta" rare, so beta ranks first.

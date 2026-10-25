@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { personSweepResultStatusV1, type PersonRunsResultsV1, type PersonSweepVerdictV1 } from '@echo-brain/organization-api';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactItemKeyV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
@@ -88,9 +89,10 @@ async function sweepFixture(options: OpenItemsFixtureOptionsV1 & { readonly owne
     /** Ari approves another meeting into project A; its impact check waits to start. */
     async approveAnother() {
       const other = await f.otherProposal();
-      f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-other', project_ids: [f.projectA] }), () => f.session);
+      f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: 'approve-other', routes: f.routes([f.projectA], other.approvalId) }), () => f.session);
       await f.publisher([enqueueApprovedRecordRunV1(f.runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
-      return f.runs.list(f.person, 10).find(run => run.trigger === 'approved_record' && run.event_ref === other.approvalId)!.run_id;
+      // The run's event is the record's own approval id: the one project A destination of that meeting.
+      return f.runs.list(f.person, 10).find(run => run.trigger === 'approved_record' && run.event_ref === approvalRecordIdV2(other.approvalId, [f.projectA]))!.run_id;
     },
   };
 }

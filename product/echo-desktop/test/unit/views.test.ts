@@ -337,11 +337,11 @@ describe('an item opened by its ref', () => {
   const meeting = { started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, participants: ['Ari', 'Maya Chen'],
     participants_more: false, approved_by: 'Ari' };
   const meetingPage = (atoms: unknown[], fields: Record<string, unknown> = {}) => opened(`meeting:${RECORD}`, {
-    item: row(`meeting:${RECORD}`), meeting, atoms, transcript_ref: `transcript:${RECORD}`, ...fields,
+    item: row(`meeting:${RECORD}`), meeting, atoms, ...fields,
   });
   const ref = { kind: 'meeting', id: RECORD } as const;
 
-  it('a meeting\'s first page describes it; its transcript\'s ref and every id stay behind', () => {
+  it('a meeting\'s first page describes it; every id stays behind', () => {
     const view = openView(meetingPage([
       { kind: 'decision', text: 'Annual plans first.', status: 'decided' }, { kind: 'decision', text: 'Keep the pilot.', status: 'proposed' },
       { kind: 'action', text: 'Send the sheet.', owner: 'Maya Chen', due_at: 'Friday' }, { kind: 'rationale', text: 'It funds the launch.' },
@@ -353,7 +353,7 @@ describe('an item opened by its ref', () => {
       actions: { more: false, items: [{ text: 'Send the sheet.', owner: 'Maya Chen', excerpts: [] }] },
       rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [] }] },
     } });
-    expect(JSON.stringify(view)).not.toMatch(/transcript|sha256|prj_/);
+    expect(JSON.stringify(view)).not.toMatch(/sha256|prj_/);
     const team = openView(meetingPage([], { item: row(`meeting:${RECORD}`, { visibility: 'team' }) }), ref, true);
     expect(team.kind === 'meeting' && team.record.visibility).toBe('organization');
     const project = openView(meetingPage([], { item: row(`meeting:${RECORD}`, { visibility: 'project' }) }), ref, true);
@@ -362,7 +362,7 @@ describe('an item opened by its ref', () => {
 
   it('only the first page describes the meeting', () => {
     const atom = { kind: 'decision', text: 'One.' };
-    const later = { meeting: undefined, transcript_ref: undefined };
+    const later = { meeting: undefined };
     expect(() => openView(meetingPage([atom]), ref, false)).toThrow(ViewError);
     expect(() => openView(meetingPage([atom], later), ref, true)).toThrow(ViewError);
     expect(openView(meetingPage([atom], later), ref, false).kind).toBe('meeting');
@@ -377,7 +377,7 @@ describe('an item opened by its ref', () => {
     ], { next_cursor: 'AQ' }), ref, true);
     const next = openView(meetingPage([
       { kind: 'action', text: three, part: { index: 3, count: 3 } }, { kind: 'rationale', text: 'It funds the launch.' },
-    ], { meeting: undefined, transcript_ref: undefined }), ref, false);
+    ], { meeting: undefined }), ref, false);
     if (first.kind !== 'meeting' || next.kind !== 'meeting') throw new Error('not a meeting');
     expect(first.record.actions.items).toEqual([{ text: `${one}${two}`, owner: 'Maya Chen', excerpts: [], parts: { from: 1, to: 2, count: 3 } }]);
     expect(first.next_cursor).toBe('AQ');
@@ -387,7 +387,7 @@ describe('an item opened by its ref', () => {
     expect(joined.rationales.items).toEqual([{ text: 'It funds the launch.', excerpts: [] }]);
     expect(joined.approved_by).toBe('Ari');
     // Parts that do not follow on are never joined.
-    const skipped = openView(meetingPage([{ kind: 'action', text: 'late', part: { index: 3, count: 4 } }], { meeting: undefined, transcript_ref: undefined }),
+    const skipped = openView(meetingPage([{ kind: 'action', text: 'late', part: { index: 3, count: 4 } }], { meeting: undefined }),
       ref, false);
     if (skipped.kind !== 'meeting') throw new Error('not a meeting');
     expect(joinRecord(first.record, skipped.record)).toBeNull();
@@ -397,7 +397,7 @@ describe('an item opened by its ref', () => {
   it('a part goes on the part before it: never first on a first page, never after another item', () => {
     const later = { kind: 'action', text: 'rest', part: { index: 2, count: 2 } };
     expect(() => openView(meetingPage([later]), ref, true)).toThrow(ViewError);
-    expect(() => openView(meetingPage([{ kind: 'decision', text: 'One.' }, later], { meeting: undefined, transcript_ref: undefined }), ref, false))
+    expect(() => openView(meetingPage([{ kind: 'decision', text: 'One.' }, later], { meeting: undefined }), ref, false))
       .toThrow(ViewError);
     expect(() => openView(meetingPage([
       { kind: 'action', text: 'start', part: { index: 1, count: 2 } }, { kind: 'decision', text: 'Between.' },
@@ -649,7 +649,7 @@ const v6 = (citations: readonly Record<string, unknown>[]) => ({ schema_version:
 describe('an Ask citation opens the exact item it cites', () => {
   const sources = (citations: readonly Record<string, unknown>[]) => answerView({ ok: true, result: v6(citations) }, { kind: 'global' }).sources;
 
-  it('keeps what each citation opens: its record item, its note, document or imported meeting, and a transcript as its meeting', () => {
+  it('keeps what each citation opens: its record item, and its note, document or imported meeting', () => {
     const note = `ctx_${'8'.repeat(64)}`;
     const imported = `cap_${'9'.repeat(64)}`;
     const document = `doc_${'a'.repeat(64)}`;
@@ -659,7 +659,6 @@ describe('an Ask citation opens the exact item it cites', () => {
       { citation: passage('b'), kind: 'imported_meeting', label: 'Kickoff', visibility: 'only_me', ref: `imported_meeting:${imported}` },
       { citation: { ...passage('c'), document_id: document }, kind: 'document_passage', label: 'Plan.md', visibility: 'team', ref: `document:${document}` },
       { citation: { ...passage('d'), document_id: document }, kind: 'document_passage', label: 'Plan.md', visibility: 'team' },
-      { citation: passage('e'), kind: 'note', label: 'Transcript', visibility: 'team', ref: `transcript:${sha('2')}` },
       { citation: passage('f'), kind: 'note', label: 'Older note', visibility: 'team' },
     ])).toEqual([
       namedSource,
@@ -667,7 +666,6 @@ describe('an Ask citation opens the exact item it cites', () => {
       { kind: 'original', label: 'Kickoff', ref: coordinates('b'), item: { kind: 'imported_meeting', id: imported }, private: true },
       { kind: 'original', label: 'Plan.md', ref: { ...coordinates('c'), document_id: document }, item: { kind: 'document', id: document } },
       { kind: 'original', label: 'Plan.md', ref: { ...coordinates('d'), document_id: document }, item: { kind: 'document', id: document } },
-      { kind: 'transcript', label: 'Transcript', ref: coordinates('e'), meeting: sha('2') },
       { kind: 'original', label: 'Older note', ref: coordinates('f') },
     ]);
   });

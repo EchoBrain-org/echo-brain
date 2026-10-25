@@ -5,7 +5,7 @@ import type { SlackBotTokenSourceV1 } from "../organization-control-plane/applic
 import type { StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import type { PrivateSlackApprovalBlockKitCardInputV1 } from "./private-slack-approval-block-kit-card-v1.js";
-import { buildClosedApprovalCardV4, buildSlackApprovalCardV4, type SlackApprovalCardV4, type SlackApprovalOwnerProposalV4 } from "./slack-approval-card-v4.js";
+import { buildClosedApprovalCardV4, buildSlackApprovalCardV4, slackApprovalDestinationSha256V4, slackApprovalDestinationV4, type SlackApprovalCardV4, type SlackApprovalOwnerProposalV4 } from "./slack-approval-card-v4.js";
 
 export interface SlackApprovalTargetV1 {
   readonly connection_id: string;
@@ -73,7 +73,10 @@ export interface ApprovalProposalViewV1 {
   readonly title: string;
   readonly status: "pending" | "publishing" | "approved" | "rejected" | "superseded";
   readonly decided_on: "desktop" | "slack" | null;
+  /** Undecided: the frozen suggestion the reviewer can read now. */
   readonly project_ids: readonly string[];
+  /** The decision's routes, decisions then actions (null = not kept, [] = Only me); null while undecided. */
+  readonly routes: readonly { readonly signal_id: string; readonly project_ids: readonly string[] | null }[] | null;
   readonly snapshot_sha256: string;
   readonly snapshot_json: string;
 }
@@ -233,13 +236,30 @@ export function createSlackApprovalPresenterV1(options: {
     unrepresentable.run(asIso(now()), row.approval_id);
     annotateCoreRuntimeV1({ approval_surface: "slack", result: "unrepresentable" });
   }, { correlation: { approval_id: coreRuntimeIdentityV1("approval", row.approval_id) } });
+  /** Project names as the reviewer can read them; a project they cannot read now is counted, never named. */
+  const named = (reviewer: ApprovalActorV1, projectIds: readonly string[]): readonly string[] => {
+    const names = new Map(options.projects(reviewer).map((project) => [project.project_id, project.name]));
+    const known = projectIds.flatMap((id) => { const name = names.get(id); return name === undefined ? [] : [name]; });
+    const unknown = projectIds.length - known.length;
+    return unknown === 0 ? known : [...known, unknown === 1 ? "1 other project" : `${unknown} other projects`];
+  };
   const card = (proposal: ApprovalProposalViewV1): SlackApprovalCardV4 => buildSlackApprovalCardV4({
     approval_id: proposal.approval_id,
     snapshot_sha256: proposal.snapshot_sha256,
     review: reviewFromSnapshot(proposal),
-    projects: options.projects(proposal.reviewer),
-    suggested_project_ids: proposal.project_ids,
+    destination: named(proposal.reviewer, proposal.project_ids),
+    destination_sha256: slackApprovalDestinationSha256V4(proposal.project_ids),
     owners: options.core.ownerProposals(proposal.approval_id),
+  });
+  /** Where an approval sent its items: one entry per destination group, in the order of each group's first item. */
+  const destinations = (proposal: ApprovalProposalViewV1): readonly string[] => {
+    const groups = new Map<string, readonly string[]>();
+    for (const route of proposal.routes ?? []) if (route.project_ids !== null) groups.set(JSON.stringify(route.project_ids), route.project_ids);
+    return [...groups.values()].map((projectIds) => projectIds.length === 0 ? slackApprovalDestinationV4([]) : named(proposal.reviewer, projectIds).join(" + "));
+  };
+  const closed = (proposal: ApprovalProposalViewV1 | undefined, shows: Exclude<PresentationRow["shows"], "open">): SlackApprovalCardV4 => buildClosedApprovalCardV4({
+    title: proposal?.title ?? "Meeting", outcome: shows, surface: proposal?.decided_on ?? "desktop",
+    ...(shows === "approved" && proposal !== undefined ? { destinations: destinations(proposal) } : {}),
   });
   const outcome = (proposal: ApprovalProposalViewV1): PresentationRow["shows"] => {
     if (proposal.status === "superseded") return "superseded";
@@ -344,7 +364,7 @@ export function createSlackApprovalPresenterV1(options: {
           const message = database.prepare("SELECT dm_channel_id,message_ts FROM authority_approval_presentations_v1 WHERE approval_id=? AND surface='slack'").get(row.approval_id) as { dm_channel_id: string; message_ts: string };
           try {
             // Built inside the try: a card that cannot be built backs this row off instead of stalling the others.
-            const publishedCard = shows === "open" ? card(liveProposal!) : buildClosedApprovalCardV4({ title: liveProposal?.title ?? "Meeting", outcome: shows, surface: liveProposal?.decided_on ?? "desktop", audience_label: liveProposal?.project_ids.length ? "Projects" : "Only me" });
+            const publishedCard = shows === "open" ? card(liveProposal!) : closed(liveProposal, shows);
             const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: message.dm_channel_id, provider_message_ts: message.message_ts, card: publishedCard }, signal));
             if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row, false, published.kind === "uncertain" ? published.retry_after_ms : undefined); uncertain = true; continue; }
             persistCard.run(shows, canonicalSha256(publishedCard as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;
@@ -356,9 +376,11 @@ export function createSlackApprovalPresenterV1(options: {
         }
         if (row.delivery !== "posted" || proposal === undefined || row.dm_channel_id === null || row.message_ts === null) continue;
         const shows = outcome(proposal);
+        // An open card is drawn once. A click that found its suggestion changed clears card_sha256, so it is redrawn here with
+        // where Approve sends the items now (and buttons bound to that).
         if (shows === row.shows && row.card_sha256 !== null) continue;
         try {
-          const redraw = shows === "open" ? card(proposal) : buildClosedApprovalCardV4({ title: proposal.title, outcome: shows, surface: proposal.decided_on ?? "desktop", audience_label: proposal.project_ids.length ? "Projects" : "Only me" });
+          const redraw = shows === "open" ? card(proposal) : closed(proposal, shows);
           const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id!, provider_message_ts: row.message_ts!, card: redraw }, signal));
           if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row, false, published.kind === "uncertain" ? published.retry_after_ms : undefined); uncertain = true; continue; }
           persistCard.run(shows, canonicalSha256(redraw as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;

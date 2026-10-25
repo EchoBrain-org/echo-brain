@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePersonMeetingResultV2,
-  type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSyntheticMeetingV1 } from '@echo-brain/organization-api';
+  type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSubmittedMeetingV2 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, coreRuntimeDiagnosticErrorKindV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeSyncV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, observeCoreRuntimeRootV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
@@ -20,10 +20,11 @@ import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing
 import { openExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
 import { OrganizationRecordAppenderV4, type RecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { FileOrganizationAuthoritySigner } from '../adapters/security/file-organization-authority-signer.js';
-import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
+import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingWatchV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
-import { approvalProposalSummaryV1, approvalProposalTextV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
+import { publishedApprovalOfRecordV1 } from '../adapters/persistence/sqlite/published-approval-records-v1.js';
+import { approvalProposalSummaryV1, approvalReviewV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationAuthorityProcessingCycleV1 } from './organization-authority-service-lifecycle.js';
@@ -34,17 +35,33 @@ export interface PersonMeetingProviderV1 {
   readonly id: string; readonly normalizer_version: string;
   /** The admission label for this provider's custodian; defaults to a person's own OAuth account. */
   readonly custodian_assurance?: string;
+  /** `members` takes submitted meetings from every active member (the hand-in tool); otherwise only owners submit (the staging synthetic source). */
+  readonly submitters?: 'members';
   readonly connection_http: ProviderHttpApplicationV1;
   readonly cursor: PersonalMeetingCheckpointCodecV1 & { readonly policy: AdmittedMeetingSourceCursorPolicyV1 };
+  /**
+   * Optional: forgets what a cancelled import kept (a handed-in payload no admitted source revision holds). It runs
+   * inside the Authority transaction that drops the import from its source's queue, and needs no provider session.
+   */
+  forget?(setting: MeetingIntakeSettingV1, meetingId: string): void;
   tool(token: string): OrganizationPersonToolV4;
   open(person: MeetingIntakePersonV1, current: () => void, signal?: AbortSignal): Promise<{
-    readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown; readonly email: string; readonly workspace: string;
+    readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown; readonly email: string | null; readonly workspace: string | null;
     current(): void;
     folders(): Promise<PersonMeetingResultsV2['home']['folders']>;
-    browse(folder: string): Promise<PersonMeetingResultsV2['browse']>;
+    /** The newest meetings, at most 50: the person's own captures (`null`), or one folder's. */
+    browse(folder: string | null): Promise<PersonMeetingResultsV2['browse']>;
+    /**
+     * Optional: checks a watch at Save with the listing its worker uses, refusing a folder the person cannot read and a
+     * window over the watch cap (`quota_exceeded`). A provider without it has nothing to watch.
+     */
+    watchable?(watch: PersonalMeetingWatchV1): Promise<void>;
     preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
-    /** Optional staging capability. Persists an immutable payload before its normal import is queued. */
-    submit?(meeting: PersonSyntheticMeetingV1): void;
+    /**
+     * Optional: keeps a submitted meeting for the person's source and returns the id its import is queued under. It runs
+     * inside the Authority transaction that queues that import, so a payload kept in the Authority commits with it.
+     */
+    submit?(meeting: PersonSubmittedMeetingV2, setting: MeetingIntakeSettingV1): string;
   }>;
   source(setting: MeetingIntakeSettingV1, current: () => void): MeetingSourceAdapter & { requireCurrent(): void };
 }
@@ -92,6 +109,8 @@ export async function queuePersonMeetingsV1(input: {
 const MEETING_LANES = 3;
 /** Extraction stages that mean the provider is refusing or struggling; one trips the runtime-wide breaker. */
 const TRANSIENT_STAGES = new Set<string>(['rate_limited', 'temporarily_unavailable', 'timeout']);
+/** A watch whose window holds more meetings than it reads (spec §1.2): checking the connection would not help. */
+const WINDOW_FULL = 'More than 200 meetings in 7 days. Choose one folder.';
 /** Meeting lanes over shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
@@ -134,7 +153,9 @@ export function createPersonMeetingRuntimeV1(options: {
     suggestions: (sourceKey, externalId) => intake.proposalSuggestions(sourceKey, externalId),
     projects: (actor, ids) => { for (const id of ids) intake.currentPerson(actor, id); },
   }).catch((error: unknown) => { core = undefined; throw error; });
-  function settings(person: MeetingIntakePersonV1) { return canonicalSha256(intake.list(person).map(({ source_key, folder_id, folder_project_id, settings_revision }) => ({ source_key, folder_id, folder_project_id, settings_revision }))); }
+  function settings(person: MeetingIntakePersonV1) {
+    return canonicalSha256(intake.list(person).map(({ source_key, watch, folder_id, suggested_project_id, settings_revision }) => ({ source_key, watch, folder_id, suggested_project_id, settings_revision })));
+  }
   async function lane(setting: MeetingIntakeSettingV1, fromCustody = false) {
     const { provider } = ownerOf(setting.source_adapter_id);
     // Pin the person's exact active membership; a source belongs to the person, not to a project.
@@ -196,7 +217,7 @@ export function createPersonMeetingRuntimeV1(options: {
     if (retry) retryAfter.set(setting.source_key, Date.now() + 60_000);
     try {
       intake.requireCurrent(setting);
-      if (!retry && setting.folder_id === null && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
+      if (!retry && setting.watch === 'off' && ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key).manual.length === 0) {
         // Only a failed freeze is left: retry it from the stored extraction, without the provider.
         const progressed = await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
         // A full page or a freeze looks again at once (a frozen source drops out); a pass that froze nothing waits.
@@ -238,7 +259,7 @@ export function createPersonMeetingRuntimeV1(options: {
         source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
           source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
           if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
-          // Same transaction as the admission: a folder delivery's project becomes the meeting's suggestion.
+          // Same transaction as the admission: a watch delivery's suggested project becomes the meeting's suggestion.
           sourceIntake.recordAdmission(setting, delivered.item.external_id);
         }),
           scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
@@ -255,12 +276,15 @@ export function createPersonMeetingRuntimeV1(options: {
     } catch (error) {
       signal.throwIfAborted();
       const remaining = ownerOf(setting.source_adapter_id).intake.checkpoint(setting.source_key);
-      // Nothing left to retry: the import queue is empty, every proposal of this source is frozen, and no granted retry is due.
-      if (remaining.folder === null && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)
+      const watching = intake.list().some(s => s.source_key === setting.source_key && s.watch !== 'off');
+      // Nothing left to retry: no watch, the import queue is empty, every proposal of this source is frozen, and no granted retry is due.
+      if (!watching && remaining.manual.length === 0 && !workflowState.listPendingApprovalSourceKeys().includes(setting.source_key)
         && !retryReady(setting.source_key)) { observed.delete(setting.source_key); return; }
       // Fixed, content-free status; one broken grant cannot starve another person's work. A failed retry is already
       // deferred, so the source's intake goes next.
-      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: 'Meeting intake needs attention. Check the connection, folder access, and project access.', next: Date.now() + (retry ? 0 : 60_000) });
+      const full = error instanceof AuthorityOperationError && error.code === 'quota_exceeded';
+      observed.set(setting.source_key, { checked_at: new Date().toISOString(),
+        error: full ? WINDOW_FULL : 'Meeting intake needs attention. Check the connection and folder access.', next: Date.now() + (retry ? 0 : 60_000) });
       if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
     }
   }
@@ -277,7 +301,7 @@ export function createPersonMeetingRuntimeV1(options: {
     // Cheap checks first: a source's held rows are read, and its grants inspected, only when it is otherwise due.
     const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys());
     const eligible = intake.list().filter(s => !inFlight.has(s.source_key) && owners.has(s.source_adapter_id) && (observed.get(s.source_key)?.next ?? 0) <= Date.now()
-      && (s.folder_id !== null || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0 || unfrozen.has(s.source_key) || retryReady(s.source_key)));
+      && (s.watch !== 'off' || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0 || unfrozen.has(s.source_key) || retryReady(s.source_key)));
     return [...eligible.filter(s => s.source_key > after), ...eligible.filter(s => s.source_key <= after)];
   }
   /**
@@ -333,8 +357,31 @@ export function createPersonMeetingRuntimeV1(options: {
     try { check(); return true; }
     catch (error) { if (error instanceof AuthorityOperationError) return false; throw error; }
   }
+  /**
+   * The proposal one of this reviewer's published records decided, by the record's own approval id (a run's event_ref): the
+   * receipt of that reviewer's decision names it. Another reviewer's record, or one not yet published, has none.
+   */
+  function proposalOfRecord(reviewer: MeetingIntakePersonV1, recordApprovalId: string): string | undefined {
+    return publishedApprovalOfRecordV1(db, reviewer, { approval_id: recordApprovalId })?.approval_id;
+  }
   function reviewView(view: ApprovalProposalViewV1): PersonMeetingReviewV2 {
-    return { approval_id: view.approval_id, title: view.title, project_ids: view.project_ids, status: view.status, decided_on: view.decided_on, ...approvalProposalSummaryV1(view.snapshot_json) };
+    return { approval_id: view.approval_id, title: view.title, project_ids: view.project_ids, status: view.status, decided_on: view.decided_on, ...approvalProposalSummaryV1(view.snapshot_json),
+      records: view.records.map(record => ({ approval_id: record.approval_id, project_ids: record.project_ids })) };
+  }
+  /**
+   * The card's items: every decision and action in brief order with where it goes. Pending, each starts at the suggestion
+   * the reviewer can read now ([] = Only me) and an action's owner is the meeting's proposal, editable; decided, each shows
+   * its route (null = not kept) and its confirmed owner. A rejection kept nothing.
+   */
+  function reviewItems(view: ApprovalProposalViewV1, proposed: ReadonlyMap<string, string>): PersonMeetingResultsV2['review_open']['items'] {
+    const routes = new Map((view.routes ?? []).map(route => [route.signal_id, route.project_ids]));
+    const confirmed = new Map((view.confirmed_owners ?? []).map(owner => [owner.signal_id, owner.owner]));
+    const decided = view.routes !== null;
+    return approvalReviewV1(view.snapshot_json).items.map(item => {
+      const owner = item.kind !== 'action' ? null : (decided ? confirmed.get(item.signal_id) : proposed.get(item.signal_id)) ?? null;
+      return { ...item, owner, owner_editable: view.status === 'pending' && owner !== null,
+        project_ids: decided ? routes.get(item.signal_id) ?? null : view.project_ids };
+    });
   }
   const application: ProviderHttpApplicationV1 = {
     routes: [{ route_id: 'personal-meetings', method: 'POST', path: PERSON_MEETINGS_PATH_V2 }],
@@ -356,23 +403,31 @@ export function createPersonMeetingRuntimeV1(options: {
           if (input.operation === 'reviews') return { reviews: reviewer === null ? [] : (await approvals()).proposals(reviewer).map(reviewView) };
           if (!reviewer) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
           const approvalCore = await approvals();
-          const view = approvalCore.proposal(input.approval_id);
+          // review_open also takes one of the proposal's published records' own approval ids (a run's event_ref, which a
+          // follow-ups list links): it opens the proposal's review, under the proposal's approval id. A decision never does.
+          const byRecord = (id: string) => { const proposal = proposalOfRecord(person, id); return proposal === undefined ? undefined : approvalCore.proposal(proposal); };
+          const view = approvalCore.proposal(input.approval_id) ?? (input.operation === 'review_open' ? byRecord(input.approval_id) : undefined);
           if (!view || view.reviewer.organization_id !== person.organization_id || view.reviewer.principal_id !== person.principal_id
             || view.reviewer.membership_id !== person.membership_id) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
           if (input.operation === 'review_open') return observeCoreRuntimeSyncV1('approval_review', () => {
-            annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', input.approval_id), approval_surface: 'desktop' });
+            annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', view.approval_id), approval_surface: 'desktop' });
             const projects = new SqlitePersonListDirectoryV1(db).joinedProjects(options.sessions.authenticateAccess({ access_token: token })).projects;
             const names = new Map(projects.filter(project => project.status === 'active').map(project => [project.project_id, project.name]));
-            const opened = { review: reviewView(view), snapshot_sha256: view.snapshot_sha256, content: approvalProposalTextV1(view.snapshot_json),
-              owners: approvalCore.ownerProposals(input.approval_id), suggested_projects: view.project_ids.flatMap(project_id => {
+            const review = approvalReviewV1(view.snapshot_json);
+            const items = reviewItems(view, new Map(approvalCore.ownerProposals(view.approval_id).map(owner => [owner.signal_id, owner.proposed])));
+            // Names for the projects the items name, as far as the reviewer can read them: a suggestion is never access.
+            const named = [...new Set(items.flatMap(item => item.project_ids ?? []))].sort();
+            const row = reviewView(view);
+            const opened = { review: row, snapshot_sha256: view.snapshot_sha256, participants: review.participants, items, reasons: review.reasons,
+              suggested_projects: named.flatMap(project_id => {
                 const name = names.get(project_id as `prj_${string}`); return name === undefined ? [] : [{ project_id: project_id as `prj_${string}`, name }];
-              }) };
+              }), records: row.records };
             annotateCoreRuntimeV1({ result: 'returned' });
             return opened;
           });
           const action = input;
           const decided = approvalCore.decide('desktop', { approval_id: action.approval_id, command_id: action.command_id, snapshot_sha256: action.snapshot_sha256 as `sha256:${string}`,
-            action: action.action, project_ids: action.project_ids, share_transcript: action.share_transcript, owners: action.owners }, () => {
+            action: action.action, routes: action.routes, owners: action.owners }, () => {
             current(); const a = authenticate(token);
             return { actor: { organization_id: a.organization_id, principal_id: a.principal_id, membership_id: a.membership_id }, evidence: { kind: 'person-session', sha256: a.authorization_sha256 } };
           });
@@ -383,13 +438,20 @@ export function createPersonMeetingRuntimeV1(options: {
         if (input.operation === 'cancel_import') {
           const setting = intake.list(person).find(s => s.source_key === input.source_key);
           if (!setting) throw new AuthorityOperationError('not_found', 'Meeting import unavailable');
-          ownerOf(setting.source_adapter_id).intake.cancelImport(setting, input.meeting_id, current); observed.delete(setting.source_key); return { status: 'cancelled' };
+          const owner = ownerOf(setting.source_adapter_id);
+          // What the import kept goes with it, in the same transaction: a handed-in payload no admitted revision holds.
+          db.transaction(() => { owner.intake.cancelImport(setting, input.meeting_id, current); owner.provider.forget?.(setting, input.meeting_id); }).immediate();
+          observed.delete(setting.source_key); return { status: 'cancelled' };
         }
-        if (input.operation === 'watch' && input.folder_id === null) {
-          current(); db.transaction(() => {
+        // Stopping needs no provider session and no project access, and leaves no status from the stopped watch behind.
+        if (input.operation === 'watch' && input.watch === 'off') {
+          current(); const stopped = db.transaction(() => {
             if (settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
-            const old = intake.list(person).find(s => s.folder_id !== null); if (old) ownerOf(old.source_adapter_id).intake.watch(old, null, null, current);
-          }).immediate(); return { status: 'saved' };
+            const old = intake.list(person).find(s => s.watch !== 'off'); if (old) ownerOf(old.source_adapter_id).intake.watch(old, { watch: 'off', folder_id: null }, null, current);
+            return old;
+          }).immediate();
+          if (stopped) observed.delete(stopped.source_key);
+          return { status: 'saved' };
         }
         const linked = provider.tool(token).personal_status === 'linked';
         let session: Awaited<ReturnType<PersonMeetingProviderV1['open']>> | null = null;
@@ -402,7 +464,7 @@ export function createPersonMeetingRuntimeV1(options: {
           return { connected: session !== null, email: session?.email ?? null, workspace: session?.workspace ?? null, folders, settings_sha256: settings(person),
             sources: intake.list(person).filter(s => s.source_adapter_id === provider.cursor.policy.source_adapter_id).map(s => {
               const owner = ownerOf(s.source_adapter_id), checkpoint = owner.intake.checkpoint(s.source_key);
-              return { source_key: s.source_key, folder_id: s.folder_id, folder_project_id: s.folder_project_id,
+              return { source_key: s.source_key, watch: s.watch, folder_id: s.folder_id, project_id: s.suggested_project_id,
                 baseline: owner.provider.cursor.ready(checkpoint), pending_imports: checkpoint.manual,
                 checked_at: observed.get(s.source_key)?.checked_at ?? null, error: sourceError(s.source_key) };
             }) };
@@ -415,29 +477,34 @@ export function createPersonMeetingRuntimeV1(options: {
         const currentProject = () => {
           session.current(); current();
           if (intake.currentPerson(person, project).grant_sha256 !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting project access changed');
-          if (input.operation === 'submit' && options.sessions.authenticateAccess({ access_token: token }).membership_type !== 'owner') {
-            throw new AuthorityOperationError('unauthorized', 'Only the staging owner can submit synthetic meetings');
+          // Every active member hands meetings in; the staging synthetic source stays owner-only.
+          if (input.operation === 'submit' && provider.submitters !== 'members' && options.sessions.authenticateAccess({ access_token: token }).membership_type !== 'owner') {
+            throw new AuthorityOperationError('unauthorized', 'Only an owner can submit meetings to this tool');
           }
         };
         if (input.operation === 'submit') {
           currentProject();
-          if (!session.submit) throw new AuthorityOperationError('not_found', 'Custom meeting submission unavailable');
-          session.submit(input.meeting);
+          if (!session.submit) throw new AuthorityOperationError('not_found', 'Meeting submission unavailable');
         }
-        // Validate folder access here; the existing worker builds its content
-        // baseline from the durable pending cursor without holding this request.
-        if (input.operation === 'watch') await session.browse(input.folder_id!);
-        else await session.preview(input.operation === 'submit' ? input.meeting.id : input.meeting_id);
+        // Check what the watch reads with its worker's own listing, so an unreadable folder or a window over the cap fails
+        // Save, not every later pull; the worker records the window from the durable pending cursor without holding this
+        // request. A submitted meeting has nothing to preview yet.
+        if (input.operation === 'watch') {
+          if (!session.watchable) throw new AuthorityOperationError('not_found', 'Meeting watch unavailable');
+          await session.watchable({ watch: input.watch, folder_id: input.folder_id });
+        } else if (input.operation === 'import') await session.preview(input.meeting_id);
         return db.transaction(() => {
           currentProject();
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
           const providerIntake = ownerOf(provider.cursor.policy.source_adapter_id).intake;
           const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, session, commitments: id => processor.current_commitments?.(id), current: currentProject });
-          // "Save to" records the watched folder's project or the import's suggestion; neither changes the source.
-          if (input.operation === 'watch') providerIntake.watch(setting, input.folder_id, project, currentProject);
-          else providerIntake.enqueue(setting, input.operation === 'submit' ? input.meeting.id : input.meeting_id, project, currentProject);
+          // A submitted meeting is kept here, so its payload and its queued import commit together or not at all.
+          const submitted = input.operation === 'submit' ? session.submit!(input.meeting, setting) : null;
+          // A watch's or an import's project is only a suggestion; neither changes the source.
+          if (input.operation === 'watch') providerIntake.watch(setting, { watch: input.watch, folder_id: input.folder_id }, project, currentProject);
+          else providerIntake.enqueue(setting, input.operation === 'submit' ? submitted! : input.meeting_id, project, currentProject);
           observed.delete(setting.source_key);
-          if (input.operation === 'submit') return { status: 'queued', meeting_id: input.meeting.id };
+          if (input.operation === 'submit') return { status: 'queued', meeting_id: submitted };
           return { status: input.operation === 'watch' ? 'saved' : 'queued' };
         }).immediate();
       };

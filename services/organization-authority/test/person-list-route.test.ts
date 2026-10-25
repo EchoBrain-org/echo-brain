@@ -5,10 +5,9 @@ import type {
   PersonListResponseV1,
   PersonOpenDocumentV1,
   PersonOpenMeetingAtomV1,
+  PersonItemRefV1,
   PersonOpenMeetingV1,
-  PersonOpenRefV1,
   PersonOpenResponseV1,
-  PersonOpenTranscriptV1,
 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { describe, expect, it } from "vitest";
@@ -21,7 +20,6 @@ import type {
   PersonStoreDocumentRowV1,
   PersonStoreMeetingRowV1,
   PersonStoreNoteRowV1,
-  PersonTranscriptByRecordPortV1,
 } from "../src/application/ports/person-list-v1.js";
 import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import { decodePersonListCursorV1, decodePersonOpenCursorV1, type PersonListPositionsV1 } from "../src/composition/person-list-cursor-v1.js";
@@ -34,7 +32,6 @@ const UNJOINED = "prj_99999999-9999-4999-8999-999999999999";
 const NONEXISTENT = "prj_88888888-8888-4888-8888-888888888888";
 const MEETING_ATOMS_PER_PAGE = 2;
 const CHUNKS_PER_PAGE = 3;
-const TRANSCRIPT_PAGE = 7;
 const hex = (value: number): string => value.toString(16).padStart(64, "0");
 const T = (minute: number): string => new Date(Date.UTC(2026, 8, 1) + minute * 60_000).toISOString();
 const note = (n: number, added_at: string, extra: Partial<PersonStoreNoteRowV1> = {}): PersonStoreNoteRowV1 =>
@@ -162,27 +159,14 @@ function fixture(options: Options = {}) {
       const following = PARTS[start + taken.length];
       return {
         row, atoms: taken.map((part) => part.atom),
-        ...(input.from === undefined ? { meeting: { all_day: false, participants: ["Ari"], participants_more: false }, transcript_shared: row.id.endsWith("1") } : {}),
+        ...(input.from === undefined ? { meeting: { all_day: false, participants: ["Ari"], participants_more: false } } : {}),
         next: following === undefined ? null : { atom_order: following.atom_order, part: following.part },
         release: { receipt: receipt(["meeting", row.id, start]) },
       };
     },
-    admitMeeting(input) {
-      record("admitMeeting", { record_sha256: input.record_sha256 });
-      if (!world.meetings.some((candidate) => candidate.id === input.record_sha256)) throw new AuthorityOperationError("not_found", "item is not available");
-    },
     revalidateMeetingRelease(input) {
       record("revalidateMeetingRelease", { receipt: input.release.receipt });
       hooks.revalidate?.();
-    },
-  };
-  const transcripts: PersonTranscriptByRecordPortV1 = {
-    readApprovedMeetingTranscriptByRecordV1(input) {
-      record("readTranscript", { record_sha256: input.record_sha256, offset: input.offset });
-      hooks.open?.();
-      const offset = input.offset ?? 0;
-      const end = Math.min(TRANSCRIPT.length, offset + TRANSCRIPT_PAGE);
-      return { text: TRANSCRIPT.slice(offset, end), next_offset: end === TRANSCRIPT.length ? null : end };
     },
   };
   const directory: PersonListDirectoryPortV1 = {
@@ -213,10 +197,10 @@ function fixture(options: Options = {}) {
       return authorization(actor, { session_state_sha256: canonicalSha256(world.session) });
     },
   };
-  const route = createPersonListRouteV1({ organization_id: OWNER.organization_id, sessions, tools, directory, originals, meetings, transcripts });
+  const route = createPersonListRouteV1({ organization_id: OWNER.organization_id, sessions, tools, directory, originals, meetings });
   const list = (request: Omit<PersonListRequestV1, "schema_version"> = {}, access_token = "owner", signal?: AbortSignal) =>
     route.list({ access_token, request: { schema_version: 1, ...request }, ...(signal === undefined ? {} : { signal }) });
-  const open = (value: PersonOpenRefV1, cursor?: string, access_token = "owner") =>
+  const open = (value: PersonItemRefV1, cursor?: string, access_token = "owner") =>
     route.open({ access_token, request: { schema_version: 1, ref: value, ...(cursor === undefined ? {} : { cursor }) } });
   const called = (method: string) => calls.filter((call) => call.method === method);
   return { world, calls, called, audits, hooks, list, open };
@@ -230,7 +214,6 @@ const PARTS: readonly { readonly atom_order: number; readonly part: number; read
   { atom_order: 2, part: 1, atom: { kind: "rationale", text: "Churn drops." } },
   { atom_order: 3, part: 1, atom: { kind: "decision", text: "Ship in October.", status: "proposed" } },
 ];
-const TRANSCRIPT = "Ari: we ship annual plans first. Maya: agreed, October.";
 
 type Fixture = ReturnType<typeof fixture>;
 async function walk(f: Fixture, request: Omit<PersonListRequestV1, "schema_version" | "cursor"> = {}, access_token = "owner"): Promise<PersonListResponseV1[]> {
@@ -495,27 +478,18 @@ describe("person list route", () => {
       cursor = page.next_cursor;
     } while (cursor !== null);
     expect(atoms).toEqual(PARTS.map((part) => part.atom));
-    expect(pages[0]).toMatchObject({ meeting: { participants: ["Ari"] }, transcript_ref: `transcript:sha256:${hex(1)}` });
-    expect(pages.slice(1).every((page) => page.meeting === undefined && page.transcript_ref === undefined)).toBe(true);
-    expect((await f.open(`meeting:sha256:${hex(2)}`) as PersonOpenMeetingV1).transcript_ref).toBeUndefined();
+    expect(pages[0]).toMatchObject({ meeting: { participants: ["Ari"] } });
+    expect(pages.slice(1).every((page) => page.meeting === undefined)).toBe(true);
     await expect(f.open(documentRef, pages[0]!.next_cursor!)).rejects.toMatchObject({ code: "invalid_request" });
-
-    const transcriptRef = `transcript:sha256:${hex(1)}` as const;
-    let text = "";
-    cursor = undefined;
-    do {
-      const page = await f.open(transcriptRef, cursor ?? undefined) as PersonOpenTranscriptV1;
-      text += page.text;
-      cursor = page.next_cursor;
-    } while (cursor !== null);
-    expect(text).toBe(TRANSCRIPT);
-    const order = f.calls.map((call) => call.method).filter((method) => method === "admitMeeting" || method === "readTranscript");
-    expect(order.slice(0, 2)).toEqual(["admitMeeting", "readTranscript"]);
+    // The retired transcript ref (ADR-0046) is a bad request, before any store runs.
+    const calls = f.calls.length;
+    await expect(f.open(`transcript:sha256:${hex(1)}` as PersonItemRefV1)).rejects.toMatchObject({ code: "invalid_request" });
+    expect(f.calls.slice(calls)).toEqual([]);
     expect(f.audits.every((audit) => audit.operation === "person_open" && audit.scope_kind === "item" && audit.released_count === 1)).toBe(true);
   });
 
   it("answers every store refusal of an open with one not_found, but passes unavailable and a bug through", async () => {
-    const refs: readonly PersonOpenRefV1[] = [`note:ctx_${hex(1)}`, `document:doc_${hex(1)}`, `meeting:sha256:${hex(1)}`, `transcript:sha256:${hex(1)}`];
+    const refs: readonly PersonItemRefV1[] = [`note:ctx_${hex(1)}`, `document:doc_${hex(1)}`, `meeting:sha256:${hex(1)}`];
     const answers: unknown[] = [];
     for (const code of ["not_found", "unauthorized", "invalid_request", "conflict", "stale_access_state", "invalid_output"] as const) {
       for (const value of refs) {

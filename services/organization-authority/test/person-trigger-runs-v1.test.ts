@@ -1,4 +1,5 @@
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
+import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
@@ -25,10 +26,11 @@ const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'c
 const card = { decided: [{ text: 'Approved display decision.', citation_index: 0 }], affected: [{ citation_index: 1, says_now: 'ignored', relation: 'conflicts' as const }], unconfirmed: [], people: [], status: 'assessed' as const,
   citations: [{ citation: record, kind: 'decision' as const, label: 'Approved display', visibility: 'team' as const }, { citation: ticket, kind: 'ticket' as const, label: 'Kestrel cooling fan drift 0xC0FFEE', visibility: 'only_me' as const }] };
 
-async function fixture(options: { readonly anchor?: () => typeof record; readonly actions?: () => readonly PersonRecordActionV1[]; readonly render?: (input: { readonly signal?: AbortSignal }) => Promise<unknown>; readonly rotated?: () => boolean; readonly indexLags?: () => boolean } = {}) {
+/** `split` sends the decision to the reviewer alone and the actions to project A: two records, so each run has a sibling. */
+async function fixture(options: { readonly anchor?: () => typeof record; readonly actions?: () => readonly PersonRecordActionV1[]; readonly render?: (input: { readonly signal?: AbortSignal }) => Promise<unknown>; readonly rotated?: () => boolean; readonly indexLags?: () => boolean; readonly split?: boolean } = {}) {
   let now = new Date('2026-10-07T10:00:00.000Z');
   const f = await approvalCoreFixture(); const runs = new SqliteTriggerRunsV1(f.db, () => now);
-  f.core.decide('desktop', f.approve(), () => f.session);
+  f.core.decide('desktop', f.approve(options.split === true ? { routes: f.routes(id => id === 'decision-1' ? [] : [f.projectA]) } : {}), () => f.session);
   await f.publisher([enqueueApprovedRecordRunV1(runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
   const row = runs.list(f.person, 1)[0]!;
   const auth = (token: string) => token === 'approver' && options.rotated?.() !== true ? { ...f.person, session_family_id: 'family', checked_at: now.toISOString() } :
@@ -220,6 +222,38 @@ describe('durable approved-record trigger runs', () => {
     expect(events).toContainEqual(expect.objectContaining({ kind: 'lifecycle', stage: 'application', event: 'failed', error_kind: 'index_lag' }));
   });
 
+  it('binds the run\'s desk with its meeting\'s other records and own source fenced off, so research never reads them', async () => {
+    const sourceOf = (g: Awaited<ReturnType<typeof fixture>>) =>
+      (JSON.parse(g.db.prepare('SELECT body_json FROM authority_approval_decisions_v1').pluck().get() as string) as { transcript_source: { source_id: string } }).transcript_source.source_id;
+    const f = await fixture({ split: true });
+    const published = (JSON.parse(f.receipt()!) as { records: { record_sha256: string }[] }).records.map(entry => entry.record_sha256);
+    const source = sourceOf(f);
+    expect(source).toMatch(/^source:/);
+    expect(f.runs.meetingSource(f.person, f.row.record_sha256!)).toBe(source);
+    await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
+    expect(f.bindDesk.mock.calls[0]![2]).toMatchObject({ access_token: 'approver', exclude: { records: published.filter(digest => digest !== f.row.record_sha256), sources: [source] } });
+    // A meeting sent to one destination has no sibling, but its own source stays fenced off; another reader's view binds no fence.
+    const single = await fixture();
+    await single.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: single.row.run_id } }); await single.settled();
+    expect(single.bindDesk.mock.calls[0]![2]).toMatchObject({ exclude: { records: [], sources: [sourceOf(single)] } });
+    await single.app.view({ access_token: 'approver', request: { schema_version: 1, operation: 'view', run_id: single.row.run_id } });
+    expect(single.bindDesk.mock.calls.at(-1)![2]).not.toHaveProperty('exclude');
+    // A digest that is not one of the approver's records has neither.
+    expect([f.runs.siblingRecords(f.person, canonicalSha256('another record')), f.runs.meetingSource(f.person, canonicalSha256('another record'))]).toEqual([[], undefined]);
+    expect(f.runs.meetingSource({ ...f.person, membership_id: 'mem_00000000-0000-4000-8000-0000000000f2' }, f.row.record_sha256!)).toBeUndefined();
+  });
+
+  it('leaves what only the approver may see out of the research of a record shared beyond them, and keeps it for an Only-me record', async () => {
+    // The fixture's record is shared (organization-readable): its card's words reach more people than the approver.
+    const shared = await fixture();
+    await shared.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: shared.row.run_id } }); await shared.settled();
+    expect(shared.bindDesk.mock.calls[0]![2]).toMatchObject({ exclude: { private: true } });
+    const onlyMe = await fixture({ anchor: () => ({ ...record, policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }) as unknown as typeof record });
+    await onlyMe.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: onlyMe.row.run_id } }); await onlyMe.settled();
+    expect(onlyMe.bindDesk.mock.calls[0]![2]).toHaveProperty('exclude');
+    expect((onlyMe.bindDesk.mock.calls[0]![2] as { readonly exclude: object }).exclude).not.toHaveProperty('private');
+  });
+
   it('reads the meeting\'s actions as the approver before research, and fails as no_access when they cannot read them', async () => {
     const f = await fixture({ actions: () => { throw new AuthorityOperationError('not_found', 'record evidence is not available'); } });
     await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } });
@@ -332,21 +366,21 @@ describe('open items written when an impact check finishes', () => {
     expect(f.items.forRun(f.runId).map(item => item.pointer.kind)).toEqual(['meeting_action']);
   });
 
-  it('never makes a follow-up of the transcript the approved meeting shared, and keeps another meeting\'s transcript', async () => {
-    const transcript = (record_sha256: string, anchor: string) => ({
-      citation: { kind: 'source_revision' as const, source_id: `source:${'a'.repeat(64)}`, revision_id: `rev-${anchor}`, source_sha256: canonicalSha256('source'),
-        representation_sha256: canonicalSha256('representation'), anchor_sha256: canonicalSha256(anchor) },
-      kind: 'note' as const, label: 'Transcript', visibility: 'only_me' as const, ref: `transcript:${record_sha256}`,
-    });
-    let own = '';
-    const f = await fixture({ render: async () => ({ ...card,
-      affected: [...card.affected, { citation_index: 2, says_now: 'The meeting said so.', relation: 'needs_updating' as const }, { citation_index: 3, says_now: 'An earlier meeting said otherwise.', relation: 'conflicts' as const }],
-      citations: [...card.citations, transcript(own, 'own'), transcript(canonicalSha256('another record'), 'other')] }) });
-    own = f.row.record_sha256!;
+  it('never makes a follow-up of the meeting\'s other records (impact runs per record, ADR-0046)', async () => {
+    let sibling = '';
+    const f = await fixture({ split: true, render: async () => ({ ...card,
+      affected: [...card.affected, { citation_index: 2, says_now: 'The same meeting decided this.', relation: 'conflicts' as const }],
+      citations: [...card.citations, { citation: { ...record, record_sha256: sibling }, kind: 'decision' as const, label: 'Sibling', visibility: 'only_me' as const }] }) });
+    const published = (JSON.parse(f.receipt()!) as { records: { record_sha256: string }[] }).records.map(entry => entry.record_sha256);
+    expect(published).toHaveLength(2);
+    sibling = published.find(digest => digest !== f.row.record_sha256)!;
+    expect(f.runs.siblingRecords(f.person, f.row.record_sha256!)).toEqual([sibling]);
     await f.app.start({ access_token: 'approver', request: { schema_version: 1, operation: 'start', run_id: f.row.run_id } }); await f.settled();
     expect(f.runs.read(f.person, f.row.run_id)!.state).toBe('done');
-    const pointers = (f.db.prepare('SELECT pointer_json FROM authority_impact_items_v1 WHERE run_id=?').pluck().all(f.row.run_id) as string[]).map(value => JSON.parse(value) as { kind: string; revision_id?: string });
-    expect(pointers.map(pointer => [pointer.kind, pointer.revision_id ?? null]).sort()).toEqual([['source_revision', 'rev-other'], ['ticket', null]]);
+    // The card itself keeps the row; only the outside ticket becomes a follow-up.
+    expect(readStoredImpactCardV1(f.runs.read(f.person, f.row.run_id)!.result_json!).affected).toHaveLength(2);
+    const pointers = (f.db.prepare('SELECT pointer_json FROM authority_impact_items_v1 WHERE run_id=?').pluck().all(f.row.run_id) as string[]).map(value => JSON.parse(value) as { kind: string });
+    expect(pointers.map(pointer => pointer.kind)).toEqual(['ticket']);
   });
 
   it('keeps one item per item key and gives the approver every ticket when the assignee read fails', async () => {

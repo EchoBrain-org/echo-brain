@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeSyncV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { canonicalJson, canonicalSha256, type JsonValue, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
-  APPROVAL_DECISION_SNAPSHOT_SURFACE_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1, APPROVAL_OWNERS_MAX_V1, type MeetingApprovalTranscriptSourceV2,
+  APPROVAL_DECISION_SNAPSHOT_SURFACE_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1, APPROVAL_OWNERS_MAX_V1,
 } from '@echo-brain/organization-protocol';
 import { validateApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
 import { validateProjectIdV1 } from '@echo-brain/organization-api';
@@ -13,32 +13,38 @@ import { compileDecisionBrief } from '@echo-brain/organization-processing/core/p
 import { ownerProposalsV1, withoutProposedOwnersV1 } from '@echo-brain/organization-processing/core/processing/owner-proposals-v1';
 import { retainedMeetingSourceCoordinateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { createApprovalPublisherV1, type AfterApprovedRecordHookV1 } from './approval-publisher-v1.js';
+import { createApprovalPublisherV1, type AfterApprovedRecordHookV1, type ApprovalDecisionReceiptV1 } from './approval-publisher-v1.js';
 export {
-  approvalDecisionReceiptJsonV1, APPROVAL_DECISION_RECORD_SHA256_PATH_V1, createApprovalPublisherV1,
-  type ApprovalDecisionReceiptV1, type AfterApprovedRecordEventV1, type AfterApprovedRecordHookV1,
+  approvalDecisionReceiptJsonV1, createApprovalPublisherV1,
+  type ApprovalDecisionReceiptV1, type ApprovalDecisionReceiptRecordV1, type AfterApprovedRecordEventV1, type AfterApprovedRecordHookV1,
 } from './approval-publisher-v1.js';
 
 /** approved_payload.surface of every snapshot the core freezes, whichever screen draws it (the approval-decision codec checks it). */
 export const APPROVAL_SNAPSHOT_SURFACE_V1 = APPROVAL_DECISION_SNAPSHOT_SURFACE_V1;
-/** At most this many projects share one approved meeting; also the cap on frozen suggestions. */
+/** At most this many projects across one decision's routes, and in one route; also the cap on frozen suggestions. */
 export const APPROVAL_PROJECTS_MAX_V1 = 20;
+/** At most this many routes in one decision: one per decision and action of the frozen snapshot. */
+export const APPROVAL_ROUTES_MAX_V1 = 500;
 
 export type ApprovalSurfaceV1 = 'desktop' | 'slack';
 export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
 export interface ApprovalOwnerChoiceV1 { readonly signal_id: string; readonly owner: string }
+/** Where one decision or action goes: null = not kept, [] = Only me, otherwise 1..20 project ids, strictly ascending. */
+export interface ApprovalRouteV1 { readonly signal_id: string; readonly project_ids: readonly string[] | null }
 export interface ApprovalDecisionRequestV1 {
   readonly approval_id: string;
   /** /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/. Desktop: never `slack:`-prefixed. Slack: `slack:` + verified click key. */
   readonly command_id: string;
   readonly snapshot_sha256: Sha256Digest;
   readonly action: 'approve' | 'reject';
-  /** [] = Only me; otherwise 1..20 project ids, strictly ascending (sorted, unique). */
-  readonly project_ids: readonly string[];
-  readonly share_transcript: boolean;
-  /** Confirmed owners of proposed actions, in brief (proposal) order, each signal at most once. */
+  /** Approve: every decision and action of the frozen snapshot exactly once, in brief order (decisions, then actions),
+   *  keeping at least one and naming at most 20 projects in all. Reject: []. */
+  readonly routes: readonly ApprovalRouteV1[];
+  /** Confirmed owners of kept proposed actions, in brief (proposal) order, each signal at most once. Reject: []. */
   readonly owners: readonly ApprovalOwnerChoiceV1[];
 }
+/** One published record of an approved proposal: its own approval id and its destination ([] = Only me). */
+export interface ApprovalRecordRefV1 { readonly approval_id: string; readonly project_ids: readonly string[] }
 export interface ApprovalAuthorizationV1 {
   readonly actor: ApprovalActorV1;
   /** Digest of the evidence that authorized this decision: the person session, or the verified Slack click and link.
@@ -65,21 +71,29 @@ export interface ApprovalProposalViewV1 {
   readonly decided_on: ApprovalSurfaceV1 | null;
   /** The decision body's decided_at. */
   readonly decided_at: string | null;
-  /** Decided: the decision's project_ids verbatim (reject: []). Undecided (pending or superseded): the frozen
+  /** Decided: the sorted union of the routed projects (a reject: []). Undecided (pending or superseded): the frozen
    *  suggestions filtered to projects the reviewer can read now (active project, active membership). */
   readonly project_ids: readonly string[];
+  /** The decision's routes verbatim (a reject routes nothing); null while undecided. */
+  readonly routes: readonly ApprovalRouteV1[] | null;
+  /** The decision's confirmed owners verbatim; null while undecided. */
+  readonly confirmed_owners: readonly ApprovalOwnerChoiceV1[] | null;
+  /** The published records, in group order: [] until the receipt is written. */
+  readonly records: readonly ApprovalRecordRefV1[];
   readonly snapshot_sha256: Sha256Digest;
   readonly snapshot_json: string;
 }
+/** The exact retained revision of a reviewed meeting's source. */
+export type ApprovalMeetingSourceV1 = NonNullable<ReturnType<typeof retainedMeetingSourceCoordinateV1>>;
 /** Exact canonical JSON stored in authority_approval_decisions_v1.body_json; Task 8's publisher reads it. */
 export interface ApprovalDecisionBodyV1 {
   readonly request: ApprovalDecisionRequestV1;
   readonly surface: ApprovalSurfaceV1;
   readonly actor: ApprovalActorV1;
   readonly evidence: ApprovalAuthorizationV1['evidence'];
-  /** The retained source coordinate of the reviewed meeting, frozen at decide so publishing reads nothing mutable;
-   *  non-null exactly for an approval. */
-  readonly transcript_source: MeetingApprovalTranscriptSourceV2 | null;
+  /** The retained source coordinate of the reviewed meeting, frozen at decide; non-null exactly for an approval. No
+   *  record carries it (ADR-0046): an impact run reads its source_id to keep the run off the meeting's own source. */
+  readonly transcript_source: ApprovalMeetingSourceV1 | null;
   /** Canonical UTC milliseconds. */
   readonly decided_at: string;
 }
@@ -135,7 +149,7 @@ const COMMAND_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SLACK_COMMAND_ID = /^slack:[A-Za-z0-9._:-]+$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
-const REQUEST_KEYS = ['action', 'approval_id', 'command_id', 'owners', 'project_ids', 'share_transcript', 'snapshot_sha256'];
+const REQUEST_KEYS = ['action', 'approval_id', 'command_id', 'owners', 'routes', 'snapshot_sha256'];
 
 function denied(): never { throw new AuthorityOperationError('unauthorized', 'Meeting review is not available'); }
 function invalid(message = 'Invalid meeting review'): never { throw new AuthorityOperationError('invalid_request', message); }
@@ -147,32 +161,50 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return actual.length === keys.length && [...keys].sort().every((key, index) => key === actual[index]);
 }
 
-/** Static, database-free validation shared by decide(), Task 9's v2 route and Task 12's click parser.
- *  Returns a fresh frozen request with exactly the 7 keys; throws AuthorityOperationError('invalid_request', 'Invalid meeting review'). */
+/** One route's destination: null, or 0..20 valid project ids, strictly ascending (sorted, unique). */
+function destination(value: unknown): readonly string[] | null {
+  if (value === null) return null;
+  if (!Array.isArray(value) || value.length > APPROVAL_PROJECTS_MAX_V1) invalid();
+  const projects = value.map((id: unknown) => {
+    try { return validateProjectIdV1(id); } catch { return invalid(); }
+  });
+  if (projects.some((id, index) => index > 0 && projects[index - 1]! >= id)) invalid();
+  return Object.freeze(projects);
+}
+
+/** Static, database-free validation shared by decide(), the desktop's review route and the Slack click.
+ *  Returns a fresh frozen request with exactly the 6 keys; throws AuthorityOperationError('invalid_request', 'Invalid meeting review').
+ *  decide() checks the routes against the frozen snapshot and the owners against its proposals. */
 export function validateApprovalDecisionRequestV1(surface: ApprovalSurfaceV1, value: unknown): ApprovalDecisionRequestV1 {
   if (surface !== 'desktop' && surface !== 'slack') invalid();
   if (!plain(value) || !hasExactKeys(value, REQUEST_KEYS)) invalid();
-  const { approval_id, command_id, snapshot_sha256, action, project_ids, share_transcript, owners } = value;
+  const { approval_id, command_id, snapshot_sha256, action, routes, owners } = value;
   if (typeof approval_id !== 'string' || !APPROVAL_ID.test(approval_id)) invalid();
   if (typeof command_id !== 'string' || !COMMAND_ID.test(command_id)) invalid();
   if (surface === 'slack' ? !SLACK_COMMAND_ID.test(command_id) : command_id.startsWith('slack:')) invalid();
   if (typeof snapshot_sha256 !== 'string' || !DIGEST.test(snapshot_sha256)) invalid();
   if (action !== 'approve' && action !== 'reject') invalid();
-  if (!Array.isArray(project_ids) || project_ids.length > APPROVAL_PROJECTS_MAX_V1) invalid();
-  const projects = project_ids.map((id: unknown) => {
-    try { return validateProjectIdV1(id); } catch { return invalid(); }
+  if (!Array.isArray(routes) || routes.length > APPROVAL_ROUTES_MAX_V1) invalid();
+  const routed = routes.map((route: unknown) => {
+    if (!plain(route) || !hasExactKeys(route, ['project_ids', 'signal_id']) || !isApprovalSignalIdV1(route.signal_id)) invalid();
+    return Object.freeze({ signal_id: route.signal_id, project_ids: destination(route.project_ids) });
   });
-  if (projects.some((id, index) => index > 0 && projects[index - 1]! >= id)) invalid();
-  if (typeof share_transcript !== 'boolean') invalid();
+  if (new Set(routed.map(route => route.signal_id)).size !== routed.length) invalid();
+  if (new Set(routed.flatMap(route => route.project_ids ?? [])).size > APPROVAL_PROJECTS_MAX_V1) invalid();
   if (!Array.isArray(owners) || owners.length > APPROVAL_OWNERS_MAX_V1) invalid();
   const chosen = owners.map((owner: unknown) => {
     if (!plain(owner) || !hasExactKeys(owner, ['owner', 'signal_id']) || !isApprovalSignalIdV1(owner.signal_id) || !isApprovalOwnerTextV1(owner.owner)) invalid();
     return Object.freeze({ signal_id: owner.signal_id, owner: owner.owner });
   });
   if (new Set(chosen.map(owner => owner.signal_id)).size !== chosen.length) invalid();
-  if (action === 'reject' && (projects.length > 0 || share_transcript || chosen.length > 0)) invalid();
-  return Object.freeze({ approval_id, command_id, snapshot_sha256: snapshot_sha256 as Sha256Digest, action, project_ids: Object.freeze(projects),
-    share_transcript, owners: Object.freeze(chosen) });
+  // An approval keeps something; a rejection routes and owns nothing.
+  if (action === 'approve' ? !routed.some(route => route.project_ids !== null) : routed.length > 0 || chosen.length > 0) invalid();
+  return Object.freeze({ approval_id, command_id, snapshot_sha256: snapshot_sha256 as Sha256Digest, action, routes: Object.freeze(routed), owners: Object.freeze(chosen) });
+}
+
+/** The sorted, unique projects a decision's routes name. */
+function approvalRoutedProjectsV1(routes: readonly ApprovalRouteV1[]): readonly string[] {
+  return Object.freeze([...new Set(routes.flatMap(route => route.project_ids ?? []))].sort());
 }
 
 function checkAuthorization(surface: ApprovalSurfaceV1, organizationId: string, value: unknown): ApprovalAuthorizationV1 {
@@ -190,37 +222,55 @@ function checkAuthorization(surface: ApprovalSurfaceV1, organizationId: string, 
   });
 }
 
-/** personMeetingReviewTextV1 moved; identical except an action prints `  Due: <due_at | Not specified>` and never an owner, and every line after the
- *  first of an entry (the title, a time, a participant, a signal's text, Subject or quote) starts with four spaces. A quote is the meeting's own
- *  words and a text is the model's, so either may hold a line like "• …" or "  Status: decided"; indented, it never reads as one the Authority
- *  wrote, and the desktop's Approve card takes each entry back whole. */
-export function approvalProposalTextV1(snapshotJson: string): string {
-  const brief = (JSON.parse(snapshotJson) as { approved_payload: { brief: DecisionBrief } }).approved_payload.brief;
-  // Any line break a reader may honour (LF, CRLF or a lone CR) becomes an indented LF.
-  const entry = (line: string) => line.replace(/\r\n?|\n/g, '\n    ');
-  const lines = [brief.meeting.title ?? 'Meeting', ...Object.entries(brief.meeting.time ?? {}).map(([key, value]) => `${key.replaceAll('_', ' ')}: ${value}`),
-    ...brief.meeting.participants.map(person => `Participant: ${person.display_name ?? person.id}`)].map(entry);
-  for (const [name, signals] of [['Decisions', brief.decisions], ['Actions', brief.actions], ['Rationales', brief.rationales]] as const) {
-    lines.push('', name);
-    if (signals.length === 0) lines.push('None');
-    for (const signal of signals) {
-      lines.push(entry(`• ${signal.text}`));
-      if (signal.subject) lines.push(entry(`  Subject: ${signal.subject}`));
-      if ('status' in signal) lines.push(entry(`  Status: ${signal.status}`));
-      if ('due_at' in signal) lines.push(entry(`  Due: ${signal.due_at ?? 'Not specified'}`));
-      for (const span of signal.evidence) if (span.quote) lines.push(entry(`  From the meeting: “${span.quote}”`));
-    }
-  }
-  return lines.join('\n');
+/** One decision or action as its reviewer reads it, in the routes' order. */
+export interface ApprovalReviewItemV1 {
+  readonly signal_id: string; readonly kind: 'decision' | 'action'; readonly text: string; readonly subject: string | null;
+  /** A decision's; null for an action. */
+  readonly status: 'proposed' | 'decided' | 'unresolved' | null;
+  /** An action's, as the meeting set it; null for a decision or when it set none. */
+  readonly due_at: string | null;
+  /** The meeting's own words, one per cited span that quotes them. */
+  readonly quotes: readonly string[];
+}
+export interface ApprovalReviewReasonV1 { readonly signal_id: string; readonly text: string; readonly supports: readonly string[]; readonly quotes: readonly string[] }
+export interface ApprovalReviewV1 {
+  /** Who was in the meeting, by name (else id), each once. */
+  readonly participants: readonly string[];
+  readonly items: readonly ApprovalReviewItemV1[];
+  readonly reasons: readonly ApprovalReviewReasonV1[];
+}
+function briefOf(snapshotJson: string): DecisionBrief {
+  return (JSON.parse(snapshotJson) as { approved_payload: { brief: DecisionBrief } }).approved_payload.brief;
+}
+/** What a frozen proposal asks its reviewer: its decisions then actions (the order routes name them), the reasons behind
+ *  them, and who was there, each signal with the meeting's own words. Structured, so no text of the meeting or the model
+ *  can read as one the Authority wrote. */
+export function approvalReviewV1(snapshotJson: string): ApprovalReviewV1 {
+  const brief = briefOf(snapshotJson);
+  const quotes = (signal: DecisionBrief['decisions'][number] | DecisionBrief['actions'][number] | DecisionBrief['rationales'][number]) =>
+    Object.freeze(signal.evidence.flatMap(span => span.quote ? [span.quote] : []));
+  return Object.freeze({
+    participants: Object.freeze([...new Set(brief.meeting.participants.map(person => person.display_name ?? person.id))]),
+    items: Object.freeze([
+      ...brief.decisions.map(signal => Object.freeze({ signal_id: signal.id, kind: 'decision' as const, text: signal.text, subject: signal.subject,
+        status: signal.status, due_at: null, quotes: quotes(signal) })),
+      ...brief.actions.map(signal => Object.freeze({ signal_id: signal.id, kind: 'action' as const, text: signal.text, subject: signal.subject,
+        status: null, due_at: signal.due_at, quotes: quotes(signal) })),
+    ]),
+    reasons: Object.freeze(brief.rationales.map(signal => Object.freeze({ signal_id: signal.id, text: signal.text,
+      supports: Object.freeze([...signal.supports_signal_ids]), quotes: quotes(signal) }))),
+  });
 }
 
-/** What a Home row shows of a proposal: its first decision (else first action) on one line, how many actions it has, and when the meeting started.
- *  The line collapses whitespace and control characters and keeps at most 300 characters, never half of one. */
-export function approvalProposalSummaryV1(snapshotJson: string): { readonly first_line: string | null; readonly action_count: number; readonly meeting_at: string | null } {
-  const brief = (JSON.parse(snapshotJson) as { approved_payload: { brief: DecisionBrief } }).approved_payload.brief;
+/** What a Home row shows of a proposal: its first decision (else first action) on one line, how many actions it has, when the meeting started,
+ *  and whether it is a whole day. The line collapses whitespace and control characters and keeps at most 300 characters, never half of one. */
+export function approvalProposalSummaryV1(snapshotJson: string): { readonly first_line: string | null; readonly action_count: number; readonly meeting_at: string | null; readonly all_day: boolean } {
+  const brief = briefOf(snapshotJson);
   const line = (brief.decisions[0]?.text ?? brief.actions[0]?.text)?.replace(/[\s\p{Cc}]+/gu, ' ').trim().slice(0, 300).replace(/[\uD800-\uDBFF]$/, '');
   const time = brief.meeting.time, started = new Date(time?.actual_start_at ?? time?.scheduled_start_at ?? NaN);
-  return { first_line: line || null, action_count: brief.actions.length, meeting_at: Number.isNaN(started.getTime()) ? null : started.toISOString() };
+  const meetingAt = Number.isNaN(started.getTime()) ? null : started.toISOString();
+  // A whole day's time only names its UTC date (a pasted day is noon UTC), so readers show that date and no clock time.
+  return { first_line: line || null, action_count: brief.actions.length, meeting_at: meetingAt, all_day: meetingAt !== null && time?.all_day === true };
 }
 
 interface ProposalRow {
@@ -352,20 +402,28 @@ export async function createApprovalCoreV1(database: Database.Database, context:
         const answered = answer(surface, req, existing(req.approval_id, req.command_id));
         if (answered !== undefined) return answered;
         if (row.state !== 'staged' || row.approved_snapshot_sha256 !== req.snapshot_sha256) return { kind: 'stale' };
-        let retained: MeetingApprovalTranscriptSourceV2 | undefined;
+        let retained: ApprovalMeetingSourceV1 | undefined;
         if (req.action === 'approve') {
           const { meeting, decisions } = extractionOf(row);
+          // The routes name what the reviewer saw: every decision and action of the frozen snapshot, once, in its order.
+          const brief = briefOf(row.approved_snapshot_json!);
+          const items = [...brief.decisions, ...brief.actions].map(signal => signal.id);
+          if (req.routes.length !== items.length || req.routes.some((route, index) => route.signal_id !== items[index])) {
+            invalid('Routes must name every decision and action once, in order');
+          }
+          const kept = new Set(req.routes.flatMap(route => route.project_ids === null ? [] : [route.signal_id]));
           if (req.owners.length > 0) {
             const proposals = new Map(ownerProposalsFor(req.approval_id, meeting, decisions).map(item => [item.signal_id, item.index]));
             let previous = -1;
             for (const owner of req.owners) {
               const index = proposals.get(owner.signal_id);
-              if (index === undefined || index <= previous) invalid('Owners must name proposed actions in order');
+              if (index === undefined || index <= previous || !kept.has(owner.signal_id)) invalid('Owners must name kept proposed actions in order');
               previous = index;
             }
           }
-          if (req.project_ids.length > 0) {
-            try { options.projects(first.actor, req.project_ids); }
+          const projects = approvalRoutedProjectsV1(req.routes);
+          if (projects.length > 0) {
+            try { options.projects(first.actor, projects); }
             catch (error) {
               if (error instanceof AuthorityOperationError && error.code === 'unauthorized') throw new AuthorityOperationError('unauthorized', 'A chosen project is not available');
               throw error;
@@ -394,6 +452,7 @@ export async function createApprovalCoreV1(database: Database.Database, context:
       if (error.message.includes('authority_approval_decisions_v1.command_id')) invalid('Command id was already used for another meeting review');
       if (error.message.includes('needs its staged proposal')) return { kind: 'stale' };
       if (error.message.includes('needs the active reviewer')) denied();
+      if (error.message.includes('approval decision routes are invalid')) invalid();
       if (error.message.includes('audience needs active project membership')) throw new AuthorityOperationError('unauthorized', 'A chosen project is not available');
       throw error;
     }
@@ -411,10 +470,15 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     const body = row.body_json === null ? null : JSON.parse(row.body_json) as ApprovalDecisionBodyV1;
     const status = statusOf(row);
     const suggested = row.suggested_projects_json === null ? [] : JSON.parse(row.suggested_projects_json) as string[];
+    const receipt = row.receipt_json === null ? null : JSON.parse(row.receipt_json) as ApprovalDecisionReceiptV1;
     return Object.freeze({
       approval_id: row.approval_id, reviewer, reviewer_active: row.membership_status === 'active',
       title: String(row.title).slice(0, 256), status, decided_on: row.surface, decided_at: body?.decided_at ?? null,
-      project_ids: Object.freeze(body !== null ? [...body.request.project_ids] : suggested.filter(id => readable(reviewer, id))),
+      project_ids: body !== null ? approvalRoutedProjectsV1(body.request.routes) : Object.freeze(suggested.filter(id => readable(reviewer, id))),
+      routes: body === null ? null : Object.freeze(body.request.routes.map(route =>
+        Object.freeze({ signal_id: route.signal_id, project_ids: route.project_ids === null ? null : Object.freeze([...route.project_ids]) }))),
+      confirmed_owners: body === null ? null : Object.freeze(body.request.owners.map(owner => Object.freeze({ signal_id: owner.signal_id, owner: owner.owner }))),
+      records: Object.freeze((receipt?.records ?? []).map(record => Object.freeze({ approval_id: record.approval_id, project_ids: Object.freeze([...record.project_ids]) }))),
       snapshot_sha256: row.approved_snapshot_sha256, snapshot_json: row.approved_snapshot_json,
     });
   }

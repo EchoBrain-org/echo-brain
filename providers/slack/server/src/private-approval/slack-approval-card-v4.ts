@@ -4,10 +4,6 @@ import {
   type PrivateSlackApprovalBlockKitCardInputV1,
 } from "./private-slack-approval-block-kit-card-v1.js";
 
-export interface SlackApprovalProjectV4 {
-  readonly project_id: string;
-  readonly name: string;
-}
 export interface SlackApprovalOwnerProposalV4 {
   readonly signal_id: string;
   readonly action: string;
@@ -26,8 +22,10 @@ export interface SlackApprovalCardInputV4 {
   readonly approval_id: string;
   readonly snapshot_sha256: string;
   readonly review: PrivateSlackApprovalBlockKitCardInputV1;
-  readonly projects: readonly SlackApprovalProjectV4[];
-  readonly suggested_project_ids: readonly string[];
+  /** Where Approve sends every decision and action: the suggested projects the reviewer can read, by name; [] = only the reviewer. */
+  readonly destination: readonly string[];
+  /** slackApprovalDestinationSha256V4 of those projects' ids: the buttons carry it, so Approve decides only while it holds. */
+  readonly destination_sha256: string;
   readonly owners: readonly SlackApprovalOwnerProposalV4[];
 }
 const plain = (text: string) =>
@@ -43,14 +41,20 @@ const id = (approval: string, name: string) =>
 /** Shared with the verified interaction parser. These identifiers bind controls to one approval without exposing card state. */
 export function slackApprovalActionIdV4(
   approvalId: string,
-  action:
-    | "audience-select"
-    | "projects-select"
-    | "transcript-checkbox"
-    | "approve"
-    | "reject",
+  action: "approve" | "reject",
 ): string {
   return id(approvalId, action);
+}
+/** Where items go, in one line: project names, or "Only you". */
+export function slackApprovalDestinationV4(names: readonly string[]): string {
+  return names.length === 0 ? "Only you" : names.join(", ");
+}
+/**
+ * Binds a card's buttons to the destination it shows: a digest of the sorted project ids Approve sends every item to
+ * ([] = only the reviewer). Shared with the click, which decides nothing when the suggestion it would send to differs.
+ */
+export function slackApprovalDestinationSha256V4(projectIds: readonly string[]): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(JSON.stringify(["echo-approval-v4-destination", [...projectIds].sort()])).digest("hex")}`;
 }
 /** A signal id remains explicit so a submitted owner can never be re-associated by its rendered position. */
 export function slackApprovalOwnerActionIdV4(
@@ -60,25 +64,18 @@ export function slackApprovalOwnerActionIdV4(
   return id(approvalId, `owner-${signalId}`);
 }
 
-/** Builds the V4 controls below the complete review. */
+/**
+ * Builds the V4 controls below the complete review: owner inputs, one line saying where every item goes, and Approve or
+ * Reject. Slack approves as suggested; choosing per item happens in the ECHO desktop app.
+ */
 export function buildSlackApprovalCardV4(
   input: SlackApprovalCardInputV4,
 ): SlackApprovalCardV4 {
-  if (input.projects.length > 100 || input.owners.length > 40)
+  if (input.destination.length > 20 || input.owners.length > 40)
     throw new Error("Slack approval card exceeds Slack limits");
   const review = buildPrivateSlackApprovalReviewV1(input.review);
-  const projectLabel = (name: string) =>
-    name.length <= 75 ? name : `${name.slice(0, 74).trimEnd()}…`;
-  const projects = input.projects.map((project) =>
-    Object.freeze({
-      text: plain(projectLabel(project.name)),
-      value: project.project_id,
-      description: plain("Current project members can read this record"),
-    }),
-  );
-  const suggested = projects.filter((project) =>
-    input.suggested_project_ids.includes(project.value),
-  );
+  const destination = slackApprovalDestinationV4(input.destination);
+  const goesTo = `Goes to: ${destination.length <= 2_900 ? destination : `${destination.slice(0, 2_899).trimEnd()}…`}`;
   const blocks: Readonly<Record<string, unknown>>[] = [
     ...review.blocks,
     ...input.owners.map((owner) => ({
@@ -99,68 +96,14 @@ export function buildSlackApprovalCardV4(
     })),
     { type: "divider", block_id: id(input.approval_id, "divider") },
     {
-      type: "input",
-      block_id: id(input.approval_id, "audience"),
-      optional: false,
-      label: plain("Who should be able to read this record?"),
-      element: {
-        type: "static_select",
-        action_id: slackApprovalActionIdV4(
-          input.approval_id,
-          "audience-select",
-        ),
-        options: [
-          { text: plain("Only me"), value: "only-me" },
-          ...(projects.length === 0
-            ? []
-            : [{ text: plain("Projects"), value: "projects" }]),
-        ],
-        initial_option: {
-          text: plain(suggested.length === 0 ? "Only me" : "Projects"),
-          value: suggested.length === 0 ? "only-me" : "projects",
-        },
-      },
+      type: "section",
+      block_id: id(input.approval_id, "destination"),
+      text: plain(goesTo),
     },
-    ...(projects.length === 0
-      ? [{
-          type: "context",
-          block_id: id(input.approval_id, "projects-unavailable"),
-          elements: [plain("You have no active projects available to share with.")],
-        }]
-      : [{
-          type: "input",
-          block_id: id(input.approval_id, "projects"),
-          optional: true,
-          label: plain("Projects to share with"),
-          element: {
-            type: "multi_static_select",
-            action_id: slackApprovalActionIdV4(
-              input.approval_id,
-              "projects-select",
-            ),
-            options: projects,
-            max_selected_items: 20,
-            ...(suggested.length === 0 ? {} : { initial_options: suggested }),
-          },
-        }]),
     {
-      type: "input",
-      block_id: id(input.approval_id, "transcript"),
-      optional: true,
-      label: plain("Transcript"),
-      element: {
-        type: "checkboxes",
-        action_id: slackApprovalActionIdV4(
-          input.approval_id,
-          "transcript-checkbox",
-        ),
-        options: [
-          {
-            text: plain("Share transcript with the selected audience"),
-            value: "share-transcript-v1",
-          },
-        ],
-      },
+      type: "context",
+      block_id: id(input.approval_id, "per-item"),
+      elements: [plain("To choose per item, open the ECHO desktop app.")],
     },
     {
       type: "actions",
@@ -171,9 +114,10 @@ export function buildSlackApprovalCardV4(
         ...(action === "approve" ? { style: "primary" } : { style: "danger" }),
         text: plain(action === "approve" ? "Approve meeting" : "Reject"),
         value: JSON.stringify({
-          schema_version: 2,
+          schema_version: 3,
           approval_id: input.approval_id,
           snapshot_sha256: input.snapshot_sha256,
+          destination_sha256: input.destination_sha256,
         }),
       })),
     },
@@ -182,9 +126,9 @@ export function buildSlackApprovalCardV4(
     throw new Error("Slack approval card exceeds Slack limits");
   const text = [
     review.text,
-    "Visibility: Only me (default) or selected Projects.",
+    goesTo,
+    "Approve sends every decision and action there; choose per item in the ECHO desktop app.",
     "Choose Approve or Reject.",
-    "Transcript sharing is off by default.",
   ].join("\n");
   return Object.freeze({
     text,
@@ -197,20 +141,25 @@ export function buildSlackApprovalCardV4(
   });
 }
 
+/**
+ * The card once decided or replaced. An approval names its destinations, one per destination group in group order (a
+ * group's projects joined with " + ", "Only you" for the reviewer alone), so mixed destinations read as they were chosen.
+ */
 export function buildClosedApprovalCardV4(input: {
   readonly title: string;
   readonly outcome: "approved" | "rejected" | "superseded";
   readonly surface?: "desktop" | "slack";
-  readonly audience_label?: string | null;
+  readonly destinations?: readonly string[];
 }): SlackApprovalCardV4 {
   const message =
     input.outcome === "superseded"
       ? "Replaced by a newer version of this meeting"
       : `${input.outcome === "approved" ? "Approved" : "Rejected"} in ${input.surface === "slack" ? "Slack" : "the ECHO desktop"}`;
+  const sent = input.destinations === undefined || input.destinations.length === 0 ? null : input.destinations.join(" · ");
   const text =
-    input.audience_label === undefined || input.audience_label === null
+    sent === null
       ? message
-      : `${message}\nAudience: ${input.audience_label}`;
+      : `${message}\nSent to: ${sent.length <= 2_900 ? sent : `${sent.slice(0, 2_899).trimEnd()}…`}`;
   return Object.freeze({
     text,
     blocks: Object.freeze([{ type: "section", text: plain(text) }]),

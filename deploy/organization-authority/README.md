@@ -693,7 +693,7 @@ holds it again at the new attempt.
 The private `state/extraction-attempts.sqlite` file is durable spend history.
 Keep it with the retained Authority state and backups; never delete it to clear
 a hold. Its schema and Authority lineage are checked on open. It is a separate
-versioned sidecar and does not migrate the V14 databases or require onboarding
+versioned sidecar and does not migrate the V15 databases or require onboarding
 to be repeated. Releases predating this guard do not enforce it; rolling back
 to those releases can resume repeated extraction calls.
 

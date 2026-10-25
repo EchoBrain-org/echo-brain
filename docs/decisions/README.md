@@ -68,6 +68,7 @@ separately.
 | [ADR-0043](ADR-0043-ask-receipt-counts-what-research-looked-through.md) | The Ask receipt counts every item research looked through | proposed |
 | [ADR-0044](ADR-0044-search-rebuilds-make-no-model-call.md) | Search rebuilds make no model call; the related-atom projection is removed | accepted |
 | [ADR-0045](ADR-0045-ask-answer-layout.md) | An Ask answer carries its layout, and the desktop sets its type | proposed |
+| [ADR-0046](ADR-0046-private-meetings-and-item-routing.md) | Meetings stay private until each item is approved to its destination | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

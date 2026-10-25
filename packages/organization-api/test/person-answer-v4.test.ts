@@ -169,19 +169,16 @@ describe('Agentic Ask V1 public contracts', () => {
       source_sha256: `sha256:${'e'.repeat(64)}`, representation_sha256: `sha256:${'f'.repeat(64)}`, anchor_sha256: `sha256:${'0'.repeat(64)}`,
     };
     const note = `note:ctx_${'2'.repeat(64)}`;
-    const transcript = `transcript:${citation.record_sha256}`;
     const accepted = [
       { citation, ref: `meeting:${citation.record_sha256}` },
       { citation: { ...source, document_id }, kind: 'document_passage', ref: `document:${document_id}` },
       { citation: source, kind: 'note', ref: note },
-      { citation: source, kind: 'note', ref: transcript },
     ];
     for (const value of accepted) expect(validatePersonAnswerResponseV4(answer(value)).citations[0]!.ref).toBe(value.ref);
     // A citation without a ref (from an older server) still validates.
     expect(validatePersonAnswerResponseV4(answer({ citation }))).not.toHaveProperty('citations.0.ref');
     const rejected = [
       { citation, ref: `meeting:sha256:${'9'.repeat(64)}` },
-      { citation, ref: transcript },
       { citation: { ...source, document_id }, kind: 'document_passage', ref: note },
       { citation: { ...source, document_id }, kind: 'document_passage', ref: `document:doc_${'3'.repeat(64)}` },
       { citation: source, kind: 'note', ref: `document:${document_id}` },
@@ -191,6 +188,9 @@ describe('Agentic Ask V1 public contracts', () => {
     for (const ref of [`record:${citation.record_sha256}`, `meeting:${citation.record_sha256} `, `meeting:sha256:${'A'.repeat(64)}`, 42]) {
       expect(() => validatePersonAnswerResponseV4(answer({ citation, ref }))).toThrow('Ask response citation ref is invalid');
     }
+    // The retired transcript ref (ADR-0046) is no ref at all.
+    expect(() => validatePersonAnswerResponseV4(answer({ citation: source, kind: 'note', ref: `transcript:${citation.record_sha256}` })))
+      .toThrow('Ask response citation ref is invalid');
   });
 
   it('keeps the evidence desk contract exact-key: a desk item never carries a ref', () => {

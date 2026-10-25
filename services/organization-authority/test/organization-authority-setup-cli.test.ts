@@ -18,6 +18,7 @@ import {
   sha256Digest,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
+import { approvalRecordIdV2 } from "@echo-brain/organization-protocol";
 import {
   buildReadableSearchGenerationV1,
   READABLE_SEARCH_CONTENT_BASELINE_V2,
@@ -199,6 +200,8 @@ interface DurableCanaryFixtureOptions {
   readonly synthetic_canary?: "owner" | "granola" | "none";
   /** The release whose canary revision that proposal carries. */
   readonly synthetic_canary_release?: string;
+  /** True leaves the canary's approval publishing: its record is in the log, but its decision has no receipt yet. */
+  readonly canary_publishing?: boolean;
 }
 
 function buildInputForCanary(
@@ -278,7 +281,8 @@ function buildInputForCanary(
 type SetupManifest = ReturnType<typeof readOrganizationAuthoritySetupManifest>;
 type RecordHead = { position: number; record_sha256: Sha256Digest };
 
-/** Appends one approved V4 record per entry, each after the previous; returns the head. */
+/** Appends one approved V4 record per entry, each after the previous; returns the head. Each is its proposal's one record:
+ *  it carries its destination's approval id and names the proposal it decided. */
 function appendApprovedRecords(
   state: string,
   manifest: SetupManifest,
@@ -304,7 +308,7 @@ function appendApprovedRecords(
           envelope_id: entry.envelope_id,
           event: { kind: "approved" },
           semantic_idempotency_key: entry.semantic_sha256,
-          human_act_resolution_ref: { approval_id: entry.approval_id, action: "approve" },
+          human_act_resolution_ref: { approval_id: approvalRecordIdV2(entry.approval_id, []), proposal_approval_id: entry.approval_id, action: "approve" },
           predecessor_position: head?.position ?? null,
           predecessor_record_sha256: head?.record_sha256 ?? null,
         },
@@ -338,7 +342,7 @@ function appendApprovedRecords(
         .run(
           position,
           entry.envelope_id,
-          entry.approval_id,
+          approvalRecordIdV2(entry.approval_id, []),
           entry.semantic_sha256,
           envelope,
           sha256Digest(envelope),
@@ -460,8 +464,10 @@ function installDurableCanaryFixture(
       const semantic = insertStagingSyntheticSource(authority, manifest, {
         adapter_id: options.synthetic_canary === "granola" ? "granola-person-mcp" : STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
       });
-      insertSyntheticProposal(authority, semantic, { index: 0, meeting_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, approval_id: approvalId,
+      const snapshot = insertSyntheticProposal(authority, semantic, { index: 0, meeting_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, approval_id: approvalId,
         revision: stagingSyntheticCanaryMeetingV1(options.synthetic_canary_release ?? CURRENT_RELEASE).provenance.canonical_revision });
+      insertSyntheticDecision(authority, manifest, { index: 0, approval_id: approvalId, snapshot_sha256: snapshot,
+        ...(options.canary_publishing === true ? {} : { published_record: sha256Digest("founder-canary-record") }) });
     }
   } finally {
     authority.close();
@@ -480,7 +486,7 @@ function insertStagingSyntheticSource(
   const adapterId = input.adapter_id ?? STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1;
   const sourceKey = `pms_${sha256Digest(`synthetic-source-${adapterId}`).slice(7)}`;
   const semantic = sha256Digest(`synthetic-source-admission-${adapterId}`);
-  const cursor = writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: input.pending ?? [] });
+  const cursor = writeStagingSyntheticCheckpointV1({ manual: input.pending ?? [] });
   authority
     .prepare(
       `INSERT INTO authority_live_source_admission_v2
@@ -515,17 +521,17 @@ function insertStagingSyntheticSource(
     .prepare("INSERT INTO authority_live_source_progress_v2 VALUES (?, ?, ?, 1, ?)")
     .run(sourceKey, semantic, cursor, SYNTHETIC_ISSUED_AT);
   authority
-    .prepare("INSERT INTO authority_person_meeting_sources_v2 VALUES (?, ?, NULL, NULL, 0)")
+    .prepare("INSERT INTO authority_person_meeting_sources_v2 VALUES (?, ?, 'off', NULL, NULL, 0)")
     .run(sourceKey, sha256Digest("synthetic-person"));
   return semantic;
 }
 
-/** One staged proposal for a meeting of that source. */
+/** One staged proposal for a meeting of that source; returns its frozen snapshot's digest. */
 function insertSyntheticProposal(
   authority: Database.Database,
   admissionSemantic: Sha256Digest,
   input: { readonly index: number; readonly meeting_id: string; readonly approval_id: string; readonly revision?: string },
-): void {
+): Sha256Digest {
   const suffix = String(input.index);
   const meeting = { schema_version: 1, id: input.meeting_id, title: `Synthetic meeting ${suffix}`, provenance: { external_id: input.meeting_id, canonical_revision: input.revision ?? `revision-${suffix}` } };
   const candidateId = `cnd_synthetic_${suffix}`;
@@ -574,9 +580,43 @@ function insertSyntheticProposal(
       canonicalSha256({ approval_id: input.approval_id, schema_version: 1, kind: "synthetic-snapshot", proposal: input.index } as never),
       SYNTHETIC_ISSUED_AT,
     );
+  return canonicalSha256({ approval_id: input.approval_id, schema_version: 1, kind: "synthetic-snapshot", proposal: input.index } as never);
 }
 
-type SyntheticFixtureApprovalShape = "one" | "all" | "pending" | "canary";
+/**
+ * The owner's approval of a synthetic proposal, every item Only me: its decision and, once published, the receipt naming the
+ * record it published (the receipt is written only after every record is in the log).
+ */
+function insertSyntheticDecision(
+  authority: Database.Database,
+  manifest: SetupManifest,
+  input: { readonly index: number; readonly approval_id: string; readonly snapshot_sha256: Sha256Digest; readonly published_record?: Sha256Digest },
+): void {
+  const suffix = String(input.index);
+  const body = {
+    request: { approval_id: input.approval_id, command_id: `desk-approve-${suffix}`, snapshot_sha256: input.snapshot_sha256, action: "approve",
+      routes: [{ signal_id: "decision-1", project_ids: [] }], owners: [] },
+    surface: "desktop", actor: { organization_id: manifest.organization_id, principal_id: manifest.owner_principal_id, membership_id: manifest.owner_membership_id },
+    evidence: { kind: "person-session", sha256: sha256Digest(`synthetic-session-${suffix}`) },
+    transcript_source: { source_id: `source:${"0".repeat(64)}`, revision_id: `revision-${suffix}`, source_sha256: sha256Digest(`synthetic-source-${suffix}`) },
+    decided_at: SYNTHETIC_ISSUED_AT,
+  };
+  authority
+    .prepare("INSERT INTO authority_approval_decisions_v1 (approval_id, command_id, surface, action, body_json) VALUES (?, ?, 'desktop', 'approve', ?)")
+    .run(input.approval_id, body.request.command_id, canonicalJson(body as never));
+  if (input.published_record === undefined) return;
+  const record = { approval_id: approvalRecordIdV2(input.approval_id, []), project_ids: [], record_sha256: input.published_record, receipt: { body: { record_sha256: input.published_record } } };
+  authority
+    .prepare("UPDATE authority_approval_decisions_v1 SET receipt_json = ? WHERE approval_id = ?")
+    .run(canonicalJson({ records: [record] } as never), input.approval_id);
+}
+
+type SyntheticFixtureApprovalShape = "one" | "all" | "pending" | "canary" | "publishing" | "unrecorded";
+/**
+ * How far a fixture proposal's approval got: published (its record in the log and its receipt written), publishing (its
+ * record in the log, no receipt yet), unrecorded (a receipt naming a record the log lacks), or none.
+ */
+type SyntheticFixtureApprovalState = "published" | "publishing" | "unrecorded" | "none";
 
 /**
  * Two fixture meetings on the owner's synthetic source. Every shape but "all"
@@ -587,21 +627,19 @@ function installSyntheticFixtureApprovalEvidence(
   shape: SyntheticFixtureApprovalShape,
 ): void {
   const manifest = readOrganizationAuthoritySetupManifest(state);
-  const proposals = [
-    { meeting_id: "fictional-roadmap-review", approval_id: "apr_synthetic_fixture_0", approved: true },
-    ...(shape === "pending" ? [] : [{ meeting_id: "fictional-budget-sync", approval_id: "apr_synthetic_fixture_1", approved: shape === "all" }]),
-    ...(shape === "canary" ? [{ meeting_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, approval_id: "apr_synthetic_canary", approved: true }] : []),
+  const second: SyntheticFixtureApprovalState = shape === "all" ? "published" : shape === "publishing" || shape === "unrecorded" ? shape : "none";
+  const proposals: readonly { readonly meeting_id: string; readonly approval_id: string; readonly state: SyntheticFixtureApprovalState }[] = [
+    { meeting_id: "fictional-roadmap-review", approval_id: "apr_synthetic_fixture_0", state: "published" },
+    ...(shape === "pending" ? [] : [{ meeting_id: "fictional-budget-sync", approval_id: "apr_synthetic_fixture_1", state: second }]),
+    ...(shape === "canary" ? [{ meeting_id: STAGING_SYNTHETIC_CANARY_MEETING_ID_V1, approval_id: "apr_synthetic_canary", state: "published" as const }] : []),
   ];
-  const head = appendApprovedRecords(
-    state,
-    manifest,
-    proposals.filter((proposal) => proposal.approved).map((proposal, index) => ({
-      approval_id: proposal.approval_id,
-      envelope_id: `env_synthetic_fixture_${String(index + 1)}`,
-      record_sha256: sha256Digest(`synthetic-fixture-record-${String(index + 1)}`),
-      semantic_sha256: sha256Digest(`synthetic-fixture-semantic-${String(index + 1)}`),
-    })),
-  );
+  const records = proposals.filter((proposal) => proposal.state === "published" || proposal.state === "publishing").map((proposal, index) => ({
+    approval_id: proposal.approval_id,
+    envelope_id: `env_synthetic_fixture_${String(index + 1)}`,
+    record_sha256: sha256Digest(`synthetic-fixture-record-${String(index + 1)}`),
+    semantic_sha256: sha256Digest(`synthetic-fixture-semantic-${String(index + 1)}`),
+  }));
+  const head = appendApprovedRecords(state, manifest, records);
   const built = buildReadableSearchGenerationV1(
     buildInputForCanary(state, manifest, head),
   );
@@ -610,7 +648,13 @@ function installSyntheticFixtureApprovalEvidence(
     const semantic = insertStagingSyntheticSource(authority, manifest, {
       pending: shape === "pending" ? ["fictional-budget-sync"] : [],
     });
-    for (const [index, proposal] of proposals.entries()) insertSyntheticProposal(authority, semantic, { index, ...proposal });
+    for (const [index, proposal] of proposals.entries()) {
+      const snapshot = insertSyntheticProposal(authority, semantic, { index, meeting_id: proposal.meeting_id, approval_id: proposal.approval_id });
+      if (proposal.state === "none") continue;
+      const recorded = records.find((record) => record.approval_id === proposal.approval_id)?.record_sha256;
+      insertSyntheticDecision(authority, manifest, { index, approval_id: proposal.approval_id, snapshot_sha256: snapshot,
+        ...(proposal.state === "publishing" ? {} : { published_record: recorded ?? sha256Digest(`synthetic-fixture-unrecorded-${String(index)}`) }) });
+    }
     insertActiveGeneration(authority, manifest, built, head, built.manifest.retrieval_contract_sha256, "2026-08-23T00:00:01.000Z");
     const audit = new SqlitePersonRecordReadAuditV1(authority);
     for (const [mode, checked_at] of [
@@ -1243,6 +1287,9 @@ describe("Organization Authority setup coordinator", () => {
     ["both fixture proposals approved", "all", "complete"],
     ["a fixture import still pending", "pending", "ready_to_start"],
     ["only the canary approved beside a fixture", "canary", "ready_to_start"],
+    // One of its records is in the log, but the approval counts only once its receipt names every record.
+    ["a fixture approval still publishing", "publishing", "ready_to_start"],
+    ["a fixture approval whose receipt names a record the log lacks", "unrecorded", "ready_to_start"],
   ] as const)(
     "requires every synthetic fixture meeting approved before synthetic completion: %s",
     async (_name, shape, nextStep) => {
@@ -1256,6 +1303,18 @@ describe("Organization Authority setup coordinator", () => {
       expect((await cli(["status", "--state-dir", state], deps)).json).toMatchObject({ next_step: nextStep });
     },
   );
+
+  it("does not count the canary while its approval is still publishing", async () => {
+    vi.stubEnv("ECHO_CLEAN_AUTHORITY_HOST", "authority-staging.echobrain.org");
+    vi.stubEnv("ECHO_CLEAN_RELEASE_ID", CURRENT_RELEASE);
+    const state = stateDirectory(STAGING_ORIGIN);
+    const productionDependencies = canaryFreeDeps();
+    await cli(bootstrapArgs(state, STAGING_ORIGIN), productionDependencies);
+    installDurableCanaryFixture(state, { synthetic_canary: "owner", canary_publishing: true });
+    expect((await cli(["status", "--state-dir", state], productionDependencies)).json).toMatchObject({
+      source_progress_observed: true, synthetic_staging_canary_observed: false, approved_record_present: true, next_step: "ready_to_start",
+    });
+  });
 
   it("reports canary evidence once the current release's synthetic canary proposal has an approved record, only on staging", async () => {
     const productionDependencies = canaryFreeDeps();

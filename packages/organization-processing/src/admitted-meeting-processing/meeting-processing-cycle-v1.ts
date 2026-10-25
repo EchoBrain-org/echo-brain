@@ -471,7 +471,7 @@ function rebindDecisionsToRevision(
  * adapter declares refused unbilled (no output) is not parked: its exact key
  * gets one automatic retry and the revision stays at the head
  * (`retry_scheduled`); any later failure parks. Advancing past a queued
- * import consumes it, so its "Save to" projects are recorded as suggestions
+ * import consumes it, so its suggested projects are recorded as suggestions
  * whether its revision was staged or parked.
  */
 export class AdmittedMeetingProcessingCycleV1 {

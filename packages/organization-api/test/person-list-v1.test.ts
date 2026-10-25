@@ -12,7 +12,6 @@ import {
   validatePersonItemRefV1,
   validatePersonListRequestV1,
   validatePersonListResponseV1,
-  validatePersonOpenRefV1,
   validatePersonOpenRequestV1,
   validatePersonOpenResponseV1,
 } from '../src/index.js';
@@ -32,6 +31,7 @@ const NOTE = `note:ctx_${'a'.repeat(64)}`;
 const IMPORTED = `imported_meeting:cap_${'d'.repeat(64)}`;
 const DOCUMENT = `document:doc_${'b'.repeat(64)}`;
 const MEETING = `meeting:sha256:${'c'.repeat(64)}`;
+/** The retired transcript ref (ADR-0046): no list, open or Ask contract accepts it. */
 const TRANSCRIPT = `transcript:sha256:${'c'.repeat(64)}`;
 
 const noteRow = { ref: NOTE, kind: 'note', title: 'Pricing notes', added_at: '2026-09-21T22:00:00.000Z', visibility: 'only_me', projects: [] };
@@ -77,7 +77,7 @@ const openMeeting = (fields: Record<string, unknown> = {}) => defined({
     { kind: 'action', text: 'Draft the ', owner: 'Maya Chen', due_at: '2026-10-01', part: { index: 1, count: 2 } },
     { kind: 'action', text: 'pricing page.', part: { index: 2, count: 2 } },
   ],
-  transcript_ref: TRANSCRIPT, next_cursor: null, ...fields,
+  next_cursor: null, ...fields,
 });
 const withAtom = (fields: Record<string, unknown>) => openMeeting({ atoms: [fields] });
 const openTranscript = { schema_version: 1, kind: 'echo-person-open-v1', ref: TRANSCRIPT, text: 'Ari: annual first.', next_cursor: 'AAA' };
@@ -104,20 +104,18 @@ describe('Person list and open public contracts', () => {
     ]) expect(() => validatePersonListRequestV1(request)).toThrow();
   });
 
-  it('parses the four ref grammars and refuses every near miss', () => {
-    for (const ref of [NOTE, DOCUMENT, MEETING, TRANSCRIPT]) expect(validatePersonOpenRefV1(ref)).toBe(ref);
-    for (const ref of [NOTE, DOCUMENT, MEETING]) expect(validatePersonItemRefV1(ref)).toBe(ref);
-    expect(() => validatePersonItemRefV1(TRANSCRIPT)).toThrow();
-    expect([NOTE, DOCUMENT, MEETING, TRANSCRIPT].map((ref) => personRefKindV1(ref as never))).toEqual(['note', 'document', 'meeting', 'transcript']);
+  it('parses the ref grammars and refuses every near miss', () => {
+    for (const ref of [NOTE, IMPORTED, DOCUMENT, MEETING]) expect(validatePersonItemRefV1(ref)).toBe(ref);
+    expect([NOTE, IMPORTED, DOCUMENT, MEETING].map((ref) => personRefKindV1(ref as never))).toEqual(['note', 'imported_meeting', 'document', 'meeting']);
     expect(personRefIdV1(NOTE as never)).toBe(`ctx_${'a'.repeat(64)}`);
-    expect(personRefIdV1(TRANSCRIPT as never)).toBe(`sha256:${'c'.repeat(64)}`);
+    expect(personRefIdV1(MEETING as never)).toBe(`sha256:${'c'.repeat(64)}`);
     for (const ref of [
-      `note:ctx_${'A'.repeat(64)}`, `document:doc_${'b'.repeat(63)}`, `meeting:sha256:${'c'.repeat(65)}`,
+      `note:ctx_${'A'.repeat(64)}`, `document:doc_${'b'.repeat(63)}`, `meeting:sha256:${'c'.repeat(65)}`, TRANSCRIPT,
       `record:sha256:${'c'.repeat(64)}`, `ctx_${'a'.repeat(64)}`, ` ${NOTE}`, `${MEETING} `, `${DOCUMENT}\n`, 42, null,
-    ]) expect(() => validatePersonOpenRefV1(ref)).toThrow();
+    ]) expect(() => validatePersonItemRefV1(ref)).toThrow();
     expect(validatePersonOpenRequestV1({ schema_version: 1, ref: DOCUMENT, cursor: 'AnR3' })).toEqual({ schema_version: 1, ref: DOCUMENT, cursor: 'AnR3' });
-    expect(validatePersonOpenRequestV1({ schema_version: 1, ref: TRANSCRIPT })).toEqual({ schema_version: 1, ref: TRANSCRIPT });
     for (const request of [
+      { schema_version: 1, ref: TRANSCRIPT },
       { schema_version: 1, ref: NOTE, cursor: 'AnR3' }, { schema_version: 1, ref: MEETING, scope: { kind: 'global' } },
       { schema_version: 1, ref: MEETING, project_id: PROJECT_A }, { schema_version: 1, ref: MEETING, mine: true },
       { schema_version: 1, ref: MEETING, cursor: 'An=' }, { schema_version: 2, ref: MEETING },
@@ -280,11 +278,11 @@ describe('Person list and open public contracts', () => {
 
   it('opens a meeting as detail plus split atoms, never as the envelope', () => {
     expect(validatePersonOpenResponseV1(openMeeting())).toEqual(openMeeting());
-    const next = validatePersonOpenResponseV1(openMeeting({ meeting: undefined, transcript_ref: undefined, next_cursor: 'AnR3' }));
+    const next = validatePersonOpenResponseV1(openMeeting({ meeting: undefined, next_cursor: 'AnR3' }));
     expect(next).not.toHaveProperty('meeting');
-    expect(validatePersonOpenResponseV1(openMeeting({ atoms: [], transcript_ref: undefined }))).toMatchObject({ atoms: [] });
+    expect(validatePersonOpenResponseV1(openMeeting({ atoms: [] }))).toMatchObject({ atoms: [] });
     expect(() => validatePersonOpenResponseV1(openMeeting({ atoms: [], next_cursor: 'AnR3' }))).toThrow('atoms is invalid');
-    expect(() => validatePersonOpenResponseV1(openMeeting({ meeting: undefined, transcript_ref: undefined, atoms: [] }))).toThrow('atoms is invalid');
+    expect(() => validatePersonOpenResponseV1(openMeeting({ meeting: undefined, atoms: [] }))).toThrow('atoms is invalid');
     for (const atom of [
       { kind: 'action', text: 'Ship it.', status: 'decided' }, { kind: 'decision', text: 'Ship it.', owner: 'Ari' },
       { kind: 'rationale', text: 'Because.', due_at: '2026-10-01' }, { kind: 'decision', text: 'Ship it.', status: 'maybe' },
@@ -297,8 +295,8 @@ describe('Person list and open public contracts', () => {
     const atoms = (count: number) => Array.from({ length: count }, (_, index) => ({ kind: 'rationale', text: `Reason ${index}.` }));
     expect(validatePersonOpenResponseV1(openMeeting({ atoms: atoms(25) }))).toHaveProperty(['atoms', 'length'], 25);
     expect(() => validatePersonOpenResponseV1(openMeeting({ atoms: atoms(26) }))).toThrow('atoms is invalid');
-    expect(() => validatePersonOpenResponseV1(openMeeting({ meeting: undefined }))).toThrow('transcript_ref');
-    expect(() => validatePersonOpenResponseV1(openMeeting({ transcript_ref: `transcript:sha256:${'d'.repeat(64)}` }))).toThrow('transcript_ref');
+    // The retired transcript_ref (ADR-0046) is an unknown field.
+    expect(() => validatePersonOpenResponseV1(openMeeting({ transcript_ref: TRANSCRIPT }))).toThrow('unexpected shape');
     expect(() => validatePersonOpenResponseV1(openMeeting({ item: { ...meetingRow, ref: `meeting:sha256:${'d'.repeat(64)}` } }))).toThrow('inconsistent');
     const detail = (fields: Record<string, unknown>) => openMeeting({ meeting: defined({ ...meetingDetail, ...fields }) });
     const names = (count: number) => Array.from({ length: count }, (_, index) => `Person ${index}`);
@@ -310,11 +308,8 @@ describe('Person list and open public contracts', () => {
     ]) expect(() => validatePersonOpenResponseV1(detail(fields))).toThrow();
   });
 
-  it('opens a transcript page without an item', () => {
-    expect(validatePersonOpenResponseV1(openTranscript)).toEqual(openTranscript);
-    expect(() => validatePersonOpenResponseV1({ ...openTranscript, item: meetingRow })).toThrow('unexpected shape');
-    expect(() => validatePersonOpenResponseV1({ ...openTranscript, text: 'x'.repeat(3 * 1024 + 1) })).toThrow('text');
-    expect(() => validatePersonOpenResponseV1({ ...openTranscript, kind: 'echo-person-meeting-transcript-v1' })).toThrow('invalid');
+  it('refuses a transcript page, the retired open kind (ADR-0046)', () => {
+    expect(() => validatePersonOpenResponseV1(openTranscript)).toThrow('ref is invalid');
   });
 
   it('fits a worst-case list page inside the list bound and refuses anything larger', () => {

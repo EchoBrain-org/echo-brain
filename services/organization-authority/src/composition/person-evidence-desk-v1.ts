@@ -16,7 +16,7 @@ import {
   type EvidenceDeskScopeV1,
   type EvidenceDeskRevalidateInputV1,
 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
-import type { PersonAnswerCitationV3, PersonOpenRefV1 } from "@echo-brain/organization-api";
+import type { PersonAnswerCitationV3, PersonItemRefV1 } from "@echo-brain/organization-api";
 import type {
   OriginalContextDeskReleaseV1,
   PersonAskScopeV2,
@@ -31,6 +31,24 @@ import {
   type PersonRecordSearchReleasePointerV1,
 } from "./person-record-search-route.js";
 
+/**
+ * What one desk never offers, whatever its scope can read: an approved record's impact run fences off its meeting's other
+ * records and the meeting's own source, so nothing routed elsewhere, or kept for the reviewer alone, reaches the record's
+ * audience through the card. Every read drops them before an item is kept, shown or opened, and a citation of one is
+ * refused before it is read.
+ */
+export interface PersonEvidenceDeskExclusionsV1 {
+  /** Approved records: their items. */
+  readonly records: readonly Sha256Digest[];
+  /** Original sources by source_id: the notes of every revision. */
+  readonly sources: readonly string[];
+  /**
+   * Every item only this reader may see: Only-me records, and private notes, documents and unapproved imported meetings.
+   * For research whose words reach a wider audience than the reader (an impact run of a shared record).
+   */
+  readonly private?: boolean;
+}
+
 /** The V3 route creates one desk per request; actor, bearer and scope never
  * enter the model-facing methods. */
 export interface CreatePersonEvidenceDeskV1Options {
@@ -38,6 +56,7 @@ export interface CreatePersonEvidenceDeskV1Options {
   readonly scope: PersonAskScopeV2;
   readonly originals: PersonOriginalContextEvidenceDeskPortV1;
   readonly records: PersonEvidenceDeskRecordsV1;
+  readonly exclude?: PersonEvidenceDeskExclusionsV1;
 }
 
 /**
@@ -55,9 +74,8 @@ export interface PersonEvidenceDeskV1 extends EvidenceDeskPortV1 {
 }
 
 /**
- * Observability only: what one desk call returned, by source. A shared
- * transcript counts as a meeting item; the originals adapter adds
- * transcript_items for that subset. Never text, ids or labels.
+ * Observability only: what one desk call returned, by source. Never text, ids
+ * or labels.
  */
 function deskCounts(items: readonly EvidenceDeskItemV1[]): CoreRuntimeCountsV1 {
   let meeting = 0; let document = 0;
@@ -150,6 +168,15 @@ function balanced<T>(left: readonly T[], right: readonly T[]): readonly T[] {
  * use `openCitation` below to make a fresh scoped desk release.
  */
 export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Options): PersonEvidenceDeskV1 {
+  const excludedRecords = new Set<string>(options.exclude?.records ?? []);
+  const excludedSources = new Set<string>(options.exclude?.sources ?? []);
+  const excludedPrivate = options.exclude?.private === true;
+  // Each store leaves these out before its limit, so an excluded item never takes a permitted item's place; the filters below
+  // stay as a backstop over what comes back.
+  const recordExclusion = excludedRecords.size === 0 && !excludedPrivate ? {} : { exclude: Object.freeze({ record_sha256s: Object.freeze([...excludedRecords] as Sha256Digest[]), approver_only: excludedPrivate }) };
+  const originalExclusion = excludedSources.size === 0 && !excludedPrivate ? {} : { exclude: Object.freeze({ source_ids: Object.freeze([...excludedSources]), only_me: excludedPrivate }) };
+  const offeredOriginal = (item: { readonly citation: { readonly source_id: string }; readonly visibility: string }) =>
+    !excludedSources.has(item.citation.source_id) && !(excludedPrivate && item.visibility === "only_me");
   const stored = new Map<string, Stored>();
   const originalReleases: OriginalContextDeskReleaseV1[] = [];
   /** How many of `originalReleases` a successful check of this desk has covered. */
@@ -176,7 +203,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const originals = (release: OriginalContextDeskReleaseV1): readonly EvidenceDeskItemV1[] => {
     originalReleases.push(release);
     readUnchecked = mergeUncheckedV1([readUnchecked, release.unchecked]);
-    return release.items.map((value) => save(Object.freeze({
+    return release.items.filter(offeredOriginal).map((value) => save(Object.freeze({
       id: itemId(sourceCitation(value)), citation: sourceCitation(value), kind: value.kind,
       ...(value.text === undefined ? {} : { text: value.text }), label: value.label,
       visibility: value.visibility, receipt_sha256: release.receipt,
@@ -191,9 +218,9 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (pointer.generation_id !== result.release.active_pointer.generation_id || pointer.manifest_sha256 !== result.release.active_pointer.manifest_sha256 || pointer.record_head.position !== result.release.active_pointer.record_head.position || pointer.record_head.record_sha256 !== result.release.active_pointer.record_head.record_sha256) throw new AuthorityOperationError("unavailable", "record evidence snapshot changed");
     recordReleases.push(result.release);
     if (result.desk_items === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
-    return result.desk_items.map((value) => {
+    return result.desk_items.filter((value) => !excludedRecords.has(value.record_sha256) && !(excludedPrivate && value.visibility === "approver_only")).map((value) => {
       const citation = recordCitation(value);
-      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, list_label: value.list_label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonOpenRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
+      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, list_label: value.list_label, visibility: value.visibility, ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at, date_kind: "occurred" as const }), ...(value.dates === undefined ? {} : { dates: value.dates }), ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonItemRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
     });
   };
   const searchRecords = (query: string, kinds?: readonly EvidenceDeskKindV1[], dates: EvidenceDateFilterV1 = {}): readonly EvidenceDeskItemV1[] => {
@@ -201,7 +228,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     try {
       const recordKinds = recordKindsOf(kinds);
       if (recordKinds !== undefined && recordKinds.length === 0) return [];
-      return records(options.records.searchBatch({ ...dates, access_token: options.access_token, query, limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }));
+      return records(options.records.searchBatch({ ...dates, access_token: options.access_token, query, limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }), ...recordExclusion }));
     } catch (error) {
       if (pointer === undefined && unavailableAtStart(error)) { recordsUnavailableAtStart = true; return []; }
       throw error;
@@ -250,16 +277,17 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
         scope: options.scope,
         limit,
         ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }),
+        ...originalExclusion,
       });
       const beforeRecords = recordReleases.length;
       const recordKinds = recordKindsOf(input.kinds);
-      const recordInventory = recordsUnavailableAtStart || input.source === "document" ? [] : records(options.records.listDeskBatch({ ...evidenceDateFilterV1(input), access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
+      const recordInventory = recordsUnavailableAtStart || input.source === "document" ? [] : records(options.records.listDeskBatch({ ...evidenceDateFilterV1(input), access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }), ...recordExclusion }), false);
       const items = balanced(originals(released), recordInventory).filter((item) => input.kinds === undefined || input.kinds.includes(item.kind));
       return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
     }
     latestRecordTruncated = false;
     const sourceKinds = sourceKindsOf(input.kinds);
-    const released = options.originals.deskSearch({ ...evidenceDateFilterV1(input), ...(input.source === "meeting" || input.source === "document" ? { source: input.source } : {}), access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
+    const released = options.originals.deskSearch({ ...evidenceDateFilterV1(input), ...(input.source === "meeting" || input.source === "document" ? { source: input.source } : {}), access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }), ...originalExclusion });
     const beforeRecords = recordReleases.length;
     const echoItems = [originals(released), input.source === "document" ? [] : searchRecords(input.query, input.kinds, evidenceDateFilterV1(input))].map((list) => list.filter((item) => input.kinds === undefined || input.kinds.includes(item.kind)));
     const items = balanced(echoItems[0]!, echoItems[1]!);
@@ -293,6 +321,10 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   const openCitation = async (input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
     initialize();
+    // An excluded record or source is not read at all, as if it did not exist.
+    if (input.citation.kind === "approved_record" ? excludedRecords.has(input.citation.record_sha256) : excludedSources.has(input.citation.source_id)) {
+      throw new AuthorityOperationError("not_found", "evidence item is not available");
+    }
     if (input.citation.kind === "approved_record") {
       const expanded = options.records.openDeskCitation({ access_token: options.access_token, atom_id: input.citation.atom_id, record_sha256: input.citation.record_sha256, policy_id: input.citation.policy_id, ...recordScope(options.scope) });
       latestRecordTruncated = false;

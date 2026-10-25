@@ -13,8 +13,13 @@ vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 
 let account: Account;
 const apollo = project(1, 20, { name: 'Apollo' });
-const proposal = { snapshot_sha256: `sha256:${'a'.repeat(64)}`, suggested_projects: [], owners: [{ signal_id: 's1', action: 'Ship it', proposed: 'Mina' }],
-  review: { status: 'pending' } };
+const proposal = { snapshot_sha256: `sha256:${'a'.repeat(64)}`, suggested_projects: [], participants: [], reasons: [], records: [],
+  items: [{ signal_id: 's1', kind: 'action', text: 'Ship it', subject: null, status: null, due_at: null, quotes: [], owner: 'Mina', owner_editable: true, project_ids: [] }],
+  review: { status: 'pending', records: [] } };
+/** apr_2, approved: its one record, whose check is keyed by the record's own approval id. */
+const approvedRecord = { approval_id: `apr_${'e'.repeat(64)}`, project_ids: [] };
+const approved = { ...proposal, items: proposal.items.map(item => ({ ...item, owner_editable: false })), records: [approvedRecord],
+  review: { status: 'approved', records: [approvedRecord] } };
 
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method);
 const checks = () => calls('changes.read').length;
@@ -40,7 +45,7 @@ beforeEach(() => {
     'tools.meetings': params => {
       const request = params.request as { operation: string };
       if (request.operation === 'reviews') return ok({ reviews: [] });
-      if (request.operation === 'review_open') return ok(proposal);
+      if (request.operation === 'review_open') return ok((request as { approval_id?: string }).approval_id === 'apr_2' ? approved : proposal);
       throw new Error(`Unexpected meeting operation: ${request.operation}`);
     },
     'employees.list': () => ok({ items: [] }),
@@ -285,12 +290,12 @@ describe('what a moved area reads again (R3)', () => {
     expect((store.followUpShown() as FollowUpList).items.filter(item => item.state === 'open')).toEqual([]);
   });
 
-  const run = { run_id: 'run_00000000-0000-4000-8000-000000000020', trigger: 'approved_record' as const, event_ref: 'apr_1', state: 'done' as const,
+  const run = { run_id: 'run_00000000-0000-4000-8000-000000000020', trigger: 'approved_record' as const, event_ref: approvedRecord.approval_id, state: 'done' as const,
     error_code: null, created_at: '2026-10-14T09:00:00.000Z', updated_at: '2026-10-14T09:05:00.000Z' };
   it.each([
     // Only the line: the project's feed is not read again.
     ['a project\'s follow-ups line', 'project', (store: Store) => store.openProject(apollo), () => [followUp(1)], 1],
-    ['a meeting\'s line on its decision page', 'run', (store: Store) => store.openDecision('apr_1', run), () => [sent(1, MINA)], 0],
+    ['a meeting\'s line on its decision page', 'run', (store: Store) => store.openDecision('apr_2', run), () => [sent(1, MINA)], 0],
   ] as const)('follow-ups: %s', async (_, scope, open, items, feeds) => {
     const store = await startStore();
     await open(store);
@@ -311,12 +316,12 @@ describe('what a moved area reads again (R3)', () => {
     expect(meetings('reviews')).toBe(reviews + 1);
     await store.openDecision('apr_1');
     await flush();
-    store.setDecisionShare(true);
+    store.setDecisionRoute('s1', null);
     const opened = meetings('review_open');
     authority.reviews = [];
     await nextCheck();
     expect(meetings('review_open')).toBe(opened + 1);
-    expect(store.getState().decision).toMatchObject({ share: true, open: { snapshot_sha256: proposal.snapshot_sha256 } });
+    expect(store.getState().decision).toMatchObject({ routes: { s1: null }, open: { snapshot_sha256: proposal.snapshot_sha256 } });
   });
 });
 

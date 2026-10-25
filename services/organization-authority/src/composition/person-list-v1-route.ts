@@ -15,7 +15,7 @@ import {
   type PersonListResponseV1,
   type PersonListRowV1,
   type PersonListVisibilityV1,
-  type PersonOpenRefV1,
+  type PersonItemRefV1,
   type PersonOpenResponseV1,
 } from "@echo-brain/organization-api";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
@@ -31,7 +31,6 @@ import type {
   PersonStoreNoteRowV1,
   PersonStoreReleaseV1,
   PersonStoreVisibilityV1,
-  PersonTranscriptByRecordPortV1,
 } from "../application/ports/person-list-v1.js";
 import type { PersonListHttpApplicationV1 } from "../presentation/person-list-http-application-v1.js";
 import { boundedTextV1 } from "../application/person-item-text-v1.js";
@@ -65,8 +64,7 @@ type Joined = ReturnType<PersonListDirectoryPortV1["joinedProjects"]>;
 type Opened =
   | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "note" | "imported_meeting" }>
   | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "document" }>
-  | (ReturnType<PersonMeetingItemsPortV1["openMeeting"]> & { readonly kind: "meeting" })
-  | (ReturnType<PersonTranscriptByRecordPortV1["readApprovedMeetingTranscriptByRecordV1"]> & { readonly kind: "transcript" });
+  | (ReturnType<PersonMeetingItemsPortV1["openMeeting"]> & { readonly kind: "meeting" });
 
 export interface CreatePersonListRouteV1Options {
   readonly organization_id: string;
@@ -76,7 +74,6 @@ export interface CreatePersonListRouteV1Options {
   readonly directory: PersonListDirectoryPortV1;
   readonly originals: PersonOriginalItemsPortV1;
   readonly meetings: PersonMeetingItemsPortV1;
-  readonly transcripts: PersonTranscriptByRecordPortV1;
 }
 
 function denied(): never {
@@ -295,7 +292,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
     return response;
   }
 
-  function openStore(access_token: string, ref: PersonOpenRefV1, position: PersonOpenPositionV1 | undefined): Opened {
+  function openStore(access_token: string, ref: PersonItemRefV1, position: PersonOpenPositionV1 | undefined): Opened {
     const kind = personRefKindV1(ref);
     const id = personRefIdV1(ref);
     switch (kind) {
@@ -317,19 +314,10 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
             ...(position?.kind === "meeting" ? { from: { atom_order: position.atom_order, part: position.part } } : {}),
           }),
         };
-      case "transcript":
-        // Layer 1 admission first: a transcript is never reached through a record the caller cannot read.
-        options.meetings.admitMeeting({ access_token, record_sha256: id as `sha256:${string}` });
-        return {
-          kind, ...options.transcripts.readApprovedMeetingTranscriptByRecordV1({
-            access_token, record_sha256: id as `sha256:${string}`,
-            ...(position?.kind === "transcript" ? { offset: position.offset } : {}),
-          }),
-        };
     }
   }
 
-  function openResponse(opened: Opened, ref: PersonOpenRefV1, binding: PersonOpenCursorBindingV1, joined: Joined): unknown {
+  function openResponse(opened: Opened, ref: PersonItemRefV1, binding: PersonOpenCursorBindingV1, joined: Joined): unknown {
     const base = { schema_version: 1, kind: "echo-person-open-v1", ref };
     switch (opened.kind) {
       case "imported_meeting":
@@ -345,13 +333,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
       case "meeting":
         return {
           ...base, item: projectRow(opened.row, joined), ...(opened.meeting === undefined ? {} : { meeting: opened.meeting }), atoms: opened.atoms,
-          ...(opened.transcript_shared === true ? { transcript_ref: `transcript:${personRefIdV1(ref)}` } : {}),
           next_cursor: opened.next === null ? null : encodePersonOpenCursorV1(binding, { kind: "meeting", atom_order: opened.next.atom_order, part: opened.next.part }),
-        };
-      case "transcript":
-        return {
-          ...base, text: opened.text,
-          next_cursor: opened.next_offset === null ? null : encodePersonOpenCursorV1(binding, { kind: "transcript", offset: opened.next_offset }),
         };
     }
   }
@@ -408,7 +390,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
       input.signal?.throwIfAborted();
       options.directory.audit({
         operation: "person_open", scope_kind: "item", actor: current, response_sha256: canonicalSha256(response),
-        released_count: 1, store_receipts: receipts(opened.kind === "transcript" ? undefined : opened.release),
+        released_count: 1, store_receipts: receipts(opened.release),
       });
       return response;
     },

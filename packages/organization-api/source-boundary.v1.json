@@ -59,7 +59,8 @@
       "packages/organization-api/src/person-slack-link.ts",
       "packages/organization-api/src/person-tools.ts",
       "packages/organization-api/src/person-slack-identity-link.ts",
-      "packages/organization-api/src/person-slack-browser-link.ts"
+      "packages/organization-api/src/person-slack-browser-link.ts",
+      "packages/organization-api/src/person-meeting-transcript-v1.ts"
     ]
   },
   "layer_rules": [

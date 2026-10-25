@@ -1,8 +1,7 @@
 import type { EvidenceDeskUncheckedV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v2";
 import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonMeetingTranscriptCitationV1, PersonOpenRefV1 } from "@echo-brain/organization-api";
-import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
+import type { PersonItemRefV1 } from "@echo-brain/organization-api";
 import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-authority-kernel/shared/released-source-context-v1";
 
 /**
@@ -34,64 +33,6 @@ export interface OriginalContextReleaseV1 {
 }
 
 /**
- * Structural view of the record package's immutable witness. It contains no
- * source bytes; Authority applies its policy inside the current authorization
- * fence before opening existing source custody.
- */
-export interface ApprovedMeetingTranscriptGrantV1 {
-  readonly approval_id: string;
-  readonly record_position: number;
-  readonly record_sha256: Sha256Digest;
-  readonly policy_id:
-    | "restricted-reviewer-person-v2"
-    | "organization-member-readable-person-v2"
-    | "project-members-readable-person-v1";
-  readonly policy_contract_sha256: Sha256Digest;
-  readonly source_id: string;
-  readonly revision_id: string;
-  readonly source_sha256: Sha256Digest;
-  readonly reviewer_principal_id: string | null;
-  readonly reviewer_membership_id: string | null;
-  readonly audience_project_ids: readonly string[];
-  readonly association_project_ids: readonly string[];
-}
-
-export interface ApprovedMeetingTranscriptGrantReaderV1 {
-  find(input: {
-    readonly authority_id: string;
-    readonly organization_id: string;
-    readonly state_lineage_id: string;
-    readonly approval_id: string;
-  }): ApprovedMeetingTranscriptGrantV1 | null;
-  /**
-   * Every grant in the lineage, or those for one exact source revision. Ask
-   * searches only transcripts it can list; without it, transcripts stay out.
-   */
-  list?(input: {
-    readonly authority_id: string;
-    readonly organization_id: string;
-    readonly state_lineage_id: string;
-    readonly source_id?: string;
-    readonly revision_id?: string;
-    readonly source_sha256?: Sha256Digest;
-  }): readonly ApprovedMeetingTranscriptGrantV1[];
-  /** The grant of one exact approved record; without it, a transcript cannot be opened by its record. */
-  findByRecord?(input: {
-    readonly authority_id: string;
-    readonly organization_id: string;
-    readonly state_lineage_id: string;
-    readonly record_sha256: Sha256Digest;
-  }): ApprovedMeetingTranscriptGrantV1 | null;
-}
-
-export interface ApprovedMeetingTranscriptReadV1 {
-  readonly scope: PersonAskScopeV2;
-  readonly citation: PersonMeetingTranscriptCitationV1;
-  readonly text: string;
-  readonly next_offset: number | null;
-}
-
-/**
  * Layer-3 port for immutable Person-upload originals. Implementations release
  * only content that is readable at retrieval time and revalidate every atom
  * before Layer 4 can return an answer.
@@ -106,29 +47,6 @@ export interface PersonOriginalContextRetrievalPortV1 {
     readonly scope: PersonAskScopeV2;
     readonly citation: OriginalContextCitationV1;
   }): { readonly scope: PersonAskScopeV2; readonly atom: ReleasedSourceContextAtomV1 };
-  /** Explicit, approved, page-bounded raw-meeting release. */
-  readApprovedMeetingTranscript(input: {
-    readonly access_token: string;
-    readonly scope: PersonAskScopeV2;
-    readonly citation: PersonMeetingTranscriptCitationV1;
-    readonly offset?: number;
-  }): ApprovedMeetingTranscriptReadV1;
-  /**
-   * Whether an approved record's shared transcript is readable now with
-   * global access. Content-free: it releases and audits nothing, so a caller
-   * that has already admitted the record may offer a transcript ref.
-   */
-  probeApprovedMeetingTranscriptV1(input: {
-    readonly actor: PersonAccessAuthorization;
-    readonly approval_id: string;
-    readonly record_sha256: Sha256Digest;
-  }): boolean;
-  /** The approved transcript page of one record, read with global access (ADR-0024). */
-  readApprovedMeetingTranscriptByRecordV1(input: {
-    readonly access_token: string;
-    readonly record_sha256: Sha256Digest;
-    readonly offset?: number;
-  }): { readonly text: string; readonly next_offset: number | null };
 }
 
 /** Desk-only, request-bound original evidence release.  Callers of the
@@ -145,8 +63,8 @@ export interface OriginalContextDeskItemV1 {
   readonly label: string;
   readonly received_at: string;
   readonly version: string;
-  /** The note, document or shared transcript this passage opens as (ADR-0024). */
-  readonly ref?: PersonOpenRefV1;
+  /** The note, document or imported meeting this passage opens as (ADR-0024). */
+  readonly ref?: PersonItemRefV1;
 }
 
 export interface OriginalContextDeskReleaseV1 {
@@ -159,6 +77,12 @@ export interface OriginalContextDeskReleaseV1 {
    * record (research tool contract v1). They are not in `items`. Audited with the release.
    */
   readonly unchecked?: EvidenceDeskUncheckedV1;
+}
+
+/** What a desk read leaves out before its limit: sources by id, and every item only its reader may see. */
+export interface OriginalContextDeskExclusionV1 {
+  readonly source_ids: readonly string[];
+  readonly only_me: boolean;
 }
 
 export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalContextRetrievalPortV1 {
@@ -174,6 +98,7 @@ export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalC
     readonly query?: string;
     readonly kinds?: readonly OriginalContextDeskKindV1[];
     readonly limit?: number;
+    readonly exclude?: OriginalContextDeskExclusionV1;
   }): OriginalContextDeskReleaseV1;
   deskOpen(input: {
     readonly access_token: string;

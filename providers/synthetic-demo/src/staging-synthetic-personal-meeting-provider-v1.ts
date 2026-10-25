@@ -32,7 +32,6 @@ const MAXIMUM_PENDING = 50;
 const MAXIMUM_FIXTURES = 40;
 const MAXIMUM_FIXTURE_BYTES = 256 * 1024;
 
-/** The personal checkpoint shape; this source has no folders and no baseline. */
 /**
  * The queued entry for one release's canary. Every release shares the canary
  * meeting id; the release names a new revision, so an undecided earlier
@@ -49,10 +48,8 @@ export function stagingSyntheticCanaryReleaseV1(entry: string): string | undefin
   return releaseId !== undefined && RELEASE_ID.test(releaseId) ? releaseId : undefined;
 }
 
+/** The personal checkpoint: only the queued imports, since this source watches nothing. */
 export interface StagingSyntheticCheckpointV1 {
-  readonly folder: string | null;
-  readonly baseline: boolean;
-  readonly revisions: Readonly<Record<string, string>>;
   readonly manual: readonly string[];
 }
 
@@ -66,10 +63,8 @@ export function readStagingSyntheticCheckpointV1(cursor: string): StagingSynthet
   try { value = JSON.parse(cursor.slice(CURSOR_PREFIX.length)); } catch { invalidCursor(); }
   if (value === null || typeof value !== "object" || Array.isArray(value)) invalidCursor();
   const row = value as Record<string, unknown>;
-  const { manual, revisions } = row;
-  if (Object.keys(row).sort().join(",") !== "baseline,folder,manual,revisions" || row.folder !== null || row.baseline !== false ||
-      revisions === null || typeof revisions !== "object" || Array.isArray(revisions) || Object.keys(revisions).length !== 0 ||
-      !Array.isArray(manual) || manual.length > MAXIMUM_PENDING ||
+  const { manual } = row;
+  if (Object.keys(row).join(",") !== "manual" || !Array.isArray(manual) || manual.length > MAXIMUM_PENDING ||
       manual.some(id => typeof id !== "string" || (!MEETING_ID.test(id) && stagingSyntheticCanaryReleaseV1(id) === undefined)) ||
       new Set(manual).size !== manual.length) invalidCursor();
   return row as unknown as StagingSyntheticCheckpointV1;
@@ -211,10 +206,10 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
     normalizer_version: NORMALIZER_VERSION,
     custodian_assurance: STAGING_SYNTHETIC_CUSTODIAN_ASSURANCE_V1,
     connection_http,
-    // This source has no folders and no baseline: a watched folder fails its write, and automatic import is never active.
+    // This source watches nothing: only stopping is a watch it takes, and automatic import is never active.
     cursor: Object.freeze({ read: readStagingSyntheticCheckpointV1, write: writeStagingSyntheticCheckpointV1, policy: CURSOR_POLICY,
-      initial: () => writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: [] }),
-      watch: (checkpoint: StagingSyntheticCheckpointV1, folder: string | null): StagingSyntheticCheckpointV1 => ({ ...checkpoint, folder }),
+      initial: () => writeStagingSyntheticCheckpointV1({ manual: [] }),
+      watch: (checkpoint: StagingSyntheticCheckpointV1, watch: { readonly watch: string }): StagingSyntheticCheckpointV1 => watch.watch === 'off' ? checkpoint : invalidCursor(),
       ready: (): boolean => false }),
     tool(_token: string) {
       return { tool_id: STAGING_SYNTHETIC_TOOL_ID_V1, display_name: "Synthetic staging meetings", availability: "enabled" as const,
@@ -227,9 +222,10 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
       return {
         identity, custodian: { kind: "echo-staging-synthetic-custodian-v1", person: identity.instance_id },
         email: "staging-synthetic@example.test", workspace: "Synthetic staging meetings", current,
-        ...(options.custom_store === undefined ? {} : { submit(input: PersonSyntheticMeetingV1) { current(); options.custom_store!.save(identity, input); current(); } }),
+        // The sidecar store commits on its own; an immutable id makes a retry after a failed queue safe. Returns the id to queue.
+        ...(options.custom_store === undefined ? {} : { submit(input: PersonSyntheticMeetingV1) { current(); options.custom_store!.save(identity, input); current(); return input.id; } }),
         async folders(): Promise<readonly { readonly id: string; readonly title: string; readonly count: number }[]> { return []; },
-        async browse(_folder: string): Promise<{ readonly meetings: readonly { readonly id: string; readonly title: string; readonly date: string }[] }> {
+        async browse(_folder: string | null): Promise<{ readonly meetings: readonly { readonly id: string; readonly title: string; readonly date: string }[] }> {
           throw new AuthorityOperationError("not_found", "Synthetic meetings have no folders");
         },
         async preview(id: string) {
@@ -253,7 +249,7 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
         requireCurrent: current,
         async pull(request) {
           current();
-          const checkpoint = readStagingSyntheticCheckpointV1(request.cursor ?? writeStagingSyntheticCheckpointV1({ folder: null, baseline: false, revisions: {}, manual: [] }));
+          const checkpoint = readStagingSyntheticCheckpointV1(request.cursor ?? writeStagingSyntheticCheckpointV1({ manual: [] }));
           const id = checkpoint.manual[0];
           if (id === undefined) return { meetings: [] };
           const found = await meeting(id, identity.instance_id);

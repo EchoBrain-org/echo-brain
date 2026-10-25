@@ -29,15 +29,9 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   PersonRecordReaderV1,
-  ApprovedMeetingTranscriptGrantReaderV1,
   openOrganizationRecordDatabase,
   type RecordApproverProjectorV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
-import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-  PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-  RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
-} from "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1";
 import type { AddressInfo } from "node:net";
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
@@ -55,7 +49,7 @@ import { PersonEmployeeLifecycleApplication } from "../application/person-employ
 import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
+import { createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1 } from './person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from './person-workspace-evidence-v1.js';
@@ -316,23 +310,8 @@ export async function startOrganizationAuthorityApiRuntime(
       },
     });
     const readAudit = new SqlitePersonRecordReadAuditV1(database);
-    const transcriptGrants = new ApprovedMeetingTranscriptGrantReaderV1(recordDatabase);
     const captureProjects = createRecordProjectAuthorizationV1(projectRepository);
-    const originals = new SqlitePersonOriginalContextRetrievalV1(
-      database,
-      sessions,
-      metadata.organization_id,
-      {
-        authority_id: metadata.authority_id,
-        state_lineage_id: lineage.root.state_lineage_id,
-        grants: transcriptGrants,
-        is_expected_policy_contract: grant => (
-          (grant.policy_id === "organization-member-readable-person-v2" && grant.policy_contract_sha256 === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256) ||
-          (grant.policy_id === "restricted-reviewer-person-v2" && grant.policy_contract_sha256 === RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256) ||
-          (grant.policy_id === "project-members-readable-person-v1" && grant.policy_contract_sha256 === PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256)
-        ),
-      },
-    );
+    const originals = new SqlitePersonOriginalContextRetrievalV1(database, sessions, metadata.organization_id);
     const recordSearch = createPersonRecordSearchRouteV1({
       ...(dependencies.record_input_codecs === undefined ? {} : { record_input_codecs: dependencies.record_input_codecs }),
       state_directory: config.state_directory,
@@ -345,11 +324,10 @@ export async function startOrganizationAuthorityApiRuntime(
       record: recordDatabase,
       audit: readAudit,
       capture_projects: captureProjects,
-      // Mine needs the approver; the person list names it and offers a shared transcript.
+      // Mine needs the approver; the person list names it.
       ...personMeetingReleaseOptionsV1({
         record_approver: dependencies.record_approver,
         memberships,
-        originals,
       }),
     });
     const documents = new SqlitePersonDocumentRepositoryV1(database);
@@ -433,7 +411,6 @@ export async function startOrganizationAuthorityApiRuntime(
         ...liveConnectors.flatMap(({ runtime }) => runtime.connection_http === undefined ? [] : [runtime.connection_http]),
         ...(personHttp?.applications ?? []),
       ],
-      person_meeting_transcript: createPersonMeetingTranscriptReadRouteV1({ originals }),
       person_source_evidence: createPersonSourceEvidenceRouteV1({ originals }),
       // Outside the answer-model gate: listing and opening never call a model.
       person_list: createPersonListRouteV1({
@@ -443,7 +420,6 @@ export async function startOrganizationAuthorityApiRuntime(
         directory: new SqlitePersonListDirectoryV1(database),
         originals: originalItems,
         meetings: recordSearch,
-        transcripts: originals,
       }),
       // Agentic Ask is the only Ask (ADR-0022); it needs the bound answer model.
       ...(answerOptions === undefined ? {} : {

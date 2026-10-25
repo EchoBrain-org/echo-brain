@@ -5,8 +5,8 @@ import type {
   MeetingDocument, MeetingParticipant,
 } from "@echo-brain/organization-processing/core";
 
-/** Content mapping version retained so existing semantic revisions stay stable. */
-export const GRANOLA_MEETING_NORMALIZER_VERSION_V1 = "2.3.0";
+/** Content mapping version, part of every revision. 2.4.0: folder membership is not, so moving a note between folders is no edit. */
+export const GRANOLA_MEETING_NORMALIZER_VERSION_V1 = "2.4.0";
 
 /**
  * Transport-independent input for the retained content transforms. This is not
@@ -135,7 +135,6 @@ function sourceRevision(note: GranolaMeetingContentInputV1): string {
     attendees: note.attendees,
     reported_participants: note.reported_participants,
     calendar_event: note.calendar_event,
-    folder_membership: note.folder_membership,
     provider_fields: note.provider_fields,
     web_url: note.web_url,
   });

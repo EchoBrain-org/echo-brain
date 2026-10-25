@@ -5,6 +5,7 @@ import {
 } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { VerifiedSlackApprovalClickV1 } from "./private-slack-approval-interaction-protocol-v1.js";
+import { slackApprovalDestinationSha256V4 } from "./slack-approval-card-v4.js";
 import type { ApprovalActorV1, SlackApprovalTargetV1 as TargetV1 } from "./slack-approval-presenter-v1.js";
 
 type LinkV1 = ApprovalActorV1 & {
@@ -21,8 +22,10 @@ type CoreV1 = {
       readonly command_id: string;
       readonly snapshot_sha256: Sha256Digest;
       readonly action: "approve" | "reject";
-      readonly project_ids: readonly string[];
-      readonly share_transcript: boolean;
+      readonly routes: readonly {
+        readonly signal_id: string;
+        readonly project_ids: readonly string[] | null;
+      }[];
       readonly owners: readonly {
         readonly signal_id: string;
         readonly owner: string;
@@ -36,9 +39,25 @@ type CoreV1 = {
       };
     },
   ): { readonly kind: "decided" | "replayed" | "already_decided" | "stale" };
-  proposal(id: string): { readonly reviewer: ApprovalActorV1 } | undefined;
+  proposal(id: string): {
+    readonly reviewer: ApprovalActorV1;
+    readonly status: "pending" | "publishing" | "approved" | "rejected" | "superseded";
+    readonly project_ids: readonly string[];
+    readonly snapshot_json: string;
+  } | undefined;
   ownerProposals(id: string): readonly { readonly signal_id: string }[];
 };
+/** The frozen snapshot's decisions then actions, in brief order: the items a Slack approval routes. Undefined when it does not read so. */
+function routedSignals(snapshotJson: string): readonly string[] | undefined {
+  try {
+    const brief = (JSON.parse(snapshotJson) as { readonly approved_payload?: { readonly brief?: Readonly<Record<string, unknown>> } }).approved_payload?.brief;
+    const ids = [brief?.decisions, brief?.actions].flatMap((signals) =>
+      Array.isArray(signals) ? signals.map((signal) => (signal as { readonly id?: unknown } | null)?.id) : [undefined]);
+    return ids.every((id): id is string => typeof id === "string") ? ids : undefined;
+  } catch {
+    return undefined;
+  }
+}
 function sameActor(left: ApprovalActorV1, right: ApprovalActorV1): boolean {
   return (
     left.organization_id === right.organization_id &&
@@ -72,7 +91,10 @@ function target(value: unknown): TargetV1 | undefined {
     return undefined;
   return record as unknown as TargetV1;
 }
-/** A target-bound Slack click adapter. It writes only through approval core decide(). */
+/**
+ * A target-bound Slack click adapter. It decides only through approval core decide(), approving as suggested, and only while
+ * the suggestion is the destination its card showed; otherwise it marks that open card for redraw and decides nothing.
+ */
 export function createSlackApprovalClickV1(options: {
   readonly database: Database.Database;
   readonly core: CoreV1;
@@ -86,6 +108,10 @@ export function createSlackApprovalClickV1(options: {
 } {
   const presentation = options.database.prepare(
     "SELECT target_json,dm_channel_id,message_ts FROM authority_approval_presentations_v1 WHERE approval_id=? AND surface='slack' AND delivery='posted'",
+  );
+  // The presenter redraws a posted card whose card_sha256 is cleared (its first-draw path); an open one is otherwise drawn once.
+  const redrawCard = options.database.prepare(
+    "UPDATE authority_approval_presentations_v1 SET card_sha256=NULL,updated_at=? WHERE approval_id=? AND surface='slack' AND delivery='posted' AND shows='open'",
   );
   return (click) => {
     const row = presentation.get(click.approval_id) as
@@ -132,6 +158,18 @@ export function createSlackApprovalClickV1(options: {
     const proposal = options.core.proposal(click.approval_id);
     if (proposal === undefined || !sameActor(current, proposal.reviewer))
       return { outcome: "refused" };
+    // Slack approves as suggested: every decision and action goes to the frozen suggestion the reviewer can read now, or to
+    // the reviewer alone when there is none. Choosing per item happens in the ECHO desktop app.
+    const signals = routedSignals(proposal.snapshot_json);
+    if (signals === undefined) return { outcome: "refused" };
+    const suggestion = [...proposal.project_ids];
+    // Approve sends every item where the card said. A suggestion that changed since it was drawn (a project the reviewer
+    // joined or left) decides nothing: the card is redrawn with where Approve sends the items now.
+    if (click.action === "approve" && proposal.status === "pending" && slackApprovalDestinationSha256V4(suggestion) !== click.destination_sha256) {
+      redrawCard.run(new Date().toISOString(), click.approval_id);
+      options.redraw(click.approval_id);
+      return { outcome: "stale" };
+    }
     const ownerProposals = options.core.ownerProposals(click.approval_id);
     const permitted = new Set(ownerProposals.map((owner) => owner.signal_id));
     if (click.owners.some((owner) => !permitted.has(owner.signal_id)))
@@ -179,12 +217,10 @@ export function createSlackApprovalClickV1(options: {
           command_id: `slack:${click.provider_action_key_sha256.slice(7)}`,
           snapshot_sha256: click.snapshot_sha256,
           action: click.action,
-          project_ids:
-            click.action === "approve" && click.audience === "projects"
-              ? click.project_ids
+          routes:
+            click.action === "approve"
+              ? signals.map((signal_id) => ({ signal_id, project_ids: suggestion }))
               : [],
-          share_transcript:
-            click.action === "approve" ? click.share_transcript : false,
           owners:
             click.action === "approve"
               ? ownerProposals.flatMap((owner) => {

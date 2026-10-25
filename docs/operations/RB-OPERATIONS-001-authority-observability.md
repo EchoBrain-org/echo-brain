@@ -316,7 +316,8 @@ payload capture has one API and collector, on ordinary product requests.
 
 #### Follow a meeting from intake to approval delivery
 
-Personal Granola and synthetic intake use the same core-runtime channel. Join
+Personal Granola, pasted (`hand-in`) and synthetic intake use the same
+core-runtime channel. Join
 `source_poll` and extraction within the worker operation; follow the hashed
 `meeting_id` through `extraction`, `candidate_persist` and `approval_staging`.
 The staging event links that meeting to a hashed `approval_id`, which later
@@ -630,8 +631,7 @@ is an `ask_planner` or `ask_answer` span with its provider `model_call` inside
 (purpose `ask_planner` or `ask_answer`). Each desk call is one span:
 `evidence_search`, `evidence_open`, `evidence_list` or `evidence_revalidate`.
 Desk spans carry `included_count` and, by source, `meeting_items` and
-`document_items`; `transcript_items` is the shared-transcript
-subset of `document_items`. The evidence HTTP doors use the same desk spans.
+`document_items`. The evidence HTTP doors use the same desk spans.
 
 #### Count code's corrections of model output
 

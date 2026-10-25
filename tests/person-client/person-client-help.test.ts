@@ -29,7 +29,8 @@ describe("Person client help", () => {
     [["tools", "cancel", "--help"], "--tool jira --attempt-id <value>"],
     [["tools", "disconnect", "--help"], "--tool jira"],
     [["ask", "--help"], "--tickets"],
-    [["tools", "--help"], "echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings> --tool <tool>"],
+    [["tools", "--help"], "echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings|submit> --tool <tool>"],
+    [["tools", "submit", "--help"], "--tool hand-in --meeting-title <value> [--notes-file <value>] [--transcript-file <value>] [--started-at <value>] [--date <value>] [--echo-project <value>] --retain"],
     [["tools", "setup", "--help"], "--tool slack [--reconnect] [--existing-app <value>] [--no-wait]"],
     [["tools", "connect", "--help"], "--method dm-code --slack-user"],
     [["tools", "status", "--help"], "--tool slack --attempt-id <value>"],
@@ -46,7 +47,6 @@ describe("Person client help", () => {
     [["evidence", "search", "--help"], "echo-brain person evidence search [--query <text>]"],
     [["evidence", "open", "--help"], "echo-brain person evidence open --item <citation-json>"],
     [["ask-source", "--help"], "echo-brain person ask-source --source-id <source-id>"],
-    [["transcript", "--help"], "echo-brain person transcript --approval-id <id> --source-id <source-id>"],
     [["employee", "--help"], "<list|invite|reissue|revoke>"],
     [["employee", "list", "--help"], "echo-brain person employee list"],
     [["employee", "invite", "--help"], "--name <name> --email <email> --out <absolute-path>"],
@@ -94,7 +94,7 @@ describe("Person client help", () => {
   it("documents list without overstating what it covers", async () => {
     // An agent reads this help: it must not overstate what list covers, and must say how a waiting page fails.
     const listHelp = await help(["list", "--help"]);
-    expect(listHelp).toContain("not shared transcripts");
+    expect(listHelp).toContain("the notes, documents, imported meetings and approved meetings ask can read;");
     expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
     expect(listHelp).toContain("usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]");
   });
@@ -106,7 +106,7 @@ describe("Person client help", () => {
       ["updates", "submit"], ["updates", "status"], ["updates", "read"], ["updates", "read-v3"],
       ["slack-connect-cancel"], ["slack-link"], ["slack-connect-begin"], ["slack-connect-status"], ["slack-disconnect"],
       ["jira"], ["jira", "connect"], ["jira", "complete"], ["jira", "disconnect"],
-      ["tools", "bogus"], ["readable-search"],
+      ["tools", "bogus"], ["readable-search"], ["transcript"],
     ];
     for (const argv of retired.flatMap(command => [command, [...command, "--help"]])) {
       let stdout = "";

@@ -619,13 +619,13 @@ describe("workspace source boundaries", () => {
 
   const expectedByRoot: Record<string, string[]> = {
     "packages/organization-authority-kernel": [
-      "authority-baseline-v14.sql",
+      "authority-baseline-v15.sql",
     ],
     "packages/organization-control-plane": [
       "organization-control-plane-baseline-v4.sql",
     ],
     "packages/organization-record": [
-      "organization-record-log-baseline-v4.sql",
+      "organization-record-log-baseline-v5.sql",
     ],
     "packages/organization-retrieval": [
       "readable-search-content-baseline-v2.sql",

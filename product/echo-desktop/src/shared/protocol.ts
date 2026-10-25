@@ -225,9 +225,9 @@ export type ToolContainerKind = 'jira_project' | 'confluence_space';
 
 /**
  * What an answer is based on, or an item Ask named while it worked: an
- * approved record's item, an original's passage, a transcript's passage, a
- * follow-up, a project, a person, a tool, or live evidence. Each kind opens
- * through one opener (renderer/openers.ts).
+ * approved record's item, an original's passage, a follow-up, a project, a
+ * person, a tool, or live evidence. Each kind opens through one opener
+ * (renderer/openers.ts).
  */
 export type ExternalAnswerSource =
   | { readonly kind: 'ticket' | 'page'; readonly tool_id: string; readonly label: string; readonly permalink: string }
@@ -242,8 +242,6 @@ export type AnswerSource = (
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef; readonly atom_id: string }
   /** `item`: the note, document or imported meeting it is a passage of, from the Authority's own ref, when it sent one. */
   | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef; readonly item?: ItemRef }
-  /** A shared transcript's passage. It opens as its meeting (`meeting`, the record digest): there is no transcript reader. */
-  | { readonly kind: 'transcript'; readonly label: string; readonly ref: SourceRef; readonly meeting: string }
   /**
    * One of ECHO's shared follow-ups (ADR-0040), by its item id: it opens its
    * item page, where its owner, status and check are read again as Home shows them.
@@ -459,6 +457,39 @@ export interface ConnectedTools {
   readonly tools: readonly ConnectedTool[];
 }
 
+/**
+ * Paste a meeting, as the page sends it: the text as typed, and a whole day's date (YYYY-MM-DD) or a start (a UTC
+ * timestamp), or neither. The host makes the text canonical and checks it with the meetings API's own validator.
+ */
+export interface PastedMeeting {
+  readonly title: string;
+  readonly notes: string;
+  readonly transcript: string;
+  readonly date?: string;
+  readonly started_at?: string;
+}
+/** The meetings API's bound on a pasted meeting (PERSON_HAND_IN_MEETING_MAX_BYTES_V1), which the page checks before sending. */
+export const MAX_PASTED_MEETING_BYTES = 60 * 1024;
+/**
+ * Pasted text as the meetings API keeps it (personHandInTextV1): line feeds only, other line breaks as line feeds, no
+ * control but tab, NFC, trimmed. The host and the client make it with the API's own function; the page measures with this.
+ */
+export function pastedText(value: string): string {
+  return value.replace(/\r\n?|[\u000b\u000c\u0085\u2028\u2029]/g, '\n').replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f]/g, '')
+    .normalize('NFC').trim();
+}
+/**
+ * A pasted meeting as the client sends it (personHandInMeetingV1): canonical text, and a whole day as its date at noon UTC
+ * or a start with this computer's time zone. Its JSON is what the meetings API bounds by MAX_PASTED_MEETING_BYTES.
+ */
+export function pastedMeetingAsSent(meeting: PastedMeeting, timeZone: string): {
+  readonly title: string; readonly notes: string; readonly transcript: string; readonly started_at?: string; readonly time_zone?: string; readonly all_day?: true;
+} {
+  return { title: pastedText(meeting.title), notes: pastedText(meeting.notes), transcript: pastedText(meeting.transcript),
+    ...(meeting.date === undefined ? {} : { started_at: `${meeting.date}T12:00:00.000Z`, all_day: true as const }),
+    ...(meeting.started_at === undefined ? {} : { started_at: meeting.started_at, time_zone: timeZone }) };
+}
+
 /** What a status check says about a save whose outcome was unknown. */
 export interface WriteStatus {
   readonly state: 'saved' | 'not_saved' | 'unknown';
@@ -649,6 +680,11 @@ export interface HostMethods {
   'tools.cancel': { params: { expect: Expect; tool_id: string; attempt_id: string }; result: ToolAttemptStatus };
   /** Removes your own connection to the tool. */
   'tools.disconnect': { params: { expect: Expect; tool_id: string }; result: null };
+  /**
+   * Paste a meeting: the host writes its text to private files for the client, never to its arguments. The same meeting
+   * pasted again answers the same id; what it decided still needs your approval.
+   */
+  'meetings.handIn': { params: { expect: Expect; meeting: PastedMeeting; project_id: string | null }; result: { meeting_id: string } };
 }
 
 export interface MainMethods {
@@ -698,6 +734,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
   'employees.reissue', 'employees.revoke', 'tools.meetings', 'runs', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
+  'meetings.handIn',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -707,6 +744,7 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
   'employees.revoke', 'tools.meetings', 'runs', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
+  'meetings.handIn',
 ]);
 /** Operations of a write method that only read. */
 const READ_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = {

@@ -23,7 +23,7 @@ Choosing **Mine** narrows Ask to what the person added: the notes they saved
 and the documents they uploaded under their current membership, and the
 meetings they approved as final approver, while each is still readable to them
 ([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). Mine
-excludes live external sources and, in this version, shared transcripts. It is
+excludes live external sources. It is
 a narrowing of global scope, never another view: a teammate's item is excluded
 even when the person can read it. "My" in a question is only a search hint; it
 does not select Mine. Its citations carry a `ref`, which `person open` reads
@@ -65,16 +65,17 @@ the original and its project links once. See
 ## Evidence and permission boundaries
 
 Supported originals include saved editor text and usable extracted text from
-the existing text/Markdown, PDF, and DOCX upload path, meeting transcripts
-the approver shared at approval
-([ADR-0021](../decisions/ADR-0021-ask-reach-and-approval-owners.md)), and a
-person's imported meeting notes. Imported notes carry the `imported_meeting`
-kind and an unapproved label; the importer reads their own, and members of a
-project suggested for that meeting read them while they are members
-([ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md)). A
-transcript is read under its approval grant: the record's current audience and,
-for project Ask, its project association. Its packets are labeled
-"Transcript: <meeting title>". The original upload and
+the existing text/Markdown, PDF, and DOCX upload path, and a person's imported
+meeting notes. Imported notes carry the `imported_meeting` kind and an
+unapproved label. Only their importer reads them, in global and Mine scope,
+never in project scope: a project suggested for the meeting grants its members
+nothing
+([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md), which
+reverses
+[ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md)'s
+project read). A pasted meeting's transcript is part of its importer's notes;
+no meeting transcript reaches anyone else, because no approval shares one. The
+original upload and
 extraction limits remain in [Project documents V1](project-documents-v1.md).
 Encrypted, scanned/no-text, failed, or still-extracting files do not acquire
 invented textual evidence. Partial extraction remains partial evidence.
@@ -103,20 +104,19 @@ evidence still requires current access when opened.
 
 ## Current limits
 
-- An approved record is associated with a project only when its owner approved
-  it with the **Projects** audience
-  ([ADR-0017](../decisions/ADR-0017-project-meeting-approval-v1.md)). Project
-  Ask includes those records while their audience still admits the reader;
-  Only me, Team and older records remain global-only. A project name appearing
-  in an approved record is not sufficient to include it. The approval card
-  refuses projects chosen with another audience rather than dropping them.
-- Raw meeting snapshots, meetings approved with transcript sharing off, and
-  pending/rejected approvals are not exposed merely because they exist in the
-  shared source tables.
+- An approved record is associated with a project only when its owner sent
+  its items to that project
+  ([ADR-0017](../decisions/ADR-0017-project-meeting-approval-v1.md),
+  [ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)):
+  each destination of a meeting is its own record. Project Ask includes those
+  records while their audience still admits the reader; Only me, Team and
+  older records remain global-only. A project name appearing in an approved
+  record is not sufficient to include it.
+- Raw meeting snapshots, meeting transcripts, and pending/rejected approvals
+  are not exposed merely because they exist in the shared source tables.
 - Original-context search computes query-local corpus statistics over every
-  readable packet of the selected source kinds, including shared transcript
-  packets. This is sized for the current retained-original and approved-meeting
-  volumes, not for a large archive.
+  readable packet of the selected source kinds. This is sized for the current
+  retained-original and approved-meeting volumes, not for a large archive.
 - Ask is the agentic loop of
   [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): at most 10 research
   steps and 24 model calls within 90 s. Live model answer quality and latency
@@ -130,9 +130,9 @@ evidence still requires current access when opened.
   is necessary because distinct relevant windows can come from one long
   extracted passage. This remains lexical matching: synonyms and conceptual
   paraphrases can still miss evidence.
-- BM25 is migration-free and scans eligible note, extracted-document,
-  shared-transcript and imported-meeting text at query time. Packet text is
-  analyzed once per query; lightweight document scan rows avoid retaining repeated immutable
+- BM25 is migration-free and scans eligible note, extracted-document and
+  imported-meeting text at query time. Packet text is analyzed once per query;
+  lightweight document scan rows avoid retaining repeated immutable
   representations, but runtime and transient memory still scale linearly with
   readable packets and their text. The synthetic production-path proof uses
   106 extracted passages (beyond the former 100-candidate window), verifies the
@@ -234,9 +234,8 @@ queries use coarse date bounds to accommodate the provider account's zone,
 then filter the current permission-checked values exactly in the client's
 zone. Empty filtered provider pages may still have a continuation.
 
-A meeting inventory includes readable imported notes and explicitly shared
-transcripts as well as approved records. Transcript permission and Mine-scope
-exclusion remain unchanged. Every metadata release remains audited and fenced.
+A meeting inventory includes readable imported notes as well as approved
+records. Every metadata release remains audited and fenced.
 
 A list read to its end answers which items exist, and research may finish on
 it without opening its items;

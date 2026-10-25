@@ -8,6 +8,10 @@ import {
 import { trapTab } from './compose.js';
 import { Close } from './icons.js';
 import { Meetings } from './meetings.js';
+import { PasteMeeting } from './paste-meeting.js';
+
+/** The tool any member pastes a meeting into, from any meeting tool. */
+const PASTE_TOOL_ID = 'hand-in';
 
 /** Sections in the order they show; an empty one is left out. */
 const SECTIONS: readonly { label: string; status: ToolStatus }[] = [
@@ -23,6 +27,19 @@ function Mark({ tool }: { tool: ConnectedTool }) {
 }
 
 function ToolRow({ tool }: { tool: ConnectedTool }) {
+  // Paste a meeting needs no account: it opens its sheet, with nothing to connect or disconnect.
+  if (tool.tool_id === PASTE_TOOL_ID) return (
+    <div class={`tool-row ${tool.status}`} data-testid="tool-row" data-tool={tool.tool_id}>
+      <Mark tool={tool} />
+      <span class="lines">
+        <span class="name">{tool.name}</span>
+        {tool.status === 'unavailable' && <span class="state" data-testid="tool-state">{TOOL_STATES.unavailable}</span>}
+      </span>
+      {tool.status !== 'unavailable' && (
+        <button type="button" class="plain-button" data-testid="tool-paste" onClick={() => manageTool(tool)}>Paste</button>
+      )}
+    </div>
+  );
   return (
     <div class={`tool-row ${tool.status}`} data-testid="tool-row" data-tool={tool.tool_id}>
       <Mark tool={tool} />
@@ -116,8 +133,13 @@ export function useMinuteTick(): void {
   }, []);
 }
 
-/** Manage: Disconnect removes only your own connection. Granola's sheet also sets up the folder ECHO watches. */
+/** A tool's sheet: Paste a meeting's own, or Manage. */
 export function ToolManage({ sheet }: { sheet: ToolManageSheet }) {
+  return sheet.tool.tool_id === PASTE_TOOL_ID ? <PasteMeeting tool={sheet.tool} /> : <ConnectionManage sheet={sheet} />;
+}
+
+/** Manage: Disconnect removes only your own connection. Granola's sheet also sets up the folder ECHO watches. */
+function ConnectionManage({ sheet }: { sheet: ToolManageSheet }) {
   const box = useRef<HTMLDivElement>(null);
   const done = useRef<HTMLButtonElement>(null);
   useEffect(() => { (done.current ?? box.current)?.focus(); }, []);

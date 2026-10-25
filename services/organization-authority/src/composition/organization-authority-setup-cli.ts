@@ -1137,12 +1137,29 @@ function stagingSyntheticSourceEvidence(
 ): { readonly proposal_staged: boolean; readonly fixture_mode: boolean; readonly fixtures_approved: boolean; readonly canary_approved: boolean } | undefined {
   const source = readStagingSyntheticSource(manifest, authority);
   if (source === undefined) return undefined;
-  const approved = record.prepare(
-    `SELECT 1 FROM organization_record_log
-      WHERE event_kind = 'approved' AND action = 'approve' AND approval_id = ?
-      LIMIT 1`,
-  );
-  const approvedProposals = source.proposals.filter((proposal) => approved.get(proposal.approval_id) !== undefined);
+  // A proposal is approved once its decision's receipt is written: the publisher writes it in one transaction, only after
+  // every destination's record is in the log, so a decision still publishing has none. Each record the receipt names must
+  // be in the log too, under its own approval id (the log's unique approval index, no envelope scan).
+  const receiptOf = authority.prepare(
+    `SELECT receipt_json FROM authority_approval_decisions_v1
+      WHERE approval_id = ? AND action = 'approve' AND receipt_json IS NOT NULL`,
+  ).pluck();
+  const recordOf = record.prepare(
+    `SELECT record_sha256 FROM organization_record_log
+      WHERE approval_id = ? AND action = 'approve' AND event_kind = 'approved'`,
+  ).pluck();
+  const published = (approvalId: string): boolean => {
+    const receipt = receiptOf.get(approvalId);
+    if (typeof receipt !== "string") return false;
+    let records: unknown;
+    try { records = (JSON.parse(receipt) as { readonly records?: unknown }).records; } catch { return false; }
+    return Array.isArray(records) && records.length > 0 && records.every((entry: unknown) => {
+      const named = entry as { readonly approval_id?: unknown; readonly record_sha256?: unknown } | null;
+      return named !== null && typeof named === "object" && typeof named.approval_id === "string"
+        && typeof named.record_sha256 === "string" && recordOf.get(named.approval_id) === named.record_sha256;
+    });
+  };
+  const approvedProposals = source.proposals.filter((proposal) => published(proposal.approval_id));
   const approvedMeetings = new Set(approvedProposals.map((proposal) => proposal.meeting_id));
   const releaseId = process.env.ECHO_CLEAN_RELEASE_ID;
   const currentCanaryRevision =

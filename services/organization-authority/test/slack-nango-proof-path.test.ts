@@ -23,7 +23,7 @@ import {
 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts";
 import { openOrganizationControlDatabase } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
-import { slackApprovalActionIdV4 } from "@echo-brain/provider-slack-server/private-approval/slack-approval-card-v4";
+import { slackApprovalActionIdV4, slackApprovalDestinationSha256V4 } from "@echo-brain/provider-slack-server/private-approval/slack-approval-card-v4";
 import {
   parseVerifiedPrivateSlackApprovalInteractionV1,
   PrivateSlackApprovalInteractionError,
@@ -654,29 +654,8 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
     // This service started before Slack was connected. The route must still be
     // mounted so a just-linked owner can use the card without a restart.
     const approval_id = "apr_00000000-0000-4000-8000-000000000001";
-    const interaction_state = {
-      audience: {
-        [slackApprovalActionIdV4(approval_id, "audience-select")]: {
-          type: "static_select",
-          selected_option: {
-            text: { type: "plain_text", text: "Only me", emoji: false },
-            value: "only-me",
-          },
-        },
-      },
-      projects: {
-        [slackApprovalActionIdV4(approval_id, "projects-select")]: {
-          type: "multi_static_select",
-          selected_options: [],
-        },
-      },
-      transcript: {
-        [slackApprovalActionIdV4(approval_id, "transcript-checkbox")]: {
-          type: "checkboxes",
-          selected_options: [],
-        },
-      },
-    };
+    // Slack approves as suggested: the card's state holds only its owner inputs, none here.
+    const interaction_state = {};
     const interaction = {
       type: "block_actions",
       user: {
@@ -718,9 +697,10 @@ it("sets up, connects, links, reconnects and restarts Slack through Nango, refus
           text: { type: "plain_text", text: "Approve meeting", emoji: false },
           action_ts: "1727700001.000001",
           value: JSON.stringify({
-            schema_version: 2,
+            schema_version: 3,
             approval_id,
             snapshot_sha256: `sha256:${"a".repeat(64)}`,
+            destination_sha256: slackApprovalDestinationSha256V4([]),
           }),
         },
       ],

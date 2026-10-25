@@ -20,8 +20,9 @@ export interface Launched {
 /**
  * The real app with a private temporary home: never the founder's session. `files` are written into that home before the
  * app starts, such as the fixture Authority's switches (`hold-live` holds every live read until the test removes it).
+ * `env` adds to the app's environment, such as `TZ` for the time zone it and its person client run in.
  */
-export async function launch(mode = '', files: Readonly<Record<string, string>> = {}): Promise<Launched> {
+export async function launch(mode = '', files: Readonly<Record<string, string>> = {}, env: Readonly<Record<string, string>> = {}): Promise<Launched> {
   // The session store requires a canonical private folder (macOS /var is a link).
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-desktop-home-')));
   for (const [name, text] of Object.entries(files)) writeFileSync(join(home, name), text);
@@ -34,6 +35,7 @@ export async function launch(mode = '', files: Readonly<Record<string, string>> 
     ],
     env: {
       ...process.env,
+      ...env,
       ECHO_HOME: home,
       ECHO_DESKTOP_USER_DATA: userData,
       ECHO_DESKTOP_TEST_FIXTURES: join(root, 'test', 'fixtures'),
@@ -164,25 +166,31 @@ export async function addMeeting(page: Page): Promise<void> {
   await page.locator('[data-tool="granola"]').getByTestId('tool-manage').click();
   const meetings = page.getByRole('region', { name: 'Personal meetings' });
   await expect(meetings).toContainText('ari@example.test · EchoBrain');
-  await meetings.getByLabel('Granola folder').selectOption({ label: 'ECHO (1)' });
-  // Granola's label is the meeting's own day; an evening in Pacific time is already the next day in UTC.
+  // Your recent meetings list as the sheet opens. Granola's label is the meeting's own day; an evening in Pacific time
+  // is already the next day in UTC.
   await expect(meetings.getByRole('button', { name: 'Pilot planning', exact: true })).toContainText('Oct 6');
   await meetings.getByRole('button', { name: 'Pilot planning', exact: true }).click();
   const add = meetings.getByRole('button', { name: 'Add to ECHO', exact: true });
   await expect(add).toBeDisabled();
   await meetings.getByLabel('I allow ECHO to retain', { exact: false }).check();
   await add.click();
-  await expect(meetings.getByRole('status')).toContainText('Added.');
+  await expect(meetings.getByRole('status')).toHaveText('Added.');
   await page.keyboard.press('Escape');
   await page.getByTestId('sidebar-home').click();
 }
 
-/** Adds the fixture meeting, then approves it from Home: for the projects it suggests, or for Only me. Returns Home's rows. */
+/** Sends every item of an open decision card to one place: Only me, or Don't keep, from its All items control. */
+export async function routeAll(card: Locator, choice: 'Only me' | 'Don\'t keep'): Promise<void> {
+  await card.getByTestId('route-all').click();
+  await card.getByTestId('route-menu').getByRole('button', { name: choice, exact: true }).click();
+}
+
+/** Adds the fixture meeting, then approves it from Home: every item to the project it suggests, or to Only me. Returns Home's rows. */
 export async function approveFromHome(page: Page, onlyMe = false): Promise<Locator> {
   await addMeeting(page);
   await page.getByTestId('need-row').filter({ hasText: 'Pilot planning' }).click();
   const card = page.getByTestId('decision');
-  if (onlyMe) await card.getByRole('radio', { name: 'Only me' }).check();
+  if (onlyMe) await routeAll(card, 'Only me');
   await card.getByTestId('decision-approve').click();
   await expect(page.getByTestId('toast')).toContainText('Approved');
   return page.getByTestId('need-row');

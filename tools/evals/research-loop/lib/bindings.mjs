@@ -40,11 +40,11 @@ export function meetingCitation(bindings, meetingId, item) {
   return citations[0];
 }
 
-/** The citation a key reference starts from. Transcripts are not starting evidence in v1. */
+/** The citation a key reference starts from. */
 export function citationFor(bindings, ref) {
   if (ref.ticket !== undefined) return ticketCitation(bindings, ref.ticket);
   if (ref.page !== undefined) return pageCitation(bindings, ref.page);
-  if (ref.meeting !== undefined && ref.item !== "transcript") return meetingCitation(bindings, ref.meeting, ref.item);
+  if (ref.meeting !== undefined) return meetingCitation(bindings, ref.meeting, ref.item);
   throw new CaseNotStartableError(`reference ${JSON.stringify(ref)} cannot start research`);
 }
 

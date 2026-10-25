@@ -61,10 +61,11 @@ function freeze(database: Database, candidate: string, approval: string, project
   database.prepare(`UPDATE authority_live_approval_outbox_v2 SET state = 'staged', approved_snapshot_json = ?, approved_snapshot_sha256 = ?,
     suggested_projects_json = ?, updated_at = ? WHERE candidate_id = ?`).run(JSON.stringify(snapshot), sha, projects === null ? null : JSON.stringify(projects), NOW, candidate);
 }
+/** An approval routes its one decision Only me by default; a rejection routes nothing. */
 function body(o: { approval?: string; command?: string; surface?: string; action?: string; request?: Record<string, unknown>; actor?: Record<string, unknown>; evidence?: Record<string, unknown>; decided_at?: unknown } = {}) {
   const approval = o.approval ?? "apr_1", command = o.command ?? "desk-1", surface = o.surface ?? "desktop", action = o.action ?? "approve";
   return {
-    request: { approval_id: approval, command_id: command, snapshot_sha256: DIGEST, action, project_ids: [], share_transcript: false, owners: [], ...o.request },
+    request: { approval_id: approval, command_id: command, snapshot_sha256: DIGEST, action, routes: action === "approve" ? [{ signal_id: "dec-1", project_ids: [] }] : [], owners: [], ...o.request },
     surface, actor: { organization_id: "org_1", principal_id: "prn_1", membership_id: "mem_1", ...o.actor },
     evidence: { kind: surface === "desktop" ? "person-session" : "slack-click", sha256: DIGEST, ...o.evidence },
     decided_at: o.decided_at === undefined ? NOW : o.decided_at,
@@ -75,9 +76,16 @@ function decide(database: Database, o: Parameters<typeof body>[0] & { readonly r
   return database.prepare("INSERT INTO authority_approval_decisions_v1 (approval_id, command_id, surface, action, body_json) VALUES (?, ?, ?, ?, ?)")
     .run(row.approval, row.command, row.surface, row.action, JSON.stringify(o.json === undefined ? body(o) : o.json));
 }
-function receipt(record: unknown, body: unknown = { record_sha256: record }) {
-  return JSON.stringify({ record_sha256: record, receipt: { body, signature: "fixture" } });
+/** One published record of a receipt; its signed receipt names its digest unless `body` says otherwise. */
+function published(record: unknown, o: { approval_id?: unknown; project_ids?: unknown; body?: unknown } = {}) {
+  return { approval_id: o.approval_id === undefined ? `apr_${"0".repeat(63)}1` : o.approval_id, project_ids: o.project_ids === undefined ? [] : o.project_ids,
+    record_sha256: record, receipt: { body: o.body === undefined ? { record_sha256: record } : o.body, signature: "fixture" } };
 }
+function receipt(...records: unknown[]) {
+  return JSON.stringify({ records });
+}
+/** Routes for the decision's items, each to the destination given. */
+const routes = (...destinations: unknown[]) => destinations.map((project_ids, index) => ({ signal_id: `item-${index + 1}`, project_ids }));
 
 describe("Authority approval decision schema", () => {
   let database: Database;
@@ -135,7 +143,7 @@ describe("Authority approval decision schema", () => {
     seedCandidate(database);
     freeze(database, "cnd_1", "apr_1", [PROJECT_A]);
     // Only the CHECKs refuse here; the insert triggers are covered below.
-    for (const trigger of ["staged", "reviewer", "audience"]) database.exec(`DROP TRIGGER authority_approval_decision_${trigger}_v1`);
+    for (const trigger of ["staged", "reviewer", "routes", "audience"]) database.exec(`DROP TRIGGER authority_approval_decision_${trigger}_v1`);
     const { request: _request, ...withoutRequest } = body();
     for (const [label, input] of [
       ["no request.action", { request: { action: undefined } }],
@@ -144,9 +152,9 @@ describe("Authority approval decision schema", () => {
       ["another command", { request: { command_id: "desk-2" } }],
       ["another surface", { json: { ...body(), surface: "slack" } }],
       ["no surface", { json: { ...body(), surface: undefined } }],
-      ["projects that are not an array", { request: { project_ids: PROJECT_A } }],
-      ["a string share choice", { request: { share_transcript: "false" } }],
-      ["no share choice", { request: { share_transcript: undefined } }],
+      ["routes that are not an array", { request: { routes: { "dec-1": [] } } }],
+      ["no routes", { request: { routes: undefined } }],
+      ["more than 500 routes", { request: { routes: Array.from({ length: 501 }, (_, i) => ({ signal_id: `a${i}`, project_ids: [] })) } }],
       ["owners that are not an array", { request: { owners: {} } }],
       ["more than 40 owners", { request: { owners: Array.from({ length: 41 }, (_, i) => ({ signal_id: `a${i}`, owner: "A" })) } }],
       ["no membership", { actor: { membership_id: undefined } }],
@@ -159,8 +167,7 @@ describe("Authority approval decision schema", () => {
       ["a command with a space", { command: "desk 1", request: { command_id: "desk 1" } }],
       ["a command over 128 characters", { command: "d".repeat(129), request: { command_id: "d".repeat(129) } }],
       ["an unknown surface", { surface: "email", evidence: { kind: "slack-click" } }],
-      ["a rejection with projects", { action: "reject", request: { project_ids: [PROJECT_A] } }],
-      ["a rejection that shares the transcript", { action: "reject", request: { share_transcript: true } }],
+      ["a rejection with routes", { action: "reject", request: { routes: [{ signal_id: "dec-1", project_ids: null }] } }],
       ["a rejection with owners", { action: "reject", request: { owners: [{ signal_id: "a1", owner: "A" }] } }],
     ] as const) {
       expect(() => decide(database, input as Parameters<typeof decide>[1]), label).toThrow(/CHECK constraint failed/);
@@ -168,11 +175,30 @@ describe("Authority approval decision schema", () => {
     // With no request at all, the staged-snapshot trigger refuses it before the CHECK runs.
     expect(() => decide(database, { json: withoutRequest })).toThrow(/needs its staged proposal|CHECK constraint failed/);
     expect(() => decide(database, { request: { snapshot_sha256: 7 } })).toThrow(/needs its staged proposal|CHECK constraint failed/);
-    expect(() => decide(database, { request: { project_ids: Array.from({ length: 21 }, () => PROJECT_A) } })).toThrow(/audience needs active project membership|CHECK constraint failed/);
     expect(database.prepare("SELECT count(*) FROM authority_approval_decisions_v1").pluck().get()).toBe(0);
     // The well-formed body each case was derived from is accepted.
-    decide(database, { request: { project_ids: [PROJECT_A], share_transcript: true, owners: [{ signal_id: "act-1", owner: "Ana" }] } });
+    decide(database, { request: { routes: routes([PROJECT_A], null, []), owners: [{ signal_id: "item-3", owner: "Ana" }] } });
     expect(database.prepare("SELECT count(*) FROM authority_approval_decisions_v1").pluck().get()).toBe(1);
+  });
+
+  it("takes routes of a signal and a destination each, keeps one item and names at most 20 projects", () => {
+    seedCandidate(database);
+    freeze(database, "cnd_1", "apr_1", [PROJECT_A]);
+    const many = Array.from({ length: 21 }, (_, i) => `prj_00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    for (const [label, value] of [
+      ["a route that is not an object", ["dec-1"]],
+      ["a route without a signal", [{ project_ids: [] }]],
+      ["a route with a numeric signal", [{ signal_id: 7, project_ids: [] }]],
+      ["a route without a destination", [{ signal_id: "dec-1" }]],
+      ["a destination that is text", [{ signal_id: "dec-1", project_ids: PROJECT_A }]],
+      ["a route naming 21 projects", routes(many)],
+      ["routes naming 21 projects in all", routes(many.slice(0, 11), many.slice(11))],
+      ["an approval that keeps nothing", routes(null, null)],
+      ["an approval with no routes", []],
+    ] as const) {
+      expect(() => decide(database, { request: { routes: value } }), label).toThrow(/approval decision routes are invalid|audience needs active project membership/);
+    }
+    expect(database.prepare("SELECT count(*) FROM authority_approval_decisions_v1").pluck().get()).toBe(0);
   });
 
   it("lets only the active reviewer decide the exact staged snapshot for projects they can read", () => {
@@ -183,7 +209,9 @@ describe("Authority approval decision schema", () => {
     expect(() => decide(database, { actor: { principal_id: "prn_2", membership_id: "mem_2" } })).toThrow(/needs the active reviewer/);
     expect(() => decide(database, { actor: { organization_id: "org_2" } })).toThrow(/needs the active reviewer/);
     for (const projects of [[PROJECT_C, PROJECT_A], [PROJECT_A, PROJECT_A], [PROJECT_B], [PROJECT_C], [7]]) {
-      expect(() => decide(database, { request: { project_ids: projects } }), JSON.stringify(projects)).toThrow(/audience needs active project membership/);
+      expect(() => decide(database, { request: { routes: routes(projects) } }), JSON.stringify(projects)).toThrow(/audience needs active project membership/);
+      // Every route is checked, wherever it is.
+      expect(() => decide(database, { request: { routes: routes([PROJECT_A], null, [], projects) } }), JSON.stringify(projects)).toThrow(/audience needs active project membership/);
     }
     database.prepare("UPDATE authority_memberships SET status = 'revoked', revoked_at = ?, revocation_reason = 'fixture' WHERE membership_id = 'mem_1'").run(NOW);
     expect(() => decide(database)).toThrow(/needs the active reviewer/);
@@ -195,29 +223,47 @@ describe("Authority approval decision schema", () => {
     freeze(database, "cnd_1", "apr_1", [PROJECT_A]);
     freeze(database, "cnd_2", "apr_2");
     freeze(database, "cnd_3", "apr_3");
-    decide(database, { request: { project_ids: [PROJECT_A], share_transcript: true, owners: [{ signal_id: "act-1", owner: "Ana" }] } });
+    decide(database, { request: { routes: routes([PROJECT_A], []), owners: [{ signal_id: "item-1", owner: "Ana" }] } });
     expect(() => decide(database, { command: "desk-other", request: { command_id: "desk-other" } })).toThrow(/UNIQUE constraint failed: authority_approval_decisions_v1.approval_id/);
     expect(() => decide(database, { approval: "apr_2", request: { approval_id: "apr_2" } })).toThrow(/UNIQUE constraint failed: authority_approval_decisions_v1.command_id/);
     decide(database, { approval: "apr_2", command: "slack:k", surface: "slack", action: "reject", request: { approval_id: "apr_2", command_id: "slack:k" } });
-    expect(() => database.prepare("UPDATE authority_approval_decisions_v1 SET body_json = ? WHERE approval_id = 'apr_1'").run(JSON.stringify(body({ request: { share_transcript: false } }))))
+    expect(() => database.prepare("UPDATE authority_approval_decisions_v1 SET body_json = ? WHERE approval_id = 'apr_1'").run(JSON.stringify(body({ request: { routes: routes([PROJECT_A]) } }))))
       .toThrow(/approval decision is immutable/);
     expect(() => database.prepare("UPDATE authority_approval_decisions_v1 SET surface = 'slack' WHERE approval_id = 'apr_1'").run()).toThrow(/approval decision is immutable/);
-    const record = `sha256:${"c".repeat(64)}`;
+    const record = `sha256:${"c".repeat(64)}`, sibling = `sha256:${"f".repeat(64)}`;
+    const update = (value: string, id = "apr_1") => database.prepare("UPDATE authority_approval_decisions_v1 SET receipt_json = ? WHERE approval_id = ?").run(value, id);
     for (const [label, value] of [
-      ["a receipt without its record digest", JSON.stringify({ receipt: { body: { record_sha256: record } } })],
-      ["a receipt naming another record", receipt(record, { record_sha256: `sha256:${"d".repeat(64)}` })],
-      ["a receipt without a signed body digest", receipt(record, {})],
-      ["a receipt that is not an object", JSON.stringify({ record_sha256: record, receipt: "signed" })],
-      ["a numeric record digest", JSON.stringify({ record_sha256: 7, receipt: { body: { record_sha256: 7 } } })],
+      ["a receipt without records", JSON.stringify({ record_sha256: record, receipt: { body: { record_sha256: record } } })],
+      ["records that are not an array", JSON.stringify({ records: published(record) })],
+      ["no records", receipt()],
       ["a receipt array", "[]"],
     ] as const) {
-      expect(() => database.prepare("UPDATE authority_approval_decisions_v1 SET receipt_json = ? WHERE approval_id = 'apr_1'").run(value), label).toThrow(/CHECK constraint failed/);
+      expect(() => update(value), label).toThrow(/CHECK constraint failed/);
     }
-    expect(() => database.prepare("UPDATE authority_approval_decisions_v1 SET receipt_json = ? WHERE approval_id = 'apr_2'").run(receipt(record))).toThrow(/CHECK constraint failed/);
-    database.prepare("UPDATE authority_approval_decisions_v1 SET receipt_json = ? WHERE approval_id = 'apr_1'").run(receipt(record));
-    expect(database.prepare("SELECT json_extract(receipt_json, '$.record_sha256') FROM authority_approval_decisions_v1 WHERE approval_id = 'apr_1'").pluck().get()).toBe(record);
-    expect(() => database.prepare("UPDATE authority_approval_decisions_v1 SET receipt_json = ? WHERE approval_id = 'apr_1'").run(receipt(`sha256:${"e".repeat(64)}`)))
-      .toThrow(/approval decision is immutable/);
+    for (const [label, value] of [
+      ["a record naming another record", receipt(published(record, { body: { record_sha256: `sha256:${"d".repeat(64)}` } }))],
+      ["a record without a signed body digest", receipt(published(record, { body: {} }))],
+      ["a record whose receipt is not an object", receipt({ ...published(record), receipt: "signed" })],
+      ["a numeric record digest", receipt(published(7))],
+      ["a record without its approval id", receipt({ ...published(record), approval_id: undefined })],
+      ["a record whose approval id is not apr_*", receipt(published(record, { approval_id: "rec_1" }))],
+      ["a record without its projects", receipt({ ...published(record), project_ids: undefined })],
+      ["a record whose projects are text", receipt(published(record, { project_ids: PROJECT_A }))],
+      ["a record that is not an object", receipt(record)],
+      ["two records under one approval id", receipt(published(record), published(sibling))],
+      ["one good record and one bad", receipt(published(record), published(sibling, { approval_id: `apr_${"0".repeat(63)}2`, body: {} }))],
+    ] as const) {
+      expect(() => update(value), label).toThrow(/approval receipt needs its published records/);
+    }
+    expect(() => update(receipt(published(record)), "apr_2")).toThrow(/CHECK constraint failed/);
+    const records = [published(record, { project_ids: [PROJECT_A] }), published(sibling, { approval_id: `apr_${"0".repeat(63)}2` })];
+    update(receipt(...records));
+    expect(JSON.parse(database.prepare("SELECT receipt_json FROM authority_approval_decisions_v1 WHERE approval_id = 'apr_1'").pluck().get() as string)).toEqual({ records });
+    expect(() => update(receipt(published(`sha256:${"e".repeat(64)}`)))).toThrow(/approval decision is immutable/);
+    // A decision starts unpublished: its receipt is never inserted with it.
+    expect(() => database.prepare("INSERT INTO authority_approval_decisions_v1 (approval_id, command_id, surface, action, body_json, receipt_json) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("apr_3", "desk-3", "desktop", "approve", JSON.stringify(body({ approval: "apr_3", command: "desk-3" })), receipt(published(record))))
+      .toThrow(/starts unpublished/);
     expect(() => database.prepare("DELETE FROM authority_approval_decisions_v1 WHERE approval_id = 'apr_2'").run()).toThrow(/approval decision deletion is denied/);
     // A decided proposal is final: never superseded, frozen fields never change.
     expect(() => database.prepare("UPDATE authority_live_approval_outbox_v2 SET state = 'superseded', superseded_by_candidate_id = 'cnd_3', superseded_at = ? WHERE candidate_id = 'cnd_1'").run(NOW))

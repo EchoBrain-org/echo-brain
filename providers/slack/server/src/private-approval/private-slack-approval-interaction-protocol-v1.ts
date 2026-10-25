@@ -22,8 +22,6 @@ const CHANNEL = /^[CDG][A-Z0-9]{2,255}$/;
 const TS = /^[0-9]{1,16}\.[0-9]{1,9}$/;
 const TRIGGER = /^[A-Za-z0-9._-]{16,512}$/;
 const TOKEN = /^[\x21-\x7e]{1,4096}$/;
-const PROJECT =
-  /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 type RecordValue = Record<string, unknown>;
 interface VerifiedEvidence {
   readonly body: Uint8Array;
@@ -64,15 +62,18 @@ export interface PrivateSlackApprovalLookupHintsV1 {
   readonly message_app_id: string;
   readonly message_bot_id: string;
 }
+/**
+ * A verified Approve or Reject. Slack approves as suggested, so a click chooses no destination: it carries the digest of the
+ * one its card showed (slackApprovalDestinationSha256V4) and the owners typed on the card.
+ */
 export interface VerifiedSlackApprovalClickV1 {
   readonly schema_version: 4;
   readonly disposition: "resolution";
   readonly action: "approve" | "reject";
   readonly approval_id: string;
   readonly snapshot_sha256: `sha256:${string}`;
-  readonly audience: "only-me" | "projects";
-  readonly project_ids: readonly string[];
-  readonly share_transcript: boolean;
+  /** Where the card said Approve sends every item; an approval decides only while the suggestion is still that. */
+  readonly destination_sha256: `sha256:${string}`;
   readonly owners: readonly {
     readonly signal_id: string;
     readonly owner: string;
@@ -289,9 +290,11 @@ function lookup(payload: RecordValue): PrivateSlackApprovalLookupHintsV1 {
     message_bot_id: string(message.bot_id, BOT),
   });
 }
+const BUTTON_KEYS = ["schema_version", "approval_id", "snapshot_sha256", "destination_sha256"] as const;
 function value(action: RecordValue): {
   readonly approval_id: string;
   readonly snapshot_sha256: `sha256:${string}`;
+  readonly destination_sha256: `sha256:${string}`;
 } {
   if (typeof action.value !== "string" || action.value.length > 1024)
     invalid();
@@ -301,29 +304,17 @@ function value(action: RecordValue): {
   } catch {
     return invalid();
   }
-  const button = exact(
-    parsed,
-    ["schema_version", "approval_id", "snapshot_sha256"],
-    ["schema_version", "approval_id", "snapshot_sha256"],
-  );
-  if (button.schema_version !== 2) invalid();
+  const button = exact(parsed, BUTTON_KEYS, BUTTON_KEYS);
+  if (button.schema_version !== 3) invalid();
   const snapshot = string(button.snapshot_sha256, DIGEST, 80);
+  const destination = string(button.destination_sha256, DIGEST, 80);
   return Object.freeze({
     approval_id: string(button.approval_id, IDENTIFIER),
     snapshot_sha256: snapshot as `sha256:${string}`,
+    destination_sha256: destination as `sha256:${string}`,
   });
 }
-function selectedProjectId(option: unknown): string {
-  const selected = exact(
-    option,
-    ["text", "value"],
-    ["text", "value", "description"],
-  );
-  plainText(selected.text);
-  if (selected.description !== undefined)
-    plainText(selected.description);
-  return string(selected.value, PROJECT);
-}
+/** The owner inputs of the card's state. A reject keeps none; an approval needs no other state, since it sends every item to the suggestion. */
 function state(
   payload: RecordValue,
   approval_id: string,
@@ -332,14 +323,6 @@ function state(
   const values = record(
     exact(payload.state, ["values"], ["values"]).values,
   );
-  const ids = {
-    audience: slackApprovalActionIdV4(approval_id, "audience-select"),
-    projects: slackApprovalActionIdV4(approval_id, "projects-select"),
-    transcript: slackApprovalActionIdV4(approval_id, "transcript-checkbox"),
-  };
-  let audience: "only-me" | "projects" | undefined,
-    project_ids: string[] = [],
-    share_transcript: boolean | undefined;
   const owners: { signal_id: string; owner: string }[] = [];
   for (const block of Object.values(values)) {
     const entry = record(block),
@@ -347,56 +330,6 @@ function state(
     if (keys.length !== 1) invalid();
     const key = keys[0]!;
     const control = record(entry[key]);
-    if (key === ids.audience) {
-      if (control.type !== "static_select") invalid();
-      const option = exact(
-        control.selected_option,
-        ["text", "value"],
-        ["text", "value"],
-      );
-      plainText(option.text);
-      if (option.value !== "only-me" && option.value !== "projects")
-        invalid();
-      audience = option.value;
-      continue;
-    }
-    if (key === ids.projects) {
-      if (
-        control.type !== "multi_static_select" ||
-        !Array.isArray(control.selected_options) ||
-        control.selected_options.length > 20
-      )
-        invalid();
-      project_ids = control.selected_options.map(selectedProjectId).sort();
-      if (
-        project_ids.some(
-          (id, index) => index > 0 && project_ids[index - 1] === id,
-        )
-      )
-        invalid();
-      continue;
-    }
-    if (key === ids.transcript) {
-      if (
-        control.type !== "checkboxes" ||
-        !Array.isArray(control.selected_options) ||
-        control.selected_options.length > 1
-      )
-        invalid();
-      const selected =
-        control.selected_options[0] === undefined
-          ? undefined
-          : exact(
-              control.selected_options[0],
-              ["text", "value"],
-              ["text", "value"],
-            );
-      if (selected !== undefined) plainText(selected.text);
-      share_transcript = selected?.value === "share-transcript-v1";
-      if (share_transcript === false && control.selected_options.length === 1)
-        invalid();
-      continue;
-    }
     const prefix = slackApprovalOwnerActionIdV4(approval_id, "");
     if (!key.startsWith(prefix)) invalid();
     const signal_id = key.slice(prefix.length);
@@ -410,45 +343,20 @@ function state(
       owners.push({ signal_id, owner: control.value });
   }
   if (
-    audience === undefined ||
-    share_transcript === undefined ||
     owners.length > 40 ||
     new Set(owners.map((owner) => owner.signal_id)).size !== owners.length
   )
     invalid();
-  if (action === "reject")
-    return Object.freeze({
-      audience: "only-me" as const,
-      project_ids: Object.freeze([]),
-      share_transcript: false,
-      owners: Object.freeze([]),
-    });
-  if (audience === "only-me")
-    return Object.freeze({
-      audience,
-      project_ids: Object.freeze([]),
-      share_transcript,
-      owners: Object.freeze(owners),
-    });
-  if (project_ids.length === 0) invalid();
   return Object.freeze({
-    audience,
-    project_ids: Object.freeze(project_ids),
-    share_transcript,
-    owners: Object.freeze(owners),
+    owners: Object.freeze(action === "reject" ? [] : owners),
   });
 }
 function presentationChangeAction(actionId: string, type: unknown): boolean {
   const control =
-    /^echo-approval-v4-[0-9a-f]{32}-(audience-select|projects-select|transcript-checkbox|owner-[A-Za-z0-9._:-]{1,255})$/.exec(
+    /^echo-approval-v4-[0-9a-f]{32}-(owner-[A-Za-z0-9._:-]{1,255})$/.exec(
       actionId,
     )?.[1];
-  return (
-    (control === "audience-select" && type === "static_select") ||
-    (control === "projects-select" && type === "multi_static_select") ||
-    (control === "transcript-checkbox" && type === "checkboxes") ||
-    (control?.startsWith("owner-") === true && type === "plain_text_input")
-  );
+  return control !== undefined && type === "plain_text_input";
 }
 function providerKey(input: {
   readonly lookup: PrivateSlackApprovalLookupHintsV1;
@@ -557,6 +465,7 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
       action: expected,
       approval_id: button.approval_id,
       snapshot_sha256: button.snapshot_sha256,
+      destination_sha256: button.destination_sha256,
       ...choices,
       provider_action_key_sha256: providerKey({
         lookup: hints,

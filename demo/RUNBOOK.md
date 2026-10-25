@@ -6,7 +6,7 @@ Show four things in one closed loop:
 
 1. Realistic meeting intake.
 2. Reasoning across related meetings the user did not need to locate or search.
-3. Evidence-backed record approval and visibility selection on the owner's approval card (the desktop, or its Slack DM copy).
+3. Evidence-backed record approval and a destination for each decision and action on the owner's approval card (the desktop; its Slack DM copy approves as suggested).
 4. High-quality, cited, permission-aware retrieval in Ask ECHO.
 
 The customer sees the approval card (in Slack or the desktop) and Ask ECHO only. Do not show fixture files, extraction
@@ -72,7 +72,8 @@ startup result other than `processing: "active"` is a stop condition.
    duplicate machine-formatted due-date row, labels any unlinked rationale as
    **Additional meeting context**,
    preserves evidence and the non-release statement in the complete plain-text
-   alternative, and retains the Only me/Projects selector.
+   alternative, and says where the items go (the desktop card chooses Only me,
+   projects or Don't keep per item; the Slack copy approves as suggested).
 7. Confirm Ask ECHO exposes human-readable source context for cited facts.
 
 ## Customer-facing sequence
@@ -140,7 +141,7 @@ Slack DM copy). For each meeting, verify that the card shows:
 - action dates;
 - a short evidence excerpt or transcript-turn reference;
 - a clear statement that raw transcript and rejected suggestions are not released;
-- Only me or project visibility choices;
+- where each decision and action goes: Only me, projects, or Don't keep;
 - Approve and Reject controls.
 
 Approve these records for the project the team belongs to:
@@ -224,7 +225,8 @@ Answer it directly rather than deflecting:
 
 - Approval is per-decision knowledge admission, not meeting review. The card
   already contains the extracted decisions, actions, dates, rationale, and
-  evidence; reading it and choosing a visibility takes seconds per meeting.
+  evidence; reading it and choosing where each item goes takes seconds per
+  meeting.
 - The owner approves once. After that, nobody downstream re-derives, re-checks,
   or re-shares the fact by hand.
 - That human moment is exactly what makes the answers trustworthy enough to act

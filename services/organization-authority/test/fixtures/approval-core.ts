@@ -7,17 +7,17 @@ import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-proto
 import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { SqliteApprovalWorkflowStateV1, SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { bindApprovalWorkflowStateV1, type ApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
-import type { ActionSignal, DecisionSet, MeetingDocument } from '@echo-brain/organization-processing/core';
+import type { ActionSignal, DecisionSet, DecisionSignal, MeetingDocument, RationaleSignal } from '@echo-brain/organization-processing/core';
 import { meetingSourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
-import { applyOrganizationRecordLogBaselineV4, OrganizationRecordAppenderV4, RecordRetrievalSourceSnapshotPortV1, type RecordPolicyFactProjectorRegistryV1, type RecordRetrievalSourceAtomV1 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { applyOrganizationRecordLogBaselineV5, OrganizationRecordAppenderV4, RecordRetrievalSourceSnapshotPortV1, type RecordPolicyFactProjectorRegistryV1, type RecordRetrievalSourceAtomV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { organizationAuthorityPinSha256, verifyOrganizationAuthorityPin, verifyOrganizationRecordEnvelopeV4 } from '@echo-brain/organization-protocol';
 import type { ApprovalWorkflowContextV1, ApprovalWorkflowProcessingV1 } from '@echo-brain/organization-processing/ports/approval-workflow-bundle-v1';
 import { testAuthority } from '../../../../packages/organization-protocol/test/fixtures/record-v4-fixture.js';
 import { database as sourceFixture, databases as fixtures, decisions as fixtureDecisions, FIXTURE_SOURCE_KEY, fixtureCursorPolicy, meeting as fixtureMeeting, REVIEW_POLICY } from '../../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
-import { createApprovalCoreV1, createApprovalPublisherV1, type AfterApprovedRecordHookV1, type ApprovalAuthorizationV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalDecisionRequestV1 } from '../../src/composition/approval-core-v1.js';
+import { createApprovalCoreV1, createApprovalPublisherV1, type AfterApprovedRecordHookV1, type ApprovalAuthorizationV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalDecisionRequestV1, type ApprovalRouteV1 } from '../../src/composition/approval-core-v1.js';
 import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from '../../src/composition/authority-record-protocols-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../../src/adapters/persistence/sqlite/source-admission-v1.js';
-import { SqlitePersonMeetingIntakeV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingCheckpointV1 } from '../../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
+import { SqlitePersonMeetingIntakeV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingCheckpointV1, type PersonalMeetingWatchV1 } from '../../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { addMembership } from './project-context-sqlite.js';
 
 const opened: Database.Database[] = [];
@@ -28,17 +28,17 @@ afterEach(() => {
 });
 
 const CURSOR_PREFIX = 'fixture-source:v1:live:';
-type FixtureCheckpointV1 = PersonalMeetingCheckpointV1 & { readonly baseline: boolean; readonly revisions: Readonly<Record<string, string>> };
-const write = (value: FixtureCheckpointV1): string => CURSOR_PREFIX + JSON.stringify({ folder: value.folder, baseline: value.baseline, revisions: value.revisions, manual: value.manual });
+type FixtureCheckpointV1 = PersonalMeetingCheckpointV1 & { readonly folder: string | null; readonly baseline: boolean };
+const write = (value: FixtureCheckpointV1): string => CURSOR_PREFIX + JSON.stringify({ folder: value.folder, baseline: value.baseline, manual: value.manual });
 /** The fixture source's live cursor carries a personal checkpoint; the admitted initial cursor reads as empty. */
 export const fixtureCheckpointCodec: PersonalMeetingCheckpointCodecV1 = {
   read(value: string): FixtureCheckpointV1 {
     if (!value.startsWith(CURSOR_PREFIX)) throw new Error('fixture cursor must be live');
     const body = value.slice(CURSOR_PREFIX.length);
-    return body.startsWith('{') ? JSON.parse(body) as FixtureCheckpointV1 : { folder: null, baseline: false, revisions: {}, manual: [] };
+    return body.startsWith('{') ? JSON.parse(body) as FixtureCheckpointV1 : { folder: null, baseline: false, manual: [] };
   },
-  write, initial: () => write({ folder: null, baseline: false, revisions: {}, manual: [] }),
-  watch: (value: FixtureCheckpointV1, folder: string | null): FixtureCheckpointV1 => ({ ...value, folder, baseline: false, revisions: {} }),
+  write, initial: () => write({ folder: null, baseline: false, manual: [] }),
+  watch: (value: FixtureCheckpointV1, watch: PersonalMeetingWatchV1): FixtureCheckpointV1 => ({ ...value, folder: watch.folder_id, baseline: false }),
   ready: (value: FixtureCheckpointV1) => value.baseline,
 };
 
@@ -72,7 +72,7 @@ export async function approvalContextFixture(options: { readonly path?: string }
     const row = old.prepare(`SELECT * FROM ${table}`).get() as Record<string, unknown>;
     db.prepare(`INSERT INTO ${table} (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(() => '?').join(',')})`).run(...Object.values(row).map(value => typeof value === 'string' && substitutions[value] !== undefined ? substitutions[value] : value));
   }
-  const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys=ON'); applyOrganizationRecordLogBaselineV4(record);
+  const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys=ON'); applyOrganizationRecordLogBaselineV5(record);
   const coordinates = { authority_id: authority.descriptor.authority_id, organization_id: actor.organization_id, state_lineage_id: 'lineage-test' };
   record.prepare('INSERT INTO organization_record_log_metadata VALUES (1,?,?,?,?)').run(coordinates.authority_id, coordinates.organization_id, coordinates.state_lineage_id, '2026-10-06T00:00:00.000Z');
   const append = new OrganizationRecordAppenderV4(record, coordinates, authorityRecordPolicyProjectorsV1());
@@ -93,6 +93,10 @@ export interface ApprovalCoreFixtureOptionsV1 {
   readonly owners?: Readonly<Record<string, string>>;
   /** Replaces the two default action signals. */
   readonly actions?: readonly { readonly id: string; readonly owner?: string | null; readonly text?: string; readonly due_at?: string | null }[];
+  /** Replaces the processing fixture's one decision (decision-1). */
+  readonly decisions?: readonly { readonly id: string; readonly text?: string; readonly status?: DecisionSignal['status'] }[];
+  /** Rationale signals (none by default), each supporting the signal ids it names. */
+  readonly rationales?: readonly { readonly id: string; readonly supports: readonly string[]; readonly text?: string }[];
   /** The actor is an active member of the first `projects` of A and B (default 2). */
   readonly projects?: number;
   /** Recorded suggestion rows for the first `suggestions` of A and B (default 0). */
@@ -121,7 +125,7 @@ export async function approvalCoreFixture(options: ApprovalCoreFixtureOptionsV1 
 async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options: ApprovalCoreFixtureOptionsV1) {
   const { db, record, actor } = base;
   const person = { organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id };
-  db.prepare('INSERT INTO authority_person_meeting_sources_v2(source_key,person_key,folder_id,folder_project_id,settings_revision) VALUES (?,?,NULL,NULL,0)').run(FIXTURE_SOURCE_KEY, canonicalSha256(person));
+  db.prepare("INSERT INTO authority_person_meeting_sources_v2(source_key,person_key,watch,folder_id,suggested_project_id,settings_revision) VALUES (?,?,'off',NULL,NULL,0)").run(FIXTURE_SOURCE_KEY, canonicalSha256(person));
   db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(actor.organization_id, NOW);
   addMembership(db, { organization_id: actor.organization_id, ...OTHER, membership_type: 'employee' }, 'Other', 'other@example.test');
   let grants = 0;
@@ -148,14 +152,18 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
       db.prepare('INSERT INTO authority_person_meeting_pending_suggestions_v1 VALUES (?,?,?,?)').run(FIXTURE_SOURCE_KEY, externalId, PROJECTS[name], NOW);
     }
   }
+  const evidence = [{ meeting_id: fixtureMeeting.id, block_id: 'block-1' }];
   const signals = (options.actions ?? [{ id: 'act-1' }, { id: 'act-2', due_at: '2026-10-20T00:00:00.000Z' }]).map((action, index): ActionSignal => ({
     id: action.id, kind: 'action', text: action.text ?? `Follow up on item ${index + 1}.`, subject: null, confidence: 1,
-    owner: action.owner !== undefined ? action.owner : options.owners?.[action.id] ?? null, due_at: action.due_at ?? null,
-    evidence: [{ meeting_id: fixtureMeeting.id, block_id: 'block-1' }] }));
+    owner: action.owner !== undefined ? action.owner : options.owners?.[action.id] ?? null, due_at: action.due_at ?? null, evidence }));
+  const decided = options.decisions === undefined ? fixtureDecisions.signals : options.decisions.map((decision, index): DecisionSignal => ({
+    id: decision.id, kind: 'decision', status: decision.status ?? 'decided', text: decision.text ?? `Decision ${index + 1}.`, subject: null, confidence: 1, evidence }));
+  const reasons = (options.rationales ?? []).map((reason, index): RationaleSignal => ({
+    id: reason.id, kind: 'rationale', text: reason.text ?? `Reason ${index + 1}.`, subject: null, confidence: 1, evidence, supports_signal_ids: [...reason.supports] }));
   let revisions = 0;
   const build = (label: string, title?: string, external = externalId) => {
     const meeting: MeetingDocument = { ...fixtureMeeting, ...(title === undefined ? {} : { title }), provenance: { ...fixtureMeeting.provenance, external_id: external, canonical_revision: canonicalSha256(label) } };
-    const decisions: DecisionSet = { ...fixtureDecisions, meeting_revision: meeting.provenance.canonical_revision, signals: [...fixtureDecisions.signals, ...signals] };
+    const decisions: DecisionSet = { ...fixtureDecisions, meeting_revision: meeting.provenance.canonical_revision, signals: [...decided, ...signals, ...reasons] };
     return { meeting, decisions };
   };
   const admitSource = (meeting: MeetingDocument) => new SqliteSourceAdmissionStoreV1(db).admit({ source: meetingSourceEnvelopeV1(meeting), scope: { organization_id: actor.organization_id,
@@ -187,11 +195,22 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
   if (options.stage !== false) await core.stager.stage({ admission: first.admission, candidate: first.candidate, meeting: first.meeting, decisions: first.decisions });
   const approvalId = first.candidate.approval_id;
   const snapshotOf = (id: string) => db.prepare('SELECT approved_snapshot_sha256 FROM authority_live_approval_outbox_v2 WHERE approval_id=?').pluck().get(id) as Sha256Digest | null;
+  /** The frozen snapshot's decisions then actions, in brief order: what an approval routes ([] before the freeze). */
+  const items = (id: string): readonly { readonly signal_id: string; readonly kind: 'decision' | 'action' }[] => {
+    const json = db.prepare('SELECT approved_snapshot_json FROM authority_live_approval_outbox_v2 WHERE approval_id=?').pluck().get(id) as string | null | undefined;
+    if (json === null || json === undefined) return [];
+    const brief = (JSON.parse(json) as { approved_payload: { brief: { decisions: { id: string }[]; actions: { id: string }[] } } }).approved_payload.brief;
+    return [...brief.decisions.map(signal => ({ signal_id: signal.id, kind: 'decision' as const })), ...brief.actions.map(signal => ({ signal_id: signal.id, kind: 'action' as const }))];
+  };
+  /** Routes for every item of a frozen proposal: one destination for all, or one per item (null = not kept, [] = Only me). */
+  const routes = (to: readonly string[] | null | ((signal_id: string, kind: 'decision' | 'action') => readonly string[] | null) = [], id = approvalId): readonly ApprovalRouteV1[] =>
+    items(id).map(item => ({ signal_id: item.signal_id, project_ids: typeof to === 'function' ? to(item.signal_id, item.kind) : to }));
   const session: ApprovalAuthorizationV1 = { actor: person, evidence: { kind: 'person-session', sha256: actor.authorization_sha256 } };
   const click: ApprovalAuthorizationV1 = { actor: person, evidence: { kind: 'slack-click', sha256: canonicalSha256('verified click') } };
+  // An approval routes every item Only me unless the test says otherwise; a rejection routes nothing.
   const request = (action: 'approve' | 'reject', o: Partial<ApprovalDecisionRequestV1> = {}): ApprovalDecisionRequestV1 => ({
     approval_id: approvalId, command_id: action === 'approve' ? 'desk-approve' : 'desk-reject', snapshot_sha256: snapshotOf(o.approval_id ?? approvalId) ?? canonicalSha256('unfrozen'),
-    action, project_ids: [], share_transcript: false, owners: [], ...o });
+    action, routes: action === 'approve' ? routes([], o.approval_id ?? approvalId) : [], owners: [], ...o });
   let peerHandle: Database.Database | undefined;
   const peer = async (): Promise<{ readonly db: Database.Database; readonly context: ApprovalWorkflowContextV1; readonly core: ApprovalCoreV1 }> => {
     if (base.path === undefined) throw new Error('peer() needs file: true');
@@ -207,7 +226,7 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
   return {
     core, context, state, intake, actor, person, approvalId, sourceKey: FIXTURE_SOURCE_KEY, externalId, setting,
     projectA: PROJECT_A, projectB: PROJECT_B, projectC: PROJECT_C, project: (name: 'A' | 'B' | 'C') => PROJECTS[name],
-    session, click, wakes: () => wakes, snapshotOf, first,
+    session, click, wakes: () => wakes, snapshotOf, first, items, routes,
     approve: (o: Partial<ApprovalDecisionRequestV1> = {}) => request('approve', o),
     reject: (o: Partial<ApprovalDecisionRequestV1> = {}) => request('reject', o),
     removeProjectMembership: (projectId: string) => { db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'").run(NOW, projectId, actor.membership_id); },
@@ -226,6 +245,8 @@ async function buildApprovalCoreFixture(base: ApprovalContextFixtureV1, options:
       return { approvalId: next.candidate.approval_id, ...next };
     },
     lastRecord: () => JSON.parse((record.prepare('SELECT canonical_envelope FROM organization_record_log ORDER BY rowid DESC LIMIT 1').get() as { canonical_envelope: string }).canonical_envelope),
+    /** Every stored record envelope, in log order. */
+    records: () => (record.prepare('SELECT canonical_envelope FROM organization_record_log ORDER BY position').pluck().all() as string[]).map(value => JSON.parse(value)),
     recordCount: () => record.prepare('SELECT count(*) FROM organization_record_log').pluck().get() as number,
     decisionCount: () => db.prepare('SELECT count(*) FROM authority_approval_decisions_v1').pluck().get() as number,
     receipt: (id = approvalId) => db.prepare('SELECT receipt_json FROM authority_approval_decisions_v1 WHERE approval_id=?').pluck().get(id) as string | null | undefined,

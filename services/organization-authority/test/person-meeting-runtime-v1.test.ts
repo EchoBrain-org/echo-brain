@@ -17,12 +17,12 @@ vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (impo
   } };
 });
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import { ApprovedMeetingTranscriptGrantReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
-import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256 } from '@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1';
 import type { PersonMeetingOperationV2, PersonMeetingResultsV2 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
-import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_FOLDER_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-folder-source-v1';
+import { readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
 import { AdapterError } from '@echo-brain/organization-processing/core/contracts/adapter';
 import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
@@ -41,8 +41,8 @@ const projectB = 'prj_00000000-0000-4000-8000-000000000013';
 const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
 const ledgers: SqliteExtractionAttemptStoreV1[] = [];
 afterEach(() => { for (const ledger of ledgers.splice(0)) ledger.close(); });
-/** `actions` adds that many unowned actions (act-2, act-3, …) to what the extractor finds. */
-async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string; readonly path?: string } = {}) {
+/** `actions` adds that many unowned actions (act-2, act-3, …) to what the extractor finds; `reasonsOnly` finds one rationale and nothing else. */
+async function fixture(options: { readonly transcriptOnly?: boolean; readonly ownedAction?: boolean; readonly actions?: number; readonly started?: string; readonly path?: string; readonly reasonsOnly?: boolean } = {}) {
   const f = await approvalContextFixture(options.path === undefined ? {} : { path: options.path });
   f.db.prepare('INSERT INTO authority_project_authorization_state_v1 VALUES (?,0,?)').run(f.actor.organization_id, new Date().toISOString());
   const person = { organization_id: f.actor.organization_id, principal_id: f.actor.principal_id, membership_id: f.actor.membership_id };
@@ -58,20 +58,22 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   // One durable attempt ledger per Authority, shared by every runtime the test creates.
   const ledger = new SqliteExtractionAttemptStoreV1(new Database(':memory:'), { authority_id: 'aut_runtime', organization_id: 'org_runtime', state_lineage_id: 'lineage-runtime' });
   ledgers.push(ledger);
-  // Meetings the watched folder delivers on its next scans after the baseline.
-  const folderDeliveries: string[] = [];
+  // Meetings the watch delivers on its next scans after the baseline, what each browse read, and each watch Save checked.
+  const folderDeliveries: string[] = [], browsed: (string | null)[] = [], watched: unknown[] = [];
+  let windowFull = false;
   const current = () => { if (!active) throw new Error('Disconnected'); };
   const sources: { readonly tool_id: string; readonly source_key: string }[] = [];
   const fakeProvider = (tool_id: string, adapter_id: string): PersonMeetingProviderV1 => ({
     id: tool_id, normalizer_version: '2.2.0', cursor: { ...GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1,
-      policy: adapter_id === GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id ? GRANOLA_FOLDER_CURSOR_POLICY_V1 : { source_adapter_id: adapter_id, assert_live_cursor(cursor) { readGranolaCheckpointV1(cursor); } } },
+      policy: adapter_id === GRANOLA_WATCH_CURSOR_POLICY_V1.source_adapter_id ? GRANOLA_WATCH_CURSOR_POLICY_V1 : { source_adapter_id: adapter_id, assert_live_cursor(cursor) { readGranolaCheckpointV1(cursor); } } },
     connection_http: { routes: [], async accept() { throw new Error('unused'); } },
     tool: () => ({ tool_id, display_name: tool_id, availability: 'enabled', personal_status: active ? 'linked' : 'revoked', external_scope_id: null, external_subject_id: null, organization_setup: null }),
     async open(actor, guard) {
       guard(); current();
       return { identity: { kind: 'meeting-source', adapter_id, instance_id: `${tool_id}-${canonicalSha256(actor).slice(7)}`, version: '1.0.0' },
         custodian: { actor }, email: 'fixture@example.test', workspace: 'Fixture', current() { guard(); current(); },
-        async folders() { return [{ id: folder, title: 'ECHO', count: 0 }]; }, async browse() { return { meetings: [] }; },
+        async folders() { return [{ id: folder, title: 'ECHO', count: 0 }]; }, async browse(value) { browsed.push(value); return { meetings: [] }; },
+        async watchable(value) { watched.push(value); if (windowFull) throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch'); },
         async preview(value) { return { id: value, title: 'Test meeting', notes: 'Ship pilot.', summary: '', truncated: false }; },
       };
     },
@@ -87,13 +89,13 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
           const build = (external: string): MeetingDocument => ({ ...original, id: `${identity.instance_id}:${external}`, content: options.transcriptOnly ? [transcript] : [...original.content, transcript], title: `Test meeting${edition}`, provenance: { ...original.provenance, source: identity, external_id: external, canonical_revision: canonicalSha256(`meeting version${edition}`) },
             ...(options.started === undefined ? {} : { time: { actual_start_at: options.started } }) });
           if (!cursor.manual[0]) {
-            if (cursor.folder !== null && cursor.baseline && folderDeliveries[0] !== undefined) {
+            if (cursor.mode !== 'off' && cursor.baseline && folderDeliveries[0] !== undefined) {
               const delivered = folderDeliveries.shift()!;
-              return { meetings: [build(delivered)], next_cursor: writeGranolaCheckpointV1({ ...cursor, revisions: { ...cursor.revisions, [delivered]: canonicalSha256('meeting version') } }) };
+              return { meetings: [build(delivered)], next_cursor: writeGranolaCheckpointV1({ ...cursor, seen: { ...cursor.seen, [delivered]: canonicalSha256('meeting version') } }) };
             }
-            if (cursor.folder === null || cursor.baseline) return { meetings: [] };
+            if (cursor.mode === 'off' || cursor.baseline) return { meetings: [] };
             await duringPull?.();
-            return { meetings: [], next_cursor: writeGranolaCheckpointV1({ ...cursor, baseline: true, revisions: { [id]: canonicalSha256('historical meeting') } }) };
+            return { meetings: [], next_cursor: writeGranolaCheckpointV1({ ...cursor, baseline: true, seen: { [id]: canonicalSha256('historical meeting') } }) };
           }
           const meeting = build(cursor.manual[0]);
           await duringPull?.();
@@ -102,7 +104,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
       };
     },
   });
-  const provider = fakeProvider('granola', GRANOLA_FOLDER_CURSOR_POLICY_V1.source_adapter_id);
+  const provider = fakeProvider('granola', GRANOLA_WATCH_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(actors[access_token as keyof typeof actors] ?? other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
   const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number; readonly observation?: CoreRuntimeObservationScopeV1 } = {}) =>
     createPersonMeetingRuntimeV1({ database: seams.database ?? f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
@@ -114,6 +116,8 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
           async extract(meeting) {
             extracted++; await duringExtract?.();
             if (failExtraction !== undefined) { const failure = failExtraction; failExtraction = undefined; throw failure; }
+            if (options.reasonsOnly) return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
+              signals: [{ id: 'reason-1', kind: 'rationale' as const, text: 'The cohort is ready.', subject: null, confidence: 1, supports_signal_ids: [], evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] };
             return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
             signals: [...decisions.signals, ...(options.ownedAction ? [{ id: 'act-1', kind: 'action' as const, text: 'Send the pilot plan.', subject: null, confidence: 1, owner: 'Rafael Moreno', due_at: null,
               evidence: [{ meeting_id: meeting.id, block_id: 'block-1' }] }] : []),
@@ -143,8 +147,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   const leave = (project_id: string, member: keyof typeof actors) => f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
     .run(new Date().toISOString(), project_id, actors[member].membership_id);
   const listRoute = () => createPersonListRouteV1({ organization_id: person.organization_id, sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(f.db), originals: new SqlitePersonOriginalItemsV1(f.db, sessions, person.organization_id),
-    meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, admitMeeting() {}, openMeeting() { throw new Error('unused'); } },
-    transcripts: { readApprovedMeetingTranscriptByRecordV1() { throw new Error('unused'); } },
+    meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, openMeeting() { throw new Error('unused'); } },
   });
   // Who can find and open the imported note through the list route and the original-context desk.
   const readers = async (tokens: readonly (keyof typeof actors)[] = ['owner', 'other', 'reader-a', 'reader-b']) => {
@@ -181,7 +184,10 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   const outbox = (sourceKey: string) => f.db.prepare(`SELECT o.approval_id, o.state, o.suggested_projects_json FROM authority_live_approval_outbox_v2 o
     JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
     JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key=? ORDER BY c.created_at, o.approval_id`).all(sourceKey) as { approval_id: string; state: string; suggested_projects_json: string | null }[];
-  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, fakeProvider, sources, intake, processUntilIdle, pendingReview, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
+  /** Routes for every item of an open review, each to one destination (null = not kept, [] = Only me) or as chosen per item. */
+  const routes = (opened: PersonMeetingResultsV2['review_open'], to: readonly string[] | null | ((item: PersonMeetingResultsV2['review_open']['items'][number]) => readonly string[] | null) = []) =>
+    opened.items.map(item => ({ signal_id: item.signal_id, project_ids: typeof to === 'function' ? to(item) : to }));
+  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, browsed, watched, fullWindow: (value = true) => { windowFull = value; }, fakeProvider, sources, intake, processUntilIdle, pendingReview, routes, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: (error: unknown = new Error('extraction failed')) => { failExtraction = error; },
     ledger, pulls: () => pulls, revise: (value: string) => { edition = value; },
     held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
@@ -266,7 +272,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect((await f.call(runtime, { operation: 'reviews' }, 'other', 'synthetic')).reviews).toEqual([]);
       const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id }, 'owner', 'synthetic');
       const approve = { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256,
-        command_id: 'synthetic-review-1', action: 'approve', project_ids: [project], share_transcript: true, owners: [] } as const;
+        command_id: 'synthetic-review-1', action: 'approve', routes: f.routes(opened, [project]), owners: [] } as const;
       await f.call(runtime, approve, 'owner', 'synthetic');
       await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
       expect(calls).toHaveLength(1);
@@ -310,8 +316,10 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([{ ...pending, project_ids: [] }]);
     const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     expect(opened.suggested_projects).toEqual([]);
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-left-project', action: 'approve', project_ids: [project], share_transcript: false, owners: [] })).rejects.toMatchObject({ code: 'unauthorized' });
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-only-me', action: 'approve', project_ids: [], share_transcript: false, owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
+    // The left project is no longer a suggestion: every item starts Only me.
+    expect(opened.items.map(item => item.project_ids)).toEqual(opened.items.map(() => []));
+    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-left-project', action: 'approve', routes: f.routes(opened, [project]), owners: [] })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-only-me', action: 'approve', routes: f.routes(opened, []), owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
   });
   it('routes each stored source to the provider that owns its adapter id', async () => {
     const f = await fixture(); f.grantProject();
@@ -358,10 +366,10 @@ describe('personal meeting intake uses the shared processing path', () => {
     const reviews = await f.call(runtime, { operation: 'reviews' }); expect(reviews.reviews).toHaveLength(1); expect(f.extracted()).toBe(1);
     expect((await f.call(runtime, { operation: 'reviews' }, 'other')).reviews).toEqual([]);
     const review = await f.call(runtime, { operation: 'review_open', approval_id: reviews.reviews[0]!.approval_id });
-    await expect(f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'invalid command id', action: 'approve', project_ids: [], share_transcript: false, owners: [] })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'invalid command id', action: 'approve', routes: f.routes(review), owners: [] })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1').pluck().get()).toBe(0);
     f.disconnect();
-    await f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'approve-once', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
+    await f.call(runtime, { operation: 'review', approval_id: review.review.approval_id, snapshot_sha256: review.snapshot_sha256, command_id: 'approve-once', action: 'approve', routes: f.routes(review), owners: [] });
     await f.create().processing.recoverV4Appends(new AbortController().signal);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]?.status).toBe('approved');
     expect(f.record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: 1 });
@@ -384,27 +392,33 @@ describe('personal meeting intake uses the shared processing path', () => {
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.db.prepare('SELECT count(*) AS n FROM authority_source_revisions_v1').get()).toEqual(before); expect(f.extracted()).toBe(0);
   });
-  it('lists and cites imported originals in Mine and project scope; the importer always reads their own imports, without releasing transcripts or outsider content', async () => {
-    const f = await fixture(), runtime = f.create(); f.grantProject();
+  it('lists and cites imported originals for their importer alone, in global and Mine scope and never in project scope, without releasing transcripts', async () => {
+    const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
     const list = f.listRoute();
     const page = await list.list({ access_token: 'owner', request: { schema_version: 1, mine: true } });
-    expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', visibility: 'project' });
+    expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', visibility: 'only_me', projects: [] });
     const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
     expect(JSON.stringify(opened)).toContain('Ship the cohort'); expect(JSON.stringify(opened)).not.toContain('TRANSCRIPT_SECRET');
-    const search = originals.deskSearch({ access_token: 'owner', scope: { kind: 'project', project_id: project }, query: 'cohort', kinds: ['imported_meeting'] });
+    // A suggested project grants nothing: its scope holds no unapproved notes, for its members or the importer.
+    for (const token of ['owner', 'reader-a']) {
+      expect(originals.deskSearch({ access_token: token, scope: { kind: 'project', project_id: project }, query: 'cohort', kinds: ['imported_meeting'] }).items).toEqual([]);
+    }
+    const search = originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] });
     expect(search.items).toHaveLength(1); expect(search.items[0]?.kind).toBe('imported_meeting');
     expect(originals.deskOpen({ access_token: 'owner', scope: { kind: 'mine' }, citation: search.items[0]!.citation }).items[0]?.text).toContain('Ship the cohort');
-    expect(originals.deskSearch({ access_token: 'other', scope: { kind: 'global' }, query: 'cohort' }).items).toEqual([]);
-    await expect(list.open({ access_token: 'other', request: { schema_version: 1, ref: page.items[0]!.ref } })).rejects.toMatchObject({ code: 'not_found' });
+    for (const token of ['other', 'reader-a']) {
+      expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toEqual([]);
+      expect(() => originals.deskOpen({ access_token: token, scope: { kind: 'global' }, citation: search.items[0]!.citation })).toThrow();
+      await expect(list.open({ access_token: token, request: { schema_version: 1, ref: page.items[0]!.ref } })).rejects.toMatchObject({ code: 'not_found' });
+    }
     expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(new Date().toISOString(), project);
-    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: search })).toThrow();
-    // Intended rule (R26): the importer always reads their own imports; project members read them only while they are members.
-    // Project scope itself still needs current project membership.
+    // Project scope itself still needs current project membership; the importer's own notes do not.
     expect(() => originals.deskSearch({ access_token: 'owner', scope: { kind: 'project', project_id: project }, query: 'cohort' })).toThrow();
+    expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] }).items).toHaveLength(1);
     expect(JSON.stringify(await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } }))).toContain('Ship the cohort');
   });
   it.each([undefined, '2026-10-02T15:00:00.000Z'])('dates imported notes by their meeting when recorded and by their arrival, and counts them where a date cannot test them (started: %s)', async started => {
@@ -438,7 +452,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     // Someone who cannot read the import never has it counted.
     expect(originals.deskSearch({ access_token: 'other', scope, source: 'meeting', ...day(arrived), date_field: 'approved' })).not.toHaveProperty('unchecked');
   });
-  it.each([false, true])('keeps imported notes and an approved transcript independently readable (project audience: %s)', async (sharedWithProject) => {
+  it.each([false, true])('never shares the transcript from an approval, and keeps the importer\'s notes readable (project audience: %s)', async (sharedWithProject) => {
     const f = await fixture(), runtime = f.create();
     f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
@@ -446,69 +460,70 @@ describe('personal meeting intake uses the shared processing path', () => {
     const [pending] = (await f.call(runtime, { operation: 'reviews' })).reviews;
     const review = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
     await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: review.snapshot_sha256,
-      command_id: 'approve-shared-transcript', action: 'approve', project_ids: sharedWithProject ? [projectB] : [], share_transcript: true, owners: [] });
+      command_id: 'approve-no-transcript', action: 'approve', routes: f.routes(review, sharedWithProject ? [projectB] : []), owners: [] });
     await runtime.processing.recoverV4Appends(new AbortController().signal);
     f.disconnect(); // Reading retained evidence must not require a provider connection.
-    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id, {
-      ...f.context.coordinates, grants: new ApprovedMeetingTranscriptGrantReaderV1(f.record),
-      is_expected_policy_contract: grant => grant.policy_contract_sha256 === (sharedWithProject ? PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256 : RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256),
-    });
+    expect(JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string).body.human_act_resolution_ref).not.toHaveProperty('share_transcript');
+    const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
     const scope = { kind: 'global' } as const;
     const notes = originals.deskSearch({ access_token: 'owner', scope, query: 'cohort', kinds: ['imported_meeting'] });
     expect(notes.items).toHaveLength(1);
     expect(JSON.stringify(notes.items)).not.toContain('TRANSCRIPT_SECRET');
-    const transcript = originals.deskSearch({ access_token: 'owner', scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE', kinds: ['note'] });
-    expect(transcript.items).toHaveLength(1);
-    expect(transcript.items[0]).toMatchObject({ kind: 'note', visibility: sharedWithProject ? 'project' : 'only_me' });
-    const citation = transcript.items[0]!.citation;
-    expect(citation.source_id).toBe(notes.items[0]!.citation.source_id);
-    expect(citation.representation_sha256).not.toBe(notes.items[0]!.citation.representation_sha256);
-    expect(originals.deskOpen({ access_token: 'owner', scope, citation }).items[0]?.text).toContain('TRANSCRIPT_SECRET');
-    expect(originals.read({ access_token: 'owner', scope, citation }).atom.text).toContain('TRANSCRIPT_SECRET');
-    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: transcript })).not.toThrow();
-    expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: notes })).not.toThrow();
     expect(originals.deskOpen({ access_token: 'owner', scope, citation: notes.items[0]!.citation }).items[0]?.kind).toBe('imported_meeting');
-    for (const token of ['reader-a', 'other']) {
+    for (const token of ['owner', 'reader-a', 'reader-b', 'other']) {
       expect(originals.deskSearch({ access_token: token, scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
-      expect(() => originals.deskOpen({ access_token: token, scope, citation })).toThrow();
-    }
-    expect(originals.deskSearch({ access_token: 'reader-b', scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toHaveLength(sharedWithProject ? 1 : 0);
-    for (const changed of [{ ...citation, representation_sha256: notes.items[0]!.citation.representation_sha256 }, { ...citation, anchor_sha256: canonicalSha256('wrong anchor') }]) {
-      expect(() => originals.deskOpen({ access_token: 'owner', scope, citation: changed })).toThrow();
-      expect(() => originals.read({ access_token: 'owner', scope, citation: changed })).toThrow();
-    }
-    expect(() => originals.deskOpen({ access_token: 'owner', scope: { kind: 'mine' }, citation })).toThrow();
-    if (sharedWithProject) {
-      f.leave(projectB, 'owner');
-      expect(() => originals.revalidateDeskRelease({ access_token: 'owner', release: transcript })).toThrow();
-      expect(() => originals.deskOpen({ access_token: 'owner', scope, citation })).toThrow();
-      expect(originals.deskSearch({ access_token: 'owner', scope, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
-      expect(originals.deskOpen({ access_token: 'owner', scope, citation: notes.items[0]!.citation }).items[0]?.kind).toBe('imported_meeting');
     }
   });
-  it('keeps a folder-delivered meeting readable by the folder project after the watch moves', async () => {
+  it('keeps a meeting the watch delivers private to its importer, with the watch\'s project frozen only as a suggestion', async () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     const home = await f.call(f.create(), { operation: 'home' });
-    await f.call(f.create(), { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    expect(f.watched).toEqual([{ watch: 'folder', folder_id: folder }]);
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
     f.folderDeliveries.push(id);
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.folderDeliveries).toEqual([]); expect(f.extracted()).toBe(1);
     const [source] = (await f.call(f.create(), { operation: 'home' })).sources;
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+    expect(JSON.parse(f.outbox(source!.source_key)[0]!.suggested_projects_json!)).toEqual([project]);
+    expect(await f.readers()).toEqual(['owner']);
     const watched = await f.call(f.create(), { operation: 'home' });
-    await f.call(f.create(), { operation: 'watch', folder_id: folder, project_id: projectB, retain: true, settings_sha256: watched.settings_sha256 });
-    expect((await f.call(f.create(), { operation: 'home' })).sources[0]).toMatchObject({ folder_id: folder, folder_project_id: projectB });
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
-    // A member of both projects reads it through project A.
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: projectB, retain: true, settings_sha256: watched.settings_sha256 });
+    expect((await f.call(f.create(), { operation: 'home' })).sources[0]).toMatchObject({ watch: 'folder', folder_id: folder, project_id: projectB });
     f.join(project, 'reader-b');
-    expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
+    expect(await f.readers()).toEqual(['owner']);
+  });
+  it('watches the meetings the person captured with no folder and no project', async () => {
+    const f = await fixture(); f.grantProject(); f.join(project, 'reader-a');
+    const home = await f.call(f.create(), { operation: 'home' });
+    for (const invalid of [{ watch: 'folder', folder_id: null, project_id: null }, { watch: 'mine', folder_id: folder, project_id: null }, { watch: 'off', folder_id: null, project_id: project }] as const) {
+      await expect(f.call(f.create(), { operation: 'watch', ...invalid, retain: true, settings_sha256: home.settings_sha256 })).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    await expect(f.call(f.create(), { operation: 'watch', watch: 'mine', folder_id: null, project_id: null, retain: true, settings_sha256: home.settings_sha256 })).resolves.toEqual({ status: 'saved' });
+    expect(f.watched).toEqual([{ watch: 'mine', folder_id: null }]);
+    expect((await f.call(f.create(), { operation: 'home' })).sources).toEqual([expect.objectContaining({ watch: 'mine', folder_id: null, project_id: null, baseline: false })]);
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
+    expect((await f.call(f.create(), { operation: 'home' })).sources[0]).toMatchObject({ watch: 'mine', baseline: true, error: null });
+    f.folderDeliveries.push(id);
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [source] = (await f.call(f.create(), { operation: 'home' })).sources;
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([]);
+    expect((await f.call(f.create(), { operation: 'reviews' })).reviews).toEqual([expect.objectContaining({ status: 'pending', project_ids: [] })]);
+    expect(await f.readers()).toEqual(['owner']);
+  });
+  it('makes no review of a meeting with no decision and no action, and keeps it in its importer\'s context', async () => {
+    const f = await fixture({ reasonsOnly: true }), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    await f.processUntilIdle(runtime);
+    const [source] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect([f.extracted(), source!.pending_imports, source!.error, f.proposals(source!.source_key)]).toEqual([1, [], null, 0]);
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it('keeps a private import with the importer even while a folder is watched', async () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a');
     const home = await f.call(f.create(), { operation: 'home' });
-    await f.call(f.create(), { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
     await f.call(f.create(), { operation: 'import', meeting_id: id, project_id: null, retain: true });
     await f.processUntilIdle(f.create());
@@ -517,7 +532,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([]);
     expect(await f.readers()).toEqual(['owner']);
   });
-  it('lets members of each project a note was imported with read it, and only while they are members', async () => {
+  it('keeps a note imported with projects readable by its importer alone, recording the projects as suggestions', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     // The project choice waits as pending until processing consumes the queued import.
@@ -527,18 +542,16 @@ describe('personal meeting intake uses the shared processing path', () => {
     const [source] = (await f.call(runtime, { operation: 'home' })).sources;
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+    expect(await f.readers()).toEqual(['owner']);
     const revisions = f.count('authority_source_revisions_v1');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: projectB, retain: true });
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+    expect(await f.readers()).toEqual(['owner']);
     await f.processUntilIdle(f.create());
     // The unchanged revision is re-admitted as a duplicate; that admission consumes the queued import and promotes B.
     expect(f.count('authority_source_revisions_v1')).toBe(revisions); expect(f.extracted()).toBe(1);
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
-    f.leave(project, 'reader-a');
-    expect(await f.readers()).toEqual(['owner', 'reader-b']);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it('grants nothing to the project of a cancelled import when the note is re-imported privately', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
@@ -555,7 +568,7 @@ describe('personal meeting intake uses the shared processing path', () => {
   it('grants nothing to the project of a cancelled import when the folder later delivers the note', async () => {
     const f = await fixture(); f.grantProject(); f.join(project, 'reader-a'); f.grantProject(projectB); f.join(projectB, 'reader-b');
     const home = await f.call(f.create(), { operation: 'home' });
-    await f.call(f.create(), { operation: 'watch', folder_id: folder, project_id: projectB, retain: true, settings_sha256: home.settings_sha256 });
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: projectB, retain: true, settings_sha256: home.settings_sha256 });
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
     await f.call(f.create(), { operation: 'import', meeting_id: id, project_id: project, retain: true });
     const [queued] = (await f.call(f.create(), { operation: 'home' })).sources;
@@ -565,7 +578,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(f.folderDeliveries).toEqual([]); expect(f.extracted()).toBe(1);
     expect(f.intake.suggestions(queued!.source_key, id)).toEqual([projectB]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner', 'reader-b']);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it.each([false, true])('grants, stages and parks nothing when the import is cancelled while its admitted meeting is being extracted (extraction fails: %s)', async (fails) => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
@@ -779,7 +792,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(held).toMatchObject({ pending_imports: [], error: heldError(id) });
     expect(f.intake.suggestions(held!.source_key, id)).toEqual([project]);
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
-    expect(await f.readers()).toEqual(['owner', 'reader-a']);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it.each(['granola', 'synthetic'] as const)('parks a failed meeting and stages the next one in its %s source on the next poll', async (tool) => {
     const f = await fixture(), storage = new Database(':memory:');
@@ -813,7 +826,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const [row] = f.held();
     const key = { admission_sha256: row!.extraction_admission_sha256, review_lineage_id: row!.review_lineage_id, review_input_sha256: row!.review_input_sha256 };
     // The parked revision is rebuilt from source custody, as an operator retry reads it.
-    const state = new SqliteAuthorityMeetingProcessingStateV1(f.db, GRANOLA_FOLDER_CURSOR_POLICY_V1, 'llm', undefined, source!.source_key);
+    const state = new SqliteAuthorityMeetingProcessingStateV1(f.db, GRANOLA_WATCH_CURSOR_POLICY_V1, 'llm', undefined, source!.source_key);
     const [listed] = await state.listHeldExtractions();
     expect(listed).toMatchObject({ external_id: id, key, attempt: 1, failure_stage: 'unknown' });
     expect((await state.readHeldMeeting(listed!)).provenance).toMatchObject({ external_id: id, canonical_revision: listed!.revision_id });
@@ -921,7 +934,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(JSON.parse(f.outbox(source!.source_key)[0]!.suggested_projects_json!)).toEqual([project, projectB].sort());
     expect(f.count('authority_person_meeting_pending_suggestions_v1')).toBe(0);
     expect(f.extracted()).toBe(1);
-    expect(await f.readers()).toEqual(['owner', 'reader-a', 'reader-b']);
+    expect(await f.readers()).toEqual(['owner']);
   });
   it('opens a valid transcript-only imported meeting with no releasable body', async () => {
     const f = await fixture({ transcriptOnly: true }), runtime = f.create();
@@ -966,8 +979,8 @@ describe('personal meeting intake uses the shared processing path', () => {
   it('saves a pending watch before the background baseline finishes, survives restart, and retains no history', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     const home = await f.call(runtime, { operation: 'home' });
-    await expect(f.call(runtime, { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 })).resolves.toEqual({ status: 'saved' });
-    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ folder_id: folder, folder_project_id: project, baseline: false });
+    await expect(f.call(runtime, { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 })).resolves.toEqual({ status: 'saved' });
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'folder', folder_id: folder, project_id: project, baseline: false });
     const before = f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get();
     let started!: () => void, release!: () => void;
     const startedPull = new Promise<void>(resolve => { started = resolve; });
@@ -985,26 +998,75 @@ describe('personal meeting intake uses the shared processing path', () => {
   it('discards an in-flight baseline when the person stops the watch', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     const home = await f.call(runtime, { operation: 'home' });
-    await f.call(runtime, { operation: 'watch', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    await f.call(runtime, { operation: 'watch', watch: 'mine', folder_id: null, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
     const pending = await f.call(runtime, { operation: 'home' });
     expect(pending.sources[0]?.baseline).toBe(false);
-    f.duringPull(async () => { await f.call(runtime, { operation: 'watch', folder_id: null, project_id: null, retain: true, settings_sha256: pending.settings_sha256 }); });
+    f.duringPull(async () => { await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: pending.settings_sha256 }); });
     const before = f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get();
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ folder_id: null, baseline: false });
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', folder_id: null, project_id: null, baseline: false });
     expect(f.db.prepare('SELECT count(*) FROM authority_source_revisions_v1').pluck().get()).toBe(before);
     expect(f.extracted()).toBe(0);
   });
   it('uses compare-and-set across clients and permits stopping after project access is revoked', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject();
     const home = await f.call(runtime, { operation: 'home' });
-    const watch = { operation: 'watch' as const, folder_id: folder, project_id: project, retain: true as const, settings_sha256: home.settings_sha256 };
+    const watch = { operation: 'watch' as const, watch: 'folder' as const, folder_id: folder, project_id: project, retain: true as const, settings_sha256: home.settings_sha256 };
     await f.call(runtime, watch);
     await expect(f.call(f.create(), watch)).rejects.toMatchObject({ code: 'stale_access_state' });
     const next = await f.call(runtime, { operation: 'home' }); expect(next.sources[0]?.baseline).toBe(false);
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(new Date().toISOString(), project);
-    await f.call(runtime, { operation: 'watch', folder_id: null, project_id: null, retain: true, settings_sha256: next.settings_sha256 });
-    expect((await f.call(runtime, { operation: 'home' })).sources[0]?.folder_id).toBeNull();
+    await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: next.settings_sha256 });
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', folder_id: null, project_id: null });
+  });
+  it('changes only the suggestion of an unchanged watch, so its change detection carries on', async () => {
+    const f = await fixture(); f.grantProject(); f.grantProject(projectB);
+    const home = await f.call(f.create(), { operation: 'home' });
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: project, retain: true, settings_sha256: home.settings_sha256 });
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal); // baseline
+    const watched = await f.call(f.create(), { operation: 'home' });
+    const [source] = watched.sources;
+    expect(source).toMatchObject({ project_id: project, baseline: true });
+    const checkpoint = f.intake.checkpoint(source!.source_key);
+    await f.call(f.create(), { operation: 'watch', watch: 'folder', folder_id: folder, project_id: projectB, retain: true, settings_sha256: watched.settings_sha256 });
+    const changed = await f.call(f.create(), { operation: 'home' });
+    expect(changed.sources).toEqual([expect.objectContaining({ watch: 'folder', folder_id: folder, project_id: projectB, baseline: true })]);
+    expect(changed.settings_sha256).not.toBe(watched.settings_sha256);
+    expect(f.intake.checkpoint(source!.source_key)).toEqual(checkpoint);
+    // The next meeting the watch delivers takes the new suggestion.
+    f.folderDeliveries.push(id);
+    await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    expect(f.intake.suggestions(source!.source_key, id)).toEqual([projectB]);
+  });
+  it('refuses at Save a watch whose window holds more than 200 meetings, and names the cap when the worker meets it later', async () => {
+    const f = await fixture(), runtime = f.create();
+    const home = await f.call(runtime, { operation: 'home' });
+    const mine = { operation: 'watch' as const, watch: 'mine' as const, folder_id: null, project_id: null, retain: true as const, settings_sha256: home.settings_sha256 };
+    f.fullWindow();
+    await expect(f.call(runtime, mine)).rejects.toMatchObject({ code: 'quota_exceeded' });
+    expect((await f.call(runtime, { operation: 'home' })).sources).toEqual([]);
+    f.fullWindow(false);
+    await expect(f.call(runtime, mine)).resolves.toEqual({ status: 'saved' });
+    expect(f.watched).toEqual([{ watch: 'mine', folder_id: null }, { watch: 'mine', folder_id: null }]);
+    // The window grew past the cap after Save: the status says so, rather than blaming the connection.
+    f.duringPull(() => { throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch'); });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [full] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(full).toMatchObject({ baseline: false, error: 'More than 200 meetings in 7 days. Choose one folder.' });
+    f.duringPull(() => { throw new AuthorityOperationError('unavailable', 'Granola operation could not be completed'); });
+    await runtime.pollAndStageSource(full!.source_key, new AbortController().signal);
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ error: 'Meeting intake needs attention. Check the connection and folder access.' });
+  });
+  it('leaves no status behind when the person stops a failing watch', async () => {
+    const f = await fixture(), runtime = f.create();
+    const home = await f.call(runtime, { operation: 'home' });
+    await f.call(runtime, { operation: 'watch', watch: 'mine', folder_id: null, project_id: null, retain: true, settings_sha256: home.settings_sha256 });
+    f.duringPull(() => { throw new AuthorityOperationError('unavailable', 'Granola operation could not be completed'); });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const failing = await f.call(runtime, { operation: 'home' });
+    expect(failing.sources[0]).toMatchObject({ error: expect.stringContaining('needs attention'), checked_at: expect.any(String) });
+    await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: failing.settings_sha256 });
+    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', error: null, checked_at: null });
   });
   it('imports a note saved to A and then B before processing as one source and one extraction, freezing both projects', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
@@ -1075,28 +1137,98 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]?.project_ids).toEqual([project]);
     expect((await runtime.approvals()).proposal(proposals[0]!.approval_id)!.project_ids).toEqual([project]);
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([project, projectB].sort());
-    expect(await f.readers()).toContain('reader-b');
+    expect(await f.readers()).toEqual(['owner']);
   });
-  it('approves into the chosen project through the v2 route', async () => {
+  it('approves into the chosen project through the route', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     const { pending, opened } = await f.pendingReview(runtime, project);
-    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-b', action: 'approve', project_ids: [projectB], share_transcript: true, owners: [] }))
+    await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-b', action: 'approve', routes: f.routes(opened, [projectB]), owners: [] }))
       .resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
     const body = JSON.parse(f.db.prepare('SELECT body_json FROM authority_approval_decisions_v1').pluck().get() as string);
-    expect(body).toMatchObject({ surface: 'desktop', request: { project_ids: [projectB], share_transcript: true, owners: [] }, evidence: { kind: 'person-session' } });
+    expect(body).toMatchObject({ surface: 'desktop', request: { routes: f.routes(opened, [projectB]), owners: [] }, evidence: { kind: 'person-session' } });
+    expect(Object.keys(body.request).sort()).toEqual(['action', 'approval_id', 'command_id', 'owners', 'routes', 'snapshot_sha256']);
     await runtime.processing.recoverV4Appends(new AbortController().signal);
     const envelope = JSON.parse(f.record.prepare('SELECT canonical_envelope FROM organization_record_log').pluck().get() as string);
     expect(envelope.body.human_act_resolution_ref.audience_project_ids).toEqual([projectB]);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]).toMatchObject({ status: 'approved', project_ids: [projectB], decided_on: 'desktop' });
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]).toMatchObject({ status: 'approved', project_ids: [projectB], decided_on: 'desktop',
+      records: [{ approval_id: approvalRecordIdV2(pending!.approval_id, [projectB]), project_ids: [projectB] }] });
+  });
+  it('opens a pending review as items with their suggested destinations and proposed owners, and a decided one as chosen', async () => {
+    const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
+    const { pending, opened } = await f.pendingReview(runtime, project);
+    expect(Object.keys(opened).sort()).toEqual(['items', 'participants', 'reasons', 'records', 'review', 'snapshot_sha256', 'suggested_projects']);
+    expect(opened.items).toEqual([
+      { signal_id: 'decision-1', kind: 'decision', text: 'Ship the cohort onboarding.', subject: null, status: 'decided', due_at: null, quotes: [], owner: null, owner_editable: false, project_ids: [project] },
+      { signal_id: 'act-1', kind: 'action', text: 'Send the pilot plan.', subject: null, status: null, due_at: null, quotes: [], owner: 'Rafael Moreno', owner_editable: true, project_ids: [project] },
+      { signal_id: 'act-2', kind: 'action', text: 'Follow up on item 2.', subject: null, status: null, due_at: null, quotes: [], owner: null, owner_editable: false, project_ids: [project] },
+    ]);
+    expect(opened).toMatchObject({ reasons: [], records: [], suggested_projects: [{ project_id: project, name: 'ECHO' }], review: { status: 'pending', records: [] } });
+    // Mixed destinations: THERM-like project B for the decision, both for the owned action, the other action not kept.
+    const routes = f.routes(opened, item => ({ 'decision-1': [projectB], 'act-1': [project, projectB].sort(), 'act-2': null })[item.signal_id] ?? null);
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-mixed', action: 'approve',
+      routes, owners: [{ signal_id: 'act-1', owner: 'Rafael M.' }] });
+    const publishing = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(publishing.items.map(item => [item.signal_id, item.project_ids, item.owner, item.owner_editable])).toEqual([
+      ['decision-1', [projectB], null, false], ['act-1', [project, projectB].sort(), 'Rafael M.', false], ['act-2', null, null, false]]);
+    expect(publishing.records).toEqual([]);
+    expect(publishing.suggested_projects.map(entry => entry.project_id)).toEqual([project, projectB].sort());
+    await runtime.processing.recoverV4Appends(new AbortController().signal);
+    const approved = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    const records = [{ approval_id: approvalRecordIdV2(pending!.approval_id, [projectB]), project_ids: [projectB] },
+      { approval_id: approvalRecordIdV2(pending!.approval_id, [project, projectB].sort()), project_ids: [project, projectB].sort() }];
+    expect(approved.records).toEqual(records);
+    expect(approved.review).toMatchObject({ status: 'approved', project_ids: [project, projectB].sort(), records });
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]!.records).toEqual(records);
+    // A destination the reviewer can no longer read keeps its route but loses its name.
+    f.leave(projectB, 'owner');
+    const later = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(later.items[0]!.project_ids).toEqual([projectB]);
+    expect(later.suggested_projects.map(entry => entry.project_id)).toEqual([project]);
+  });
+  it('opens a review by one of its published records\' own approval ids (a run\'s event_ref), for its reviewer only', async () => {
+    const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
+    const { pending, opened } = await f.pendingReview(runtime, project);
+    const routes = f.routes(opened, item => ({ 'decision-1': [projectB], 'act-1': [], 'act-2': null })[item.signal_id] ?? null);
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-split', action: 'approve', routes, owners: [] });
+    const recordIds = [approvalRecordIdV2(pending!.approval_id, [projectB]), approvalRecordIdV2(pending!.approval_id, [])];
+    // While the approval publishes, no record exists yet to name it.
+    await expect(f.call(runtime, { operation: 'review_open', approval_id: recordIds[0]! })).rejects.toMatchObject({ code: 'not_found' });
+    await runtime.processing.recoverV4Appends(new AbortController().signal);
+    const byProposal = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(byProposal.records.map(record => record.approval_id)).toEqual(recordIds);
+    for (const id of recordIds) {
+      const byRecord = await f.call(runtime, { operation: 'review_open', approval_id: id });
+      // The proposal's own review, under its approval id: the desktop decides and links by that.
+      expect(byRecord).toEqual(byProposal);
+      expect(byRecord.review.approval_id).toBe(pending!.approval_id);
+    }
+    // Another member opens it by neither id, as if neither existed.
+    for (const id of [pending!.approval_id, ...recordIds]) {
+      await expect(f.call(runtime, { operation: 'review_open', approval_id: id }, 'other')).rejects.toMatchObject({ code: 'not_found' });
+    }
+    // A decision never takes a record id, and an id that names no record of theirs opens nothing.
+    await expect(f.call(runtime, { operation: 'review', approval_id: recordIds[1]!, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-record', action: 'reject', routes: [], owners: [] }))
+      .rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.call(runtime, { operation: 'review_open', approval_id: `apr_${'e'.repeat(64)}` })).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.count('authority_approval_decisions_v1')).toBe(1);
+  });
+  it('opens a rejected review with nothing kept', async () => {
+    const f = await fixture({ ownedAction: true }), runtime = f.create(); f.grantProject();
+    const { pending, opened } = await f.pendingReview(runtime, project);
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-it', action: 'reject', routes: [], owners: [] });
+    const rejected = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(rejected.items.map(item => [item.project_ids, item.owner, item.owner_editable])).toEqual([[null, null, false], [null, null, false]]);
+    expect(rejected).toMatchObject({ suggested_projects: [], records: [], review: { status: 'rejected', project_ids: [], records: [] } });
   });
   it('forwards after_record hooks from the runtime passthrough', async () => {
     const calls: AfterApprovedRecordEventV1[] = [];
     const f = await fixture(), runtime = f.create(undefined, { approval_core: { after_record: [(tx, event) => { expect(tx.inTransaction).toBe(true); calls.push(event); }] } });
     const { pending, opened } = await f.pendingReview(runtime);
-    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-hooked', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
+    await f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-hooked', action: 'approve', routes: f.routes(opened), owners: [] });
     await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
-    expect(calls).toEqual([expect.objectContaining({ approval_id: pending!.approval_id, record_sha256: f.record.prepare('SELECT record_sha256 FROM organization_record_log').pluck().get() })]);
+    expect(calls).toEqual([expect.objectContaining({ approval_id: approvalRecordIdV2(pending!.approval_id, []), proposal_approval_id: pending!.approval_id,
+      record_sha256: f.record.prepare('SELECT record_sha256 FROM organization_record_log').pluck().get() })]);
   });
   it('crash between append and receipt at restart: one record, one receipt, one hook', async () => {
     const calls: AfterApprovedRecordEventV1[] = [];
@@ -1104,7 +1236,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const f = await fixture();
     const crashing = f.create(undefined, { approval_core: { after_record }, record_append: { async append(input) { await f.context.record_append.append(input); throw new Error('crash after append'); } } });
     const { pending, opened } = await f.pendingReview(crashing);
-    await f.call(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', project_ids: [], share_transcript: false, owners: [] });
+    await f.call(crashing, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-crash', action: 'approve', routes: f.routes(opened), owners: [] });
     // A row failure does not fail recovery; the row stays unpublished for the next pass.
     await crashing.processing.recoverV4Appends(new AbortController().signal);
     expect(calls).toEqual([]);
@@ -1114,39 +1246,36 @@ describe('personal meeting intake uses the shared processing path', () => {
     await restarted.processing.recoverV4Appends(new AbortController().signal);
     expect(f.record.prepare('SELECT count(*) FROM organization_record_log').pluck().get()).toBe(1);
     expect(f.db.prepare('SELECT count(*) FROM authority_approval_decisions_v1 WHERE receipt_json IS NOT NULL').pluck().get()).toBe(1);
-    expect(calls).toEqual([expect.objectContaining({ approval_id: pending!.approval_id })]);
+    expect(calls).toEqual([expect.objectContaining({ approval_id: approvalRecordIdV2(pending!.approval_id, []), proposal_approval_id: pending!.approval_id })]);
   });
   it('returns an earlier decision and writes no second row', async () => {
     const f = await fixture(), runtime = f.create();
     const { pending, opened } = await f.pendingReview(runtime);
-    const review = { operation: 'review' as const, approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-once', action: 'reject' as const, project_ids: [], share_transcript: false, owners: [] };
+    const review = { operation: 'review' as const, approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'reject-once', action: 'reject' as const, routes: [], owners: [] };
     await expect(f.call(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
     await expect(f.call(runtime, review)).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
-    await expect(f.call(runtime, { ...review, command_id: 'approve-later', action: 'approve' })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
-    await expect(f.call(runtime, { ...review, command_id: 'approve-stale', action: 'approve', snapshot_sha256: canonicalSha256('other') })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
+    await expect(f.call(runtime, { ...review, command_id: 'approve-later', action: 'approve', routes: f.routes(opened) })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
+    await expect(f.call(runtime, { ...review, command_id: 'approve-stale', action: 'approve', routes: f.routes(opened), snapshot_sha256: canonicalSha256('other') })).resolves.toEqual({ status: 'rejected', decided_on: 'desktop' });
     expect(f.count('authority_approval_decisions_v1')).toBe(1);
   });
   it('approves into two projects with a confirmed owner through the route', async () => {
     const f = await fixture({ ownedAction: true }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     const { pending, opened } = await f.pendingReview(runtime, project);
-    expect(opened.content).toContain('Send the pilot plan.');
-    expect(opened.content).toContain('  Due: Not specified');
-    expect(opened.content).not.toMatch(/Owner|Rafael/);
-    expect(opened.owners).toEqual([{ signal_id: 'act-1', action: 'Send the pilot plan.', proposed: 'Rafael Moreno' }]);
+    expect(opened.items.find(item => item.signal_id === 'act-1')).toMatchObject({ text: 'Send the pilot plan.', due_at: null, owner: 'Rafael Moreno', owner_editable: true });
     expect(opened.suggested_projects).toEqual([{ project_id: project, name: 'ECHO' }]);
     await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c1', snapshot_sha256: opened.snapshot_sha256,
-      action: 'approve', project_ids: [project, projectB].sort(), share_transcript: false, owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] }))
+      action: 'approve', routes: f.routes(opened, [project, projectB].sort()), owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] }))
       .resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
   });
   it('returns the earlier decision when Slack decided first', async () => {
     const f = await fixture(), runtime = f.create();
     const { pending, opened } = await f.pendingReview(runtime);
     const slackReview = validateApprovalDecisionRequestV1('slack', { approval_id: pending!.approval_id, command_id: 'slack:k', snapshot_sha256: opened.snapshot_sha256,
-      action: 'approve', project_ids: [], share_transcript: false, owners: [] });
+      action: 'approve', routes: f.routes(opened), owners: [] });
     (await runtime.approvals()).decide('slack', slackReview, () => ({ actor: f.person, evidence: { kind: 'slack-click', sha256: canonicalSha256('slack click') } }));
     expect((await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id })).review.decided_on).toBe('slack');
     await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, command_id: 'c2', snapshot_sha256: opened.snapshot_sha256,
-      action: 'reject', project_ids: [], share_transcript: false, owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'slack' });
+      action: 'reject', routes: [], owners: [] })).resolves.toEqual({ status: 'publishing', decided_on: 'slack' });
   });
   it('names the first decision, the action count and the meeting time on review rows', async () => {
     const f = await fixture({ ownedAction: true, started: '2026-10-06T16:00:00.000Z' }), runtime = f.create();

@@ -5,17 +5,14 @@ import {
   type PrivateSlackApprovalInteractionHandlerInputV1,
 } from "../../src/private-approval/private-slack-approval-interaction-handler-v1.js";
 import { createPrivateSlackApprovalHttpAdapterV1 } from "../../src/private-approval/private-slack-approval-http-adapter-v1.js";
-import { slackApprovalActionIdV4 } from "../../src/private-approval/slack-approval-card-v4.js";
+import { slackApprovalActionIdV4, slackApprovalDestinationSha256V4 } from "../../src/private-approval/slack-approval-card-v4.js";
 
 const SECRET = "not-a-real-signing-secret",
   NOW = 1_800_000_000,
   APPROVAL = "apr_00000000-0000-4000-8000-000000000001",
   SNAPSHOT = `sha256:${"a".repeat(64)}`;
 function body(response_url?: string) {
-  const id = (
-    name:
-      "audience-select" | "projects-select" | "transcript-checkbox" | "approve",
-  ) => slackApprovalActionIdV4(APPROVAL, name);
+  const id = (name: "approve") => slackApprovalActionIdV4(APPROVAL, name);
   const payload = {
     type: "block_actions",
     user: { id: "U012ABCDEF", team_id: "T012ABCDEF" },
@@ -35,31 +32,8 @@ function body(response_url?: string) {
       app_id: "A012ABCDEF",
       bot_id: "B012ABCDEF",
     },
-    state: {
-      values: {
-        audience: {
-          [id("audience-select")]: {
-            type: "static_select",
-            selected_option: {
-              text: { type: "plain_text", text: "Only me" },
-              value: "only-me",
-            },
-          },
-        },
-        projects: {
-          [id("projects-select")]: {
-            type: "multi_static_select",
-            selected_options: [],
-          },
-        },
-        transcript: {
-          [id("transcript-checkbox")]: {
-            type: "checkboxes",
-            selected_options: [],
-          },
-        },
-      },
-    },
+    // Slack approves as suggested: the card's state holds only its owner inputs, none here.
+    state: { values: {} },
     ...(response_url === undefined ? {} : { response_url }),
     actions: [
       {
@@ -67,9 +41,10 @@ function body(response_url?: string) {
         action_id: id("approve"),
         text: { type: "plain_text", text: "Approve", emoji: false },
         value: JSON.stringify({
-          schema_version: 2,
+          schema_version: 3,
           approval_id: APPROVAL,
           snapshot_sha256: SNAPSHOT,
+          destination_sha256: slackApprovalDestinationSha256V4([]),
         }),
         action_ts: "1712345680.123456",
       },

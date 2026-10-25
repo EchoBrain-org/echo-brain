@@ -68,7 +68,7 @@ describe("storable impact card", () => {
     const stored = JSON.stringify(storableImpactCardV1(card, [OUTSIDE]));
     expect(stored).not.toContain("0xC0FFEE");
     expect(stored).not.toContain("Rafael Moreno");
-    expect(JSON.parse(stored).unconfirmed).toContain("1 item could not be read.");
+    expect(JSON.parse(stored).unconfirmed).toEqual([]);
   });
 
   it("keeps ECHO-local text and the model relation and date", () => {
@@ -110,35 +110,34 @@ describe("storable impact card", () => {
     expect(JSON.stringify(stored)).not.toContain("0xC0FFEE");
   });
 
-  it("replaces every note that names an outside item with one count, and keeps the others", () => {
-    const other = "THERM-47: Fan curve";
+  it("keeps only notes of ECHO's fixed shapes, so no item's title is stored, outside or ECHO's own", () => {
     const card = cardWith({
       rows: [{ citation: ticketCitation("THERM-46", "THERM-46: Display precision"), says_now: "x", relation: "confirms" }],
       unconfirmed: [
         "Research stopped before it finished, so other items may be affected too.",
         `${OUTSIDE} could not be read.`,
+        // An approver-only record's title: every viewer of the record reads these notes.
+        "Supplier exit plan could not be read.",
+        "THERM-46:  Display precision could not be read.",
         "1 fact research looked for was not found.",
-        `${other.toLowerCase()} could not be read.`,
         "The tickets source could not be read.",
+        "2 items could not be read.",
+        "The tickets list was cut short at 25 items.",
+        "A pages search result was cut short.",
+        "3 source representation notices limited this assessment.",
       ],
     });
-    // Labels match whatever their case or spacing, and a blank label matches nothing.
-    expect(storableImpactCardV1(card, [OUTSIDE, other, "", "   "]).unconfirmed).toEqual([
+    const kept = [
       "Research stopped before it finished, so other items may be affected too.",
-      "2 items could not be read.",
-      "1 fact research looked for was not found.",
       "The tickets source could not be read.",
-    ]);
-    // With no outside label to name, nothing is counted.
-    expect(storableImpactCardV1(card, []).unconfirmed).toEqual(card.unconfirmed);
-  });
-
-  it("also counts a note that names an outside item the card itself cites", () => {
-    const card = cardWith({
-      rows: [{ citation: ticketCitation("THERM-46", "THERM-46: Display precision"), says_now: "x", relation: "confirms" }],
-      unconfirmed: ["THERM-46:  Display precision could not be read.", "The tickets list was cut short at 25 items."],
-    });
-    expect(storableImpactCardV1(card, []).unconfirmed).toEqual(["1 item could not be read.", "The tickets list was cut short at 25 items."]);
+      "2 items could not be read.",
+      "The tickets list was cut short at 25 items.",
+      "A pages search result was cut short.",
+      "3 source representation notices limited this assessment.",
+    ];
+    expect(storableImpactCardV1(card, [OUTSIDE]).unconfirmed).toEqual(kept);
+    // Whatever labels the caller names, the shapes decide.
+    expect(storableImpactCardV1(card, []).unconfirmed).toEqual(kept);
   });
 
   it("never stores a decided line that cites an outside item", () => {
@@ -216,7 +215,7 @@ describe("storable impact card: every line a model wrote is screened for outside
     expect(JSON.stringify(stored)).not.toContain("Display precision");
   });
 
-  it.each([290, 320])("still catches a %i-character title in a note that cleanLine cut short", length => {
+  it.each([290, 320])("never stores a %i-character title in a note that cleanLine cut short", length => {
     const title = (`${OUTSIDE} `).repeat(12).slice(0, length).trim();
     const note = cleanLine(`${title} could not be read.`, 300);
     // The renderer's note is cut at 300 characters: its tail, and for a very long title the title itself.
@@ -227,7 +226,7 @@ describe("storable impact card: every line a model wrote is screened for outside
       unconfirmed: [note, "The tickets list was cut short at 25 items."],
     });
     const stored = storableImpactCardV1(card, [title]);
-    expect(stored.unconfirmed).toEqual(["1 item could not be read.", "The tickets list was cut short at 25 items."]);
+    expect(stored.unconfirmed).toEqual(["The tickets list was cut short at 25 items."]);
     expect(JSON.stringify(stored)).not.toContain("0xC0FFEE");
   });
 

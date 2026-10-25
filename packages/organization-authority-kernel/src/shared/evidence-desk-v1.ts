@@ -1,6 +1,6 @@
 import { AuthorityOperationError } from "../domain/errors.js";
 import type { EvidenceDateFilterV1, EvidenceDatesV1 } from "./temporal-query-v1.js";
-import type { PersonAnswerEvidenceCitationV4, PersonAnswerScopeV3, PersonOpenRefV1 } from '@echo-brain/organization-api';
+import type { PersonAnswerEvidenceCitationV4, PersonAnswerScopeV3, PersonItemRefV1 } from '@echo-brain/organization-api';
 
 /** A pinned evidence snapshot advanced; rechecking the old snapshot cannot recover it. */
 export class EvidenceDeskSnapshotChangedV1 extends AuthorityOperationError {
@@ -17,8 +17,7 @@ export type EvidenceDeskSourceV1 = 'meeting' | 'document';
 export type EvidenceDeskDateKindV1 = 'created' | 'version_created' | 'occurred' | 'updated' | 'due' | 'received';
 
 /** The source of an item, from its kind. */
-export function evidenceDeskSourceV1(item: { readonly kind: EvidenceDeskKindV1; readonly ref?: string }): EvidenceDeskSourceV1 {
-  if (item.ref?.startsWith('transcript:')) return 'meeting';
+export function evidenceDeskSourceV1(item: { readonly kind: EvidenceDeskKindV1 }): EvidenceDeskSourceV1 {
   return item.kind === 'note' || item.kind === 'document_passage' ? 'document' : 'meeting';
 }
 export type EvidenceDeskScopeV1 = PersonAnswerScopeV3;
@@ -68,7 +67,7 @@ export interface EvidenceDeskItemV1 {
   /** SHA-256 receipt for the release that admitted this item into the request. */
   readonly receipt_sha256: `sha256:${string}`;
   /** Server-owned ref for person open. Never shown to a model. */
-  readonly ref?: PersonOpenRefV1;
+  readonly ref?: PersonItemRefV1;
 }
 
 export interface EvidenceDeskResultV1 {

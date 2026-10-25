@@ -10,9 +10,10 @@ import a provider implementation.
   selects the OpenRouter bundle and the Slack pieces from the `providers/`
   workspaces, the staging synthetic personal source (release canary, or the
   selected fixed fixtures), the personal Granola meeting provider
-  (`granola-person-live-runtime-v1.ts`), and the shared personal meeting
-  runtime with the approval core, its after-record hook and optional Slack
-  presenter. It adds the Jira and Confluence Person runtimes
+  (`granola-person-live-runtime-v1.ts`), the hand-in provider every member
+  pastes meetings through (`hand-in-person-meeting-provider-v1.ts`), and the
+  shared personal meeting runtime with the approval core, its after-record
+  hook and optional Slack presenter. It adds the Jira and Confluence Person runtimes
   (`jira-person-live-runtime-v1.ts`, `confluence-person-live-runtime-v1.ts`)
   as live connectors only when the service CLI supplies their explicit
   configuration. Meetings come only from
@@ -73,10 +74,10 @@ Concrete bundles live in `providers/synthetic-demo` (the staging synthetic
 personal meeting provider), `providers/openrouter`, `providers/slack/server`
 (the approval presenter and click, Person identity and the organization Slack
 connection state), `providers/granola` (the personal Granola connection and
-folder meeting source), `providers/jira` and `providers/confluence` (each a
-gated Person connection and live reader), and `providers/shared` (the shared
-Person connection and Nango runtime). Secret values enter only through
-private-file adapters.
+its watch source: my meetings or one folder), `providers/jira` and
+`providers/confluence` (each a gated Person connection and live reader), and
+`providers/shared` (the shared Person connection and Nango runtime). Secret
+values enter only through private-file adapters.
 Public `clean-*` command names and versioned `clean-founder` wire values are
 compatibility contracts, not component names.
 
@@ -93,6 +94,8 @@ known layering debt:
   record publication (raw SQL);
 - `person-meeting-runtime-v1.ts`: the personal meeting lanes and the
   `POST /v1/person/meetings` route (raw SQL and SQLite adapters);
+- `hand-in-person-meeting-provider-v1.ts`: the handed-in meeting source, which
+  keeps and reads payloads through `SqlitePersonHandInMeetingsV1`;
 - `person-trigger-runs-v1.ts`, `person-sweep-runs-v1.ts` and
   `person-open-items-v1.ts`: runs, sweeps and open items (typed against
   `Sqlite*` adapter classes, with `better-sqlite3` write callbacks);

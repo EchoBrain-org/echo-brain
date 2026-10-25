@@ -360,24 +360,26 @@ validates. If the head advances or a generation build fails,
 the existing pointer is not used for the new head. The Person client reports
 that search is catching up; wait for the next worker cycle and retry.
 
-The meeting card chooses approved-content visibility. It is the same on the
-desktop and in the Slack DM copy that a reviewer who linked Slack also gets, and
-the first decision wins. **Who can read it** defaults to **Only me**
-(`restricted-reviewer-person-v2`), which allows only the exact approving person
-and that person's current membership tenure to read the record. Instead, the
-reviewer may pick **Projects** (`project-members-readable-person-v1`): one to
-twenty of their own active projects, with the projects chosen at import or watch
-already ticked. Current members of any selected project can read the record, and
-it is associated with those projects for project Ask. Only me records carry no
-project association. There is no organization-wide (Team) choice. Each action
-with an owner proposed by extraction shows an owner field, pre-filled; only the
-owners the approver confirms are recorded. The selected policy and project IDs
-freeze with the approved record; project readers are resolved at read time.
-
-The separate **Share transcript with the selected audience** checkbox defaults
-off. When checked, the same approval releases the exact retained transcript
-revision to the record's audience through `echo-brain person transcript`
-(`POST /v1/person/meeting-transcripts/read`). Ask does not search transcripts.
+The meeting card routes each decision and action to its own destination
+([ADR-0046](../../docs/decisions/ADR-0046-private-meetings-and-item-routing.md)):
+**Only me** (`restricted-reviewer-person-v2`), which allows only the exact
+approving person and that person's current membership tenure to read it; one to
+twenty of the reviewer's own active projects
+(`project-members-readable-person-v1`), whose current members can read it and
+with which it is associated for project Ask; or **Don't keep**. Destinations
+start from the projects suggested at import or watch, which grant nothing.
+There is no organization-wide (Team) choice. The publisher groups the kept
+items by their exact project set and writes one signed record per group,
+holding only its items and the reasons that support them, so every record keeps
+one audience, which is also its association; Only me records carry no project
+association. In the Slack DM copy that a reviewer who linked Slack also gets,
+Approve sends every item to the suggestion (Only me when there is none), and
+the first decision wins across surfaces. Each action with an owner proposed by
+extraction shows an owner field, pre-filled; only the owners the approver
+confirms are recorded. The selected policy and project IDs freeze with each
+record; project readers are resolved at read time. No transcript is ever
+shared: the card has no transcript choice, and only a meeting's approved
+records leave it.
 
 Each approved record also enqueues one impact check (`authority_trigger_runs_v1`),
 written in the same transaction as the approval's receipt. The check runs as
@@ -386,9 +388,10 @@ every view re-releases the items through a fresh desk
 ([ADR-0032](../../docs/decisions/ADR-0032-stored-trigger-runs.md)). A
 finished check writes, in the same transaction, one shared open item per
 affected item a model found `conflicts` or `needs_updating` (a `confirms` row
-and every row of the fallback card no model assessed make none, and the
-meeting's own record or the transcript its approver shared is never one) and
-one per action the approved
+and every row of the fallback card no model assessed make none, and neither
+this record nor a sibling, the same meeting's record for another destination,
+is ever one; the check's research never reads a sibling or the meeting's own
+source, its unapproved notes) and one per action the approved
 meeting decided (kind `action`, at most 20, the first in the brief that have
 text; its line is the action's text and its owner the one the approver
 confirmed, matched to the one active member with the same display name,
@@ -467,8 +470,8 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses six byte-pinned baselines, one per role: Authority V14,
-control-plane V4, record-log V4, retrieval facts V3, retrieval lexical V2 and
+Current state uses six byte-pinned baselines, one per role: Authority V15,
+control-plane V4, record-log V5, retrieval facts V3, retrieval lexical V2 and
 retrieval content V2. The V2 root binds exactly these six roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
 database. Old roots, retired databases, and mismatched schemas refuse before

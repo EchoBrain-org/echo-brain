@@ -38,7 +38,6 @@ import {
   type PersonResearchEvalStartReceiptV1,
   type PersonResearchEvalStartRequestV1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
-  PERSON_MEETING_TRANSCRIPT_PATH_V1,
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
   PERSON_LIST_RESPONSE_MAX_BYTES_V1,
@@ -59,8 +58,6 @@ import {
   validatePersonEvidenceDeskResponseV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
-  validatePersonMeetingTranscriptReadRequestV1,
-  validatePersonMeetingTranscriptV1,
   type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
   type PersonAnswerResponseV4 as OrganizationPersonAnswerV4,
   type PersonAnswerResponseV5 as OrganizationPersonAnswerV5,
@@ -72,8 +69,6 @@ import {
   type PersonEvidenceDeskResponseV1,
   type PersonSourceEvidenceReadRequestV1,
   type PersonSourceEvidenceV1,
-  type PersonMeetingTranscriptReadRequestV1,
-  type PersonMeetingTranscriptV1,
   type PersonListRequestV1,
   type PersonListResponseV1,
   type PersonOpenRequestV1,
@@ -113,7 +108,7 @@ import {
   type PersonUpdateSubmitV3, type PersonUploadSearchV3,
 } from '@echo-brain/organization-api';
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isCanonicalPersonEmail, isExpectedPersonEmail, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -189,7 +184,6 @@ export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
 export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
 export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
-export type PersonMeetingTranscriptReadV1 = PersonMeetingTranscriptV1;
 export type PersonListV1 = PersonListResponseV1;
 export type PersonOpenV1 = PersonOpenResponseV1;
 
@@ -798,6 +792,8 @@ interface JsonRequest {
   readonly access_token?: string;
   readonly method?: "POST" | "PUT";
   readonly headers?: Readonly<Record<string, string>>;
+  /** Only a tool's bounded request (a handed-in meeting) passes the ordinary body bound. */
+  readonly maximum_request_bytes?: number;
 }
 
 export class PersonAuthorityClient {
@@ -866,7 +862,7 @@ export class PersonAuthorityClient {
   private async post(input: JsonRequest, deadline: AbortSignal): Promise<Response> {
     const request = input.validate_request(input.body);
     const body = canonicalJson(request);
-    if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
+    if (Buffer.byteLength(body) > (input.maximum_request_bytes ?? MAX_ORGANIZATION_API_BODY_BYTES)) {
       throw new Error("Person Authority request exceeds its body bound");
     }
     return this.sendUntil(
@@ -1624,23 +1620,6 @@ export class PersonAuthorityClient {
     return response;
   }
 
-  async readMeetingTranscript(accessToken: string, value: PersonMeetingTranscriptReadRequestV1): Promise<PersonMeetingTranscriptV1> {
-    const request = validatePersonMeetingTranscriptReadRequestV1(value);
-    const response = await this.json({
-      path: PERSON_MEETING_TRANSCRIPT_PATH_V1,
-      body: request,
-      validate_request: validatePersonMeetingTranscriptReadRequestV1,
-      validate_response: validatePersonMeetingTranscriptV1,
-      access_token: accessToken,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-      timeout_ms: DEFAULT_TIMEOUT_MS,
-    });
-    if (canonicalJson(response.scope) !== canonicalJson(request.scope) || canonicalJson(response.citation) !== canonicalJson(request.citation)) {
-      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different meeting transcript coordinates');
-    }
-    return response;
-  }
-
   /** A tool receives bounded methods tied to this Authority, without the bearer credential. */
   toolTransport(accessToken: string, signal?: AbortSignal): PersonToolTransportV1 {
     const assertPath = (path: string): void => {
@@ -1648,18 +1627,20 @@ export class PersonAuthorityClient {
         throw new Error('Person tool request must remain on its Authority');
       }
     };
-    const assertBounds = (bytes: number, timeout = this.timeoutMs): void => {
+    const assertBounds = (bytes: number, timeout = this.timeoutMs, request = MAX_ORGANIZATION_API_BODY_BYTES): void => {
       if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 ||
-          !Number.isSafeInteger(timeout) || timeout < 1 || timeout > 75_000) {
+          !Number.isSafeInteger(timeout) || timeout < 1 || timeout > 75_000 ||
+          !Number.isSafeInteger(request) || request < 1 || request > PERSON_TOOL_REQUEST_MAX_BYTES_V1) {
         throw new Error('Person tool transport bounds are invalid');
       }
     };
     return Object.freeze({
       json: async <T>(input: import('@echo-brain/organization-api').PersonToolJsonRequestV1<T>): Promise<T> => {
         assertPath(input.path);
-        assertBounds(input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.timeout_ms);
+        assertBounds(input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.timeout_ms, input.maximum_request_bytes);
         return this.json({ path: input.path, body: input.body, validate_request: input.validate_request,
           validate_response: input.validate_response, maximum_response_bytes: input.maximum_response_bytes,
+          ...(input.maximum_request_bytes === undefined ? {} : { maximum_request_bytes: input.maximum_request_bytes }),
           timeout_ms: input.timeout_ms, access_token: accessToken, signal });
       },
       getJson: async <T>(input: import('@echo-brain/organization-api').PersonToolGetRequestV1<T>): Promise<T> => {

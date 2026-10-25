@@ -8,7 +8,7 @@ import type {
   Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
   ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace,
   NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result, RunsResults, SourceEvidence, ToolAttempt,
-  ExternalAnswerSource, UpdateState,
+  ExternalAnswerSource, PastedMeeting, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
@@ -19,7 +19,7 @@ import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import * as freshness from './freshness.js';
-import { message } from './messages.js';
+import { meetingMessage, message } from './messages.js';
 import { ACTIVE_STATES, CLOSED_STATES, firstName, reopenSends, sentWords } from './needs.js';
 
 /** Mine: only what you added, to see and to ask about. Follow-ups: everything you sent, own or last handed on. */
@@ -99,8 +99,6 @@ export interface SourcesState {
   listed: boolean;
   /** Approved records read for this answer, by digest. */
   records: Readonly<Record<string, Read<ApprovedRecord>>>;
-  /** Meetings read by their ref for a transcript the pane shows, by record digest: the first page, and whether more follows. */
-  meetings: Readonly<Record<string, Read<{ record: ApprovedRecord; more: boolean }>>>;
   /**
    * Follow-ups an answer cites or Ask named (ADR-0040), by item id: each its
    * row as Home reads it now (rows only), for the pane's owner, status and
@@ -657,8 +655,9 @@ function applyStatus(status: AppStatus): void {
   weeklySignIn(next);
   // Signed out: the sign-in page covers everything until someone signs in. Mine, and what was read in it, goes.
   if (!next) {
-    // A sign-out the host lost mid-way did happen: the account goes as it would have.
-    if (signOutPending) { signOutPending = null; forgetAccount(); }
+    // A sign-out the host lost mid-way did happen: the account goes as it would have. Any other sign-out still drops what
+    // a screen keeps beside its sheet, as the sheet goes, even one the cover has away.
+    if (signOutPending) { signOutPending = null; forgetAccount(); } else dropAccountKeeps();
     // No one to check for: signing in again starts over, learning what is there.
     freshness.stop();
     emptyBar();
@@ -735,9 +734,16 @@ export async function signInAgain(): Promise<void> {
   await signIn(account.authority);
 }
 
+/** How each screen drops what it keeps of an account beside the state, such as Paste a meeting's draft under the cover. */
+const accountKeeps: (() => void)[] = [];
+/** Registers how a screen drops what it keeps of an account: whenever that account goes (forgotten, switched or signed out). */
+export function onAccountGone(drop: () => void): void { accountKeeps.push(drop); }
+function dropAccountKeeps(): void { for (const drop of accountKeeps) drop(); }
+
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
 function forgetAccount(): void {
   askedQuestions = [];
+  dropAccountKeeps();
   // Cleanup belongs to the previous account, even after status has changed. The host may refuse it once that session
   // is gone; never try an old request or connection with the newly signed-in account's authority.
   const account = lastAccount;
@@ -971,7 +977,7 @@ function cancelWaitingConnection(connect: Pick<ToolConnectSheet, 'tool' | 'phase
 
 /** A host call that failed: the page's words for it as its message, and the failure itself. */
 class CommandFailed extends Error {
-  constructor(readonly failure: Failure) { super(message(failure)); }
+  constructor(readonly failure: Failure, words = message(failure)) { super(words); }
 }
 
 /** The failure a command threw; a plain one when the account or the screen changed under it. */
@@ -984,10 +990,24 @@ function outcomeUnknown(failure: Failure, resend: boolean): boolean {
   return resend || failure.mutation_outcome === 'unknown';
 }
 
-/** Account-fenced command for the personal meeting sheet. No provider token enters the renderer. */
-export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
-  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id: 'granola' } }),
-    isWriteCall('tools.meetings', { request: operation }));
+/** Account-fenced command for a personal meeting tool, Granola unless named. No provider token enters the renderer. */
+export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }, tool_id = 'granola'): Promise<PersonMeetingResultsV2[K]> {
+  return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id } }),
+    isWriteCall('tools.meetings', { request: operation }), meetingMessage);
+}
+
+/**
+ * Account-fenced Paste a meeting. Its sheet stays up while it is on its way, as Disconnect's does. Pasting the same
+ * meeting again is safe: it answers the same id and adds nothing.
+ */
+export async function handInMeeting(meeting: PastedMeeting, project_id: string | null): Promise<{ meeting_id: string }> {
+  const pasting = (sheet: Sheet | null): sheet is ToolManageSheet => sheet?.kind === 'tool-manage' && sheet.tool.tool_id === 'hand-in';
+  if (pasting(state.sheet)) set({ sheet: { ...state.sheet, busy: true } });
+  try {
+    return await fencedCommand<{ meeting_id: string }>(account => rpc('meetings.handIn', { expect: account, meeting, project_id }), true);
+  } finally {
+    if (pasting(state.sheet)) set({ sheet: { ...state.sheet, busy: false } });
+  }
 }
 
 /** Account-fenced runs request: your own approvals' checks, and the open items you can see. */
@@ -1002,7 +1022,7 @@ export function runsCommand<K extends keyof RunsResults>(request: PersonRunsRequ
  * it settles that. Another app in front changes nothing: the reply is the
  * Authority's answer, and the page it is for fences it by itself.
  */
-async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>, write: boolean): Promise<T> {
+async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>, write: boolean, words: (failure: Failure) => string = message): Promise<T> {
   const account = expect();
   if (!account) throw new Error('Sign in to use meetings.');
   const result = await send(account);
@@ -1011,7 +1031,7 @@ async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknow
     const unsent = !result.ok && result.failure.mutation_outcome === 'not_submitted';
     throw new CommandFailed({ code: 'account_changed', retryable: false, mutation_outcome: unsent ? 'not_submitted' : 'unknown' });
   }
-  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
+  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure, words(result.failure)); }
   return result.value as T;
 }
 
@@ -3555,7 +3575,7 @@ async function openCitedProject(project_id: string, label: string): Promise<void
 
 /** Nothing open in the pane, nothing read for it yet. */
 function emptySources(): SourcesState {
-  return { gen: ++seq, open: null, focus: null, listed: false, named: null, records: {}, meetings: {}, followUps: {}, evidence: null };
+  return { gen: ++seq, open: null, focus: null, listed: false, named: null, records: {}, followUps: {}, evidence: null };
 }
 
 /**
@@ -3629,35 +3649,17 @@ async function readRecord(gen: number, record: RecordRef, background: boolean): 
   if (!result.ok && sourcesAt(gen) && (!background || ACCOUNT_GONE.includes(result.failure.code))) accountLost(result.failure);
 }
 
-/** A transcript's meeting, by its ref, as the reader reads it: its first page, and whether more follows. */
-async function readMeeting(gen: number, id: string): Promise<void> {
-  const account = expect();
-  if (!account || !sourcesAt(gen)) return;
-  const patch = (read: Read<{ record: ApprovedRecord; more: boolean }>) => {
-    const sources = sourcesAt(gen);
-    if (sources) set({ sources: { ...sources, meetings: { ...sources.meetings, [id]: read } } });
-  };
-  patch({ loading: true });
-  const result = await rpc('open.ref', { expect: account, ref: { kind: 'meeting', id } });
-  const opened = result.ok && result.value.kind === 'meeting' ? result.value : null;
-  patch(opened ? { loading: false, value: { record: opened.record, more: opened.next_cursor !== null } }
-    : { loading: false, failure: result.ok ? { code: 'invalid_output', retryable: true } : result.failure });
-  if (!result.ok && sourcesAt(gen)) accountLost(result.failure);
-}
-
 /**
  * What the pane needs read for `source`, unless it already was: its record,
- * its meeting, its passages, or its follow-up's row. A project, a person, a
- * tool or a link needs nothing read: the pane shows what Ask cited.
+ * its passages, or its follow-up's row. A project, a person, a tool or a link
+ * needs nothing read: the pane shows what Ask cited.
  */
 function readPane(gen: number, source: AnswerSource): void {
   const sources = sourcesAt(gen);
   if (!sources) return;
-  const opener = openerOf(source);
   const stale = (read: Read<unknown> | undefined) => !read || (!read.loading && 'failure' in read);
-  if (opener.pane === 'passages') void readEvidence(gen);
+  if (openerOf(source).pane === 'passages') void readEvidence(gen);
   else if (source.kind === 'record' && stale(sources.records[source.record.record_sha256])) void readRecord(gen, source.record, false);
-  else if (opener.pane === 'meeting' && opener.meeting !== undefined && stale(sources.meetings[opener.meeting])) void readMeeting(gen, opener.meeting);
   else if (source.kind === 'follow_up' && stale(sources.followUps[source.item_id])) void readFollowUpRow(gen, source.item_id);
 }
 
@@ -3756,14 +3758,12 @@ export function retryEvidence(): void {
   if (sources && paneTarget()) void readEvidence(sources.gen);
 }
 
-/** Try again, on an approved record, a transcript's meeting, or a follow-up, that could not be read. */
+/** Try again, on an approved record or a follow-up that could not be read. */
 export function retryRecord(): void {
   const sources = state.sources;
   const source = paneTarget()?.sources[0];
   if (!sources || !source) return;
-  const opener = openerOf(source);
   if (source.kind === 'record') void readRecord(sources.gen, source.record, false);
-  else if (opener.pane === 'meeting' && opener.meeting !== undefined) void readMeeting(sources.gen, opener.meeting);
   else if (source.kind === 'follow_up') void readFollowUpRow(sources.gen, source.item_id);
 }
 
@@ -4354,7 +4354,7 @@ function conceal(): void {
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
   set({
-    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, meetings: {}, followUps: {}, evidence: null } } : {}),
+    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, named: null, records: {}, followUps: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
     ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });
@@ -4375,14 +4375,23 @@ interface Surface {
 }
 
 const topView = () => { const view = followUpShown(); return view?.kind === 'list' || view?.kind === 'item' ? view : null; };
+/** The decision opened from a meeting's follow-ups, while it shows over them. */
+const decisionView = () => { const view = followUpShown(); return view?.kind === 'decision' && state.decision?.seq === view.seq ? state.decision : null; };
 const projectShown = () => (state.route.page === 'project' ? state.route.project : null);
 
 const SURFACES: readonly Surface[] = [
   // Home, and the decision page over it: their rows, and the decision's check (only new rows read live, but on a return).
   { areas: ['follow_ups', 'reviews'], shows: () => (state.route.page === 'home' || state.route.page === 'decision') && state.home !== null, read: back => loadHome(back) },
+  // The decision page's records: each finished check's follow-ups.
+  { areas: ['follow_ups'], shows: () => state.route.page === 'decision' && (state.decision?.runs.length ?? 0) > 0, read: () => loadRecordLines(state.decision!) },
   { areas: ['reviews'], shows: () => state.route.page === 'decision' && state.decision !== null,
     busy: () => Boolean(state.decision?.loading || state.decision?.busy || state.decision?.unknown),
     read: () => readDecision(state.decision!.seq, state.decision!.approval_id, true) },
+  // A decision opened from a meeting's follow-ups: its review, then its records' checks (away from Home, by the runs list) and
+  // their follow-ups.
+  { areas: ['follow_ups', 'reviews'], shows: () => decisionView() !== null,
+    busy: () => Boolean(decisionView()?.loading || decisionView()?.busy || decisionView()?.unknown),
+    read: () => readDecision(decisionView()!.seq, decisionView()!.approval_id, true) },
   // The follow-ups view on screen: those under it, and the page under them all, read again when they show.
   { areas: ['follow_ups'], shows: () => topView() !== null, busy: () => Boolean(topView()?.loading || topView()?.busy), read: () => rereadViews() },
   { areas: ['follow_ups'], shows: () => projectShown() !== null, read: () => loadLine('projectLine', 'project', projectShown()!.project_id) },
@@ -4402,10 +4411,10 @@ const SURFACES: readonly Surface[] = [
   } },
 ];
 
-/** The meeting line the reader or the decision page shows. */
+/** The meeting line the reader shows. The decision page keeps a line per record of its own. */
 function impactLineShown(): ItemsLine | null {
   const line = state.impactLine;
-  return line && (state.route.page === 'decision' || (state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id)) ? line : null;
+  return line && state.reader?.ref.kind === 'meeting' && state.reader.ref.id === line.id ? line : null;
 }
 
 /** Surfaces owed a read, and whether for a return; and those whose read is on its way. */
@@ -4524,9 +4533,17 @@ export interface HomeState {
 }
 
 type ReviewOpen = PersonMeetingResultsV2['review_open'];
+/** Where one decision or action goes: null = not kept, [] = Only me, otherwise its projects, sorted. */
+export type Destination = readonly string[] | null;
+/** One record's follow-ups counted on the decision page, by its check. */
+export interface RecordLine { summary: OpenItemsView['summary'] | null; stage: PersonImpactStageV1 | null }
 
-/** The decision open from Home, or from a meeting's follow-ups: what was proposed, your choices, and what it changed once approved. */
+/**
+ * The decision open from Home, or from a meeting's follow-ups: what was proposed, where each decision and action goes,
+ * and, once approved, what each of its records changed.
+ */
 export interface DecisionState {
+  /** The proposal's own id; each published record has its own. Opened from a record's follow-ups, that record's id until read. */
   approval_id: string;
   seq: number;
   loading: boolean;
@@ -4534,15 +4551,17 @@ export interface DecisionState {
   open: ReviewOpen | null;
   /** The card's idempotency key: one per opening. */
   command: string;
-  audience: 'only-me' | 'projects';
-  project_ids: string[];
-  share: boolean;
-  owners: { signal_id: string; action: string; owner: string }[];
+  /** Each decision's and action's destination, by signal id. */
+  routes: Readonly<Record<string, Destination>>;
+  /** Each proposed owner as typed, by action signal id. */
+  owners: Readonly<Record<string, string>>;
   busy: boolean;
   /** The approve or reject may have arrived: the choices are locked, and a resend repeats them. */
   unknown?: boolean;
-  /** The impact check of an approved decision: its follow-ups line counts what it found. */
-  run: PersonRunV1 | null;
+  /** The impact checks of an approved decision, one per published record. */
+  runs: readonly PersonRunV1[];
+  /** Each finished check's follow-ups line, by its run. */
+  lines: Readonly<Record<string, RecordLine>>;
 }
 
 /**
@@ -4552,24 +4571,29 @@ export interface DecisionState {
  * sort before the others. An item whose last check is `changed` and whose
  * owner is not you (`me`) is a Review row; every other item is an Update row
  * (R64). Only impact checks make rows: a sweep never does, going or failed.
+ * An approval's checks are its records' runs, one per destination: a meeting
+ * makes one row, failed when any check did not finish, else checking while
+ * any is on its way.
  */
 export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readonly PersonRunV1[], open: HomeView | null, me: string | null): NeedRow[] {
-  const byApproval = new Map(runs.filter(run => run.trigger === 'approved_record').map(run => [run.event_ref, run]));
+  const byRecord = new Map(runs.filter(run => run.trigger === 'approved_record').map(run => [run.event_ref, run]));
   const approve: NeedRow[] = [];
   const failed: NeedRow[] = [];
   const checking: NeedRow[] = [];
   for (const review of reviews) {
     if (review.status === 'pending') { approve.push({ kind: 'approve', review }); continue; }
     if (review.status !== 'approved' && review.status !== 'publishing') continue;
-    const run = byApproval.get(review.approval_id);
-    if (!run) {
-      // The publisher queues the run only after the approved record is written.
+    const checks = review.records.flatMap(record => { const run = byRecord.get(record.approval_id); return run ? [run] : []; });
+    if (checks.length === 0) {
+      // The publisher queues the runs only after the approved records are written.
       if (review.status === 'publishing') checking.push({ kind: 'checking', review });
       continue;
     }
     // A finished check makes no row of its own: what it found comes from `home`.
-    if (run.state === 'failed') failed.push({ kind: 'failed', review, run });
-    else if (run.state !== 'done') checking.push({ kind: 'checking', review, run });
+    const stopped = checks.find(run => run.state === 'failed');
+    const going = checks.find(run => run.state === 'pending' || run.state === 'running');
+    if (stopped) failed.push({ kind: 'failed', review, run: stopped });
+    else if (going) checking.push({ kind: 'checking', review, run: going });
   }
   const items = open?.items ?? [];
   const changed = (item: OpenItemView) => item.check?.verdict === 'changed';
@@ -4682,10 +4706,16 @@ function checkEnded(before: readonly PersonRunV1[], after: readonly PersonRunV1[
 /** Tools that could not be read: they fail Home's load, which says so with their own failure. */
 class ToolsFailed extends CommandFailed {}
 
+/** The meeting tools, in the order Home reads reviews through them: a review is the person's, whichever tool brought it. */
+const MEETING_TOOLS = ['granola', 'hand-in'] as const;
+/** The meeting tool Home reads reviews through, as its last load learned; a card opens and decides through it too. */
+let reviewTool: string = MEETING_TOOLS[0];
+
 /**
- * The meeting reviews, when Granola is there to review them. A load learns
- * that from the tools (`tools`), read beside Home's other reads; a poll keeps
- * what its load learned. Tools that cannot be read fail this part (`ToolsFailed`).
+ * The meeting reviews, when a meeting tool is there: Granola, or Paste a
+ * meeting. A load learns that from the tools (`tools`), read beside Home's
+ * other reads; a poll keeps what its load learned. Tools that cannot be read
+ * fail this part (`ToolsFailed`).
  */
 async function readReviews(mine: number, tools: Promise<Result<ConnectedTools>> | undefined): Promise<readonly PersonMeetingReviewV2[]> {
   if (tools) {
@@ -4694,12 +4724,13 @@ async function readReviews(mine: number, tools: Promise<Result<ConnectedTools>> 
       accountLost(answer.failure);
       throw new ToolsFailed(answer.failure);
     }
-    const granola = answer.value.tools.find(tool => tool.tool_id === 'granola');
+    const tool = MEETING_TOOLS.find(id => answer.value.tools.some(entry => entry.tool_id === id && entry.status !== 'unavailable'));
     const home = homeShown(mine);
     if (!home) return [];
-    set({ home: { ...home, meetings: granola !== undefined && granola.status !== 'unavailable' } });
+    if (tool !== undefined) reviewTool = tool;
+    set({ home: { ...home, meetings: tool !== undefined } });
   }
-  return state.home?.meetings ? (await meetingCommand({ operation: 'reviews' })).reviews : [];
+  return state.home?.meetings ? (await meetingCommand({ operation: 'reviews' }, reviewTool)).reviews : [];
 }
 
 /**
@@ -4743,7 +4774,7 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
   if (waiting) openUnread = unread !== undefined;
   // A check that ended owes a read of what it found (set as its list showed); only a read that brings its rows pays it.
   if (waiting && unread === undefined) resultOwed = false;
-  updateDecisionRun(home.runs);
+  updateDecisionRuns(home.runs);
   // Tools that could not be read fail the load, as Home says: it waits for Try again, and starts no run meanwhile.
   if (toolsFailure) return;
   // The next poll waits longer after a failed runs read, or a failed read of what a check found.
@@ -4925,17 +4956,43 @@ async function startDueSweep(): Promise<Failure | undefined> {
 }
 
 /**
- * A fresh list updates the open decision too, even if its check finished while hidden. A list holds only the newest runs: a
- * check it does not hold (one a decision opened from its list was given) stays as it was.
+ * The checks of a decision's records, in record order: each the newest list's, else the one the decision was given (a list
+ * holds only the newest runs). Before the decision is read, the checks it was given.
  */
-function updateDecisionRun(runs: readonly PersonRunV1[]): void {
+function recordRuns(decision: DecisionState, runs: readonly PersonRunV1[]): readonly PersonRunV1[] {
+  const records = decision.open?.records;
+  if (!records) return decision.runs;
+  return records.flatMap(record => {
+    const run = runs.find(item => item.trigger === 'approved_record' && item.event_ref === record.approval_id)
+      ?? decision.runs.find(item => item.event_ref === record.approval_id);
+    return run ? [run] : [];
+  });
+}
+
+/** A fresh list updates the open decision's checks too, even one that finished while hidden; a check now done reads its line. */
+function updateDecisionRuns(runs: readonly PersonRunV1[]): void {
   const decision = state.decision;
   if (!decision || !decisionShown(decision.seq)) return;
-  const run = runs.find(item => item.event_ref === decision.approval_id) ?? decision.run;
-  if (run?.run_id !== decision.run?.run_id || run?.state !== decision.run?.state) {
-    set({ decision: { ...decision, run } });
-    if (run?.state === 'done') void loadLine('impactLine', 'run', run.run_id);
-  }
+  const next = recordRuns(decision, runs);
+  const before = new Map(decision.runs.map(run => [run.run_id, run.state]));
+  if (next.length === decision.runs.length && next.every((run, index) => run.run_id === decision.runs[index]!.run_id && run.state === before.get(run.run_id))) return;
+  set({ decision: { ...decision, runs: next } });
+  for (const run of next) if (run.state === 'done' && before.get(run.run_id) !== 'done') void loadRecordLine(decision.seq, run.run_id);
+}
+
+/** A record's follow-ups line on the decision page, read by its check: counts and the check's stage only. A read that fails keeps what shows. */
+async function loadRecordLine(mine: number, run_id: string): Promise<void> {
+  const account = expect();
+  if (!account || state.concealed) return;
+  const counted = await readItems(account, { scope: 'run', id: run_id, read: 'counts' }, null, 1);
+  const decision = decisionShown(mine);
+  if (!decision || !counted.ok) return;
+  set({ decision: { ...decision, lines: { ...decision.lines, [run_id]: { summary: counted.last.summary, stage: stageFor(counted.last, 'run', run_id) } } } });
+}
+
+/** Every finished check's line of the decision, read again. */
+async function loadRecordLines(decision: DecisionState): Promise<void> {
+  await Promise.all(decision.runs.filter(run => run.state === 'done').map(run => loadRecordLine(decision.seq, run.run_id)));
 }
 
 /** The decision, while it is the page, or opened over a meeting's follow-ups and showing. */
@@ -4944,7 +5001,24 @@ function decisionShown(mine: number): DecisionState | null {
   return decision?.seq === mine && (state.route.page === 'decision' || viewOf('decision', mine)) ? decision : null;
 }
 
-/** A decision, from its Home row: what was proposed, and, once approved, its check and its follow-ups. */
+/** Home's reads go on under the decision (Home, or the decision page opened from it): they keep its runs list fresh. */
+function homeUnder(): boolean {
+  return homeShown() !== null;
+}
+
+/** Away from Home no Home read keeps the runs list: the decision reads it for its records' checks. A read that fails keeps what shows. */
+async function readRecordRuns(mine: number): Promise<void> {
+  if (state.concealed || !expect()) return;
+  let runs: readonly PersonRunV1[];
+  try {
+    runs = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
+  } catch {
+    return;
+  }
+  if (state.decision?.seq === mine) updateDecisionRuns(runs);
+}
+
+/** A decision, from its Home row: what was proposed, and, once approved, each record's check and its follow-ups. */
 export async function openDecision(approval_id: string, run: PersonRunV1 | null = null): Promise<void> {
   if (!expect() || state.concealed) return;
   readSeq += 1;
@@ -4956,30 +5030,31 @@ export async function openDecision(approval_id: string, run: PersonRunV1 | null 
   });
   syncSearch();
   freshness.navigated();
-  if (run?.state === 'done') void loadLine('impactLine', 'run', run.run_id);
   await readDecision(mine, approval_id);
 }
 
 function newDecision(approval_id: string, mine: number, run: PersonRunV1 | null): DecisionState {
-  return { approval_id, seq: mine, loading: true, open: null, command: crypto.randomUUID(), audience: 'only-me', project_ids: [], share: false, owners: [], busy: false, run };
+  return { approval_id, seq: mine, loading: true, open: null, command: crypto.randomUUID(), routes: {}, owners: {}, busy: false, runs: run ? [run] : [], lines: {} };
 }
 
-/** A proposal's own choices: its suggested projects, and each action's proposed owner. */
-function choicesOf(open: ReviewOpen): Pick<DecisionState, 'audience' | 'project_ids' | 'owners'> {
-  return { audience: open.suggested_projects.length > 0 ? 'projects' : 'only-me', project_ids: open.suggested_projects.map(project => project.project_id),
-    owners: open.owners.map(owner => ({ signal_id: owner.signal_id, action: owner.action, owner: owner.proposed })) };
+/** A proposal's own choices: each item where the review says it goes (pending: the suggestion), and each proposed owner. */
+function choicesOf(open: ReviewOpen): Pick<DecisionState, 'routes' | 'owners'> {
+  return { routes: Object.fromEntries(open.items.map(item => [item.signal_id, item.project_ids])),
+    owners: Object.fromEntries(open.items.flatMap(item => (item.owner_editable && item.owner !== null ? [[item.signal_id, item.owner]] : []))) };
 }
 
 /**
- * What was proposed, and your choices on it. Read again (`again`, quietly,
- * while nothing on it is on its way), the same proposal keeps the choices made
- * on it, a new one comes with its own under a new command, and a read that
- * fails keeps what shows.
+ * What was proposed, and your choices on it. Opened by a record's own id (from
+ * its follow-ups), the Authority answers that record's proposal, whose id the
+ * page holds from then on. Read again (`again`, quietly, while nothing on it
+ * is on its way), the same proposal keeps the choices made on it, a new one
+ * comes with its own under a new command, and a read that fails keeps what
+ * shows.
  */
 async function readDecision(mine: number, approval_id: string, again = false): Promise<void> {
   let open: ReviewOpen;
   try {
-    open = await meetingCommand({ operation: 'review_open', approval_id });
+    open = await meetingCommand({ operation: 'review_open', approval_id }, reviewTool);
   } catch (error) {
     const decision = decisionShown(mine);
     if (decision && !again) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
@@ -4988,7 +5063,16 @@ async function readDecision(mine: number, approval_id: string, again = false): P
   const decision = decisionShown(mine);
   if (!decision || (again && (decision.busy || decision.unknown))) return;
   const same = again && decision.open?.snapshot_sha256 === open.snapshot_sha256;
-  set({ decision: { ...decision, loading: false, open, ...(same ? {} : { ...choicesOf(open), ...(again ? { command: crypto.randomUUID() } : {}) }) } });
+  // A read that failed showed only why; this one shows the decision.
+  const read: DecisionState = { ...decision, approval_id: open.review.approval_id, loading: false, open, ...(decision.open ? {} : { failure: undefined }),
+    ...(same ? {} : { ...choicesOf(open), ...(again ? { command: crypto.randomUUID() } : {}) }) };
+  // Its records' checks, each record its own: as Home's runs know them while Home is read under it. Away from Home that read may
+  // be long gone: the checks it was given show at once, and the runs list is read for the others.
+  const home = homeUnder();
+  const runs = recordRuns(read, home ? state.home?.runs ?? [] : []);
+  set({ decision: { ...read, runs } });
+  void loadRecordLines({ ...read, runs });
+  if (!home) void readRecordRuns(mine);
 }
 
 function editDecision(patch: Partial<DecisionState>): void {
@@ -4998,18 +5082,72 @@ function editDecision(patch: Partial<DecisionState>): void {
 function editChoices(patch: Partial<DecisionState>): void {
   if (!state.decision?.busy && !state.decision?.unknown) editDecision(patch);
 }
-export function setDecisionAudience(audience: DecisionState['audience']): void { editChoices({ audience }); }
-export function setDecisionShare(share: boolean): void { editChoices({ share }); }
 export function setDecisionOwner(signalId: string, owner: string): void {
   const decision = state.decision;
-  if (decision) editChoices({ owners: decision.owners.map(item => item.signal_id === signalId ? { ...item, owner } : item) });
+  if (decision) editChoices({ owners: { ...decision.owners, [signalId]: owner } });
 }
-export function tickDecisionProject(projectId: string): void {
+
+/** The items the card routes, in its order: decisions, then actions. */
+function routedItems(decision: DecisionState): readonly ReviewOpen['items'][number][] {
+  return decision.open?.items ?? [];
+}
+/** The items kept somewhere: Only me or projects. */
+export function keptItems(decision: DecisionState): readonly ReviewOpen['items'][number][] {
+  return routedItems(decision).filter(item => (decision.routes[item.signal_id] ?? null) !== null);
+}
+/** Every project the routes name, each once: what counts toward the meeting's MAX_CAPTURE_PROJECTS. */
+export function routedProjects(routes: Readonly<Record<string, Destination>>): Set<string> {
+  return new Set(Object.values(routes).flatMap(destination => destination ?? []));
+}
+/** Routes the card may send: at most MAX_CAPTURE_PROJECTS projects in all, as at most so many in one item. */
+function withinProjects(routes: Readonly<Record<string, Destination>>): boolean {
+  return routedProjects(routes).size <= MAX_CAPTURE_PROJECTS;
+}
+
+/** One item's destination: Only me ([]), not kept (null), or exactly these projects. */
+export function setDecisionRoute(signalId: string, destination: Destination): void {
   const decision = state.decision;
   if (!decision) return;
-  const ticked = decision.project_ids.includes(projectId);
-  if (!ticked && decision.project_ids.length >= MAX_CAPTURE_PROJECTS) return;
-  editChoices({ project_ids: ticked ? decision.project_ids.filter(id => id !== projectId) : [...decision.project_ids, projectId].sort() });
+  const routes = { ...decision.routes, [signalId]: destination === null ? null : [...destination].sort() };
+  if (withinProjects(routes)) editChoices({ routes });
+}
+/** A project ticked or unticked on one item: unticking its last project leaves it Only me. */
+export function tickDecisionRoute(signalId: string, projectId: string): void {
+  const decision = state.decision;
+  if (!decision) return;
+  const now = decision.routes[signalId] ?? [];
+  setDecisionRoute(signalId, now.includes(projectId) ? now.filter(id => id !== projectId) : [...now, projectId]);
+}
+/** Every kept item to one destination, or every item when none is kept. "Don't keep" (null) keeps none. */
+export function setDecisionRoutes(destination: Destination): void {
+  const decision = state.decision;
+  if (!decision) return;
+  const items = routedItems(decision);
+  const targets = destination === null || keptItems(decision).length === 0 ? items : keptItems(decision);
+  const value = destination === null ? null : [...destination].sort();
+  const routes = { ...decision.routes, ...Object.fromEntries(targets.map(item => [item.signal_id, value])) };
+  if (withinProjects(routes)) editChoices({ routes });
+}
+/**
+ * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects:
+ * one every kept item has comes off each, leaving an item with no other Only me; any other goes on each.
+ */
+export function tickDecisionRoutes(projectId: string): void {
+  const decision = state.decision;
+  if (!decision) return;
+  const kept = keptItems(decision);
+  const off = kept.length > 0 && kept.every(item => decision.routes[item.signal_id]!.includes(projectId));
+  const routes = { ...decision.routes, ...Object.fromEntries((kept.length > 0 ? kept : routedItems(decision)).map(item => {
+    const others = (decision.routes[item.signal_id] ?? []).filter(id => id !== projectId);
+    return [item.signal_id, off ? others : [...others, projectId].sort()];
+  })) };
+  if (withinProjects(routes)) editChoices({ routes });
+}
+/** The one destination every kept item has, or null when they differ ("Mixed") or nothing is kept. */
+export function sharedDestination(decision: DecisionState): readonly string[] | null {
+  const kept = keptItems(decision).map(item => decision.routes[item.signal_id]!);
+  const [first] = kept;
+  return first !== undefined && kept.every(value => value.length === first.length && value.every((id, index) => id === first[index])) ? first : null;
 }
 
 /** Approve or Reject: one send per opening. Home shows where it went; the check runs by itself. */
@@ -5018,13 +5156,16 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
   if (!decision?.open || decision.busy || !decisionShown(decision.seq)) return;
   const mine = decision.seq;
   editDecision({ busy: true, failure: undefined });
+  // Every item in the card's order with its destination; owners only of kept actions the meeting proposed one for.
+  const items = decision.open.items;
+  const owner = (item: ReviewOpen['items'][number]) => (decision.owners[item.signal_id] ?? '').trim();
   try {
     const result = await meetingCommand({
       operation: 'review', approval_id: decision.approval_id, command_id: decision.command, snapshot_sha256: decision.open.snapshot_sha256, action,
-      project_ids: action === 'approve' && decision.audience === 'projects' ? decision.project_ids : [],
-      share_transcript: action === 'approve' && decision.share,
-      owners: action === 'approve' ? decision.owners.flatMap(owner => owner.owner.trim() ? [{ signal_id: owner.signal_id, owner: owner.owner.trim() }] : []) : [],
-    });
+      routes: action === 'approve' ? items.map(item => ({ signal_id: item.signal_id, project_ids: decision.routes[item.signal_id] ?? null })) : [],
+      owners: action === 'approve' ? items.flatMap(item => (item.owner_editable && (decision.routes[item.signal_id] ?? null) !== null && owner(item)
+        ? [{ signal_id: item.signal_id, owner: owner(item) }] : [])) : [],
+    }, reviewTool);
     if (!decisionShown(mine)) return;
     const toast = result.decided_on === 'slack' ? `Already ${result.status === 'rejected' ? 'rejected' : 'approved'} in Slack`
       : result.status === 'rejected' ? 'Rejected' : 'Approved · checking what it changes';
@@ -5036,17 +5177,21 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
   }
 }
 
-/** Try again on a failed impact check. */
-export async function retryImpact(): Promise<void> {
+/** Try again on one record's failed impact check. */
+export async function retryImpact(run_id: string): Promise<void> {
   const decision = state.decision;
-  if (!decision?.run || decision.run.state !== 'failed') return;
+  const run = decision?.runs.find(item => item.run_id === run_id);
+  if (!decision || run?.state !== 'failed') return;
   const mine = decision.seq;
   try {
-    await runsCommand({ schema_version: 1, operation: 'retry', run_id: decision.run.run_id });
-    if (!decisionShown(mine)) return;
-    editDecision({ run: { ...decision.run, state: 'pending', error_code: null } });
+    await runsCommand({ schema_version: 1, operation: 'retry', run_id });
+    const shown = decisionShown(mine);
+    if (!shown) return;
+    editDecision({ runs: shown.runs.map(item => (item.run_id === run_id ? { ...item, state: 'pending', error_code: null } : item)) });
     const runs = await runsCommand({ schema_version: 1, operation: 'list' });
-    void driveRuns(runs.runs);
+    // Home looks again while it runs; away from Home the decision reads its checks once more, as a meeting's line does.
+    if (homeUnder()) void driveRuns(runs.runs);
+    else { await driveRuns(runs.runs); await readRecordRuns(mine); }
   } catch { /* the card still offers Try again */ }
 }
 
@@ -5964,7 +6109,8 @@ function backTo(at: number): void {
   else if (under.kind === 'item') void readItem(under.seq);
   else {
     setView({ ...under, stale: false });
-    if (state.decision?.run) void loadLine('impactLine', 'run', state.decision.run.run_id);
+    if (state.decision) void loadRecordLines(state.decision);
+    if (state.decision && !homeUnder()) void readRecordRuns(state.decision.seq);
   }
 }
 
@@ -5980,25 +6126,27 @@ function refreshUnder(): void {
 /**
  * A meeting's decision page, from its list's "Approved Oct 6": over the list,
  * so Back returns to it. Opened from that decision's own page, or already
- * open under the list, Back goes to it instead. Its check finished (it found
- * the list's follow-ups); its follow-ups line counts them by that check.
+ * open under the list, Back goes to it instead. The list is one record's: the
+ * Authority opens that record's proposal by the record's own id (however old
+ * it is), and this record's check finished (it found the list's follow-ups).
+ * A read that fails says so on the page.
  */
 export async function openListDecision(): Promise<void> {
   const list = shownView('list');
   const decided = list && listDecision(list);
   if (!list || list.scope !== 'record' || !decided || !list.stage?.mine || state.concealed || !expect()) return;
-  const { approval_id } = decided;
-  const decision = state.decision?.approval_id === approval_id ? state.decision : null;
+  const record = decided.approval_id;
+  const open = state.decision?.open?.records.some(entry => entry.approval_id === record) || state.decision?.runs.some(run => run.event_ref === record);
+  const decision = open ? state.decision : null;
   const at = decision ? followUpsShown()!.views.findIndex(view => view.kind === 'decision' && view.seq === decision.seq) : -1;
   if (at >= 0 || (decision && state.route.page === 'decision')) { backTo(at); return; }
   const { stage } = list;
   const mine = ++seq;
-  const run: PersonRunV1 = { run_id: stage.run_id, trigger: 'approved_record', event_ref: approval_id, state: stage.state, error_code: stage.error_code,
+  const run: PersonRunV1 = { run_id: stage.run_id, trigger: 'approved_record', event_ref: record, state: stage.state, error_code: stage.error_code,
     created_at: decided.approved_at, updated_at: decided.approved_at };
   pushView({ kind: 'decision', seq: mine, stale: false });
-  set({ decision: newDecision(approval_id, mine, run) });
-  void loadLine('impactLine', 'run', run.run_id);
-  await readDecision(mine, approval_id);
+  set({ decision: newDecision(record, mine, run) });
+  await readDecision(mine, record);
 }
 
 /**

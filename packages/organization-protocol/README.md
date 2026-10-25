@@ -12,8 +12,8 @@ readers. Its public entry point exposes four responsibility groups:
 - the approval and rejection payload shapes that carry exactly the meeting
   facts a person reviewed;
 - restricted-reviewer, project-members-readable and
-  organization-member-readable content policies, plus the meeting approval
-  event, approval-decision proof and owner-choice rules; and
+  organization-member-readable content policies, plus the approval-decision
+  proof and owner-choice rules; and
 - authority-signed organization record envelopes and append receipts.
 
 The package does not own enrollment, access leases, user sessions, HTTP
@@ -50,13 +50,18 @@ carried into the signed record.
 
 A meeting approval decided in the approval core, on the desktop or through the
 Slack DM copy, is recorded with one neutral proof:
-`approval-decision-record-input-v1.ts` (`echo-approval-decision-ref-v1`). Raw
+`approval-decision-record-input-v2.ts` (`echo-approval-decision-ref-v2`). Raw
 Slack request bodies and response URLs never enter the record contract.
-It accepts only restricted reviewer (Only me) or project members readable
-(Projects), so new meeting approvals never record organization member
-readable. It validates the decision's event with `meeting-approval-event-v2.ts`
-and its confirmed action owners with `approval-owner-choice-v1.ts`, the one
-owner rule every approval surface shares.
+A decision routes each decision and action to a destination, and each
+destination group is its own record: it holds only its items, names the
+proposal and the snapshot the reviewer saw, and carries a record approval id
+derived from the proposal and its projects (`approvalRecordIdV2`). It accepts
+only restricted reviewer (Only me) or project members readable (Projects), so
+new meeting approvals never record organization member readable. Its event's
+consequence names only that audience, which is also the record's association:
+no record carries a transcript choice or source (ADR-0046). It validates the
+confirmed action owners with `approval-owner-choice-v1.ts`, the one owner rule
+every approval surface shares.
 
 ## Organization record contract
 

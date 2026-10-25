@@ -11,6 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0046
   - ADR-0044
   - ADR-0043
   - ADR-0045
@@ -112,9 +113,12 @@ Central state is authoritative for organization membership and access,
 provider integration policy, the append-only organization record, and
 centrally served retrieval generations. It may also hold governed pre-record
 meeting data from an exactly bound member identity and that member's own
-connected meeting source (a personal Nango grant under
-[ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md), or the
-staging synthetic source). That data remains in
+meeting source (a personal Nango grant under
+[ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md), the
+`hand-in` source through which a member pastes a meeting under
+[ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md), or the
+staging synthetic source). Until approved, it is readable by its importer only.
+That data remains in
 the pending approval boundary: it is not an organization record, retrieval
 input, or delivery payload until an audited resolution admits it. Central state
 must not accept unrestricted provider payloads or bypass that pending-only
@@ -169,7 +173,7 @@ protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits and indefinite retention.
 The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persistence.md)
-describes the original V7 project storage. The current Authority is V14, which
+describes the original V7 project storage. The current Authority is V15, which
 accepts only fresh state, and its project routes and client operations are live.
 
 Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as
@@ -190,10 +194,10 @@ entire import closure to enforce that separation.
 
 Person list and open by ref are specified in
 [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md).
-`POST /v1/person/list` returns the newest notes, documents and approved
-meetings the caller can read, 25 per page under an opaque cursor, in global,
-joined-project or mine scope; `POST /v1/person/open` reads one of them, or a
-shared transcript, by its ref. Both are model-free and served outside the
+`POST /v1/person/list` returns the newest notes, documents, imported meetings
+and approved meetings the caller can read, 25 per page under an opaque cursor,
+in global, joined-project or mine scope; `POST /v1/person/open` reads one of
+them by its ref. Both are model-free and served outside the
 answer-model gate. The originals store lists custody rows under the evidence
 desk's access rule, and the records route lists meetings from the pinned search
 generation and opens them through the Layer 1 exact read; neither returns the

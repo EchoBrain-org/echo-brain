@@ -18,7 +18,7 @@ import { approvalCoreFixture } from './approval-core.js';
 import { addMembership, revokeMembership } from './project-context-sqlite.js';
 
 /**
- * Open items over a real Authority V14 database (open items and Home v1).
+ * Open items over a real Authority V15 database (open items and Home v1).
  * Ari approves a meeting into project A, whose members are Ari (lead), Mina
  * Patel and Rafael Moreno; S. Okafor is in the organization but not in project
  * A. Decision readers are project A's active members. The impact check finds
@@ -131,7 +131,7 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     db.prepare(`INSERT INTO authority_project_memberships_v1 (project_membership_id, project_id, organization_id, principal_id, membership_id, membership_type, role, status, granted_at)
       VALUES (?, ?, ?, ?, ?, 'employee', 'member', 'active', ?)`).run(`pgm_${randomUUID()}`, f.projectA, organization, people[name].principal_id, people[name].membership_id, START);
   }
-  f.core.decide('desktop', f.approve({ project_ids: [f.projectA] }), () => f.session);
+  f.core.decide('desktop', f.approve({ routes: f.routes([f.projectA]) }), () => f.session);
   const runs = new SqliteTriggerRunsV1(db, () => now);
   await f.publisher([enqueueApprovedRecordRunV1(runs)]).appendFinalizedApprovalsToV4(signal());
   const run = runs.list(f.person, 1)[0]!;

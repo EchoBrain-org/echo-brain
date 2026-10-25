@@ -6,7 +6,7 @@ export interface ImpactOwnerCandidateV1 {
   /** The owner name the impact card took from the item's details, if any. */
   readonly owner_name?: string;
 }
-/** An assignee account match is stored as `jira_account`: a frozen V14 baseline and organization-api value, renamed only by a versioned migration. */
+/** An assignee account match is stored as `jira_account`: a frozen V15 baseline and organization-api value, renamed only by a versioned migration. */
 export interface ImpactOwnerMatchResultV1 { readonly owner_membership_id: string; readonly owner_match: 'jira_account' | 'name' | 'approver' }
 /** ECHO's member directory as owner matching reads it: the open items' people store. */
 export interface ImpactOwnerPeopleV1 {

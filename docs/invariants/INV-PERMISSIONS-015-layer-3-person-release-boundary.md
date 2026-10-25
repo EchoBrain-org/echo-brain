@@ -31,9 +31,10 @@ decision_ids:
   - ADR-0040
   - ADR-0042
   - ADR-0044
+  - ADR-0046
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary, the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary as narrowed by ADR-0046 (their importer only), the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -196,21 +197,20 @@ without widening audience. Revalidate all evidence supplied to the answerer,
 including uncited sources, before response release. A revision or representation
 reference is provenance, not continuing permission to read it.
 
-ADR-0017 extends this same boundary to approved meeting transcripts only when
-the exact human approval explicitly grants transcript release. The retained
-source revision digest must match that grant, and its committed content hash
-must verify before release. Current audience and,
-when requested, project association are checked before content access and again
-at release; a missing, disabled or mismatched grant releases no content. This
-does not admit generic meeting snapshots into original-context search or Ask.
+ADR-0017 once extended this boundary to the meeting transcripts an approver
+explicitly released.
+[ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md) removed
+that release: no approval shares a transcript, the record log keeps no
+transcript grant, and no Person path reads one. A meeting's unapproved notes
+are readable by their importer only, never in project scope, and generic
+meeting snapshots never enter original-context search or Ask.
 
 ADR-0024's list and open paths call no model and are served outside the
 answer-model gate. The server binds principal and membership from the session;
 a request chooses only a joined project or mine, and a project it has not
 joined gets the same denial as project Ask before any store runs. Notes and
 documents are read from custody under the evidence desk's access rule, meetings
-from the pinned search generation (list) or the Layer 1 exact read (open), and
-a transcript only after that exact read and through the ADR-0017 grant. Each
+from the pinned search generation (list) or the Layer 1 exact read (open). Each
 store audits exactly the rows it released after its own fence; the route then
 revalidates every store release, the session and the grant set before one page
 audit and the response. Rows and open responses carry only allowlisted fields:
@@ -227,7 +227,7 @@ mine, one the reader approved) is waiting to be indexed.
 ADR-0024's mine scope on `POST /v3/person/ask` is a caller-selected narrowing
 of the same global readable set: the evidence desk pushes it into every store
 query, mine with a project is a 400, and mine without the composed approver
-projectors is a 503 rather than global. Mine reads no shared transcript. The answer audit and the per-store release audits are unchanged.
+projectors is a 503 rather than global. The answer audit and the per-store release audits are unchanged.
 
 ## Verification and change procedure
 

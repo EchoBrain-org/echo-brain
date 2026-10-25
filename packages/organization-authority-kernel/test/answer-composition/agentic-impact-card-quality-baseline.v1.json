@@ -123,10 +123,10 @@
     "calls": 4,
     "prompt_sha256": "sha256:bfa1edb37a99ef59c23e064e5ef8b6a47214572451053a061ba0b8c971957654",
     "answer_sha256": "sha256:db9b589b99afdf4498a2079ccb085e63f3e56aab776d0cce1ce3f32431ac8fee",
-    "response_sha256": "sha256:2d8e6104d02b3e90c24237ba6f5fc4c18ae7cb77039a23c60dc4a01ab471fc3c",
+    "response_sha256": "sha256:30bd7515c9aa92d53ecddf4ef9870d4ee59d8be3f4140fd72331ce338bf01f03",
     "model_inputs_sha256": "sha256:78311589c9eee23710540b90eaa7f67621151e92d15889ef26485298b11ec265",
     "outcome": "partial",
-    "audit_sha256": "sha256:33707a56162fad7fdc04c636bbc7401a88134c4acdba35574a243de9a2667bb0",
+    "audit_sha256": "sha256:f4956f0233af02d6020dca33ab532609b0c4fb5574aaecec6ee4d168ede72c25",
     "card": {
       "decided": [
         {
@@ -162,7 +162,7 @@
       ],
       "unconfirmed": [
         "The tickets list was cut short at 2 items.",
-        "Gate review notes could not be read."
+        "1 item could not be read."
       ],
       "people": [
         {

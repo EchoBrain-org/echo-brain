@@ -4,7 +4,7 @@ import { validatePersonDocumentSearchV2, parseCanonicalAssociationProjectIdsJson
 import { readUpdateFile } from './update-file.js';
 import { validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1, validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
-import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
+import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
@@ -62,8 +62,6 @@ const OPTIONS = {
   "source-id": { type: "string" },
   "revision-id": { type: "string" },
   "source-sha256": { type: "string" },
-  "approval-id": { type: "string" },
-  offset: { type: "string" },
   "representation-sha256": { type: "string" },
   "anchor-sha256": { type: "string" },
   "audience-project-id": { type: "string" },
@@ -151,10 +149,6 @@ const RULES: Readonly<
     accepts: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256", "document-id", "project"],
     requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
   },
-  transcript: {
-    accepts: ["approval-id", "source-id", "revision-id", "source-sha256", "project", "offset"],
-    requires: ["approval-id", "source-id", "revision-id", "source-sha256"],
-  },
   records: { accepts: ["limit", "query", "record-sha256"] },
   "tools": {},
   "employee-invite": {
@@ -195,7 +189,6 @@ Commands:
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
   evidence    Search or open released Ask evidence.
-  transcript  Read an explicitly approved meeting transcript page.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
   projects    Create projects, manage members, and browse permitted context.
@@ -216,10 +209,11 @@ Provide exactly one identity option. --open-browser opens the handoff automatica
 Shows installed_version, client_build source_sha/source_kind, sign-in state, membership type, and Authority origin.
 Client provenance does not identify the Authority build serving requests. Status is local and makes no network request.
 `,
-  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings> --tool <tool> [options]]
+  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings|submit> --tool <tool> [options]]
 
 Without a verb, lists your organization's tools and your link to each; owners also see each tool's organization setup.
 setup (owners only) and connect open the tool's page in your browser and wait. A token is read only from standard input.
+submit --tool hand-in hands in a meeting from any tool, its text read from files.
 Run \`echo-brain person tools <verb> --help\` for each tool's options.
 `,
   logout: `usage: echo-brain person logout
@@ -228,7 +222,7 @@ Removes the local session. A revoked session is also removed locally.
 `,
   ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --progress [--expected-membership-id <id> --expected-authority <origin>]]
 
-Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved; shared transcripts are not read. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
+Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
 Ask uses the newest Ask route, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools, follow-ups and the workspace. An older Authority answers on its newest route: without /v7 it cites no projects, people, tools or tool containers, and without /v6 no follow-ups. --live, which once chose this route, is still accepted and changes nothing; it is refused beside --tickets. --tickets retains the prior ticket-capable response for compatibility, and never streams progress.
 
@@ -237,14 +231,14 @@ Ask uses the newest Ask route, with every configured request-local live source, 
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
 Lists the newest things you can read now, 25 per page: notes, documents, imported meetings and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
-Without a scope flag the list covers the notes, documents, imported meetings and approved meetings ask can read (not shared transcripts); the first page also shows who you are, your connected tools and your projects.
+Without a scope flag the list covers the notes, documents, imported meetings and approved meetings ask can read; the first page also shows who you are, your connected tools and your projects.
 --project lists one project you belong to. --mine lists only what you added: notes you saved, documents you uploaded and meetings you imported or approved (approved means you were the approver, not an attendee or action owner).
 Pass next_cursor as --cursor with the same scope for the next page; null means the end.
 notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A first page with no items and that notice is not the end: follow its next_cursor later. A later page that could only wait for meetings fails with unavailable (503): retry the same --cursor later.
 `,
   open: `usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]
 
-Reads one item under your current access: a note's full text, a document's extracted text, or a meeting's decisions, actions and rationales. Documents and meetings are paged. A meeting's first page shows transcript_ref when its approver shared the transcript and you may read it; open that ref to page the transcript. Refs come from person list and from ask citations. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
+Reads one item under your current access: a note's full text, a document's extracted text, or a meeting's decisions, actions and rationales. Documents and meetings are paged. Refs come from person list and from ask citations. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
 `,
   runs: `usage: echo-brain person runs --request <json>
 
@@ -278,10 +272,6 @@ Opens one cited evidence item under a fresh signed-in request. --item is the cit
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
 Reads one bounded immutable source-evidence packet cited by Ask. Use the exact citation fields. The server rechecks your current access and project association before returning it; this never downloads an original file.
-`,
-  transcript: `usage: echo-brain person transcript --approval-id <id> --source-id <source-id> --revision-id <id> --source-sha256 <sha256:64hex> [--project <project-id>] [--offset <code-point>]
-
-Reads one bounded page from an explicitly approved meeting transcript. The meeting is not searched by Ask and source custody alone never grants this read. Use the approval's exact source coordinates; follow next_offset with --offset when present.
 `,
   directory: `usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 
@@ -444,7 +434,7 @@ const EMPLOYEE_ACTIONS = {
   list: "employee-list",
 } as const;
 
-const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project', 'meetings'];
+const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project', 'meetings', 'submit'];
 
 function toolVerb(value: string | undefined): PersonToolVerbNameV1 | undefined {
   return TOOL_VERBS.find((verb) => verb === value);
@@ -838,7 +828,7 @@ export async function runPersonClientCli(
   const evidenceAction = argv[0] === 'evidence' ? `evidence-${argv[1] ?? ''}` : undefined;
   const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
-  // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of the five.
+  // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of TOOL_VERBS.
   const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;
   const verbName = toolAction === undefined ? undefined : toolVerb(argv[1]);
   const subcommandAction = documentAction ?? evidenceAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction;
@@ -1280,26 +1270,6 @@ export async function runPersonClientCli(
               anchor_sha256: requiredText(values, "anchor-sha256"),
               ...(values["document-id"] === undefined ? {} : { document_id: requiredText(values, "document-id") }),
             },
-          })),
-        });
-        break;
-      }
-      case "transcript": {
-        const project_id = optionalProject(values);
-        const offset = values.offset === undefined ? undefined : Number(values.offset);
-        print(stdout, {
-          ok: true,
-          result: await client.readMeetingTranscript(validatePersonMeetingTranscriptReadRequestV1({
-            schema_version: 1,
-            scope: project_id === undefined ? { kind: "global" } : { kind: "project", project_id },
-            citation: {
-              kind: "approved_meeting_transcript",
-              approval_id: requiredText(values, "approval-id"),
-              source_id: requiredText(values, "source-id"),
-              revision_id: requiredText(values, "revision-id"),
-              source_sha256: requiredText(values, "source-sha256"),
-            },
-            ...(offset === undefined ? {} : { offset }),
           })),
         });
         break;

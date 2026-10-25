@@ -14,7 +14,7 @@ import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
-import { validatePersonOpenRefV1, type PersonOpenRefV1 } from './person-list-v1.js';
+import { validatePersonItemRefV1, type PersonItemRefV1 } from './person-list-v1.js';
 import { validatePersonAnswerLayoutV1, type PersonAnswerBlockV1 } from './person-answer-layout-v1.js';
 import {
   asEnumerableRecord as object,
@@ -99,7 +99,7 @@ export interface PersonAnswerCitationV4 {
   readonly label: string;
   readonly visibility: PersonEvidenceVisibilityV1;
   /** Opens the cited item with person open (ADR-0024). */
-  readonly ref?: PersonOpenRefV1;
+  readonly ref?: PersonItemRefV1;
 }
 
 export interface PersonAnswerResponseV4 {
@@ -267,7 +267,7 @@ function statement(value: unknown, citations: readonly (PersonAnswerCitationV5 |
 }
 
 /**
- * A citation's ref names the item it cites: its record, its document, its note or shared transcript, its follow-up, or
+ * A citation's ref names the item it cites: its record, its document, its note or imported meeting, its follow-up, or
  * its project or tool. A person and a tool container have no ref.
  */
 function citationRefConsistent(cited: PersonAnswerEvidenceCitationV8, ref: PersonAnswerOpenRefV8): boolean {
@@ -280,7 +280,7 @@ function citationRefConsistent(cited: PersonAnswerEvidenceCitationV8, ref: Perso
   if (cited.kind === 'approved_record') return ref === `meeting:${cited.record_sha256}`;
   if (cited.kind === 'source_revision') {
     return cited.document_id === undefined
-      ? ref.startsWith('imported_meeting:') || ref.startsWith('note:') || ref.startsWith('transcript:')
+      ? ref.startsWith('imported_meeting:') || ref.startsWith('note:')
       : ref === `document:${cited.document_id}`;
   }
   return false;
@@ -300,7 +300,7 @@ function answerCitation(value: unknown, version: AnswerVersion = 4): PersonAnswe
   const ref: PersonAnswerOpenRefV8 | undefined = !Object.hasOwn(input, 'ref') ? undefined
     : version >= 7 && typeof input.ref === 'string' && input.ref.startsWith('follow_up:') ? validatePersonFollowUpRefV1(input.ref, 'Ask response citation ref')
       : version >= 8 && typeof input.ref === 'string' && (input.ref.startsWith('project:') || input.ref.startsWith('tool:')) ? validatePersonWorkspaceRefV1(input.ref, 'Ask response citation ref')
-        : validatePersonOpenRefV1(input.ref, 'Ask response citation ref');
+        : validatePersonItemRefV1(input.ref, 'Ask response citation ref');
   // A follow-up always opens its item page.
   if (cited.kind === 'follow_up' && ref === undefined) fail('Follow-up citation ref is missing');
   // A project always opens in ECHO, and a tool on the tools page; a person and a tool container open no page of ECHO's.

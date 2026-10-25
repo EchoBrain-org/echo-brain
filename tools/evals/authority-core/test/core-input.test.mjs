@@ -39,9 +39,9 @@ test("statically admits the authenticated owner and replays immutable offered ev
     );
     assert.equal(input.source_key, admission.source_key);
     assert.equal(
-      authority.prepare("SELECT count(*) FROM authority_person_meeting_sources_v2 WHERE source_key = ? AND folder_id IS NULL AND folder_project_id IS NULL").pluck().get(admission.source_key),
+      authority.prepare("SELECT count(*) FROM authority_person_meeting_sources_v2 WHERE source_key = ? AND watch = 'off' AND folder_id IS NULL AND suggested_project_id IS NULL").pluck().get(admission.source_key),
       1,
-      "the admission is a personal meeting source with no watched folder",
+      "the admission is a personal meeting source with no watch",
     );
     const text = "Core input preserves the source cursor on retry.";
     const meeting = {

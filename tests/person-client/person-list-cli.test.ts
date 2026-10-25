@@ -13,6 +13,7 @@ const record = 'c'.repeat(64);
 const NOTE = `note:ctx_${'a'.repeat(64)}`;
 const DOCUMENT = `document:doc_${'b'.repeat(64)}`;
 const MEETING = `meeting:sha256:${record}`;
+/** The retired transcript ref (ADR-0046). */
 const TRANSCRIPT = `transcript:sha256:${record}`;
 const CURSOR = 'AnR3-page_2';
 
@@ -178,10 +179,8 @@ describe('person open CLI', () => {
     const cases: readonly [string[], Record<string, unknown>, unknown][] = [
       [['open', '--ref', NOTE], { schema_version: 1, ref: NOTE },
         { schema_version: 1, kind: 'echo-person-open-v1', ref: NOTE, item: noteRow, text: 'Annual plans first.\n', next_cursor: null }],
-      [['open', '--ref', MEETING], { schema_version: 1, ref: MEETING }, meetingOpen({ meeting: meetingDetail, transcript_ref: TRANSCRIPT, next_cursor: CURSOR })],
+      [['open', '--ref', MEETING], { schema_version: 1, ref: MEETING }, meetingOpen({ meeting: meetingDetail, next_cursor: CURSOR })],
       [['open', '--ref', MEETING, '--cursor', CURSOR], { schema_version: 1, ref: MEETING, cursor: CURSOR }, meetingOpen()],
-      [['open', '--ref', TRANSCRIPT, '--cursor', CURSOR], { schema_version: 1, ref: TRANSCRIPT, cursor: CURSOR },
-        { schema_version: 1, kind: 'echo-person-open-v1', ref: TRANSCRIPT, text: 'Ari: annual first.', next_cursor: null }],
     ];
     for (const [argv, body, response] of cases) {
       const { fetch, sent } = network(() => json(response));
@@ -208,6 +207,7 @@ describe('person open CLI', () => {
       ['open', '--ref', `meeting:${record}`],
       ['open', '--ref', `record:sha256:${record}`],
       ['open', '--ref', `sha256:${record}`],
+      ['open', '--ref', TRANSCRIPT],
       ['open', '--ref', DOCUMENT, '--cursor', 'bad cursor'],
       ['open', '--ref', DOCUMENT, '--cursor', 'A'.repeat(513)],
       ['open', '--ref', NOTE, '--cursor', CURSOR],
@@ -243,8 +243,8 @@ describe('person open CLI', () => {
     expect(missing.code).toBe(1);
     expect(missing.stdout).toBe('');
     expect(JSON.parse(missing.stderr)).toEqual({ ok: false, action: 'open', error: 'Person Authority rejected the request', code: 'not_found', status: 404 });
-    const transcript = { schema_version: 1, kind: 'echo-person-open-v1', ref: TRANSCRIPT, text: 'Ari: annual first.', next_cursor: null };
-    const large = await run(['open', '--ref', TRANSCRIPT], network(() => padded(transcript, 70 * 1024)).fetch);
+    const note = { schema_version: 1, kind: 'echo-person-open-v1', ref: NOTE, item: noteRow, text: 'Annual plans first.\n', next_cursor: null };
+    const large = await run(['open', '--ref', NOTE], network(() => padded(note, 70 * 1024)).fetch);
     expect(large.code).toBe(1);
     expect(large.stdout).toBe('');
     expect(JSON.parse(large.stderr)).toMatchObject({ ok: false, action: 'open', code: 'response_too_large' });

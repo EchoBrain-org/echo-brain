@@ -112,7 +112,7 @@ describe("Retained Granola content normalization", () => {
         },
         external_id: "note-1",
         observed_at: "2026-07-16T00:00:00.000Z",
-        normalizer_version: "2.3.0",
+        normalizer_version: "2.4.0",
         source_created_at: "2026-07-15T16:00:00.000Z",
         source_updated_at: "2026-07-15T17:00:00.000Z",
         source_url: "https://app.granola.ai/notes/note-1",
@@ -208,8 +208,9 @@ describe("Retained Granola content normalization", () => {
       /^sha256:[a-f0-9]{64}$/,
     );
 
+    // Moving a note between folders is no edit.
     const withoutFolder = normalize({ ...detail, folder_membership: [] });
-    expect(withoutFolder.provenance.canonical_revision).not.toBe(
+    expect(withoutFolder.provenance.canonical_revision).toBe(
       meeting.provenance.canonical_revision,
     );
   });

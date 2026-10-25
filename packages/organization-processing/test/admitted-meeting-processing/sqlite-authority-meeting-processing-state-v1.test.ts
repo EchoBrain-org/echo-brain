@@ -56,7 +56,9 @@ function snapshotFor(candidate: ActionableMeetingProcessingCandidateV1) {
 /** One decision row as the approval core writes it. */
 function insertDecision(value: Database.Database, approvalId: string, snapshotSha256: string, surface: "desktop" | "slack", action: "approve" | "reject") {
   const command_id = surface === "slack" ? `slack:${action}` : `desk-${action}`;
-  const body = { request: { approval_id: approvalId, command_id, snapshot_sha256: snapshotSha256, action, project_ids: [], share_transcript: false, owners: [] }, surface,
+  // An approval routes the fixture's one decision Only me; a rejection routes nothing.
+  const routes = action === "approve" ? [{ signal_id: decisions.signals[0]!.id, project_ids: [] }] : [];
+  const body = { request: { approval_id: approvalId, command_id, snapshot_sha256: snapshotSha256, action, routes, owners: [] }, surface,
     actor: { organization_id: "org_test", principal_id: "prn_test", membership_id: "mem_test" }, evidence: { kind: surface === "desktop" ? "person-session" : "slack-click", sha256: SHA },
     decided_at: ADVANCED_AT };
   value.prepare("INSERT INTO authority_approval_decisions_v1 (approval_id, command_id, surface, action, body_json) VALUES (?,?,?,?,?)").run(approvalId, command_id, surface, action, canonicalJson(body));
@@ -718,6 +720,39 @@ it.each([["desktop", "approve"], ["desktop", "reject"], ["slack", "approve"], ["
       disposition: "no_signals",
       decisions: { signals: [] },
     });
+  });
+
+  it("makes no card for an extraction with rationales but no decision and no action", async () => {
+    const { value, state } = stateFixture();
+    const current = await state.readAdmission();
+    const reasonsOnly = await state.stageCandidate({
+      admission: current,
+      meeting,
+      decisions: {
+        ...decisions,
+        signals: [{ id: "reason-1", kind: "rationale", text: "The cohort is ready.", subject: null, confidence: 1,
+          evidence: [{ meeting_id: meeting.id, block_id: "block-1" }], supports_signal_ids: [] }],
+      },
+      review_policy: REVIEW_POLICY,
+    });
+    expect(reasonsOnly).toMatchObject({ disposition: "no_signals", state: "no_signals", approval_id: null, stage_command_id: null });
+    expect(rows(value, "authority_live_source_candidates_v2")).toBe(1);
+    expect(rows(value, "authority_live_approval_outbox_v2")).toBe(0);
+    // One action is enough for a card.
+    const withAction: MeetingDocument = { ...meeting, provenance: { ...meeting.provenance, canonical_revision: "sha256:note-action" } };
+    const actionable = await state.stageCandidate({
+      admission: current,
+      meeting: withAction,
+      decisions: {
+        ...decisions,
+        meeting_revision: withAction.provenance.canonical_revision,
+        signals: [{ id: "act-1", kind: "action", text: "Send the cohort plan.", subject: null, confidence: 1, owner: null, due_at: null,
+          evidence: [{ meeting_id: meeting.id, block_id: "block-1" }] }],
+      },
+      review_policy: REVIEW_POLICY,
+    });
+    assertActionable(actionable);
+    expect(rows(value, "authority_live_approval_outbox_v2")).toBe(1);
   });
 
   it("rejects impossible proposal transitions", async () => {
