@@ -68,11 +68,12 @@ Adopt option 3, as specified in
   row per proposal; the first decision still wins across surfaces.
 - **One record per destination group.** Kept items are grouped by their exact
   project set. Each group is one signed `echo-approval-decision-ref-v2` record
-  holding only its items and their supporting rationales, with a derived record
-  approval id, so the record log keeps one record per approval id. Audience equals
-  association per record (ADR-0017), unchanged. Every group is validated
-  before the first append, and the receipts of all groups are written in one
-  Authority transaction.
+  holding only its items and their supporting rationales (a project's record
+  takes a rationale only when it holds every item the rationale supports), with
+  a derived record approval id, so the record log keeps one record per approval
+  id. Audience equals association per record (ADR-0017), unchanged. Every
+  group is validated before the first append, and the receipts of all groups
+  are written in one Authority transaction.
 - **No transcript sharing.** Nothing shares a transcript, so the whole
   transcript-sharing path goes: ADR-0017's explicit release at approval and its
   grant table, ADR-0021's Ask reach over shared transcripts, and ADR-0024's

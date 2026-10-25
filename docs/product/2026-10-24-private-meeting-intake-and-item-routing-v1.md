@@ -178,11 +178,14 @@ proposal's approval id alone.
 The publisher groups kept items by their exact project set. Each group becomes
 one record:
 
-- Its subset snapshot holds only that group's decisions and actions, plus the
-  rationales that support any of them, with `supports_signal_ids` pruned to
-  that group. A rationale that supports nothing kept is dropped. A rationale
-  that supports nothing at all goes to the Only-me group when there is one,
-  and is dropped otherwise.
+- Its subset snapshot holds only that group's decisions and actions and the
+  rationales for them. A rationale's text and quotes may speak of any item it
+  supports, so a project group takes a rationale, whole, only when every item
+  it supports is in that group. The Only-me group, which only the reviewer
+  reads, takes every rationale that supports one of its items, with
+  `supports_signal_ids` pruned to that group, and every rationale that
+  supports nothing at all. Any other rationale is dropped: one shared by items
+  with different destinations, or by an item not kept, reaches no project.
 - Its record approval id is derived: `apr_` + the hex of
   `canonicalSha256({ kind: 'echo-approval-route-v1', approval_id, project_ids })`.
   The record log's one-record-per-approval rule then holds per destination.
@@ -343,6 +346,11 @@ these were decided while building and reviewing it.
     These fences and those of ruling 17 apply inside each store before its
     result limit, so a fenced item never takes the place of one the run may
     read.
+21. A rationale reaches a project's record only when that record holds every
+    item it supports (section 2.3). Its text and quotes can speak of any of
+    those items, so one shared with an item routed elsewhere, kept for Only
+    me, or not kept reaches no project; the Only-me record keeps it when it
+    supports an item kept there.
 
 Known and left for the founder:
 

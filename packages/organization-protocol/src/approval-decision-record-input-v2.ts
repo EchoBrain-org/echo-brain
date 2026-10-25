@@ -99,10 +99,12 @@ export interface ApprovalDecisionGroupV2 {
 }
 /**
  * The snapshot one destination group's record carries: the frozen proposal snapshot the reviewer saw, under the record's own
- * approval id, holding only the group's decisions and actions and every reason that supports one of them, its links pruned
- * to the group. A reason that supports nothing goes to the Only-me group; one that supports only items kept elsewhere, or
- * not kept, is left out. Pure: the publisher builds each record with it and the append projector recomputes it from the
- * proposal snapshot, so the two cannot drift. Throws unless every group item is a decision or action of the proposal.
+ * approval id, holding only the group's decisions and actions and the reasons for them. A reason's text and quotes may speak
+ * of any item it supports, so a project group takes a reason, whole, only when every item it supports is the group's. The
+ * Only-me group, which only its approver reads, takes every reason that supports one of its items, its links pruned to them,
+ * and every reason that supports nothing. Any other reason is left out. Pure: the publisher builds each record with it and
+ * the append projector recomputes it from the proposal snapshot, so the two cannot drift. Throws unless every group item is
+ * a decision or action of the proposal.
  */
 export function approvalDecisionSubsetSnapshotV2(proposal: unknown, group: ApprovalDecisionGroupV2): ApprovedDecisionSnapshotV2 {
   const snapshot = validateApprovedDecisionSnapshotV2(proposal);
@@ -111,7 +113,8 @@ export function approvalDecisionSubsetSnapshotV2(proposal: unknown, group: Appro
   const items = new Set([...brief.decisions, ...brief.actions].map(signal => signal.id));
   if (ids.size === 0 || ids.size !== group.signal_ids.length || group.signal_ids.some(id => !items.has(id))) fail('Approval decision group names items its proposal does not');
   const rationales = brief.rationales.flatMap(reason => {
-    if (reason.supports_signal_ids.length === 0) return group.project_ids.length === 0 ? [reason] : [];
+    if (group.project_ids.length > 0) return reason.supports_signal_ids.length > 0 && reason.supports_signal_ids.every(id => ids.has(id)) ? [reason] : [];
+    if (reason.supports_signal_ids.length === 0) return [reason];
     const supports = reason.supports_signal_ids.filter(id => ids.has(id));
     return supports.length === 0 ? [] : [{ ...reason, supports_signal_ids: supports }];
   });

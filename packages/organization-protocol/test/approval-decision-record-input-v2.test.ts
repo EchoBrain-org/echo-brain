@@ -243,17 +243,20 @@ describe("approval decision record input v2", () => {
       expect(accepted, JSON.stringify(owner)).toBe(isApprovalOwnerTextV1(owner));
     }
   });
-  it("derives a destination's subset snapshot: its items, the reasons for them with their links pruned, and unsupported reasons for Only me", () => {
+  it("derives a destination's subset snapshot: its items, a reason for a project only when it holds every item the reason supports, and Only me's own reasons pruned plus the unsupported ones", () => {
     const proposal = snapshot({ rationales: [{ id: "why-1", supports: ["dec-1", "act-1"] }, { id: "why-2", supports: ["act-2"] }, { id: "why-3", supports: [] }] }, PROPOSAL_ID);
     const before = canonicalJson(proposal as unknown as JsonValue);
-    const group = { approval_id: approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1]), project_ids: [PROJECT_1], signal_ids: ["act-1"] };
+    const group = { approval_id: approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1]), project_ids: [PROJECT_1], signal_ids: ["act-1", "act-2"] };
     const subset = approvalDecisionSubsetSnapshotV2(proposal, group);
     expect(subset.approval_id).toBe(group.approval_id);
     expect(subset.staged_content_sha256).toBe(proposal.staged_content_sha256);
     expect(subset.final_content_sha256).toBe(canonicalSha256(subset.approved_payload as unknown as JsonValue));
     const brief = subset.approved_payload.brief;
-    expect([brief.decisions.length, brief.actions.map(action => action.id)]).toEqual([0, ["act-1"]]);
-    expect(brief.rationales.map(reason => [reason.id, reason.supports_signal_ids])).toEqual([["why-1", ["act-1"]]]);
+    expect([brief.decisions.length, brief.actions.map(action => action.id)]).toEqual([0, ["act-1", "act-2"]]);
+    // why-1 may speak of dec-1, which goes elsewhere (Only me below), so the project never reads it.
+    expect(brief.rationales.map(reason => [reason.id, reason.supports_signal_ids])).toEqual([["why-2", ["act-2"]]]);
+    const whole = approvalDecisionSubsetSnapshotV2(proposal, { ...group, signal_ids: ["dec-1", "act-1"] });
+    expect(whole.approved_payload.brief.rationales.map(reason => [reason.id, reason.supports_signal_ids])).toEqual([["why-1", ["dec-1", "act-1"]]]);
     const only = approvalDecisionSubsetSnapshotV2(proposal, { approval_id: approvalRecordIdV2(PROPOSAL_ID, []), project_ids: [], signal_ids: ["dec-1"] });
     expect(only.approved_payload.brief.rationales.map(reason => [reason.id, reason.supports_signal_ids])).toEqual([["why-1", ["dec-1"]], ["why-3", []]]);
     // Pure: the same bytes from a copy, and the proposal is untouched.

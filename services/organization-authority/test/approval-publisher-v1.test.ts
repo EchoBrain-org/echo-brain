@@ -413,7 +413,7 @@ async function destinationsFixture(after_record: readonly AfterApprovedRecordHoo
   const f = await approvalCoreFixture({
     decisions: [{ id: 'dec-1' }, { id: 'dec-2' }, { id: 'dec-3' }],
     actions: [{ id: 'act-1', owner: 'Rafael Moreno' }, { id: 'act-2', owner: 'Ana Lima' }, { id: 'act-3', owner: 'Jules Ortega' }],
-    rationales: [{ id: 'why-1', supports: ['dec-1', 'dec-2'] }, { id: 'why-2', supports: ['dec-3'] }, { id: 'why-3', supports: [] }, { id: 'why-4', supports: ['act-3'] }],
+    rationales: [{ id: 'why-1', supports: ['dec-1', 'dec-2'] }, { id: 'why-2', supports: ['dec-3'] }, { id: 'why-3', supports: [] }, { id: 'why-4', supports: ['act-3'] }, { id: 'why-5', supports: ['dec-1', 'act-2'] }],
     after_record,
   });
   const THERM = [f.projectA], BOTH = [f.projectA, f.projectB];
@@ -448,10 +448,12 @@ describe('approval publisher: destinations', () => {
     expect(JSON.stringify(records)).not.toContain('dec-3');
     // The append witness carries the whole snapshot the reviewer saw, but the log never stores it: no row names the item not kept.
     expect(JSON.stringify(f.record.prepare('SELECT * FROM organization_record_log').all())).not.toContain('dec-3');
-    // A reason follows the items it supports, its links pruned; one supporting nothing goes to Only me; one supporting only an item not kept is left out.
+    // A project reads a reason, whole, only when it holds every item the reason supports: why-1 speaks of dec-1 and dec-2,
+    // routed to different projects, so neither reads it. Only me keeps its own reasons and the one supporting nothing; one
+    // supporting only an item not kept is left out.
     expect(briefs.map(brief => brief.rationales.map((reason: { id: string; supports_signal_ids: string[] }) => [reason.id, reason.supports_signal_ids]))).toEqual([
-      [['why-1', ['dec-1']]], [['why-1', ['dec-2']]], [['why-3', []], ['why-4', ['act-3']]]]);
-    expect(JSON.stringify(records)).not.toContain('why-2');
+      [['why-5', ['dec-1', 'act-2']]], [], [['why-3', []], ['why-4', ['act-3']]]]);
+    for (const reason of ['why-1', 'why-2']) expect(JSON.stringify(records)).not.toContain(reason);
     for (const [index, record] of records.entries()) {
       const snapshot = record.body.event.approved_snapshot;
       expect(snapshot.approval_id).toBe(refs[index]!.approval_id);
