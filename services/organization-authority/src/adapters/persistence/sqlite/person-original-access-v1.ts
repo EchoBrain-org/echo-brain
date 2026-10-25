@@ -58,3 +58,9 @@ export function personUnknownScopeV1(scope: never): never {
  * canonical milliseconds here.
  */
 export const PERSON_ORIGINAL_NOTE_CUSTODY_V1 = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,submitted_association_project_ids_json,audience_project_ids_json,strftime('%Y-%m-%dT%H:%M:%fZ',received_at) AS received_at FROM authority_person_updates_v2)`;
+
+/**
+ * A note custody row (`u`) the source-admission inbox has not quarantined: the person list leaves a quarantined note out,
+ * and so does what reads the list's notes on its behalf (the project activity read, Ask timeline v1).
+ */
+export const PERSON_ORIGINAL_NOTE_NOT_QUARANTINED_V1 = "NOT EXISTS (SELECT 1 FROM authority_person_text_source_failures_v1 f WHERE f.organization_id=u.organization_id AND f.api_version=u.api_version AND f.context_id=u.context_id)";

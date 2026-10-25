@@ -110,6 +110,8 @@ import {
 import type { PersonListHttpApplicationV1 } from "./person-list-http-application-v1.js";
 import { PERSON_CHANGES_ROUTE_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import type { PersonChangesHttpApplicationV1 } from "./person-changes-http-application.js";
+import { PERSON_PROJECT_ACTIVITY_PATH_V1 } from '@echo-brain/organization-api';
+import type { PersonProjectActivityHttpApplicationV1 } from "./person-project-activity-http-application.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
@@ -144,6 +146,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
   `GET ${PERSON_CHANGES_ROUTE_V1}`,
+  `GET ${PERSON_PROJECT_ACTIVITY_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
   `POST ${PERSON_LIST_PATH_V1}`,
   `POST ${PERSON_OPEN_PATH_V1}`,
@@ -206,6 +209,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_list?: PersonListHttpApplicationV1;
   /** The change check (ADR-0036); it needs no answer model and reads only the database. */
   readonly person_changes?: PersonChangesHttpApplicationV1;
+  /** Project activity (Ask timeline v1, C2); like the change check, it needs no answer model and reads only the database. */
+  readonly person_project_activity?: PersonProjectActivityHttpApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
   readonly project_context?: ProjectContextApplicationV1;
   readonly person_documents?: PersonDocumentApplicationV1;
@@ -1240,6 +1245,25 @@ export function createOrganizationAuthorityHttpServer(
         const disconnect = disconnectSignal(request, response);
         try {
           json(response, 200, await options.person_changes.read({ access_token, signal: disconnect.signal }));
+        } finally {
+          disconnect.dispose();
+        }
+        return;
+      }
+      if (method === "GET" && url.pathname === PERSON_PROJECT_ACTIVITY_PATH_V1) {
+        if (options.person_project_activity === undefined) {
+          fail(response, 503, "unavailable");
+          return;
+        }
+        // Authenticated first, as the change check is; the read takes no query and no body.
+        const access_token = accessToken(request.headers.authorization);
+        options.sessions.authenticateAccess({ access_token });
+        if (url.search !== "" || (await rawBody(request)).byteLength !== 0) {
+          throw new AuthorityOperationError("invalid_request", "request is invalid");
+        }
+        const disconnect = disconnectSignal(request, response);
+        try {
+          json(response, 200, await options.person_project_activity.read({ access_token, signal: disconnect.signal }));
         } finally {
           disconnect.dispose();
         }

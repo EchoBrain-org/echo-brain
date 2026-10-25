@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type Database from 'better-sqlite3';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonRunsResultV1, type PersonOpenItemV1, type PersonRunsRequestV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -284,6 +285,8 @@ export async function openItemsFixture(options: OpenItemsFixtureOptionsV1 = {}) 
     // `db` comes with `f`, typed by the approval fixture's named interface, so this inferred type can be emitted.
     ...f, runs, items, directory, records, readable, bindDesk, openCitation, opened, revalidated, liveFailures, openItemsOptions, owners, research, card, app, runsApp, openItemsApp,
     runId: run.run_id, record: recordSha256, people, outsideText, finishImpactRun, runItems,
+    /** The record log the approval was appended to (`record` is the approved record's digest). */
+    recordLog: f.record as Database.Database,
     membership: (name: FixturePerson) => people[name].membership_id,
     okaforMembership: people.okafor.membership_id,
     decisionCitation,

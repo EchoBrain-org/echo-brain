@@ -996,6 +996,8 @@ describe("Organization Authority API runtime", () => {
         expect((await get("/v1/person/changes")).areas).toEqual({
           projects: canonicalSha256([[project_id, create.name, "active", "lead"]]), follow_ups: canonicalSha256([]), reviews: canonicalSha256([[REVIEW, "pending"]]),
         });
+        // Project activity (Ask timeline v1, C2) is composed beside it: the owner's own note is no news to the owner.
+        expect(await get("/v1/person/project-activity")).toEqual({ schema_version: 1, kind: "echo-person-project-activity-v1", items: [{ project_id, latest_at: null }] });
       } finally { inspection.close(); }
       await runtime.close();
       runtime = await startOrganizationAuthorityApiRuntime({ ...apiConfig, port: await availablePort() }, apiDependencies);
