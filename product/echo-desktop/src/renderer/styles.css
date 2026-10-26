@@ -132,8 +132,12 @@
 }
 
 * { box-sizing: border-box; }
+/* The window itself never scrolls; each page scrolls in its own box. Should something reach past the window, the body clips it
+   (hidden would still let a script or a screen reader scroll it), and the root hides so the clip stays on the body. */
 html, body { height: 100%; }
+html { overflow: hidden; }
 body {
+  overflow: clip;
   margin: 0;
   font-family: var(--sans);
   font-size: 14px;
@@ -146,6 +150,9 @@ body {
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Heard by a screen reader, never seen. It sits against its nearest positioned box, so a box that scrolls one should be positioned
+   too (Ask, the page you read, an answer's table): otherwise it stays where it was laid out as the box scrolls, and can reach past
+   the window. */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .selectable { user-select: text; }
 
@@ -283,7 +290,7 @@ button.account-row:hover { background: var(--raise); }
 /* Ask and its bar keep a column short enough to read (ADR-0049). The full page scrolls, with the column inside it, so its
    scrollbar stays at the page edge. */
 .main:has(.ask) { --ask-width: 720px; --turn-gap: 48px; }
-.ask { align-self: stretch; width: 100%; min-width: 0; overflow-y: auto; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: var(--turn-gap); padding: 24px 24px 16px; }
+.ask { position: relative; align-self: stretch; width: 100%; min-width: 0; overflow-y: auto; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: var(--turn-gap); padding: 24px 24px 16px; }
 .ask > * { width: min(100%, var(--ask-width)); min-width: 0; margin-inline: auto; }
 .turn { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
 /* The question is the turn's heading: the answer's size, heavier. */
@@ -430,7 +437,7 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
    A shadow at an edge says more of the table is past it: covers in the workspace's colour scroll with the table (local) over shadows that
    stay with the box (scroll). The first column wraps at about 40% of the box, so the next one shows beside it. */
 .answer-table {
-  max-width: 100%; overflow-x: auto; overflow-wrap: normal; container-type: inline-size; border: 1px solid var(--line); border-radius: 10px;
+  position: relative; max-width: 100%; overflow-x: auto; overflow-wrap: normal; container-type: inline-size; border: 1px solid var(--line); border-radius: 10px;
   background:
     linear-gradient(to right, var(--ink) 40%, transparent) left / 32px 100% no-repeat local,
     linear-gradient(to left, var(--ink) 40%, transparent) right / 32px 100% no-repeat local,
@@ -493,7 +500,7 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .pane-actions { display: flex; flex-shrink: 0; align-items: center; gap: 2px; }
 /* The decision, action or rationale an answer or a name cites, lit in its meeting. */
 .record-item.on { border-color: var(--cite-line); background: var(--cite); }
-.reader { width: var(--ask-width); max-width: calc(100% - 48px); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.reader { position: relative; width: var(--ask-width); max-width: calc(100% - 48px); height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
 .reader h1 { margin: 0; font-size: 26px; font-weight: 600; line-height: 1.2; letter-spacing: -0.02em; }
 .reader-title .notice { font-size: 13.5px; }
 .reader .body { font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
