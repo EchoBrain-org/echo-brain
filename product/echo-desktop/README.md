@@ -95,8 +95,10 @@ predates follow-ups refuses the earlier turn: the question is asked once more
 without it, and once that is answered the window stops sending it until the
 next sign-in.
 
-Every refresh check also reads what arrived in your projects (`person
-project-activity`). A project shows a small signal dot in the sidebar when a
+The refresh checks also read what arrived in your projects (`person
+project-activity`): the first check after sign-in, a return to ECHO and a wake
+read it at once; any other check shares one read every two minutes, and no
+check waits for it. A project shows a small signal dot in the sidebar when a
 note or document was filed in it, a meeting record approved into it, or a
 follow-up of its meetings moved, by someone else and readable by you, since you
 last opened it; live Jira and Confluence edits do not count. Opening it clears

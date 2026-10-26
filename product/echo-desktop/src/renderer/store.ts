@@ -34,7 +34,6 @@ type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | {
 export interface AskQuestion {
   question: string;
   scope: AskScope;
-  scopeName: string;
 }
 
 /**
@@ -3765,7 +3764,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
   activeAskCancelId = cancelId;
-  const named: AskQuestion = { question: text, scope, scopeName: scopeName(scope) };
+  const named: AskQuestion = { question: text, scope };
   const started = Date.now();
   set({
     ask: { ...view, seq: mine, asking: { ...named, progress: startProgress(started) }, clarify: null, failed: null,
