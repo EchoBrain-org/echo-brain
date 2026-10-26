@@ -45,9 +45,9 @@ sidebar.
   under each question, and no divider between turns.
 - Answers render as today (ADR-0045 layout, citations, collapsed sources),
   without the coverage note, without the assumption and off-scope banners
-  (nothing produces them) and without "Try again" on a successful answer. A
-  failed Ask keeps its Try again. "Nothing in <project> matched" with "Ask
-  across everything you can see" stays.
+  (no current path produces them) and without "Try again" on a successful
+  answer. A failed Ask keeps its Try again. "Nothing in <project> matched"
+  with "Ask across everything you can see" stays.
 
 ### Opening an old answer, and Ask again
 
@@ -246,14 +246,22 @@ interface PersonAnswerPreviousV1 {
   - `same`: the question stands alone. Research runs on it unchanged.
   - `resolved`: a full question and the previous citations it is about.
     Research runs on the full question and starts from those citations
-    (`brief.starting`, `if_unreadable: 'report'`, openable kinds only:
-    approved records, source revisions, tickets, pages).
+    (`brief.starting`, `if_unreadable: 'skip'`, openable kinds only:
+    approved records, source revisions, tickets, pages). A citation that
+    cannot be read is reported, as `report` does. One whose tool cannot be
+    read for now (`unavailable`, `rate_limited`, `quota_exceeded`) is
+    skipped: research goes on without it, and neither the planner nor the
+    writer is told. Anything else still fails the Ask: a cancel, the
+    deadline, `stale_access_state`, and any other error.
   - `clarify`: 2 to 4 choices, each a label (at most 60 characters) and a
-    full question (at most 300). No research runs.
+    full question (at most 240 characters, the Ask question rule). No
+    research runs.
 
   A resolver that fails after one repair counts as `same`. It must never pick
   one of several plausible referents.
-- **`ask_again`:** research runs on the question as usual. The writer also
+- **`ask_again`:** the request's question must equal `previous.question`;
+  a request whose question differs is refused with `invalid_request`.
+  Research runs on the question as usual. The writer also
   receives the earlier statements with their date and returns `since`: 0 to 6
   sentences, each citing current evidence, saying what is different now. A
   `since` sentence without a valid current citation is dropped. No new
@@ -275,7 +283,9 @@ interface PersonAnswerPreviousV1 {
 
 ### C4. Removed from the contract
 
-Nothing ever produced them:
+No current path produces them. Only the A1 pipeline did, from `298ebfd`
+(2026-09-27) to `e0b6980` (2026-09-28), and nothing re-reads stored audit
+outcomes:
 
 - `assumption` on Ask responses (V4 to V8 validators, the kernel's
   pass-through, the person client's validator, the desktop).
@@ -371,13 +381,19 @@ If rule 1 or 2 fails, follow-ups ship switched off: the desktop sends
 `previous` only for Ask again, and the result goes to the founder. Rules 3 and
 4 failing is reported and judged by the founder.
 
+A trial whose resolver fell back (no usable reply after one repair, so the
+product left the question as asked, as `same`) fails, in every group. The
+grader first counted a fallback as `same`, a pass for an unrelated or already
+standalone case; it was corrected after the run below.
+
 **Result, 2026-10-26T00:44Z** (source `cffe227`, cases
 `sha256:0ee0b552…47be94`, the product route `anthropic/claude-sonnet-5.5`
 through OpenRouter): all four rules passed, and follow-ups ship. 90 of 90
 trials passed. Several-referent cases asked "Which one?" in 30 of 30 trials,
 one-referent cases resolved in 30 of 30, unrelated and standalone questions
 were left alone in 30 of 30, and no trial outside the several-referent group
-asked back. There were no fallbacks and no repairs. The resolver's time was
+asked back. There were no fallbacks and no repairs, so the corrected grader
+gives the same result, and it stands. The resolver's time was
 1.1 s at the median and 2.6 s at p95, using 142,504 tokens in all. The report
 is private, outside the repository.
 
@@ -388,8 +404,10 @@ is private, outside the repository.
   tags, no dots) and `invalid_request` for `previous` (the desktop retries
   without it).
 - The desktop always sends the existing headers; nothing new is header-gated.
-- Removing `assumption` and `off_scope` changes no response anyone receives:
-  nothing produced them.
+- Removing `assumption` and `off_scope` changes no response anyone receives
+  now: no current path produces them (only the A1 pipeline did, from
+  `298ebfd` on 2026-09-27 to `e0b6980` on 2026-09-28), and nothing re-reads
+  stored audit outcomes.
 
 ## Known limits
 
@@ -401,6 +419,10 @@ is private, outside the repository.
 - A note filed into a project long after it was written keeps its original
   date on the project page, so its "New" tag may not show even though it lit
   the dot.
+- Project activity looks only at each project's newest 500 filed meeting
+  records: an older record, or a follow-up of one, never lights the dot. A
+  project whose newest 500 records are all the person's own approvals (or
+  all records they cannot read) has no meeting time, however many it holds.
 - The timeline lives on one device. A second Mac starts empty.
 
 ## Build tracks

@@ -69,9 +69,12 @@ function covers(choices, candidates) {
 
 /**
  * One trial's grade against its case: `passed` by the group's expectation, and `clarify` when it asked which one. A
- * trial with no resolution (an error) passes nothing. `resolution.about` counts from 0, as the kernel returns it.
+ * trial with no resolution (an error) passes nothing, and neither does a `fallback`: the resolver had no usable reply
+ * after one repair, so the product left the question as asked (`same`), which no group counts as resolving it.
+ * `resolution.about` counts from 0, as the kernel returns it.
  */
-export function gradeTrial(caseDefinition, resolution) {
+export function gradeTrial(caseDefinition, resolution, fallback = false) {
+  if (fallback) return Object.freeze({ passed: false, clarify: false });
   const kind = resolution?.resolution ?? null;
   const expect = caseDefinition.expect;
   const named = (terms) => kind === "resolved" && terms.every((term) => lower(resolution.question).includes(lower(term)));

@@ -36,7 +36,8 @@ const ask = (value: unknown) => ({ schema_version: 3, question: 'what are the de
 describe('the previous turn on the Ask request (ADR-0047)', () => {
   it('carries a follow-up or an Ask again, exactly as sent, and leaves a request without it unchanged', () => {
     expect(validatePersonAnswerRequestV3(ask(previous()))).toEqual(ask(previous()));
-    expect(validatePersonAnswerRequestV3(ask(previous({ purpose: 'ask_again', statements: [], citations: [] })))).toEqual(ask(previous({ purpose: 'ask_again', statements: [], citations: [] })));
+    const again = { schema_version: 3, question: previous().question, previous: previous({ purpose: 'ask_again', statements: [], citations: [] }) };
+    expect(validatePersonAnswerRequestV3(again)).toEqual(again);
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What changed?' })).toEqual({ schema_version: 3, question: 'What changed?' });
     expect(Object.isFrozen(validatePersonAnswerRequestV3(ask(previous())).previous!.statements[0])).toBe(true);
     // Scope rides beside it as before.
@@ -67,6 +68,15 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
       previous({ citations: [ticket, ticket] }), previous({ citations: [{ ...ticket, kind: 'page' }] }),
       null, [], 'previous',
     ]) expect(() => validatePersonAnswerRequestV3(ask(value))).toThrow();
+  });
+
+  it('takes an Ask again only of the earlier question itself, and a follow-up of any question', () => {
+    const again = previous({ purpose: 'ask_again' });
+    expect(validatePersonAnswerRequestV3({ schema_version: 3, question: again.question, previous: again }).previous).toEqual(again);
+    for (const question of ['what are the details on that ticket?', "what's blocking the DVT gate?", "What's blocking the DVT gate"]) {
+      expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question, previous: again }), question).toThrow('Ask previous question is not the question asked again');
+    }
+    expect(validatePersonAnswerRequestV3({ schema_version: 3, question: again.question, previous: previous() }).previous!.purpose).toBe('follow_up');
   });
 
   it('keeps the whole request within its 16 KiB bound', () => {
@@ -157,7 +167,7 @@ describe('removed from the contract (ADR-0047 C4)', () => {
   });
   const validators = [validatePersonAnswerResponseV4, validatePersonAnswerResponseV5, validatePersonAnswerResponseV6, validatePersonAnswerResponseV7, validatePersonAnswerResponseV8];
 
-  it('refuses an assumption and the off_scope outcome on every answer version, which nothing ever produced', () => {
+  it('refuses an assumption and the off_scope outcome on every answer version, which only the retired A1 pipeline produced', () => {
     validators.forEach((validate, index) => {
       expect(validate(at(index + 4)).outcome).toBe('not_found');
       expect(() => validate({ ...at(index + 4), assumption: 'You meant the DVT gate.' })).toThrow('Ask response has an unexpected shape');

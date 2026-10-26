@@ -299,7 +299,7 @@ describe("research-only triggers", () => {
     const h = harness([], { openCitation });
     await expect(h.research.research({ trigger: "sweep", brief: taskBrief(" ", [record("x").citation]) })).rejects.toThrow("research goal is invalid");
     await expect(h.research.research({ trigger: "sweep", brief: taskBrief("Recheck.", ["not a citation"]) })).rejects.toThrow("research goal is invalid");
-    await expect(h.research.research({ trigger: "sweep", brief: { ...taskBrief("Recheck.", [record("x").citation]), starting: [{ citation: record("x").citation, if_unreadable: "skip" as never }] } })).rejects.toThrow("research goal is invalid");
+    await expect(h.research.research({ trigger: "sweep", brief: { ...taskBrief("Recheck.", [record("x").citation]), starting: [{ citation: record("x").citation, if_unreadable: "ignore" as never }] } })).rejects.toThrow("research goal is invalid");
     await expect(h.research.research({ trigger: "sweep", brief: { ...taskBrief("Recheck.", [record("x").citation]), goal: { kind: "task", task: "Recheck.", data: [1 as never] } } })).rejects.toThrow("research goal is invalid");
     expect(openCitation).not.toHaveBeenCalled();
   });

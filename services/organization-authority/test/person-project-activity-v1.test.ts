@@ -5,13 +5,15 @@ import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
+import { canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { PERSON_PROJECT_ACTIVITY_PATH_V1, validatePersonProjectActivityV1 } from '@echo-brain/organization-api';
 import { composeRecordApproverProjectorsV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
+import type { ImpactItemDraftV1, SqliteImpactItemsV1 } from '../src/adapters/persistence/sqlite/impact-items-v1.js';
 import { SqlitePersonProjectActivityV1 } from '../src/adapters/persistence/sqlite/person-project-activity-v1.js';
 import { SqlitePersonRecordReadAuditV1 } from '../src/adapters/persistence/sqlite/person-record-read-audit-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
+import { enqueueApprovedRecordRunV1 } from '../src/adapters/persistence/sqlite/trigger-runs-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { AUTHORITY_RECORD_APPROVER_PROJECTORS_V1, AUTHORITY_RECORD_INPUT_CODECS_V1 } from '../src/composition/authority-record-protocols-v1.js';
@@ -20,8 +22,8 @@ import { createRecordProjectAuthorizationV1 } from '../src/composition/person-re
 import { createPersonRecordSearchRouteV1, type CreatePersonRecordSearchRouteV1Options, type PersonRecordSearchRouteV1 } from '../src/composition/person-record-search-route.js';
 import { readableSearchGenerationContractV1 } from '../src/composition/readable-search-generation-composition.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
-import { assign, openItemsFixture, sendAll, setState, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
-import { OWNER, PROJ_X, SHARED, UNJOINED, meetingWorld } from './fixtures/person-meeting-world.js';
+import { CLOUD, assign, openItemsFixture, sendAll, setState, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from './fixtures/person-meeting-world.js';
 
 /**
  * Project activity over the open-items fixture's Authority and its real record log: Ari approved a meeting into project A,
@@ -105,6 +107,59 @@ async function approveAnother(f: OpenItemsFixtureV1, projectIds: readonly string
   f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: `desk-approve-${external}`, routes: f.routes(projectIds, other.approvalId) }), () => f.session);
   await f.publisher([]).appendFinalizedApprovalsToV4(new AbortController().signal);
   return f.recordLog.prepare('SELECT record_sha256 FROM organization_record_log ORDER BY position DESC LIMIT 1').pluck().get() as Sha256Digest;
+}
+
+/** `count` follow-ups of a record's finished impact run, as its finishing transaction stores them: unsent, owned by Mina. */
+const followUpDrafts = (f: OpenItemsFixtureV1, tag: string, count: number): ImpactItemDraftV1[] => Array.from({ length: count }, (_, index) => ({
+  item_key: canonicalSha256({ tag, index }), pointer: { kind: 'ticket', tool_id: 'jira', external_scope_id: CLOUD, ticket_id: `${tag}-${index}` },
+  relation: null, expected: null, owner_membership_id: f.membership('mina'), owner_match: 'name' as const,
+}));
+/** The item ids of these drafts, in draft order. */
+const itemIdsOf = (f: OpenItemsFixtureV1, drafts: readonly ImpactItemDraftV1[]): string[] =>
+  drafts.map(draft => f.db.prepare('SELECT item_id FROM authority_impact_items_v1 WHERE item_key = ?').pluck().get(draft.item_key) as string);
+/** `count` more follow-ups of the fixture's finished impact run. */
+function moreFollowUps(f: OpenItemsFixtureV1, count: number): string[] {
+  const drafts = followUpDrafts(f, 'more', count);
+  f.db.transaction(() => f.items.insertForRun(f.db, f.runs.read(f.person, f.runId)!, drafts))();
+  return itemIdsOf(f, drafts);
+}
+/** Ari approves another meeting into these projects; its impact run finishes with `count` follow-ups. */
+async function approveWithFollowUps(f: OpenItemsFixtureV1, projectIds: readonly string[], external: string, count: number): Promise<{ readonly record: Sha256Digest; readonly items: string[] }> {
+  const other = await f.otherProposal(true, external);
+  f.core.decide('desktop', f.approve({ approval_id: other.approvalId, command_id: `desk-approve-${external}`, routes: f.routes(projectIds, other.approvalId) }), () => f.session);
+  await f.publisher([enqueueApprovedRecordRunV1(f.runs)]).appendFinalizedApprovalsToV4(new AbortController().signal);
+  const record = f.recordLog.prepare('SELECT record_sha256 FROM organization_record_log ORDER BY position DESC LIMIT 1').pluck().get() as Sha256Digest;
+  const [run] = f.runs.impactRunsFor([record]);
+  const lease = f.runs.claim(f.person, run!.run_id, 60_000);
+  if (lease.kind !== 'claimed') throw new Error('expected to claim the impact run');
+  const drafts = followUpDrafts(f, external, count);
+  if (!f.runs.finish(run!.run_id, lease.lease_token, { json: '{}', sha256: canonicalSha256({}) }, transaction => f.items.insertForRun(transaction, run!, drafts))) throw new Error('expected to finish the impact run');
+  return { record, items: itemIdsOf(f, drafts) };
+}
+/** Moves as the open-items store records them, at the given (canonical) times: Ari's send, and a state or an owner set by someone. */
+const moves = (f: OpenItemsFixtureV1) => ({
+  sent: (itemId: string, at: string) => f.db.prepare("UPDATE authority_impact_items_v1 SET state='open', sent_at=?, send_command_id=?, send_included=1, updated_at=? WHERE item_id=? AND state='unsent'")
+    .run(at, `send-${itemId}`, at, itemId),
+  closed: (itemId: string, by: FixturePerson, at: string) => f.db.prepare("UPDATE authority_impact_items_v1 SET state='done', state_set_by=?, state_set_at=?, updated_at=? WHERE item_id=?")
+    .run(f.membership(by), at, at, itemId),
+  handed: (itemId: string, by: FixturePerson, to: FixturePerson, at: string) => f.db.prepare(`UPDATE authority_impact_items_v1
+    SET owner_membership_id=?, owner_match='reassigned', owner_set_by=?, owner_set_at=?, updated_at=? WHERE item_id=?`).run(f.membership(to), f.membership(by), at, at, itemId),
+});
+/** The items store, counting the rows its reads return. */
+function countingItems(items: SqliteImpactItemsV1) {
+  const read = { rows: 0 };
+  const port = new Proxy(items, {
+    get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        const result: unknown = value.apply(target, args);
+        if (Array.isArray(result)) read.rows += result.length;
+        return result;
+      };
+    },
+  });
+  return { port, read };
 }
 
 describe('project activity: what it answers', () => {
@@ -382,7 +437,7 @@ describe('project activity: cost', () => {
       projects: { personChangeView: traced('projects', repository.personChangeView.bind(repository)) },
       originals: { originals: traced('originals', rows.originals.bind(rows)) },
       approvals: { approvedRecords: traced('approvals', rows.approvedRecords.bind(rows)) },
-      items: { forRecords: traced('items', f.items.forRecords.bind(f.items)) },
+      items: { movedByOthers: traced('items', f.items.movedByOthers.bind(f.items)) },
       people: { people: traced('people', f.directory.people.bind(f.directory)), leadsAny: traced('leads', f.directory.leadsAny.bind(f.directory)) },
       records: { projectRecordActivity: traced('records', route.projectRecordActivity), readableDecisionProjects: traced('decisions', route.readableDecisionProjects) },
     });
@@ -405,6 +460,53 @@ describe('project activity: cost', () => {
       expect(() => repository.withReadTransaction(() => 0)).toThrow(/locked|busy/i);
     } finally { peer.db.exec('ROLLBACK'); }
     expect(f.db.inTransaction).toBe(false);
+  });
+
+  it('finds the newest move by someone else among many follow-ups, reading only a page of the newest moves', async () => {
+    const f = await openItemsFixture();
+    afterArrival(f);
+    await f.finishImpactRun();
+    const items = moreFollowUps(f, 120);
+    const start = f.clock().getTime();
+    const at = (seconds: number) => new Date(start + seconds * 1_000).toISOString();
+    const move = moves(f);
+    // Ari sent all 120; Mina closed the first 100 in turn; Rafael took the next; Ari closed the last 19 himself, latest of all.
+    for (const item of items) move.sent(item, at(1));
+    items.slice(0, 100).forEach((item, index) => move.closed(item, 'mina', at(10 + index)));
+    move.handed(items[100]!, 'rafael', 'rafael', at(200));
+    items.slice(101).forEach((item, index) => move.closed(item, 'ari', at(300 + index)));
+    const counted = countingItems(f.items);
+    const { latest } = activityOf(f, { items: counted.port as never });
+    // To Ari, the newest move by someone else is Rafael's; his own later closes are not news to him.
+    expect(await latest('ari')).toEqual({ [f.projectA]: at(200), [f.projectB]: null });
+    // To Mina and Rafael, Ari's last close is.
+    expect(await latest('mina')).toEqual({ [f.projectA]: at(318) });
+    expect(await latest('rafael')).toEqual({ [f.projectA]: at(318) });
+    // Each read took one page of the newest moves, never the project's 123 follow-ups.
+    expect(counted.read.rows).toBeLessThanOrEqual(3 * 50);
+  });
+
+  it('pages on past newer moves the caller cannot see to an older one they can', async () => {
+    const f = await openItemsFixture();
+    afterArrival(f);
+    await f.finishImpactRun();
+    const unsent = (await f.runItems()).items;
+    const route = recordRoute(f);
+    // A second meeting in project A, with 60 follow-ups of its own.
+    const second = await approveWithFollowUps(f, [f.projectA], 'note-2', 60);
+    tick(f);
+    // Ari sends the first meeting's follow-ups, then the second's, each a second later.
+    const sentAt = tick(f);
+    await sendAll(f, unsent);
+    const move = moves(f);
+    const later = (index: number) => new Date(Date.parse(sentAt) + (index + 1) * 1_000).toISOString();
+    second.items.forEach((item, index) => move.sent(item, later(index)));
+    // As if Mina could not read the second meeting's decision: its follow-ups, all newer, are never news to her.
+    const blind = (access_token: string) => access_token === 'mina';
+    const hidden = activityOf(f, { records: { projectRecordActivity: route.projectRecordActivity, readableDecisionProjects: input =>
+      new Map([...route.readableDecisionProjects(input)].filter(([record]) => !(blind(input.access_token) && record === second.record))) } });
+    expect(await hidden.latest('mina')).toEqual({ [f.projectA]: sentAt });
+    expect(await hidden.latest('rafael')).toEqual({ [f.projectA]: later(59) });
   });
 
   it('refuses to run inside a transaction it did not open', async () => {
@@ -498,6 +600,25 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
       expect(() => activity('owner', [], 501)).toThrow(invalid);
       expect(() => route.projectRecordActivity({ access_token: 'nobody', projects: projectsOf('owner'), project_ids: [SHARED], own: new Set(), limit: 500 }))
         .toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    } finally { w.close(); }
+  });
+
+  it('looks for a meeting among a project\'s newest 500 records alone: one of only the reader\'s own has none, however many it holds', async () => {
+    const w = await meetingWorld();
+    try {
+      // SHARED holds r3 (OWNER's) and r4 (EMP_A's); then OWNER approves 500 more into it.
+      for (let index = 0; index < 500; index += 1) await w.approve({ name: `own-${index}`, approval_id: `apr_own_${index}`, projects: [SHARED], final_approver: OWNER, issued_at: T(8) });
+      const route = w.route();
+      const projectsOf = (access_token: string) => createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(w.authority))(w.sessions.authenticateAccess({ access_token }));
+      const activity = (access_token: string, own: readonly string[] = []) =>
+        route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids: [SHARED], own: new Set(own), limit: 500 }).get(SHARED);
+      const newest = w.record.prepare('SELECT record_sha256 FROM organization_record_project_association_v1 WHERE project_id = ? ORDER BY record_position DESC LIMIT 500').pluck().all(SHARED) as string[];
+      const arrival = (name: string) => w.record.prepare('SELECT receipt_issued_at FROM organization_record_log WHERE record_sha256 = ?').pluck().get(w.digest(name)) as string;
+      // EMP_A's r4 is the 501st newest: OWNER's newest 500 are all his own, so the read stops there, with no meeting time.
+      expect(activity('owner')).toEqual({ meeting_at: null, filed: newest });
+      expect(activity('owner', newest)).toEqual({ meeting_at: null, filed: newest });
+      // To EMP_A, OWNER's newest is news.
+      expect(activity('emp_a')).toEqual({ meeting_at: arrival('own-499'), filed: newest });
     } finally { w.close(); }
   });
 });

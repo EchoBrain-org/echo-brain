@@ -73,9 +73,15 @@ test("runs the kernel's resolver once per trial, through the product's prompt, k
   assert.equal(shown.previous.asked_on, "2026-10-24");
   assert.deepEqual(shown.previous.sources.map((source) => source.n), [1]);
   assert.ok(!JSON.stringify(result).includes("thermal fixture fails"), "no prompt text is kept");
-  // A reply no repair makes usable is the fallback: the question as asked, which fails a one-referent case.
+  // A reply no repair makes usable is the fallback: the question as asked, which fails a one-referent case, and fails an
+  // unrelated one too, where the model answering `same` would pass.
   const failing = await runTrial(founder, 2, oracle(() => ({ resolution: "guess" })), generation, document, { timeoutMs: 15_000 });
   assert.deepEqual([failing.resolution, failing.fallback, failing.calls, failing.repairs, failing.passed], ["same", true, 2, 1, false]);
+  const unrelated = document.cases.find((entry) => entry.group === "unrelated");
+  const alone = await runTrial(unrelated, 1, oracle(), generation, document, { timeoutMs: 15_000 });
+  assert.deepEqual([alone.resolution, alone.fallback, alone.passed], ["same", false, true]);
+  const fellBack = await runTrial(unrelated, 2, oracle(() => ({ resolution: "guess" })), generation, document, { timeoutMs: 15_000 });
+  assert.deepEqual([fellBack.resolution, fellBack.fallback, fellBack.passed], ["same", true, false]);
   // A model that cannot be reached keeps its safe error class only.
   const broken = { async generate_with_observation() { throw Object.assign(new Error("secret provider detail"), { diagnostic: { failure_class: "adapter_http", http_status: 401 } }); } };
   const refused = await runTrial(founder, 3, broken, generation, document, { timeoutMs: 15_000 });

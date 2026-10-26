@@ -12,6 +12,7 @@ import {
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { meetingSourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
+import { SqlitePersonImportedMeetingsV1 } from '../src/adapters/persistence/sqlite/person-imported-meetings-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { SqlitePersonTextSourceInboxV1 } from '../src/adapters/persistence/sqlite/person-text-source-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
@@ -190,6 +191,30 @@ describe('Ask source check: the database kinds', () => {
     expect(await check('ari', [item(followUp(f.ticket.item_id), checked)])).toEqual([SAME]);
     // Okafor, who cannot read the decision, sees no row: hidden and never-made follow-ups read the same.
     expect(await check('okafor', [item(followUp(f.ticket.item_id), before), item(followUp('itm_00000000-never-made'), before)])).toEqual([UNREADABLE, UNREADABLE]);
+  });
+
+  it('reads each cited revision once however many turns cited it, and an import\'s newer revisions once, answering each turn alike', async () => {
+    const f = await world();
+    const { check } = askCheckOf(f);
+    f.editMeeting();
+    const edited = f.originals.deskSearch({ access_token: 'ari', scope: GLOBAL, kinds: ['imported_meeting'] }).items[0]!.citation;
+    // The expensive read: an imported meeting's revision, verified in full.
+    const imported = vi.spyOn(SqlitePersonImportedMeetingsV1.prototype, 'rows');
+    try {
+      // One turn: the cited revision is read, then the newer one.
+      expect(await check('ari', [item(f.cited.meeting)])).toEqual([CHANGED]);
+      expect(imported).toHaveBeenCalledTimes(2);
+      imported.mockClear();
+      // Many turns citing the same revisions, among other sources: still each revision once, and the same answer each time.
+      const turns = [item(f.cited.meeting), item(f.cited.team), item(f.cited.meeting, '2026-10-01T00:00:00.000Z'), item(edited), item(f.cited.document),
+        item(f.cited.meeting), item(edited), item(f.cited.document), item(f.cited.team)];
+      expect(await check('ari', turns)).toEqual([CHANGED, SAME, CHANGED, SAME, SAME, CHANGED, SAME, SAME, SAME]);
+      expect(imported).toHaveBeenCalledTimes(2);
+      // Someone who cannot read the import is answered alike for every turn, reading it no more than once.
+      imported.mockClear();
+      expect(await check('mina', [item(f.cited.meeting), item(f.cited.meeting), item(edited), item(edited)])).toEqual([UNREADABLE, UNREADABLE, UNREADABLE, UNREADABLE]);
+      expect(imported.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally { imported.mockRestore(); }
   });
 
   it('answers every kind in request order, the same source once per turn that cited it', async () => {

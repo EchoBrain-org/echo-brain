@@ -73,9 +73,11 @@ lived in the answer it never saw.
   change.
 - **Quieter answers.** The desktop drops the coverage note ADR-0045 introduced,
   the "Asked as" idea, and Try again on a successful answer. `assumption` and
-  the `off_scope` outcome leave the contract: nothing ever produced them, so
-  ADR-0022's off-scope outcome no longer exists. `notice` and `gap` stay in the
-  contract for the person client and the evals.
+  the `off_scope` outcome leave the contract: no current path produces them
+  (only the A1 pipeline did, from `298ebfd` on 2026-09-27 to `e0b6980` on
+  2026-09-28), and nothing re-reads stored audit outcomes, so ADR-0022's
+  off-scope outcome no longer exists. `notice` and `gap` stay in the contract
+  for the person client and the evals.
 
 ## Migration, rollback, and evidence
 

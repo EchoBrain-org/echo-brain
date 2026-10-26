@@ -37,6 +37,15 @@ test("unrelated and already standalone: same, or resolved keeping every term", (
   }
 });
 
+test("a fallback fails its trial in every group: the question left as asked for want of a usable reply is no resolution", () => {
+  for (const caseDefinition of [one, several, unrelated, standalone]) {
+    assert.deepEqual(gradeTrial(caseDefinition, SAME, true), { passed: false, clarify: false }, caseDefinition.group);
+  }
+  // The same reply, when the model gave it, still leaves an unrelated or already standalone question alone.
+  assert.equal(gradeTrial(unrelated, SAME, false).passed, true);
+  assert.equal(gradeTrial(standalone, SAME).passed, true);
+});
+
 test("rules: no guess at all, 90% resolved, 90% left alone, at most 10% asked which one; follow-ups ship on rules 1 and 2", () => {
   const trials = (group, passed, total, clarify = 0) => Array.from({ length: total }, (_, index) => ({ group, passed: index < passed, clarify: index < clarify }));
   const several = (clarified) => Array.from({ length: 30 }, (_, index) => ({ group: "several_referents", passed: index < clarified, clarify: index < clarified }));

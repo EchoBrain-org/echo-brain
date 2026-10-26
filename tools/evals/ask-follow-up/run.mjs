@@ -174,7 +174,7 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
     error = safeError(caught);
   }
   const resolution = resolved?.resolution ?? null;
-  const grade = gradeTrial(caseDefinition, resolution);
+  const grade = gradeTrial(caseDefinition, resolution, resolved?.fallback === true);
   return Object.freeze({
     case_id: caseDefinition.id, group: caseDefinition.group, trial,
     resolution: resolution?.resolution ?? null,

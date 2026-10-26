@@ -280,6 +280,11 @@ function unreadableRefusal(error: unknown): boolean {
   const value = object(error);
   return value?.name === "AuthorityOperationError" && (value.code === "not_found" || value.code === "unauthorized");
 }
+/** The item's tool cannot be read for now (down, rate limited, out of quota): nothing is known about the item itself. */
+function temporaryRefusal(error: unknown): boolean {
+  const value = object(error);
+  return value?.name === "AuthorityOperationError" && (value.code === "unavailable" || value.code === "rate_limited" || value.code === "quota_exceeded");
+}
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }
 function preview(text: string): string { return cleanLine(text, PREVIEW_CHARS); }
 /** Characters a query preview keeps before its first matched word. */
@@ -1287,7 +1292,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // The reads run together, a few at a time in brief order, and are registered in brief order, so ids, receipts and
     // failures are those of reading one at a time: a failure that stops research stops only the reads after it, and the
     // first failure in brief order is the one thrown.
-    type StartingRead = { readonly opened: EvidenceDeskResultV2; readonly readable: readonly EvidenceDeskItemV2[]; readonly anchor: EvidenceDeskItemV2 | undefined } | { readonly unreadable: true };
+    type StartingRead = { readonly opened: EvidenceDeskResultV2; readonly readable: readonly EvidenceDeskItemV2[]; readonly anchor: EvidenceDeskItemV2 | undefined } | { readonly unreadable: true } | { readonly skipped: true };
     assertLive();
     const stopReads = brief.starting.map(() => new AbortController());
     let reading = 0;
@@ -1308,11 +1313,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         const readable = opened.items.filter(item => item.text !== undefined);
         const anchor = readable.find(item => citationIdentity(item.citation) === citationIdentity(citation)) ?? readable[0];
         // Fail closed unless the brief asked to report it: research never runs without evidence its brief names.
-        if (anchor === undefined && ifUnreadable !== "report") throw new AuthorityOperationError("not_found", "Starting evidence is not available");
+        if (anchor === undefined && ifUnreadable === "fail") throw new AuthorityOperationError("not_found", "Starting evidence is not available");
         return { opened, readable, anchor };
       } catch (error) {
         // A deleted or now-hidden item is news to a brief that asked to hear about it; nothing else about it is known.
-        if (ifUnreadable === "report" && unreadableRefusal(error)) return { unreadable: true };
+        if (ifUnreadable !== "fail" && unreadableRefusal(error)) return { unreadable: true };
+        // A follow-up's item its tool cannot read for now is left out: research goes on as if it was never named. A cancel
+        // or the deadline stays what it is, whatever the tool said as it stopped.
+        if (ifUnreadable === "skip" && temporaryRefusal(error) && !isAbort(error, signal)) return { skipped: true };
         for (const stop of stopReads.slice(index + 1)) stop.abort();
         throw error;
       } finally {
@@ -1332,6 +1340,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     for (const [index, outcome] of settled.entries()) {
       const read = (outcome as PromiseFulfilledResult<StartingRead>).value;
       const { citation } = brief.starting[index]!;
+      // Nothing was released, and nothing is covered or reported: only a question skips, and its goal has no slot to fill.
+      if ("skipped" in read) { startingIds.push(null); continue; }
       if ("unreadable" in read) {
         cover('open', undefined);
         unreadableStarting.push(citation); startingIds.push(null);

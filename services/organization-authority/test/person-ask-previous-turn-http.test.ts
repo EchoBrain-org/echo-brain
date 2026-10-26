@@ -110,7 +110,8 @@ describe('the previous turn on /v7 (ADR-0047)', () => {
     const f = await sentFixture();
     const generate = vi.fn(async () => { throw new Error('no model call expected'); });
     const base = await v7(f, { generate });
-    for (const previous of [{ ...PREVIOUS, purpose: 'guess' }, { ...PREVIOUS, statements: [{ text: 'x'.repeat(401), citation_indexes: [] }] }, { ...PREVIOUS, extra: true }]) {
+    // An Ask again of another question than the earlier one is not an Ask again.
+    for (const previous of [{ ...PREVIOUS, purpose: 'guess' }, { ...PREVIOUS, statements: [{ text: 'x'.repeat(401), citation_indexes: [] }] }, { ...PREVIOUS, extra: true }, { ...PREVIOUS, purpose: 'ask_again' }]) {
       const response = await ask(base, { progress: null, body: body(previous) });
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toMatchObject({ error: { code: 'invalid_request' } });

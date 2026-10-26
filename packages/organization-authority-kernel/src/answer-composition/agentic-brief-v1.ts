@@ -10,8 +10,13 @@ import type { AgenticResearchBudgetV1, AgenticResearchGoalV1 } from "./agentic-r
 /** One starting item: a citation released by an earlier request, re-read fresh through the desk before round one. */
 export interface AgenticBriefStartingItemV1 {
   readonly citation: unknown;
-  /** `fail` stops the run when the item cannot be read; `report` lists it in the bundle and research goes on. */
-  readonly if_unreadable: "fail" | "report";
+  /**
+   * `fail` stops the run when the item cannot be read; `report` lists it in the bundle and research goes on. `skip` (a
+   * question's starting items only: a follow-up's, ADR-0047) is `report`, and an item its tool cannot read for now
+   * (`unavailable`, `rate_limited`, `quota_exceeded`) is left out as if never named: research goes on, and neither the
+   * bundle, the planner nor the writer hears of it. Under every mode, anything else still stops the run.
+   */
+  readonly if_unreadable: "fail" | "report" | "skip";
 }
 
 /**
