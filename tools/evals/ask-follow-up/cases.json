@@ -1,0 +1,1499 @@
+{
+  "schema_version": 1,
+  "kind": "echo-ask-follow-up-eval-cases-v1",
+  "description": "Pre-registered follow-up resolution cases (Ask timeline v1, ADR-0047). Synthetic engineering content; source numbers in expectations count from 1, as the resolver is shown them.",
+  "today": "2026-10-25",
+  "time_zone": "America/Los_Angeles",
+  "cases": [
+    {
+      "id": "one-dvt-gate-ticket",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-10-24T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT gate is blocked by THERM-482: the thermal fixture fails at 45 °C, so the 72-hour soak test cannot finish.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "what are the details on that ticket?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "THERM-482"
+        ]
+      }
+    },
+    {
+      "id": "one-fixture-redesign-due",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Who owns the fixture redesign?",
+        "asked_at": "2026-10-23T21:40:00.000Z",
+        "statements": [
+          {
+            "text": "Dev Patel owns the fixture redesign for the new heater block, tracked in THERM-490.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10490",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-490",
+              "text_sha256": "sha256:ff4e3cfd3ca02a5d44fed24b6a33c9a5bc67b606fd12b2843ffcf716dd1454e0"
+            },
+            "kind": "ticket",
+            "label": "THERM-490: Fixture redesign for the new heater block",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "when is it due?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "THERM-490",
+          "fixture redesign"
+        ]
+      }
+    },
+    {
+      "id": "one-readiness-decision-approver",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What did we decide in the DVT readiness review?",
+        "asked_at": "2026-10-23T23:10:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT readiness review on Oct 23 approved starting the DVT build on Nov 3 with 40 units.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:0a556e8d44a18a16b5ecff5a66f27724fe28fc8a40e06648af5901cd5f56273c",
+              "record_sha256": "sha256:8e1dc7630571eb31a458aaa5ad981dd045c93238ca93e936b443f2c56e6aab20",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "decision",
+            "label": "DVT readiness review (Oct 23): DVT build starts Nov 3 with 40 units",
+            "visibility": "team",
+            "ref": "meeting:sha256:8e1dc7630571eb31a458aaa5ad981dd045c93238ca93e936b443f2c56e6aab20"
+          }
+        ]
+      },
+      "question": "who approved that decision?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "DVT readiness review",
+          "DVT build",
+          "Nov 3"
+        ]
+      }
+    },
+    {
+      "id": "one-thermal-sync-actions",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Was there a meeting about the thermal margin problem?",
+        "asked_at": "2026-10-22T18:00:00.000Z",
+        "statements": [
+          {
+            "text": "Yes: the Thermal margin sync on Oct 21 discussed the 45 °C soak failures on the DVT fixture.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "source_revision",
+              "source_id": "source:cf667ba6b546f4889286d2f7fc134037de0b8ff5519100c0bcf863b42ebf008a",
+              "revision_id": "granola-0de3e1cfb697",
+              "source_sha256": "sha256:c2dd8fb180546429e4558283bc280b2b32b71de9e7a5e217ccfb7e01acff9fc1",
+              "representation_sha256": "sha256:ab0b31ff6ca8083fd2b400ec09985a63fe63d6e663e224c6254425c0f511f844",
+              "anchor_sha256": "sha256:f22a06f472dbda878186880208ad5896f7afdb415192a6eb46beddee410b9e30"
+            },
+            "kind": "imported_meeting",
+            "label": "Thermal margin sync — Oct 21",
+            "visibility": "team"
+          }
+        ]
+      },
+      "question": "what action items came out of that meeting?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "Thermal margin sync"
+        ]
+      }
+    },
+    {
+      "id": "one-evt-exit-page-current",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Where are the EVT exit criteria written down?",
+        "asked_at": "2026-10-20T16:30:00.000Z",
+        "statements": [
+          {
+            "text": "The EVT exit criteria are on the Confluence page \"EVT exit criteria\" in the HW space.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1441793",
+              "section_id": "overview",
+              "version": "7",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1441793",
+              "text_sha256": "sha256:64cebf5e57a910810e1749c52bd4505457e3c3f1547cabab9140a29c1d517a9b"
+            },
+            "kind": "page",
+            "label": "EVT exit criteria",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "is that page up to date?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "EVT exit criteria"
+        ]
+      }
+    },
+    {
+      "id": "one-battery-ticket-beside-page",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Why did the battery swelling show up?",
+        "asked_at": "2026-10-24T15:20:00.000Z",
+        "statements": [
+          {
+            "text": "Priya Nair's investigation in BATT-77 found the cells swell after 72 hours of storage at 45 °C.",
+            "citation_indexes": [
+              0
+            ]
+          },
+          {
+            "text": "The Battery safety test plan lists 45 °C storage as a required DVT test.",
+            "citation_indexes": [
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "30077",
+              "permalink": "https://therm-hw.atlassian.net/browse/BATT-77",
+              "text_sha256": "sha256:993bed77df23aa18f9ad9083f9a7785111f760dbada26b5d881fceba811e4510"
+            },
+            "kind": "ticket",
+            "label": "BATT-77: Battery swelling after 45 °C storage",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1442150",
+              "section_id": "overview",
+              "version": "7",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1442150",
+              "text_sha256": "sha256:bede946b2a590dea28c6d916813a85bf70823956937f689e73046a875ba07227"
+            },
+            "kind": "page",
+            "label": "Battery safety test plan",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "what's the latest status of that ticket?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "BATT-77"
+        ]
+      }
+    },
+    {
+      "id": "one-gasket-follow-up-sent",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What is still open from the supplier quality review?",
+        "asked_at": "2026-10-23T19:00:00.000Z",
+        "statements": [
+          {
+            "text": "One follow-up is open: Ana Gomez is to send the revised gasket spec to Acme Seals, due Oct 29.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "follow_up",
+              "item_id": "itm_gasket-spec-1"
+            },
+            "kind": "follow_up",
+            "label": "Send the revised gasket spec to Acme Seals",
+            "visibility": "team",
+            "ref": "follow_up:itm_gasket-spec-1"
+          }
+        ]
+      },
+      "question": "has it been sent yet?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "gasket spec",
+          "Acme Seals"
+        ]
+      }
+    },
+    {
+      "id": "one-dvt-move-why",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What changed in the DVT schedule this week?",
+        "asked_at": "2026-10-24T22:15:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT build moved from Nov 3 to Nov 10, tracked in THERM-501.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10501",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-501",
+              "text_sha256": "sha256:257b3b1f05b76a8c3aa9c8f88d66497b973b0a0da7859b5c49175840328715da"
+            },
+            "kind": "ticket",
+            "label": "THERM-501: Move the DVT build to Nov 10",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "why did it move?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "THERM-501",
+          "DVT build"
+        ]
+      }
+    },
+    {
+      "id": "one-drop-test-assignee",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Which ticket tracks the drop test failures?",
+        "asked_at": "2026-10-24T20:45:00.000Z",
+        "statements": [
+          {
+            "text": "MECH-214 tracks the drop test failures: the front bezel cracks on 3 of 10 DVT units at 1.2 m.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "20214",
+              "permalink": "https://therm-hw.atlassian.net/browse/MECH-214",
+              "text_sha256": "sha256:659bcb1a7898650b446beabeede595b73c849cd5c7b706c65cb3e79dbe466615"
+            },
+            "kind": "ticket",
+            "label": "MECH-214: Front bezel cracks in 1.2 m drop test",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "who is assigned to it?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "MECH-214"
+        ]
+      }
+    },
+    {
+      "id": "one-emc-lead-other-work",
+      "group": "one_referent",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Who is leading the EMC pre-scan?",
+        "asked_at": "2026-10-21T17:30:00.000Z",
+        "statements": [
+          {
+            "text": "Lena Okafor leads the EMC pre-scan, scheduled for Oct 28 at Intertek.",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "person",
+              "membership_id": "mem_77e9047c-1d60-4d36-aa69-431f62c596c2"
+            },
+            "kind": "person",
+            "label": "Lena Okafor",
+            "visibility": "team"
+          },
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1442001",
+              "section_id": "overview",
+              "version": "7",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1442001",
+              "text_sha256": "sha256:df206f3e23263772418f0eff856b83ba1f6233618954fd61397ee5a4b29093cd"
+            },
+            "kind": "page",
+            "label": "EMC test plan",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "what else is that person working on?",
+      "expect": {
+        "about": [
+          1
+        ],
+        "names": [
+          "Lena Okafor",
+          "Lena"
+        ]
+      }
+    },
+    {
+      "id": "several-dvt-gate-tickets",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-10-24T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "Two tickets block the DVT gate: THERM-482, the thermal fixture failing at 45 °C, and MECH-214, the front bezel cracking in drop tests.",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "20214",
+              "permalink": "https://therm-hw.atlassian.net/browse/MECH-214",
+              "text_sha256": "sha256:659bcb1a7898650b446beabeede595b73c849cd5c7b706c65cb3e79dbe466615"
+            },
+            "kind": "ticket",
+            "label": "MECH-214: Front bezel cracks in 1.2 m drop test",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "what are the details on that ticket?",
+      "expect": {
+        "candidates": [
+          [
+            "THERM-482"
+          ],
+          [
+            "MECH-214"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "several-owners-due",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Who owns the open DVT work?",
+        "asked_at": "2026-10-23T21:40:00.000Z",
+        "statements": [
+          {
+            "text": "Dev Patel owns THERM-490, the fixture redesign for the new heater block.",
+            "citation_indexes": [
+              0
+            ]
+          },
+          {
+            "text": "Priya Nair owns BATT-77, the battery swelling investigation.",
+            "citation_indexes": [
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10490",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-490",
+              "text_sha256": "sha256:ff4e3cfd3ca02a5d44fed24b6a33c9a5bc67b606fd12b2843ffcf716dd1454e0"
+            },
+            "kind": "ticket",
+            "label": "THERM-490: Fixture redesign for the new heater block",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "30077",
+              "permalink": "https://therm-hw.atlassian.net/browse/BATT-77",
+              "text_sha256": "sha256:993bed77df23aa18f9ad9083f9a7785111f760dbada26b5d881fceba811e4510"
+            },
+            "kind": "ticket",
+            "label": "BATT-77: Battery swelling after 45 °C storage",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "when is it due?",
+      "expect": {
+        "candidates": [
+          [
+            "THERM-490",
+            "fixture redesign"
+          ],
+          [
+            "BATT-77",
+            "battery swelling"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "several-readiness-reasoning",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What did the DVT readiness review decide?",
+        "asked_at": "2026-10-23T23:10:00.000Z",
+        "statements": [
+          {
+            "text": "The review approved starting the DVT build on Nov 3 with 40 units.",
+            "citation_indexes": [
+              0
+            ]
+          },
+          {
+            "text": "It also approved the two-layer heatsink for every DVT unit.",
+            "citation_indexes": [
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:0a556e8d44a18a16b5ecff5a66f27724fe28fc8a40e06648af5901cd5f56273c",
+              "record_sha256": "sha256:8e1dc7630571eb31a458aaa5ad981dd045c93238ca93e936b443f2c56e6aab20",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "decision",
+            "label": "DVT readiness review (Oct 23): DVT build starts Nov 3 with 40 units",
+            "visibility": "team",
+            "ref": "meeting:sha256:8e1dc7630571eb31a458aaa5ad981dd045c93238ca93e936b443f2c56e6aab20"
+          },
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:f85a68a75ea42a507619199a7ac0b5b11ea23f968a532d4b754fc80e81e955cb",
+              "record_sha256": "sha256:f6efe22ecbd04c6bc1df7f61747aa356b499f11966a62c157f38ca610587bee1",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "decision",
+            "label": "DVT readiness review (Oct 23): two-layer heatsink on every DVT unit",
+            "visibility": "team",
+            "ref": "meeting:sha256:f6efe22ecbd04c6bc1df7f61747aa356b499f11966a62c157f38ca610587bee1"
+          }
+        ]
+      },
+      "question": "what was the reasoning behind that decision?",
+      "expect": {
+        "candidates": [
+          [
+            "Nov 3",
+            "DVT build",
+            "40 units"
+          ],
+          [
+            "heatsink"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "several-meeting-actions",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Which meetings discussed the thermal margin this week?",
+        "asked_at": "2026-10-24T18:00:00.000Z",
+        "statements": [
+          {
+            "text": "The Thermal margin sync on Oct 21 and the DVT readiness review on Oct 23 both discussed the thermal margin.",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "source_revision",
+              "source_id": "source:cf667ba6b546f4889286d2f7fc134037de0b8ff5519100c0bcf863b42ebf008a",
+              "revision_id": "granola-0de3e1cfb697",
+              "source_sha256": "sha256:c2dd8fb180546429e4558283bc280b2b32b71de9e7a5e217ccfb7e01acff9fc1",
+              "representation_sha256": "sha256:ab0b31ff6ca8083fd2b400ec09985a63fe63d6e663e224c6254425c0f511f844",
+              "anchor_sha256": "sha256:f22a06f472dbda878186880208ad5896f7afdb415192a6eb46beddee410b9e30"
+            },
+            "kind": "imported_meeting",
+            "label": "Thermal margin sync — Oct 21",
+            "visibility": "team"
+          },
+          {
+            "citation": {
+              "kind": "source_revision",
+              "source_id": "source:f68aa5e99790739952269a0a84b7f60282fb908a4e6160515946d3bdc0c1c5db",
+              "revision_id": "granola-36338459b24e",
+              "source_sha256": "sha256:72dc87ff893afb8f7138adc4b187afcdd44fee948ba1f8004be80373d1c1174f",
+              "representation_sha256": "sha256:5a8e7f90b820e0794a5a6be1c2cdebb52b87aa2b2f49109f25dfa7767ab62036",
+              "anchor_sha256": "sha256:6119d9ac64d50d10257c6b620dee6807723241ebc0968216621c984c1a7839cc"
+            },
+            "kind": "imported_meeting",
+            "label": "DVT readiness review — Oct 23",
+            "visibility": "team"
+          }
+        ]
+      },
+      "question": "what action items came out of that meeting?",
+      "expect": {
+        "candidates": [
+          [
+            "Thermal margin sync"
+          ],
+          [
+            "readiness review"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "several-evt-pages-current",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Where are the EVT test requirements written down?",
+        "asked_at": "2026-10-20T16:30:00.000Z",
+        "statements": [
+          {
+            "text": "Two Confluence pages hold them: \"EVT exit criteria\" and \"EVT test matrix\".",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1441793",
+              "section_id": "overview",
+              "version": "7",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1441793",
+              "text_sha256": "sha256:64cebf5e57a910810e1749c52bd4505457e3c3f1547cabab9140a29c1d517a9b"
+            },
+            "kind": "page",
+            "label": "EVT exit criteria",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1441810",
+              "section_id": "overview",
+              "version": "7",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1441810",
+              "text_sha256": "sha256:1930c7bb23552418472e789094e6a5336a53848b3375b9af991d61f6c0e40ce9"
+            },
+            "kind": "page",
+            "label": "EVT test matrix",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "is that page up to date?",
+      "expect": {
+        "candidates": [
+          [
+            "exit criteria"
+          ],
+          [
+            "test matrix"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "several-thermal-people-tickets",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Who is on the thermal team?",
+        "asked_at": "2026-10-22T16:00:00.000Z",
+        "statements": [
+          {
+            "text": "Dev Patel and Priya Nair are on the thermal team.",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "person",
+              "membership_id": "mem_9bc7c9b6-b604-4980-a4df-f94e09cd3130"
+            },
+            "kind": "person",
+            "label": "Dev Patel",
+            "visibility": "team"
+          },
+          {
+            "citation": {
+              "kind": "person",
+              "membership_id": "mem_dc582558-deb4-40ee-b68b-a37968af85af"
+            },
+            "kind": "person",
+            "label": "Priya Nair",
+            "visibility": "team"
+          }
+        ]
+      },
+      "question": "what tickets does that person own?",
+      "expect": {
+        "candidates": [
+          [
+            "Dev Patel",
+            "Dev"
+          ],
+          [
+            "Priya Nair",
+            "Priya"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "several-supplier-follow-up-owner",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What is still open from the supplier quality review?",
+        "asked_at": "2026-10-23T19:00:00.000Z",
+        "statements": [
+          {
+            "text": "Two follow-ups are open: send the revised gasket spec to Acme Seals, and get a second-source quote for the DVT fan.",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "follow_up",
+              "item_id": "itm_gasket-spec-1"
+            },
+            "kind": "follow_up",
+            "label": "Send the revised gasket spec to Acme Seals",
+            "visibility": "team",
+            "ref": "follow_up:itm_gasket-spec-1"
+          },
+          {
+            "citation": {
+              "kind": "follow_up",
+              "item_id": "itm_fan-quote-1"
+            },
+            "kind": "follow_up",
+            "label": "Get a second-source quote for the DVT fan",
+            "visibility": "team",
+            "ref": "follow_up:itm_fan-quote-1"
+          }
+        ]
+      },
+      "question": "who owns that follow-up?",
+      "expect": {
+        "candidates": [
+          [
+            "gasket"
+          ],
+          [
+            "fan",
+            "second-source",
+            "quote"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "several-schedule-moves-why",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What changed in the DVT schedule this week?",
+        "asked_at": "2026-10-24T22:15:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT build moved to Nov 10 (THERM-501), and the EMC pre-scan moved to Nov 4 (EMC-12).",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10501",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-501",
+              "text_sha256": "sha256:257b3b1f05b76a8c3aa9c8f88d66497b973b0a0da7859b5c49175840328715da"
+            },
+            "kind": "ticket",
+            "label": "THERM-501: Move the DVT build to Nov 10",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "40012",
+              "permalink": "https://therm-hw.atlassian.net/browse/EMC-12",
+              "text_sha256": "sha256:3380eda653dfc2f12599194b614f0f162d666da4d9bd37a057b9eda202421132"
+            },
+            "kind": "ticket",
+            "label": "EMC-12: Move the EMC pre-scan to Nov 4",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "why did that move?",
+      "expect": {
+        "candidates": [
+          [
+            "THERM-501",
+            "DVT build"
+          ],
+          [
+            "EMC-12",
+            "pre-scan"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "several-evt-blockers-assignee",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Which tickets block EVT exit?",
+        "asked_at": "2026-10-19T20:00:00.000Z",
+        "statements": [
+          {
+            "text": "Three tickets block EVT exit: THERM-482, MECH-214 and BATT-77.",
+            "citation_indexes": [
+              0,
+              1,
+              2
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "20214",
+              "permalink": "https://therm-hw.atlassian.net/browse/MECH-214",
+              "text_sha256": "sha256:659bcb1a7898650b446beabeede595b73c849cd5c7b706c65cb3e79dbe466615"
+            },
+            "kind": "ticket",
+            "label": "MECH-214: Front bezel cracks in 1.2 m drop test",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "30077",
+              "permalink": "https://therm-hw.atlassian.net/browse/BATT-77",
+              "text_sha256": "sha256:993bed77df23aa18f9ad9083f9a7785111f760dbada26b5d881fceba811e4510"
+            },
+            "kind": "ticket",
+            "label": "BATT-77: Battery swelling after 45 °C storage",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "who is assigned to the ticket?",
+      "expect": {
+        "candidates": [
+          [
+            "THERM-482"
+          ],
+          [
+            "MECH-214"
+          ],
+          [
+            "BATT-77"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "several-decisions-when",
+      "group": "several_referents",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What did we decide about the enclosure and the battery?",
+        "asked_at": "2026-10-17T21:00:00.000Z",
+        "statements": [
+          {
+            "text": "The design review approved the polycarbonate enclosure.",
+            "citation_indexes": [
+              0
+            ]
+          },
+          {
+            "text": "The battery review approved switching to the 2,800 mAh cell.",
+            "citation_indexes": [
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:77afd291a0f0f91608efdfad0083fd2b5ee7dea6a0bc04d9a5610b647c9c255e",
+              "record_sha256": "sha256:6e35952756ce3f2ef53928ab842e1f69bb5db25887c9fecc857eece03b5a8861",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "decision",
+            "label": "Design review (Oct 14): polycarbonate enclosure",
+            "visibility": "team",
+            "ref": "meeting:sha256:6e35952756ce3f2ef53928ab842e1f69bb5db25887c9fecc857eece03b5a8861"
+          },
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:39c6b6d6eef2691eaf4242b793dc33fb783f953c3705dfb5a2e4b905aa33d74d",
+              "record_sha256": "sha256:3cee0b3f7b0adf3c2aa968918d61b08b77b2a0e348c38e7664416b268b9887cb",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "decision",
+            "label": "Battery review (Oct 16): switch to the 2,800 mAh cell",
+            "visibility": "team",
+            "ref": "meeting:sha256:3cee0b3f7b0adf3c2aa968918d61b08b77b2a0e348c38e7664416b268b9887cb"
+          }
+        ]
+      },
+      "question": "when was that decided?",
+      "expect": {
+        "candidates": [
+          [
+            "enclosure",
+            "polycarbonate"
+          ],
+          [
+            "cell",
+            "battery",
+            "2,800 mAh",
+            "2800 mAh"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "unrelated-firmware-lead",
+      "group": "unrelated",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-10-24T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT gate is blocked by THERM-482: the thermal fixture fails at 45 °C, so the 72-hour soak test cannot finish.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "Who leads the firmware team?",
+      "expect": {
+        "terms": [
+          "firmware team"
+        ]
+      }
+    },
+    {
+      "id": "unrelated-shipping-carton",
+      "group": "unrelated",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Why did the battery swelling show up?",
+        "asked_at": "2026-10-24T15:20:00.000Z",
+        "statements": [
+          {
+            "text": "Priya Nair's investigation in BATT-77 found the cells swell after 72 hours of storage at 45 °C.",
+            "citation_indexes": [
+              0
+            ]
+          },
+          {
+            "text": "The Battery safety test plan lists 45 °C storage as a required DVT test.",
+            "citation_indexes": [
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "30077",
+              "permalink": "https://therm-hw.atlassian.net/browse/BATT-77",
+              "text_sha256": "sha256:993bed77df23aa18f9ad9083f9a7785111f760dbada26b5d881fceba811e4510"
+            },
+            "kind": "ticket",
+            "label": "BATT-77: Battery swelling after 45 °C storage",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1442150",
+              "section_id": "overview",
+              "version": "7",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1442150",
+              "text_sha256": "sha256:bede946b2a590dea28c6d916813a85bf70823956937f689e73046a875ba07227"
+            },
+            "kind": "page",
+            "label": "Battery safety test plan",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "What did we decide about the shipping carton design?",
+      "expect": {
+        "terms": [
+          "shipping carton"
+        ]
+      }
+    },
+    {
+      "id": "unrelated-my-projects",
+      "group": "unrelated",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Who is leading the EMC pre-scan?",
+        "asked_at": "2026-10-21T17:30:00.000Z",
+        "statements": [
+          {
+            "text": "Lena Okafor leads the EMC pre-scan, scheduled for Oct 28 at Intertek.",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "person",
+              "membership_id": "mem_77e9047c-1d60-4d36-aa69-431f62c596c2"
+            },
+            "kind": "person",
+            "label": "Lena Okafor",
+            "visibility": "team"
+          },
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1442001",
+              "section_id": "overview",
+              "version": "7",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1442001",
+              "text_sha256": "sha256:df206f3e23263772418f0eff856b83ba1f6233618954fd61397ee5a4b29093cd"
+            },
+            "kind": "page",
+            "label": "EMC test plan",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "Which projects am I a member of?",
+      "expect": {
+        "terms": [
+          "projects"
+        ]
+      }
+    },
+    {
+      "id": "unrelated-all-hands",
+      "group": "unrelated",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What is still open from the supplier quality review?",
+        "asked_at": "2026-10-23T19:00:00.000Z",
+        "statements": [
+          {
+            "text": "One follow-up is open: Ana Gomez is to send the revised gasket spec to Acme Seals, due Oct 29.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "follow_up",
+              "item_id": "itm_gasket-spec-1"
+            },
+            "kind": "follow_up",
+            "label": "Send the revised gasket spec to Acme Seals",
+            "visibility": "team",
+            "ref": "follow_up:itm_gasket-spec-1"
+          }
+        ]
+      },
+      "question": "When is the next all-hands meeting?",
+      "expect": {
+        "terms": [
+          "all-hands"
+        ]
+      }
+    },
+    {
+      "id": "unrelated-mech-open-tickets",
+      "group": "unrelated",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What changed in the DVT schedule this week?",
+        "asked_at": "2026-10-24T22:15:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT build moved from Nov 3 to Nov 10, tracked in THERM-501.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10501",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-501",
+              "text_sha256": "sha256:257b3b1f05b76a8c3aa9c8f88d66497b973b0a0da7859b5c49175840328715da"
+            },
+            "kind": "ticket",
+            "label": "THERM-501: Move the DVT build to Nov 10",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "What are the open tickets in the MECH project?",
+      "expect": {
+        "terms": [
+          "MECH"
+        ]
+      }
+    },
+    {
+      "id": "standalone-therm-482-details",
+      "group": "standalone",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-10-24T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT gate is blocked by THERM-482: the thermal fixture fails at 45 °C, so the 72-hour soak test cannot finish.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "What are the details on THERM-482?",
+      "expect": {
+        "terms": [
+          "THERM-482"
+        ]
+      }
+    },
+    {
+      "id": "standalone-therm-490-due",
+      "group": "standalone",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Who owns the fixture redesign?",
+        "asked_at": "2026-10-23T21:40:00.000Z",
+        "statements": [
+          {
+            "text": "Dev Patel owns the fixture redesign for the new heater block, tracked in THERM-490.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10490",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-490",
+              "text_sha256": "sha256:ff4e3cfd3ca02a5d44fed24b6a33c9a5bc67b606fd12b2843ffcf716dd1454e0"
+            },
+            "kind": "ticket",
+            "label": "THERM-490: Fixture redesign for the new heater block",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "When is THERM-490 due?",
+      "expect": {
+        "terms": [
+          "THERM-490"
+        ]
+      }
+    },
+    {
+      "id": "standalone-readiness-approver",
+      "group": "standalone",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What did we decide in the DVT readiness review?",
+        "asked_at": "2026-10-23T23:10:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT readiness review on Oct 23 approved starting the DVT build on Nov 3 with 40 units.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:0a556e8d44a18a16b5ecff5a66f27724fe28fc8a40e06648af5901cd5f56273c",
+              "record_sha256": "sha256:8e1dc7630571eb31a458aaa5ad981dd045c93238ca93e936b443f2c56e6aab20",
+              "policy_id": "organization-member-readable-person-v2"
+            },
+            "kind": "decision",
+            "label": "DVT readiness review (Oct 23): DVT build starts Nov 3 with 40 units",
+            "visibility": "team",
+            "ref": "meeting:sha256:8e1dc7630571eb31a458aaa5ad981dd045c93238ca93e936b443f2c56e6aab20"
+          }
+        ]
+      },
+      "question": "Who approved the DVT readiness review decision on the Nov 3 build?",
+      "expect": {
+        "terms": [
+          "DVT readiness review"
+        ]
+      }
+    },
+    {
+      "id": "standalone-evt-exit-page",
+      "group": "standalone",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Where are the EVT test requirements written down?",
+        "asked_at": "2026-10-20T16:30:00.000Z",
+        "statements": [
+          {
+            "text": "Two Confluence pages hold them: \"EVT exit criteria\" and \"EVT test matrix\".",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1441793",
+              "section_id": "overview",
+              "version": "7",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1441793",
+              "text_sha256": "sha256:64cebf5e57a910810e1749c52bd4505457e3c3f1547cabab9140a29c1d517a9b"
+            },
+            "kind": "page",
+            "label": "EVT exit criteria",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1441810",
+              "section_id": "overview",
+              "version": "7",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1441810",
+              "text_sha256": "sha256:1930c7bb23552418472e789094e6a5336a53848b3375b9af991d61f6c0e40ce9"
+            },
+            "kind": "page",
+            "label": "EVT test matrix",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "Is the EVT exit criteria page up to date?",
+      "expect": {
+        "terms": [
+          "EVT exit criteria"
+        ]
+      }
+    },
+    {
+      "id": "standalone-mech-214-among-two",
+      "group": "standalone",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-10-24T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "Two tickets block the DVT gate: THERM-482, the thermal fixture failing at 45 °C, and MECH-214, the front bezel cracking in drop tests.",
+            "citation_indexes": [
+              0,
+              1
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          },
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "20214",
+              "permalink": "https://therm-hw.atlassian.net/browse/MECH-214",
+              "text_sha256": "sha256:659bcb1a7898650b446beabeede595b73c849cd5c7b706c65cb3e79dbe466615"
+            },
+            "kind": "ticket",
+            "label": "MECH-214: Front bezel cracks in 1.2 m drop test",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "question": "Who is assigned to MECH-214?",
+      "expect": {
+        "terms": [
+          "MECH-214"
+        ]
+      }
+    }
+  ]
+}
