@@ -6,8 +6,8 @@ import type {
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerSentences, documentName, dueColumn, externalSourceProvider, lateForYou, passageBlocks, rowId, rowStatement, statementGroups, tableDay, yoursIn,
-  type AnswerTable, type Inline, type SourceGroup,
+  answerSentences, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownBlocks, statementGroups, tableDay,
+  yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
 } from '../answer.js';
 import { identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
@@ -25,7 +25,7 @@ import {
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
-  allOmitted, askedToday, askedWhen, markOf, shownInFull, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
+  allOmitted, askedToday, askedWhen, markOf, shownInFull, showsOf, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { Caret, Check, Chevron, Close, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticks, Up } from './icons.js';
 
@@ -180,18 +180,20 @@ export function Bar({ state }: { state: State }) {
 
 /**
  * One turn's answer as the page shows it (ADR-0047): its sources, numbered as
- * its sentences cite them, and what the last check found of them, when one
- * applies (never to a turn asked in this Ask).
+ * its sentences cite them, what the last check found of them, when one
+ * applies (never to a turn asked in this Ask), and so which sentences and rows
+ * it shows.
  */
 interface TurnView {
   readonly id: string;
   readonly answer: Answer;
   readonly groups: readonly SourceGroup[];
   readonly checks: TurnChecks | undefined;
+  readonly shows: Shows;
 }
 
 function turnView(turn: TimelineTurn, checks: TurnChecks | undefined): TurnView {
-  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer.sources, checks), checks };
+  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer.sources, checks), checks, shows: showsOf(checks) };
 }
 
 /** A source's first citation stands for it: its kind, its label, its record or its link. */
@@ -234,9 +236,9 @@ function markIn(view: TurnView, citations: readonly number[]): Mark {
   return markOf(citations, view.checks);
 }
 
-/** A sentence's classes: lit by its number, and changed since it was said. */
+/** A sentence's or row's classes: lit by its number, and changed since it was said. */
 function markClass(base: string, on: boolean, mark: Mark): string {
-  return `${base}${on ? ' on' : ''}${mark === 'changed' ? ' changed' : ''}`;
+  return [base, on ? 'on' : '', mark === 'changed' ? 'changed' : ''].filter(Boolean).join(' ');
 }
 
 /** A sentence and the numbers of its sources. The one whose number opened the pane is lit. One a check left out is not shown. */
@@ -276,7 +278,7 @@ function Claim({ state, view, statement, id, mark }: { state: State; view: TurnV
 
 /** The places of a block's sentences a check leaves to show. */
 function shownPlaces(view: TurnView, part: AnswerPart, places: readonly number[]): number[] {
-  return places.filter(place => markIn(view, part.statements[place]!.citation_indexes) !== 'omitted');
+  return places.filter(place => view.shows(part.statements[place]!.citation_indexes));
 }
 
 /** The sentences of a lead or a paragraph, one after another, each with its own numbers. */
@@ -321,8 +323,7 @@ function Table({ state, view, index, block, place, opens, label }: {
             const id = rowId(index, place, at);
             const late = lateForYou(block.columns, row.cells, me);
             return (
-              <tr key={at} class={[lit(state, view, id) ? 'on' : '', mark === 'changed' ? 'changed' : ''].filter(Boolean).join(' ') || undefined}
-                data-testid="answer-row" data-mark={mark ?? undefined}>
+              <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-mark={mark ?? undefined}>
                 {row.cells.map((cell, column) => column === 0
                   ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row, view.answer.sources)} id={id} /></span></td>
                   : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
@@ -333,13 +334,6 @@ function Table({ state, view, index, block, place, opens, label }: {
       </table>
     </div>
   </>;
-}
-
-/** Whether a laid-out block shows anything once a check leaves out what you can no longer read. */
-function blockShows(view: TurnView, part: AnswerPart, block: AnswerBlock): boolean {
-  if (block.kind === 'heading') return true;
-  if (block.kind === 'table') return block.rows.some(row => markIn(view, row.citation_indexes) !== 'omitted');
-  return shownPlaces(view, part, block.statements).length > 0;
 }
 
 /**
@@ -354,12 +348,11 @@ function LaidOut({ state, view, part, index, layout, opening }: {
 }) {
   // A table without a caption is named by the heading above it.
   let heading = 'Table';
-  const shows = layout.map((block, place) => blockShows(view, part, block) && (block.kind !== 'heading' || (layout[place + 1] !== undefined && layout[place + 1]!.kind !== 'heading'
-    && blockShows(view, part, layout[place + 1]!))));
+  const showing = shownBlocks(part, layout, view.shows);
   return (
     <div class="answer-layout">
       {layout.map((block, place) => {
-        if (!shows[place]) return null;
+        if (!showing[place]) return null;
         if (block.kind === 'heading') { heading = block.text; return <h3 key={place} class="answer-heading">{block.text}</h3>; }
         if (block.kind === 'lead') {
           return <p key={place} class="answer-lead selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
@@ -374,8 +367,7 @@ function LaidOut({ state, view, part, index, layout, opening }: {
                 const id = `${index}.${at}`;
                 const statement = part.statements[at]!;
                 const mark = markIn(view, statement.citation_indexes);
-                return <li key={at} class={[lit(state, view, id) ? 'on' : '', mark === 'changed' ? 'changed' : ''].filter(Boolean).join(' ') || undefined}
-                  data-testid="statement" data-mark={mark ?? undefined}>
+                return <li key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="statement" data-mark={mark ?? undefined}>
                   <span><span data-testid="statement-text">{statement.text}</span><Markers state={state} view={view} statement={statement} id={id} /></span>
                 </li>;
               })}
@@ -388,11 +380,6 @@ function LaidOut({ state, view, part, index, layout, opening }: {
   );
 }
 
-/** Whether a part shows anything once a check leaves out what you can no longer read. */
-function partShows(view: TurnView, part: AnswerPart): boolean {
-  return [...part.statements, ...(part.records ?? [])].some(statement => markIn(view, statement.citation_indexes) !== 'omitted');
-}
-
 /**
  * The answer: each part, laid out when it carries a layout and a paragraph
  * per sentence when not. A part with nothing to show is left out, and so is a
@@ -403,8 +390,8 @@ function partShows(view: TurnView, part: AnswerPart): boolean {
  */
 function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
   const answer = view.answer;
-  const parts = answer.parts.map((part, index) => ({ part, index })).filter(({ part }) => partShows(view, part));
-  const said = parts.length > 0 || (answer.direct !== undefined && markIn(view, answer.direct.citation_indexes) !== 'omitted');
+  const parts = answer.parts.map((part, index) => ({ part, index })).filter(({ part }) => partShows(part, view.shows));
+  const said = parts.length > 0 || (answer.direct !== undefined && view.shows(answer.direct.citation_indexes));
   return (
     <div class={`agentic-answer${dimmed ? ' dimmed' : ''}`} data-testid="answer">
       {answer.direct && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
@@ -430,7 +417,7 @@ function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: S
  */
 function SinceList({ state, view, since, at }: { state: State; view: TurnView; since: readonly AnswerStatement[]; at: string | null }) {
   const when = at === null ? 'then' : askedWhen(at);
-  const shown = since.map((statement, place) => ({ statement, place })).filter(({ statement }) => markIn(view, statement.citation_indexes) !== 'omitted');
+  const shown = since.map((statement, place) => ({ statement, place })).filter(({ statement }) => view.shows(statement.citation_indexes));
   if (since.length === 0) return <p class="since-note" data-testid="since-nothing">Nothing changed since {when}</p>;
   if (shown.length === 0) return null;
   return (

@@ -8,7 +8,7 @@ import type {
 } from '../shared/protocol.js';
 import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
-import { answerSentences, MAX_SOURCES, sourceGroups, type SourceGroup } from './answer.js';
+import { answerSentences, MAX_SOURCES, sourceGroups, type Shows, type SourceGroup } from './answer.js';
 
 /** A follow-up continues the latest turn while it was asked this recently, and Ask is open. */
 export const FOLLOW_UP_MS = 60 * 60_000;
@@ -124,6 +124,11 @@ export function markOf(citations: readonly number[], checks: TurnChecks | undefi
   if (!checks) return null;
   if (citations.some(at => checks[at] === 'unreadable')) return 'omitted';
   return citations.some(at => checks[at] === 'changed') ? 'changed' : null;
+}
+
+/** Which sentences and rows of a turn the page shows after a check: all but those it leaves out. */
+export function showsOf(checks: TurnChecks | undefined): Shows {
+  return citations => markOf(citations, checks) !== 'omitted';
 }
 
 /**

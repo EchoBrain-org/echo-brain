@@ -15,7 +15,7 @@ import { askText, searchQuery } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, MAX_SOURCES, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  answeredNow, askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, markOf, previousOf, sameScope, shownInFull,
+  answeredNow, askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, previousOf, sameScope, shownInFull, showsOf,
   turnGroups, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
@@ -3965,7 +3965,7 @@ export async function copyAnswer(id: string | null = state.sources?.turn ?? null
   const { answer } = turn;
   const checks = shownChecks(turn);
   const groups = turnGroups(answer.sources, checks);
-  const shows = (citations: readonly number[]) => markOf(citations, checks) !== 'omitted';
+  const shows = showsOf(checks);
   const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows);
   const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : checks === undefined ? answer.text : answerText(answer, shows);
   return text !== '' && (await rpc('clipboard.writeText', { text })).ok;

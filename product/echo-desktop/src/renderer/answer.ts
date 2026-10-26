@@ -250,7 +250,7 @@ export type Shows = (citations: readonly number[]) => boolean;
  * a sentence or row it shows, and a heading only with such a block right
  * under it.
  */
-function shownBlocks(part: AnswerPart, layout: readonly AnswerBlock[], shows: Shows): boolean[] {
+export function shownBlocks(part: AnswerPart, layout: readonly AnswerBlock[], shows: Shows): boolean[] {
   const some = (block: AnswerBlock) => block.kind === 'heading' || (block.kind === 'table' ? block.rows.some(row => shows(row.citation_indexes))
     : block.statements.some(place => shows(part.statements[place]!.citation_indexes)));
   return layout.map((block, place) => some(block) && (block.kind !== 'heading' || (layout[place + 1] !== undefined && layout[place + 1]!.kind !== 'heading'
@@ -258,7 +258,7 @@ function shownBlocks(part: AnswerPart, layout: readonly AnswerBlock[], shows: Sh
 }
 
 /** Whether the page shows anything of a part: a sentence, or a passage found. */
-function partShows(part: AnswerPart, shows: Shows): boolean {
+export function partShows(part: AnswerPart, shows: Shows): boolean {
   return [...part.statements, ...(part.records ?? [])].some(statement => shows(statement.citation_indexes));
 }
 
