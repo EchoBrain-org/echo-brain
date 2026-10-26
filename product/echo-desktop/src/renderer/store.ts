@@ -5093,8 +5093,30 @@ export interface HomeState {
 }
 
 type ReviewOpen = PersonMeetingResultsV2['review_open'];
-/** Where one decision or action goes: null = not kept, [] = Only me, otherwise its projects, sorted. */
-export type Destination = readonly string[] | null;
+/**
+ * Where one decision or action goes: null = not kept, otherwise its projects (sorted) and the Only me lock. No project is
+ * Only me, always locked; projects with the lock are where it is filed for you alone (ADR-0049).
+ */
+export type Destination = { readonly projects: readonly string[]; readonly private: boolean } | null;
+/** Only me: in no project, and only you read it. */
+export const ONLY_ME: NonNullable<Destination> = Object.freeze({ projects: Object.freeze([]) as readonly string[], private: true });
+/** A destination as the card keeps it: its projects sorted, and Only me whenever it names none. */
+function destinationOf(projects: readonly string[], isPrivate: boolean): NonNullable<Destination> {
+  return projects.length === 0 ? ONLY_ME : { projects: [...projects].sort(), private: isPrivate };
+}
+/** Where a review says an item or a record went: not kept (null), or its projects and `private` as the route said them. */
+export function destinationFrom(value: { readonly project_ids: readonly string[] | null; readonly private?: true }): Destination {
+  return value.project_ids === null ? null : destinationOf(value.project_ids, value.private === true);
+}
+/** Two destinations are one when they name the same projects with the same lock, or neither is kept. */
+function sameDestination(a: Destination, b: Destination): boolean {
+  return a === null || b === null ? a === b
+    : a.private === b.private && a.projects.length === b.projects.length && a.projects.every((id, index) => id === b.projects[index]);
+}
+/** Whether a destination is filed in projects for you alone: the lock, pressed while projects are ticked. */
+export function keptPrivate(destination: Destination): boolean {
+  return destination !== null && destination.projects.length > 0 && destination.private;
+}
 /** One record's follow-ups counted on the decision page, by its check. */
 export interface RecordLine { summary: OpenItemsView['summary'] | null; stage: PersonImpactStageV1 | null }
 
@@ -5599,7 +5621,7 @@ function newDecision(approval_id: string, mine: number, run: PersonRunV1 | null)
 
 /** A proposal's own choices: each item where the review says it goes (pending: the suggestion), and each proposed owner. */
 function choicesOf(open: ReviewOpen): Pick<DecisionState, 'routes' | 'owners'> {
-  return { routes: Object.fromEntries(open.items.map(item => [item.signal_id, item.project_ids])),
+  return { routes: Object.fromEntries(open.items.map(item => [item.signal_id, destinationFrom(item)])),
     owners: Object.fromEntries(open.items.flatMap(item => (item.owner_editable && item.owner !== null ? [[item.signal_id, item.owner]] : []))) };
 }
 
@@ -5655,28 +5677,38 @@ function routedItems(decision: DecisionState): readonly ReviewOpen['items'][numb
 export function keptItems(decision: DecisionState): readonly ReviewOpen['items'][number][] {
   return routedItems(decision).filter(item => (decision.routes[item.signal_id] ?? null) !== null);
 }
-/** Every project the routes name, each once: what counts toward the meeting's MAX_CAPTURE_PROJECTS. */
+/** Every project the routes name, each once, locked or not: what counts toward the meeting's MAX_CAPTURE_PROJECTS. */
 export function routedProjects(routes: Readonly<Record<string, Destination>>): Set<string> {
-  return new Set(Object.values(routes).flatMap(destination => destination ?? []));
+  return new Set(Object.values(routes).flatMap(destination => destination?.projects ?? []));
 }
 /** Routes the card may send: at most MAX_CAPTURE_PROJECTS projects in all, as at most so many in one item. */
 function withinProjects(routes: Readonly<Record<string, Destination>>): boolean {
   return routedProjects(routes).size <= MAX_CAPTURE_PROJECTS;
 }
 
-/** One item's destination: Only me ([]), not kept (null), or exactly these projects. */
+/** One item's destination: not kept (null), Only me, or exactly these projects, locked or not. */
 export function setDecisionRoute(signalId: string, destination: Destination): void {
   const decision = state.decision;
   if (!decision) return;
-  const routes = { ...decision.routes, [signalId]: destination === null ? null : [...destination].sort() };
+  const routes = { ...decision.routes, [signalId]: destination === null ? null : destinationOf(destination.projects, destination.private) };
   if (withinProjects(routes)) editChoices({ routes });
 }
-/** A project ticked or unticked on one item: unticking its last project leaves it Only me. */
+/**
+ * A project ticked or unticked on one item. The lock stays as it was while projects stay ticked; the first project ticked
+ * starts unlocked, as Capture's does, and unticking the last leaves it Only me.
+ */
 export function tickDecisionRoute(signalId: string, projectId: string): void {
   const decision = state.decision;
   if (!decision) return;
-  const now = decision.routes[signalId] ?? [];
-  setDecisionRoute(signalId, now.includes(projectId) ? now.filter(id => id !== projectId) : [...now, projectId]);
+  const now = decision.routes[signalId] ?? null, projects = now?.projects ?? [];
+  setDecisionRoute(signalId, destinationOf(projects.includes(projectId) ? projects.filter(id => id !== projectId) : [...projects, projectId], keptPrivate(now)));
+}
+/** The Only me lock on one item: on projects it turns whether only you read the item there; with none, or not kept, it is Only me. */
+export function lockDecisionRoute(signalId: string): void {
+  const decision = state.decision;
+  if (!decision) return;
+  const now = decision.routes[signalId] ?? null;
+  setDecisionRoute(signalId, now === null || now.projects.length === 0 ? ONLY_ME : destinationOf(now.projects, !now.private));
 }
 /** Every kept item to one destination, or every item when none is kept. "Don't keep" (null) keeps none. */
 export function setDecisionRoutes(destination: Destination): void {
@@ -5684,30 +5716,43 @@ export function setDecisionRoutes(destination: Destination): void {
   if (!decision) return;
   const items = routedItems(decision);
   const targets = destination === null || keptItems(decision).length === 0 ? items : keptItems(decision);
-  const value = destination === null ? null : [...destination].sort();
+  const value = destination === null ? null : destinationOf(destination.projects, destination.private);
   const routes = { ...decision.routes, ...Object.fromEntries(targets.map(item => [item.signal_id, value])) };
   if (withinProjects(routes)) editChoices({ routes });
 }
 /**
- * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects:
- * one every kept item has comes off each, leaving an item with no other Only me; any other goes on each.
+ * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects
+ * and its lock: one every kept item has comes off each, leaving an item with no other Only me; any other goes on each.
  */
 export function tickDecisionRoutes(projectId: string): void {
   const decision = state.decision;
   if (!decision) return;
   const kept = keptItems(decision);
-  const off = kept.length > 0 && kept.every(item => decision.routes[item.signal_id]!.includes(projectId));
+  const off = kept.length > 0 && kept.every(item => decision.routes[item.signal_id]!.projects.includes(projectId));
   const routes = { ...decision.routes, ...Object.fromEntries((kept.length > 0 ? kept : routedItems(decision)).map(item => {
-    const others = (decision.routes[item.signal_id] ?? []).filter(id => id !== projectId);
-    return [item.signal_id, off ? others : [...others, projectId].sort()];
+    const now = decision.routes[item.signal_id] ?? null;
+    const others = (now?.projects ?? []).filter(id => id !== projectId);
+    return [item.signal_id, destinationOf(off ? others : [...others, projectId], keptPrivate(now))];
   })) };
   if (withinProjects(routes)) editChoices({ routes });
 }
-/** The one destination every kept item has, or null when they differ ("Mixed") or nothing is kept. */
-export function sharedDestination(decision: DecisionState): readonly string[] | null {
+/**
+ * The Only me lock on every kept item at once (every item when none is kept). With no project among them, every one is Only
+ * me. Otherwise each item filed in projects is locked, or unlocked when each already is; an item in none stays Only me.
+ */
+export function lockDecisionRoutes(): void {
+  const decision = state.decision;
+  if (!decision) return;
+  const filed = keptItems(decision).filter(item => decision.routes[item.signal_id]!.projects.length > 0);
+  if (filed.length === 0) { setDecisionRoutes(ONLY_ME); return; }
+  const lock = !filed.every(item => decision.routes[item.signal_id]!.private);
+  editChoices({ routes: { ...decision.routes, ...Object.fromEntries(filed.map(item => [item.signal_id, destinationOf(decision.routes[item.signal_id]!.projects, lock)])) } });
+}
+/** The one destination every kept item has, its lock included, or null when they differ ("Mixed") or nothing is kept. */
+export function sharedDestination(decision: DecisionState): NonNullable<Destination> | null {
   const kept = keptItems(decision).map(item => decision.routes[item.signal_id]!);
   const [first] = kept;
-  return first !== undefined && kept.every(value => value.length === first.length && value.every((id, index) => id === first[index])) ? first : null;
+  return first !== undefined && kept.every(value => sameDestination(value, first)) ? first : null;
 }
 
 /** Approve or Reject: one send per opening. Home shows where it went; the check runs by itself. */
@@ -5722,7 +5767,11 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
   try {
     const result = await meetingCommand({
       operation: 'review', approval_id: decision.approval_id, command_id: decision.command, snapshot_sha256: decision.open.snapshot_sha256, action,
-      routes: action === 'approve' ? items.map(item => ({ signal_id: item.signal_id, project_ids: decision.routes[item.signal_id] ?? null })) : [],
+      // Projects with the lock go as `private: true`; no other route says it.
+      routes: action === 'approve' ? items.map(item => {
+        const destination = decision.routes[item.signal_id] ?? null;
+        return { signal_id: item.signal_id, project_ids: destination === null ? null : [...destination.projects], ...(keptPrivate(destination) ? { private: true as const } : {}) };
+      }) : [],
       owners: action === 'approve' ? items.flatMap(item => (item.owner_editable && (decision.routes[item.signal_id] ?? null) !== null && owner(item)
         ? [{ signal_id: item.signal_id, owner: owner(item) }] : [])) : [],
     }, reviewTool);

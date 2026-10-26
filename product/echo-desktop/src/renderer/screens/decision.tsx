@@ -4,11 +4,11 @@ import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol
 import { dateTime } from '../format.js';
 import { dueWords } from '../needs.js';
 import {
-  decide, keptItems, loadProjects, retryImpact, routedProjects, setDecisionOwner, setDecisionRoute, setDecisionRoutes, sharedDestination, tickDecisionRoute,
-  tickDecisionRoutes, type DecisionState, type Destination, type State,
+  decide, destinationFrom, keptItems, keptPrivate, loadProjects, lockDecisionRoute, lockDecisionRoutes, retryImpact, routedProjects, setDecisionOwner,
+  setDecisionRoute, setDecisionRoutes, sharedDestination, tickDecisionRoute, tickDecisionRoutes, type DecisionState, type Destination, type State,
 } from '../store.js';
 import { CardHead, Face, Reasons, SignalRow } from './card.js';
-import { Caret } from './icons.js';
+import { Caret, Lock } from './icons.js';
 import { ImpactSection, meetingFollowUps } from './impact-card.js';
 import { ProjectPicker } from './project-picker.js';
 
@@ -27,47 +27,61 @@ function namesOf(projects: readonly ProjectSummary[]): ReadonlyMap<string, strin
   return new Map(projects.map(project => [project.project_id, project.name]));
 }
 
-/** A destination in a few words: its first project's name ("THERM +1" with more), Only me, or Not kept. */
-export function destinationLabel(destination: Destination, names: ReadonlyMap<string, string>): string {
+/** Where a destination is, in a few words: its first project's name ("THERM +1" with more), Only me, or Not kept. */
+function destinationPlace(destination: Destination, names: ReadonlyMap<string, string>): string {
   if (destination === null) return 'Not kept';
-  if (destination.length === 0) return 'Only me';
-  const first = names.get(destination[0]!) ?? 'A project';
-  return destination.length > 1 ? `${first} +${destination.length - 1}` : first;
+  if (destination.projects.length === 0) return 'Only me';
+  const first = names.get(destination.projects[0]!) ?? 'A project';
+  return destination.projects.length > 1 ? `${first} +${destination.projects.length - 1}` : first;
+}
+
+/** A destination in words: where it is, then ", only me" when it is filed there for you alone. */
+export function destinationLabel(destination: Destination, names: ReadonlyMap<string, string>): string {
+  return keptPrivate(destination) ? `${destinationPlace(destination, names)}, only me` : destinationPlace(destination, names);
+}
+
+/** A chip's face: the lock when it is filed for you alone (its words stay in the chip's name), then where it is. */
+function ChipFace({ label, locked }: { label: string; locked: boolean }) {
+  return <>{locked && <span class="route-lock" data-testid="route-lock" title="Only you can read it there"><Lock /></span>}<span class="name">{label}</span></>;
 }
 
 /**
- * "2 to Thermostat redesign · 1 to Only me · 1 not kept": where Approve sends the items, in the card's order. Counted by
- * destination, not by its words: THERM with ECHO and THERM with SUPPLIER both read "THERM +1", and are two records.
+ * "2 to Thermostat redesign · 1 to Thermostat redesign, only me · 1 to Only me · 1 not kept": where Approve sends the items,
+ * in the card's order. Counted by destination, not by its words: THERM with ECHO and THERM with SUPPLIER both read
+ * "THERM +1", and are two records; so are THERM shared and THERM kept for you alone.
  */
 function summary(items: readonly Item[], routes: DecisionState['routes'], names: ReadonlyMap<string, string>): string {
   const counts = new Map<string, { destination: Destination; count: number }>();
   for (const item of items) {
     const destination = routes[item.signal_id] ?? null;
-    const key = JSON.stringify(destination && [...destination].sort());
+    const key = JSON.stringify(destination && [destination.private, ...destination.projects]);
     counts.set(key, { destination, count: (counts.get(key)?.count ?? 0) + 1 });
   }
   return [...counts.values()].sort((a, b) => Number(a.destination === null) - Number(b.destination === null))
     .map(({ destination, count }) => (destination === null ? `${count} not kept` : `${count} to ${destinationLabel(destination, names)}`)).join(' · ');
 }
 
-/** A chip's choice as it shows: Don't keep (a faint chip) or Only me pressed, the projects ticked, and those only some items have. */
+/**
+ * A chip's choice as it shows: Don't keep (a faint chip), the Only me lock pressed (Only me itself, or projects only you
+ * read), the projects ticked, and those only some items have.
+ */
 interface Shown { dropped: boolean; onlyMe: boolean; ticked: readonly string[]; partly: readonly string[] }
 
 function shownOf(destination: Destination): Shown {
-  return { dropped: destination === null, onlyMe: destination?.length === 0, ticked: destination ?? [], partly: [] };
+  return { dropped: destination === null, onlyMe: destination?.private === true, ticked: destination?.projects ?? [], partly: [] };
 }
 
 /**
- * The All items control: the one destination every kept item has, or Not kept when none is. Mixed is its own: no choice
- * pressed, a project every kept item has ticked, and one only some have part-ticked.
+ * The All items control: the one destination every kept item has, or Not kept when none is. Mixed is its own: the lock
+ * pressed only when every kept item is for you alone, a project every kept item has ticked, and one only some have part-ticked.
  */
 function allShown(decision: DecisionState): Shown {
   const kept = keptItems(decision).map(item => decision.routes[item.signal_id]!);
   const shared = sharedDestination(decision);
   if (kept.length === 0 || shared !== null) return shownOf(kept.length === 0 ? null : shared);
-  const every = (id: string) => kept.every(destination => destination.includes(id));
-  const named = [...new Set(kept.flat())];
-  return { dropped: false, onlyMe: false, ticked: named.filter(every), partly: named.filter(id => !every(id)) };
+  const every = (id: string) => kept.every(destination => destination.projects.includes(id));
+  const named = [...new Set(kept.flatMap(destination => destination.projects))];
+  return { dropped: false, onlyMe: kept.every(destination => destination.private), ticked: named.filter(every), partly: named.filter(id => !every(id)) };
 }
 
 /** "2 decisions · 1 action": what the proposal holds. */
@@ -92,12 +106,14 @@ function short(text: string): string {
 }
 
 /**
- * A destination chip and its menu: Only me, your projects (several, up to 20
- * named by the whole meeting), or Don't keep. Escape or a click elsewhere
- * closes it.
+ * A destination chip and its menu: the Only me lock, your projects (several,
+ * up to 20 named by the whole meeting), or Don't keep. With no project ticked
+ * the lock is Only me itself and closes the menu; with projects ticked it
+ * turns whether only you read the item in them, and stays pressed while they
+ * stay ticked. Escape or a click elsewhere closes it.
  */
-function RouteChip({ label, shown, named, projects, state, frozen, name, testid, onOnlyMe, onTick, onDrop }: {
-  label: string; shown: Shown; named: readonly string[]; projects: readonly ProjectSummary[]; state: State; frozen: boolean; name: string; testid: string;
+function RouteChip({ label, locked, shown, named, projects, state, frozen, name, testid, onOnlyMe, onTick, onDrop }: {
+  label: string; locked: boolean; shown: Shown; named: readonly string[]; projects: readonly ProjectSummary[]; state: State; frozen: boolean; name: string; testid: string;
   onOnlyMe(): void; onTick(projectId: string): void; onDrop(): void;
 }) {
   const [open, setOpen] = useState(false);
@@ -116,12 +132,13 @@ function RouteChip({ label, shown, named, projects, state, frozen, name, testid,
   return (
     <div class="route" ref={box}>
       <button type="button" ref={chip} class={`route-chip${shown.dropped ? ' dropped' : ''}`} aria-haspopup="true" aria-expanded={open} disabled={frozen}
-        aria-label={`${name}: ${label}`} data-testid={testid} onClick={() => setOpen(!open)}>
-        <span class="name">{label}</span><Caret />
+        aria-label={`${name}: ${label}${locked ? ', only me' : ''}`} data-testid={testid} onClick={() => setOpen(!open)}>
+        <ChipFace label={label} locked={locked} /><Caret />
       </button>
       {open && (
         <div class="menu route-menu" role="group" aria-label={name} data-testid="route-menu">
-          <button type="button" class="menu-item" aria-pressed={shown.onlyMe} onClick={choose(onOnlyMe)}>Only me</button>
+          <button type="button" class="menu-item" aria-pressed={shown.onlyMe}
+            onClick={shown.ticked.length + shown.partly.length === 0 ? choose(onOnlyMe) : onOnlyMe}>Only me</button>
           <div class="menu-rule" />
           <ProjectPicker projects={projects} ticked={shown.ticked} partly={shown.partly} named={named} max={MAX_CAPTURE_PROJECTS} onTick={onTick} disabled={frozen}
             more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)} />
@@ -138,9 +155,9 @@ function ItemRoute({ item, decision, state, projects, names, named, frozen }: {
   item: Item; decision: DecisionState; state: State; projects: readonly ProjectSummary[]; names: ReadonlyMap<string, string>; named: readonly string[]; frozen: boolean;
 }) {
   const destination = decision.routes[item.signal_id] ?? null;
-  return <RouteChip label={destinationLabel(destination, names)} shown={shownOf(destination)} named={named} projects={projects} state={state} frozen={frozen}
+  return <RouteChip label={destinationPlace(destination, names)} locked={keptPrivate(destination)} shown={shownOf(destination)} named={named} projects={projects} state={state} frozen={frozen}
     name={`Where it goes: ${short(item.text)}`} testid="route-chip"
-    onOnlyMe={() => setDecisionRoute(item.signal_id, [])} onTick={id => tickDecisionRoute(item.signal_id, id)} onDrop={() => setDecisionRoute(item.signal_id, null)} />;
+    onOnlyMe={() => lockDecisionRoute(item.signal_id)} onTick={id => tickDecisionRoute(item.signal_id, id)} onDrop={() => setDecisionRoute(item.signal_id, null)} />;
 }
 
 /** The meeting's decisions, numbered, each with what goes with it. */
@@ -183,7 +200,7 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   const frozen = decision.busy || decision.unknown === true;
   const kept = keptItems(decision);
   const shared = sharedDestination(decision);
-  const all = kept.length === 0 ? 'Not kept' : shared === null ? 'Mixed' : destinationLabel(shared, names);
+  const all = kept.length === 0 ? 'Not kept' : shared === null ? 'Mixed' : destinationPlace(shared, names);
   const approvable = !decision.busy && kept.length > 0;
   // Every chip counts the whole meeting's projects toward the 20 one approval may name.
   const named = [...routedProjects(decision.routes)];
@@ -209,8 +226,8 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
         <section class="card-panel" aria-labelledby="decision-route">
           <div class="route-all">
             <div class="section-label" id="decision-route">All items</div>
-            <RouteChip label={all} shown={allShown(decision)} named={named} projects={projects} state={state} frozen={frozen} name="Where all items go" testid="route-all"
-              onOnlyMe={() => setDecisionRoutes([])} onTick={tickDecisionRoutes} onDrop={() => setDecisionRoutes(null)} />
+            <RouteChip label={all} locked={keptPrivate(shared)} shown={allShown(decision)} named={named} projects={projects} state={state} frozen={frozen} name="Where all items go" testid="route-all"
+              onOnlyMe={lockDecisionRoutes} onTick={tickDecisionRoutes} onDrop={() => setDecisionRoutes(null)} />
           </div>
           <div class="route-summary" data-testid="route-summary">{summary(open.items, decision.routes, names)}</div>
           {decision.failure && <div class="error" data-testid="decision-error" aria-live="polite">{decision.failure}</div>}
@@ -245,8 +262,11 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
     : runs.length > 0 && runs.length >= open.records.length && runs.every(run => run.state === 'done') ? 'What did it change?' : 'Checking what it changes';
   const verb = status === 'rejected' ? 'Rejected' : status === 'superseded' ? 'Replaced by a newer version' : 'Approved';
   const standing = open.review.decided_on === 'slack' ? `${verb} in Slack` : verb;
-  const where = (item: Item) => (approved ? <span class={`route-chip still${item.project_ids === null ? ' dropped' : ''}`} data-testid="route-final">
-    <span class="name">{destinationLabel(item.project_ids, names)}</span></span> : null);
+  const where = (item: Item) => {
+    const destination = destinationFrom(item);
+    return approved ? <span class={`route-chip still${destination === null ? ' dropped' : ''}`} data-testid="route-final" title={destinationLabel(destination, names)}>
+      <ChipFace label={destinationPlace(destination, names)} locked={keptPrivate(destination)} /></span> : null;
+  };
   return (
     <div class="card-page" data-testid="decision">
       <article class="card-main" aria-labelledby="decision-ask">
@@ -256,7 +276,7 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
           const run = runs.find(item => item.event_ref === record.approval_id);
           const line = run ? decision.lines[run.run_id] : undefined;
           const followUps = run && line ? meetingFollowUps({ scope: 'run', id: run.run_id, seq: 0, loading: false, summary: line.summary, stage: line.stage, busy: false }, open.review.title) : null;
-          return <ImpactSection key={record.approval_id} label={destinationLabel(record.project_ids, names)} run={run} publishing={run === undefined} busy={decision.busy}
+          return <ImpactSection key={record.approval_id} label={destinationLabel(destinationFrom(record), names)} run={run} publishing={run === undefined} busy={decision.busy}
             followUps={followUps} onRetry={() => { if (run) void retryImpact(run.run_id); }} />;
         })}
         <Decided items={open.items}>{where}</Decided>

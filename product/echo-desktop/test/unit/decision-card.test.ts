@@ -23,9 +23,12 @@ const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning', 
   action_count: 1, meeting_at: null as string | null, all_day: false, records: [] };
 const open = { review, snapshot_sha256: 'sha256:' + 'b'.repeat(64), participants: ['Ari', 'Mina Patel'], items, suggested_projects: [{ project_id: THERM, name: 'THERM' }],
   reasons: [{ signal_id: 'why-1', text: 'The freeze lifts on Friday.', supports: ['dec-1'], quotes: [] }], records: [] };
+/** Shared with these projects; `mine`: filed in them for you alone; Only me is no project. */
+const to = (...projects: string[]) => ({ projects, private: false }), mine = (...projects: string[]) => ({ projects, private: true });
+const ONLY_ME = mine();
 const decision = (patch: Partial<DecisionState> = {}): DecisionState => ({
   approval_id: review.approval_id, seq: 1, loading: false, open, command: 'command-1', busy: false, runs: [], lines: {},
-  routes: { 'dec-1': [THERM], 'dec-2': [THERM], 'act-1': [THERM] }, owners: { 'act-1': 'Rafael Moreno' }, ...patch,
+  routes: { 'dec-1': to(THERM), 'dec-2': to(THERM), 'act-1': to(THERM) }, owners: { 'act-1': 'Rafael Moreno' }, ...patch,
 });
 const run = (id: string, event_ref: string, state: PersonRunV1['state']): PersonRunV1 => ({ run_id: `run_00000000-0000-4000-8000-0000000000${id}`, trigger: 'approved_record',
   event_ref, state, error_code: state === 'failed' ? 'research_failed' : null, created_at: '2026-10-08T10:00:00.000Z', updated_at: '2026-10-08T10:05:00.000Z' });
@@ -54,7 +57,7 @@ describe('the decision card', () => {
   });
 
   it('labels a destination by its first project and how many more, Only me, or Not kept; the control says Mixed when kept items differ', async () => {
-    const tree = await page(decision({ routes: { 'dec-1': [ECHO, THERM].sort(), 'dec-2': [], 'act-1': null } }));
+    const tree = await page(decision({ routes: { 'dec-1': to(...[ECHO, THERM].sort()), 'dec-2': ONLY_ME, 'act-1': null } }));
     expect(chips(tree)).toEqual(['THERM +1', 'Only me', 'Not kept']);
     expect(text(byTestId(tree, 'route-all')[0])).toBe('Mixed');
     expect(text(byTestId(tree, 'route-summary')[0])).toBe('1 to THERM +1 · 1 to Only me · 1 not kept');
@@ -62,11 +65,28 @@ describe('the decision card', () => {
     const owner = elements(tree).find(node => node.props['aria-label'] === 'Owner for: Send the revised quote')!;
     expect(owner.props.disabled).toBe(true);
     const { destinationLabel } = await import('../../src/renderer/screens/decision.js');
-    expect(destinationLabel([THERM], new Map())).toBe('A project');
+    expect(destinationLabel(to(THERM), new Map())).toBe('A project');
+  });
+
+  it('locks a chip of projects kept for you alone, apart from the same projects shared, and says ", only me" in its name and the summary', async () => {
+    const tree = await page(decision({ routes: { 'dec-1': mine(THERM), 'dec-2': to(THERM), 'act-1': mine(THERM, ECHO) } }));
+    expect(chips(tree)).toEqual(['THERM', 'THERM', 'THERM +1']);
+    expect(byTestId(tree, 'route-chip').map(node => byTestId(node, 'route-lock').length)).toEqual([1, 0, 1]);
+    expect(byTestId(tree, 'route-chip').map(node => node.props['aria-label'])).toEqual([
+      'Where it goes: Launch the pilot next week.: THERM, only me', 'Where it goes: Keep the freeze.: THERM', 'Where it goes: Send the revised quote: THERM +1, only me']);
+    expect(text(byTestId(tree, 'route-all')[0])).toBe('Mixed');
+    expect(byTestId(byTestId(tree, 'route-all')[0], 'route-lock')).toEqual([]);
+    expect(text(byTestId(tree, 'route-summary')[0])).toBe('1 to THERM, only me · 1 to THERM · 1 to THERM +1, only me');
+    // Only me itself has no lock on its chip: it is in no project.
+    expect(byTestId(byTestId(await page(decision({ routes: { 'dec-1': ONLY_ME, 'dec-2': ONLY_ME, 'act-1': null } })), 'route-chip')[0], 'route-lock')).toEqual([]);
+    const all = await page(decision({ routes: { 'dec-1': mine(THERM), 'dec-2': mine(THERM), 'act-1': mine(THERM) } }));
+    const control = byTestId(all, 'route-all')[0]!;
+    expect([text(control), control.props['aria-label'], byTestId(control, 'route-lock').length]).toEqual(['THERM', 'Where all items go: THERM, only me', 1]);
+    expect(text(byTestId(all, 'route-summary')[0])).toBe('3 to THERM, only me');
   });
 
   it('counts the summary by destination, so two that read alike stay apart, and never shows Mixed as not kept', async () => {
-    const tree = await page(decision({ routes: { 'dec-1': [THERM, ECHO], 'dec-2': [THERM, SUPPLIER], 'act-1': [THERM, ECHO] } }));
+    const tree = await page(decision({ routes: { 'dec-1': to(THERM, ECHO), 'dec-2': to(THERM, SUPPLIER), 'act-1': to(THERM, ECHO) } }));
     expect(chips(tree)).toEqual(['THERM +1', 'THERM +1', 'THERM +1']);
     expect(text(byTestId(tree, 'route-summary')[0])).toBe('2 to THERM +1 · 1 to THERM +1');
     // Items are kept: Mixed is not the faint Not kept control.
@@ -117,6 +137,17 @@ describe('the decision card', () => {
     expect(text(tree)).toContain('R. Moreno');
     expect(text(tree)).toContain('The check did not finish');
     expect(byTestId(tree, 'route-chip')).toEqual([]);
+  });
+
+  it('says of an approved item and its record when they were kept for you alone in a project', async () => {
+    const records = [{ approval_id: 'apr_' + '3'.repeat(64), project_ids: [THERM], private: true as const }, { approval_id: 'apr_' + '1'.repeat(64), project_ids: [THERM] }];
+    const decided = { ...open, review: { ...review, status: 'approved' as const, decided_on: 'desktop' as const, records }, records,
+      items: [{ ...items[0]!, project_ids: [THERM], private: true as const }, { ...items[1]!, project_ids: [THERM] }, { ...items[2]!, owner: null, owner_editable: false, project_ids: [THERM], private: true as const }] };
+    const tree = await page(decision({ open: decided }));
+    expect(elements(tree).filter(node => node.props.class === 'impact').map(node => node.props['aria-label'])).toEqual(['Impact · THERM, only me', 'Impact · THERM']);
+    const final = byTestId(tree, 'route-final');
+    expect(final.map(node => [text(node), node.props.title, byTestId(node, 'route-lock').length])).toEqual([
+      ['THERM', 'THERM, only me', 1], ['THERM', 'THERM', 0], ['THERM', 'THERM, only me', 1]]);
   });
 });
 

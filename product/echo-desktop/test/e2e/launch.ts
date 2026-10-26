@@ -179,10 +179,20 @@ export async function addMeeting(page: Page): Promise<void> {
   await page.getByTestId('sidebar-home').click();
 }
 
-/** Sends every item of an open decision card to one place: Only me, or Don't keep, from its All items control. */
+/**
+ * Sends every item of an open decision card to one place from its All items control: Don't keep, or Only me. Only me is a
+ * lock on projects (ADR-0049), so Only me itself is no project: every project the items all have is unticked.
+ */
 export async function routeAll(card: Locator, choice: 'Only me' | 'Don\'t keep'): Promise<void> {
   await card.getByTestId('route-all').click();
-  await card.getByTestId('route-menu').getByRole('button', { name: choice, exact: true }).click();
+  const menu = card.getByTestId('route-menu');
+  const ticked = choice === 'Only me' ? await menu.getByRole('checkbox', { checked: true }).all() : [];
+  if (ticked.length === 0) {
+    await menu.getByRole('button', { name: choice, exact: true }).click();
+    return;
+  }
+  for (const box of ticked) await box.uncheck();
+  await card.page().keyboard.press('Escape');
 }
 
 /** Adds the fixture meeting, then approves it from Home: every item to the project it suggests, or to Only me. Returns Home's rows. */

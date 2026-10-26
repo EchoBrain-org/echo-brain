@@ -967,6 +967,7 @@ button.items-line:hover { background: var(--raise); }
 .route { position: relative; flex-shrink: 0; }
 .route-chip { max-width: 190px; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; font-size: 12.5px; font-weight: 500; color: var(--text); background: var(--field); white-space: nowrap; }
 .route-chip .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.route-chip .route-lock { display: inline-flex; flex-shrink: 0; }
 .route-chip svg { flex-shrink: 0; color: var(--muted); }
 .route-chip:hover:not(:disabled) { background: var(--hover); }
 .route-chip[aria-expanded="true"] { border-color: var(--control); }

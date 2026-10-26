@@ -222,6 +222,54 @@ test('sends each item to its own destination: a record and a check per destinati
   await page.screenshot({ path: testInfo.outputPath('decision-records.png') });
 });
 
+test('keeps an item for you alone in its project with the Only me lock, sends it as private, and says so once approved', async ({}, testInfo) => {
+  // granola-extra-failed: the check of each record but the first fails, so the approved meeting waits on Home with both.
+  run = await launch('granola-extra-failed');
+  const { page } = run;
+  await addMeeting(page);
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  const chips = card.getByTestId('route-chip');
+  const menu = card.getByTestId('route-menu');
+  // The lock on the decision's chip: Thermostat redesign stays ticked, and only Ari reads the decision there.
+  await chips.nth(0).click();
+  const lock = menu.getByRole('button', { name: 'Only me', exact: true });
+  await expect(lock).toHaveAttribute('aria-pressed', 'false');
+  await lock.click();
+  await expect(lock).toHaveAttribute('aria-pressed', 'true');
+  await expect(menu.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
+  // It stays pressed while projects stay ticked.
+  await menu.getByRole('checkbox', { name: 'Supplier review' }).check();
+  await expect(lock).toHaveAttribute('aria-pressed', 'true');
+  await menu.getByRole('checkbox', { name: 'Supplier review' }).uncheck();
+  await page.keyboard.press('Escape');
+  // The chip shows the lock, and its name says so.
+  await expect(chips).toHaveText(['Thermostat redesign', 'Thermostat redesign', 'Thermostat redesign']);
+  await expect(chips.nth(0)).toHaveAccessibleName('Where it goes: Launch the pilot next week.: Thermostat redesign, only me');
+  await expect(chips.nth(0).getByTestId('route-lock')).toBeVisible();
+  await expect(chips.nth(1).getByTestId('route-lock')).toHaveCount(0);
+  await expect(card.getByTestId('route-all')).toHaveText('Mixed');
+  await expect(card.getByTestId('route-summary')).toHaveText('1 to Thermostat redesign, only me · 2 to Thermostat redesign');
+  await page.screenshot({ path: testInfo.outputPath('decision-only-me-lock.png') });
+  await card.getByTestId('decision-approve').click();
+  await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+  const therm = 'prj_11111111-1111-4111-8111-111111111111';
+  expect(run.calls().find(call => call.body?.operation === 'review')?.body?.routes).toEqual([
+    { signal_id: 'dec-1', project_ids: [therm], private: true }, { signal_id: 'act-1', project_ids: [therm] }, { signal_id: 'act-2', project_ids: [therm] }]);
+  // Approved: the item and its record say it was kept for Ari alone, beside the same project shared.
+  const row = page.getByTestId('need-row').filter({ hasText: 'the check did not finish' });
+  await expect(row).toHaveAttribute('data-kind', 'failed', { timeout: 30_000 });
+  await row.click();
+  const decision = page.getByTestId('decision');
+  await expect(decision.getByRole('region', { name: 'Impact · Thermostat redesign, only me' })).toBeVisible({ timeout: 30_000 });
+  await expect(decision.getByRole('region', { name: 'Impact · Thermostat redesign', exact: true })).toBeVisible();
+  const final = decision.getByTestId('route-final');
+  await expect(final).toHaveText(['Thermostat redesign', 'Thermostat redesign', 'Thermostat redesign']);
+  await expect(final.nth(0)).toHaveAttribute('title', 'Thermostat redesign, only me');
+  await expect(final.nth(0).getByTestId('route-lock')).toBeVisible();
+  await expect(final.nth(1).getByTestId('route-lock')).toHaveCount(0);
+});
+
 test('All items while kept items differ: nothing chosen, a project some have part-ticked, and a tick keeps what else each has', async () => {
   run = await launch('granola');
   const { page } = run;
@@ -230,12 +278,13 @@ test('All items while kept items differ: nothing chosen, a project some have par
   const card = page.getByTestId('decision');
   const chips = card.getByTestId('route-chip');
   const menu = card.getByTestId('route-menu');
-  // The decision to Supplier review too, the second action Only me.
+  // The decision to Supplier review too, the second action Only me: its one project unticked.
   await chips.nth(0).click();
   await menu.getByRole('checkbox', { name: 'Supplier review' }).check();
   await page.keyboard.press('Escape');
   await chips.nth(2).click();
-  await menu.getByRole('button', { name: 'Only me', exact: true }).click();
+  await menu.getByRole('checkbox', { name: 'Thermostat redesign' }).uncheck();
+  await page.keyboard.press('Escape');
   await expect(chips).toHaveText(['Thermostat redesign +1', 'Thermostat redesign', 'Only me']);
   const all = card.getByTestId('route-all');
   const summary = card.getByTestId('route-summary');
