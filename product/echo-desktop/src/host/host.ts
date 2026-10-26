@@ -287,21 +287,28 @@ async function forAccount<T>(
   }
 }
 
+/** The timeline's reads and writes, one after another in the order they came: a turn's later put never lands under an earlier one. */
+let timelineWork: Promise<unknown> = Promise.resolve();
+
 /**
  * A call on this computer's own files, for the account the renderer is
  * showing and never another: the Ask timeline (ADR-0047). The client is asked
- * only who is signed in.
+ * only who is signed in. Each waits for the one before it.
  */
-async function onDevice<T>(expect: Expect, work: (personDirectory: string) => T): Promise<Result<T>> {
-  const current = await status();
-  if (!sameAccount(current, expect)) return code(lost(current));
-  const { paths } = await modules;
-  try {
-    return ok(work(paths.directory));
-  } catch (error) {
-    if (__ECHO_TEST_HOOK__) console.error('[timeline] failed:', error);
-    return code('failed');
-  }
+function onDevice<T>(expect: Expect, work: (personDirectory: string) => T): Promise<Result<T>> {
+  const done = timelineWork.then(async (): Promise<Result<T>> => {
+    const current = await status();
+    if (!sameAccount(current, expect)) return code(lost(current));
+    const { paths } = await modules;
+    try {
+      return ok(work(paths.directory));
+    } catch (error) {
+      if (__ECHO_TEST_HOOK__) console.error('[timeline] failed:', error);
+      return code('failed');
+    }
+  });
+  timelineWork = done.catch(() => undefined);
+  return done;
 }
 
 /** Google in the browser, then the new session. Only the phase crosses to the renderer; the sign-in URL never does. */
