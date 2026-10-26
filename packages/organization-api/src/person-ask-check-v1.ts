@@ -60,8 +60,7 @@ export interface PersonAskCheckV1 {
 }
 
 function citation(value: unknown, label: string): PersonAnswerEvidenceCitationV8 {
-  const kind = asEnumerableRecord(value, `${label} citation`).kind;
-  if (!(PERSON_ASK_CHECK_CITATION_KINDS_V1 as readonly unknown[]).includes(kind)) fail(`${label} citation kind is invalid`);
+  oneOf(asEnumerableRecord(value, `${label} citation`).kind, PERSON_ASK_CHECK_CITATION_KINDS_V1, `${label} citation kind`);
   return validatePersonAnswerEvidenceCitationV8(value);
 }
 
