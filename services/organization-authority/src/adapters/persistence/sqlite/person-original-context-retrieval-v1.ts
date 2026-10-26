@@ -134,6 +134,8 @@ type DocumentRow = {
   readonly lexical_score: number;
   readonly visibility?: "only_me" | "team" | "project" | "projects";
 };
+/** A document source revision's metadata: its row without a chunk. */
+type DocumentMeta = Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text">;
 type DeskKind = "note" | "document_passage" | "imported_meeting";
 type DeskEntry = { readonly score: number; readonly received_at: string; readonly atom: ReleasedSourceContextAtomV1; readonly item: () => OriginalContextDeskItemV1 };
 
@@ -805,13 +807,16 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
    *
    * One check reads each cited revision once, however many turns cited it: answers are kept by the revision a citation names
    * (`source_id`, `revision_id`, `source_sha256`, `representation_sha256`, and a document's `document_id`; the cited anchor
-   * never changes the answer), each imported revision is verified once, and each imported source's newest revision its
-   * importer reads is found once. Answers keep the request's order and length.
+   * never changes the answer), and each revision of an imported meeting is verified once. The caller's ACL and scope filter
+   * and the statements are prepared once a check. Answers keep the request's order and length.
    */
   checkSourceRevisions(input: { readonly access_token: string; readonly citations: readonly OriginalContextCitationV1[] }): readonly ("same" | "changed" | "unreadable")[] {
     const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
     this.assertOrganization(actor);
     this.assertScope(actor, GLOBAL_SCOPE);
+    const text = this.textSourceRead(actor, GLOBAL_SCOPE);
+    const documentMeta = this.documentSourceMetaRead(actor, GLOBAL_SCOPE);
+    const revisions = this.database.prepare("SELECT revision_id FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=? ORDER BY captured_at DESC,revision_id DESC").pluck();
     const importedRows = new Map<string, SourceRow | undefined>();
     /** The importer's exact read of one revision of an imported meeting, verified in full once per check. */
     const imported = (sourceId: string, revisionId: string): SourceRow | undefined => {
@@ -819,28 +824,20 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       if (!importedRows.has(key)) importedRows.set(key, this.imported.rows(actor, GLOBAL_SCOPE, { source_id: sourceId, revision_id: revisionId })[0]);
       return importedRows.get(key);
     };
-    const newestRevisions = new Map<string, string | undefined>();
-    /**
-     * The newest revision of an imported meeting's source its importer reads: newest by the rule the import's own list keeps
-     * (capture time, then revision id), read through the same exact import read, newest first until one reads.
-     */
-    const newestReadable = (sourceId: string): string | undefined => {
-      if (!newestRevisions.has(sourceId)) {
-        const revisions = this.database.prepare(`SELECT revision_id FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=?
-          ORDER BY captured_at DESC,revision_id DESC`).pluck().all(actor.organization_id, sourceId) as readonly string[];
-        newestRevisions.set(sourceId, revisions.find((revisionId) => imported(sourceId, revisionId) !== undefined));
-      }
-      return newestRevisions.get(sourceId);
-    };
     const check = (citation: OriginalContextCitationV1): "same" | "changed" | "unreadable" => {
       if (citation.document_id !== undefined) {
-        const meta = this.documentSourceMeta(actor, GLOBAL_SCOPE, citation.source_id, citation.revision_id, citation.document_id, citation.representation_sha256);
-        return meta?.source_sha256 === citation.source_sha256 ? "same" : "unreadable";
+        return documentMeta(citation.source_id, citation.revision_id, citation.document_id, citation.representation_sha256)?.source_sha256 === citation.source_sha256 ? "same" : "unreadable";
       }
-      const row = this.textByCitation(actor, GLOBAL_SCOPE, citation, imported);
-      if (row === undefined) return "unreadable";
-      // The cited revision reads, so the newest that reads is it or a newer one.
-      return row.api_version === 0 && newestReadable(row.source_id) !== row.revision_id ? "changed" : "same";
+      const row = text(citation.source_id, citation.revision_id) ?? imported(citation.source_id, citation.revision_id);
+      if (row?.source_sha256 !== citation.source_sha256 || row.representation_sha256 !== citation.representation_sha256) return "unreadable";
+      if (row.api_version !== 0) return "same";
+      // An imported meeting's revisions newest first, by the rule the import's own list keeps (capture time, then revision
+      // id), down to the cited one, which reads: changed exactly when a newer one its importer reads exists.
+      for (const revisionId of revisions.all(actor.organization_id, row.source_id) as readonly string[]) {
+        if (revisionId === row.revision_id) break;
+        if (imported(row.source_id, revisionId) !== undefined) return "changed";
+      }
+      return "same";
     };
     const answers = new Map<string, "same" | "changed" | "unreadable">();
     return Object.freeze(input.citations.map((citation) => {
@@ -850,22 +847,25 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     }));
   }
 
-  /** `imported`: how a revision of an imported meeting is read; a check passes its own, which reads each revision once. */
-  private textBySource(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string,
-    imported: (sourceId: string, revisionId: string) => SourceRow | undefined = (source, revision) => this.imported.rows(actor, scope, { source_id: source, revision_id: revision })[0]): SourceRow | undefined {
+  /** One text source revision through the caller's ACL and `scope`, prepared once for any number of reads. */
+  private textSourceRead(actor: PersonAccessAuthorization, scope: PersonAskScopeV2): (sourceId: string, revisionId: string) => SourceRow | undefined {
     const acl = this.acl(actor, "u");
     const scoped = personOriginalScopeFilterV1("u", actor, scope);
-    return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,u.audience_kind AS visibility
+    const statement = this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,u.audience_kind AS visibility
       FROM ${ORIGINAL_TEXT_CUSTODY_V1} u JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
-      WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} AND s.source_id=? AND r.revision_id=?`).get(actor.organization_id, ...acl.args, ...scoped.args, sourceId, revisionId) as SourceRow | undefined ?? imported(sourceId, revisionId);
+      WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} AND s.source_id=? AND r.revision_id=?`);
+    return (sourceId, revisionId) => statement.get(actor.organization_id, ...acl.args, ...scoped.args, sourceId, revisionId) as SourceRow | undefined;
+  }
+
+  private textBySource(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string): SourceRow | undefined {
+    return this.textSourceRead(actor, scope)(sourceId, revisionId) ?? this.imported.rows(actor, scope, { source_id: sourceId, revision_id: revisionId })[0];
   }
 
   /** The cited source revision and representation must both be the row's. */
-  private textByCitation(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1,
-    imported?: (sourceId: string, revisionId: string) => SourceRow | undefined): SourceRow | undefined {
-    const row = this.textBySource(actor, scope, citation.source_id, citation.revision_id, imported);
+  private textByCitation(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): SourceRow | undefined {
+    const row = this.textBySource(actor, scope, citation.source_id, citation.revision_id);
     return row?.source_sha256 === citation.source_sha256 && row.representation_sha256 === citation.representation_sha256 ? row : undefined;
   }
 
@@ -883,16 +883,22 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return undefined;
   }
 
-  private documentSourceMeta(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string, documentId: string, representationSha256: Sha256Digest): Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text"> | undefined {
+  private documentSourceMeta(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string, documentId: string, representationSha256: Sha256Digest): DocumentMeta | undefined {
+    return this.documentSourceMetaRead(actor, scope)(sourceId, revisionId, documentId, representationSha256);
+  }
+
+  /** One document source revision's metadata through the caller's ACL and `scope`, prepared once for any number of reads. */
+  private documentSourceMetaRead(actor: PersonAccessAuthorization, scope: PersonAskScopeV2): (sourceId: string, revisionId: string, documentId: string, representationSha256: Sha256Digest) => DocumentMeta | undefined {
     const acl = this.acl(actor, "d");
     const scoped = personOriginalScopeFilterV1("d", actor, scope);
-    return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,work.extractor,representation.content_json AS representation_json,d.received_at,d.audience_kind AS visibility
+    const statement = this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,work.extractor,representation.content_json AS representation_json,d.received_at,d.audience_kind AS visibility
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial')
       JOIN authority_sources_v1 s ON s.organization_id=d.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=d.document_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=d.original_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       JOIN authority_source_representations_v1 representation ON representation.organization_id=r.organization_id AND representation.source_id=r.source_id AND representation.revision_id=r.revision_id AND representation.processor_version=work.extractor
-      WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql} AND s.source_id=? AND r.revision_id=? AND d.document_id=? AND ('sha256:' || representation.content_sha256)=?`).get(actor.organization_id, ...acl.args, ...scoped.args, sourceId, revisionId, documentId, representationSha256) as Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text"> | undefined;
+      WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql} AND s.source_id=? AND r.revision_id=? AND d.document_id=? AND ('sha256:' || representation.content_sha256)=?`);
+    return (sourceId, revisionId, documentId, representationSha256) => statement.get(actor.organization_id, ...acl.args, ...scoped.args, sourceId, revisionId, documentId, representationSha256) as DocumentMeta | undefined;
   }
 }
