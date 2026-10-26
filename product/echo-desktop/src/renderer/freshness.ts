@@ -65,8 +65,11 @@ export interface Surfaces {
   /** The follow-up whose page shows, if one does. */
   itemShown(): string | null;
   accountLost(failure: Failure): void;
-  /** What arrived in your projects (ADR-0047), read with every check: the sidebar's dots. Quiet, and never thrown. */
-  readActivity(): Promise<void>;
+  /**
+   * What arrived in your projects (ADR-0047), read with a check: the sidebar's dots. `due` is a check you would expect it
+   * from (the first, a return, a wake); a timer's or a page's reads it at most every two minutes. Quiet, and never thrown.
+   */
+  readActivity(due: boolean): Promise<void>;
 }
 
 /** Why a check ran. */
@@ -178,7 +181,7 @@ function check(trigger: Trigger): Promise<Checked | null> {
     return run.running;
   }
   if (run.older && trigger !== 'timer' && trigger !== 'wake') return Promise.resolve({ outcome: 'older', moved: [] });
-  const running = once(run).then(checked => {
+  const running = once(run, trigger).then(checked => {
     if (trigger !== 'came-back' && loop === run && checked.moved.length > 0) surfaces.owe({ back: false, areas: checked.moved });
     return checked;
   }).finally(() => {
@@ -202,11 +205,11 @@ function schedule(run: Loop): void {
   run.timer = setTimeout(() => { run.timer = null; if (loop === run) void check('timer'); }, delay);
 }
 
-async function once(run: Loop): Promise<Checked> {
+async function once(run: Loop, trigger: Trigger): Promise<Checked> {
   run.began = Date.now();
   if (run.timer) { clearTimeout(run.timer); run.timer = null; }
-  // Each check also reads what arrived in your projects, side by side (ADR-0047).
-  const activity = surfaces.readActivity().catch(() => undefined);
+  // A check also reads what arrived in your projects, side by side (ADR-0047).
+  const activity = surfaces.readActivity(trigger === 'start' || trigger === 'came-back' || trigger === 'wake').catch(() => undefined);
   if (run.older) { await Promise.all([scan(run), activity]); return { outcome: 'older', moved: [] }; }
   const [result] = await Promise.all([ask<PersonChangesV1>(() => rpc('changes.read', { expect: run.account })), activity]);
   if (loop !== run) return { outcome: 'failed', moved: [] };

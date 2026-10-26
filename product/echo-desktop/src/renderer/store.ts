@@ -1498,6 +1498,10 @@ let seenKey: string | null = null;
 let arrivals: ReadonlyMap<string, string | null> = new Map();
 /** The Authority has no activity read (`not_supported`): no dots, and it is not asked again until the next sign-in. */
 let activityUnsupported = false;
+/** When the activity read last went out: a timer's or a page's check reads it again only after `ACTIVITY_EVERY_MS`. */
+let activityReadAt = 0;
+/** The activity read costs the Authority a few queries per project, so checks that are not due share one every two minutes. */
+const ACTIVITY_EVERY_MS = 120_000;
 
 /** An account as a short hash (FNV-1a twice over, 16 hex digits): the key its last-opened times are kept under. */
 export function accountHash(account: Expect): string {
@@ -1513,6 +1517,7 @@ export function accountHash(account: Expect): string {
 function rememberSeen(account: Expect): void {
   seenKey = `echo.projectSeen.${accountHash(account)}`;
   activityUnsupported = false;
+  activityReadAt = 0;
   arrivals = new Map();
   let kept: unknown = null;
   try { kept = JSON.parse(localStorage.getItem(seenKey) ?? 'null'); } catch { kept = null; }
@@ -1548,16 +1553,18 @@ function visitProject(projectId: string): Pick<State, 'visit' | 'news'> {
 }
 
 /**
- * Each freshness tick (ADR-0047): per project you are in, the newest arrival
+ * A freshness check's activity read (ADR-0047): per project you are in, the newest arrival
  * from someone else you can read. A project with an arrival since you last
  * opened it has a dot. One seen for the first time is seen now, with none;
  * the one on screen is being seen. Times of projects you are no longer in go.
  * Quiet: a read that fails leaves the dots; an Authority without the read has
  * none.
  */
-async function readActivity(): Promise<void> {
+async function readActivity(due: boolean): Promise<void> {
   const account = expect();
   if (!account || activityUnsupported || seen === null) return;
+  if (!due && Date.now() - activityReadAt < ACTIVITY_EVERY_MS) return;
+  activityReadAt = Date.now();
   const result = await rpc('projects.activity', { expect: account });
   if (!sameAccount(account) || seen === null) return;
   if (!result.ok) {

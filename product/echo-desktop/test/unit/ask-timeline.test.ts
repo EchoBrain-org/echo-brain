@@ -556,6 +556,29 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
     expect(byTestId(render(Project({ state: store.getState(), project: apollo })), 'item-new')).toEqual([]);
   });
 
+  it('reads what arrived on the first check, a return or a wake, and otherwise at most every two minutes', async () => {
+    activity = () => ok({ items: [{ project_id: apollo.project_id, latest_at: at(DAY) }] });
+    await startStore();
+    await flush();
+    expect(calls('projects.activity')).toHaveLength(1);
+    const freshness = await import('../../src/renderer/freshness.js');
+    // A page opened a minute later checks for changes; the activity read waits.
+    vi.setSystemTime(NOW.getTime() + 60_000);
+    freshness.navigated();
+    await flush();
+    expect(calls('projects.activity')).toHaveLength(1);
+    // A wake is a check you would expect it from.
+    vi.setSystemTime(NOW.getTime() + 70_000);
+    freshness.woke();
+    await flush();
+    expect(calls('projects.activity')).toHaveLength(2);
+    // Two minutes on, a page's check reads it again.
+    vi.setSystemTime(NOW.getTime() + 70_000 + 120_000);
+    freshness.navigated();
+    await flush();
+    expect(calls('projects.activity')).toHaveLength(3);
+  });
+
   it('shows no dots, and asks no more, when the Authority has no activity read', async () => {
     const store = await startStore();
     await flush();
