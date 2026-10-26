@@ -142,6 +142,31 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
       ...(content === undefined ? {} : { text: content.text }) }) });
 }
 
+/**
+ * The issues of these distinct issue ids, read in bulk calls of `batch` ids that apply this person's current issue permissions:
+ * hidden, deleted and unknown issues do not come back. Each comes once, with its id and the `fields` asked for; a malformed
+ * page fails the whole read. With `issue_errors`, an issue Jira could not return just now fails it too; with `abort`, a call
+ * that returns to an aborted signal stops it.
+ */
+async function* jiraBulkIssues(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal },
+  options: { readonly batch: number; readonly fields: readonly string[]; readonly issue_errors: boolean; readonly abort: boolean }): AsyncGenerator<{ readonly id: string; readonly fields: unknown }> {
+  for (let offset = 0; offset < input.ticket_ids.length; offset += options.batch) {
+    const batch = new Set(input.ticket_ids.slice(offset, offset + options.batch));
+    const page = jiraRecord(await transport.request({ path: `/ex/jira/${input.cloud_id}/rest/api/3/issue/bulkfetch`, method: 'POST',
+      body: { issueIdsOrKeys: [...batch], fields: [...options.fields] }, signal: input.signal }));
+    if (options.abort) input.signal?.throwIfAborted();
+    if (options.issue_errors && jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, batch.size).length > 0) jiraFailure('unavailable');
+    const seen = new Set<string>();
+    for (const raw of jiraArray(page.issues, batch.size)) {
+      const issue = jiraRecord(raw);
+      const id = jiraString(issue.id, 20, JIRA_ID);
+      if (!batch.has(id) || seen.has(id)) jiraFailure('invalid_output');
+      seen.add(id);
+      yield { id, fields: issue.fields };
+    }
+  }
+}
+
 /** The Ask source check reads 50 issues per bulk call (Jira allows 100), in at most two calls. */
 const TICKET_CHECK_BATCH = 50;
 const TICKET_CHECK_MAX_IDS = 100;
@@ -156,20 +181,10 @@ const TICKET_CHECK_FIELDS = Object.freeze(['summary', 'description', 'status', '
 export async function readJiraTicketMarkersV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, Sha256Digest | null>> {
   if (input.ticket_ids.length > TICKET_CHECK_MAX_IDS) jiraFailure('invalid_request');
   const found = new Map<string, Sha256Digest | null>();
-  for (let offset = 0; offset < input.ticket_ids.length; offset += TICKET_CHECK_BATCH) {
-    const batch = new Set(input.ticket_ids.slice(offset, offset + TICKET_CHECK_BATCH));
-    const page = jiraRecord(await transport.request({ path: `/ex/jira/${input.cloud_id}/rest/api/3/issue/bulkfetch`, method: 'POST',
-      body: { issueIdsOrKeys: [...batch], fields: [...TICKET_CHECK_FIELDS] }, signal: input.signal }));
-    input.signal?.throwIfAborted();
-    if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, batch.size).length > 0) jiraFailure('unavailable');
-    for (const raw of jiraArray(page.issues, batch.size)) {
-      const issue = jiraRecord(raw);
-      const id = jiraString(issue.id, 20, JIRA_ID);
-      if (!batch.has(id) || found.has(id)) jiraFailure('invalid_output');
-      let marker: Sha256Digest | null;
-      try { marker = jiraTicketMarkerV1(issue.fields); } catch { marker = null; }
-      found.set(id, marker);
-    }
+  for await (const issue of jiraBulkIssues(transport, input, { batch: TICKET_CHECK_BATCH, fields: TICKET_CHECK_FIELDS, issue_errors: true, abort: true })) {
+    let marker: Sha256Digest | null;
+    try { marker = jiraTicketMarkerV1(issue.fields); } catch { marker = null; }
+    found.set(issue.id, marker);
   }
   return found;
 }
@@ -185,19 +200,9 @@ const JIRA_ACCOUNT_ID = /^[A-Za-z0-9:_-]{1,128}$/;
  */
 export async function readJiraAssigneeAccountsV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
   const found = new Map<string, string>();
-  for (let offset = 0; offset < input.ticket_ids.length; offset += ASSIGNEE_BULK_FETCH_MAX_IDS) {
-    const batch = new Set(input.ticket_ids.slice(offset, offset + ASSIGNEE_BULK_FETCH_MAX_IDS));
-    const page = jiraRecord(await transport.request({ path: `/ex/jira/${input.cloud_id}/rest/api/3/issue/bulkfetch`, method: 'POST',
-      body: { issueIdsOrKeys: [...batch], fields: ['assignee'] }, signal: input.signal }));
-    const seen = new Set<string>();
-    for (const raw of jiraArray(page.issues, batch.size)) {
-      const issue = jiraRecord(raw);
-      const id = jiraString(issue.id, 20, JIRA_ID);
-      if (!batch.has(id) || seen.has(id)) jiraFailure('invalid_output');
-      seen.add(id);
-      const assignee = jiraRecord(issue.fields).assignee;
-      if (assignee !== null && assignee !== undefined) found.set(id, jiraString(jiraRecord(assignee).accountId, 128, JIRA_ACCOUNT_ID));
-    }
+  for await (const issue of jiraBulkIssues(transport, input, { batch: ASSIGNEE_BULK_FETCH_MAX_IDS, fields: ['assignee'], issue_errors: false, abort: false })) {
+    const assignee = jiraRecord(issue.fields).assignee;
+    if (assignee !== null && assignee !== undefined) found.set(issue.id, jiraString(jiraRecord(assignee).accountId, 128, JIRA_ACCOUNT_ID));
   }
   return found;
 }
