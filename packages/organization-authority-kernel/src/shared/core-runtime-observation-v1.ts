@@ -27,6 +27,8 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "input_bytes", "output_bytes", "record_count", "atom_count",
   "included_count", "excluded_count",
   "captured_head", "current_head", "published_head", "http_status", "active_http",
+  // Generation response envelope: refusal presence (0/1) and numeric error status, never provider text.
+  "provider_refusal", "provider_error_status",
   "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "provider_latency_ms",
   // One terminal research-run summary, shared by every trigger and output type.
   "planned_query_count", "query_hit_count", "released_atom_count", "context_atom_count", "citation_count",

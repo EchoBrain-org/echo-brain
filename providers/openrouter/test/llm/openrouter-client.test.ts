@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { OpenRouterClient } from "../../src/llm/openrouter-client.js";
 import {
   StructuredGenerationAttemptError,
@@ -52,6 +53,35 @@ function client(
 }
 
 describe('OpenRouter provider client', () => {
+  it.each([
+    { finish: 'content_filter', refusal: null, refused: 0 },
+    { finish: 'stop', refusal: 'private refusal text', refused: 1 },
+  ])('retains safe failure diagnostics for $finish with refusal=$refused', async ({ finish, refusal, refused }) => {
+    const events: CoreRuntimeObservationV1[] = [];
+    const promise = observeCoreRuntimeV1('model_call', () => client({
+      id: 'gen-private-correlation',
+      choices: [{ finish_reason: finish, message: { content: 'private response text', refusal } }],
+    }).generateStructured(generationRequest), { observer: event => { events.push(event); } });
+    await expect(promise).rejects.toMatchObject({ code: 'permanently_rejected', retryable: false });
+    const failed = events.find(event => event.event === 'failed' && event.phase === 'model_call');
+    expect(failed).toMatchObject({ finish_reason: finish, counts: { http_status: 200, provider_refusal: refused } });
+    expect(failed?.provider_request).toMatch(/^[a-f0-9]{64}$/);
+    for (const privateText of ['gen-private-correlation', 'private refusal text', 'private response text', generationRequest.userPrompt]) {
+      expect(JSON.stringify(events)).not.toContain(privateText);
+    }
+  });
+
+  it('distinguishes a JSON error inside HTTP 200 without logging its free text', async () => {
+    const events: CoreRuntimeObservationV1[] = [];
+    await expect(observeCoreRuntimeV1('model_call', () => client({
+      id: 'gen-private-correlation', error: { code: 502, message: 'private upstream error' },
+    }).generateStructured(generationRequest), { observer: event => { events.push(event); } }))
+      .rejects.toMatchObject({ code: 'temporarily_unavailable', retryable: true });
+    expect(events.find(event => event.event === 'failed' && event.phase === 'model_call'))
+      .toMatchObject({ counts: { http_status: 200, provider_error_status: 502 } });
+    expect(JSON.stringify(events)).not.toContain('private upstream error');
+  });
+
   it('uses stable Chat Completions with strict required-parameter routing', async () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const result = await client(
