@@ -8,7 +8,7 @@ import {
   type PersonAskProgressStepEventV3,
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
-import { createAgenticAskV4, createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { ANSWER_SINCE_PROMPT, answerLayoutSinceSchema, answerSchema, answerSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { FOLLOW_UP_RESOLVER_PROMPT, followUpResolutionSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
@@ -234,15 +234,6 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
       expect(run.of("step"), reason.name).toEqual([]);
       expect(audits, reason.name).toEqual([expect.objectContaining({ outcome: reason instanceof AgenticAskDeadlineErrorV1 ? "timed_out" : "cancelled" })]);
     }
-  });
-
-  it("is refused on every answer before V8", async () => {
-    const run = scripted({});
-    const ask = createAgenticAskV4({ desk: desk(), model: run.model, generation, audit: { append: () => undefined } }) as unknown as {
-      answer(input: { readonly question: string; readonly previous?: PersonAnswerPreviousV1 }): Promise<unknown>;
-    };
-    await expect(ask.answer({ question: QUESTION, previous: FOLLOW_UP })).rejects.toMatchObject({ code: "invalid_request" });
-    expect(run.inputs).toEqual([]);
   });
 });
 

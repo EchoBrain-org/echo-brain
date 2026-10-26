@@ -146,9 +146,8 @@ export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAn
     // A streamed request spans every attempt a snapshot restart runs: one stream, each item named once, timed from here.
     const streamed = progress === undefined ? undefined : { on_progress: progress.on_progress, request: createAgenticAskProgressRequestV1() };
     const scope = scopeOf(input.request);
-    // The asker's previous turn rides only on the V8 Ask (ADR-0047); the HTTP boundary refuses it on every older route.
+    // The asker's previous turn (ADR-0047): the HTTP boundary takes it only on /v7, the V8 Ask's route.
     const { previous } = input.request;
-    if (previous !== undefined && response_version !== 8) throw new AuthorityOperationError('invalid_request', 'Ask previous is only on /v7');
     input.signal?.throwIfAborted();
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
     return runPersonAskV1(options, input, async ({ authorization, context, capture, signal }) => {

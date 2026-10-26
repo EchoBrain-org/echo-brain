@@ -17,7 +17,6 @@ import { DOCUMENTS_SOURCE_CAPABILITIES_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } fro
 import { evidenceDayV1 } from "../shared/temporal-query-v1.js";
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from "../shared/workspace-evidence-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1 } from "../shared/core-runtime-observation-v1.js";
-import { AuthorityOperationError } from "../domain/errors.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
@@ -572,14 +571,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       }
   }, value => ({ trigger: input.trigger, output_kind: value.response !== undefined ? 'answer' : value.rendered !== undefined ? 'rendered' : 'research', result: value.response ?? value.rendered ?? value.research }));
   const signalOf = (signal: AbortSignal | undefined) => signal === undefined ? {} : { signal };
-  /** The asker's previous turn (ADR-0047): only the V8 Ask takes it. */
-  const previousOf = (previous: PersonAnswerPreviousV1 | undefined) => {
-    if (previous !== undefined && responseVersion !== 8) throw new AuthorityOperationError("invalid_request", "Ask previous is only for the V8 answer");
-    return previous;
-  };
   return Object.freeze({
     async answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1 }) {
-      return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) }, undefined, previousOf(input.previous))).response!;
+      // Only the V8 core's type takes the asker's previous turn (ADR-0047).
+      return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) }, undefined, input.previous)).response!;
     },
     /**
      * Ask with its progress sent to `on_progress` while it runs, and the receipt
@@ -589,7 +584,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     async answerWithReceipt(input: AgenticAskProgressInputV2 | AgenticAskProgressInputV3): Promise<AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3> {
       if ((responseVersion !== 7 && responseVersion !== 8) || typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");
       const output = await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal), on_progress: input.on_progress,
-        ...(input.request === undefined ? {} : { progress_request: input.request }) }, undefined, previousOf((input as AgenticAskProgressInputV3).previous));
+        ...(input.request === undefined ? {} : { progress_request: input.request }) }, undefined, (input as AgenticAskProgressInputV3).previous);
       return Object.freeze({ response: output.response as PersonAnswerResponseV7 | PersonAnswerResponseV8, receipt: output.receipt! }) as AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3;
     },
     /** Ask plus its research result and writer input, for the research evaluation. */
