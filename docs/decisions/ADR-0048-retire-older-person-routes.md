@@ -122,7 +122,8 @@ Retire them, and keep what reads stored data.
   those to `/v1`, reads the 404 as `not_found`, and says the document is no
   longer available, until it updates itself. Shipped on its own, this change
   would be safe clients first, because the Authority it builds on already
-  serves the `/v2` document routes.
+  serves the `/v2` document routes. This gap was accepted on 2026-10-25 in
+  place of keeping the V1 association routes for one more release.
 - **Data:** no migration. No table, column or stored row changes.
 - **Rollback:** revert the change. Nothing stored changed, so the older routes
   return as they were.
