@@ -62,7 +62,18 @@ describe('person meetings v2', () => {
     ['format control owner', { owners: [{ signal_id: 'act-1', owner: 'Rafael\u200e Moreno' }] }],
     ['reject with routes', { action: 'reject', routes: routes(null) }],
     ['reject with owners', { action: 'reject', routes: [], owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] }],
+    ['a private route with no project (Only me is already private)', { routes: [{ signal_id: 'sig-1', project_ids: [], private: true }] }],
+    ['a private route that keeps nothing', { routes: [{ signal_id: 'sig-1', project_ids: null, private: true }, { signal_id: 'sig-2', project_ids: [] }] }],
+    ['a route that says private: false', { routes: [{ signal_id: 'sig-1', project_ids: [projectA], private: false }] }],
+    ['a route that says private any other way', { routes: [{ signal_id: 'sig-1', project_ids: [projectA], private: 'true' }] }],
   ])('rejects %s', (_name, value) => expect(() => validatePersonMeetingRequestV2(request(value))).toThrow());
+
+  it('accepts an item kept private inside its projects, said only as true, beside routes that keep their shape', () => {
+    const mixed = [{ signal_id: 'sig-1', project_ids: [projectA, projectB], private: true }, { signal_id: 'sig-2', project_ids: [projectA] }, { signal_id: 'sig-3', project_ids: [] }];
+    const validated = validatePersonMeetingRequestV2(request({ routes: mixed })) as { readonly routes: readonly object[] };
+    expect(validated.routes).toEqual(mixed);
+    expect(Object.keys(validated.routes[1]!).sort()).toEqual(['project_ids', 'signal_id']);
+  });
 
   it('accepts mixed destinations with confirmed owners, and a reject with nothing routed', () => {
     const mixed = routes([projectA, projectB], [projectA], null, []);
@@ -77,6 +88,11 @@ describe('person meetings v2', () => {
     const records = [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [projectA] }, { approval_id: `apr_${'d'.repeat(64)}`, project_ids: [] }];
     expect(validatePersonMeetingResultV2('review_open', opened({ review: { ...review, status: 'approved', records }, records })).records).toEqual(records);
     expect(validatePersonMeetingResultV2('review_open', opened({ items: [{ ...item, project_ids: null }, { ...action, owner_editable: false }] })).items).toHaveLength(2);
+    // A decided item and its record kept private inside a project say so.
+    const kept = [{ approval_id: `apr_${'e'.repeat(64)}`, project_ids: [projectA], private: true }, ...records];
+    const decided = opened({ review: { ...review, status: 'approved', records: kept }, records: kept, items: [{ ...item, private: true }, { ...action, owner_editable: false }] });
+    expect(validatePersonMeetingResultV2('review_open', decided)).toEqual(decided);
+    expect(validatePersonMeetingResultV2('reviews', { reviews: [{ ...review, status: 'approved', records: kept }] }).reviews[0]!.records).toEqual(kept);
   });
 
   it.each([
@@ -101,6 +117,10 @@ describe('person meetings v2', () => {
     ['a record whose id is not apr_*', { review: { ...review, status: 'approved', records: [{ approval_id: 'rec_1', project_ids: [] }] }, records: [{ approval_id: 'rec_1', project_ids: [] }] }],
     ['a record before the approval is published', { review: { ...review, status: 'publishing', records: [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [] }] } }],
     ['one record twice', { records: [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [] }, { approval_id: `apr_${'c'.repeat(64)}`, project_ids: [projectA] }] }],
+    ['a private record in no project', { records: [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [], private: true }] }],
+    ['a record that says private: false', { records: [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [projectA], private: false }] }],
+    ['a private item not kept', { items: [{ ...item, project_ids: null, private: true }] }],
+    ['a private item kept for Only me', { items: [{ ...item, project_ids: [], private: true }] }],
   ])('rejects review_open response with %s', (_name, value) => {
     const body: Record<string, unknown> = opened(value);
     for (const [key, entry] of Object.entries(value)) if (entry === undefined) delete body[key];

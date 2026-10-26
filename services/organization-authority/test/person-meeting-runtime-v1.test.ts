@@ -1185,6 +1185,29 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(later.items[0]!.project_ids).toEqual([projectB]);
     expect(later.suggested_projects.map(entry => entry.project_id)).toEqual([project]);
   });
+  it('keeps an item for the reviewer alone inside a project: the decided item and its record say private, and a private route needs a project', async () => {
+    const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
+    const { pending, opened } = await f.pendingReview(runtime, project);
+    // No suggestion is private: a pending item names projects only.
+    expect(opened.items.every(item => !('private' in item))).toBe(true);
+    const review = { operation: 'review' as const, approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, action: 'approve' as const, owners: [] };
+    for (const [command_id, to] of [['private-only-me', []], ['private-not-kept', null]] as const) {
+      await expect(f.call(runtime, { ...review, command_id, routes: f.routes(opened, to).map(route => ({ ...route, private: true as const })) })).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(f.count('authority_approval_decisions_v1')).toBe(0);
+    const routes = f.routes(opened, item => ({ 'decision-1': [project], 'act-1': [project], 'act-2': [] })[item.signal_id] ?? null)
+      .map(route => route.signal_id === 'decision-1' ? { ...route, private: true as const } : route);
+    await f.call(runtime, { ...review, command_id: 'approve-private', routes });
+    await runtime.processing.recoverV4Appends(new AbortController().signal);
+    const approved = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
+    expect(approved.items.map(item => [item.signal_id, item.project_ids, item.private])).toEqual([['decision-1', [project], true], ['act-1', [project], undefined], ['act-2', [], undefined]]);
+    expect(approved.items.filter(item => 'private' in item).map(item => item.signal_id)).toEqual(['decision-1']);
+    const records = [{ approval_id: approvalRecordIdV2(pending!.approval_id, [project], true), project_ids: [project], private: true },
+      { approval_id: approvalRecordIdV2(pending!.approval_id, [project]), project_ids: [project] }, { approval_id: approvalRecordIdV2(pending!.approval_id, []), project_ids: [] }];
+    expect(approved.records).toEqual(records);
+    expect(approved.review).toMatchObject({ status: 'approved', project_ids: [project], records });
+    expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]!.records).toEqual(records);
+  });
   it('opens a review by one of its published records\' own approval ids (a run\'s event_ref), for its reviewer only', async () => {
     const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     const { pending, opened } = await f.pendingReview(runtime, project);

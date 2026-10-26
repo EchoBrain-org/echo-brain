@@ -10,6 +10,7 @@ import {
 } from '../src/composition/approval-core-v1.js';
 import { buildApprovalDecisionRecordsV1 } from '../src/composition/approval-decision-projection-v1.js';
 import { confirmedOwners } from '../src/composition/person-meeting-items-v1.js';
+import { PersonRecordReaderV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { coreRuntimeIdentityV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 
 const signal = () => new AbortController().signal;
@@ -542,6 +543,59 @@ describe('approval publisher: destinations', () => {
     expect(linked.map(event => event.event_id)).toEqual(receiptRecords(f).map(record => coreRuntimeIdentityV1('research-event', record.approval_id)));
     expect(linked.map(event => event.output_id)).toEqual(receiptRecords(f).map(record => coreRuntimeIdentityV1('research-output', record.record_sha256)));
     expect(linked.every(event => event.phase === 'record_append' && event.result === 'published')).toBe(true);
+  });
+});
+
+describe('approval publisher: kept private inside a project (ADR-0049)', () => {
+  it('publishes a private group apart from Only me and the same project shared, and only its approver reads it, there or anywhere', async () => {
+    const events: AfterApprovedRecordEventV1[] = [];
+    const note = 'Totals show two decimals. Keep the supplier reserve SILVER-95.';
+    const f = await approvalCoreFixture({ decisions: [{ id: 'dec-1' }, { id: 'dec-2' }], actions: [{ id: 'act-1' }, { id: 'act-2' }], note,
+      rationales: [{ id: 'why-1', supports: ['dec-1', 'act-2'] }, { id: 'why-2', supports: [] }, { id: 'why-3', supports: ['dec-2'] }, { id: 'why-4', supports: ['dec-1', 'act-1'] }],
+      after_record: [(_tx, event) => { events.push(event); }] });
+    const A = [f.projectA];
+    // dec-1 and act-2 kept for the reviewer alone in A, dec-2 shared with A, act-1 Only me.
+    const routes = f.routes(id => ({ 'dec-1': A, 'dec-2': A, 'act-1': [], 'act-2': A })[id] ?? null)
+      .map(route => route.signal_id === 'dec-1' || route.signal_id === 'act-2' ? { ...route, private: true as const } : route);
+    expect(f.core.decide('desktop', f.approve({ routes }), () => f.session).kind).toBe('decided');
+    await f.core.processing.appendFinalizedApprovalsToV4(signal());
+    const records = f.records(), refs = records.map(record => record.body.human_act_resolution_ref);
+    const ids = [approvalRecordIdV2(f.approvalId, A, true), approvalRecordIdV2(f.approvalId, A), approvalRecordIdV2(f.approvalId, [])];
+    // Ordered by each group's first item: dec-1 (A, private), dec-2 (A), act-1 (Only me); three ids, none another's.
+    expect(refs.map(ref => ref.approval_id)).toEqual(ids);
+    expect(new Set(ids).size).toBe(3);
+    expect(refs.map(ref => [ref.selected_policy_id, ref.audience_project_ids, ref.association_project_ids, ref.route_signal_ids])).toEqual([
+      ['restricted-reviewer-person-v2', [], A, ['dec-1', 'act-2']], ['project-members-readable-person-v1', A, A, ['dec-2']], ['restricted-reviewer-person-v2', [], [], ['act-1']]]);
+    const briefs = records.map(record => record.body.event.approved_snapshot.approved_payload.brief);
+    // The private record keeps its quotes, as Only me does; the shared one carries none.
+    expect(briefs[0].decisions[0].evidence[0].quote).toBe(note);
+    expect(JSON.stringify(records[1])).not.toContain('SILVER-95');
+    // Reasons: the private group keeps those for its own items (pruned), the shared one only a reason it holds whole, and a
+    // reason that supports nothing goes to Only me alone, never copied into the private record.
+    expect(briefs.map(brief => brief.rationales.map((reason: { id: string; supports_signal_ids: string[] }) => [reason.id, reason.supports_signal_ids]))).toEqual([
+      [['why-1', ['dec-1', 'act-2']], ['why-4', ['dec-1']]], [['why-3', ['dec-2']]], [['why-2', []], ['why-4', ['act-1']]]]);
+    // The receipt and the proposal's records say private only of the private record; one hook call per record.
+    expect(receiptRecords(f).map(record => Object.keys(record).sort().join())).toEqual(['approval_id,private,project_ids,receipt,record_sha256',
+      'approval_id,project_ids,receipt,record_sha256', 'approval_id,project_ids,receipt,record_sha256']);
+    expect(f.core.proposal(f.approvalId)).toMatchObject({ status: 'approved', project_ids: A, routes,
+      records: [{ approval_id: ids[0], project_ids: A, private: true }, { approval_id: ids[1], project_ids: A }, { approval_id: ids[2], project_ids: [] }] });
+    expect(f.core.proposal(f.approvalId)!.records[1]).not.toHaveProperty('private');
+    expect(events.map(event => event.approval_id)).toEqual(ids);
+    // Readers: the approver reads the private record in A and everywhere; another member of A only ever reads the shared one.
+    const digests = records.map(record => record.record_sha256);
+    const reader = new PersonRecordReaderV1(f.record);
+    const read = (who: { readonly principal_id: string; readonly membership_id: string }, project_id?: string) => reader.list({ ...f.context.coordinates, ...who,
+      project_ids: [f.projectA, f.projectB], ...(project_id === undefined ? {} : { project_id }) }).map(row => row.record_sha256).sort();
+    const other = { principal_id: 'prn_00000000-0000-4000-8000-0000000000e1', membership_id: 'mem_00000000-0000-4000-8000-0000000000e2' };
+    expect(read(f.actor)).toEqual([...digests].sort());
+    expect(read(f.actor, f.projectA)).toEqual([digests[0]!, digests[1]!].sort());
+    expect(read(f.actor, f.projectB)).toEqual([]);
+    for (const project_id of [undefined, f.projectA]) expect(read(other, project_id)).toEqual([digests[1]]);
+    // Its search atoms are its approver's alone, filed in A.
+    const atoms = f.snapshotAtoms().filter(atom => atom.record_sha256 === digests[0]);
+    expect(atoms.length).toBeGreaterThan(0);
+    expect(atoms.every(atom => atom.policy_id === 'restricted-reviewer-person-v2' && atom.reviewer_principal_id === f.actor.principal_id
+      && atom.audience_project_ids.length === 0 && canonicalJson(atom.association_project_ids as JsonValue) === canonicalJson(A as JsonValue))).toBe(true);
   });
 });
 

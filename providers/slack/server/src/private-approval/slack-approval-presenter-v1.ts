@@ -75,8 +75,9 @@ export interface ApprovalProposalViewV1 {
   readonly decided_on: "desktop" | "slack" | null;
   /** Undecided: the frozen suggestion the reviewer can read now. */
   readonly project_ids: readonly string[];
-  /** The decision's routes, decisions then actions (null = not kept, [] = Only me); null while undecided. */
-  readonly routes: readonly { readonly signal_id: string; readonly project_ids: readonly string[] | null }[] | null;
+  /** The decision's routes, decisions then actions (null = not kept, [] = Only me; `private` = kept for the reviewer alone
+   *  inside its projects); null while undecided. */
+  readonly routes: readonly { readonly signal_id: string; readonly project_ids: readonly string[] | null; readonly private?: true }[] | null;
   readonly snapshot_sha256: string;
   readonly snapshot_json: string;
 }
@@ -251,11 +252,17 @@ export function createSlackApprovalPresenterV1(options: {
     destination_sha256: slackApprovalDestinationSha256V4(proposal.project_ids),
     owners: options.core.ownerProposals(proposal.approval_id),
   });
-  /** Where an approval sent its items: one entry per destination group, in the order of each group's first item. */
+  /**
+   * Where an approval sent its items: one entry per destination group, in the order of each group's first item. A group kept
+   * for the reviewer alone inside its projects reads as only you: "THERM, only you".
+   */
   const destinations = (proposal: ApprovalProposalViewV1): readonly string[] => {
-    const groups = new Map<string, readonly string[]>();
-    for (const route of proposal.routes ?? []) if (route.project_ids !== null) groups.set(JSON.stringify(route.project_ids), route.project_ids);
-    return [...groups.values()].map((projectIds) => projectIds.length === 0 ? slackApprovalDestinationV4([]) : named(proposal.reviewer, projectIds).join(" + "));
+    const groups = new Map<string, { readonly project_ids: readonly string[]; readonly private: boolean }>();
+    for (const route of proposal.routes ?? []) {
+      if (route.project_ids !== null) groups.set(JSON.stringify([route.private === true, route.project_ids]), { project_ids: route.project_ids, private: route.private === true });
+    }
+    return [...groups.values()].map((group) => group.project_ids.length === 0 ? slackApprovalDestinationV4([])
+      : `${named(proposal.reviewer, group.project_ids).join(" + ")}${group.private ? ", only you" : ""}`);
   };
   const closed = (proposal: ApprovalProposalViewV1 | undefined, shows: Exclude<PresentationRow["shows"], "open">): SlackApprovalCardV4 => buildClosedApprovalCardV4({
     title: proposal?.title ?? "Meeting", outcome: shows, surface: proposal?.decided_on ?? "desktop",

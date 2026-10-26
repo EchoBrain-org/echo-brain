@@ -8,6 +8,7 @@ import {
   APPROVAL_DECISION_SNAPSHOT_SURFACE_V1,
   approvalDecisionSubsetSnapshotV2,
   approvalRecordIdV2,
+  isPrivateApprovalRecordV2,
   validateApprovalDecisionRecordInputV2,
 } from "../src/approval-decision-record-input-v2.js";
 import { isApprovalOwnerTextV1 } from "../src/approval-owner-choice-v1.js";
@@ -43,6 +44,8 @@ interface Options {
   readonly route_signal_ids?: readonly string[];
   /** Every span quotes this text, as each item of a one-paragraph note quotes the whole note. */
   readonly quote?: string;
+  /** Kept for the approver alone inside `projects` (ADR-0049): the restricted reviewer, no audience, the projects as association. */
+  readonly private?: boolean;
 }
 
 function snapshot(options: Options, approval_id: string) {
@@ -73,16 +76,18 @@ function snapshot(options: Options, approval_id: string) {
 
 function validInput(options: Options = {}) {
   const projects = [...(options.projects ?? [])];
-  const policy_id: PolicyId = options.policy ?? (projects.length === 0 ? RESTRICTED_REVIEWER_PERSON_POLICY_ID : PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID);
+  const kept = options.private === true;
+  const audience = kept ? [] : projects;
+  const policy_id: PolicyId = options.policy ?? (projects.length === 0 || kept ? RESTRICTED_REVIEWER_PERSON_POLICY_ID : PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID);
   const policy_contract_sha256 = policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID ? restrictedReviewerPersonPolicyContractSha256()
     : policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID ? projectMembersReadablePersonPolicyContractSha256() : organizationMemberReadablePersonPolicyContractSha256();
-  const approval_id = approvalRecordIdV2(PROPOSAL_ID, projects);
+  const approval_id = approvalRecordIdV2(PROPOSAL_ID, projects, kept);
   const approved = snapshot(options, approval_id);
   const approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(approved);
   const brief = approved.approved_payload.brief;
   const transcript = options.share_transcript === undefined ? {}
     : { share_transcript: options.share_transcript, transcript_source: { source_id: "source-1", revision_id: "revision-1", source_sha256: sha256Digest("source-1") } };
-  const consequence = { schema_version: 2, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id, audience_project_ids: projects, association_project_ids: projects, ...transcript };
+  const consequence = { schema_version: 2, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id, audience_project_ids: audience, association_project_ids: projects, ...transcript };
   const policy_consequence_sha256 = canonicalSha256(consequence as unknown as JsonValue);
   const surface = options.surface ?? "desktop";
   const command_id = options.command_id ?? (surface === "slack" ? "slack:k1" : "cmd-1");
@@ -94,7 +99,7 @@ function validInput(options: Options = {}) {
     route_signal_ids: options.route_signal_ids ?? [...brief.decisions, ...brief.actions].map(signal => signal.id),
     final_approver: { principal_id: "prn_1", membership_id: "mem_1" },
     selected_policy_id: policy_id, policy_contract_sha256, policy_consequence_sha256,
-    audience_project_ids: projects, association_project_ids: projects, ...transcript,
+    audience_project_ids: audience, association_project_ids: projects, ...transcript,
     action_owners: options.owners ?? [],
     audit_event_id: `audit:${command_id}`, audit_sequence: 7, audit_entry_sha256: sha256Digest("audit"),
     provider_action_kind: "echo-approval-decision-v2", provider_action_schema_version: 2,
@@ -285,6 +290,72 @@ describe("approval decision record input v2", () => {
     expect(project.final_content_sha256).toBe(canonicalSha256(project.approved_payload as unknown as JsonValue));
     const only = approvalDecisionSubsetSnapshotV2(proposal, { approval_id: approvalRecordIdV2(PROPOSAL_ID, []), project_ids: [], signal_ids: ["dec-2"] });
     expect(only.approved_payload.brief.decisions.map(signal => signal.evidence)).toEqual([[{ meeting_id: "meeting-1", block_id: "d1", quote: note }]]);
+  });
+  it("keeps every record that is not private byte for byte: its id, its reference digest and its subset", () => {
+    // Pinned before private destinations existed (ADR-0049): a route without `private` hashes and builds exactly as it did.
+    const rationales = [{ id: "why-1", supports: ["dec-1", "act-1"] }, { id: "why-2", supports: ["act-2"] }, { id: "why-3", supports: [] }];
+    const owners = [{ signal_id: "act-1", owner: "Rafael M." }];
+    expect(approvalRecordIdV2(PROPOSAL_ID, [])).toBe("apr_2e0408591cfce9e46c4ada8466994750916c67219787b08d0443422febf84e57");
+    expect(approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1])).toBe("apr_76b2dd978a2a0b27db53ddd19bf1041f50f43514100ccf5df99e8afe86e92895");
+    expect(approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1, PROJECT_2])).toBe("apr_02f1be9f745ca30a8bdbc7073a80ef07826355df441be7dc173137f22236ee8e");
+    expect(approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1], false)).toBe(approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1]));
+    expect(validateApprovalDecisionRecordInputV2(validInput({ rationales, quote: "Q", owners })).semantic_idempotency_key)
+      .toBe("sha256:ab6dc845b041668c69753dffafff295c0074b839cfdab05280dff93e42986963");
+    expect(validateApprovalDecisionRecordInputV2(validInput({ projects: [PROJECT_1], rationales, quote: "Q", owners })).semantic_idempotency_key)
+      .toBe("sha256:0ff0ce138517cf0acf6f3ba42bb31eb89ea6b162bfba298f5328ce0c3bba7299");
+    const proposal = snapshot({ rationales, quote: "Q" }, PROPOSAL_ID);
+    expect(canonicalSha256(approvalDecisionSubsetSnapshotV2(proposal, { approval_id: approvalRecordIdV2(PROPOSAL_ID, []), project_ids: [], signal_ids: ["dec-1", "act-2"] }) as unknown as JsonValue))
+      .toBe("sha256:e608e85e6a9cce863f775f0f4b258ce8fd955b6880414153839309a1cf6cc1b8");
+    expect(canonicalSha256(approvalDecisionSubsetSnapshotV2(proposal, { approval_id: approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1]), project_ids: [PROJECT_1], signal_ids: ["dec-1", "act-1", "act-2"] }) as unknown as JsonValue))
+      .toBe("sha256:1eaa38e32bec1a865ad8a450bced97e340004ffe4e38c980d57d54d31660080f");
+  });
+  it("accepts a record kept private inside its projects: the restricted reviewer, no audience, the projects as association, under its own id", () => {
+    const kept = validateApprovalDecisionRecordInputV2(validInput({ projects: [PROJECT_1, PROJECT_2], private: true }));
+    expect(kept.event.policy_id).toBe(RESTRICTED_REVIEWER_PERSON_POLICY_ID);
+    expect(kept.event.policy_contract_sha256).toBe(restrictedReviewerPersonPolicyContractSha256());
+    expect(kept.event.policy_consequence).toMatchObject({ audience_project_ids: [], association_project_ids: [PROJECT_1, PROJECT_2] });
+    expect(kept.approval_decision_ref_v2).toMatchObject({ audience_project_ids: [], association_project_ids: [PROJECT_1, PROJECT_2] });
+    expect(kept.approval_decision_ref_v2.approval_id).toBe(`apr_${canonicalSha256({ kind: "echo-approval-route-v1", approval_id: PROPOSAL_ID, project_ids: [PROJECT_1, PROJECT_2], private: true }).slice(7)}`);
+    expect(isPrivateApprovalRecordV2(kept.event.policy_consequence)).toBe(true);
+    // Never the id of the same projects shared, nor Only me's.
+    const ids = [approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1, PROJECT_2], true), approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1, PROJECT_2]), approvalRecordIdV2(PROPOSAL_ID, []), approvalRecordIdV2(PROPOSAL_ID, [], true)];
+    expect(new Set(ids).size).toBe(4);
+    expect(isPrivateApprovalRecordV2(validateApprovalDecisionRecordInputV2(validInput()).event.policy_consequence)).toBe(false);
+    expect(isPrivateApprovalRecordV2(validateApprovalDecisionRecordInputV2(validInput({ projects: [PROJECT_1] })).event.policy_consequence)).toBe(false);
+  });
+  it("refuses a private record that claims another destination's id, an audience, or a policy other than the restricted reviewer", () => {
+    const shared = validInput({ projects: [PROJECT_1], private: true });
+    shared.approval_decision_ref_v2.approval_id = approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1]);
+    refuses(shared);
+    // An approver-only record that names an audience project would add readers: refused, in the event and in the reference.
+    const audience = validInput({ projects: [PROJECT_1], private: true });
+    const event = audience.event as { policy_consequence: Mutable; policy_consequence_sha256: string };
+    event.policy_consequence = { ...event.policy_consequence, audience_project_ids: [PROJECT_1] };
+    event.policy_consequence_sha256 = canonicalSha256(event.policy_consequence as JsonValue);
+    Object.assign(audience.approval_decision_ref_v2, { audience_project_ids: [PROJECT_1], policy_consequence_sha256: event.policy_consequence_sha256 });
+    refuses(audience, "must not carry an audience project");
+    // A project record's association is its audience; Team carries none.
+    refuses(validInput({ projects: [PROJECT_1], private: true, policy: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID }));
+    refuses(validInput({ projects: [PROJECT_1], private: true, policy: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID }), "Only me or projects");
+  });
+  it("keeps a private group's quotes and its own reasons, and leaves a reason that supports nothing to the Only-me group alone", () => {
+    const note = "Totals show two decimals. Project B runs the six-test matrix VIOLET-62.";
+    const proposal = snapshot({ decisions: 2, actions: [{ id: "act-1" }], quote: note,
+      rationales: [{ id: "why-1", supports: ["dec-1", "act-1"] }, { id: "why-2", supports: ["dec-2"] }, { id: "why-3", supports: [] }] }, PROPOSAL_ID);
+    const group = { approval_id: approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1], true), project_ids: [PROJECT_1], private: true as const, signal_ids: ["dec-1"] };
+    const kept = approvalDecisionSubsetSnapshotV2(proposal, group).approved_payload.brief;
+    // Only its approver reads it, as Only me: every quote stays, and a reason shared with an item elsewhere is pruned to its own.
+    expect(kept.decisions[0]!.evidence).toEqual([{ meeting_id: "meeting-1", block_id: "d0", quote: note }]);
+    expect(kept.rationales.map(reason => [reason.id, reason.supports_signal_ids, reason.evidence[0]!.quote])).toEqual([["why-1", ["dec-1"], note]]);
+    // Only me, for the other items: the reason that supports nothing goes there once, never into the private group too.
+    const only = approvalDecisionSubsetSnapshotV2(proposal, { approval_id: approvalRecordIdV2(PROPOSAL_ID, []), project_ids: [], signal_ids: ["dec-2", "act-1"] }).approved_payload.brief;
+    expect(only.rationales.map(reason => [reason.id, reason.supports_signal_ids])).toEqual([["why-1", ["act-1"]], ["why-2", ["dec-2"]], ["why-3", []]]);
+    // The same projects shared keep no quote and no reason it does not hold whole.
+    const shared = approvalDecisionSubsetSnapshotV2(proposal, { ...group, approval_id: approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1]), private: undefined }).approved_payload.brief;
+    expect([shared.decisions[0]!.evidence, shared.rationales]).toEqual([[{ meeting_id: "meeting-1", block_id: "d0" }], []]);
+    // A private group is kept inside a project, and says so only with `true`.
+    expect(() => approvalDecisionSubsetSnapshotV2(proposal, { ...group, project_ids: [] })).toThrow("kept inside one or more projects");
+    expect(() => approvalDecisionSubsetSnapshotV2(proposal, { ...group, private: false } as never)).toThrow("kept inside one or more projects");
   });
   it("freezes its result and does not alias the input", () => {
     const input = validInput();
