@@ -101,6 +101,8 @@ import type {
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
 import type { PersonDiagnosticsHttpApplicationV1 } from './person-diagnostics-http-application.js';
+import { PERSON_ASK_CHECK_PATH_V1, validatePersonAskCheckRequestV1 } from '@echo-brain/organization-api';
+import type { PersonAskCheckHttpApplicationV1 } from './person-ask-check-http-application.js';
 import {
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
@@ -142,6 +144,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_ANSWER_PATH_V5}`,
   `POST ${PERSON_ANSWER_PATH_V6}`,
   `POST ${PERSON_ANSWER_PATH_V7}`,
+  `POST ${PERSON_ASK_CHECK_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
@@ -197,6 +200,8 @@ export interface OrganizationAuthorityHttpServerOptions {
    * projects, people, tools and their connected tools' containers. It preserves `/v3` to `/v6` for installed clients.
    */
   readonly person_answer_v7?: PersonAnswerV7HttpApplication;
+  /** The Ask source check (ADR-0047); it needs no answer model, and reads the database and the caller's own tool connections. */
+  readonly person_ask_check?: PersonAskCheckHttpApplicationV1;
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
@@ -863,6 +868,7 @@ export function createOrganizationAuthorityHttpServer(
     [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
+    [PERSON_ASK_CHECK_PATH_V1, personCancellablePost(options.person_ask_check, validatePersonAskCheckRequestV1, (application, input) => application.check(input))],
     ...(options.person_research_eval === undefined ? [] : [
       [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],
       [PERSON_RESEARCH_EVAL_READ_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalReadRequestV1, (application, input) => application.read(input))],

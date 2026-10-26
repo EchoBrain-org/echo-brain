@@ -7,6 +7,7 @@ import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/orga
 import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
+import { validatePersonAskCheckRequestV1, type PersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbNameV1, type PersonToolVerbV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
@@ -150,6 +151,7 @@ const RULES: Readonly<
     accepts: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256", "document-id", "project"],
     requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
   },
+  "ask-check": { accepts: ["request"], requires: ["request"] },
   records: { accepts: ["limit", "query", "record-sha256"] },
   "tools": {},
   "employee-invite": {
@@ -189,6 +191,7 @@ Commands:
   list        List the newest notes, documents, imported meetings and approved meetings you can read.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
+  ask-check   Check whether what earlier answers cited changed, with no content.
   evidence    Search or open released Ask evidence.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
@@ -278,6 +281,10 @@ Opens one cited evidence item under a fresh signed-in request. --item is the cit
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
 Reads one bounded immutable source-evidence packet cited by Ask. Use the exact citation fields. The server rechecks your current access and project association before returning it; this never downloads an original file.
+`,
+  "ask-check": `usage: echo-brain person ask-check --request <json>
+
+Checks whether the sources earlier answers cited changed, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket may add the "marker" an earlier check returned. Each item is answered in order: same, changed, unreadable (never why) or unknown (its tool is not connected, failed or ran out of time), and a readable ticket with its current marker. Prints echo-person-ask-check-v1 as its last line. An Authority without the check fails with code not_supported.
 `,
   directory: `usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 
@@ -849,6 +856,7 @@ export async function runPersonClientCli(
   let listRequest: PersonListRequestV1 | undefined;
     let openRequest: PersonOpenRequestV1 | undefined;
     let runsRequest: PersonRunsRequestV1 | undefined;
+    let askCheckRequest: PersonAskCheckRequestV1 | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
   try {
     const args = argv.slice(subcommandAction === undefined ? 1 : 2);
@@ -866,7 +874,7 @@ export async function runPersonClientCli(
       strict: true,
       tokens: true,
       allowPositionals: false,
-      options: { ...OPTIONS, ...(action === 'runs' ? RUNS_OPTIONS : {}), ...(verbName === undefined ? {} : { tool: { type: 'string' as const }, ...toolOptions }) },
+      options: { ...OPTIONS, ...(action === 'runs' || action === 'ask-check' ? RUNS_OPTIONS : {}), ...(verbName === undefined ? {} : { tool: { type: 'string' as const }, ...toolOptions }) },
     });
     values = parsed.values as Record<Option, string | boolean | undefined>;
     if (isContextAction(action)) {
@@ -962,6 +970,10 @@ export async function runPersonClientCli(
     if (action === 'runs') {
       try { runsRequest = validatePersonRunsRequestV1(JSON.parse(requiredText(values, 'request'))); }
       catch (error) { if (error instanceof SyntaxError) throw new Error('Runs request JSON is invalid'); throw error; }
+    }
+    if (action === 'ask-check') {
+      try { askCheckRequest = validatePersonAskCheckRequestV1(JSON.parse(requiredText(values, 'request'))); }
+      catch (error) { if (error instanceof SyntaxError) throw new Error('Ask check request JSON is invalid'); throw error; }
     }
   } catch (error) {
     if (isContextAction(action)) {
@@ -1229,6 +1241,10 @@ export async function runPersonClientCli(
         break;
       case 'runs':
         print(stdout, { ok: true, result: await client.runs(runsRequest!, dependencies.abort_signal) });
+        break;
+      case 'ask-check':
+        // The bare check is the last line, as the desktop reads it.
+        print(stdout, await client.askCheck(askCheckRequest!, dependencies.abort_signal));
         break;
       case 'changes':
         // The bare change check is the last line, as the desktop reads it.

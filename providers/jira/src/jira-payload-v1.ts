@@ -1,6 +1,6 @@
 import { normalizeAtlassianDocumentTextV1 } from '@echo-brain/provider-runtime/atlassian-document-text-v1';
 import { verifyAtlassianConnectionV1, type AtlassianConnectionCheckInputV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
-import { sha256Digest } from '@echo-brain/federation-protocol';
+import { canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
@@ -78,6 +78,38 @@ function relatedIssueIds(value: unknown, anchorId: string): { readonly ids: read
     truncated: value.length > count });
 }
 
+/** An issue's summary: one non-blank line of at most 256 KiB. */
+function issueSummary(fields: Record<string, unknown>): string {
+  if (typeof fields.summary !== 'string' || fields.summary.trim() === '' || Buffer.byteLength(fields.summary, 'utf8') > 256 * 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(fields.summary)) jiraFailure('invalid_output');
+  return fields.summary;
+}
+
+/** An issue's description as text, empty when it has none; embedded content it cannot read is refused unless `omit` leaves it out. */
+function issueDescription(fields: Record<string, unknown>, unsupported: 'reject' | 'omit' = 'reject'): string {
+  return fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1, { unsupported }).text.trim();
+}
+
+/** An issue's status name, its assignee's display name and its due day, when it has them. */
+function issueState(fields: Record<string, unknown>): { readonly status: string; readonly owner?: string; readonly due_at?: string } {
+  const status = jiraString(jiraRecord(fields.status).name, 128);
+  const owner = fields.assignee === null ? undefined : jiraString(jiraRecord(fields.assignee).displayName, 128);
+  const due_at = fields.duedate === null ? undefined : jiraDay(fields.duedate);
+  return { status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) };
+}
+
+/**
+ * A ticket's marker for the Ask source check (Ask timeline v1, C1; ADR-0047): `sha256:` and the hex SHA-256 of the canonical
+ * JSON of its summary, description, status name, assignee display name and due date, each parsed as `parseJiraIssueV1` parses
+ * it, so the marker moves when what an answer read of the ticket does. A description with embedded content the reader cannot
+ * read (an image, say), which an answer could only cite by its row, keeps the rest of its text with that content left out.
+ * Jira's `updated` is not in it: it moves on every comment.
+ */
+export function jiraTicketMarkerV1(fields: unknown): Sha256Digest {
+  const record = jiraRecord(fields);
+  const { status, owner, due_at } = issueState(record);
+  return canonicalSha256({ summary: issueSummary(record), description: issueDescription(record, 'omit'), status, assignee: owner ?? null, due_date: due_at ?? null });
+}
+
 export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: string; readonly origin: string; readonly inventory: boolean; readonly related?: boolean }): ParsedJiraIssueV1 {
   const issue = jiraRecord(value);
   const id = jiraString(issue.id, 20, JIRA_ID); const key = jiraString(issue.key, 85, JIRA_TICKET_KEY);
@@ -86,8 +118,8 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   const fields = jiraRecord(issue.fields);
   const project = parseJiraProject(fields.project, input.origin, apiPrefix);
   if (!key.startsWith(`${project.key}-`)) jiraFailure('invalid_output');
-  if (typeof fields.summary !== 'string' || fields.summary.trim() === '' || Buffer.byteLength(fields.summary, 'utf8') > 256 * 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(fields.summary)) jiraFailure('invalid_output');
-  const label = jiraBoundText(`${key}: ${fields.summary}`, 256);
+  const summary = issueSummary(fields);
+  const label = jiraBoundText(`${key}: ${summary}`, 256);
   const rawCreated = jiraString(fields.created, 64, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/);
   jiraDay(rawCreated.slice(0, 10));
   const created = new Date(rawCreated);
@@ -95,14 +127,12 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   const occurred_at = created.toISOString().slice(0, 10);
   const updated = fields.updated == null ? undefined : jiraString(fields.updated, 64, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/);
   if (updated !== undefined && !Number.isFinite(Date.parse(updated))) jiraFailure('invalid_output');
-  const status = jiraString(jiraRecord(fields.status).name, 128);
-  const owner = fields.assignee === null ? undefined : jiraString(jiraRecord(fields.assignee).displayName, 128);
-  const due_at = fields.duedate === null ? undefined : jiraDay(fields.duedate);
+  const { status, owner, due_at } = issueState(fields);
   // Jira can omit this optional field when linking is disabled or unavailable.
   // That means no related context was discoverable, not that no link exists.
   // A field that is present must still have the expected safe array shape.
   const relatedLinks = input.related && fields.issuelinks !== undefined ? relatedIssueIds(fields.issuelinks, id) : Object.freeze({ ids: Object.freeze([]), truncated: false });
-  const content = input.inventory ? undefined : jiraBoundText(`${key}: ${fields.summary}\n\n${(fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1).text.trim())}`.trim(), 3072);
+  const content = input.inventory ? undefined : jiraBoundText(`${key}: ${summary}\n\n${issueDescription(fields)}`.trim(), 3072);
   const citation: PersonTicketCitationV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: input.cloudid,
     ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: sha256Digest(content?.text ?? '') });
   return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(), related_issue_ids: relatedLinks.ids, related_truncated: relatedLinks.truncated,
@@ -110,6 +140,38 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
     value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created', dates: Object.freeze({ created: created.toISOString(), ...(updated === undefined ? {} : { updated: new Date(updated).toISOString() }), ...(due_at === undefined ? {} : { due: due_at }) }),
       attributes: Object.freeze({ status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) }),
       ...(content === undefined ? {} : { text: content.text }) }) });
+}
+
+/** The Ask source check reads 50 issues per bulk call (Jira allows 100), in at most two calls. */
+const TICKET_CHECK_BATCH = 50;
+const TICKET_CHECK_MAX_IDS = 100;
+const TICKET_CHECK_FIELDS = Object.freeze(['summary', 'description', 'status', 'assignee', 'duedate']);
+
+/**
+ * Each readable ticket's check marker by its id (`jiraTicketMarkerV1`), for distinct valid issue ids, in bulk reads that apply
+ * this person's current issue permissions. Hidden, deleted and unknown issues do not come back and are left out. A ticket that
+ * came back with fields its marker cannot be made from is readable with no marker (null), and the others keep theirs; an issue
+ * Jira could not return just now (issueErrors) or a malformed page fails the whole read, never a partial answer.
+ */
+export async function readJiraTicketMarkersV1(transport: JiraCloudTransportV1, input: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, Sha256Digest | null>> {
+  if (input.ticket_ids.length > TICKET_CHECK_MAX_IDS) jiraFailure('invalid_request');
+  const found = new Map<string, Sha256Digest | null>();
+  for (let offset = 0; offset < input.ticket_ids.length; offset += TICKET_CHECK_BATCH) {
+    const batch = new Set(input.ticket_ids.slice(offset, offset + TICKET_CHECK_BATCH));
+    const page = jiraRecord(await transport.request({ path: `/ex/jira/${input.cloud_id}/rest/api/3/issue/bulkfetch`, method: 'POST',
+      body: { issueIdsOrKeys: [...batch], fields: [...TICKET_CHECK_FIELDS] }, signal: input.signal }));
+    input.signal?.throwIfAborted();
+    if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, batch.size).length > 0) jiraFailure('unavailable');
+    for (const raw of jiraArray(page.issues, batch.size)) {
+      const issue = jiraRecord(raw);
+      const id = jiraString(issue.id, 20, JIRA_ID);
+      if (!batch.has(id) || found.has(id)) jiraFailure('invalid_output');
+      let marker: Sha256Digest | null;
+      try { marker = jiraTicketMarkerV1(issue.fields); } catch { marker = null; }
+      found.set(id, marker);
+    }
+  }
+  return found;
 }
 
 /** Jira's bulk fetch reads at most 100 issues per call. */

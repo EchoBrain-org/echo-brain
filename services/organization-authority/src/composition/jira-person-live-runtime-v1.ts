@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { openPersonProviderDatabaseV1 } from './person-provider-state-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { TicketOwnerAccountsV1 } from '../application/ports/ticket-owner-accounts-v1.js';
+import type { PersonTicketCheckV1 } from '../application/ports/person-source-check-v1.js';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 
 /** Explicit selecting configuration, absent until enabled by an operator. */
@@ -31,6 +32,8 @@ export interface OpenedJiraPersonLiveRuntimeV1 {
   readonly connection_http: ProviderHttpApplicationV1;
   /** Assignee accounts for matching impact owners, read with the caller's own connection. */
   readonly owners: TicketOwnerAccountsV1;
+  /** The Ask source check's ticket markers (ADR-0047), read with the caller's own connection. */
+  readonly checks: PersonTicketCheckV1;
   tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]>;
   close(): void;
 }
@@ -72,8 +75,11 @@ export function openJiraPersonLiveRuntimeV1(options: {
       },
       people: (accountId: string) => store.peopleForSubject(cloud_id, accountId),
     });
+    // A failed read rejects, so the check answers its tickets unknown.
+    const checks: PersonTicketCheckV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: cloud_id,
+      markers: (input: Parameters<PersonTicketCheckV1['markers']>[0]) => application.ticketMarkers(input) });
     return Object.freeze({
-      application, connection_http: createJiraPersonConnectionHttpApplicationV1(application), owners,
+      application, connection_http: createJiraPersonConnectionHttpApplicationV1(application), owners, checks,
       async tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]> {
         return Object.freeze([application.tool({ access_token })]);
       },

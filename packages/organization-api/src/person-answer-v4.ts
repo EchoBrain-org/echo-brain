@@ -194,6 +194,11 @@ function evidenceCitation(value: unknown, version: AnswerVersion = 4): PersonAns
   return citation(input);
 }
 
+/** One V8 evidence citation, exactly as a response citation's `citation` carries it; the Ask source check reads these (ADR-0047). */
+export function validatePersonAnswerEvidenceCitationV8(value: unknown): PersonAnswerEvidenceCitationV8 {
+  return evidenceCitation(value, 8);
+}
+
 function citation(value: unknown): PersonAnswerCitationV3 {
   const input = object(value, 'Ask citation');
   if (input.kind === 'approved_record') {

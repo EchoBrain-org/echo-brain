@@ -38,6 +38,8 @@ import { createUncheckedTallyV1 } from "../../../application/evidence-unchecked-
 const MAXIMUM_PACKET_BYTES = 3_072;
 const SOURCE_ID = /^source:[0-9a-f]{64}$/;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
+/** The Ask source check reads under global access: everything the caller may read, mine and every project included. */
+const GLOBAL_SCOPE: PersonAskScopeV2 = Object.freeze({ kind: "global" });
 
 
 /** Desk search and inventory share admission/ACL joins; inventory skips term matching. */
@@ -792,6 +794,41 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   private auditProofRead(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1): void {
     const body = { schema_version: 1, kind: "echo-person-original-context-proof-read-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, source_id: atom.source_id, revision_id: atom.revision_id, source_sha256: atom.source_sha256, representation_sha256: atom.representation_sha256, anchor_sha256: atom.anchor_sha256, checked_at: actor.checked_at };
     appendAuditRowV1(this.database, "authority_person_upload_read_audit_v1", body, actor.checked_at);
+  }
+
+  /**
+   * The Ask source check (Ask timeline v1, C1; ADR-0047): for each cited source revision, whether the caller can read it now,
+   * through the same ACL and global scope filter as every original read, and when they can, whether a newer readable revision
+   * of the same source exists: `changed` for an imported or pasted meeting edited since. Notes and documents never change.
+   * Read only: it releases nothing and writes no audit row, and a citation the caller cannot read is `unreadable`, never a
+   * refusal, so a hidden, deleted and never-existing source read the same.
+   */
+  checkSourceRevisions(input: { readonly access_token: string; readonly citations: readonly OriginalContextCitationV1[] }): readonly ("same" | "changed" | "unreadable")[] {
+    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
+    this.assertOrganization(actor);
+    this.assertScope(actor, GLOBAL_SCOPE);
+    return Object.freeze(input.citations.map((citation) => {
+      if (citation.document_id !== undefined) {
+        const meta = this.documentSourceMeta(actor, GLOBAL_SCOPE, citation.source_id, citation.revision_id, citation.document_id, citation.representation_sha256);
+        return meta?.source_sha256 === citation.source_sha256 ? "same" : "unreadable";
+      }
+      const row = this.textByCitation(actor, GLOBAL_SCOPE, citation);
+      if (row === undefined) return "unreadable";
+      return row.api_version === 0 && this.newerImportedRevision(actor, row) ? "changed" : "same";
+    }));
+  }
+
+  /**
+   * Whether a newer revision of an imported meeting's source is one its importer reads: newer by the rule the import's own
+   * list keeps only the newest revision by (capture time, then revision id), and read through the same exact import read.
+   */
+  private newerImportedRevision(actor: PersonAccessAuthorization, row: SourceRow): boolean {
+    const newer = this.database.prepare(`SELECT newer.revision_id FROM authority_source_revisions_v1 cited
+      JOIN authority_source_revisions_v1 newer ON newer.organization_id=cited.organization_id AND newer.source_id=cited.source_id
+        AND (newer.captured_at>cited.captured_at OR (newer.captured_at=cited.captured_at AND newer.revision_id>cited.revision_id))
+      WHERE cited.organization_id=? AND cited.source_id=? AND cited.revision_id=?
+      ORDER BY newer.captured_at DESC,newer.revision_id DESC`).pluck().all(actor.organization_id, row.source_id, row.revision_id) as readonly string[];
+    return newer.some((revisionId) => this.imported.rows(actor, GLOBAL_SCOPE, { source_id: row.source_id, revision_id: revisionId }).length > 0);
   }
 
   private textBySource(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string): SourceRow | undefined {

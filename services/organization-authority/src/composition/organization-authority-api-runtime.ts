@@ -12,6 +12,7 @@ import { createPersonOpenItemsV1 } from './person-open-items-v1.js';
 import { createPersonChangesV1 } from './person-changes-v1.js';
 import { createPersonProjectActivityV1 } from './person-project-activity-v1.js';
 import { SqlitePersonProjectActivityV1 } from '../adapters/persistence/sqlite/person-project-activity-v1.js';
+import { createPersonAskCheckV1 } from './person-ask-check-v1.js';
 import type { PersonReviewStatusesV1 } from './person-meeting-runtime-v1.js';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
@@ -368,6 +369,12 @@ export async function startOrganizationAuthorityApiRuntime(
     const projectActivity = createPersonProjectActivityV1({
       database, sessions, projects: projectRepository, originals: activityRows, approvals: activityRows, items, people, records: recordSearch,
     });
+    // The Ask source check (ADR-0047) needs no answer model either: the database in one read transaction, then each connected
+    // tool's own check through the caller's connection.
+    const askCheck = createPersonAskCheckV1({
+      database, sessions, projects: projectRepository, records: recordSearch, originals, items, people,
+      live: liveConnectors.flatMap(({ runtime }) => (runtime.checks === undefined ? [] : [runtime.checks])),
+    });
     const projectContext = createProjectContextApplicationV1({
       authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
       repository: projectRepository,
@@ -444,6 +451,7 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
       ...(diagnostics === undefined ? {} : { person_diagnostics: diagnostics }),
       person_trigger_runs: triggerRuns,
+      person_ask_check: askCheck,
       person_changes: personChanges,
       person_project_activity: projectActivity,
       person_documents: createPersonDocumentApplicationV1({
