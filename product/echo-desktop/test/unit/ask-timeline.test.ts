@@ -271,6 +271,21 @@ describe('Ask on the timeline', () => {
     expect(byTestId(thread(store), 'question').map(text)).toEqual(['What now?', 'And next?']);
   });
 
+  it.each([
+    [1, ['Yesterday?']],
+    [2, []],
+  ])('reads the timeline once more when the read at sign-in fails, and no more (%i failing)', async (failing, shown) => {
+    let failures = failing;
+    const timeline = rpcFor(held, {}, () => ({ active: [apollo], archived: [] }));
+    rpc.mockImplementation((method: string, params: Record<string, unknown>) => (method === 'timeline.read' && failures-- > 0
+      ? Promise.resolve(fail('failed', { retryable: true })) : timeline(method, params)));
+    seed(turn('Yesterday?', DAY, status()));
+    const store = await startStore();
+    await flush();
+    expect(calls('timeline.read')).toHaveLength(2);
+    expect(store.getState().timeline.turns.map(each => each.question)).toEqual(shown);
+  });
+
   it('keeps what the person typed for a turn in full, and the full question its answer answers for its line and Ask again', async () => {
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => ok({ ...answerOf('Who owns THERM-482?', [ticket('THERM-482', '20482')], [['Dev owns THERM-482, since Oct 21.', [0]]]),

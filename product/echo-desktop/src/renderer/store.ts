@@ -3559,10 +3559,10 @@ export function latestTurn(current: State = state): ShownTurn | null {
 
 /**
  * The account's timeline, read at sign-in and when the account changes, with
- * nothing of the last check. A read that fails leaves it as it was; a turn
- * kept meanwhile (an Ask answered first) stays, after those read. What this
- * window learned of the last Authority (no check, no `previous`) is learned
- * again.
+ * nothing of the last check. A read that fails is made once more, unless the
+ * account is gone; one that fails again leaves it as it was. A turn kept
+ * meanwhile (an Ask answered first) stays, after those read. What this window
+ * learned of the last Authority (no check, no `previous`) is learned again.
  */
 async function loadTimeline(): Promise<void> {
   const account = expect();
@@ -3570,8 +3570,12 @@ async function loadTimeline(): Promise<void> {
   const mine = ++timelineSeq;
   checksUnsupported = false;
   previousRefused = false;
-  const result = await rpc('timeline.read', { expect: account });
+  let result = await rpc('timeline.read', { expect: account });
   if (mine !== timelineSeq || !sameAccount(account)) return;
+  if (!result.ok && !ACCOUNT_GONE.includes(result.failure.code)) {
+    result = await rpc('timeline.read', { expect: account });
+    if (mine !== timelineSeq || !sameAccount(account)) return;
+  }
   if (!result.ok) {
     if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
     return;
