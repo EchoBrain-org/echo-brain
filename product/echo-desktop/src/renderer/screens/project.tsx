@@ -2,7 +2,7 @@ import type { ListItem, ProjectSummary } from '../../shared/protocol.js';
 import { identity, initials } from '../format.js';
 import { message } from '../messages.js';
 import { activeTotal, followUpCount, followUpProgress, stateCounts } from '../needs.js';
-import { moreList, openCompose, openFollowUps, openListItem, openPeople, openProject, openProjectTools, readsWords, retryList, type State } from '../store.js';
+import { moreList, newOnVisit, openCompose, openFollowUps, openListItem, openPeople, openProject, openProjectTools, readsWords, retryList, type State } from '../store.js';
 import { People, Plug, Plus } from './icons.js';
 import { FollowUpsLabel } from './impact-card.js';
 import { ItemRow, useKeptPlace } from './items.js';
@@ -44,7 +44,8 @@ function ToolsLine({ state, project }: { state: State; project: ProjectSummary }
  * meeting's are ("Follow-ups · 1 open · 3 not sent", canvas 9.7), with how far
  * they have come in a thin bar under the words: the line opens the project's
  * follow-ups, and each meeting's row says how many of its follow-ups are not
- * closed ("4 follow-ups").
+ * closed ("4 follow-ups"). Rows that arrived since your previous visit say
+ * "New" for this visit (ADR-0047).
  */
 export function Project({ state, project }: { state: State; project: ProjectSummary }) {
   const list = state.list?.scope.kind === 'project' && state.list.scope.project_id === project.project_id ? state.list : null;
@@ -92,7 +93,8 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
         </div>
       )}
       {items.map(item => (
-        <ItemRow key={`${item.ref.kind}:${item.ref.id}`} item={item} testid="feed-row" projects={false} onOpen={() => void openListItem(item)} badge={badge(item)} />
+        <ItemRow key={`${item.ref.kind}:${item.ref.id}`} item={item} testid="feed-row" projects={false} onOpen={() => void openListItem(item)} badge={badge(item)}
+          fresh={newOnVisit(state, project.project_id, item.added_at)} />
       ))}
       {more && (
         <button type="button" class="link-button more" data-testid="feed-more" disabled={list?.loading} onClick={() => void moreList()}>More</button>

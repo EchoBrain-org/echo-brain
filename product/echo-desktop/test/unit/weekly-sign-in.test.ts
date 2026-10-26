@@ -50,7 +50,8 @@ describe('a day before the weekly sign-in', () => {
     await store.signInAgain();
     await flush();
     expect(order()).toEqual(['account.signOut', 'signin.begin']);
-    expect(calls('account.signOut')[0]![1]).toEqual({ expect: { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id } });
+    // The same person signs straight back in: their Ask timeline stays (ADR-0047).
+    expect(calls('account.signOut')[0]![1]).toEqual({ expect: { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id }, again: true });
     expect(calls('signin.begin')[0]![1]).toEqual({ authority_url: ACCOUNT.authority });
     // A new week: nothing to say until its last day.
     expect(store.getState().status?.account?.membership_id).toBe(ACCOUNT.membership_id);

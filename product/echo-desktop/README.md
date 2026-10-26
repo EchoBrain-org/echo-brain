@@ -49,9 +49,53 @@ sources' numbers and lights on its own; a table shows ISO dates as "Oct 14",
 only your own late row's due date in the signal colour, and scrolls in its own
 box when the window is narrow. An answer without a layout reads as a paragraph
 per sentence. Either way, its sources start as one closed line ("4 sources ·
-Tuesday sync · …") that a click or a source's number opens, what research did
-not cover is one quiet note after the answer, and **Copy answer** writes
-Markdown with the sources numbered as the page numbers them.
+Tuesday sync · …") that a click or a source's number opens, and **Copy answer**
+writes Markdown with the sources numbered as the page numbers them. What
+research did not cover is not shown, and an answer that came has no Try again:
+only a question that failed does. "Nothing in Apollo matched", with **Ask
+across everything you can see**, stays.
+
+Ask keeps a timeline (ADR-0047): every question you asked and its answer, on
+this computer only, in one owner-only file per account beside the person
+session (`ask-timeline-v1`), at most 200 turns and 90 days. Our own sign-out,
+or another account signing in here, deletes it; a session that merely ended
+keeps it. The Authority never stores it. Ask opens over the page on the
+timeline: the latest turn, and those asked since Ask opened, in full, the
+question reading as your message; every earlier turn is one line with its
+project's square (none for all context or Mine), its full question,
+**Changed** when a source it cited changed, and when it was asked, with a quiet
+Today line above today's first turn. Back, Escape or any page closes Ask and
+keeps the timeline. Opening Ask checks what the newest ten turns cited in one
+content-free read (`person ask-check`): at most every five minutes, quiet when
+it fails, and never on an Authority without it. A line opens its answer as it
+was, dimmed: a sentence whose source changed is lit in the signal, one citing
+something you can no longer read is left out, and **Ask again** sits beside
+"Highlighted parts changed since Oct 14" or "Nothing changed since Oct 20".
+Ask again asks the same full question in the same scope: the new answer lands
+at the bottom, opening with "Since Oct 14" and what is different, each cited,
+or "Nothing changed since Oct 14", and the old line loses its tag. The empty
+bar suggests the questions you asked in its scope first, newest first; one
+opens Ask at its turn instead of asking it again.
+
+Typed while Ask is open, a question continues the conversation: it carries the
+earlier turn opened, or else the latest one when it was asked in the last hour
+(the question and the sentences you can still read, within the Ask's 16 KiB).
+ECHO works out what "it" or "that ticket" means: when one thing fits it answers
+at once, and the turn's line later reads the full question ("Who owns
+THERM-482?"); when several fit, the turn says "Which one?" with a button each,
+which asks that one's full question. It never guesses. An Authority that
+predates follow-ups refuses the earlier turn: the question is asked once more
+without it, and the window stops sending it.
+
+Every refresh check also reads what arrived in your projects (`person
+project-activity`). A project shows a small signal dot in the sidebar when a
+note or document was filed in it, a meeting record approved into it, or a
+follow-up of its meetings moved, by someone else and readable by you, since you
+last opened it; live Jira and Confluence edits do not count. Opening it clears
+the dot, and its rows added since your previous visit say **New** for that
+visit. When you last opened each project is kept in the window's storage, per
+account under a hash of it; a project seen for the first time has no dot, and
+an Authority without the read shows none.
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 

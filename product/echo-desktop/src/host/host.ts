@@ -16,13 +16,14 @@ import {
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { askArgv, askProgressLines, askRecordArgv, askSourceArgv } from './ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, refreshStops } from './session.js';
+import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
 import {
-  abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
+  abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
-  NotReadable, pastedView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
+  NotReadable, pastedView, projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -37,7 +38,8 @@ const home = process.env.ECHO_HOME;
 if (!entry || !home) throw new Error('The person host needs ECHO_PERSON_CLIENT_ENTRY and ECHO_HOME');
 
 interface SessionStore { read(): { session: { access_expires_at: string } } }
-interface SessionPaths { refresh_claim: string; refreshing: string }
+/** Where the person client keeps its session: its folder, which also holds the Ask timeline (ADR-0047), and the files of a refresh. */
+interface SessionPaths { directory: string; refresh_claim: string; refreshing: string }
 interface ClientModules {
   cli: PersonCli;
   store: SessionStore;
@@ -104,9 +106,11 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
   'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
   'meetings.handIn': 90_000,
+  // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
+  'timeline.read': 15_000, 'timeline.put': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
-const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
+const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put']);
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
 const ASK_CANCEL_ID = new RegExp(`^${UUID}$`);
@@ -281,6 +285,30 @@ async function forAccount<T>(
     }
     throw error;
   }
+}
+
+/** The timeline's reads and writes, one after another in the order they came: a turn's later put never lands under an earlier one. */
+let timelineWork: Promise<unknown> = Promise.resolve();
+
+/**
+ * A call on this computer's own files, for the account the renderer is
+ * showing and never another: the Ask timeline (ADR-0047). The client is asked
+ * only who is signed in. Each waits for the one before it.
+ */
+function onDevice<T>(expect: Expect, work: (personDirectory: string) => T): Promise<Result<T>> {
+  const done = timelineWork.then(async (): Promise<Result<T>> => {
+    const current = await status();
+    if (!sameAccount(current, expect)) return code(lost(current));
+    const { paths } = await modules;
+    try {
+      return ok(work(paths.directory));
+    } catch (error) {
+      if (__ECHO_TEST_HOOK__) console.error('[timeline] failed:', error);
+      return code('failed');
+    }
+  });
+  timelineWork = done.catch(() => undefined);
+  return done;
 }
 
 /** Google in the browser, then the new session. Only the phase crosses to the renderer; the sign-in URL never does. */
@@ -597,15 +625,43 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
         stdout => abandonView(lastJson(stdout), request_id));
     }
     case 'ask.run': {
-      const { expect, question, scope, cancel_id } = params as Params<'ask.run'>;
+      const { expect, question, scope, cancel_id, previous: earlier } = params as Params<'ask.run'>;
       const text = askText(question);
-      if (text === '') return code('invalid_request');
+      // The earlier turn a follow-up or Ask again carries, checked as C3 bounds it; anything else is refused, and the page asks without it.
+      const previous = earlier === undefined ? undefined : askPrevious(earlier);
+      if (text === '' || previous === null) return code('invalid_request');
       // An Ask's steps reach the page as they are printed (ask.ts).
       const progress = abortSignal !== undefined
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
-      return forAccount(method, expect, askArgv(text, scope, expect), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
+      return forAccount(method, expect, askArgv(text, scope, expect, previous), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
+    }
+    case 'timeline.read': {
+      const { expect } = params as Params<'timeline.read'>;
+      // Reading an account's timeline is where an account change shows on this computer: any other account's file goes (ADR-0047).
+      return onDevice(expect, directory => {
+        deleteOtherTimelines(directory, expect);
+        return { turns: readTimeline(directory, expect) };
+      });
+    }
+    case 'timeline.put': {
+      const { expect, turn: given } = params as Params<'timeline.put'>;
+      const turn = timelineTurn(given);
+      if (turn === null) return code('invalid_request');
+      // Pruned by this computer's clock, the one the page asked by.
+      return onDevice(expect, directory => { putTimeline(directory, expect, turn, Date.now()); return {}; });
+    }
+    case 'ask.check': {
+      // The person client prints the check as its last line; an Authority without the route answers `not_supported`.
+      const { expect, items } = params as Params<'ask.check'>;
+      const request = askCheckRequest(items);
+      if (request === null) return code('invalid_request');
+      return forAccount(method, expect, askCheckArgv(request), stdout => askCheckView(lastJson(stdout), items.length));
+    }
+    case 'projects.activity': {
+      const { expect } = params as Params<'projects.activity'>;
+      return forAccount(method, expect, ['project-activity'], stdout => projectActivityView(lastJson(stdout)));
     }
     case 'ask.source': {
       const { expect, scope, ref } = params as Params<'ask.source'>;
@@ -727,7 +783,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['tools', 'disconnect', option('tool', tool)], () => null);
     }
     case 'account.signOut': {
-      const { expect } = params as Params<'account.signOut'>;
+      const { expect, again } = params as Params<'account.signOut'>;
       const before = await status();
       if (before === null) return code('unavailable');
       // Already signed out (a failed refresh does that) is what was asked.
@@ -737,7 +793,13 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       if (before.signed_in) await cli(['logout']);
       const after = await status();
       if (after === null) return code('unavailable');
-      return after.signed_in ? code('signout_failed') : ok(after);
+      if (after.signed_in) return code('signout_failed');
+      // Our own sign-out: the account's Ask timeline goes with it, unless the same person signs straight back in (ADR-0047).
+      if (again !== true) {
+        const { paths } = await modules;
+        try { deleteTimeline(paths.directory, expect); } catch { /* best effort: the next read of another account deletes it */ }
+      }
+      return ok(after);
     }
   }
 }

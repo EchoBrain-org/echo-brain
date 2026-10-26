@@ -16,10 +16,13 @@ const ICONS = { imported_meeting: Calendar, note: Note, document: Page, meeting:
 /**
  * One row: what kind it is, its title (a document's kind and size under it),
  * the names of your projects it is filed in, who can read it, and when it was
- * added. A project's own page leaves the projects out, and says on a
- * meeting's row how many of its follow-ups are not closed ("4 follow-ups").
+ * added. A project's own page leaves the projects out, says on a meeting's row
+ * how many of its follow-ups are not closed ("4 follow-ups"), and marks a row
+ * that arrived since your previous visit "New" for this visit (ADR-0047).
  */
-export function ItemRow({ item, testid, projects, badge, onOpen }: { item: ListItem; testid: string; projects: boolean; badge?: string | null | undefined; onOpen: () => void }) {
+export function ItemRow({ item, testid, projects, badge, fresh = false, onOpen }: {
+  item: ListItem; testid: string; projects: boolean; badge?: string | null | undefined; fresh?: boolean; onOpen: () => void;
+}) {
   const Icon = ICONS[item.ref.kind];
   return (
     <button type="button" class="row item-row" data-testid={testid} data-kind={item.ref.kind} onClick={onOpen}>
@@ -30,6 +33,7 @@ export function ItemRow({ item, testid, projects, badge, onOpen }: { item: ListI
           <span class="detail" data-testid="document-detail">{documentDetail(item.document)}</span>
         </span>
       ) : <span class="name">{item.title}</span>}
+      {fresh && <span class="new-tag" data-testid="item-new">New</span>}
       {projects && item.projects.length > 0 && <span class="projects" data-testid="item-projects">{item.projects.join(', ')}</span>}
       {badge && <span class="open-count" data-testid="item-follow-ups">{badge}</span>}
       <Mark visibility={item.visibility} />

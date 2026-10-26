@@ -216,7 +216,9 @@ test("Mine's bar asks only what you added through ordinary Ask", async () => {
 
   await field.press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
-  await expect(page.locator('.asked')).toHaveText('Mine');
+  // Asked as Mine, which the chip still says: the question has no scope line under it (ADR-0047).
+  await expect(page.getByTestId('scope-chip')).toHaveText('Mine');
+  await expect(page.getByTestId('ask-view')).not.toContainText('Mine');
   // Asked as every Ask is, with its progress, on the newest route: this Authority, from before /v7 and /v6, answers on /v5.
   const asks = () => run.calls().filter(call => call.path.endsWith('/person/ask')).map(call => ({ path: call.path, body: call.body, progress: call.progress }));
   const mineAsk = [['/v7', '3'], ['/v6', '2'], ['/v5', '1']]
@@ -262,7 +264,7 @@ for (const [mode, route, progress] of [['ask-progress', '/v5', '1'], ['ask-progr
     // The answer, still on Mine, with the receipt the line became.
     writeFileSync(join(run.home, 'release-ask'), '');
     await expect(page.getByTestId('answer')).toBeVisible();
-    await expect(page.locator('.asked')).toHaveText('Mine');
+    await expect(page.getByTestId('scope-chip')).toHaveText('Mine');
     await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 1 item · \d+s$/);
     await expect(page.getByTestId('receipt-rows').getByTestId('ask-step')).toHaveText(['Searched meetings and documents · 1 found', 'Read Apollo update']);
     await page.getByTestId('sources-toggle').click();

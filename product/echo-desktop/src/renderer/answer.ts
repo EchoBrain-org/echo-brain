@@ -174,19 +174,6 @@ export function externalSourceProvider(source: Pick<ExternalAnswerSource, 'tool_
     source.tool_id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }
 
-/** What research did not cover: an answer's notice, and each part's gap, with its part's question when there are several. */
-export interface Coverage {
-  readonly notice?: string;
-  readonly gaps: readonly { readonly question?: string; readonly text: string }[];
-}
-
-/** What an answer did not cover, for the one note after it (ADR-0045): never a banner over it. */
-export function coverage(answer: Answer): Coverage {
-  const several = answer.parts.length > 1;
-  const gaps = answer.parts.flatMap(part => part.gap ? [{ ...(several ? { question: part.question } : {}), text: part.gap }] : []);
-  return { ...(answer.notice ? { notice: answer.notice } : {}), gaps };
-}
-
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/u;
 
 /** An ISO date's day, here: null for any other text, or a date that is not one. */
@@ -257,11 +244,12 @@ function markdownText(text: string): string {
 
 /**
  * Copy answer's Markdown (ADR-0045): the answer as it reads, each claim
- * followed by its sources' numbers as the page shows them ("[1][3]"), what
- * research did not cover, and the sources, numbered and named (`names`, one
- * per number). A laid-out part keeps its lead, headings, bullets and tables;
- * any other is a paragraph per sentence. A part's question heads what it says
- * when there are several.
+ * followed by its sources' numbers as the page shows them ("[1][3]"), and the
+ * sources, numbered and named (`names`, one per number). A laid-out part keeps
+ * its lead, headings, bullets and tables; any other is a paragraph per
+ * sentence. A part's question heads what it says when there are several.
+ * What research did not cover is not written: the page no longer shows it
+ * (ADR-0047).
  */
 export function answerMarkdown(answer: Answer, names: readonly string[]): string {
   const groups = sourceGroups(answer.sources.slice(0, MAX_SOURCES));
@@ -272,7 +260,7 @@ export function answerMarkdown(answer: Answer, names: readonly string[]): string
   const blocks: string[] = [];
   if (answer.direct) blocks.push(claim(answer.direct));
   for (const part of answer.parts) {
-    // A part with nothing to show is not headed: its gap, after its question, is in the note.
+    // A part with nothing to show is not headed.
     if (answer.parts.length > 1 && (part.statements.length > 0 || (part.records?.length ?? 0) > 0)) blocks.push(`## ${markdownText(part.question)}`);
     const said = (indexes: readonly number[]) => indexes.map(index => claim(part.statements[index]!));
     if (!part.layout) blocks.push(...part.statements.map(claim));
@@ -291,9 +279,6 @@ export function answerMarkdown(answer: Answer, names: readonly string[]): string
     }
     blocks.push(...(part.records ?? []).map(claim));
   }
-  const { notice, gaps } = coverage(answer);
-  const note = [notice, ...gaps.map(gap => [gap.question, gap.text].filter(Boolean).join(' '))].filter(Boolean).join(' ');
-  if (note) blocks.push(markdownText(note));
   if (groups.length > 0) blocks.push('Sources', groups.map((_, index) => `${index + 1}. ${markdownText(names[index] ?? '')}`.trimEnd()).join('\n'));
   return blocks.join('\n\n');
 }

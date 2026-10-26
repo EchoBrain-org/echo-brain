@@ -1,6 +1,6 @@
 import type {
-  PersonAnswerBlockV1, PersonAnswerTableRowV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2, PersonMeetingResultsV2, PersonOpenItemCurrentV1,
-  PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
+  PersonAnswerBlockV1, PersonAnswerCitationV8, PersonAnswerEvidenceCitationV8, PersonAnswerTableRowV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
+  PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
@@ -260,7 +260,24 @@ export type AnswerSource = (
    * answer's sources, so a table row that cites it shows the lock (ADR-0045).
    */
   readonly private?: true;
+  /**
+   * The citation exactly as the answer's response carried it, only on an
+   * answer's sources: opaque here. A follow-up or Ask again sends the earlier
+   * answer's citations back with it (`previous`, ADR-0047).
+   */
+  readonly cited?: PersonAnswerCitationV8;
+  /**
+   * A source that can change or go (a record's item, an original's passage, a
+   * follow-up, a ticket or a page): its evidence citation, exactly as the
+   * answer cited it, which `ask.check` asks about (ADR-0047). Opaque here.
+   */
+  readonly check?: CheckCitation;
 };
+
+/** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can change or go. */
+export const CHECK_KINDS: readonly CheckCitation['kind'][] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
+/** A checkable source's evidence citation, as the answer cited it. */
+export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: 'approved_record' | 'source_revision' | 'follow_up' | 'ticket' | 'page' }>;
 
 /**
  * What Ask is doing now (ADR-0039), from what ECHO ran: a step's searches,
@@ -329,20 +346,106 @@ export interface AnswerPart {
   readonly layout?: readonly AnswerBlock[];
 }
 
-/** An Agentic Ask answer. `text` is its plain reading, for earlier turns, and for Copy answer when its Markdown is too long. */
+/** One thing a follow-up could be about, as Ask offers it to choose (ADR-0047): a short label, and the full question it asks. */
+export interface AskChoice {
+  readonly label: string;
+  readonly question: string;
+}
+
+/** An Agentic Ask answer. `text` is its plain reading, for Copy answer when its Markdown is too long. */
 export interface Answer {
   readonly text: string;
   readonly scope: AskScope;
   readonly sources: readonly AnswerSource[];
   readonly direct?: AnswerStatement;
-  /** At least one. */
+  /** At least one, but none when Ask asks which one (`clarify`). */
   readonly parts: readonly AnswerPart[];
-  /** Off-scope: the evidence is about another subject, so a wider ask would not help. */
-  readonly outcome: 'answered' | 'partial' | 'not_found' | 'off_scope';
-  readonly assumption?: string;
-  readonly notice?: string;
+  /** `clarify`: a follow-up could mean more than one thing, and `choices` asks which; Ask never guesses (ADR-0047). */
+  readonly outcome: 'answered' | 'partial' | 'not_found' | 'clarify';
   /** Only from an Authority that streamed the Ask: what it looked through. */
   readonly receipt?: AskReceipt;
+  /** Only for an Ask that carried `previous`: the full question the answer answers ("Who owns THERM-482?"). */
+  readonly question?: string;
+  /** Only for Ask again: what is different now, each cited; empty when nothing material changed. */
+  readonly since?: readonly AnswerStatement[];
+  /** Only with outcome `clarify`: two to four things the question could mean. */
+  readonly choices?: readonly AskChoice[];
+}
+
+/**
+ * One question and its answer on the Ask timeline (ADR-0047), as the host keeps
+ * it in the account's file on this device. Never sent to the Authority.
+ */
+export interface TimelineTurn {
+  /** A UUID the page gave it. */
+  readonly id: string;
+  /** When it was asked, by this computer's clock (ISO 8601). */
+  readonly asked_at: string;
+  /** What the person typed: shown while the turn is in full. */
+  readonly text: string;
+  /** The full question the answer answers: shown when folded, and what Ask again asks. */
+  readonly question: string;
+  readonly scope: AskScope;
+  /** As the host built it; each checkable source keeps its raw evidence citation (`check`). */
+  readonly answer: Answer;
+  /** Ask again's "Since" list: what is different now, each cited; empty when nothing material changed. */
+  readonly since?: readonly AnswerStatement[];
+  /** The turn this one asked again. */
+  readonly again_of?: string;
+  /** Ticket baseline markers by source index: what a check compares a ticket with. */
+  readonly markers?: Readonly<Record<string, string>>;
+}
+
+/** The most turns a timeline keeps, and for how long: older ones go on every put. */
+export const MAX_TIMELINE_TURNS = 200;
+export const TIMELINE_DAYS = 90;
+/**
+ * The most a put may send: one turn, whose answer is at most the API's 64 KiB
+ * with its sources' citations kept beside them. Every other call keeps the
+ * broker's MAX_PARAMS_BYTES.
+ */
+export const MAX_TIMELINE_PUT_BYTES = 256 * 1024;
+
+/** What a check says of one cited source (C1): unchanged, changed, no longer readable by you, or not known now. */
+export type AskCheckState = 'same' | 'changed' | 'unreadable' | 'unknown';
+/** One source to check: when the turn that cited it was asked, its evidence citation, and a ticket's baseline marker. */
+export interface AskCheckItem {
+  readonly asked_at: string;
+  readonly citation: CheckCitation;
+  readonly marker?: string;
+}
+/** What the check said of one item, in the request's order: a readable ticket's current marker too. */
+export interface AskCheckResult {
+  readonly state: AskCheckState;
+  readonly marker?: string;
+}
+/** The most items one check asks about, and its body's bound (C1). */
+export const MAX_CHECK_ITEMS = 100;
+export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
+
+/**
+ * The previous turn an Ask carries (C3, ADR-0047): the asker's own context,
+ * never evidence, never stored. `follow_up` resolves what "it" means from it;
+ * `ask_again` has the writer say what is different since `asked_at`.
+ */
+export interface AskPrevious {
+  readonly purpose: 'follow_up' | 'ask_again';
+  /** The earlier turn's full question, within the question bound. */
+  readonly question: string;
+  readonly asked_at: string;
+  /** 0 to 8 sentences of the earlier answer the asker can still read, each at most 400 characters. */
+  readonly statements: readonly { readonly text: string; readonly citation_indexes: readonly number[] }[];
+  /** 0 to 12 of the earlier answer's citations, as its response carried them; statements index into these (at most 4 each). */
+  readonly citations: readonly PersonAnswerCitationV8[];
+}
+/** C3's bounds on `previous`, and the Ask request body's own, which it shares. */
+export const PREVIOUS_LIMITS = { statements: 8, statement_chars: 400, citations: 12, statement_citations: 4 } as const;
+export const MAX_ASK_BODY_BYTES = 16 * 1024;
+
+/** The newest thing that arrived in one of your projects from someone else that you can read, or null (C2). */
+export interface ProjectActivity {
+  readonly project_id: string;
+  readonly latest_at: string | null;
 }
 
 export interface SourceEvidence {
@@ -650,7 +753,16 @@ export interface HostMethods {
     params: { expect: Expect; request_id: string; file_handle: string; title: string; audience: Audience; project_ids: readonly string[] };
     result: Receipt;
   };
-  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string }; result: Answer };
+  /** `previous`: the earlier turn a follow-up or Ask again carries (C3); an Authority that predates it refuses it (`invalid_request`). */
+  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious }; result: Answer };
+  /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
+  'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
+  /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */
+  'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
+  /** What changed of the sources old answers cited (C1): content-free, in the items' order; `not_supported` before the route. */
+  'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
+  /** Per project you are in, the newest arrival from someone else you can read (C2); `not_supported` before the route. */
+  'projects.activity': { params: { expect: Expect }; result: { items: ProjectActivity[] } };
   /** Cancels an active Ask by its renderer-issued opaque id. */
   'ask.cancel': { params: { cancel_id: string }; result: null };
   /** The bar's live search, within its scope: a project, or all context. */
@@ -663,8 +775,11 @@ export interface HostMethods {
   'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };
   /** Start over: removes the private copy the client kept to resend a document. The Authority is not asked. */
   'documents.abandon': { params: { expect: Expect; request_id: string }; result: null };
-  /** Signs the account on screen out of this computer; the reply is the new status. */
-  'account.signOut': { params: { expect: Expect }; result: AppStatus };
+  /**
+   * Signs the account on screen out of this computer; the reply is the new status. Its Ask timeline goes with it, except
+   * when the same person signs straight back in (`again`, the weekly sign-in done early).
+   */
+  'account.signOut': { params: { expect: Expect; again?: true }; result: AppStatus };
   /** Tools: the organization's tools and your connection to each, for the account on screen. */
   'account.tools': { params: { expect: Expect }; result: ConnectedTools };
   /** Project members read the mapping; only leads can change it. */
@@ -734,7 +849,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
   'employees.reissue', 'employees.revoke', 'tools.meetings', 'runs', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
-  'meetings.handIn',
+  'meetings.handIn', 'timeline.read', 'timeline.put', 'ask.check', 'projects.activity',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -932,6 +1047,10 @@ export function changesLogLine(params: unknown): string | null {
 
 /** Parameters larger than this are refused at the broker. */
 export const MAX_PARAMS_BYTES = 64 * 1024;
+/** The most a call's parameters may take at the broker: a timeline put carries one whole answer, every other call MAX_PARAMS_BYTES. */
+export function paramsLimit(method: string): number {
+  return method === 'timeline.put' ? MAX_TIMELINE_PUT_BYTES : MAX_PARAMS_BYTES;
+}
 /** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */
 const MAX_PARAMS_DEPTH = 32;
 

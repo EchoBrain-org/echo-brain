@@ -12,17 +12,23 @@ import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
 
-/** One project: a click opens it, a dropped file is captured into it. */
+/**
+ * One project: a click opens it, a dropped file is captured into it. A small
+ * signal dot at its end says something new arrived since you last opened it
+ * (ADR-0047).
+ */
 function SidebarProject({ project, current, state }: { project: ProjectSummary; current: boolean; state: State }) {
   const drop = useDropTarget(project);
+  const news = !current && state.news.has(project.project_id);
   return (
     <div class={`side-project-row${current ? ' current' : ''}${drop.over ? ' drop-target' : ''}`} {...drop.handlers}>
       <button
         type="button" data-testid="sidebar-project" class="side-project" data-role={project.role}
-        aria-current={current ? 'page' : undefined} onClick={() => void openProject(project)}
+        aria-current={current ? 'page' : undefined} aria-label={news ? `${project.name}, something new` : undefined} onClick={() => void openProject(project)}
       >
         <span class="dot" style={identity(project.project_id)} aria-hidden="true">{initial(project.name)}</span>
         <span class="label">{project.name}</span>
+        {news && <span class="news-dot" data-testid="project-news" aria-hidden="true" />}
       </button>
       <ProjectSettingsButton state={state} project={project} />
     </div>

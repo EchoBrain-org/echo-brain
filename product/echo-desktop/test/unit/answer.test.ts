@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Answer, AnswerSource } from '../../src/shared/protocol.js';
 import {
-  answerMarkdown, answerSentences, coverage, documentName, externalSourceProvider, lateForYou, passageBlocks, sourceGroups, statementGroups, tableDay,
+  answerMarkdown, answerSentences, documentName, externalSourceProvider, lateForYou, passageBlocks, sourceGroups, statementGroups, tableDay,
 } from '../../src/renderer/answer.js';
 import { layoutAnswer } from '../../src/host/test-authority.js';
 import { answerView } from '../../src/host/views.js';
@@ -157,7 +157,7 @@ describe('a table\'s dates read as dates, and only your late row is marked', () 
 });
 
 describe('Copy answer writes Markdown (ADR-0045)', () => {
-  it('writes a laid-out answer as it reads: the lead, headings, bullets, a table, each claim with its sources\' numbers, then the note and the sources', () => {
+  it('writes a laid-out answer as it reads: the lead, headings, bullets, a table, each claim with its sources\' numbers, then the sources', () => {
     expect(answerMarkdown(therm(), THERM_NAMES)).toBe([
       'No, the reduced test scope was rejected. [2] DVT-R2 retests TC-D-03 and TC-D-01, plus the regression subset QA approves. [2]',
       '',
@@ -175,8 +175,6 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
       '| Send the regression-scope proposal to the PM [3] | Rafael Moreno | 2026-10-09 | Open |',
       '| Fix BUG-412 on the board (HW-11) [5] | Tomas Okafor | 2026-10-28 | In Progress |',
       '| Run DVT-R2 and publish the report [6] | QA | 2026-10-30 | To Do |',
-      '',
-      'One of three THERM meetings in range was not read before the time limit. Who proposed the reduced scope was not found in the evidence read.',
       '',
       'Sources',
       '',
@@ -197,14 +195,13 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
       'Yes. [3]\n\nWe ship annual plans first. [1][3]\n\nMonthly plans follow. [2]\n\nSources\n\n1. Launch plan\n2. Pricing\n3. Board');
   });
 
-  it('heads what each part says with its question when there are several, and puts each part\'s gap after its question in the note', () => {
+  it('heads what each part says with its question when there are several, and leaves out what research did not cover (ADR-0047)', () => {
     const answer: Answer = { ...plain([['Annual first.', [0]]]), sources: [page('1')], outcome: 'partial', parts: [
       { question: 'What did we agree?', status: 'answered', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }] },
       { question: 'Who approved it?', status: 'not_found', statements: [], gap: 'This was not found.' },
     ] };
-    expect(coverage(answer)).toEqual({ gaps: [{ question: 'Who approved it?', text: 'This was not found.' }] });
     expect(answerMarkdown(answer, ['Launch plan'])).toBe(
-      '## What did we agree?\n\nAnnual first. [1]\n\nWho approved it? This was not found.\n\nSources\n\n1. Launch plan');
+      '## What did we agree?\n\nAnnual first. [1]\n\nSources\n\n1. Launch plan');
   });
 
   it('keeps a table cell\'s pipes and backslashes as text, and a line that would start a list as a sentence', () => {
