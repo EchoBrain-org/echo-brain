@@ -26,18 +26,19 @@ describe('project archive document fences', () => {
     const beta = projects.createProject('owner', { schema_version: 1, kind: 'echo-project-create-v1', request_id: requestId(2), name: 'Still active' });
     const bytes = Buffer.from('retained original bytes');
     const upload = (request_id: string, project_id: typeof alpha.project_id | null, title: string) => ({
-      schema_version: 1 as const, kind: 'echo-person-document-upload-v1' as const, request_id, filename: 'evidence.txt', title,
-      content_length: bytes.byteLength, sha256: sha256Digest(bytes), audience: project_id === null ? { kind: 'only_me' as const } : { kind: 'project' as const, project_id }, project_id,
+      schema_version: 2 as const, kind: 'echo-person-document-upload-v2' as const, request_id, filename: 'evidence.txt', title,
+      content_length: bytes.byteLength, sha256: sha256Digest(bytes), audience: project_id === null ? { kind: 'only_me' as const } : { kind: 'project' as const, project_id },
+      association_project_ids: project_id === null ? [] : [project_id],
     });
     const existingRequest = upload(requestId(3), alpha.project_id, 'Existing archived evidence');
-    const existing = documents.upload('owner', existingRequest, bytes);
-    const privateDocument = documents.upload('owner', upload(requestId(4), null, 'Private evidence'), bytes);
+    const existing = documents.uploadV2('owner', existingRequest, bytes);
+    const privateDocument = documents.uploadV2('owner', upload(requestId(4), null, 'Private evidence'), bytes);
     projects.archiveProject('owner', { schema_version: 1, kind: 'echo-project-archive-v1', request_id: requestId(5), project_id: alpha.project_id, archived: true });
 
-    expect(documents.original('owner', existing.document_id, { project_id: alpha.project_id }).bytes).toEqual(bytes);
-    expect(documents.upload('owner', existingRequest, bytes)).toEqual(existing);
-    expect(() => documents.upload('owner', upload(requestId(6), alpha.project_id, 'Blocked evidence'), bytes)).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(documents.originalV2('owner', existing.document_id, { project_id: alpha.project_id }).bytes).toEqual(bytes);
+    expect(documents.uploadV2('owner', existingRequest, bytes)).toEqual(existing);
+    expect(() => documents.uploadV2('owner', upload(requestId(6), alpha.project_id, 'Blocked evidence'), bytes)).toThrow(expect.objectContaining({ code: 'not_found' }));
     expect(() => documents.associate('owner', { schema_version: 1, kind: 'echo-person-document-associate-v1', request_id: requestId(7), document_id: privateDocument.document_id, project_id: alpha.project_id })).toThrow(expect.objectContaining({ code: 'not_found' }));
-    expect(documents.upload('owner', upload(requestId(8), beta.project_id, 'Active evidence'), bytes)).toMatchObject({ state: 'saved' });
+    expect(documents.uploadV2('owner', upload(requestId(8), beta.project_id, 'Active evidence'), bytes)).toMatchObject({ state: 'saved' });
   });
 });

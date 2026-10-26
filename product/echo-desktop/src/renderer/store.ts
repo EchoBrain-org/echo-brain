@@ -1501,8 +1501,6 @@ const SEEN_PREFIX = 'echo.projectSeen.';
 let seenKey: string | null = null;
 /** The newest arrival in each project from someone else, as the last activity read said. */
 let arrivals: ReadonlyMap<string, string | null> = new Map();
-/** The Authority has no activity read (`not_supported`): no dots, and it is not asked again until the next sign-in. */
-let activityUnsupported = false;
 /** When the activity read last went out: a timer's or a page's check reads it again only after `ACTIVITY_EVERY_MS`. */
 let activityReadAt = 0;
 /** Which activity read is the latest: no check waits on one, so a reply that lands after a later one went is dropped. */
@@ -1528,7 +1526,6 @@ export function accountHash(account: Expect): string {
  */
 function rememberSeen(account: Expect): void {
   seenKey = `${SEEN_PREFIX}${accountHash(account)}`;
-  activityUnsupported = false;
   activityReadAt = 0;
   arrivals = new Map();
   let kept: unknown = null;
@@ -1584,20 +1581,18 @@ function visitProject(projectId: string): Pick<State, 'visit' | 'news'> {
  * from someone else you can read. A project with an arrival since you last
  * opened it has a dot. One seen for the first time is seen now, with none;
  * the one on screen is being seen. Times of projects you are no longer in go.
- * Quiet: a read that fails leaves the dots; an Authority without the read has
- * none.
+ * Quiet: a read that fails leaves the dots.
  */
 async function readActivity(due: boolean): Promise<void> {
   const account = expect();
-  if (!account || activityUnsupported || seen === null) return;
+  if (!account || seen === null) return;
   if (!due && Date.now() - activityReadAt < ACTIVITY_EVERY_MS) return;
   activityReadAt = Date.now();
   const mine = ++activitySeq;
   const result = await rpc('projects.activity', { expect: account });
   if (mine !== activitySeq || !sameAccount(account) || seen === null) return;
   if (!result.ok) {
-    if (result.failure.code === 'not_supported') { activityUnsupported = true; set({ news: new Set() }); }
-    else if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
+    if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
     return;
   }
   const open = state.route.page === 'project' && !state.concealed ? state.route.project.project_id : null;
@@ -6078,9 +6073,7 @@ async function readItems(account: Expect, query: ItemsQuery, cursor: string | nu
   : Promise<{ ok: true; pages: { cursor: string | null; items: readonly OpenItemView[] }[]; last: OpenItemsView } | { ok: false; failure: Failure }> {
   const pages: { cursor: string | null; items: readonly OpenItemView[] }[] = [];
   for (let next = cursor, rows = 0; ;) {
-    // On an older Authority (no change check), what you are involved in is what you sent or own.
-    const scope = query.scope === 'involved' && freshness.olderAuthority() ? 'mine' : query.scope;
-    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope,
+    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: query.scope,
       ...(query.id === undefined ? {} : { id: query.id }), ...(query.states ? { states: query.states } : {}), ...(next === null ? {} : { cursor: next }),
       ...(query.read ? { read: query.read } : {}), ...(query.changed_since === undefined ? {} : { changed_since: query.changed_since }) } });
     if (!result.ok) {

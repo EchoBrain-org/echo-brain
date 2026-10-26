@@ -60,15 +60,14 @@ describe("Person Slack identity-link HTTP routes", () => {
         channel_id: "D12345678",
       });
       expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledOnce();
-      const toolsResponse = await fetch(`${server.baseUrl}/v2/person/tools`, { headers: { authorization: "Bearer bearer" } });
-      expect(toolsResponse.status).toBe(200);
-      expect(await toolsResponse.json()).toMatchObject({ membership_id: MEMBERSHIP_ID, tools: [{ personal_status: "unlinked" }] });
+      expect(await context.application.tools("bearer")).toMatchObject({ membership_id: MEMBERSHIP_ID, tools: [{ personal_status: "unlinked" }] });
+      // The V2 tools read is retired (ADR-0048): Slack's tools reach a person only through the V4 list.
+      const retired = await fetch(`${server.baseUrl}/v2/person/tools`, { headers: { authorization: "Bearer bearer" } });
+      expect(retired.status).toBe(404);
       const malformed = await fetch(`${server.baseUrl}/v2/integration-links/slack/challenges`, {
         method: "POST", headers: { authorization: "Bearer bearer", "content-type": "application/json" }, body: JSON.stringify({ ...beginRequest(), recipient_user_id: "" }),
       });
       expect(malformed.status).toBe(400);
-      const denied = await fetch(`${server.baseUrl}/v2/person/tools`);
-      expect(denied.status).toBe(401);
       const disconnected = await fetch(`${server.baseUrl}/v2/person/external-identities/slack/disconnect`, {
         method: "POST", headers: { authorization: "Bearer bearer", "content-type": "application/json" }, body: "{}",
       });
@@ -117,7 +116,6 @@ describe("Person Slack identity-link HTTP routes", () => {
     const headers = { authorization: "Bearer bearer", "content-type": "application/json" };
     try {
       for (const [method, path] of [
-        ["GET", "/v2/person/tools"],
         ["POST", "/v2/person/external-identities/slack/browser/begin"],
         ["POST", "/v2/person/external-identities/slack/browser/status"],
         ["POST", "/v2/person/external-identities/slack/browser/cancel"],
@@ -159,9 +157,7 @@ describe("Person Slack identity-link HTTP routes", () => {
       expect(status.status).toBe(200);
       expect(await status.json()).toMatchObject({ status: "complete", failure_reason: null });
       expect(context.database.prepare("SELECT count(*) AS count FROM organization_external_human_link_current").get()).toEqual({ count: 1 });
-      const tools = await fetch(`${baseUrl}/v2/person/tools`, { headers: { authorization: "Bearer bearer" } });
-      expect(tools.status).toBe(200);
-      expect(await tools.json()).toMatchObject({
+      expect(await context.application.tools("bearer")).toMatchObject({
         tools: [{ provider: "slack", personal_status: "linked", account_id: "U12345679" }],
       });
     } finally {

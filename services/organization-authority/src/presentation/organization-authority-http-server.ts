@@ -9,19 +9,18 @@ import {
 import { startPersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
   PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
-  validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
+  validateProjectCreateV1, validateProjectCreateReceiptV1,
   validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1, validateProjectSettingsReceiptV1,
   validateProjectListV2, validateProjectPageRequestV2, validateProjectSummaryV2,
-  validateProjectPageRequestV1, validateProjectIdV1, validateProjectSummaryV1,
+  validateProjectIdV1,
   validateProjectContextBrowseV1, validateProjectMembersV1,
   validateProjectDirectorySearchV1, validateProjectDirectoryV1,
   validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
   validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectContextFeedV1, validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectContextSearchResultV1, validateProjectContextSearchResultV2,
-  validateProjectContextReadV1, validateProjectContextReadV2, validatePersonUploadContextId, validatePersonUpdateRequestId,
-  validatePersonUpdateSubmitV2, validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2,
-  validatePersonUploadSearchV2, validatePersonUploadSearchResultV2, validatePersonUploadContentV2,
+  validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectContextSearchResultV2,
+  validateProjectContextReadV2, validatePersonUploadContextId, validatePersonUpdateRequestId,
+  validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
   validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
   validatePersonUploadSearchV3, validatePersonUploadSearchResultV3, validatePersonUploadContentV3,
 } from '@echo-brain/organization-api';
@@ -177,8 +176,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly expected_issuer: string;
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: ProviderHttpApplicationV1;
+  /** The Person tools list, `/v4/person/tools`. */
   readonly person_tools?: ProviderHttpApplicationV1;
-  readonly person_tools_v4?: ProviderHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
   readonly person_record_read?: PersonRecordReadHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
@@ -227,7 +226,7 @@ function providerIngressRoutes(
   options: OrganizationAuthorityHttpServerOptions,
 ): ReadonlyMap<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }> {
   const mounted = new Map<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }>();
-  for (const application of [options.person_external_identity_link, options.person_tools, options.person_tools_v4, ...(options.person_tool_connections ?? [])]) {
+  for (const application of [options.person_external_identity_link, options.person_tools, ...(options.person_tool_connections ?? [])]) {
     if (application === undefined) continue;
     const routeIds = new Set<string>();
     for (const route of application.routes) {
@@ -240,9 +239,11 @@ function providerIngressRoutes(
       ) throw new Error("invalid provider ingress route");
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
-      // The retired V1 notes path stays reserved so no adapter can mount it.
+      // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
+      // ADR-0048), so no adapter can mount one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
-        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2]
+        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
+          '/v2/person/tools', '/v3/person/tools']
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -751,11 +752,11 @@ async function projectBody(request: IncomingMessage): Promise<unknown> {
   } catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
 }
 
-/** The V1 list accepts limit and cursor; V2 also accepts a status filter. */
-function projectPage(url: URL, v2: boolean): unknown {
+/** The project list accepts limit, cursor and a status filter. */
+function projectPage(url: URL): unknown {
   const page: Record<string, unknown> = {};
   for (const [key, value] of url.searchParams) {
-    if ((key !== 'limit' && key !== 'cursor' && (!v2 || key !== 'status')) || Object.hasOwn(page, key)) {
+    if ((key !== 'limit' && key !== 'cursor' && key !== 'status') || Object.hasOwn(page, key)) {
       throw new AuthorityOperationError('invalid_request', 'request failed');
     }
     if (key === 'limit' && !/^(?:[1-9]|10)$/.test(value)) {
@@ -763,7 +764,7 @@ function projectPage(url: URL, v2: boolean): unknown {
     }
     page[key] = key === 'limit' ? Number(value) : value;
   }
-  return v2 ? projectInput(validateProjectPageRequestV2, page) : projectInput(validateProjectPageRequestV1, page);
+  return projectInput(validateProjectPageRequestV2, page);
 }
 
 function projectResponse(response: ServerResponse, status: number, value: unknown, validate: (value: unknown) => unknown): void {
@@ -778,8 +779,7 @@ function projectResponse(response: ServerResponse, status: number, value: unknow
   json(response, status, value);
 }
 
-type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1,
-  'listProjects' | 'listProjectsV2' | 'readProject' | 'readProjectV2' | 'readContext' | 'readContextV2' | 'uploadStatus' | 'readUpload'>;
+type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1, 'listProjectsV2' | 'readProjectV2' | 'readContextV2'>;
 const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   readonly operation: ProjectBodyOperation;
   readonly request: (value: unknown) => unknown;
@@ -798,11 +798,9 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
-  [`${PERSON_PROJECTS_PATH_V1}/context/feed`, { operation: 'feed', request: validateProjectContextBrowseV1, response: validateProjectContextFeedV1, status: 200 }],
-  [`${PERSON_PROJECTS_PATH_V1}/context/search`, { operation: 'search', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V2}/context/feed`, { operation: 'feedV2', request: validateProjectContextBrowseV1, response: validateProjectContextFeedV2, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V2}/context/search`, { operation: 'searchV2', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV2, status: 200 }],
-  [PERSON_UPDATES_PATH_V2, { operation: 'submitUpload', request: validatePersonUpdateSubmitV2, response: validatePersonUpdateReceiptV2, status: 202 }],
+  // The one V2 notes route: the notes stored as V2, which no V3 read returns (ADR-0048).
   [`${PERSON_UPDATES_PATH_V2}/search`, { operation: 'searchUploads', request: validatePersonUploadSearchV2, response: validatePersonUploadSearchResultV2, status: 200 }],
   [PERSON_UPDATES_PATH_V3, { operation: 'submitUploadV3', request: validatePersonUpdateSubmitV3, response: validatePersonUpdateReceiptV3, status: 202 }],
   [`${PERSON_UPDATES_PATH_V3}/search`, { operation: 'searchUploadsV3', request: validatePersonUploadSearchV3, response: validatePersonUploadSearchResultV3, status: 200 }],
@@ -822,14 +820,12 @@ async function projectRoute(
   }
   if (method !== 'GET') return undefined;
   // Static POST paths cannot be misinterpreted as project/request identifiers.
-  if (route !== undefined && url.pathname !== PERSON_PROJECTS_PATH_V1) return undefined;
-  const projectBase = url.pathname === PERSON_PROJECTS_PATH_V2 || url.pathname.startsWith(`${PERSON_PROJECTS_PATH_V2}/`) ? PERSON_PROJECTS_PATH_V2 : PERSON_PROJECTS_PATH_V1;
-  const projectPath = url.pathname.startsWith(`${projectBase}/`)
-    ? url.pathname.slice(projectBase.length + 1).split('/') : [];
-  const uploadBase = url.pathname.startsWith(`${PERSON_UPDATES_PATH_V3}/`) ? PERSON_UPDATES_PATH_V3 : PERSON_UPDATES_PATH_V2;
-  const uploadPath = url.pathname.startsWith(`${uploadBase}/`)
-    ? url.pathname.slice(uploadBase.length + 1).split('/') : [];
-  const list = url.pathname === PERSON_PROJECTS_PATH_V1 || url.pathname === PERSON_PROJECTS_PATH_V2;
+  if (route !== undefined) return undefined;
+  const projectPath = url.pathname.startsWith(`${PERSON_PROJECTS_PATH_V2}/`)
+    ? url.pathname.slice(PERSON_PROJECTS_PATH_V2.length + 1).split('/') : [];
+  const uploadPath = url.pathname.startsWith(`${PERSON_UPDATES_PATH_V3}/`)
+    ? url.pathname.slice(PERSON_UPDATES_PATH_V3.length + 1).split('/') : [];
+  const list = url.pathname === PERSON_PROJECTS_PATH_V2;
   const readProject = projectPath.length === 1;
   const readContext = projectPath.length === 3 && projectPath[1] === 'context';
   const status = uploadPath.length === 1;
@@ -840,33 +836,23 @@ async function projectRoute(
     throw new AuthorityOperationError('invalid_request', 'request failed');
   }
   if (list) {
-    const page = projectPage(url, projectBase === PERSON_PROJECTS_PATH_V2);
-    return response => projectBase === PERSON_PROJECTS_PATH_V2
-      ? projectResponse(response, 200, application.listProjectsV2(token, page), validateProjectListV2)
-      : projectResponse(response, 200, application.listProjects(token, page), validateProjectListV1);
+    const page = projectPage(url);
+    return response => projectResponse(response, 200, application.listProjectsV2(token, page), validateProjectListV2);
   }
   if (readProject || readContext) {
     const project = projectInput(validateProjectIdV1, projectPath[0]);
     if (readContext) {
       const context = projectInput(validatePersonUploadContextId, projectPath[2]);
-      return response => projectBase === PERSON_PROJECTS_PATH_V2
-        ? projectResponse(response, 200, application.readContextV2(token, project, context), validateProjectContextReadV2)
-        : projectResponse(response, 200, application.readContext(token, project, context), validateProjectContextReadV1);
+      return response => projectResponse(response, 200, application.readContextV2(token, project, context), validateProjectContextReadV2);
     }
-    return response => projectBase === PERSON_PROJECTS_PATH_V2
-      ? projectResponse(response, 200, application.readProjectV2(token, project), validateProjectSummaryV2)
-      : projectResponse(response, 200, application.readProject(token, project), validateProjectSummaryV1);
+    return response => projectResponse(response, 200, application.readProjectV2(token, project), validateProjectSummaryV2);
   }
   if (readUpload) {
     const context = projectInput(validatePersonUploadContextId, uploadPath[1]);
-    return response => uploadBase === PERSON_UPDATES_PATH_V3
-      ? projectResponse(response, 200, application.readUploadV3(token, context), validatePersonUploadContentV3)
-      : projectResponse(response, 200, application.readUpload(token, context), validatePersonUploadContentV2);
+    return response => projectResponse(response, 200, application.readUploadV3(token, context), validatePersonUploadContentV3);
   }
   const id = projectInput(validatePersonUpdateRequestId, uploadPath[0]);
-  return response => uploadBase === PERSON_UPDATES_PATH_V3
-    ? projectResponse(response, 200, application.uploadStatusV3(token, id), validatePersonUpdateStatusResultV3)
-    : projectResponse(response, 200, application.uploadStatus(token, id), validatePersonUpdateStatusV2);
+  return response => projectResponse(response, 200, application.uploadStatusV3(token, id), validatePersonUpdateStatusResultV3);
 }
 
 /** The Organization Authority Person API surface, with no machine routes. */

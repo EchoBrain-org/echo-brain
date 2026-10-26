@@ -56,8 +56,8 @@ export const authority = {
   active: [] as ProjectSummary[],
   archived: [] as ProjectSummary[],
   reviews: [] as string[],
-  /** How `changes.read` answers: as the Authority does, failing, or not there (an older Authority). */
-  changes: 'ok' as 'ok' | 'fails' | 'not_supported',
+  /** How `changes.read` answers: as the Authority does, or failing. */
+  changes: 'ok' as 'ok' | 'fails',
   seconds: 60,
   reset(): void {
     Object.assign(authority, { items: [], active: [], archived: [], reviews: [], changes: 'ok', seconds: 60 });
@@ -72,7 +72,6 @@ const lists = () => ({ active: authority.active, archived: authority.archived })
 /** The handlers `rpcFor` takes for the change check, your projects, the follow-ups reads it makes, and Home's: a test's own fall back on them. */
 export const fixture: Record<string, Handler> = {
   'changes.read': () => {
-    if (authority.changes === 'not_supported') return fail('not_supported');
     if (authority.changes === 'fails') return fail('unavailable', { retryable: true });
     const tuples = authority.items.filter(item => involved(item))
       .map(item => [item.item_id, item.state, item.owner.membership_id, item.owner_set_at, item.state_set_at, item.sent_at]);

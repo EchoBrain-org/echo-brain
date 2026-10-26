@@ -193,7 +193,7 @@ test('a document reads a page of text at a time, and Save original writes the ch
   await page.getByTestId('reader-remove').click();
   await expect(page.getByTestId('change-error')).toHaveText('This is no longer available to you.');
   await expect(page.getByTestId('reader')).toBeVisible();
-  const dissociate = run.calls().filter(call => call.path === `/v1/person/documents/${DOCUMENT}/dissociate`);
+  const dissociate = run.calls().filter(call => call.path === `/v2/person/documents/${DOCUMENT}/dissociate`);
   expect(dissociate.map(call => call.body)).toEqual([expect.objectContaining({ project_id: BEACON })]);
 });
 
@@ -208,7 +208,7 @@ test('a document leaves a project its lead opened it in', async () => {
   await expect(page.getByTestId('toast')).toHaveText('Removed from Apollo');
   await expect(page.getByTestId('reader')).toHaveCount(0);
   await expect(page.locator('[data-kind="document"]')).toHaveCount(0);
-  const dissociate = run.calls().filter(call => call.path === `/v1/person/documents/doc_${'9'.repeat(64)}/dissociate`);
+  const dissociate = run.calls().filter(call => call.path === `/v2/person/documents/doc_${'9'.repeat(64)}/dissociate`);
   expect(dissociate.map(call => call.body)).toEqual([expect.objectContaining({ project_id: APOLLO })]);
 });
 

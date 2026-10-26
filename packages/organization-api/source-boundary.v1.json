@@ -58,6 +58,7 @@
       "packages/organization-api/src/person-meeting-ingestion-exclusion-read.ts",
       "packages/organization-api/src/person-slack-link.ts",
       "packages/organization-api/src/person-tools.ts",
+      "packages/organization-api/src/person-tools-v3.ts",
       "packages/organization-api/src/person-slack-identity-link.ts",
       "packages/organization-api/src/person-slack-browser-link.ts",
       "packages/organization-api/src/person-meeting-transcript-v1.ts"

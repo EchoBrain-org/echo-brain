@@ -1,7 +1,7 @@
 import { validateOrganizationPersonTools } from '@echo-brain/provider-slack-client/organization-api/person-tools';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
-import { ORGANIZATION_API_PERSON_TOOLS_PATH, ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH } from "@echo-brain/provider-slack-client/organization-api/person-tools";
+import { ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH } from "@echo-brain/provider-slack-client/organization-api/person-tools";
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
@@ -29,7 +29,6 @@ import type {
 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 
 const SLACK_IDENTITY_ROUTES_V1 = Object.freeze([
-  Object.freeze({ route_id: "tools", method: "GET" as const, path: ORGANIZATION_API_PERSON_TOOLS_PATH }),
   Object.freeze({ route_id: "slack-disconnect", method: "POST" as const, path: ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH }),
   Object.freeze({
     route_id: "slack-begin",
@@ -97,7 +96,6 @@ async function acceptOrganizationSetupRouteV1(
 
 export function createSlackExternalIdentityHttpApplicationV1(input: {
   readonly service: {
-    tools(accessToken: string): Promise<unknown>;
     begin(input: unknown, accessToken: string): Promise<unknown>;
     complete(input: unknown, accessToken: string): Promise<unknown>;
     disconnect(input: unknown, accessToken: string): Promise<unknown>;
@@ -113,7 +111,6 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
         return Object.freeze({ status: 200 as const, body: "<!doctype html><meta charset=\"utf-8\"><title>ECHO</title><p>Return to ECHO to finish connecting. ECHO will show the connection status.</p>", content_type: "text/html" as const });
       }
       const token = accessToken(request.headers);
-      if (request.route_id === "tools") return { status: 200 as const, body: await input.service.tools(token) };
       const setupResponse = await acceptOrganizationSetupRouteV1(input.setup, request, token);
       if (setupResponse !== undefined) return setupResponse;
       const body = parseBody(request.raw_body);

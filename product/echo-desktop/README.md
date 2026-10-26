@@ -106,7 +106,7 @@ the dot, and its rows added since your previous visit say **New** for that
 visit. When you last opened each project is kept in the window's storage, per
 account under a hash of it, and goes when the timeline does: at our own
 sign-out, or when another account signs in here. A project seen for the first
-time has no dot, and an Authority without the read shows none.
+time has no dot, and a read that fails leaves the dots as they were.
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 
@@ -172,8 +172,7 @@ found). "Open" is one status only: a total of not sent and open together is
 A **follow-ups list** is a meeting's (from its Send row, its line in the
 reader, its decision page, or a follow-up's page), a project's (from the line
 above its feed), or **Follow-ups**: everything you sent, own or last handed
-on, in every status, from the sidebar or Home's footer (on an Authority
-without that list, what you sent or own). When that list is already open
+on, in every status, from the sidebar or Home's footer. When that list is already open
 under what shows, its links go back to it, ticks and place kept, instead of
 opening it again. Rows are grouped Not sent, Open, Done and Dismissed, each
 group counted over the whole list, the meeting's actions first; each row
@@ -262,10 +261,7 @@ and the decision page. Coming back reads the page on screen again once, with
 what its check found moved (and the sidebar, when its last read failed or
 the check could not say whether projects moved), keeping what it shows. While the window is hidden, minimized or covered, or
 another app is in front, checks go on, and what shows is read once it can be
-seen. An Authority without the change check: ECHO scans what you sent or own,
-rows only, every five minutes and on wake, and notifies what someone else did
-among them; the sidebar is read again on each return, and Follow-ups lists
-what you sent or own.
+seen.
 
 What someone else did to a follow-up you are involved in (handed to you, done,
 not relevant, reopened, or handed on, for one you sent or last handed on) and
@@ -278,8 +274,8 @@ notification brings the window forward and opens that item's page, a list of
 exactly the follow-ups a summary counted (at most 100, each read again by its
 id, one you can no longer read left out), or the project; only what this
 account was told of opens, and a sheet or Capture that is up stays.
-desktop.log records `lifecycle conceal|resume|shown|wake`, `changes moved
-<areas>` (by area name only) and `changes unsupported`.
+desktop.log records `lifecycle conceal|resume|shown|wake` and `changes moved
+<areas>` (by area name only).
 
 Under the rows, and on an empty Home (with no projects too), a footer says how
 many items you sent wait on others and when ECHO last checked ("2 waiting on

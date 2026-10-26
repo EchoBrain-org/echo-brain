@@ -408,10 +408,12 @@ function quiet(method: string, account: Expect) {
     case 'search.run': return ok({ items: [] });
     case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60, areas: { projects: `sha256:${'1'.repeat(64)}`, follow_ups: `sha256:${'2'.repeat(64)}`, reviews: `sha256:${'3'.repeat(64)}` } });
     case 'runs': return { ok: false, failure: { code: 'unavailable', retryable: true } };
-    // The Ask timeline (ADR-0047): kept on this computer, empty at first; its checks and project dots need an Authority read this proof does not serve.
+    // The Ask timeline (ADR-0047): kept on this computer, empty at first; its checks need an Authority read this proof does not
+    // serve, and with no projects there are no dots.
     case 'timeline.read': return ok({ turns: [] });
     case 'timeline.put': return ok({});
-    case 'ask.check': case 'projects.activity': return { ok: false, failure: { code: 'not_supported', retryable: false } };
+    case 'projects.activity': return ok({ items: [] });
+    case 'ask.check': return { ok: false, failure: { code: 'not_supported', retryable: false } };
   }
   throw new Error(`Unexpected request: ${method}`);
 }

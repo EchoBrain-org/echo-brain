@@ -70,6 +70,7 @@ separately.
 | [ADR-0045](ADR-0045-ask-answer-layout.md) | An Ask answer carries its layout, and the desktop sets its type | proposed |
 | [ADR-0046](ADR-0046-private-meetings-and-item-routing.md) | Meetings stay private until each item is approved to its destination | proposed |
 | [ADR-0047](ADR-0047-ask-timeline.md) | Ask keeps a device-only timeline that says what changed, and answers follow-ups | proposed |
+| [ADR-0048](ADR-0048-retire-older-person-routes.md) | Retire the older Person routes and fallbacks kept only for compatibility | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

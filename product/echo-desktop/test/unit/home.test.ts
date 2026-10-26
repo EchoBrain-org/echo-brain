@@ -155,9 +155,10 @@ async function authority(method: string, params: { project_id?: string; request?
     // A project's tools line: it reads nothing.
     case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
     case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
-    // The Ask timeline has nothing in it, and this Authority predates project activity and the source check (ADR-0047).
+    // The Ask timeline has nothing in it, there are no projects to have news, and this Authority predates the source check (ADR-0047).
     case 'timeline.read': return ok({ turns: [] });
-    case 'projects.activity': case 'ask.check': return fail('not_supported');
+    case 'projects.activity': return ok({ items: [] });
+    case 'ask.check': return fail('not_supported');
     // The change check: nothing moves unless a test says.
     case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60,
       areas: { projects: `sha256:${'0'.repeat(64)}`, follow_ups: `sha256:${'1'.repeat(64)}`, reviews: `sha256:${'2'.repeat(64)}` } });

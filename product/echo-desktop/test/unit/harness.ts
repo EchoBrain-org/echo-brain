@@ -97,7 +97,8 @@ export const fileOf = (account: Expect) => `${account.authority} ${account.membe
 /**
  * An rpc for the store: held replies first, then the test's own handlers,
  * then what every page needs to open quietly. Anything else is a test error.
- * Its Authority predates the source check and project activity (`not_supported`).
+ * Its Authority predates the source check (`not_supported`), and nothing new
+ * arrived in your projects.
  */
 export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () => { active: ProjectSummary[]; archived: ProjectSummary[] }) {
   Object.assign(moved, { projects: 0, follow_ups: 0, reviews: 0 });
@@ -116,7 +117,8 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
         timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? turn : other)) : [...kept, turn]);
         return ok({});
       }
-      case 'ask.check': case 'projects.activity': return fail('not_supported');
+      case 'ask.check': return fail('not_supported');
+      case 'projects.activity': return ok({ items: lists().active.map(project => ({ project_id: project.project_id, latest_at: null })) });
       case 'app.status': return ok({ signed_in: true, account: ACCOUNT });
       case 'app.setUnresolved': return ok(null);
       case 'account.tools': return ok({ tools: [] });

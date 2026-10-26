@@ -315,18 +315,6 @@ describe('a follow-up sent and closed between two checks (review C)', () => {
     await nextCheck();
     expect(texts()).toEqual(['Mina marked Action 1 not relevant']);
   });
-
-  it('on an older Authority (no change check, nor changed_since), reads none closed, and tells the rest as before', async () => {
-    authority.changes = 'not_supported';
-    await startStore();
-    authority.items = [stated(sent(1, MINA), 'done', MINA, 2)];
-    await nextCheck(300);
-    expect(notices()).toEqual([]);
-    authority.items = [...authority.items, followUp(3)];
-    await nextCheck(300);
-    expect(texts()).toEqual(['Mina handed you Action 3']);
-    expect(closedReads()).toEqual([]);
-  });
 });
 
 describe('what never notifies (N3)', () => {
@@ -513,22 +501,6 @@ describe('noise (N4)', () => {
     await flush();
     expect(notices()).toEqual([]);
     expect(rpc.mock.calls.filter(([method]) => method === 'changes.read').at(-1)?.[1]).toMatchObject({ expect: { membership_id: 'other' } });
-  });
-});
-
-describe('an older Authority (R8)', () => {
-  it('scans what you sent or own every five minutes, learning first, then telling what someone else did', async () => {
-    authority.changes = 'not_supported';
-    await signedIn([sent(1, MINA)]);
-    expect(followed().map(([, params]) => params.request.scope)).toEqual(['mine']);
-    authority.items = [stated(sent(1, MINA), 'done', MINA, 30)];
-    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
-    expect(followed()).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await flush();
-    expect(texts()).toEqual(['Mina marked Action 1 done']);
-    // The change check is not asked again until the next start.
-    expect(rpc.mock.calls.filter(([method]) => method === 'changes.read')).toHaveLength(1);
   });
 });
 

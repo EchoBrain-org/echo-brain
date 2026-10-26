@@ -761,7 +761,7 @@ export interface HostMethods {
   'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
   /** What changed of the sources old answers cited (C1): content-free, in the items' order; `not_supported` before the route. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
-  /** Per project you are in, the newest arrival from someone else you can read (C2); `not_supported` before the route. */
+  /** Per project you are in, the newest arrival from someone else you can read (C2). */
   'projects.activity': { params: { expect: Expect }; result: { items: ProjectActivity[] } };
   /** Cancels an active Ask by its renderer-issued opaque id. */
   'ask.cancel': { params: { cancel_id: string }; result: null };
@@ -835,8 +835,8 @@ export interface MainMethods {
    * changed for you, and what a click opens. See `noticeOf`.
    */
   'notice.show': { params: Notice; result: null };
-  /** desktop.log, codes only: the change check's areas that moved, or that the Authority has no change check. Never a digest or an id. */
-  'log.changes': { params: { moved: readonly PersonChangesAreaV1[] } | { unsupported: true }; result: null };
+  /** desktop.log, codes only: the change check's areas that moved. Never a digest or an id. */
+  'log.changes': { params: { moved: readonly PersonChangesAreaV1[] }; result: null };
 }
 
 export type Methods = HostMethods & MainMethods;
@@ -1036,10 +1036,8 @@ export function noticeOf(params: unknown): Notice | null {
 /** The change check's areas, as desktop.log names them: known names only, each once, in the contract's order. */
 export function changesLogLine(params: unknown): string | null {
   if (params === null || typeof params !== 'object' || Array.isArray(params)) return null;
-  const keys = Object.keys(params).sort().join();
-  const { moved, unsupported } = params as Record<string, unknown>;
-  if (keys === 'unsupported' && unsupported === true) return 'changes unsupported';
-  if (keys !== 'moved' || !Array.isArray(moved) || moved.length === 0) return null;
+  const { moved } = params as Record<string, unknown>;
+  if (Object.keys(params).join() !== 'moved' || !Array.isArray(moved) || moved.length === 0) return null;
   const areas: readonly string[] = CHANGE_AREAS;
   if (!moved.every(area => typeof area === 'string' && areas.includes(area)) || new Set(moved).size !== moved.length) return null;
   return `changes moved ${areas.filter(area => moved.includes(area)).join(',')}`;

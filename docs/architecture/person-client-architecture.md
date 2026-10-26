@@ -364,12 +364,13 @@ The repository root is workspace orchestration only. It is private and has no
 runtime export or executable.
 
 The neutral client uses `/v4/person/tools`, a bounded generic status contract
-that adds `organization_setup` for owners; the v3 route strips that field and
-keeps serving older clients. Each tool registers its own verbs (`setup`,
-`connect`, `disconnect`, `status`, `cancel`) as a `PersonToolProviderV1` at an
-explicit entrypoint; `person tools` dispatches to them by `--tool`. Supported
-v2 routes remain in the Slack provider for existing clients; the disconnect
-command decodes that retained response there.
+that adds `organization_setup` for owners; the v3 route and Slack's
+`GET /v2/person/tools` are retired
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). Each tool
+registers its own verbs (`setup`, `connect`, `disconnect`, `status`, `cancel`)
+as a `PersonToolProviderV1` at an explicit entrypoint; `person tools`
+dispatches to them by `--tool`. Slack's disconnect reply still carries its V2
+tool shape, which the disconnect command decodes in the Slack provider.
 
 ## Deliberate context uploads
 
@@ -433,8 +434,10 @@ the original source pathname. `documents pending` lists local retained requests
 without a network call or revealing paths. A matching full or minimal saved
 receipt resolves the local attempt. A minimal receipt confirms admission after
 project access is lost without returning document content or access coordinates.
-A full `status-v2` receipt never matches a snapshot an older client kept from a
-V1 upload; `retry` or `abandon` settles that one.
+A snapshot an older client kept from a V1 upload cannot be resent, because the
+V1 routes are retired
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)):
+`documents pending` lists it as unreadable, and `abandon` removes it.
 
 `documents abandon --request-id` explicitly removes only local retry material.
 It cannot cancel or delete a possibly completed Authority upload. The desktop

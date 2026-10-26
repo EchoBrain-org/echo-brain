@@ -282,11 +282,12 @@ export function layoutAnswer(question: string, scope: Record<string, unknown>, l
 // ---- the Ask timeline (ADR-0047) --------------------------------------------------
 
 /**
- * The modes whose Authority has the Ask timeline's routes: `/v7` that takes
- * `previous` (C3), the source check (C1) and project activity (C2). `changed`
- * finds a cited page changed and a cited follow-up gone; `quiet` finds nothing
- * different on Ask again. Every other mode's Authority predates all three:
- * its client asks `/v5` without `previous`, and the two reads answer 404.
+ * The modes whose Authority has the Ask timeline's Ask routes: `/v7` that
+ * takes `previous` (C3) and the source check (C1). `changed` finds a cited
+ * page changed and a cited follow-up gone; `quiet` finds nothing different on
+ * Ask again. Every other mode's Authority predates both: its client asks `/v5`
+ * without `previous`, and the source check answers 404. Every mode's serves
+ * project activity (C2), as every Authority does (ADR-0048).
  */
 export const TIMELINE_MODES: ReadonlySet<string> = new Set(['ask-timeline', 'ask-timeline-changed', 'ask-timeline-quiet']);
 /** An answer citation, as a V8 answer carries it. */
@@ -460,8 +461,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // No longer a lead of the first project, though the list said so.
   if (mode === 'demoted') members[desktop.projects[0]!.project_id] = members[desktop.projects[0]!.project_id]!.map(entry => ({ ...entry, role: entry.role === 'lead' ? 'member' : 'lead' }));
   const documents = structuredClone(desktop.documents);
-  const feedItem = fixture('projects-feed').items as Record<string, unknown>[];
-  const readable = fixture('projects-read-context');
+  const feedItem = fixture('projects-feed-v2').items as Record<string, unknown>[];
+  const readable = fixture('projects-read-context-v2');
   const catalog = new Map<string, { received_at: string; title: string; text: string; audience: Record<string, unknown> }>([
     [String(feedItem[0]!.context_id), { received_at: String(feedItem[0]!.received_at), title: String(feedItem[0]!.title),
       // Shared with several projects; a reader sees only the one it is read in (ADR-0023).
@@ -1329,8 +1330,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // granola-sweep, until one is asked for. Every answer passes the
     // contract's own result check, as the Authority's does. Runs and shared
     // Home reads exist even when the meeting provider is unavailable.
-    // An Authority from before the change check (`no-changes`) answers it as any unknown path.
-    if (method === 'GET' && path === '/v1/person/changes' && mode !== 'no-changes') return json(changeCheck());
+    if (method === 'GET' && path === '/v1/person/changes') return json(changeCheck());
     if (method === 'POST' && path === '/v1/person/runs') {
       const api = await contract();
       let request: RunsRequest;
@@ -1718,8 +1718,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     if (method === 'POST' && path === '/v2/person/projects/context/search') {
       if (mode === 'search-fails') return failure('unauthorized', 401);
-      const response = fixture('projects-search');
-      response.schema_version = 2; response.kind = 'echo-project-context-search-result-v2';
+      const response = fixture('projects-search-v2');
       response.project_id = body?.project_id;
       response.items = (response.items as { title: string; excerpt: string }[])
         .filter(item => found(body?.query, item))
@@ -1934,7 +1933,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       return json(documentMetadata(stored));
     }
-    const link = /^\/v1\/person\/documents\/(doc_[0-9a-f]{64})\/(associate|dissociate)$/.exec(path);
+    const link = /^\/v2\/person\/documents\/(doc_[0-9a-f]{64})\/(associate|dissociate)$/.exec(path);
     if (method === 'POST' && link) {
       const projectId = String(body?.project_id);
       return change(path, body, () => {
@@ -2020,7 +2019,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       });
     }
     // The Ask timeline's reads (ADR-0047): the source check, by citation, and what arrived in your projects. Each is checked
-    // by the contract's own validator where this checkout has it; every other mode's Authority predates both (404).
+    // by the contract's own validator where this checkout has it; every other mode's Authority predates the source check (404).
     if (method === 'POST' && path === '/v1/person/ask/check' && TIMELINE_MODES.has(mode)) {
       const api = await contract() as unknown as Record<string, unknown>;
       const request = body as { schema_version?: unknown; kind?: unknown; items?: unknown } | undefined;
@@ -2037,7 +2036,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (typeof api.validatePersonAskCheckV1 === 'function') (api.validatePersonAskCheckV1 as (value: unknown) => unknown)(checked);
       return json(checked);
     }
-    if (method === 'GET' && path === '/v1/person/project-activity' && (mode === 'project-activity' || TIMELINE_MODES.has(mode))) {
+    if (method === 'GET' && path === '/v1/person/project-activity') {
       const api = await contract() as unknown as Record<string, unknown>;
       arrive();
       const activity = projectActivityOf(listed(), arrivals);

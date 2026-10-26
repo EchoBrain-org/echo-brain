@@ -43,10 +43,10 @@ describe('person change check client (ADR-0036)', () => {
     expect(init).toMatchObject({ method: 'GET', headers: { authorization: 'Bearer bearer' } });
   });
 
-  it('reports an Authority without the route as not_supported, never not_found, and keeps other failures', async () => {
-    const older = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
-    await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: older }).changes('bearer'))
-      .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'not_supported', status: 404 });
+  it('keeps the code the Authority sent, a 404 included, since every Authority serves the check (ADR-0048)', async () => {
+    const missing = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
+    await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: missing }).changes('bearer'))
+      .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'not_found', status: 404 });
     const signedOut = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'unauthorized', message: 'request failed' } }, 401));
     await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: signedOut }).changes('bearer'))
       .rejects.toMatchObject({ code: 'unauthorized', status: 401 });
@@ -62,12 +62,12 @@ describe('person change check client (ADR-0036)', () => {
     expect((fetch.mock.calls[0]![1]!.headers as Record<string, string>).authorization).toBe(`Bearer ${'A'.repeat(43)}`);
   });
 
-  it('fails the changes command with code not_supported on 404, as other commands report their codes', async () => {
+  it('fails the changes command with the code the Authority sent, as other commands report their codes', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
     const { output, run } = cli(sessionHome(), fetch);
     expect(await run(['changes'])).toBe(1);
     expect(output.stdout).toBe('');
-    expect(lastLine(output.stderr)).toEqual({ ok: false, action: 'changes', error: 'This Authority has no change check', code: 'not_supported', status: 404 });
+    expect(lastLine(output.stderr)).toMatchObject({ ok: false, action: 'changes', code: 'not_found', status: 404 });
   });
 
   it('takes no options and needs a signed-in session before any request', async () => {

@@ -14,7 +14,7 @@ import { createProjectContextApplicationV1 } from "../src/application/project-co
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import type { OriginalContextCitationV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
-import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
+import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, insertStoredNoteV2, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
@@ -70,16 +70,16 @@ function fixture() {
     readonly filename?: string;
   } = {}) => {
     const bytes = Buffer.from(chunks.join("\n"));
-    const saved = documents.upload("owner", {
-      schema_version: 1,
-      kind: "echo-person-document-upload-v1",
+    const saved = documents.uploadV2("owner", {
+      schema_version: 2,
+      kind: "echo-person-document-upload-v2",
       request_id: randomUUID(),
       filename: changes.filename ?? `${title.replaceAll(" ", "-")}.md`,
       title,
       content_length: bytes.byteLength,
       sha256: sha256Digest(bytes),
       audience: changes.audience ?? { kind: "team" },
-      project_id: changes.project_id ?? null,
+      association_project_ids: changes.project_id == null ? [] : [changes.project_id],
     }, bytes);
     const claim = repository.claimExtraction();
     if (claim === undefined) throw new Error("document extraction was not claimed");
@@ -95,9 +95,9 @@ function fixture() {
   const upload = (title: string, text: string, changes: Parameters<typeof uploadChunks>[2] = {}) =>
     uploadChunks(title, [text], changes);
 
-  const notes = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(database, now) });
+  // A note stored as V2 before its submit was retired (ADR-0048): Ask still admits it.
   const admitTeamNote = async (title: string, text: string) => {
-    notes.submitUpload("owner", { schema_version: 2, kind: "echo-person-update-submit-v2", request_id: randomUUID(), title, text, audience: { kind: "team" }, project_id: null });
+    insertStoredNoteV2(database, OWNER, { title, text, audience: { kind: "team" }, project_id: null }, now());
     const worker = new PersonDocumentProcessingV1(repository, undefined, new SqlitePersonTextSourceInboxV1(database, now));
     expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
   };
@@ -211,10 +211,10 @@ describe("adversarial original-context retrieval", () => {
     const worker = new PersonDocumentProcessingV1(f.repository);
     for (const filename of ["SCOUT-MRD-v0.1.md", "SCOUT-PRD-v0.2.md"]) {
       const bytes = readFileSync(new URL(`../../../docs/simulations/scout/${filename}`, import.meta.url));
-      f.documents.upload("owner", {
-        schema_version: 1, kind: "echo-person-document-upload-v1", request_id: randomUUID(),
+      f.documents.uploadV2("owner", {
+        schema_version: 2, kind: "echo-person-document-upload-v2", request_id: randomUUID(),
         filename, title: filename, content_length: bytes.length, sha256: sha256Digest(bytes),
-        audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA,
+        audience: { kind: "project", project_id: PROJECT_ALPHA }, association_project_ids: [PROJECT_ALPHA],
       }, bytes);
       expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
     }
@@ -373,6 +373,27 @@ describe("adversarial original-context retrieval", () => {
     f.leave(PROJECT_BETA);
     expect(() => f.retrieval.revalidate({ access_token: "member", release: global.release })).toThrow();
     expect(() => f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation })).toThrow();
+  });
+
+  it("retrieves documents stored as V1 under their stored audiences after the V1 upload was retired (ADR-0048)", () => {
+    const f = fixture();
+    for (const [marker, audience, project_id] of [
+      ["legacyteammarker", { kind: "team" }, null],
+      ["legacyprojectmarker", { kind: "project", project_id: PROJECT_ALPHA }, PROJECT_ALPHA],
+      ["legacyprivatemarker", { kind: "only_me" }, null],
+    ] as const) {
+      const bytes = Buffer.from(marker);
+      insertStoredDocumentV1(f.database, OWNER, { filename: `${marker}.md`, title: marker, audience, project_id }, bytes);
+      const claim = f.repository.claimExtraction()!;
+      expect(f.repository.completeExtraction(claim, { status: "ready", sourceSha256: claim.source_sha256, extractorVersion: "fixture-1", chunks: [{ anchor_kind: "paragraph", anchor_start: 1, text: marker }], message: null })).toBe(true);
+    }
+    const search = (marker: string, project?: typeof PROJECT_ALPHA, access_token = "member") => f.retrieval.deskSearch({ access_token, scope: project ? { kind: "project", project_id: project } : { kind: "global" }, query: marker });
+    expect(texts(search("legacyteammarker"))).toEqual([expect.stringContaining("legacyteammarker")]);
+    const project = search("legacyprojectmarker", PROJECT_ALPHA);
+    expect(texts(project)).toEqual([expect.stringContaining("legacyprojectmarker")]);
+    expect(f.retrieval.read({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation: citationOf(project.release.released_atoms[0]!) }).atom.text).toContain("legacyprojectmarker");
+    expect(texts(search("legacyprivatemarker"))).toEqual([]);
+    expect(texts(search("legacyprivatemarker", undefined, "owner"))).toEqual([expect.stringContaining("legacyprivatemarker")]);
   });
 
   it("records repeated identical releases without colliding on a content-free audit identity", () => {

@@ -79,7 +79,7 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
   ] as const) {
     const documents = createPersonDocumentApplicationV1({ repository, authenticate: () => authorization(actor) });
     const bytes = Buffer.from(text);
-    documents.upload('synthetic-seed', { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: randomUUID(), filename: 'launchscope.md', title: 'Launchscope document', content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: audience }, project_id: null }, bytes);
+    documents.uploadV2('synthetic-seed', { schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: randomUUID(), filename: 'launchscope.md', title: 'Launchscope document', content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: audience }, association_project_ids: [] }, bytes);
     const claim = repository.claimExtraction();
     if (claim === undefined) throw new Error('Missing synthetic document extraction claim');
     expect(repository.completeExtraction(claim, { status: 'ready', sourceSha256: claim.source_sha256, extractorVersion: 'cross-source-fixture-v1', chunks: [{ anchor_kind: 'paragraph', anchor_start: 1, text }], message: null })).toBe(true);

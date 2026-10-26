@@ -7,8 +7,8 @@ import {
   SqliteProjectContextRepositoryV1,
 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { decodeProjectCursorV1 } from "../src/adapters/persistence/sqlite/project-context-cursor-v1.js";
-import { validateProjectContextSearchV1, validateProjectPageRequestV1 } from "@echo-brain/organization-api";
-import type { PersonUpdateSubmitV2, PersonUploadAudienceV2, ProjectIdV1 } from "@echo-brain/organization-api";
+import { validatePersonUpdateSubmitV3, validateProjectContextSearchV1, validateProjectPageRequestV2 } from "@echo-brain/organization-api";
+import type { PersonUpdateSubmitV3, PersonUploadAudienceV3, ProjectIdV1 } from "@echo-brain/organization-api";
 import type {
   ProjectAuthorizationScopeV1,
   ProjectContextReadTransactionV1,
@@ -23,6 +23,7 @@ import {
   RETURNED_MEMBER,
   addMembership,
   authorization,
+  insertStoredNoteV2,
   projectContextDatabase,
   revokeMembership,
 } from "./fixtures/project-context-sqlite.js";
@@ -78,18 +79,18 @@ function createProject(repository: SqliteProjectContextRepositoryV1, actor = OWN
   );
 }
 
-function submit(repository: SqliteProjectContextRepositoryV1, projectId: ProjectIdV1 | null, audience: PersonUploadAudienceV2, number = 10, actor = OWNER) {
-  const request: PersonUpdateSubmitV2 = {
-    schema_version: 2,
-    kind: "echo-person-update-submit-v2",
+function submit(repository: SqliteProjectContextRepositoryV1, projectId: ProjectIdV1 | null, audience: PersonUploadAudienceV3, number = 10, actor = OWNER) {
+  const request: PersonUpdateSubmitV3 = {
+    schema_version: 3,
+    kind: "echo-person-update-submit-v3",
     request_id: requestId(number),
     title: `Context ${number}`,
     text: `The durable context ${number} is searchable.`,
-    project_id: projectId,
+    association_project_ids: projectId === null ? [] : [projectId],
     audience,
   };
   return repository.withWriteTransaction(transaction =>
-    transaction.submitUpload(snapshot(transaction, actor, { operation: "upload_submit", request }), request),
+    transaction.submitUploadV3(snapshot(transaction, actor, { operation: "upload_submit_v3", request }), request),
   );
 }
 
@@ -257,11 +258,15 @@ describe("SQLite project context V1", () => {
   });
 
   it("persists every project port and preserves V2's independent custody coordinates", () => {
-    const { repository } = open();
+    const { database, repository } = open();
     const project = createProject(repository);
     setMember(repository, project.project_id, OWNER, MEMBER, "member", 2);
 
-    const receipt = submit(repository, null, { kind: "project", project_id: project.project_id }, 3);
+    // A note stored as V2 before its submit was retired (ADR-0048): no association, a project audience.
+    const receipt = insertStoredNoteV2(database, OWNER, {
+      request_id: requestId(3), title: "Context 3", text: "The durable context 3 is searchable.",
+      project_id: null, audience: { kind: "project", project_id: project.project_id },
+    });
     const association = {
       schema_version: 1 as const,
       kind: "echo-project-context-associate-v1" as const,
@@ -286,32 +291,45 @@ describe("SQLite project context V1", () => {
     );
 
     repository.withReadTransaction(transaction => {
-      const projectSnapshot = snapshot(transaction, OWNER, { operation: "project_read", project_id: project.project_id });
-      expect(transaction.readProject(projectSnapshot, project.project_id)).toMatchObject({ project_id: project.project_id, role: "lead" });
-      expect(transaction.listProjects(snapshot(transaction, OWNER, { operation: "project_list" }), { limit: 10 }).items).toContainEqual(expect.objectContaining({ project_id: project.project_id }));
+      const projectSnapshot = snapshot(transaction, OWNER, { operation: "project_read_v2", project_id: project.project_id });
+      expect(transaction.readProjectV2(projectSnapshot, project.project_id)).toMatchObject({ project_id: project.project_id, role: "lead", status: "active" });
+      expect(transaction.listProjectsV2(snapshot(transaction, OWNER, { operation: "project_list_v2" }), { limit: 10 }).items).toContainEqual(expect.objectContaining({ project_id: project.project_id, status: "active" }));
       expect(transaction.listMembers(snapshot(transaction, OWNER, { operation: "members", project_id: project.project_id }), { project_id: project.project_id, limit: 10 }).items).toEqual(expect.arrayContaining([
         expect.objectContaining({ membership_id: OWNER.membership_id, role: "lead" }),
         expect.objectContaining({ membership_id: MEMBER.membership_id, role: "member" }),
       ]));
       expect(transaction.searchDirectory(snapshot(transaction, OWNER, { operation: "directory", project_id: project.project_id }), { project_id: project.project_id, query: "member", limit: 10 }).items).toContainEqual(expect.objectContaining({ membership_id: MEMBER.membership_id }));
 
-      const feedSnapshot = snapshot(transaction, OWNER, { operation: "feed", project_id: project.project_id });
-      const feed = transaction.feed(feedSnapshot, { project_id: project.project_id, limit: 10 });
+      const feedSnapshot = snapshot(transaction, OWNER, { operation: "feed_v2", project_id: project.project_id });
+      const feed = transaction.feedV2(feedSnapshot, { project_id: project.project_id, limit: 10 });
       expect(feed.items.map(item => item.context_id)).toContain(receipt.context_id);
       expect(transaction.revalidateAndAuditRelease(feedSnapshot, authorization(), feed)).toEqual(feed);
-      const search = transaction.search(snapshot(transaction, OWNER, { operation: "search", project_id: project.project_id }), { project_id: project.project_id, query: "durable", limit: 10 });
+      const search = transaction.searchV2(snapshot(transaction, OWNER, { operation: "search_v2", project_id: project.project_id }), { project_id: project.project_id, query: "durable", limit: 10 });
       expect(search.items.map(item => item.context_id)).toContain(receipt.context_id);
-      const context = transaction.readContext(snapshot(transaction, OWNER, { operation: "context_read", project_id: project.project_id, context_id: receipt.context_id }), project.project_id, receipt.context_id);
+      const context = transaction.readContextV2(snapshot(transaction, OWNER, { operation: "context_read_v2", project_id: project.project_id, context_id: receipt.context_id }), project.project_id, receipt.context_id);
       expect(context).toMatchObject({ project_id: project.project_id, context_id: receipt.context_id });
 
-      const status = transaction.uploadStatus(snapshot(transaction, OWNER, { operation: "upload_status", request_id: receipt.request_id }), receipt.request_id);
-      expect(status).toMatchObject({ request_id: receipt.request_id, project_id: null, audience: { kind: "project", project_id: project.project_id } });
-      const generic = transaction.readUpload(snapshot(transaction, OWNER, { operation: "upload_read", context_id: receipt.context_id }), receipt.context_id);
-      expect(generic).toMatchObject({ context_id: receipt.context_id, audience: { kind: "project", project_id: project.project_id } });
-      expect(Object.hasOwn(generic, "project_id")).toBe(false);
+      // The V3 status and read serve only V3 notes; the V2 search is the generic read left for a stored V2 note.
+      expectNotFound(() => transaction.uploadStatusV3(snapshot(transaction, OWNER, { operation: "upload_status_v3", request_id: receipt.request_id }), receipt.request_id));
+      expectNotFound(() => transaction.readUploadV3(snapshot(transaction, OWNER, { operation: "upload_read_v3", context_id: receipt.context_id }), receipt.context_id));
       const genericSearch = transaction.searchUploads(snapshot(transaction, OWNER, { operation: "upload_search" }), { query: "durable" });
       expect(genericSearch.results.map(item => item.context_id)).toContain(receipt.context_id);
+      expect(genericSearch.results).toContainEqual(expect.objectContaining({ context_id: receipt.context_id, audience: { kind: "project", project_id: project.project_id } }));
       expect(genericSearch.results.every(item => !Object.hasOwn(item, "project_id"))).toBe(true);
+    });
+  });
+
+  it("keeps a stored V2 note's request ID taken: a V3 note or a project under it conflicts (ADR-0048)", () => {
+    const { database, repository } = open();
+    const stored = insertStoredNoteV2(database, OWNER, {
+      request_id: requestId(30), title: "Context 30", text: "The durable context 30 is searchable.", project_id: null, audience: { kind: "only_me" },
+    });
+    // The same title and text as the V2 note, under its request ID: the stored `upload_submit` receipt is a different command.
+    expect(() => submit(repository, null, { kind: "only_me" }, 30)).toThrow(expect.objectContaining({ code: "conflict" }));
+    expect(() => createProject(repository, OWNER, 30)).toThrow(expect.objectContaining({ code: "conflict" }));
+    repository.withReadTransaction(transaction => {
+      const found = transaction.searchUploads(snapshot(transaction, OWNER, { operation: "upload_search" }), { query: "durable" });
+      expect(found.results.map(item => item.context_id)).toEqual([stored.context_id]);
     });
   });
 
@@ -339,14 +357,14 @@ describe("SQLite project context V1", () => {
       snapshot(transaction, OWNER, { operation: "member_remove", request: remove }), remove,
     ));
     expect(() => submit(recovered, project.project_id, { kind: "team" }, 22, MEMBER)).toThrow();
-    expect(recovered.withReadTransaction(transaction => transaction.uploadStatus(
-      snapshot(transaction, OWNER, { operation: "upload_status", request_id: receipt.request_id }), receipt.request_id,
+    expect(recovered.withReadTransaction(transaction => transaction.uploadStatusV3(
+      snapshot(transaction, OWNER, { operation: "upload_status_v3", request_id: receipt.request_id }), receipt.request_id,
     ))).toEqual(expect.objectContaining({
       request_id: receipt.request_id,
       context_id: receipt.context_id,
-      project_id: receipt.project_id,
+      association_project_ids: receipt.association_project_ids,
       audience: receipt.audience,
-      kind: "echo-person-update-status-v2",
+      kind: "echo-person-update-status-v3",
       status: "stored",
     }));
   });
@@ -359,7 +377,7 @@ describe("SQLite project context V1", () => {
     const projectReceipt = submit(repository, project.project_id, { kind: "project", project_id: project.project_id }, 33);
 
     repository.withReadTransaction(transaction => {
-      const memberFeed = transaction.feed(snapshot(transaction, MEMBER, { operation: "feed", project_id: project.project_id }), { project_id: project.project_id, limit: 10 });
+      const memberFeed = transaction.feedV2(snapshot(transaction, MEMBER, { operation: "feed_v2", project_id: project.project_id }), { project_id: project.project_id, limit: 10 });
       expect(memberFeed.items.map(item => item.context_id)).toContain(projectReceipt.context_id);
       expect(memberFeed.items.map(item => item.context_id)).not.toContain(privateReceipt.context_id);
     });
@@ -367,8 +385,8 @@ describe("SQLite project context V1", () => {
     revokeMembership(database, MEMBER);
     addMembership(database, RETURNED_MEMBER, "Member", "member@example.test");
     repository.withReadTransaction(transaction => {
-      expect(() => transaction.feed(snapshot(transaction, RETURNED_MEMBER, { operation: "feed", project_id: project.project_id }), { project_id: project.project_id, limit: 10 })).toThrow();
-      expect(() => transaction.readUpload(snapshot(transaction, RETURNED_MEMBER, { operation: "upload_read", context_id: projectReceipt.context_id }), projectReceipt.context_id)).toThrow(expect.objectContaining({ code: "not_found" }));
+      expect(() => transaction.feedV2(snapshot(transaction, RETURNED_MEMBER, { operation: "feed_v2", project_id: project.project_id }), { project_id: project.project_id, limit: 10 })).toThrow();
+      expect(() => transaction.readUploadV3(snapshot(transaction, RETURNED_MEMBER, { operation: "upload_read_v3", context_id: projectReceipt.context_id }), projectReceipt.context_id)).toThrow(expect.objectContaining({ code: "not_found" }));
     });
   });
 
@@ -376,14 +394,15 @@ describe("SQLite project context V1", () => {
     const { repository } = open();
     createProject(repository, OWNER, 40);
     createProject(repository, OWNER, 41);
-    const page = repository.withReadTransaction(transaction => transaction.listProjects(
-      snapshot(transaction, OWNER, { operation: "project_list" }), { limit: 1 },
+    const page = repository.withReadTransaction(transaction => transaction.listProjectsV2(
+      snapshot(transaction, OWNER, { operation: "project_list_v2" }), { limit: 1 },
     ));
     expect(page.next_cursor).not.toBeNull();
     const cursor = page.next_cursor!;
     expect(decodeProjectCursorV1(cursor, {
-      operation: "project_list",
+      operation: "project_list_v2",
       project_id: undefined,
+      status: "active",
       canonical_query: undefined,
       limit: 1,
       organization_id: OWNER.organization_id,
@@ -391,8 +410,8 @@ describe("SQLite project context V1", () => {
     })).toHaveLength(2);
     const raw = Buffer.from(cursor, "base64url");
     expect(raw.subarray(33).toString("utf8")).not.toContain("session-fixture");
-    expect(() => repository.withReadTransaction(transaction => transaction.listProjects(
-      snapshot(transaction, OWNER, { operation: "project_list" }), { limit: 2, cursor },
+    expect(() => repository.withReadTransaction(transaction => transaction.listProjectsV2(
+      snapshot(transaction, OWNER, { operation: "project_list_v2" }), { limit: 2, cursor },
     ))).toThrow(expect.objectContaining({ code: "invalid_request" }));
   });
 
@@ -401,8 +420,8 @@ describe("SQLite project context V1", () => {
     const project = createProject(repository, OWNER, 50);
     submit(repository, project.project_id, { kind: "project", project_id: project.project_id }, 51);
     repository.withReadTransaction(transaction => {
-      const state = snapshot(transaction, OWNER, { operation: "feed", project_id: project.project_id });
-      const response = transaction.feed(state, { project_id: project.project_id, limit: 10 });
+      const state = snapshot(transaction, OWNER, { operation: "feed_v2", project_id: project.project_id });
+      const response = transaction.feedV2(state, { project_id: project.project_id, limit: 10 });
       expect(Object.isFrozen(response)).toBe(true);
       expect(transaction.revalidateAndAuditRelease(state, authorization(), response)).toEqual(response);
     });
@@ -411,14 +430,14 @@ describe("SQLite project context V1", () => {
     expect(audit).not.toContain('"query"');
 
     repository.withReadTransaction(transaction => {
-      const state = snapshot(transaction, OWNER, { operation: "feed", project_id: project.project_id });
-      const response = transaction.feed(state, { project_id: project.project_id, limit: 10 });
+      const state = snapshot(transaction, OWNER, { operation: "feed_v2", project_id: project.project_id });
+      const response = transaction.feedV2(state, { project_id: project.project_id, limit: 10 });
       expect(() => transaction.revalidateAndAuditRelease(state, authorization(), { ...response, items: [] })).toThrow(expect.objectContaining({ code: "invalid_output" }));
     });
 
     expect(() => repository.withReadTransaction(transaction => {
-      const state = snapshot(transaction, OWNER, { operation: "feed", project_id: project.project_id });
-      const response = transaction.feed(state, { project_id: project.project_id, limit: 10 });
+      const state = snapshot(transaction, OWNER, { operation: "feed_v2", project_id: project.project_id });
+      const response = transaction.feedV2(state, { project_id: project.project_id, limit: 10 });
       database.prepare("UPDATE authority_project_authorization_state_v1 SET revision = revision + 1 WHERE organization_id = ?").run(OWNER.organization_id);
       return transaction.revalidateAndAuditRelease(state, authorization(), response);
     })).toThrow(expect.objectContaining({ code: "stale_access_state" }));
@@ -428,8 +447,8 @@ describe("SQLite project context V1", () => {
       BEFORE INSERT ON authority_project_read_audit_v1
       BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END`);
     expect(() => repository.withReadTransaction(transaction => {
-      const state = snapshot(transaction, OWNER, { operation: "feed", project_id: project.project_id });
-      const response = transaction.feed(state, { project_id: project.project_id, limit: 10 });
+      const state = snapshot(transaction, OWNER, { operation: "feed_v2", project_id: project.project_id });
+      const response = transaction.feedV2(state, { project_id: project.project_id, limit: 10 });
       return transaction.revalidateAndAuditRelease(state, authorization(), response);
     })).toThrow("fixture audit failure");
     expect(database.prepare("SELECT count(*) AS n FROM authority_project_read_audit_v1").get()).toEqual(before);
@@ -455,12 +474,12 @@ describe("SQLite project context V1", () => {
     const project = createProject(repository, OWNER, 70);
     const receipt = submit(repository, project.project_id, { kind: "team" }, 71);
     const read = repository.withReadTransaction(transaction => {
-      const state = snapshot(transaction, OWNER, { operation: "context_read", project_id: project.project_id, context_id: receipt.context_id });
-      const response = transaction.readContext(state, project.project_id, receipt.context_id);
+      const state = snapshot(transaction, OWNER, { operation: "context_read_v2", project_id: project.project_id, context_id: receipt.context_id });
+      const response = transaction.readContextV2(state, project.project_id, receipt.context_id);
       return { state, response };
     });
     expect(() => ((read.state.grants[0] as { role: string }).role = "member")).toThrow();
-    expect(() => repository.withReadTransaction(transaction => transaction.readContext(
+    expect(() => repository.withReadTransaction(transaction => transaction.readContextV2(
       read.state, project.project_id, `ctx_${"f".repeat(64)}`,
     ))).toThrow();
 
@@ -501,10 +520,10 @@ describe("SQLite project context V1", () => {
     submit(repository, first.project_id, { kind: "team" }, 89);
 
     repository.withReadTransaction(transaction => {
-      const projects = transaction.listProjects(snapshot(transaction, OWNER, { operation: "project_list" }), { limit: 1 });
+      const projects = transaction.listProjectsV2(snapshot(transaction, OWNER, { operation: "project_list_v2" }), { limit: 1 });
       expect(projects.items).toHaveLength(1);
       expect(projects.next_cursor).not.toBeNull();
-      const projectFinal = transaction.listProjects(snapshot(transaction, OWNER, { operation: "project_list" }), { limit: 1, cursor: projects.next_cursor! });
+      const projectFinal = transaction.listProjectsV2(snapshot(transaction, OWNER, { operation: "project_list_v2" }), { limit: 1, cursor: projects.next_cursor! });
       expect(projectFinal.items).toHaveLength(1);
       expect(projectFinal.items.map(item => item.project_id)).toContain(first.project_id);
       expect(projectFinal.next_cursor).toBeNull();
@@ -516,16 +535,16 @@ describe("SQLite project context V1", () => {
       expect(rosterFinal.items).toHaveLength(1);
       expect(rosterFinal.next_cursor).toBeNull();
 
-      const feed = transaction.feed(snapshot(transaction, OWNER, { operation: "feed", project_id: first.project_id }), { project_id: first.project_id, limit: 1 });
+      const feed = transaction.feedV2(snapshot(transaction, OWNER, { operation: "feed_v2", project_id: first.project_id }), { project_id: first.project_id, limit: 1 });
       expect(feed.next_cursor).not.toBeNull();
-      const feedFinal = transaction.feed(snapshot(transaction, OWNER, { operation: "feed", project_id: first.project_id }), { project_id: first.project_id, limit: 1, cursor: feed.next_cursor! });
+      const feedFinal = transaction.feedV2(snapshot(transaction, OWNER, { operation: "feed_v2", project_id: first.project_id }), { project_id: first.project_id, limit: 1, cursor: feed.next_cursor! });
       expect(feedFinal.items).toHaveLength(1);
       expect(feedFinal.next_cursor).toBeNull();
       expect(feed.items[0]!.received_at > feedFinal.items[0]!.received_at).toBe(true);
 
-      const search = transaction.search(snapshot(transaction, OWNER, { operation: "search", project_id: first.project_id }), { project_id: first.project_id, query: "durable context", limit: 1 });
+      const search = transaction.searchV2(snapshot(transaction, OWNER, { operation: "search_v2", project_id: first.project_id }), { project_id: first.project_id, query: "durable context", limit: 1 });
       expect(search.next_cursor).not.toBeNull();
-      const searchFinal = transaction.search(snapshot(transaction, OWNER, { operation: "search", project_id: first.project_id }), { project_id: first.project_id, query: "durable context", limit: 1, cursor: search.next_cursor! });
+      const searchFinal = transaction.searchV2(snapshot(transaction, OWNER, { operation: "search_v2", project_id: first.project_id }), { project_id: first.project_id, query: "durable context", limit: 1, cursor: search.next_cursor! });
       expect(searchFinal.items).toHaveLength(1);
       expect(searchFinal.next_cursor).toBeNull();
       expect(search.items[0]!.received_at > searchFinal.items[0]!.received_at).toBe(true);
@@ -553,9 +572,13 @@ describe("SQLite project context V1", () => {
     ))).toThrow(expect.objectContaining({ code: "conflict" }));
   });
 
-  it("holds the 100-item retained-corpus limit, while exact retry wins before capacity", () => {
-    const { repository } = open();
-    for (let index = 0; index < 99; index += 1) submit(repository, null, { kind: "only_me" }, 1000 + index);
+  it("holds the 100-item retained-corpus limit, counting notes stored as V2, while exact retry wins before capacity", () => {
+    const { database, repository } = open();
+    // Notes stored as V2 before its submit was retired (ADR-0048) still count.
+    for (let index = 0; index < 40; index += 1) {
+      insertStoredNoteV2(database, OWNER, { request_id: requestId(900 + index), title: `Stored ${index}`, text: `Stored note ${index}.`, project_id: null, audience: { kind: "only_me" } });
+    }
+    for (let index = 0; index < 59; index += 1) submit(repository, null, { kind: "only_me" }, 1000 + index);
     const receipt = submit(repository, null, { kind: "only_me" }, 1100);
     expect(submit(repository, null, { kind: "only_me" }, 1100)).toEqual(receipt);
     expect(() => submit(repository, null, { kind: "only_me" }, 1101)).toThrow(expect.objectContaining({ code: "rate_limited" }));
@@ -564,19 +587,22 @@ describe("SQLite project context V1", () => {
   it("round-trips the largest valid original byte-for-byte through generic and project reads", () => {
     const { repository } = open();
     const project = createProject(repository, OWNER, 1500);
-    const text = "\n".repeat(8047) + "a";
-    const request: PersonUpdateSubmitV2 = {
-      schema_version: 2, kind: "echo-person-update-submit-v2", request_id: requestId(1501),
-      title: "Maximum source", text, project_id: project.project_id,
+    const text = "\n".repeat(8040) + "a";
+    const request: PersonUpdateSubmitV3 = {
+      schema_version: 3, kind: "echo-person-update-submit-v3", request_id: requestId(1501),
+      title: "Maximum source", text, association_project_ids: [project.project_id],
       audience: { kind: "project", project_id: project.project_id },
     };
-    const receipt = repository.withWriteTransaction(transaction => transaction.submitUpload(
-      snapshot(transaction, OWNER, { operation: "upload_submit", request }), request,
+    // The largest newline-heavy original the V3 request byte bound admits: one more newline exceeds it.
+    expect(() => validatePersonUpdateSubmitV3(request)).not.toThrow();
+    expect(() => validatePersonUpdateSubmitV3({ ...request, text: `\n${text}` })).toThrow("exceeds JSON byte bound");
+    const receipt = repository.withWriteTransaction(transaction => transaction.submitUploadV3(
+      snapshot(transaction, OWNER, { operation: "upload_submit_v3", request }), request,
     ));
     repository.withReadTransaction(transaction => {
-      expect(transaction.readUpload(snapshot(transaction, OWNER, { operation: "upload_read", context_id: receipt.context_id }), receipt.context_id).text).toBe(text);
-      expect(transaction.readContext(
-        snapshot(transaction, OWNER, { operation: "context_read", project_id: project.project_id, context_id: receipt.context_id }),
+      expect(transaction.readUploadV3(snapshot(transaction, OWNER, { operation: "upload_read_v3", context_id: receipt.context_id }), receipt.context_id).text).toBe(text);
+      expect(transaction.readContextV2(
+        snapshot(transaction, OWNER, { operation: "context_read_v2", project_id: project.project_id, context_id: receipt.context_id }),
         project.project_id, receipt.context_id,
       ).text).toBe(text);
     });
@@ -630,7 +656,8 @@ describe("SQLite project context V1", () => {
     expect(repository.withWriteTransaction(transaction => transaction.dissociateContext(
       snapshot(transaction, OWNER, { operation: "dissociate", request: dissociateAlpha }), dissociateAlpha,
     ))).toEqual(detached);
-    expect(database.prepare("SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id = ?").get(receipt.context_id)).toEqual({ project_id: beta.project_id });
+    // A V3 note may hold several associations, so every row is read, not just the first.
+    expect(database.prepare("SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id = ?").all(receipt.context_id)).toEqual([{ project_id: beta.project_id }]);
   });
 
   it("rejects storage tampering when immutable triggers are deliberately removed by a fixture", () => {
@@ -643,8 +670,8 @@ describe("SQLite project context V1", () => {
     const receipt = submit(repository, null, { kind: "only_me" }, 1801);
     database.exec("DROP TRIGGER authority_person_updates_v2_immutable");
     database.prepare("UPDATE authority_person_updates_v2 SET text = 'tampered' WHERE context_id = ?").run(receipt.context_id);
-    expect(() => repository.withReadTransaction(transaction => transaction.readUpload(
-      snapshot(transaction, OWNER, { operation: "upload_read", context_id: receipt.context_id }), receipt.context_id,
+    expect(() => repository.withReadTransaction(transaction => transaction.readUploadV3(
+      snapshot(transaction, OWNER, { operation: "upload_read_v3", context_id: receipt.context_id }), receipt.context_id,
     ))).toThrow("project upload payload integrity failure");
   });
 
@@ -672,23 +699,23 @@ describe("project context adversarial authorization", () => {
     database.prepare("UPDATE authority_person_updates_v2 SET text = 'corrupted' WHERE context_id = ?").run(receipt.context_id);
 
     repository.withReadTransaction(transaction => {
-      const feed = transaction.feed(
-        snapshot(transaction, MEMBER, { operation: "feed", project_id: project.project_id }),
+      const feed = transaction.feedV2(
+        snapshot(transaction, MEMBER, { operation: "feed_v2", project_id: project.project_id }),
         { project_id: project.project_id, limit: 10 },
       );
-      const search = transaction.search(
-        snapshot(transaction, MEMBER, { operation: "search", project_id: project.project_id }),
+      const search = transaction.searchV2(
+        snapshot(transaction, MEMBER, { operation: "search_v2", project_id: project.project_id }),
         { project_id: project.project_id, query: "durable", limit: 10 },
       );
       expect(feed.items).toEqual([]);
       expect(search.items).toEqual([]);
-      expectNotFound(() => transaction.readContext(
-        snapshot(transaction, MEMBER, { operation: "context_read", project_id: project.project_id, context_id: receipt.context_id }),
+      expectNotFound(() => transaction.readContextV2(
+        snapshot(transaction, MEMBER, { operation: "context_read_v2", project_id: project.project_id, context_id: receipt.context_id }),
         project.project_id,
         receipt.context_id,
       ));
-      expectNotFound(() => transaction.readContext(
-        snapshot(transaction, MEMBER, { operation: "context_read", project_id: project.project_id, context_id: `ctx_${"f".repeat(64)}` }),
+      expectNotFound(() => transaction.readContextV2(
+        snapshot(transaction, MEMBER, { operation: "context_read_v2", project_id: project.project_id, context_id: `ctx_${"f".repeat(64)}` }),
         project.project_id,
         `ctx_${"f".repeat(64)}`,
       ));
@@ -712,11 +739,11 @@ describe("project context adversarial authorization", () => {
     ));
 
     repository.withReadTransaction(transaction => {
-      expect(transaction.readUpload(
-        snapshot(transaction, OWNER, { operation: "upload_read", context_id: receipt.context_id }), receipt.context_id,
+      expect(transaction.readUploadV3(
+        snapshot(transaction, OWNER, { operation: "upload_read_v3", context_id: receipt.context_id }), receipt.context_id,
       )).toMatchObject({ context_id: receipt.context_id, audience: { kind: "team" } });
-      expectNotFound(() => transaction.readProject(
-        snapshot(transaction, OWNER, { operation: "project_read", project_id: associationProject.project_id }),
+      expectNotFound(() => transaction.readProjectV2(
+        snapshot(transaction, OWNER, { operation: "project_read_v2", project_id: associationProject.project_id }),
         associationProject.project_id,
       ));
     });
@@ -738,21 +765,21 @@ describe("project context adversarial authorization", () => {
     const audienceProject = createProject(repository, OWNER, 20);
     const associationProject = createProject(repository, OWNER, 21);
     setMember(repository, associationProject.project_id, OWNER, MEMBER, "member", 22);
-    const request: PersonUpdateSubmitV2 = {
-      schema_version: 2,
-      kind: "echo-person-update-submit-v2",
+    const request: PersonUpdateSubmitV3 = {
+      schema_version: 3,
+      kind: "echo-person-update-submit-v3",
       request_id: requestId(23),
       title: "Out of scope audience",
       text: "Membership in the association project cannot authorize the audience project.",
-      project_id: associationProject.project_id,
+      association_project_ids: [associationProject.project_id],
       audience: { kind: "project", project_id: audienceProject.project_id },
     };
 
     repository.withWriteTransaction(transaction => {
-      const admitted = snapshot(transaction, MEMBER, { operation: "upload_submit", request });
+      const admitted = snapshot(transaction, MEMBER, { operation: "upload_submit_v3", request });
       const forged = { ...admitted, grants: [] } as typeof admitted;
-      expect(() => transaction.submitUpload(forged, request)).toThrow("snapshot escaped or was forged");
-      expectNotFound(() => transaction.submitUpload(admitted, request));
+      expect(() => transaction.submitUploadV3(forged, request)).toThrow("snapshot escaped or was forged");
+      expectNotFound(() => transaction.submitUploadV3(admitted, request));
     });
     expect(database.prepare("SELECT count(*) AS n FROM authority_person_updates_v2").get()).toEqual({ n: 0 });
   });
@@ -766,8 +793,8 @@ describe("project context adversarial query inputs", () => {
 
     const request = { project_id: project.project_id, query: "", limit: 10 };
     expect(() => validateProjectContextSearchV1(request)).toThrow();
-    expect(() => repository.withReadTransaction(transaction => transaction.search(
-      snapshot(transaction, OWNER, { operation: "search", project_id: project.project_id }),
+    expect(() => repository.withReadTransaction(transaction => transaction.searchV2(
+      snapshot(transaction, OWNER, { operation: "search_v2", project_id: project.project_id }),
       request,
     ))).toThrow();
   });
@@ -777,9 +804,9 @@ describe("project context adversarial query inputs", () => {
     createProject(repository, OWNER, 3);
 
     const request = { limit: 0 };
-    expect(() => validateProjectPageRequestV1(request)).toThrow();
-    expect(() => repository.withReadTransaction(transaction => transaction.listProjects(
-      snapshot(transaction, OWNER, { operation: "project_list" }), request,
+    expect(() => validateProjectPageRequestV2(request)).toThrow();
+    expect(() => repository.withReadTransaction(transaction => transaction.listProjectsV2(
+      snapshot(transaction, OWNER, { operation: "project_list_v2" }), request,
     ))).toThrow(expect.objectContaining({ code: "invalid_request" }));
   });
 });
@@ -787,13 +814,13 @@ describe("project context adversarial query inputs", () => {
 describe("project context adversarial storage", () => {
   it("does not commit an upload prefix when its callback catches a durable work failure", () => {
     const { database, repository } = open();
-    const request: PersonUpdateSubmitV2 = {
-      schema_version: 2,
-      kind: "echo-person-update-submit-v2",
+    const request: PersonUpdateSubmitV3 = {
+      schema_version: 3,
+      kind: "echo-person-update-submit-v3",
       request_id: requestId(1),
       title: "Atomic admission",
       text: "The work row must commit with the original and replay receipt.",
-      project_id: null,
+      association_project_ids: [],
       audience: { kind: "only_me" },
     };
     database.exec(`CREATE TRIGGER fixture_work_failure
@@ -801,7 +828,7 @@ describe("project context adversarial storage", () => {
       BEGIN SELECT RAISE(ABORT, 'fixture work failure'); END`);
 
     repository.withWriteTransaction(transaction => {
-      expect(() => transaction.submitUpload(snapshot(transaction, OWNER, { operation: "upload_submit", request }), request)).toThrow("fixture work failure");
+      expect(() => transaction.submitUploadV3(snapshot(transaction, OWNER, { operation: "upload_submit_v3", request }), request)).toThrow("fixture work failure");
     });
 
     expect(database.prepare("SELECT count(*) AS n FROM authority_person_updates_v2").get()).toEqual({ n: 0 });
@@ -837,20 +864,20 @@ describe("project context adversarial storage", () => {
   it("rolls an initial association back when its insert fails after original and work admission", () => {
     const { database, repository } = open();
     const project = createProject(repository, OWNER, 3);
-    const request: PersonUpdateSubmitV2 = {
-      schema_version: 2,
-      kind: "echo-person-update-submit-v2",
+    const request: PersonUpdateSubmitV3 = {
+      schema_version: 3,
+      kind: "echo-person-update-submit-v3",
       request_id: requestId(4),
       title: "Association fence",
       text: "All upload admission rows must roll back if the initial association fails.",
-      project_id: project.project_id,
+      association_project_ids: [project.project_id],
       audience: { kind: "team" },
     };
     database.exec(`CREATE TRIGGER fixture_association_failure
       BEFORE INSERT ON authority_project_context_associations_v1
       BEGIN SELECT RAISE(ABORT, 'fixture association failure'); END`);
 
-    attempt(repository, transaction => transaction.submitUpload(snapshot(transaction, OWNER, { operation: "upload_submit", request }), request));
+    attempt(repository, transaction => transaction.submitUploadV3(snapshot(transaction, OWNER, { operation: "upload_submit_v3", request }), request));
 
     expect(database.prepare("SELECT count(*) AS n FROM authority_person_updates_v2 WHERE request_id = ?").get(request.request_id)).toEqual({ n: 0 });
     expect(database.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 0 });

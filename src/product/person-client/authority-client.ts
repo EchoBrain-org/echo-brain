@@ -85,7 +85,7 @@ import {
 } from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V4, validateOrganizationPersonToolsV4, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
-import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
 import {
   PERSON_DIRECTORY_PATH_V1, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, type OrganizationDirectorySearchV1,
@@ -1029,8 +1029,7 @@ export class PersonAuthorityClient {
   }
 
   async uploadDocument(accessToken: string, snapshot: DocumentSnapshot) {
-    const v2 = snapshot.metadata.schema_version === 2;
-    const metadata = v2 ? validatePersonDocumentUploadMetadataV2(snapshot.metadata) : validatePersonDocumentUploadMetadataV1(snapshot.metadata);
+    const metadata = validatePersonDocumentUploadMetadataV2(snapshot.metadata);
     const stream = snapshot.open();
     let status: number | null = null;
     try {
@@ -1039,22 +1038,16 @@ export class PersonAuthorityClient {
         headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/octet-stream',
           'content-length': String(metadata.content_length), 'x-echo-document-metadata': Buffer.from(canonicalJson(metadata)).toString('base64url') },
       };
-      const path = v2 ? PERSON_DOCUMENTS_PATH_V2 : PERSON_DOCUMENTS_PATH_V1;
-      const response = await this.send(`${path}/${metadata.request_id}`, init, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
+      const response = await this.send(`${PERSON_DOCUMENTS_PATH_V2}/${metadata.request_id}`, init, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
       status = response.status;
-      const receipt = await this.documentResponse<PersonDocumentUploadResultV1 | PersonDocumentUploadResultV2>(response, (value) =>
-        v2 ? validatePersonDocumentUploadResultV2(value) : validatePersonDocumentUploadResultV1(value), 201);
+      const receipt = await this.documentResponse(response, validatePersonDocumentUploadResultV2, 201);
       if (receipt.request_id !== metadata.request_id) throw new Error('Document receipt request changed');
-      if (receipt.kind === 'echo-person-document-saved-v1' || receipt.kind === 'echo-person-document-saved-v2') return receipt;
+      if (receipt.kind === 'echo-person-document-saved-v2') return receipt;
       for (const key of ['request_id', 'filename', 'title', 'content_length', 'sha256'] as const) {
         if (receipt[key] !== metadata[key]) throw new Error('Document receipt coordinates changed');
       }
       if (canonicalJson(receipt.audience) !== canonicalJson(metadata.audience)) throw new Error('Document receipt audience changed');
-      if (metadata.schema_version === 2) {
-        if (receipt.schema_version !== 2 || canonicalJson(receipt.association_project_ids) !== canonicalJson(metadata.association_project_ids)) throw new Error('Document receipt associations changed');
-      } else if (receipt.schema_version !== 1 || receipt.project_id !== metadata.project_id) {
-        throw new Error('Document receipt associations changed');
-      }
+      if (canonicalJson(receipt.association_project_ids) !== canonicalJson(metadata.association_project_ids)) throw new Error('Document receipt associations changed');
       return receipt;
     } catch (error) {
       if (error instanceof PersonAuthorityClientError && status !== null && status >= 400 && status < 500 &&
@@ -1069,7 +1062,7 @@ export class PersonAuthorityClient {
     const add = value.kind === 'echo-person-document-associate-v1';
     const request = add ? validatePersonDocumentAssociateV1(value) : validatePersonDocumentDissociateV1(value);
     const operation = add ? 'associate' : 'dissociate';
-    return this.contextRequest(accessToken, { path: `${PERSON_DOCUMENTS_PATH_V1}/${request.document_id}/${operation}`, body: request,
+    return this.contextRequest(accessToken, { path: `${PERSON_DOCUMENTS_PATH_V2}/${request.document_id}/${operation}`, body: request,
       request_id: request.request_id, validate: validatePersonDocumentAssociationReceiptV1,
       matches: result => result.request_id === request.request_id && result.document_id === request.document_id &&
         result.project_id === request.project_id && result.operation === operation });
@@ -1417,31 +1410,30 @@ export class PersonAuthorityClient {
 
   /**
    * The change check (desktop refresh and notifications v1; ADR-0036): one fingerprint per area of this person's own view, and
-   * no content. An Authority without the route answers 404, which is `not_supported` here, never `not_found`.
+   * no content. Every Authority serves it (ADR-0048).
    */
-  async changes(accessToken: string, signal?: AbortSignal): Promise<PersonChangesV1> {
-    return this.notSupportedOn404(this.getJson({
+  changes(accessToken: string, signal?: AbortSignal): Promise<PersonChangesV1> {
+    return this.getJson({
       path: PERSON_CHANGES_ROUTE_V1,
       access_token: accessToken,
       validate_response: validatePersonChangesV1,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
       signal,
-    }), "This Authority has no change check");
+    });
   }
 
   /**
    * Project activity (Ask timeline v1, C2): when each of this person's active projects last had something new from someone
-   * else that they can read, and no content; 500 projects fit the ordinary bound. An Authority without the route answers 404,
-   * which is `not_supported` here, never `not_found`.
+   * else that they can read, and no content; 500 projects fit the ordinary bound. Every Authority serves it (ADR-0048).
    */
-  async projectActivity(accessToken: string, signal?: AbortSignal): Promise<PersonProjectActivityV1> {
-    return this.notSupportedOn404(this.getJson({
+  projectActivity(accessToken: string, signal?: AbortSignal): Promise<PersonProjectActivityV1> {
+    return this.getJson({
       path: PERSON_PROJECT_ACTIVITY_PATH_V1,
       access_token: accessToken,
       validate_response: validatePersonProjectActivityV1,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
       signal,
-    }), "This Authority has no project activity");
+    });
   }
 
   /** A read of a route an older Authority lacks: its 404 is `not_supported`, with this message, never `not_found`. */
