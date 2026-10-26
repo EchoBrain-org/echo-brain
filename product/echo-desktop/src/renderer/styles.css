@@ -169,10 +169,7 @@ input[type="checkbox"]:checked { border-color: var(--primary); background: var(-
 input[type="checkbox"]:checked::after { opacity: 1; }
 input[type="checkbox"]:disabled { cursor: default; }
 
-/* ECHO's mark: a signal and what comes back; its centre is the signal. Marks that carry a meaning of their own. */
-.echo-mark { flex-shrink: 0; }
-.echo-mark .core { fill: var(--signal); }
-.echo-rings { flex-shrink: 0; color: var(--faint); }
+/* Marks that carry a meaning of their own. */
 .mark-ok { color: var(--done); }
 .mark-warn { color: var(--danger); }
 
@@ -190,7 +187,7 @@ input[type="checkbox"]:disabled { cursor: default; }
 .titlebar .side:last-child { justify-content: flex-end; gap: 6px; }
 .titlebar button { -webkit-app-region: no-drag; }
 .title { flex-grow: 1; min-width: 0; text-align: center; font-size: 13px; font-weight: 500; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.title.brand { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.16em; color: var(--text); }
+.title.brand { font-size: 12px; font-weight: 600; letter-spacing: 0.16em; color: var(--text); }
 .icon-button { width: 28px; height: 28px; flex-shrink: 0; padding: 0; border: 0; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: var(--muted); background: transparent; }
 .icon-button:hover { color: var(--text); background: var(--hover); }
 .back { display: flex; align-items: center; gap: 4px; min-width: 0; height: 28px; padding: 0 10px 0 6px; border: 0; border-radius: 7px; font-size: 13px; color: var(--muted); background: transparent; }
@@ -538,7 +535,7 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .place-button:hover:not(:disabled) { background: var(--hover); }
 .lock-toggle { color: var(--muted); background: transparent; }
 .lock-toggle:hover:not(:disabled, [aria-disabled="true"]) { color: var(--text); }
-.lock-toggle[aria-pressed="true"] { color: var(--text); background: var(--knob); box-shadow: var(--knob-shadow); }
+.lock-toggle[aria-pressed="true"] { border-color: var(--line-strong); color: var(--text); background: var(--knob); box-shadow: var(--knob-shadow); }
 .place-button:disabled, .lock-toggle:disabled, .lock-toggle[aria-disabled="true"] { cursor: default; }
 /* The place list: above the place button, over the note. Its projects, then No project and Organization. */
 .project-list { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 3; width: 300px; max-width: 100%; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 12px; background: var(--raise); box-shadow: var(--pop-shadow); }
@@ -940,7 +937,11 @@ button.items-line:hover { background: var(--raise); }
 .card-kind.approve::before { width: 7px; height: 7px; border: 0; border-radius: 1px; background: currentColor; transform: rotate(45deg); }
 .card-kind.done { color: var(--muted); }
 .card-title { margin: 0; font-size: 28px; font-weight: 600; line-height: 1.15; letter-spacing: -0.025em; overflow-wrap: anywhere; user-select: text; }
-.card-meta { font-size: 13.5px; color: var(--muted); }
+.card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13.5px; color: var(--muted); }
+/* See the notes: one quiet button in the head for the meeting's words, in place of one per item; they open full width under it. */
+.notes-toggle { padding: 0; border: 0; font-size: 13.5px; color: var(--text); background: none; text-decoration: underline; text-decoration-color: var(--control); text-underline-offset: 3px; }
+.notes-toggle:hover { text-decoration-color: currentColor; }
+.card-notes { display: flex; flex-direction: column; }
 .card-section { display: flex; flex-direction: column; gap: 10px; }
 .card-list { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
 .card-list > * + * { border-top: 1px solid var(--line); }
@@ -951,19 +952,18 @@ button.items-line:hover { background: var(--raise); }
 /* A tag only says something (Proposed, Unresolved): a quiet solid chip. Dashed borders are kept for slots to fill and places to drop. */
 .card-tag { display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 6px; font-size: 11.5px; font-weight: 500; line-height: 20px; color: var(--muted); background: var(--tag); vertical-align: 2px; }
 .card-subject { display: inline-block; margin-left: 8px; font-family: var(--mono); font-size: 12px; color: var(--faint); }
-/* In the meeting: a pill that reads as a button at rest, lit on hover, filled while its words show. */
-.card-toggle { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 13px; font-size: 12.5px; color: var(--muted); background: transparent; white-space: nowrap; }
+/* Why: a quiet line that reads as a button, lit on hover, filled while the reasons show. */
+.card-toggle { flex-shrink: 0; align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; height: 26px; margin-left: -8px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; font-size: 13px; color: var(--muted); background: transparent; white-space: nowrap; }
 .card-toggle:hover { color: var(--text); background: var(--hover); }
-.card-toggle.open, .card-toggle.open:hover { border-color: transparent; color: var(--text); background: var(--selected); }
-.card-toggle svg { width: 10px; height: 10px; transform: rotate(90deg); transition: transform 120ms ease; }
-.card-toggle.open svg { transform: rotate(-90deg); }
-.card-toggle.wide { align-self: flex-start; margin-left: -8px; padding: 0 8px; border-color: transparent; border-radius: 7px; font-size: 13px; color: var(--muted); }
-.card-toggle.wide svg { transform: none; }
-.card-toggle.wide.open svg { transform: rotate(90deg); }
+.card-toggle.open, .card-toggle.open:hover { color: var(--text); background: var(--selected); }
+.card-toggle svg { width: 10px; height: 10px; transition: transform 120ms ease; }
+.card-toggle.open svg { transform: rotate(90deg); }
 .said { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; line-height: 1.5; background: var(--field); }
-.said-line { display: grid; grid-template-columns: 44px 124px minmax(0, 1fr); column-gap: 12px; }
-.said-time { padding-top: 2px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.said-who { padding-top: 1px; font-size: 13px; font-weight: 500; color: var(--muted); overflow-wrap: anywhere; }
+/* Who spoke and when sit above the words, never beside them: no width leaves the words a sliver. */
+.said-line { display: flex; flex-direction: column; gap: 2px; }
+.said-meta { display: flex; align-items: baseline; gap: 8px; }
+.said-time { font-family: var(--mono); font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.said-who { font-size: 13px; font-weight: 500; color: var(--muted); overflow-wrap: anywhere; }
 .said-text { overflow-wrap: anywhere; }
 .card-reasons { margin: 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 1.5; color: var(--muted); }
 .card-due { flex-shrink: 0; padding-top: 3px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
@@ -971,23 +971,42 @@ button.items-line:hover { background: var(--raise); }
 .card-owner:focus-within { border-color: var(--control); }
 .card-owner input { width: 110px; padding: 0; border: 0; outline: none; font-size: 13.5px; background: transparent; user-select: text; }
 .card-owner input:focus-visible { outline: none; }
-/* Where an item goes: a chip that reads as a choice, opening Only me, your projects and Don't keep. Not kept is faint. */
-.route { position: relative; flex-shrink: 0; }
-.route-chip { max-width: 190px; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; font-size: 12.5px; font-weight: 500; color: var(--text); background: var(--field); white-space: nowrap; }
+/*
+ * Where an item goes, under its words (ADR-0049, as on Capture): a place button opening your projects, No project and
+ * Don't keep; the Only me lock beside it; who reads it in words. Don't keep is faint.
+ */
+.where { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.card-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+/* Beside an owner, the place, its lock and who reads it wrap one by one, as the owner does. */
+.card-controls > .where { display: contents; }
+.route { position: relative; flex-shrink: 0; min-width: 0; }
+.route-chip { max-width: 260px; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--text); background: var(--field); white-space: nowrap; }
 .route-chip .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.route-chip .route-lock { display: inline-flex; flex-shrink: 0; }
 .route-chip svg { flex-shrink: 0; color: var(--muted); }
 .route-chip:hover:not(:disabled) { background: var(--hover); }
 .route-chip[aria-expanded="true"] { border-color: var(--control); }
-.route-chip:disabled { cursor: default; opacity: 0.6; }
+.route-chip:disabled, .where .lock-toggle:disabled { cursor: default; opacity: 0.6; }
 .route-chip.dropped { color: var(--faint); font-weight: 400; }
 .route-chip.still { border-color: transparent; background: var(--selected); }
-.route-menu { top: 32px; width: 260px; max-height: 340px; overflow-y: auto; gap: 2px; }
+.route-menu { top: 36px; width: 260px; max-height: 340px; overflow-y: auto; gap: 2px; }
 /* A list clips its rows' corners; an open menu must not be clipped with them. */
 .card-list:has(.route-menu) { overflow: visible; }
-.route-menu .menu-item[aria-pressed="true"] { font-weight: 600; }
+.route-menu .menu-item[aria-checked="true"] { font-weight: 600; }
+.route-menu .menu-choices { display: flex; flex-direction: column; gap: 2px; }
 .route-menu .project-ticks { max-height: 200px; }
-.route-all { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.route-all .route-chip { max-width: 200px; }
+.route-menu .menu-label { padding: 6px 10px 2px; font-size: 11.5px; font-weight: 500; color: var(--faint); }
+.menu-hint { font-size: 12px; font-weight: 400; color: var(--faint); }
+/* The place button sits at the left of its row: its menu opens rightward from it. */
+.where .route-menu { left: 0; right: auto; }
+/* Only some kept items are yours alone: the All items lock reads "1 of 3", half on. */
+.lock-toggle[aria-pressed="mixed"] { border-color: var(--control); color: var(--text); background: var(--hover); }
+.route-readers { font-size: 12.5px; color: var(--faint); }
+.route-all { display: flex; flex-direction: column; gap: 8px; }
+/* In the rail the place gives way, so its lock stays on its line. */
+.route-all .where { flex-wrap: nowrap; }
+.route-all .route { flex: 0 1 auto; }
+.route-all .route-chip { max-width: 100%; }
 .route-summary { font-size: 13px; line-height: 1.45; color: var(--muted); }
 .card-owner.still { padding-right: 10px; border-color: transparent; font-size: 13.5px; color: var(--muted); background: transparent; }
 .card-panel { display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }

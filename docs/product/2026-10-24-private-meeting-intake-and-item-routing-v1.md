@@ -46,7 +46,8 @@ intentional.
   link).
 - Audience equals association per record (ADR-0017), unchanged. A record never
   carries per-item permissions; a meeting with several destinations writes one
-  record per destination.
+  record per destination. (ADR-0049 later adds items kept for the reviewer
+  alone inside projects: their record's projects are its association only.)
 - Owners need the approver (ADR-0021), unchanged.
 - Approved records stay the only thing project members read from a meeting.
 - The repository is public: fixtures stay fictional.

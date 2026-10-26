@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyOrganizationRecordLogBaselineV5, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { applyOrganizationRecordLogBaselineV6, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { openPersonMeetingRuntimeV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { createApprovalCoreV1, type AfterApprovedRecordHookV1 } from '../src/composition/approval-core-v1.js';
 
@@ -21,7 +21,7 @@ afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); vi.mocked
 async function open(approval_core?: { readonly after_record: readonly AfterApprovedRecordHookV1[] }) {
   const state_directory = mkdtempSync(join(tmpdir(), 'person-meetings-'));
   const authority = new Database(':memory:'), record = new Database(':memory:');
-  applyOrganizationRecordLogBaselineV5(record);
+  applyOrganizationRecordLogBaselineV6(record);
   record.prepare('INSERT INTO organization_record_log_metadata VALUES (1,?,?,?,?)').run(COORDINATES.authority_id, COORDINATES.organization_id, COORDINATES.state_lineage_id, '2026-10-07T00:00:00.000Z');
   const runtime = openPersonMeetingRuntimeV1({
     state_directory, sessions: { authenticateAccess: () => { throw new Error('unused'); } },

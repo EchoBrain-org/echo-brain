@@ -125,6 +125,8 @@ describe("Slack approval click V1", () => {
     const body = JSON.parse(f.db.prepare("SELECT body_json FROM authority_approval_decisions_v1").pluck().get() as string);
     expect(body.request.routes).toEqual(f.routes([PROJECT_A]));
     expect(body.request.routes.map((route: { signal_id: string }) => route.signal_id)).toEqual(["decision-1", "act-1", "act-2"]);
+    // A suggestion is never private (ADR-0049): Slack keeps nothing for the reviewer alone inside a project.
+    expect(body.request.routes.every((route: object) => Object.keys(route).sort().join() === "project_ids,signal_id")).toBe(true);
     expect(body.request.owners).toEqual([{ signal_id: "act-1", owner: "Rafael M." }]);
     await f.core.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
     expect(f.core.proposal(f.approvalId)!.records).toEqual([{ approval_id: approvalRecordIdV2(f.approvalId, [PROJECT_A]), project_ids: [PROJECT_A] }]);

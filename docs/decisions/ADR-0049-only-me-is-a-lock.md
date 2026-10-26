@@ -83,3 +83,19 @@ Adopt option 2, the founder's choice.
   state). It ships as its own change, after the founder accepts the reset.
 - The desktop timeline file is unchanged; older turns asked in Mine stay on
   Home's thread.
+- Meeting items kept private inside a project, as built: a route says
+  `private: true` only beside 1 to 20 projects, and every other route, record
+  id and decision digest keeps its bytes. Kept items group by (private,
+  project set); a private group's record binds the restricted reviewer with no
+  project audience and the projects as its association, and its approval id
+  hashes `private: true` in. Like Only me it keeps its quotes and the reasons
+  for its own items. A reason that supports no item goes to one record only:
+  the plain Only me group's, else the first private group's in group order.
+  Record log V6 binds such association rows to the approval;
+  retrieval admits the record to its approver and then narrows it by
+  association. Receipts and record refs say `private`; Slack's closed card
+  reads "THERM, only you" and Slack never routes privately; the desktop review
+  shows the Only me lock beside each item's place, as Capture does, pressed
+  while projects stay ticked and on for good with no project. Existing
+  record logs (V5) are refused at startup, so this ships with a fresh-state
+  reset.

@@ -29,8 +29,12 @@ export const APPROVAL_ROUTES_MAX_V1 = 500;
 export type ApprovalSurfaceV1 = 'desktop' | 'slack';
 export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
 export interface ApprovalOwnerChoiceV1 { readonly signal_id: string; readonly owner: string }
-/** Where one decision or action goes: null = not kept, [] = Only me, otherwise 1..20 project ids, strictly ascending. */
-export interface ApprovalRouteV1 { readonly signal_id: string; readonly project_ids: readonly string[] | null }
+/**
+ * Where one decision or action goes: null = not kept, [] = Only me, otherwise 1..20 project ids, strictly ascending.
+ * `private: true` keeps it for the reviewer alone inside those projects (ADR-0049): only with a project, and present only
+ * when true, so every other route keeps its bytes.
+ */
+export interface ApprovalRouteV1 { readonly signal_id: string; readonly project_ids: readonly string[] | null; readonly private?: true }
 export interface ApprovalDecisionRequestV1 {
   readonly approval_id: string;
   /** /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/. Desktop: never `slack:`-prefixed. Slack: `slack:` + verified click key. */
@@ -43,8 +47,8 @@ export interface ApprovalDecisionRequestV1 {
   /** Confirmed owners of kept proposed actions, in brief (proposal) order, each signal at most once. Reject: []. */
   readonly owners: readonly ApprovalOwnerChoiceV1[];
 }
-/** One published record of an approved proposal: its own approval id and its destination ([] = Only me). */
-export interface ApprovalRecordRefV1 { readonly approval_id: string; readonly project_ids: readonly string[] }
+/** One published record of an approved proposal: its own approval id and its destination ([] = Only me; `private` as its routes). */
+export interface ApprovalRecordRefV1 { readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true }
 export interface ApprovalAuthorizationV1 {
   readonly actor: ApprovalActorV1;
   /** Digest of the evidence that authorized this decision: the person session, or the verified Slack click and link.
@@ -185,9 +189,13 @@ export function validateApprovalDecisionRequestV1(surface: ApprovalSurfaceV1, va
   if (typeof snapshot_sha256 !== 'string' || !DIGEST.test(snapshot_sha256)) invalid();
   if (action !== 'approve' && action !== 'reject') invalid();
   if (!Array.isArray(routes) || routes.length > APPROVAL_ROUTES_MAX_V1) invalid();
-  const routed = routes.map((route: unknown) => {
-    if (!plain(route) || !hasExactKeys(route, ['project_ids', 'signal_id']) || !isApprovalSignalIdV1(route.signal_id)) invalid();
-    return Object.freeze({ signal_id: route.signal_id, project_ids: destination(route.project_ids) });
+  const routed = routes.map((route: unknown): ApprovalRouteV1 => {
+    if (!plain(route) || !(hasExactKeys(route, ['project_ids', 'signal_id']) || hasExactKeys(route, ['private', 'project_ids', 'signal_id']))
+      || !isApprovalSignalIdV1(route.signal_id)) invalid();
+    const project_ids = destination(route.project_ids);
+    // Kept for the reviewer alone inside projects: said only when true, and only of a route that names a project.
+    if (Object.hasOwn(route, 'private') && (route.private !== true || project_ids === null || project_ids.length === 0)) invalid();
+    return Object.freeze({ signal_id: route.signal_id, project_ids, ...(route.private === true ? { private: true as const } : {}) });
   });
   if (new Set(routed.map(route => route.signal_id)).size !== routed.length) invalid();
   if (new Set(routed.flatMap(route => route.project_ids ?? [])).size > APPROVAL_PROJECTS_MAX_V1) invalid();
@@ -476,9 +484,11 @@ export async function createApprovalCoreV1(database: Database.Database, context:
       title: String(row.title).slice(0, 256), status, decided_on: row.surface, decided_at: body?.decided_at ?? null,
       project_ids: body !== null ? approvalRoutedProjectsV1(body.request.routes) : Object.freeze(suggested.filter(id => readable(reviewer, id))),
       routes: body === null ? null : Object.freeze(body.request.routes.map(route =>
-        Object.freeze({ signal_id: route.signal_id, project_ids: route.project_ids === null ? null : Object.freeze([...route.project_ids]) }))),
+        Object.freeze({ signal_id: route.signal_id, project_ids: route.project_ids === null ? null : Object.freeze([...route.project_ids]),
+          ...(route.private === true ? { private: true as const } : {}) }))),
       confirmed_owners: body === null ? null : Object.freeze(body.request.owners.map(owner => Object.freeze({ signal_id: owner.signal_id, owner: owner.owner }))),
-      records: Object.freeze((receipt?.records ?? []).map(record => Object.freeze({ approval_id: record.approval_id, project_ids: Object.freeze([...record.project_ids]) }))),
+      records: Object.freeze((receipt?.records ?? []).map(record => Object.freeze({ approval_id: record.approval_id, project_ids: Object.freeze([...record.project_ids]),
+        ...(record.private === true ? { private: true as const } : {}) }))),
       snapshot_sha256: row.approved_snapshot_sha256, snapshot_json: row.approved_snapshot_json,
     });
   }

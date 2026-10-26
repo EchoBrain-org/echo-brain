@@ -366,21 +366,23 @@ export function createPersonMeetingRuntimeV1(options: {
   }
   function reviewView(view: ApprovalProposalViewV1): PersonMeetingReviewV2 {
     return { approval_id: view.approval_id, title: view.title, project_ids: view.project_ids, status: view.status, decided_on: view.decided_on, ...approvalProposalSummaryV1(view.snapshot_json),
-      records: view.records.map(record => ({ approval_id: record.approval_id, project_ids: record.project_ids })) };
+      records: view.records.map(record => ({ approval_id: record.approval_id, project_ids: record.project_ids, ...(record.private === true ? { private: true as const } : {}) })) };
   }
   /**
    * The card's items: every decision and action in brief order with where it goes. Pending, each starts at the suggestion
    * the reviewer can read now ([] = Only me) and an action's owner is the meeting's proposal, editable; decided, each shows
-   * its route (null = not kept) and its confirmed owner. A rejection kept nothing.
+   * its route (null = not kept; `private` when kept for the reviewer alone inside its projects) and its confirmed owner. A
+   * rejection kept nothing.
    */
   function reviewItems(view: ApprovalProposalViewV1, proposed: ReadonlyMap<string, string>): PersonMeetingResultsV2['review_open']['items'] {
-    const routes = new Map((view.routes ?? []).map(route => [route.signal_id, route.project_ids]));
+    const routes = new Map((view.routes ?? []).map(route => [route.signal_id, route]));
     const confirmed = new Map((view.confirmed_owners ?? []).map(owner => [owner.signal_id, owner.owner]));
     const decided = view.routes !== null;
     return approvalReviewV1(view.snapshot_json).items.map(item => {
       const owner = item.kind !== 'action' ? null : (decided ? confirmed.get(item.signal_id) : proposed.get(item.signal_id)) ?? null;
+      const route = decided ? routes.get(item.signal_id) : undefined;
       return { ...item, owner, owner_editable: view.status === 'pending' && owner !== null,
-        project_ids: decided ? routes.get(item.signal_id) ?? null : view.project_ids };
+        project_ids: decided ? route?.project_ids ?? null : view.project_ids, ...(route?.private === true ? { private: true as const } : {}) };
     });
   }
   const application: ProviderHttpApplicationV1 = {

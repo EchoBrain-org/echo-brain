@@ -33,7 +33,7 @@ export interface ApprovalDecisionActionOwnerV1 { readonly signal_id: string; rea
 export interface ApprovalDecisionRefV2 {
   readonly schema_version: 2; readonly kind: typeof APPROVAL_DECISION_REF_KIND_V2;
   readonly authority_id: string; readonly organization_id: string; readonly state_lineage_id: string;
-  /** This record's own approval id: approvalRecordIdV2(proposal_approval_id, audience_project_ids). */
+  /** This record's own approval id: approvalRecordIdV2(proposal_approval_id, association_project_ids, isPrivateApprovalRecordV2(…)). */
   readonly approval_id: string;
   /** The decided proposal, which every record of the decision shares. */
   readonly proposal_approval_id: string;
@@ -54,7 +54,10 @@ export interface ApprovalDecisionRefV2 {
   readonly provider_action_kind: typeof APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2; readonly provider_action_schema_version: 2;
   readonly provider_action_sha256: Sha256Digest; readonly authorization_proof_sha256: Sha256Digest; readonly approved_at: string;
 }
-/** What a destination's policy selects: its project audience, which is also its association ([] for Only me). */
+/**
+ * What a destination's policy selects: its project audience and its association. Projects: both are the projects. Only me:
+ * neither. Kept private inside projects (ADR-0049): the restricted reviewer, no audience, and the projects as its association.
+ */
 export interface ApprovalDecisionConsequenceV2 {
   readonly schema_version: 2; readonly kind: typeof APPROVAL_DECISION_CONSEQUENCE_KIND_V1; readonly policy_id: ApprovalDecisionPolicyIdV1;
   readonly audience_project_ids: readonly string[]; readonly association_project_ids: readonly string[];
@@ -88,25 +91,45 @@ const SLACK_COMMAND = /^slack:[A-Za-z0-9._:-]+$/;
 
 /**
  * The record approval id of one destination of a decided proposal: `apr_` and the hex of the route's digest. Each
- * destination has its own, so the record log's one record per approval holds per destination and its baseline stays.
+ * destination has its own, so the record log's one record per approval holds per destination and its baseline stays. A
+ * destination kept private inside its projects (ADR-0049) hashes `private: true` in, so its id is never that of the same
+ * projects shared, nor Only me's; every other destination hashes as it always has.
  */
-export function approvalRecordIdV2(proposalApprovalId: string, projectIds: readonly string[]): string {
-  return `apr_${canonicalSha256({ kind: APPROVAL_ROUTE_KIND_V1, approval_id: proposalApprovalId, project_ids: [...projectIds] } as unknown as JsonValue).slice(7)}`;
+export function approvalRecordIdV2(proposalApprovalId: string, projectIds: readonly string[], isPrivate = false): string {
+  return `apr_${canonicalSha256({ kind: APPROVAL_ROUTE_KIND_V1, approval_id: proposalApprovalId, project_ids: [...projectIds],
+    ...(isPrivate ? { private: true } : {}) } as unknown as JsonValue).slice(7)}`;
 }
 
-/** One destination group of a decision: the record's own approval id, its project set ([] = Only me), its decisions then actions. */
+/**
+ * Whether a record is kept private inside its projects (ADR-0049): its approver alone reads it (the restricted reviewer)
+ * and it is filed in at least one project. Only me is filed in none; a project record's audience is its projects.
+ */
+export function isPrivateApprovalRecordV2(record: { readonly policy_id: string; readonly association_project_ids: readonly string[] }): boolean {
+  return record.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID && record.association_project_ids.length > 0;
+}
+
+/**
+ * One destination group of a decision: the record's own approval id, its project set ([] = Only me), whether it is kept
+ * private inside those projects (only with at least one), its decisions then actions, and, on a private group only,
+ * `unsupported_reasons`: it takes the reasons that support no item. The grouping sets it on the first private group when the
+ * decision keeps nothing for Only me; the Only-me group, when there is one, always takes them.
+ */
 export interface ApprovalDecisionGroupV2 {
-  readonly approval_id: string; readonly project_ids: readonly string[]; readonly signal_ids: readonly string[];
+  readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true; readonly unsupported_reasons?: true;
+  readonly signal_ids: readonly string[];
 }
 /**
  * The snapshot one destination group's record carries: the frozen proposal snapshot the reviewer saw, under the record's own
  * approval id, holding only the group's decisions and actions and the reasons for them. A reason's text may speak of any
  * item it supports, so a project group takes a reason only when every item it supports is the group's. A quote is the text
  * of the evidence unit the item cites (a note line, or part of a paragraph or turn), which may speak of any item of the
- * meeting, so a project group's spans keep their meeting, block and times but never a quote. The Only-me group, which only its approver reads, keeps its quotes and
- * takes every reason that supports one of its items, its links pruned to them, and every reason that supports nothing. Any
- * other reason is left out. Pure: the publisher builds each record with it and the append projector recomputes it from the
- * proposal snapshot, so the two cannot drift. Throws unless every group item is a decision or action of the proposal.
+ * meeting, so a project group's spans keep their meeting, block and times but never a quote. A group only its approver
+ * reads (Only me, or kept private inside its projects) keeps its quotes and takes every reason that supports one of its
+ * items, its links pruned to them. A reason that supports nothing goes to one record only: the Only-me group's, else the
+ * first private group's (`unsupported_reasons`); with neither it is left out, as is any other reason. Pure: the publisher
+ * builds each record with it and the append projector recomputes it from the proposal snapshot, so the two cannot drift.
+ * Throws unless every group item is a decision or action of the proposal, unless a private group names a project, and
+ * unless only a private group takes the unsupported reasons.
  */
 export function approvalDecisionSubsetSnapshotV2(proposal: unknown, group: ApprovalDecisionGroupV2): ApprovedDecisionSnapshotV2 {
   const snapshot = validateApprovedDecisionSnapshotV2(proposal);
@@ -114,12 +137,16 @@ export function approvalDecisionSubsetSnapshotV2(proposal: unknown, group: Appro
   const ids = new Set(group.signal_ids);
   const items = new Set([...brief.decisions, ...brief.actions].map(signal => signal.id));
   if (ids.size === 0 || ids.size !== group.signal_ids.length || group.signal_ids.some(id => !items.has(id))) fail('Approval decision group names items its proposal does not');
-  const project = group.project_ids.length > 0;
+  if (group.private !== undefined && (group.private !== true || group.project_ids.length === 0)) fail('A private approval decision group is kept inside one or more projects');
+  if (group.unsupported_reasons !== undefined && (group.unsupported_reasons !== true || group.private !== true)) {
+    fail('Only a private approval decision group takes the reasons that support no item');
+  }
+  const project = group.project_ids.length > 0 && group.private !== true;
   const unquoted = <T extends OrganizationRecordSignalV1>(signal: T): T => project
     ? { ...signal, evidence: signal.evidence.map(({ quote, ...span }) => span) } : signal;
   const rationales = brief.rationales.flatMap(reason => {
     if (project) return reason.supports_signal_ids.length > 0 && reason.supports_signal_ids.every(id => ids.has(id)) ? [unquoted(reason)] : [];
-    if (reason.supports_signal_ids.length === 0) return [reason];
+    if (reason.supports_signal_ids.length === 0) return group.project_ids.length === 0 || group.unsupported_reasons === true ? [reason] : [];
     const supports = reason.supports_signal_ids.filter(id => ids.has(id));
     return supports.length === 0 ? [] : [{ ...reason, supports_signal_ids: supports }];
   });
@@ -150,6 +177,10 @@ function projectIds(value: unknown, label: string, required: boolean): readonly 
   });
   return Object.freeze([...value as string[]]);
 }
+/**
+ * Projects: the audience is the association, 1 to 20 projects. The restricted reviewer: no audience, and an association of
+ * 0 (Only me) to 20 projects (kept private inside them, ADR-0049), which narrows where the record shows and never who reads it.
+ */
 function consequenceOf(value: unknown): ApprovalDecisionConsequenceV2 {
   const record = exact(value, CONSEQUENCE_KEYS, 'Approval decision consequence');
   if (record.schema_version !== 2 || record.kind !== APPROVAL_DECISION_CONSEQUENCE_KIND_V1) fail('Approval decision consequence has an unsupported envelope');
@@ -157,8 +188,8 @@ function consequenceOf(value: unknown): ApprovalDecisionConsequenceV2 {
   const projects = policyId === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
   const audience = projectIds(record.audience_project_ids, 'Approval decision consequence audience projects', projects);
   const association = projectIds(record.association_project_ids, 'Approval decision consequence association projects', projects);
-  if (!same(audience, association)) fail('Approval decision consequence audience and association must match');
-  if (!projects && audience.length !== 0) fail('Approval decision consequence for Only me must not carry projects');
+  if (projects && !same(audience, association)) fail('Approval decision consequence audience and association must match');
+  if (!projects && audience.length !== 0) fail('Approval decision consequence for Only me must not carry an audience project');
   return Object.freeze({ schema_version: 2, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id: policyId, audience_project_ids: audience, association_project_ids: association });
 }
 /** The approved event, its snapshot digest, and the consequence and contract its policy selects. A rejection writes no record. */
@@ -203,8 +234,10 @@ export function validateApprovalDecisionRecordInputV2(value: unknown): Validated
   for (const key of ['audience_project_ids', 'association_project_ids'] as const) {
     if (!same(ref[key], event.policy_consequence[key])) fail('Approval decision audience differs from its event');
   }
-  // The audience is validated (sorted, unique, canonical) by the event's consequence, which the reference equals.
-  if (ref.approval_id !== approvalRecordIdV2(ref.proposal_approval_id as string, event.policy_consequence.audience_project_ids)) {
+  // The association is validated (sorted, unique, canonical) by the event's consequence, which the reference equals: a
+  // project record's audience, none for Only me, or the projects a private record is kept in.
+  const destination = event.policy_consequence;
+  if (ref.approval_id !== approvalRecordIdV2(ref.proposal_approval_id as string, destination.association_project_ids, isPrivateApprovalRecordV2(destination))) {
     fail('Approval decision record is not its destination\'s');
   }
   const payload = event.approved_snapshot.approved_payload;

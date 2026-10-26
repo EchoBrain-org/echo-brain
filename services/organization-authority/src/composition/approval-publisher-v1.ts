@@ -9,16 +9,17 @@ import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeSyncV1,
 import type { ApprovalActorV1, ApprovalDecisionBodyV1 } from './approval-core-v1.js';
 import { buildApprovalDecisionRecordsV1 } from './approval-decision-projection-v1.js';
 
-/** One published record of a decision: its own approval id, its destination, and the record log's signed receipt verbatim,
- *  whose body names record_sha256 (authority_approval_decision_receipt_v1 enforces it). */
+/** One published record of a decision: its own approval id, its destination (`private` when kept for the reviewer alone inside
+ *  its projects, present only then), and the record log's signed receipt verbatim, whose body names record_sha256
+ *  (authority_approval_decision_receipt_v1 enforces it). */
 export interface ApprovalDecisionReceiptRecordV1 {
-  readonly approval_id: string; readonly project_ids: readonly string[]; readonly record_sha256: Sha256Digest; readonly receipt: Readonly<Record<string, unknown>>;
+  readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true; readonly record_sha256: Sha256Digest; readonly receipt: Readonly<Record<string, unknown>>;
 }
 /** Exact canonical JSON stored in authority_approval_decisions_v1.receipt_json: every record of the decision, in group order. */
 export interface ApprovalDecisionReceiptV1 { readonly records: readonly ApprovalDecisionReceiptRecordV1[] }
 
 /** Builds the receipt_json value from each record's append result; throws unless every receipt names its record. */
-export function approvalDecisionReceiptJsonV1(records: readonly { readonly approval_id: string; readonly project_ids: readonly string[];
+export function approvalDecisionReceiptJsonV1(records: readonly { readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true;
   readonly record_sha256: string; readonly receipt: unknown }[]): string {
   if (records.length === 0) throw new Error('an approval receipt needs its records');
   return canonicalJson({ records: records.map(record => {
@@ -27,7 +28,7 @@ export function approvalDecisionReceiptJsonV1(records: readonly { readonly appro
       || receipt.body?.record_sha256 !== record.record_sha256) {
       throw new Error('approval receipt does not name its record');
     }
-    return { approval_id: record.approval_id, project_ids: [...record.project_ids], record_sha256: record.record_sha256, receipt };
+    return { approval_id: record.approval_id, project_ids: [...record.project_ids], ...(record.private === true ? { private: true } : {}), record_sha256: record.record_sha256, receipt };
   }) } as unknown as JsonValue);
 }
 
@@ -60,8 +61,9 @@ const ASYNC_TAGS = new Set(['[object AsyncFunction]', '[object AsyncGeneratorFun
 const isThenable = (value: unknown): value is PromiseLike<unknown> =>
   value !== null && (typeof value === 'object' || typeof value === 'function') && typeof (value as { then?: unknown }).then === 'function';
 /** What a stored receipt and a rebuilt one must agree on: each record's id, destination and digest, in order. */
-const published = (records: readonly Pick<ApprovalDecisionReceiptRecordV1, 'approval_id' | 'project_ids' | 'record_sha256'>[]) =>
-  canonicalJson(records.map(({ approval_id, project_ids, record_sha256 }) => ({ approval_id, project_ids: [...project_ids], record_sha256 })) as unknown as JsonValue);
+const published = (records: readonly Pick<ApprovalDecisionReceiptRecordV1, 'approval_id' | 'project_ids' | 'private' | 'record_sha256'>[]) =>
+  canonicalJson(records.map(({ approval_id, project_ids, private: kept, record_sha256 }) =>
+    ({ approval_id, project_ids: [...project_ids], ...(kept === true ? { private: true } : {}), record_sha256 })) as unknown as JsonValue);
 
 async function publisherAppendOptionsV1(context: ApprovalWorkflowContextV1): Promise<RecordAppendFactoryOptionsV4> {
   const descriptor = await context.signer.inspect();
@@ -112,7 +114,8 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
     // [T2] record-log.sqlite only, one group at a time in group order: BEGIN IMMEDIATE … COMMIT inside the record appender, then
     //      the signed receipt in its own autocommit. The Authority handle holds no transaction across these awaits. The build is
     //      deterministic, so a retry after a partial pass gets `duplicate` for each group already in the log.
-    const appended: { readonly approval_id: string; readonly project_ids: readonly string[]; readonly record_sha256: Sha256Digest; readonly receipt: unknown; readonly event: AfterApprovedRecordEventV1 }[] = [];
+    const appended: { readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true; readonly record_sha256: Sha256Digest; readonly receipt: unknown;
+      readonly event: AfterApprovedRecordEventV1 }[] = [];
     for (const record of built) {
       const ref = record.human_act_record_input.approval_decision_ref_v2;
       const result = await context.record_append.append({ approval_id: record.approval_id, action: 'approve', semantic_idempotency_key: record.semantic_idempotency_key,
@@ -133,7 +136,8 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
       if (event.reviewer.principal_id !== body.actor.principal_id || event.reviewer.membership_id !== body.actor.membership_id
         || event.reviewer.organization_id !== body.actor.organization_id || event.decided_at !== body.decided_at
         || event.proposal_approval_id !== row.approval_id) throw new Error('Approval record names another reviewer');
-      appended.push({ approval_id: record.approval_id, project_ids: record.project_ids, record_sha256: result.record_sha256 as Sha256Digest, receipt: result.receipt, event });
+      appended.push({ approval_id: record.approval_id, project_ids: record.project_ids, ...(record.private === true ? { private: true as const } : {}),
+        record_sha256: result.record_sha256 as Sha256Digest, receipt: result.receipt, event });
     }
     const receipt_json = approvalDecisionReceiptJsonV1(appended);
     // A nested .immediate() would be a savepoint, so the hooks would commit with someone else's outer transaction.

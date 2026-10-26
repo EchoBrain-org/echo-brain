@@ -350,17 +350,21 @@ desktop card and, for a reviewer who linked Slack, the Slack DM copy decide the
 same approval, and the first decision wins. Every decision and action has its
 own destination: **Only me**, binding `restricted-reviewer-person-v2`, one to
 twenty of the reviewer's active projects, binding
-`project-members-readable-person-v1`, or not kept; there is no Team choice,
-and the card names at most twenty projects in all. Each item starts on the
-meeting's suggested projects that are still among the reviewer's active
-projects, and on **Only me** when none is. The desktop card chooses per item;
-Slack approves every item as suggested. The publisher writes one signed record
-per destination group (the kept items with exactly the same projects), holding
-only that group's items and the reasons that support them, under an approval
-id derived from the proposal and the group's projects. No approval shares the
-transcript. Owners are recorded only when the approver confirms them, on the
-record that holds their action. Each record freezes its policy; rejection
-creates no record.
+`project-members-readable-person-v1`, the same projects kept for the reviewer
+alone ([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md): the route says
+`private: true`, and the record binds `restricted-reviewer-person-v2` with no
+project audience and those projects as its association), or not kept; there is
+no Team choice, and the card names at most twenty projects in all. Each item
+starts on the meeting's suggested projects that are still among the reviewer's
+active projects, and on **Only me** when none is. The desktop card chooses per
+item; Slack approves every item as suggested, never privately. The publisher
+writes one signed record per destination group (the kept items with exactly
+the same projects, kept private or not), holding only that group's items and
+the reasons that support them, under an approval id derived from the proposal,
+the group's projects and, for a private group only, `private: true`. No
+approval shares the transcript. Owners are recorded only when the approver
+confirms them, on the record that holds their action. Each record freezes its
+policy; rejection creates no record.
 
 ## Shared connector capabilities
 

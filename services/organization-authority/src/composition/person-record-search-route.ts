@@ -338,7 +338,10 @@ export interface PersonReadableDecisionV1 {
 export interface PersonReadableDecisionsV1 {
   /** The records among these that this person can read now (the exact Layer 1 check `admittedRecord`), with what a list row shows of each. A lookup, not a release: nothing is audited. */
   readableDecisions(input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }): ReadonlyMap<Sha256Digest, PersonReadableDecisionV1>;
-  /** The records this person can read in one project now, newest first, at most `limit` (at most 500). */
+  /**
+   * The records this person can read in one project now, newest first, at most `limit` (at most 500). Another's records kept
+   * private in the project are never candidates, so they cost no read.
+   */
   projectRecords(input: { readonly access_token: string; readonly project_id: string; readonly limit: number }): readonly Sha256Digest[];
 }
 
@@ -361,8 +364,10 @@ interface PersonProjectRecordsV1 {
    */
   readonly meeting_at: string | null;
   /**
-   * The newest records filed in the project, at most 500, newest first: a lookup of what is filed where, not a read. Nothing
-   * here says this person reads them, so the caller checks each one it uses (`readableDecisionProjects`).
+   * The newest records filed in the project, at most 500, newest first: those its members read by the record's project
+   * audience, and those its approver alone reads (ADR-0049) only when this person is that approver, so another's private
+   * records never take the place of a record this person reads. A lookup, not a read: it checks no current grant, so the
+   * caller checks each one it uses (`readableDecisionProjects`).
    */
   readonly filed: readonly Sha256Digest[];
 }
@@ -1105,11 +1110,25 @@ export function createPersonRecordSearchRouteV1(
     return result;
   }
 
-  /** One page of a project's filed records before a log position, newest first; the statement is prepared once per read. */
-  function filedPages(): (projectId: string, before: number, limit: number) => readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[] {
-    const statement = options.record.prepare(`SELECT record_position, record_sha256 FROM organization_record_project_association_v1
-      WHERE project_id = ? AND record_position < ? ORDER BY record_position DESC LIMIT ?`);
-    return (projectId, before, limit) => statement.all(projectId, before, limit) as readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[];
+  /**
+   * One page of a project's filed records before a log position, newest first, that this person may read there: a project
+   * record by its audience in that project, and a record its approver alone reads (ADR-0049) only for that approver. Another's
+   * private records are left out before the page limit, so they never fill a page or cost an exact read. The statement is
+   * prepared once per read.
+   */
+  function filedPages(authorization: PersonAccessAuthorization): (projectId: string, before: number, limit: number) => readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[] {
+    const statement = options.record.prepare(`SELECT association.record_position, association.record_sha256
+      FROM organization_record_project_association_v1 AS association
+      WHERE association.project_id = ? AND association.record_position < ?
+        AND (EXISTS (SELECT 1 FROM organization_record_project_members_readable_person_record_fact AS audience
+            WHERE audience.record_position = association.record_position AND audience.record_sha256 = association.record_sha256
+              AND audience.project_id = association.project_id)
+          OR EXISTS (SELECT 1 FROM organization_record_restricted_reviewer_person_fact AS reviewer
+            WHERE reviewer.record_position = association.record_position AND reviewer.record_sha256 = association.record_sha256
+              AND reviewer.reviewer_principal_id = ? AND reviewer.reviewer_membership_id = ?))
+      ORDER BY association.record_position DESC LIMIT ?`);
+    return (projectId, before, limit) => statement.all(projectId, before, authorization.principal_id, authorization.membership_id, limit) as
+      readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[];
   }
 
   /** The Layer 1 exact read with current grants, or undefined when this reader cannot read the record now. */
@@ -1691,7 +1710,7 @@ export function createPersonRecordSearchRouteV1(
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       assertExpectedOrganization(authorization);
       const held = new Set(input.projects.project_ids);
-      const filedIn = filedPages();
+      const filedIn = filedPages(authorization);
       const receipt = options.record.prepare("SELECT receipt_issued_at FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'").pluck();
       const result = new Map<string, PersonProjectRecordsV1>();
       for (const projectId of new Set(input.project_ids)) {
@@ -1731,7 +1750,7 @@ export function createPersonRecordSearchRouteV1(
       // A project the reader does not hold lists nothing, the same as a project with no records.
       if (!projects.project_ids.includes(projectId)) return Object.freeze([]);
       const found: Sha256Digest[] = [];
-      const filedIn = filedPages();
+      const filedIn = filedPages(authorization);
       let before = Number.MAX_SAFE_INTEGER;
       // The project's records newest first, each through the exact Layer 1 read with current grants.
       while (found.length < input.limit) {

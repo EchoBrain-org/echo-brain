@@ -568,7 +568,8 @@ export class RecordRetrievalSourceSnapshotPortV1 {
         if (audience_project_ids.length === 0 || association_project_ids.length === 0) {
           invalid("project-readable record lacks immutable audience or association facts");
         }
-      } else if (audience_project_ids.length !== 0 || association_project_ids.length !== 0) {
+      } else if (audience_project_ids.length !== 0 || (expectedFamily === "member" && association_project_ids.length !== 0)) {
+        // A record its approver alone reads may be filed in projects (ADR-0049); no other record is.
         invalid("non-project record has project audience or association facts");
       }
       let reviewerPrincipal: string | null = null;

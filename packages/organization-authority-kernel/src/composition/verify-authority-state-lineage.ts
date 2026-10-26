@@ -5,8 +5,8 @@ import {
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V4,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  organizationRecordLogBaselineSha256V5,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5,
+  organizationRecordLogBaselineSha256V6,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V6,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   readableSearchPlaneBaselineSha256,
@@ -60,8 +60,8 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5,
-        schema_sha256: organizationRecordLogBaselineSha256V5(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V6,
+        schema_sha256: organizationRecordLogBaselineSha256V6(),
       },
       "retrieval-facts": {
         database_schema_version:

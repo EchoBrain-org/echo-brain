@@ -335,11 +335,17 @@ function policyBranch(atom: ReadableSearchAtomV1): SegmentKind {
       atom.reviewer_membership_id !== null
     )
       throw new Error("member atom must not carry a reviewer tuple");
+    if (projectAssociations(atom).length > 0)
+      throw new Error("member atom must not carry project associations");
     return "organization-member";
   }
   if (atom.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2) {
     text(atom.reviewer_principal_id, "reviewer_principal_id");
     text(atom.reviewer_membership_id, "reviewer_membership_id");
+    // Its approver may file it in projects (ADR-0049), which only narrow a project scope: it names no audience project.
+    if (projectAudience(atom).length > 0)
+      throw new Error("reviewer atom must not carry a project audience");
+    projectAssociations(atom);
     return "reviewer";
   }
   if (atom.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1) {
@@ -1981,8 +1987,10 @@ function readAndValidateReadableSearchSegment(
         fact.reviewer_principal_id !== segment.reviewer_principal_id ||
         fact.reviewer_membership_id !== segment.reviewer_membership_id ||
         canonicalJson(canonicalProjectIds(JSON.parse(fact.audience_project_ids_json), "fact audience_project_ids", isProjectFact)) !== canonicalJson(segment.audience_project_ids ?? []) ||
-        // Associations are validated for every fact; only a project fact may carry them.
-        (canonicalProjectIds(JSON.parse(fact.association_project_ids_json), "fact association_project_ids", isProjectFact).length > 0 && !isProjectFact) ||
+        // Associations are validated for every fact; a project fact, or a reviewer fact its approver filed in projects
+        // (ADR-0049), may carry them. A member fact never does.
+        (canonicalProjectIds(JSON.parse(fact.association_project_ids_json), "fact association_project_ids", isProjectFact).length > 0 &&
+          fact.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2) ||
         item.log_position !== fact.log_position ||
         item.record_hash !== fact.record_hash ||
         item.atom_order !== fact.atom_order ||

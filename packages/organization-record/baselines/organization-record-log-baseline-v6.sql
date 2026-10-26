@@ -1,5 +1,6 @@
--- Record log baseline V5: the V4 schema without the meeting transcript grant
--- (ADR-0046: no approval shares a transcript).
+-- Record log baseline V6: the V5 schema (V4 without the meeting transcript
+-- grant, ADR-0046), where a record its approver alone reads may also be filed
+-- in projects (ADR-0049): its association rows are bound to its approval.
 -- Frozen once released. Fresh initialization only; existing state uses the
 -- explicit offline schema-cleanup transition, never this file as an upgrade.
 
@@ -175,9 +176,10 @@ CREATE TABLE organization_record_project_members_readable_person_fact (
     REFERENCES organization_record_log (position, record_sha256)
 ) STRICT;
 
--- Association is deliberately independent of audience.  Lean V1 writes the
--- same selected project set to both tables, but consumers must not infer that
--- equivalence from the schema.
+-- Association is deliberately independent of audience.  A project record
+-- writes the same selected project set to both tables; a record its approver
+-- alone reads may be filed in projects with no project audience at all
+-- (ADR-0049).  Consumers must not infer audience from association.
 CREATE TABLE organization_record_project_association_v1 (
   record_position INTEGER NOT NULL CHECK (record_position > 0),
   record_sha256 TEXT NOT NULL CHECK (record_sha256 LIKE 'sha256:%'),
@@ -436,6 +438,10 @@ CREATE TRIGGER organization_record_project_association_immutable_delete
 BEFORE DELETE ON organization_record_project_association_v1
 BEGIN SELECT RAISE(ABORT, 'organization record project association cannot be deleted'); END;
 
+-- A project record is filed in its approved project audience. A record its
+-- approver alone reads is filed only in the projects its approval names, and
+-- names no audience project; its reviewer facts are written after this row, so
+-- it is bound through its envelope's policy.
 CREATE TRIGGER organization_record_project_association_bound_insert
 BEFORE INSERT ON organization_record_project_association_v1
 WHEN NOT EXISTS (
@@ -443,5 +449,19 @@ WHEN NOT EXISTS (
   WHERE audience.record_position = NEW.record_position
     AND audience.record_sha256 = NEW.record_sha256
     AND audience.project_id = NEW.project_id
+) AND NOT EXISTS (
+  SELECT 1 FROM organization_record_log AS record
+  WHERE record.position = NEW.record_position
+    AND record.record_sha256 = NEW.record_sha256
+    AND record.event_kind = 'approved'
+    AND COALESCE(
+      json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.policy_id'),
+      json_extract(record.canonical_envelope, '$.body.human_act_resolution_ref.selected_policy_id')
+    ) = 'restricted-reviewer-person-v2'
+    AND json_array_length(record.canonical_envelope, '$.body.human_act_resolution_ref.audience_project_ids') = 0
+    AND EXISTS (
+      SELECT 1 FROM json_each(record.canonical_envelope, '$.body.human_act_resolution_ref.association_project_ids')
+      WHERE value = NEW.project_id
+    )
 )
-BEGIN SELECT RAISE(ABORT, 'project association is not bound to its approved project audience'); END;
+BEGIN SELECT RAISE(ABORT, 'project association is not bound to its approved project audience or approver'); END;

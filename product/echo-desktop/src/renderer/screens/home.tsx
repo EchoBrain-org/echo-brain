@@ -5,7 +5,7 @@ import { actionCount, homeFooter, itemLine, itemNames, meetingSuffix, monthDay, 
 import {
   awaitingLive, homeRows, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openOnlyMe, openYourFollowUps, type NeedRow, type State,
 } from '../store.js';
-import { EchoRings, KindMark, Lock, Plus } from './icons.js';
+import { KindMark, Lock, Plus } from './icons.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
 const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', review: 'Review', failed: 'Retry', checking: 'Checking' };
@@ -215,7 +215,7 @@ export function Home({ state }: { state: State }) {
     }
     return (
       <div class="column needs empty" data-testid="needs" aria-busy={home?.loading ?? true}>
-        <div class="home-clear" data-testid="home-clear">{home && !home.loading && <><EchoRings /><span>Nothing needs you</span></>}</div>
+        <div class="home-clear" data-testid="home-clear">{home && !home.loading && <span>Nothing needs you</span>}</div>
         <Footer state={state} />
       </div>
     );

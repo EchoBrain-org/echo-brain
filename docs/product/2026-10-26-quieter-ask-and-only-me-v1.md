@@ -126,9 +126,17 @@ long identifiers). That is server prompt work, separate from this page.
 
 ### Meeting review
 
-- Each item's route chip keeps Not kept / Only me / projects, and a project
-  choice gains the same "Only me" lock: the item is filed in those projects
-  and only you can read it.
+- Under each item sit a place button and, beside it, the same "Only me" lock
+  as Capture, then who can read it in words. The place menu holds places
+  only: your projects, No project, or Don't keep. With projects, the lock
+  files the item in them and only you can read it; with no project the lock
+  stays on. All items has the same pair; its lock reads "1 of 3" when only
+  some kept items are yours alone.
+- One "See the notes" button in the card's head opens the meeting's words
+  behind every item, in place of a quote button on each item.
+- Revised 2026-10-26 after the founder reviewed the staged build: the first
+  version put the lock inside the place menu as an "Only me" row that was a
+  place with no project ticked and the lock with one, which was hard to find.
 
 ## Architecture
 
@@ -220,8 +228,8 @@ nothing, as before.
   (replacing the V5 trigger), and retrieval admits it to the approver alone,
   then filters it by association as any record. Fresh state only.
 - Receipts and record refs carry `private`; Slack's closed card says "only
-  you" for a private group; the desktop route chip gains the lock on a
-  project choice.
+  you" for a private group; the desktop review shows the lock beside each
+  item's place.
 
 ## Known limits
 

@@ -1,8 +1,9 @@
 import { canonicalJson, canonicalSha256, type JsonObject, type JsonValue, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   APPROVAL_DECISION_CONSEQUENCE_KIND_V1, APPROVAL_DECISION_FIELD_V2, APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2, APPROVAL_DECISION_REF_KIND_V2,
-  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, approvalDecisionSubsetSnapshotV2, approvalRecordIdV2, projectMembersReadablePersonPolicyContractSha256,
-  restrictedReviewerPersonPolicyContractSha256, validateApprovalDecisionRecordInputV2, type ApprovalDecisionRecordInputV2, type ApprovalDecisionRefV2,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, approvalDecisionSubsetSnapshotV2, approvalRecordIdV2, isPrivateApprovalRecordV2,
+  projectMembersReadablePersonPolicyContractSha256, restrictedReviewerPersonPolicyContractSha256, validateApprovalDecisionRecordInputV2,
+  type ApprovalDecisionRecordInputV2, type ApprovalDecisionRefV2,
 } from '@echo-brain/organization-protocol';
 import { validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
 import {
@@ -41,13 +42,15 @@ export interface ApprovalDecisionWitnessV1 {
 
 /**
  * Pure. sequence = authority_approval_decisions_v1.sequence, body = the parsed body_json, proposal_snapshot = the validated
- * frozen snapshot whose digest is body.request.snapshot_sha256 (the projector checks it).
+ * frozen snapshot whose digest is body.request.snapshot_sha256 (the projector checks it). A route's `private` is copied as
+ * stored, whatever its value, so the projector refuses any but `true` instead of reading it as shared.
  */
 export function approvalDecisionWitnessV1(decision: { readonly sequence: number; readonly body: ApprovalDecisionBodyV1 },
   proposal_snapshot: ApprovedDecisionSnapshotV2): ApprovalDecisionWitnessV1 {
   const { body, sequence } = decision, r = body.request;
   const request: ApprovalDecisionRequestV1 = Object.freeze({ approval_id: r.approval_id, command_id: r.command_id, snapshot_sha256: r.snapshot_sha256, action: r.action,
-    routes: Object.freeze(r.routes.map(route => Object.freeze({ signal_id: route.signal_id, project_ids: route.project_ids === null ? null : Object.freeze([...route.project_ids]) }))),
+    routes: Object.freeze(r.routes.map(route => Object.freeze({ signal_id: route.signal_id, project_ids: route.project_ids === null ? null : Object.freeze([...route.project_ids]),
+      ...(Object.hasOwn(route, 'private') ? { private: route.private } : {}) }))),
     owners: Object.freeze(r.owners.map(o => Object.freeze({ signal_id: o.signal_id, owner: o.owner }))) });
   const evidence: ApprovalDecisionEvidenceWitnessV1 = Object.freeze({ surface: body.surface, organization_id: body.actor.organization_id, principal_id: body.actor.principal_id,
     membership_id: body.actor.membership_id, kind: body.evidence.kind, sha256: body.evidence.sha256 });
@@ -56,27 +59,44 @@ export function approvalDecisionWitnessV1(decision: { readonly sequence: number;
   return Object.freeze({ decision: request, evidence, audit, proposal_snapshot });
 }
 
-/** One destination of a decision: the kept items routed to exactly one project set. */
+/** One destination of a decision: the kept items routed to exactly one project set, kept private in it or not. */
 export interface ApprovalDecisionGroupV1 {
   /** The record's own approval id (approvalRecordIdV2). */
   readonly approval_id: string;
   /** [] = Only me. */
   readonly project_ids: readonly string[];
+  /** Kept for the reviewer alone inside those projects (ADR-0049); absent otherwise. */
+  readonly private?: true;
+  /** On the first private group when the decision keeps nothing for Only me: it takes the reasons that support no item. */
+  readonly unsupported_reasons?: true;
   /** Its decisions then actions, in brief order. */
   readonly signal_ids: readonly string[];
 }
-/** Pure: the kept routes grouped by their exact project set, ordered by each group's first item in the routes' (brief) order. */
+/**
+ * Pure: the kept routes grouped by whether they are kept private and their exact project set, ordered by each group's first
+ * item in the routes' (brief) order. The same projects shared and kept private are two groups, and two records. The reasons
+ * that support no item go to the Only-me group; with none, the first private group takes them (`unsupported_reasons`), so
+ * they land in one record. Throws on a route that says `private` other than as `true` beside a project: the Authority's
+ * tables do not check it, and read any other way it would publish the item to the whole project.
+ */
 export function approvalDecisionGroupsV1(request: { readonly approval_id: string; readonly routes: readonly ApprovalRouteV1[] }): readonly ApprovalDecisionGroupV1[] {
-  const groups = new Map<string, { readonly project_ids: readonly string[]; readonly signal_ids: string[] }>();
+  const groups = new Map<string, { readonly project_ids: readonly string[]; readonly private: boolean; readonly signal_ids: string[] }>();
   for (const route of request.routes) {
+    if (Object.hasOwn(route, 'private') && (route.private !== true || route.project_ids === null || route.project_ids.length === 0)) {
+      throw new Error('Approval decision route keeps an item private only as true, beside a project');
+    }
     if (route.project_ids === null) continue;
-    const key = canonicalJson([...route.project_ids] as JsonValue);
-    const group = groups.get(key) ?? { project_ids: Object.freeze([...route.project_ids]), signal_ids: [] };
+    const kept = route.private === true;
+    const key = canonicalJson({ private: kept, project_ids: [...route.project_ids] } as JsonValue);
+    const group = groups.get(key) ?? { project_ids: Object.freeze([...route.project_ids]), private: kept, signal_ids: [] };
     group.signal_ids.push(route.signal_id);
     groups.set(key, group);
   }
-  return Object.freeze([...groups.values()].map(group => Object.freeze({ approval_id: approvalRecordIdV2(request.approval_id, group.project_ids),
-    project_ids: group.project_ids, signal_ids: Object.freeze(group.signal_ids) })));
+  const all = [...groups.values()];
+  const loose = all.some(group => group.project_ids.length === 0 && !group.private) ? undefined : all.find(group => group.private);
+  return Object.freeze(all.map(group => Object.freeze({ approval_id: approvalRecordIdV2(request.approval_id, group.project_ids, group.private),
+    project_ids: group.project_ids, ...(group.private ? { private: true as const } : {}), ...(group === loose ? { unsupported_reasons: true as const } : {}),
+    signal_ids: Object.freeze(group.signal_ids) })));
 }
 
 export interface ApprovalDecisionRecordSourceV1 {
@@ -91,6 +111,8 @@ export interface BuiltApprovalDecisionRecordV1 {
   /** The record's own approval id, which it is appended under. */
   readonly approval_id: string;
   readonly project_ids: readonly string[];
+  /** Kept for the reviewer alone inside its projects; absent otherwise. */
+  readonly private?: true;
   readonly human_act_record_input: ApprovalDecisionRecordInputV2;
   readonly semantic_idempotency_key: Sha256Digest;
   readonly authorization_witness: ApprovalDecisionWitnessV1;
@@ -124,16 +146,19 @@ export function buildApprovalDecisionRecordsV1(source: ApprovalDecisionRecordSou
     const subset = approvalDecisionSubsetSnapshotV2(snapshot, group);
     const approved_snapshot_sha256 = canonicalSha256(subset as unknown as JsonValue);
     const ids = [...group.project_ids];
-    const policy_id = ids.length === 0 ? RESTRICTED_REVIEWER_PERSON_POLICY_ID : PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
-    const policy_contract_sha256 = ids.length === 0 ? restrictedReviewerPersonPolicyContractSha256() : projectMembersReadablePersonPolicyContractSha256();
-    const consequence = { schema_version: 2 as const, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id, audience_project_ids: ids, association_project_ids: ids };
+    // Projects are its audience unless it is kept for the reviewer alone: then they are only where it is filed (ADR-0049).
+    const shared = ids.length > 0 && group.private !== true;
+    const audience = shared ? ids : [];
+    const policy_id = shared ? PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID : RESTRICTED_REVIEWER_PERSON_POLICY_ID;
+    const policy_contract_sha256 = shared ? projectMembersReadablePersonPolicyContractSha256() : restrictedReviewerPersonPolicyContractSha256();
+    const consequence = { schema_version: 2 as const, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id, audience_project_ids: audience, association_project_ids: ids };
     const policy_consequence_sha256 = canonicalSha256(consequence as unknown as JsonValue);
     const actions = new Set(subset.approved_payload.brief.actions.map(action => action.id));
     const ref = { schema_version: 2, kind: APPROVAL_DECISION_REF_KIND_V2, ...source.coordinates,
       approval_id: group.approval_id, proposal_approval_id: body.request.approval_id, command_id: body.request.command_id, action: 'approve', surface: body.surface,
       candidate_sha256: source.candidate_sha256, proposal_snapshot_sha256, approved_snapshot_sha256, route_signal_ids: [...group.signal_ids],
       final_approver: { principal_id: body.actor.principal_id, membership_id: body.actor.membership_id },
-      selected_policy_id: policy_id, policy_contract_sha256, policy_consequence_sha256, audience_project_ids: ids, association_project_ids: ids,
+      selected_policy_id: policy_id, policy_contract_sha256, policy_consequence_sha256, audience_project_ids: audience, association_project_ids: ids,
       action_owners: witness.decision.owners.filter(owner => actions.has(owner.signal_id)),
       audit_event_id: witness.audit.event_id, audit_sequence: witness.audit.sequence, audit_entry_sha256: canonicalSha256(witness.audit as unknown as JsonValue),
       provider_action_kind: APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2, provider_action_schema_version: 2,
@@ -142,7 +167,7 @@ export function buildApprovalDecisionRecordsV1(source: ApprovalDecisionRecordSou
     const v = validateApprovalDecisionRecordInputV2({ [APPROVAL_DECISION_FIELD_V2]: ref, event });
     // The append projector refuses what it would refuse later, so a group it cannot accept fails here, before the first append.
     verifyApprovalDecisionWitnessV1(v, witness);
-    return Object.freeze({ approval_id: group.approval_id, project_ids: Object.freeze(ids),
+    return Object.freeze({ approval_id: group.approval_id, project_ids: Object.freeze(ids), ...(group.private === true ? { private: true as const } : {}),
       human_act_record_input: Object.freeze({ approval_decision_ref_v2: v.approval_decision_ref_v2, event: v.event }),
       semantic_idempotency_key: v.semantic_idempotency_key, authorization_witness: witness });
   }));
@@ -152,24 +177,31 @@ function parse(envelope: { readonly body: { readonly human_act_resolution_ref: u
   return validateApprovalDecisionRecordInputV2({ [APPROVAL_DECISION_FIELD_V2]: envelope.body.human_act_resolution_ref, event: envelope.body.event });
 }
 
+/** A stored route: its signal and destination, and `private: true` when it was kept for the reviewer alone. */
+const isRoute = (route: unknown): route is Record<string, unknown> =>
+  keysAre(route, 'project_ids,signal_id') || (keysAre(route, 'private,project_ids,signal_id') && route.private === true);
+
 /**
  * That a record is one destination group of the stored, authorized decision: the proposal, the snapshot its reviewer saw,
- * the record's derived id, the routes to its project set, the owners of its actions and the policy its set selects, the
- * authorized actor, the audit entry, the three digests that bind the witness to the signed reference, and the record's
- * content: its group's subset of that snapshot, recomputed.
+ * the record's derived id, the routes to its destination (its project set, kept private in it or not), the owners of its
+ * actions and the policy its destination selects, the authorized actor, the audit entry, the three digests that bind the
+ * witness to the signed reference, and the record's content: its group's subset of that snapshot, recomputed.
  */
 function verifyApprovalDecisionWitnessV1(parsed: ReturnType<typeof validateApprovalDecisionRecordInputV2>, w: unknown): void {
   const ref: ApprovalDecisionRefV2 = parsed.approval_decision_ref_v2;
   if (!keysAre(w, 'audit,decision,evidence,proposal_snapshot')) refuse();
   const d = w.decision, e = w.evidence, a = w.audit;
-  // (a) the human choice equals the record: this record holds exactly the items routed to its project set, and the policy follows the set
+  // The record's destination: its association (a project record's audience, none for Only me), and whether it is kept private there.
+  const projects = ref.association_project_ids;
+  const kept = isPrivateApprovalRecordV2({ policy_id: ref.selected_policy_id, association_project_ids: projects });
+  // (a) the human choice equals the record: this record holds exactly the items routed to its destination, and the policy follows it
   if (!keysAre(d, 'action,approval_id,command_id,owners,routes,snapshot_sha256')
     || d.approval_id !== ref.proposal_approval_id || d.command_id !== ref.command_id || d.action !== 'approve' || d.snapshot_sha256 !== ref.proposal_snapshot_sha256
-    || typeof d.approval_id !== 'string' || ref.approval_id !== approvalRecordIdV2(d.approval_id, ref.audience_project_ids)
+    || typeof d.approval_id !== 'string' || ref.approval_id !== approvalRecordIdV2(d.approval_id, projects, kept)
     || !Array.isArray(d.routes) || !Array.isArray(d.owners)
     || ref.selected_policy_id !== (ref.audience_project_ids.length === 0 ? RESTRICTED_REVIEWER_PERSON_POLICY_ID : PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID)) refuse();
-  const routed = (d.routes as unknown[]).flatMap(route => keysAre(route, 'project_ids,signal_id') && route.project_ids !== null
-    && same(route.project_ids, ref.audience_project_ids) ? [route.signal_id] : []);
+  const routed = (d.routes as unknown[]).flatMap(route => isRoute(route) && route.project_ids !== null
+    && same(route.project_ids, projects) && (route.private === true) === kept ? [route.signal_id] : []);
   const actions = new Set(parsed.event.approved_snapshot.approved_payload.brief.actions.map(action => action.id));
   const owners = (d.owners as unknown[]).filter(owner => keysAre(owner, 'owner,signal_id') && actions.has(owner.signal_id as string));
   if (!same(routed, ref.route_signal_ids) || !same(owners, ref.action_owners)) refuse();
@@ -191,12 +223,16 @@ function verifyApprovalDecisionWitnessV1(parsed: ReturnType<typeof validateAppro
   let proposal: ApprovedDecisionSnapshotV2, subset: ApprovedDecisionSnapshotV2;
   try {
     proposal = validateApprovedDecisionSnapshotV2(w.proposal_snapshot);
-    subset = approvalDecisionSubsetSnapshotV2(proposal, { approval_id: ref.approval_id, project_ids: ref.audience_project_ids, signal_ids: routed as string[] });
+    // The record's group as the publisher made it from the same routes, which also says whether it takes the reasons that
+    // support no item.
+    const group = approvalDecisionGroupsV1({ approval_id: d.approval_id, routes: d.routes as ApprovalRouteV1[] }).find(entry => entry.approval_id === ref.approval_id);
+    if (group === undefined || !same(group.signal_ids, routed) || !same(group.project_ids, projects) || (group.private === true) !== kept) refuse();
+    subset = approvalDecisionSubsetSnapshotV2(proposal, group);
   } catch { refuse(); }
   const brief = proposal.approved_payload.brief;
   const proposal_sha256 = canonicalSha256(proposal as unknown as JsonValue);
   if (proposal.approval_id !== d.approval_id || proposal_sha256 !== ref.proposal_snapshot_sha256 || proposal_sha256 !== d.snapshot_sha256
-    || !same((d.routes as unknown[]).map(route => keysAre(route, 'project_ids,signal_id') ? route.signal_id : null), [...brief.decisions, ...brief.actions].map(signal => signal.id))
+    || !same((d.routes as unknown[]).map(route => isRoute(route) ? route.signal_id : null), [...brief.decisions, ...brief.actions].map(signal => signal.id))
     || canonicalSha256(subset as unknown as JsonValue) !== ref.approved_snapshot_sha256 || !same(subset, parsed.event.approved_snapshot)) refuse();
 }
 

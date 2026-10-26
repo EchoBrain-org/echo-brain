@@ -65,6 +65,8 @@ export interface SignedApprovalInputV1 {
   readonly audit_sequence: number;
   /** A project audience; [] is Only me (both an approval decision, every item routed there). "team" is the whole organization (a generic human act). */
   readonly projects: readonly string[] | "team";
+  /** Every item kept for the approver alone inside `projects` (ADR-0049); an approval decision with projects only. */
+  readonly private?: true;
   readonly final_approver: { readonly principal_id: string; readonly membership_id: string };
   /** The receipt and envelope time; it is the meeting's list time. */
   readonly issued_at?: string;
@@ -124,7 +126,8 @@ export async function appendSignedApprovalV1(
     const projects = [...(input.projects as readonly string[])];
     const body: ApprovalDecisionBodyV1 = {
       request: { approval_id, command_id, snapshot_sha256: approvedDecisionSnapshotV2Sha256(snapshot), action: "approve",
-        routes: [...brief.decisions, ...brief.actions].map((signal) => ({ signal_id: signal.id, project_ids: projects })), owners: input.action_owners ?? [] },
+        routes: [...brief.decisions, ...brief.actions].map((signal) => ({ signal_id: signal.id, project_ids: projects, ...(input.private === true ? { private: true as const } : {}) })),
+        owners: input.action_owners ?? [] },
       surface, actor: { organization_id: COORDINATES.organization_id, ...final_approver },
       evidence: { kind: surface === "desktop" ? "person-session" : "slack-click", sha256: sha256Digest(`evidence-${approval_id}`) },
       transcript_source: { source_id: `source-${approval_id}`, revision_id: "revision-1", source_sha256: sha256Digest(`source-${approval_id}`) },
@@ -137,8 +140,8 @@ export async function appendSignedApprovalV1(
     witness = built!.authorization_witness;
     appended_as = built!.approval_id;
   } else {
-    if (input.action_owners !== undefined || input.surface !== undefined) {
-      throw new Error("owners and surface need an approval-decision record");
+    if (input.action_owners !== undefined || input.surface !== undefined || input.private !== undefined) {
+      throw new Error("owners, surface and private need an approval-decision record");
     }
     const policy = input.projects === "team" ? ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID : RESTRICTED_REVIEWER_PERSON_POLICY_ID;
     const fixture = humanAct(approval_id, action, policy, 1, input.signals);

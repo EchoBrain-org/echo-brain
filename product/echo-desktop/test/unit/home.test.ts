@@ -516,10 +516,10 @@ describe('Home decisions and impact checks', () => {
     rpc.mockImplementationOnce(async () => ({ ok: false, failure: { code: 'timeout', retryable: true, mutation_outcome: 'unknown' } }));
     await store.decide('approve');
     expect(store.getState().decision).toMatchObject({ busy: false, unknown: true, failure: 'This may not have been sent.' });
-    store.setDecisionRoute('act-1', []);
-    store.setDecisionRoutes([project.project_id]);
+    store.setDecisionRoute('act-1', store.ONLY_ME);
+    store.setDecisionRoutes({ projects: [project.project_id], private: false });
     store.setDecisionOwner('act-1', 'Someone else');
-    expect(store.getState().decision).toMatchObject({ routes: { 'dec-1': [], 'act-1': null }, owners: { 'act-1': 'Rafael Moreno' } });
+    expect(store.getState().decision).toMatchObject({ routes: { 'dec-1': store.ONLY_ME, 'act-1': null }, owners: { 'act-1': 'Rafael Moreno' } });
     rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'approved', decided_on: 'desktop' } }));
     await store.decide('approve');
     expect(reviews()).toHaveLength(2);
@@ -533,27 +533,26 @@ describe('Home decisions and impact checks', () => {
     const store = await start();
     await store.openDecision(approval);
     await flush();
-    expect(store.getState().decision).toMatchObject({ routes: { 'dec-1': [], 'act-1': [] }, owners: { 'act-1': 'Rafael Moreno' } });
+    expect(store.getState().decision).toMatchObject({ routes: { 'dec-1': store.ONLY_ME, 'act-1': store.ONLY_ME }, owners: { 'act-1': 'Rafael Moreno' } });
+    const to = (...projects: string[]) => ({ projects, private: false });
     // One item to a project, then another ticked on and off: unticking its last project leaves it Only me.
     store.tickDecisionRoute('dec-1', project.project_id);
     store.tickDecisionRoute('act-1', project.project_id);
     store.tickDecisionRoute('act-1', project.project_id);
-    expect(store.getState().decision?.routes).toEqual({ 'dec-1': [project.project_id], 'act-1': [] });
-    expect(store.sharedDestination(store.getState().decision!)).toBeNull();
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': to(project.project_id), 'act-1': store.ONLY_ME });
     // All items: every kept item at once; Don't keep keeps none, and then a destination goes to every item.
     store.setDecisionRoutes(null);
     expect(store.keptItems(store.getState().decision!)).toEqual([]);
     store.tickDecisionRoutes(project.project_id);
-    expect(store.getState().decision?.routes).toEqual({ 'dec-1': [project.project_id], 'act-1': [project.project_id] });
-    expect(store.sharedDestination(store.getState().decision!)).toEqual([project.project_id]);
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': to(project.project_id), 'act-1': to(project.project_id) });
     store.setDecisionRoute('dec-1', null);
-    store.setDecisionRoutes([]);
-    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': [] });
+    store.setDecisionRoutes(store.ONLY_ME);
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': store.ONLY_ME });
     // No more than 20 projects in all.
     const many = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
-    store.setDecisionRoute('act-1', many.slice(0, 20));
-    store.setDecisionRoute('dec-1', many.slice(20));
-    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': many.slice(0, 20) });
+    store.setDecisionRoute('act-1', to(...many.slice(0, 20)));
+    store.setDecisionRoute('dec-1', to(...many.slice(20)));
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': to(...many.slice(0, 20)) });
     store.setDecisionOwner('act-1', ' R. Moreno ');
     rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'publishing', decided_on: 'desktop' } }));
     await store.decide('approve');
@@ -568,29 +567,97 @@ describe('Home decisions and impact checks', () => {
     await flush();
     const [therm, echo, supplier] = ['prj_11111111-1111-4111-8111-111111111111', 'prj_22222222-2222-4222-8222-222222222222', 'prj_44444444-4444-4444-8444-444444444444'];
     const routes = () => store.getState().decision?.routes;
-    store.setDecisionRoute('dec-1', [echo, therm]);
-    store.setDecisionRoute('act-1', [therm]);
+    const to = (...projects: string[]) => ({ projects, private: false });
+    store.setDecisionRoute('dec-1', to(echo, therm));
+    store.setDecisionRoute('act-1', to(therm));
     // SUPPLIER goes on both, and neither loses what it had.
     store.tickDecisionRoutes(supplier);
-    expect(routes()).toEqual({ 'dec-1': [therm, echo, supplier], 'act-1': [therm, supplier] });
+    expect(routes()).toEqual({ 'dec-1': to(therm, echo, supplier), 'act-1': to(therm, supplier) });
     // ECHO, on one of them, goes on the other too; on both, it comes off both.
     store.tickDecisionRoutes(echo);
-    expect(routes()).toEqual({ 'dec-1': [therm, echo, supplier], 'act-1': [therm, echo, supplier] });
+    expect(routes()).toEqual({ 'dec-1': to(therm, echo, supplier), 'act-1': to(therm, echo, supplier) });
     store.tickDecisionRoutes(echo);
-    expect(routes()).toEqual({ 'dec-1': [therm, supplier], 'act-1': [therm, supplier] });
+    expect(routes()).toEqual({ 'dec-1': to(therm, supplier), 'act-1': to(therm, supplier) });
     // An item not kept stays so; a kept one left with no project is Only me.
     store.setDecisionRoute('act-1', null);
     store.tickDecisionRoutes(therm);
     store.tickDecisionRoutes(supplier);
-    expect(routes()).toEqual({ 'dec-1': [], 'act-1': null });
+    expect(routes()).toEqual({ 'dec-1': store.ONLY_ME, 'act-1': null });
     // At most 20 projects in all: a 21st goes on no item, and one the meeting names already goes on every kept item.
     const many = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
-    store.setDecisionRoute('dec-1', many.slice(0, 19));
-    store.setDecisionRoute('act-1', many.slice(19, 20));
+    store.setDecisionRoute('dec-1', to(...many.slice(0, 19)));
+    store.setDecisionRoute('act-1', to(...many.slice(19, 20)));
     store.tickDecisionRoutes(many[20]!);
-    expect(routes()).toEqual({ 'dec-1': many.slice(0, 19), 'act-1': many.slice(19, 20) });
+    expect(routes()).toEqual({ 'dec-1': to(...many.slice(0, 19)), 'act-1': to(...many.slice(19, 20)) });
     store.tickDecisionRoutes(many[19]!);
-    expect(routes()).toEqual({ 'dec-1': many.slice(0, 20), 'act-1': many.slice(19, 20) });
+    expect(routes()).toEqual({ 'dec-1': to(...many.slice(0, 20)), 'act-1': to(...many.slice(19, 20)) });
+  });
+
+  it('keeps an item for you alone in its projects with the Only me lock, which stays pressed while they stay ticked, and sends it as private', async () => {
+    const store = await start();
+    await store.openDecision(approval);
+    await flush();
+    const [therm, echo] = ['prj_11111111-1111-4111-8111-111111111111', 'prj_22222222-2222-4222-8222-222222222222'];
+    const routes = () => store.getState().decision?.routes;
+    const to = (...projects: string[]) => ({ projects, private: false }), mine = (...projects: string[]) => ({ projects, private: true });
+    // A project chosen from Only me starts unlocked, as Capture's does; the lock then stays while projects stay ticked.
+    store.tickDecisionRoute('dec-1', therm);
+    expect(routes()?.['dec-1']).toEqual(to(therm));
+    store.lockDecisionRoute('dec-1');
+    store.tickDecisionRoute('dec-1', echo);
+    expect(routes()?.['dec-1']).toEqual(mine(therm, echo));
+    store.tickDecisionRoute('dec-1', echo);
+    expect(routes()?.['dec-1']).toEqual(mine(therm));
+    // The lock turns off again; on an item in no project it is Only me, and unticking the last project leaves Only me.
+    store.lockDecisionRoute('dec-1');
+    expect(routes()?.['dec-1']).toEqual(to(therm));
+    store.lockDecisionRoute('dec-1');
+    store.lockDecisionRoute('act-1');
+    expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': store.ONLY_ME });
+    // All items: the lock turns on or off every kept item filed in a project, and leaves Only me as it is.
+    store.lockDecisionRoutes();
+    expect(routes()).toEqual({ 'dec-1': to(therm), 'act-1': store.ONLY_ME });
+    store.lockDecisionRoutes();
+    expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': store.ONLY_ME });
+    // An item in no project beside one kept for you alone in THERM: a project ticked from All items keeps each item's own
+    // lock, so the item in no project is shared there; the one every item has comes off each.
+    store.tickDecisionRoutes(echo);
+    expect(routes()).toEqual({ 'dec-1': mine(therm, echo), 'act-1': to(echo) });
+    store.tickDecisionRoutes(echo);
+    expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': store.ONLY_ME });
+    // Every item in no project: a project ticked from All items shares them, as from one item's place menu.
+    store.setDecisionRoutes(store.ONLY_ME);
+    store.tickDecisionRoutes(therm);
+    expect(routes()).toEqual({ 'dec-1': to(therm), 'act-1': to(therm) });
+    // Every item kept for you alone in a project: a project ticked keeps them so.
+    store.setDecisionRoutes(mine(therm));
+    store.tickDecisionRoutes(echo);
+    expect(routes()).toEqual({ 'dec-1': mine(therm, echo), 'act-1': mine(therm, echo) });
+    // The same projects shared and kept for you alone are two destinations, and All items sets one for both.
+    store.setDecisionRoute('dec-1', mine(therm));
+    store.setDecisionRoute('act-1', to(therm));
+    expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': to(therm) });
+    store.setDecisionRoutes(mine(therm));
+    expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': mine(therm) });
+    store.setDecisionRoute('act-1', to(therm));
+    rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'publishing', decided_on: 'desktop' } }));
+    await store.decide('approve');
+    const sent = rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
+    expect(sent).toEqual([expect.objectContaining({ action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: [therm], private: true }, { signal_id: 'act-1', project_ids: [therm] }] })]);
+  });
+
+  it('leaves every item as it is from either lock when none is filed in a project: the lock never moves an item', async () => {
+    const store = await start();
+    await store.openDecision(approval);
+    await flush();
+    store.setDecisionRoutes(null);
+    store.lockDecisionRoutes();
+    store.lockDecisionRoute('dec-1');
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': null });
+    store.setDecisionRoutes(store.ONLY_ME);
+    store.lockDecisionRoutes();
+    store.lockDecisionRoute('act-1');
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': store.ONLY_ME, 'act-1': store.ONLY_ME });
   });
 
   it('keeps a publishing approval visible and shows what its check found once it finishes', async () => {

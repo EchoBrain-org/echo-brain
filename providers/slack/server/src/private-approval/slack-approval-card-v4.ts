@@ -143,7 +143,8 @@ export function buildSlackApprovalCardV4(
 
 /**
  * The card once decided or replaced. An approval names its destinations, one per destination group in group order (a
- * group's projects joined with " + ", "Only you" for the reviewer alone), so mixed destinations read as they were chosen.
+ * group's projects joined with " + ", then ", only you" when kept for the reviewer alone inside them, and "Only you" for the
+ * reviewer alone), so mixed destinations read as they were chosen.
  */
 export function buildClosedApprovalCardV4(input: {
   readonly title: string;

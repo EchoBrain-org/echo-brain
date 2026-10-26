@@ -179,18 +179,23 @@ export async function addMeeting(page: Page): Promise<void> {
   await page.getByTestId('sidebar-home').click();
 }
 
-/** Sends every item of an open decision card to one place: Only me, or Don't keep, from its All items control. */
-export async function routeAll(card: Locator, choice: 'Only me' | 'Don\'t keep'): Promise<void> {
+/**
+ * Sends every item of an open decision card to one place from its All items place menu: Don't keep, or No project, where
+ * only you read it (ADR-0049; the Only me lock beside a place is its own button).
+ */
+export async function routeAll(card: Locator, choice: 'No project' | 'Don\'t keep'): Promise<void> {
   await card.getByTestId('route-all').click();
-  await card.getByTestId('route-menu').getByRole('button', { name: choice, exact: true }).click();
+  const menu = card.getByTestId('route-menu');
+  // No project names who reads it beside it ("No project only you"); the menu closes on either.
+  await (choice === 'No project' ? menu.getByRole('radio', { name: /^No project\b/ }) : menu.getByRole('radio', { name: choice, exact: true })).click();
 }
 
-/** Adds the fixture meeting, then approves it from Home: every item to the project it suggests, or to Only me. Returns Home's rows. */
+/** Adds the fixture meeting, then approves it from Home: every item to the project it suggests, or to no project, only you. Returns Home's rows. */
 export async function approveFromHome(page: Page, onlyMe = false): Promise<Locator> {
   await addMeeting(page);
   await page.getByTestId('need-row').filter({ hasText: 'Pilot planning' }).click();
   const card = page.getByTestId('decision');
-  if (onlyMe) await routeAll(card, 'Only me');
+  if (onlyMe) await routeAll(card, 'No project');
   await card.getByTestId('decision-approve').click();
   await expect(page.getByTestId('toast')).toContainText('Approved');
   return page.getByTestId('need-row');

@@ -203,6 +203,43 @@ describe("immutable readable-search generation v1", () => {
     expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: { ...alphaReader, project_ids: [] }, query: "roadmap" }).items).toEqual([]);
   });
 
+  it("admits a reviewer atom its approver filed in a project to that approver alone, then narrows it by association (ADR-0049)", () => {
+    const directory = tempDirectory();
+    const projectPolicy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
+    const shared = { ...atom("project-shared", projectPolicy), text: "shared roadmap", text_sha256: digest("shared roadmap"),
+      audience_project_ids: ["prj_alpha"], association_project_ids: ["prj_alpha"] };
+    const kept = { ...atom("reviewer-kept", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2), text: "private roadmap", text_sha256: digest("private roadmap"),
+      audience_project_ids: [], association_project_ids: ["prj_alpha"] };
+    const built = buildReadableSearchGenerationV1({ ...input(directory, [shared, kept]), project_members_policy_contract_sha256: digest(`policy-${projectPolicy}`) });
+    const active = activeGeneration(built);
+    warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation: active });
+    const read = (reader: { principal_id: string; membership_id: string; project_ids: string[] }, project_id?: string) =>
+      searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader, query: "roadmap", ...(project_id === undefined ? {} : { project_id }) })
+        .items.map((item) => item.text).sort();
+    const listed = (reader: { principal_id: string; membership_id: string; project_ids: string[] }, project_id?: string) =>
+      listReadableSearchGenerationRecordsV1({ state_directory: directory, active_generation: active, reader, ...(project_id === undefined ? {} : { project_id }) })
+        .records.map((record) => record.record_sha256).sort();
+    const approver = { principal_id: "prn_reviewer", membership_id: "mem_reviewer", project_ids: ["prj_alpha", "prj_beta"] };
+    const member = { principal_id: "prn_member", membership_id: "mem_member", project_ids: ["prj_alpha", "prj_beta"] };
+    expect(read(approver)).toEqual(["private roadmap", "shared roadmap"]);
+    expect(read(approver, "prj_alpha")).toEqual(["private roadmap", "shared roadmap"]);
+    expect(read(approver, "prj_beta")).toEqual([]);
+    expect(listed(approver, "prj_alpha")).toEqual([kept.record_sha256, shared.record_sha256].sort());
+    // Another member of the project reads the shared record there, and never the approver's own.
+    for (const project_id of [undefined, "prj_alpha", "prj_beta"]) {
+      expect(read(member, project_id)).toEqual(project_id === "prj_beta" ? [] : ["shared roadmap"]);
+      expect(listed(member, project_id)).not.toContain(kept.record_sha256);
+    }
+  });
+
+  it("refuses a member atom filed in a project and a reviewer atom with an audience project", () => {
+    const directory = tempDirectory();
+    expect(() => buildReadableSearchGenerationV1(input(directory, [{ ...atom("member-filed", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2), association_project_ids: ["prj_alpha"] }])))
+      .toThrow("member atom must not carry project associations");
+    expect(() => buildReadableSearchGenerationV1(input(directory, [{ ...atom("reviewer-audience", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2), audience_project_ids: ["prj_alpha"], association_project_ids: ["prj_alpha"] }])))
+      .toThrow("reviewer atom must not carry a project audience");
+  });
+
   it("fails closed when a project-policy atom lacks the frozen audience or association facts", () => {
     const directory = tempDirectory();
     const projectPolicy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
