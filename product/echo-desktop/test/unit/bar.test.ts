@@ -131,11 +131,12 @@ describe('what an empty bar suggests', () => {
     await flush();
     expect(rpc.mock.calls.filter(([method]) => method === 'ask.run')).toHaveLength(asked);
     expect(store.getState().ask).toMatchObject({ opened: first!.id, focus: first!.id, asked: [] });
-    // The latest is in full already: it is only brought into view.
+    // The latest is in full already: it stays so, brought into view, and is the turn the next question continues.
     const latest = store.barSuggestions().find(each => each.question === 'Who leads the pilot?')!;
     store.closeAsk();
     store.pickSuggestion(latest);
-    expect(store.getState().ask).toMatchObject({ opened: null, focus: latest.turn });
+    expect(store.getState().ask).toMatchObject({ opened: latest.turn, focus: latest.turn });
+    expect(store.getState().ask?.latest).toBe(latest.turn);
   });
 
   it('keeps a project\'s questions and meetings to its own bar', async () => {

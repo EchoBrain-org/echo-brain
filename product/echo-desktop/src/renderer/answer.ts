@@ -1,4 +1,4 @@
-import type { Answer, AnswerBlock, AnswerSource, AnswerStatement, AnswerTableRow, ConnectedTool, ExternalAnswerSource } from '../shared/protocol.js';
+import type { Answer, AnswerBlock, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ConnectedTool, ExternalAnswerSource } from '../shared/protocol.js';
 import { sourceKey } from './openers.js';
 
 /** What the pane may show: at most 32 sources. */
@@ -242,29 +242,56 @@ function markdownText(text: string): string {
     .replace(/^([-+])(?=[\s-]|$)/u, '\\$1');
 }
 
+/** Which of an answer's sentences and rows the page shows, by what they cite: all, unless a check leaves some out (ADR-0047). */
+export type Shows = (citations: readonly number[]) => boolean;
+
 /**
- * Copy answer's Markdown (ADR-0045): the answer as it reads, each claim
- * followed by its sources' numbers as the page shows them ("[1][3]"), and the
- * sources, numbered and named (`names`, one per number). A laid-out part keeps
- * its lead, headings, bullets and tables; any other is a paragraph per
- * sentence. A part's question heads what it says when there are several.
- * What research did not cover is not written: the page no longer shows it
- * (ADR-0047).
+ * The blocks of a laid-out part the page shows, by their place: a block with
+ * a sentence or row it shows, and a heading only with such a block right
+ * under it.
  */
-export function answerMarkdown(answer: Answer, names: readonly string[]): string {
-  const groups = sourceGroups(answer.sources.slice(0, MAX_SOURCES));
+function shownBlocks(part: AnswerPart, layout: readonly AnswerBlock[], shows: Shows): boolean[] {
+  const some = (block: AnswerBlock) => block.kind === 'heading' || (block.kind === 'table' ? block.rows.some(row => shows(row.citation_indexes))
+    : block.statements.some(place => shows(part.statements[place]!.citation_indexes)));
+  return layout.map((block, place) => some(block) && (block.kind !== 'heading' || (layout[place + 1] !== undefined && layout[place + 1]!.kind !== 'heading'
+    && some(layout[place + 1]!))));
+}
+
+/** Whether the page shows anything of a part: a sentence, or a passage found. */
+function partShows(part: AnswerPart, shows: Shows): boolean {
+  return [...part.statements, ...(part.records ?? [])].some(statement => shows(statement.citation_indexes));
+}
+
+/**
+ * Copy answer's Markdown (ADR-0045): the answer as the page shows it, each
+ * claim followed by its sources' numbers as the page shows them ("[1][3]"),
+ * and the sources, numbered and named (`names`, one per number). The page's
+ * `groups` number them, by default every one of the first 32; `shows` says
+ * which sentences and rows it shows, so what a check left out is not written,
+ * nor a part, block or heading left with nothing to show (ADR-0047). A
+ * laid-out part keeps its lead, headings, bullets and tables; any other is a
+ * paragraph per sentence. A part's question heads what it says when there are
+ * several. What research did not cover is not written: the page no longer
+ * shows it (ADR-0047).
+ */
+export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[] = sourceGroups(answer.sources.slice(0, MAX_SOURCES)),
+  shows: Shows = () => true): string {
   const numbers = (citations: readonly number[]) => statementGroups(citations, groups).map(group => `[${group + 1}]`).join('');
   /** Text, then the numbers of what it cites: they stay on their claim. */
   const cited = (text: string, citations: readonly number[]) => [markdownText(text), numbers(citations)].filter(Boolean).join(' ');
   const claim = (statement: AnswerStatement) => cited(statement.text, statement.citation_indexes);
+  const shown = (statements: readonly AnswerStatement[]) => statements.filter(statement => shows(statement.citation_indexes));
   const blocks: string[] = [];
-  if (answer.direct) blocks.push(claim(answer.direct));
+  if (answer.direct && shows(answer.direct.citation_indexes)) blocks.push(claim(answer.direct));
   for (const part of answer.parts) {
-    // A part with nothing to show is not headed.
-    if (answer.parts.length > 1 && (part.statements.length > 0 || (part.records?.length ?? 0) > 0)) blocks.push(`## ${markdownText(part.question)}`);
-    const said = (indexes: readonly number[]) => indexes.map(index => claim(part.statements[index]!));
-    if (!part.layout) blocks.push(...part.statements.map(claim));
-    for (const block of part.layout ?? []) {
+    // A part with nothing to show is not written, nor headed.
+    if (!partShows(part, shows)) continue;
+    if (answer.parts.length > 1) blocks.push(`## ${markdownText(part.question)}`);
+    const said = (indexes: readonly number[]) => shown(indexes.map(index => part.statements[index]!)).map(claim);
+    if (!part.layout) blocks.push(...shown(part.statements).map(claim));
+    const showing = part.layout ? shownBlocks(part, part.layout, shows) : [];
+    (part.layout ?? []).forEach((block, place) => {
+      if (!showing[place]) return;
       if (block.kind === 'heading') blocks.push(`### ${markdownText(block.text)}`);
       else if (block.kind === 'bullets') blocks.push(said(block.statements).map(line => `- ${line}`).join('\n'));
       else if (block.kind !== 'table') blocks.push(said(block.statements).join(' '));
@@ -273,12 +300,25 @@ export function answerMarkdown(answer: Answer, names: readonly string[]): string
         const line = (cells: readonly string[]) => `| ${cells.join(' | ')} |`;
         blocks.push([
           line(block.columns.map(markdownText)), line(block.columns.map(() => '---')),
-          ...block.rows.map(row => line(row.cells.map((cell, at) => at === 0 ? cited(cell, row.citation_indexes) : markdownText(cell)))),
+          ...block.rows.filter(row => shows(row.citation_indexes)).map(row => line(row.cells.map((cell, at) => at === 0 ? cited(cell, row.citation_indexes) : markdownText(cell)))),
         ].join('\n'));
       }
-    }
-    blocks.push(...(part.records ?? []).map(claim));
+    });
+    blocks.push(...shown(part.records ?? []).map(claim));
   }
   if (groups.length > 0) blocks.push('Sources', groups.map((_, index) => `${index + 1}. ${markdownText(names[index] ?? '')}`.trimEnd()).join('\n'));
   return blocks.join('\n\n');
+}
+
+/**
+ * Copy answer's plain reading of what the page shows, for an answer whose
+ * Markdown is longer than Copy answer takes: as the answer's own `text` reads
+ * (its sentences one a line, each part's question first when there are
+ * several), without what a check left out.
+ */
+export function answerText(answer: Answer, shows: Shows): string {
+  const said = (statements: readonly AnswerStatement[]) => statements.filter(statement => shows(statement.citation_indexes)).map(statement => statement.text);
+  return [...said(answer.direct ? [answer.direct] : []), ...answer.parts.filter(part => partShows(part, shows))
+    .flatMap(part => [answer.parts.length > 1 ? part.question : '', ...said(part.statements), ...said(part.records ?? [])])]
+    .filter(line => line !== '').join('\n');
 }

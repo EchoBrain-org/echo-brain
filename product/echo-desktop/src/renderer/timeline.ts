@@ -4,9 +4,9 @@
 // empty bar suggests from it. Pure, for the store and its tests; the store
 // keeps the state and makes the calls.
 import type {
-  AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, TimelineTurn,
+  AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
-import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
+import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerSentences, MAX_SOURCES, sourceGroups, type SourceGroup } from './answer.js';
 
@@ -19,10 +19,32 @@ export const CHECK_FRESH_MS = 5 * 60_000;
 /** What a check said of one turn's sources, by their place among its answer's sources. */
 export type TurnChecks = Readonly<Record<number, AskCheckState>>;
 
-/** One check: its items, and for each, the turn whose sources it stands for and their places there. */
+/** What a check said of one turn's sources, and when it went, by this computer's clock. */
+export interface TurnCheck {
+  readonly at: number;
+  readonly states: TurnChecks;
+}
+
+/** What a check said of a turn's sources while it is good: five minutes from when it went, and nothing after (C5). */
+export function freshStates(check: TurnCheck | undefined, now: number): TurnChecks | undefined {
+  return check !== undefined && now - check.at < CHECK_FRESH_MS ? check.states : undefined;
+}
+
+/** The checks still good at `now`: one five minutes old goes, so nothing it said shows any more. */
+export function freshChecks(checks: Readonly<Record<string, TurnCheck>>, now: number): Record<string, TurnCheck> {
+  return Object.fromEntries(Object.entries(checks).filter(([, check]) => freshStates(check, now) !== undefined));
+}
+
+/**
+ * One check: its items, and for each, the turn whose sources it stands for
+ * and their places there; and the turns it speaks for: each it asks about,
+ * and each citing nothing a check asks about. A turn none of whose sources
+ * fit is not one of them.
+ */
 export interface CheckPlan {
   readonly items: readonly AskCheckItem[];
   readonly places: readonly { readonly turn: string; readonly sources: readonly number[] }[];
+  readonly turns: readonly string[];
 }
 
 /** What a check found: each checked turn's sources' states, and the markers tickets have now. */
@@ -31,46 +53,57 @@ export interface Checked {
   readonly markers: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
-/** The answer's sources a check can ask about, numbered as the page numbers them: the first 32. */
-function checkable(turn: TimelineTurn): { source: AnswerSource; at: number }[] {
-  return turn.answer.sources.slice(0, MAX_SOURCES).flatMap((source, at) => source.check === undefined ? [] : [{ source, at }]);
+/** The answer's sources a check can ask about, numbered as the page numbers them: the first 32, each with what a check asks of it. */
+function checkable(turn: TimelineTurn): { source: AnswerSource; at: number; citation: CheckCitation }[] {
+  return turn.answer.sources.slice(0, MAX_SOURCES).flatMap((source, at) => {
+    const citation = checkOf(source);
+    return citation === undefined ? [] : [{ source, at, citation }];
+  });
 }
 
 /**
- * One check of `turns` (newest first): each turn's checkable sources, the
- * same citation once per turn, with when the turn was asked and a ticket's
- * baseline marker; at most 100 items in all, within the route's 64 KiB, the
- * newest turns' first. `only` narrows the sources, as a new answer's tickets'
- * baseline does.
+ * One check of `turns` (the one most wanted first: the newest, or the turn
+ * opened): each turn's checkable sources, the same citation once per turn,
+ * with when the turn was asked and a ticket's baseline marker; at most 100
+ * items in all, within the route's 64 KiB, the first turns' first. `only`
+ * narrows the sources, as a new answer's tickets' baseline does.
  */
 export function checkPlan(turns: readonly TimelineTurn[], only: (source: AnswerSource) => boolean = () => true): CheckPlan {
   const items: AskCheckItem[] = [];
   const places: { turn: string; sources: number[] }[] = [];
+  const spoken: string[] = [];
   // The request's envelope, and a comma between items.
   let bytes = 96;
+  let full = false;
   for (const turn of turns) {
+    const asked = checkable(turn).filter(({ source }) => only(source));
+    if (asked.length === 0) { spoken.push(turn.id); continue; }
     const seen = new Map<string, number>();
-    for (const { source, at } of checkable(turn)) {
-      if (!only(source)) continue;
-      const key = JSON.stringify(source.check);
+    for (const { source, at, citation } of full ? [] : asked) {
+      const key = JSON.stringify(citation);
       const same = seen.get(key);
       if (same !== undefined) { places[same]!.sources.push(at); continue; }
       const marker = source.kind === 'ticket' ? turn.markers?.[String(at)] : undefined;
-      const item: AskCheckItem = { asked_at: turn.asked_at, citation: source.check!, ...(marker === undefined ? {} : { marker }) };
+      const item: AskCheckItem = { asked_at: turn.asked_at, citation, ...(marker === undefined ? {} : { marker }) };
       const size = new TextEncoder().encode(JSON.stringify(item)).length + 1;
-      if (items.length === MAX_CHECK_ITEMS || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) return { items, places };
+      if (items.length === MAX_CHECK_ITEMS || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) { full = true; break; }
       bytes += size;
       seen.set(key, places.length);
       items.push(item);
       places.push({ turn: turn.id, sources: [at] });
     }
+    if (seen.size > 0) spoken.push(turn.id);
   }
-  return { items, places };
+  return { items, places, turns: spoken };
 }
 
-/** What a check's results say of each turn it asked about, and the markers its readable tickets have now. */
+/**
+ * What a check's results say of each turn it speaks for (nothing of one that
+ * cites nothing a check asks about), and the markers its readable tickets
+ * have now.
+ */
 export function checkedOf(plan: CheckPlan, results: readonly AskCheckResult[]): Checked {
-  const turns: Record<string, Record<number, AskCheckState>> = {};
+  const turns: Record<string, Record<number, AskCheckState>> = Object.fromEntries(plan.turns.map(id => [id, {}]));
   const markers: Record<string, Record<string, string>> = {};
   plan.places.forEach(({ turn, sources }, index) => {
     const result = results[index];
@@ -114,14 +147,28 @@ function sentences(turn: TimelineTurn): AnswerStatement[] {
   return [...answerSentences(turn.answer).map(([, statement]) => statement), ...(turn.since ?? [])];
 }
 
-/** A turn's Changed tag: a source one of its sentences cites changed, and no later turn asked it again. */
-export function turnChanged(turn: TimelineTurn, checks: TurnChecks | undefined, turns: readonly TimelineTurn[]): boolean {
-  return !askedAgain(turn, turns) && sentences(turn).some(statement => markOf(statement.citation_indexes, checks) === 'changed');
+/**
+ * What a check says of a turn as a whole, as the line under it says it:
+ * `changed` when a sentence it shows cites a source that changed; `same` only
+ * when every source the sentences it shows cite was checked and is the same;
+ * and nothing otherwise. A check that could not tell (`unknown`), a source it
+ * did not ask about (one past what it could take, or a project, a person or a
+ * tool, which no check asks about) and a turn with every sentence left out
+ * leave an old answer saying nothing: it never looks current unless the check
+ * says so.
+ */
+export type TurnNote = 'changed' | 'same' | null;
+
+export function turnNote(turn: TimelineTurn, checks: TurnChecks | undefined): TurnNote {
+  const shown = sentences(turn).filter(statement => markOf(statement.citation_indexes, checks) !== 'omitted');
+  if (shown.some(statement => markOf(statement.citation_indexes, checks) === 'changed')) return 'changed';
+  const cited = shown.flatMap(statement => statement.citation_indexes);
+  return checks !== undefined && cited.length > 0 && cited.every(at => checks[at] === 'same') ? 'same' : null;
 }
 
-/** Whether a check says anything of a turn: it is in the last one. A turn it says nothing of has no note. */
-export function checkedTurn(checks: TurnChecks | undefined): checks is TurnChecks {
-  return checks !== undefined && Object.keys(checks).length > 0;
+/** A turn's Changed tag: a source one of the sentences it shows cites changed, and no later turn asked it again. */
+export function turnChanged(turn: TimelineTurn, checks: TurnChecks | undefined, turns: readonly TimelineTurn[]): boolean {
+  return !askedAgain(turn, turns) && turnNote(turn, checks) === 'changed';
 }
 
 /** Whether every sentence of a turn is left out: then an opened turn shows only Ask again. */
@@ -139,7 +186,10 @@ export function shownInFull(turn: TimelineTurn, turns: readonly TimelineTurn[], 
   return turns.at(-1)?.id === turn.id || full.includes(turn.id);
 }
 
-/** The turn a follow-up continues: the earlier turn opened, or else the latest when it was asked in the last hour. */
+/**
+ * The turn a follow-up continues: the turn opened (from its line, or chosen from the bar's suggestions, the latest included),
+ * or else the latest when it was asked in the last hour.
+ */
 export function followedTurn(turns: readonly TimelineTurn[], opened: string | null, now: number): TimelineTurn | null {
   const open = opened === null ? undefined : turns.find(turn => turn.id === opened);
   if (open) return open;
@@ -165,18 +215,31 @@ function bodyBytes(question: string, scope: AskScope, previous: AskPrevious): nu
 }
 
 /**
+ * What a turn's own answer says of its sources while it is new: it read every
+ * one a check asks about just now, so each is as it was. For a turn asked in
+ * the last five minutes, as good as a check.
+ */
+export function answeredNow(turn: TimelineTurn): TurnChecks {
+  return Object.fromEntries(turn.answer.sources.flatMap((source, at) => (checkOf(source) === undefined ? [] : [[at, 'same' as const]])));
+}
+
+/**
  * The earlier turn an Ask carries (C3): its full question and when it was
- * asked; its sentences you can still read (none citing a source a check found
- * you can no longer read), in the order the answer says them, at most eight,
- * each at most 400 characters and four citations; and the citations they cite,
- * at most twelve, as the answer's response carried them, renumbered in the
- * order first cited. Sentences go from the end until the request, asking
+ * asked; its sentences you can still read, in the order the answer says
+ * them, at most eight, each at most 400 characters and four citations; and
+ * the citations they cite, at most twelve, as the answer's response carried
+ * them, renumbered in the order first cited. A sentence goes only when what
+ * is known now (`known`: what a check said in the last five minutes, or a new
+ * turn's own answer) has each source it cites that a check asks about
+ * readable, the same or changed; with nothing known (null), none goes, only
+ * the question (C5). Sentences go from the end until the request, asking
  * `question` in `scope`, fits the Ask body's 16 KiB.
  */
-export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], checks: TurnChecks | undefined, question: string, scope: AskScope): AskPrevious {
+export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
   const sources = turn.answer.sources;
-  const readable = [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
-    .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== '' && markOf(statement.citation_indexes, checks) !== 'omitted');
+  const read = (at: number) => sources[at] === undefined || checkOf(sources[at]) === undefined || known?.[at] === 'same' || known?.[at] === 'changed';
+  const readable = known === null ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
+    .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== '' && statement.citation_indexes.every(read));
   const build = (chosen: readonly AnswerStatement[]): AskPrevious => {
     // Each citation once, by what it names (an answer may cite the same item at two places), and each sentence citing it once.
     const keys: string[] = [];

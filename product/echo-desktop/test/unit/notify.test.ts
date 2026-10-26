@@ -132,6 +132,35 @@ describe('what notifies (N2)', () => {
     expect(notices()).toEqual([{ text: 'You were added to Comet', target: { kind: 'project', project_id: comet.project_id } }]);
   });
 
+  it('a project you were added to, told without waiting on the read of what arrived in your projects; a return goes on without it too', async () => {
+    authority.active = [project(1, 20)];
+    let hold = false;
+    const arrivals: ((value: unknown) => void)[] = [];
+    rpc.mockImplementation(changesRpc({
+      'app.status': () => ok(account ? { signed_in: true, account } : { signed_in: false, account: null }),
+      'projects.activity': () => (hold ? new Promise(resolve => { arrivals.push(resolve); }) : ok({ items: [] })),
+    }));
+    const store = await signedIn();
+    // The read of what arrived starts with the check and hangs; the check acts on what moved all the same.
+    hold = true;
+    const comet = project(2, 25, { name: 'Comet', role: 'member' });
+    authority.active = [comet, project(1, 20)];
+    await wake();
+    await flush();
+    expect(arrivals).toHaveLength(1);
+    expect(texts()).toEqual(['You were added to Comet']);
+    // Coming back reads the account and the page again without it, too.
+    let back = false;
+    void show(store).then(() => { back = true; });
+    await flush();
+    expect(arrivals).toHaveLength(2);
+    expect(back).toBe(true);
+    // Answered late, quietly.
+    for (const arrived of arrivals) arrived(fail('unavailable', { retryable: true }));
+    await flush();
+    expect(texts()).toEqual(['You were added to Comet']);
+  });
+
   it('a project you were added to that sorts past the sidebar\'s pages, once, opening it though no sidebar row has it', async () => {
     authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
     const store = await signedIn();

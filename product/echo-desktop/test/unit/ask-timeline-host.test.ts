@@ -4,10 +4,23 @@
 // account change deleting the last one's), and the checks of what the page
 // sends with an Ask and a source check before the client sees it.
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/** A disk that, while `short` is on, takes at most half of what each write gives it, as a write may. Everything else is the real one. */
+const { disk } = vi.hoisted(() => ({ disk: { short: false } }));
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>();
+  const writeSync = (descriptor: number, data: string | NodeJS.ArrayBufferView, offset?: number, length?: number) => {
+    const bytes = typeof data === 'string' ? Buffer.from(data) : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    const from = typeof data === 'string' ? 0 : offset ?? 0;
+    const asked = typeof data === 'string' ? bytes.length : length ?? bytes.length - from;
+    return fs.writeSync(descriptor, bytes, from, disk.short ? Math.ceil(asked / 2) : asked);
+  };
+  return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), readFileSync: vi.fn(fs.readFileSync) };
+});
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
 import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
@@ -27,7 +40,7 @@ function turn(daysAgo = 0, extra: Partial<TimelineTurn> = {}): TimelineTurn {
     id: randomUUID(), asked_at: new Date(NOW - daysAgo * DAY).toISOString(), text: 'what is open?', question: 'What is open on THERM?', scope: { kind: 'global' },
     answer: {
       text: 'THERM-482 is open.', scope: { kind: 'global' }, outcome: 'answered',
-      sources: [{ kind: 'ticket', tool_id: 'jira', label: 'THERM-482 · Sensor drift', permalink: ticketCitation.permalink, private: true, cited, check: ticketCitation }],
+      sources: [{ kind: 'ticket', tool_id: 'jira', label: 'THERM-482 · Sensor drift', permalink: ticketCitation.permalink, private: true, cited }],
       parts: [{ question: 'What is open on THERM?', status: 'answered', statements: [{ text: 'THERM-482 is open.', citation_indexes: [0], private: true }] }],
     },
     ...extra,
@@ -64,6 +77,49 @@ describe('the timeline file (C5)', () => {
     putTimeline(person, ARI, marked, NOW);
     expect(readTimeline(person, ARI)).toEqual([marked, second]);
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('writes every byte however little a write takes, and has the file and its new name on disk before a put returns', () => {
+    const [first, second] = [turn(2), turn(1)];
+    putTimeline(person, ARI, first, NOW);
+    vi.mocked(fsyncSync).mockClear();
+    vi.mocked(renameSync).mockClear();
+    disk.short = true;
+    try {
+      putTimeline(person, ARI, second, NOW);
+    } finally {
+      disk.short = false;
+    }
+    // The good file is never replaced by part of the next one.
+    expect(readTimeline(person, ARI)).toEqual([first, second]);
+    // Its bytes before it takes the name, and the folder's new entry after.
+    const renamed = vi.mocked(renameSync).mock.invocationCallOrder;
+    const synced = vi.mocked(fsyncSync).mock.invocationCallOrder;
+    expect(renamed).toHaveLength(1);
+    expect(synced.filter(order => order < renamed[0]!)).toHaveLength(1);
+    expect(synced.filter(order => order > renamed[0]!)).toHaveLength(1);
+  });
+
+  it('goes on from the turns it last read or wrote while the file is still that one, and reads it again once it is not', () => {
+    const [first, second, third] = [turn(3), turn(2), turn(1)];
+    putTimeline(person, ARI, first, NOW);
+    vi.mocked(readFileSync).mockClear();
+    putTimeline(person, ARI, second, NOW);
+    expect(vi.mocked(readFileSync)).not.toHaveBeenCalled();
+    expect(readTimeline(person, ARI)).toEqual([first, second]);
+    // Changed by anything but a put: read again, all of it.
+    const elsewhere = turn(5);
+    writeFileSync(timelinePath(person, ARI), JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [elsewhere] }), { mode: 0o600 });
+    vi.mocked(readFileSync).mockClear();
+    putTimeline(person, ARI, third, NOW);
+    expect(vi.mocked(readFileSync)).toHaveBeenCalledTimes(1);
+    expect(readTimeline(person, ARI)).toEqual([elsewhere, third]);
+    // Gone: a put starts it again, and another account's file is its own.
+    deleteTimeline(person, ARI);
+    putTimeline(person, ARI, first, NOW);
+    putTimeline(person, MINA, second, NOW);
+    expect(readTimeline(person, ARI)).toEqual([first]);
+    expect(readTimeline(person, MINA)).toEqual([second]);
   });
 
   it('keeps at most 200 turns and none older than 90 days, the newest, on every put', () => {
@@ -128,6 +184,33 @@ describe('the timeline file (C5)', () => {
     deleteTimeline(person, ARI);
   });
 
+  it('deletes from a folder open to others all the same, but never through a link or from a folder that is not yours to use', () => {
+    putTimeline(person, ARI, turn(), NOW);
+    putTimeline(person, MINA, turn(), NOW);
+    chmodSync(folder(), 0o755);
+    // Reads stay strict; deletion does not wait on the folder's mode.
+    expect(readTimeline(person, MINA)).toEqual([]);
+    deleteOtherTimelines(person, MINA);
+    expect(existsSync(timelinePath(person, ARI))).toBe(false);
+    expect(existsSync(timelinePath(person, MINA))).toBe(true);
+    deleteTimeline(person, MINA);
+    expect(readdirSync(folder())).toEqual([]);
+    // A folder that is a link: nothing it points at goes.
+    rmSync(folder(), { recursive: true });
+    const elsewhere = mkdtempSync(join(tmpdir(), 'echo-elsewhere-'));
+    try {
+      const name = timelinePath(person, ARI).split('/').at(-1)!;
+      writeFileSync(join(elsewhere, name), 'kept', { mode: 0o600 });
+      symlinkSync(elsewhere, folder());
+      deleteTimeline(person, ARI);
+      deleteOtherTimelines(person, MINA);
+      expect(readdirSync(elsewhere)).toEqual([name]);
+    } finally {
+      rmSync(folder(), { force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   it('takes only a turn as a put writes it: a page that sends anything else is refused', () => {
     const good = turn(0, { since: [], again_of: randomUUID(), markers: { 0: sha('b') } });
     expect(timelineTurn(good)).toEqual(good);
@@ -135,7 +218,8 @@ describe('the timeline file (C5)', () => {
       { ...good, id: 'turn-1' }, { ...good, asked_at: 'yesterday' }, { ...good, scope: { kind: 'project', project_id: 'Apollo' } },
       { ...good, again_of: 'turn-0' }, { ...good, markers: { 0: 'v1' } }, { ...good, markers: { first: sha('b') } },
       { ...good, answer: { ...good.answer, outcome: 'clarify' } }, { ...good, answer: { ...good.answer, sources: [{ kind: 'ticket', label: 'T' }] } },
-      { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], check: { kind: 'person' } }] } },
+      { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: undefined } }] } },
+      { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: { ...ticketCitation, kind: 7 } } }] } },
       { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0], layout: [{ kind: 'lead', statements: [3] }] }] } },
     ]) expect(timelineTurn(bad)).toBeNull();
   });

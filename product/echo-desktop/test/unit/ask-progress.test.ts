@@ -236,8 +236,8 @@ describe('the receipt above an answer', () => {
     quick.release(ok(answer()));
     await flush();
     expect(quick.store.latestTurn()?.receipt).toBeUndefined();
-    // The answer itself still came with it.
-    expect(quick.store.latestTurn()?.answer.receipt).toEqual(receipt);
+    // The answer itself came with it, but only the Ask that brought it reads it: the timeline keeps none.
+    expect(quick.store.latestTurn()?.answer).not.toHaveProperty('receipt');
 
     const slow = held.hold('ask.run');
     void quick.store.ask('Slow?');
