@@ -41,7 +41,7 @@ import {
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
 import { agenticAskAnswerSha256V1 } from "./agentic-ask-v1-response.js";
-import { agenticClarifyResponseV1, agenticFollowUpStartingV1, resolveAgenticFollowUpV1 } from "./agentic-follow-up-resolver-v1.js";
+import { agenticClarifyResponseV1, agenticFollowUpStartingV1, agenticPreviousAskedOnV1, resolveAgenticFollowUpV1 } from "./agentic-follow-up-resolver-v1.js";
 import type {
   AgenticAskAnswerWithReceiptV2, AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV2, AgenticAskProgressInputV3,
   AgenticAskProgressRequestV1, AgenticAskProgressSinkV2, AgenticAskProgressSinkV3,
@@ -191,7 +191,7 @@ const NO_RESEARCH: AgenticResearchProgressV1 = Object.freeze({
 /** The earlier answer an Ask again's writer compares with (ADR-0047): its day where the asker is, and its sentences with their sources' labels. */
 function earlierAnswer(previous: PersonAnswerPreviousV1, timeZone: string): AskEarlierAnswerV1 {
   return Object.freeze({
-    asked_on: evidenceDayV1(previous.asked_at, timeZone) ?? previous.asked_at.slice(0, 10),
+    asked_on: agenticPreviousAskedOnV1(previous, timeZone),
     statements: Object.freeze(previous.statements.map(statement => Object.freeze({
       text: statement.text, sources: Object.freeze(statement.citation_indexes.map(index => previous.citations[index]!.label)),
     }))),
