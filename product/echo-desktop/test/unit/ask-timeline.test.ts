@@ -10,7 +10,7 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
-  allOmitted, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
+  allOmitted, answeredNow, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
 } from '../../src/renderer/timeline.js';
 import {
   ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, type Node,
@@ -193,13 +193,26 @@ describe('the earlier turn an Ask carries (C3)', () => {
       statements: [{ text: 'THERM-482, Sensor drift, is open.', citation_indexes: [0] }, { text: 'The DVT plan moved the retest to Oct 30.', citation_indexes: [1] }],
       citations: [one.answer.sources[0]!.cited, one.answer.sources[1]!.cited],
     });
+    const texts = (known: Parameters<typeof previousOf>[2]) => previousOf(one, 'follow_up', known, 'Who owns it?', { kind: 'global' }).statements.map(statement => statement.text);
+    // Only what is known to be readable now: a source a check could not tell about, or did not ask about, keeps its sentence back.
+    expect(texts({ 0: 'same', 1: 'unknown', 2: 'same' })).toEqual(['THERM-482, Sensor drift, is open.', 'Confirm the trace is still open.']);
+    expect(texts({ 0: 'same' })).toEqual(['THERM-482, Sensor drift, is open.']);
+    // Nothing known: its question alone.
+    expect(previousOf(one, 'follow_up', null, 'Who owns it?', { kind: 'global' })).toEqual({ purpose: 'follow_up', question: 'What is open on THERM?',
+      asked_at: one.asked_at, statements: [], citations: [] });
+    // A new turn's own answer read every source a check asks about; one no check asks about (a person) keeps nothing back.
+    expect(texts(answeredNow(one))).toHaveLength(3);
+    const named = turn('Who owns it?', HOUR, answerOf('Who owns it?', [ticket('THERM-482', '20482'), mara], [['Mara owns THERM-482.', [0, 1]]]));
+    expect(answeredNow(named)).toEqual({ 0: 'same' });
+    expect(previousOf(named, 'follow_up', { 0: 'same' }, 'And since?', { kind: 'global' }).statements).toHaveLength(1);
   });
 
   it('keeps eight sentences at most, each 400 characters and four citations, and twelve citations in all', () => {
     const sources = Array.from({ length: 16 }, (_, at) => ticket(`T-${at}`, String(2000 + at)));
     const long = 'x'.repeat(500);
     const answer = answerOf('Wide?', sources, [[long, [0, 1, 2, 3, 4]], ...Array.from({ length: 9 }, (_, at) => [`Sentence ${at}.`, [5 + at]] as [string, number[]])]);
-    const previous = previousOf(turn('Wide?', HOUR, answer), 'ask_again', undefined, 'Wide?', { kind: 'global' });
+    const wide = turn('Wide?', HOUR, answer);
+    const previous = previousOf(wide, 'ask_again', answeredNow(wide), 'Wide?', { kind: 'global' });
     expect(previous.statements).toHaveLength(8);
     expect(previous.statements[0]!.text.length).toBeLessThanOrEqual(400);
     expect(previous.statements[0]!.text.endsWith('…')).toBe(true);
@@ -211,7 +224,8 @@ describe('the earlier turn an Ask carries (C3)', () => {
   it('sends each citation once, however many places of the answer cite it, and each sentence citing it once', () => {
     const same = ticket('THERM-482', '20482');
     const answer = answerOf('Twice?', [same, page('31010'), { ...same }], [['THERM-482 is open.', [0, 2]], ['The plan moved.', [1, 0]]]);
-    const previous = previousOf(turn('Twice?', HOUR, answer), 'follow_up', undefined, 'Who owns it?', { kind: 'global' });
+    const twice = turn('Twice?', HOUR, answer);
+    const previous = previousOf(twice, 'follow_up', answeredNow(twice), 'Who owns it?', { kind: 'global' });
     expect(previous.citations).toEqual([same.cited, answer.sources[1]!.cited]);
     expect(previous.statements.map(statement => statement.citation_indexes)).toEqual([[0], [1, 0]]);
   });
@@ -220,7 +234,8 @@ describe('the earlier turn an Ask carries (C3)', () => {
     const permalink = (at: number) => `https://example.atlassian.net/browse/${'L'.repeat(1_800)}${at}`;
     const sources = Array.from({ length: 12 }, (_, at) => ticket(`L-${at}`, String(3000 + at), permalink(at)));
     const answer = answerOf('Long?', sources, Array.from({ length: 8 }, (_, at) => [`${'y'.repeat(380)} ${at}.`, [at, at + 4 > 11 ? 11 : at + 4]] as [string, number[]]));
-    const previous: AskPrevious = previousOf(turn('Long?', HOUR, answer), 'follow_up', undefined, 'And then?', { kind: 'global' });
+    const long = turn('Long?', HOUR, answer);
+    const previous: AskPrevious = previousOf(long, 'follow_up', answeredNow(long), 'And then?', { kind: 'global' });
     const body = JSON.stringify({ schema_version: 3, question: 'And then?', previous });
     expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(MAX_ASK_BODY_BYTES);
     expect(previous.statements.length).toBeGreaterThan(0);
@@ -546,6 +561,71 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await flush();
     await store.ask('and that one?');
     expect(calls('ask.run')[1]!.previous).toMatchObject({ purpose: 'follow_up', question: 'Older?', asked_at: older.asked_at });
+  });
+
+  it('checks a turn past the newest ten once it is opened, and a follow-up of it waits for that check', async () => {
+    const turns = Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, (12 - at) * DAY, status()));
+    seed(...turns);
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
+    const store = await startStore();
+    await store.ask('What changed?');
+    await flush();
+    // The newest ten, when Ask opened: the oldest two were not checked.
+    const [opening] = calls('ask.check');
+    expect(new Set((opening!.items as { asked_at: string }[]).map(item => item.asked_at)).has(turns[0]!.asked_at)).toBe(false);
+    const thread = await view();
+    expect(byTestId(thread(store), 'timeline-row').map(row => byTestId(row, 'changed-tag').length)).toEqual([0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    // Opened: its own check, whose reply waits here.
+    const release = held.hold('ask.check');
+    store.toggleTurn(turns[0]!.id);
+    await flush();
+    const own = calls('ask.check').at(-1)!.items as { asked_at: string }[];
+    expect(own.map(item => item.asked_at)).toEqual([turns[0]!.asked_at, turns[0]!.asked_at, turns[0]!.asked_at]);
+    // A follow-up of it waits for that check, then carries only what you can still read.
+    const asked = calls('ask.run').length;
+    const following = store.ask('who owns it?');
+    await flush();
+    expect(calls('ask.run')).toHaveLength(asked);
+    expect(store.getState().ask?.asking?.question).toBe('who owns it?');
+    release(ok({ items: [{ state: 'same', marker: sha('m') }, { state: 'changed' }, { state: 'unreadable' }] }));
+    await following;
+    expect((calls('ask.run').at(-1)!.previous as AskPrevious).statements.map(statement => statement.text))
+      .toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
+    expect(byTestId(thread(store), 'timeline-row').map(row => byTestId(row, 'changed-tag').length)).toEqual([1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  });
+
+  it('opens a suggestion past the newest ten checked first, in the one check Ask opening makes', async () => {
+    const turns = Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, (12 - at) * DAY, status()));
+    seed(...turns);
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : 'same' })) });
+    const store = await startStore();
+    store.pickSuggestion({ question: 'Turn 0?', turn: turns[0]!.id });
+    await flush();
+    const [opening] = calls('ask.check');
+    expect(calls('ask.check')).toHaveLength(1);
+    expect((opening!.items as { asked_at: string }[]).slice(0, 3).map(item => item.asked_at)).toEqual(Array(3).fill(turns[0]!.asked_at));
+    expect((opening!.items as unknown[]).length).toBe(33);
+    const opened = byTestId((await view())(store), 'opened-turn')[0]!;
+    expect(byTestId(opened, 'statement').map(node => node.props['data-mark'] ?? null)).toEqual([null, 'changed', null]);
+    expect(text(byTestId(opened, 'again-note'))).toContain('Highlighted parts changed since');
+  });
+
+  it('carries no sentence of a turn whose sources no check could read now, only its question', async () => {
+    const old = turn('What is open on THERM?', 2 * DAY, status());
+    seed(old, turn('Since then?', DAY, status()));
+    checks = () => fail('unavailable', { retryable: true });
+    const store = await startStore();
+    store.pickSuggestion({ question: old.question, turn: old.id });
+    await flush();
+    await store.ask('who owns it?');
+    // Its own check failed, and so did the one the follow-up made: nothing it said is known to be readable now.
+    const ofOld = () => calls('ask.check').filter(call => (call.items as { asked_at: string }[]).some(item => item.asked_at === old.asked_at));
+    expect(ofOld()).toHaveLength(2);
+    expect(calls('ask.run')[0]!.previous).toEqual({ purpose: 'follow_up', question: old.question, asked_at: old.asked_at, statements: [], citations: [] });
+    // Ask again of it, the same.
+    store.askAgain(old.id);
+    await flush();
+    expect(calls('ask.run')[1]!.previous).toMatchObject({ purpose: 'ask_again', statements: [], citations: [] });
   });
 
   it('asks which one, keeps nothing, and asks the chosen full question with the same earlier turn', async () => {

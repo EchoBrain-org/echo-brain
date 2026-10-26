@@ -67,10 +67,14 @@ project's square (none for all context or Mine), its full question,
 Today line above today's first turn. Back, Escape or any page closes Ask and
 keeps the timeline. Opening Ask checks what the newest ten turns cited in one
 content-free read (`person ask-check`): at most every five minutes, quiet when
-it fails, and never on an Authority without it. A line opens its answer as it
-was, dimmed: a sentence whose source changed is lit in the signal, one citing
-something you can no longer read is left out, and **Ask again** sits beside
-"Highlighted parts changed since Oct 14" or "Nothing changed since Oct 20".
+it fails, and never on an Authority without it. A turn opened from its line or
+a suggestion is checked too when nothing in the last five minutes said what
+its sources are now, and what a check said shows for five minutes only. A line
+opens its answer as it was, dimmed: a sentence whose source changed is lit in
+the signal, one citing something you can no longer read is left out, and **Ask
+again** sits beside "Highlighted parts changed since Oct 14", or "Nothing
+changed since Oct 20" when every source its sentences cite was checked and is
+the same; a check that could not tell says nothing.
 Ask again asks the same full question in the same scope: the new answer lands
 at the bottom, opening with "Since Oct 14" and what is different, each cited,
 or "Nothing changed since Oct 14", and the old line loses its tag. The empty
@@ -79,7 +83,10 @@ opens Ask at its turn instead of asking it again.
 
 Typed while Ask is open, a question continues the conversation: it carries the
 earlier turn opened, or else the latest one when it was asked in the last hour
-(the question and the sentences you can still read, within the Ask's 16 KiB).
+(the question, and the sentences a check of the last five minutes found you can
+still read, within the Ask's 16 KiB). It waits for that check; with none, it
+carries the question alone. A turn asked in the last five minutes needs none:
+its answer just read what it cites.
 ECHO works out what "it" or "that ticket" means: when one thing fits it answers
 at once, and the turn's line later reads the full question ("Who owns
 THERM-482?"); when several fit, the turn says "Which one?" with a button each,
