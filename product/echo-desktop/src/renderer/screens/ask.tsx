@@ -25,7 +25,7 @@ import {
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
-  allOmitted, askedToday, askedWhen, checkedTurn, markOf, shownInFull, turnChanged, turnGroups, type Mark, type Suggestion, type TurnChecks,
+  allOmitted, askedToday, askedWhen, markOf, shownInFull, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { Caret, Check, Chevron, Close, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticks, Up } from './icons.js';
 
@@ -543,21 +543,21 @@ function CopyAnswer({ turn }: { turn: TimelineTurn }) {
 
 /**
  * Under an answer asked before this Ask (ADR-0047): Ask again, and what the
- * last check says of it: "Highlighted parts changed since Oct 14", or
- * "Nothing changed since Oct 20". No check, no line; with every sentence left
+ * last check says of it: "Highlighted parts changed since Oct 14" when a
+ * sentence it shows cites a source that changed, or "Nothing changed since
+ * Oct 20" only when every source they cite was checked and is the same. A
+ * check that could not tell, or none, says nothing; with every sentence left
  * out, only Ask again shows.
  */
 function AgainRow({ state, turn, view, children }: { state: State; turn: TimelineTurn; view: TurnView; children?: ComponentChildren }) {
   const when = askedWhen(turn.asked_at);
-  const shown = !allOmitted(turn, view.checks) && checkedTurn(view.checks);
-  const changed = shown && [...answerSentences(turn.answer).map(([, statement]) => statement), ...(turn.since ?? [])]
-    .some(statement => markIn(view, statement.citation_indexes) === 'changed');
+  const note = turnNote(turn, view.checks);
   return (
     <div class="again-row">
       <button type="button" class="again-button" data-testid="ask-again" disabled={Boolean(state.ask?.asking)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
-      {shown && (
-        <span class={`again-note${changed ? ' changed' : ''}`} data-testid="again-note">
-          {changed ? `Highlighted parts changed since ${when}` : `Nothing changed since ${when}`}
+      {note && (
+        <span class={`again-note${note === 'changed' ? ' changed' : ''}`} data-testid="again-note">
+          {note === 'changed' ? `Highlighted parts changed since ${when}` : `Nothing changed since ${when}`}
         </span>
       )}
       {children}

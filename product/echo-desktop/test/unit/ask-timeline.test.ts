@@ -10,7 +10,7 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AskPrevious, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
-  allOmitted, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups,
+  allOmitted, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
 } from '../../src/renderer/timeline.js';
 import {
   ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, type Node,
@@ -359,6 +359,38 @@ describe('Ask on the timeline', () => {
     expect(byTestId(opened, 'answer')).toEqual([]);
     expect(byTestId(opened, 'again-note')).toEqual([]);
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
+  });
+
+  it('says nothing changed only when every source its sentences cite was checked and is the same, and nothing when the check could not tell', async () => {
+    const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
+    seed(one, two);
+    // The ticket and the follow-up are as they were; the DVT plan's tool could not be read.
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'unknown' : 'same' })) });
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    const thread = await view();
+    // No line under the turn opened, nor under the latest, asked before this Ask; Ask again stays, and nothing is tagged.
+    const opened = byTestId(thread(store), 'opened-turn')[0]!;
+    expect(byTestId(opened, 'again-note')).toEqual([]);
+    expect(byTestId(opened, 'ask-again')).toHaveLength(1);
+    const latest = byTestId(thread(store), 'turn').find(node => node.props['data-turn'] === two.id)!;
+    expect(byTestId(latest, 'again-note')).toEqual([]);
+    expect(byTestId(latest, 'ask-again')).toHaveLength(1);
+    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
+    // What the line says, sentence by sentence: the same only when every source they cite was checked and is the same.
+    expect(turnNote(one, { 0: 'same', 1: 'same', 2: 'same' })).toBe('same');
+    expect(turnNote(one, { 0: 'same', 1: 'unknown', 2: 'same' })).toBeNull();
+    expect(turnNote(one, { 0: 'same', 2: 'same' })).toBeNull();
+    expect(turnNote(one, undefined)).toBeNull();
+    // Changed whenever a sentence it shows cites a source that changed, whatever else could not be told.
+    expect(turnNote(one, { 0: 'unknown', 1: 'changed' })).toBe('changed');
+    // A sentence left out says nothing: the rest are the same.
+    expect(turnNote(one, { 0: 'same', 1: 'same', 2: 'unreadable' })).toBe('same');
+    expect(turnNote(one, { 0: 'unreadable', 1: 'unreadable', 2: 'unreadable' })).toBeNull();
+    // A source no check asks about (a person) is never known to be the same.
+    const named = turn('Who owns it?', DAY, answerOf('Who owns it?', [ticket('THERM-482', '20482'), mara], [['Mara owns THERM-482.', [0, 1]]]));
+    expect(turnNote(named, { 0: 'same' })).toBeNull();
   });
 
   it('fails quietly: no tags, and an Authority without the check is not asked again until the next sign-in', async () => {

@@ -114,14 +114,28 @@ function sentences(turn: TimelineTurn): AnswerStatement[] {
   return [...answerSentences(turn.answer).map(([, statement]) => statement), ...(turn.since ?? [])];
 }
 
-/** A turn's Changed tag: a source one of its sentences cites changed, and no later turn asked it again. */
-export function turnChanged(turn: TimelineTurn, checks: TurnChecks | undefined, turns: readonly TimelineTurn[]): boolean {
-  return !askedAgain(turn, turns) && sentences(turn).some(statement => markOf(statement.citation_indexes, checks) === 'changed');
+/**
+ * What a check says of a turn as a whole, as the line under it says it:
+ * `changed` when a sentence it shows cites a source that changed; `same` only
+ * when every source the sentences it shows cite was checked and is the same;
+ * and nothing otherwise. A check that could not tell (`unknown`), a source it
+ * did not ask about (one past what it could take, or a project, a person or a
+ * tool, which no check asks about) and a turn with every sentence left out
+ * leave an old answer saying nothing: it never looks current unless the check
+ * says so.
+ */
+export type TurnNote = 'changed' | 'same' | null;
+
+export function turnNote(turn: TimelineTurn, checks: TurnChecks | undefined): TurnNote {
+  const shown = sentences(turn).filter(statement => markOf(statement.citation_indexes, checks) !== 'omitted');
+  if (shown.some(statement => markOf(statement.citation_indexes, checks) === 'changed')) return 'changed';
+  const cited = shown.flatMap(statement => statement.citation_indexes);
+  return checks !== undefined && cited.length > 0 && cited.every(at => checks[at] === 'same') ? 'same' : null;
 }
 
-/** Whether a check says anything of a turn: it is in the last one. A turn it says nothing of has no note. */
-export function checkedTurn(checks: TurnChecks | undefined): checks is TurnChecks {
-  return checks !== undefined && Object.keys(checks).length > 0;
+/** A turn's Changed tag: a source one of the sentences it shows cites changed, and no later turn asked it again. */
+export function turnChanged(turn: TimelineTurn, checks: TurnChecks | undefined, turns: readonly TimelineTurn[]): boolean {
+  return !askedAgain(turn, turns) && turnNote(turn, checks) === 'changed';
 }
 
 /** Whether every sentence of a turn is left out: then an opened turn shows only Ask again. */
