@@ -11,8 +11,8 @@ import { openStagingConnectorRehearsalService } from '../src/composition/staging
 import { STAGING_CONNECTOR_REHEARSAL_POLICY_V3 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 import { readOrganizationAuthoritySetupManifest } from '../src/composition/organization-authority-setup-cli.js';
 import { readPersonOidcConfiguration } from '../src/composition/organization-authority-person-administration-cli.js';
-import { PERSON_ANSWER_PATH_V4 } from '@echo-brain/organization-api';
-import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
+import { PERSON_ANSWER_PATH_V7 } from '@echo-brain/organization-api';
+import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
 import { FIXTURE_CLOUD, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
@@ -147,7 +147,7 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeMismatch);
     // Local Ask remains available before Jira Ask is selected, without reading Jira.
     const jiraBeforeLocalAsk = seams.jiraFetch.mock.calls.length;
-    expect(await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'fixture' })).toMatchObject({ status: 200, body: { schema_version: 5, citations: [] } });
+    expect(await post(PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'fixture' })).toMatchObject({ status: 200, body: { schema_version: 8, citations: [] } });
     expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeLocalAsk);
       await runtime.close();
     jiraAskEnabled = true;
@@ -187,9 +187,9 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     const connections = vi.mocked(seams.jira_person_live_seams.nango.connection);
     const ownerConnectionStart = connections.mock.calls.length;
     generate.mockClear();
-    const answerResponse = await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'When should the ticket ship?' });
+    const answerResponse = await post(PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'When should the ticket ship?' });
     expect(answerResponse.status).toBe(200);
-    const answer = validatePersonAnswerResponseV5(answerResponse.body);
+    const answer = validatePersonAnswerResponseV8(answerResponse.body);
     expect(answer.citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'ticket', citation: expect.objectContaining({ ticket_id: '10001' }) })]));
     const globalSearches = seams.jiraFetch.mock.calls.slice(globalReadStart).filter(([url]) => String(url).endsWith('/search/jql'));
     expect(globalSearches).toHaveLength(1);
@@ -198,9 +198,9 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     const ownerReferences = new Set(connections.mock.calls.slice(ownerConnectionStart).map(([reference]) => reference));
     expect(ownerReferences.size).toBe(1);
     const employeeConnectionStart = connections.mock.calls.length;
-    const employeeAnswer = await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'When should the ticket ship?' }, employee);
+    const employeeAnswer = await post(PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'When should the ticket ship?' }, employee);
     expect(employeeAnswer.status).toBe(200);
-    expect(validatePersonAnswerResponseV5(employeeAnswer.body).citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'ticket' })]));
+    expect(validatePersonAnswerResponseV8(employeeAnswer.body).citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'ticket' })]));
     const employeeReferences = new Set(connections.mock.calls.slice(employeeConnectionStart).map(([reference]) => reference));
     expect(employeeReferences.size).toBe(1);
     expect([...employeeReferences].some(reference => ownerReferences.has(reference))).toBe(false);

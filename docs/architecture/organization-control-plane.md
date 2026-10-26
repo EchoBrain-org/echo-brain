@@ -228,8 +228,8 @@ from email, display name, or caller-supplied IDs.
 
 `GET /v4/person/tools` is a bearer-authenticated read of the current
 organization connection and the current member's external identity link; owners
-also see the organization setup state. The v3 route and Slack's v2 route remain
-for older clients. No
+also see the organization setup state. The v3 route and Slack's v2 route are
+retired ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). No
 configured tool returns an empty list; an unavailable connection returns an
 unavailable row. An active Slack tool reports its workspace separately from
 the member's unlinked, linked, or revoked status. Failed reads return an

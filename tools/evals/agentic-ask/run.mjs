@@ -6,7 +6,6 @@
  * is a structured-generation request made by the shipped OpenRouter bundle
  * after the caller explicitly supplies --run and --credential-file.
  */
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
@@ -14,9 +13,10 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readPrivateAuthorityCredential } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import { createAgenticAskV1, createAgenticAskV2 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import { createAgenticAskV5 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createOpenRouterStructuredGenerationAdapter } from "../../../providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
+import { assertExplicitRun, boundedInteger, json, readFlags, sha256, usage } from "../shared/runner.mjs";
 import { CASES, createFixtureDesk, fixtureSha256, sourceForCitation } from "./fixtures.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -28,19 +28,6 @@ const MAX_TOTAL_MODEL_CALLS = 72;
 const MIN_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 85_000;
 const PROVIDER_ROUTE_NAMES = Object.freeze({ friendli: "Friendli", baidu: "Baidu" });
-
-const sha256 = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
-const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
-
-function usage(value) {
-  if (value === null || typeof value !== "object") return null;
-  const integer = (entry) => typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0 ? entry : null;
-  return Object.freeze({
-    input_tokens: integer(value.input_tokens),
-    output_tokens: integer(value.output_tokens),
-    total_tokens: integer(value.total_tokens),
-  });
-}
 
 function safeError(error) {
   const detail = error !== null && typeof error === "object" && !Array.isArray(error) ? error : null;
@@ -54,13 +41,6 @@ function safeError(error) {
     usage: usage(generationObservation?.usage),
     provider_latency_ms: typeof generationObservation?.provider_latency_ms === "number" && Number.isSafeInteger(generationObservation.provider_latency_ms) && generationObservation.provider_latency_ms >= 0 ? generationObservation.provider_latency_ms : null,
   });
-}
-
-function boundedInteger(value, label, minimum, maximum) {
-  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
-    throw new Error(`${label} must be an integer from ${minimum} to ${maximum}`);
-  }
-  return value;
 }
 
 function help() {
@@ -88,28 +68,16 @@ function help() {
 
 function parseArgs(argv) {
   const options = { run: false, credentialFile: null, caseIds: CASES.map((entry) => entry.id), trials: 1, maxModelCalls: 6, timeoutMs: 60_000, outDir: null, providerRoute: null };
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
-    if (flag === "--help") return { help: true };
-    if (flag === "--run") { options.run = true; continue; }
-    const value = argv[index + 1];
-    if (value === undefined || value.startsWith("--")) throw new Error(`missing value for ${flag}`);
-    index += 1;
-    if (flag === "--credential-file") options.credentialFile = value;
-    else if (flag === "--cases") options.caseIds = value.split(",").map((part) => part.trim()).filter(Boolean);
-    else if (flag === "--trials") options.trials = Number(value);
-    else if (flag === "--max-model-calls") options.maxModelCalls = Number(value);
-    else if (flag === "--timeout-ms") options.timeoutMs = Number(value);
-    else if (flag === "--out-dir") options.outDir = value;
-    else if (flag === "--provider-route") options.providerRoute = value;
-    else throw new Error(`unknown option ${flag}`);
-  }
-  if (!options.run) throw new Error("this evaluator makes no network request unless --run is explicit");
-  if (typeof options.credentialFile !== "string" || !isAbsolute(options.credentialFile)) throw new Error("--credential-file must be an absolute private file path");
-  // stat verifies that the supplied path exists without reading its contents.
-  const credentialStat = statSync(options.credentialFile);
-  if (!credentialStat.isFile()) throw new Error("--credential-file must name a file");
-  if ((credentialStat.mode & 0o077) !== 0) throw new Error("--credential-file must not be readable by group or other users");
+  if (readFlags(argv, options, {
+    "--credential-file": (value) => { options.credentialFile = value; },
+    "--cases": (value) => { options.caseIds = value.split(",").map((part) => part.trim()).filter(Boolean); },
+    "--trials": (value) => { options.trials = Number(value); },
+    "--max-model-calls": (value) => { options.maxModelCalls = Number(value); },
+    "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
+    "--out-dir": (value) => { options.outDir = value; },
+    "--provider-route": (value) => { options.providerRoute = value; },
+  })) return { help: true };
+  assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, MAX_TRIALS);
   options.maxModelCalls = boundedInteger(options.maxModelCalls, "--max-model-calls", 1, MAX_MODEL_CALLS_PER_CASE);
   options.timeoutMs = boundedInteger(options.timeoutMs, "--timeout-ms", MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
@@ -167,6 +135,7 @@ function codeIdentity() {
   const composition = "packages/organization-authority-kernel/dist/answer-composition";
   const files = [
     "tools/evals/agentic-ask/run.mjs",
+    "tools/evals/shared/runner.mjs",
     "tools/evals/agentic-ask/fixtures.mjs",
     ...readdirSync(join(ROOT, composition), { recursive: true }).filter((file) => file.endsWith(".js")).sort().map((file) => `${composition}/${file}`),
     "packages/organization-authority-kernel/dist/adapters/security/private-file-credentials.js",
@@ -343,8 +312,8 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
     },
   });
   const audits = [];
-  const create = caseDefinition.mode === "v1" ? createAgenticAskV1 : createAgenticAskV2;
-  const ask = create({
+  // Every case asks Ask's one core; a case's mode only shapes its desk (fixtures.mjs).
+  const ask = createAgenticAskV5({
     desk,
     model,
     generation,

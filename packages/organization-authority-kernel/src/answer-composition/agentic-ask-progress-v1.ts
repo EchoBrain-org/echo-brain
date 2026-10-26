@@ -1,6 +1,4 @@
-import type {
-  PersonAnswerResponseV7, PersonAnswerResponseV8, PersonAskProgressStepEventV2, PersonAskProgressStepEventV3, PersonAskReceiptV2, PersonAskReceiptV3,
-} from "@echo-brain/organization-api";
+import type { PersonAnswerPreviousV1, PersonAnswerResponseV8, PersonAskProgressStepEventV3, PersonAskReceiptV3 } from "@echo-brain/organization-api";
 
 /**
  * Ask progress (ADR-0039): what a live Ask run reports while it works, and
@@ -16,12 +14,11 @@ import type {
  * names at the gate's `before_call` point, after the access check before that
  * call) and never from model output. It catches and ignores what the sink
  * throws, so a sink can never change research, and it calls the sink no more
- * once the run has settled, cancelled, timed out or failed. This is the V7
- * Ask's sink (ADR-0040): progress V2, so a read may name a follow-up. The V6
- * Ask's progress V1 was retired on 2026-10-19.
+ * once the run has settled, cancelled, timed out or failed. This is the V8
+ * Ask's sink (research tool contract v1): progress V3, so a read may name a
+ * follow-up (ADR-0040), a workspace item or a tool container. Progress V1 and
+ * V2, the V6 and V7 Asks', were retired with `/v5` and `/v6`.
  */
-export type AgenticAskProgressSinkV2 = (event: PersonAskProgressStepEventV2) => void;
-/** The V8 Ask's sink (research tool contract v1): progress V3, so a read may name a workspace item or tool container. */
 export type AgenticAskProgressSinkV3 = (event: PersonAskProgressStepEventV3) => void;
 
 /**
@@ -39,29 +36,21 @@ export interface AgenticAskProgressRequestV1 {
   elapsed(): number;
 }
 
-/** One streamed V7 Ask: today's answer input plus the V2 sink. */
-export interface AgenticAskProgressInputV2 {
+/** One streamed Ask: the question, its V3 sink, and the asker's previous turn when the request carried it (ADR-0047). */
+export interface AgenticAskProgressInputV3 {
   readonly question: string;
   readonly signal?: AbortSignal;
-  readonly on_progress: AgenticAskProgressSinkV2;
+  readonly on_progress: AgenticAskProgressSinkV3;
   /** The request this run is an attempt of; without it, the run is the whole request. */
   readonly request?: AgenticAskProgressRequestV1;
-}
-/** One streamed V8 Ask: the V2 input with the V3 sink. */
-export interface AgenticAskProgressInputV3 extends Omit<AgenticAskProgressInputV2, "on_progress"> {
-  readonly on_progress: AgenticAskProgressSinkV3;
+  readonly previous?: PersonAnswerPreviousV1;
 }
 
 /**
- * What a streamed V7 Ask returns once the release step has passed: the same V7
- * response `answer` returns, and its V2 receipt, built after the final access
+ * What a streamed Ask returns once the release step has passed: the same V8
+ * response `answer` returns, and its V3 receipt, built after the final access
  * check from the run's own record of what it named.
  */
-export interface AgenticAskAnswerWithReceiptV2 {
-  readonly response: PersonAnswerResponseV7;
-  readonly receipt: PersonAskReceiptV2;
-}
-/** What a streamed V8 Ask returns: the V8 response `answer` returns, and its V3 receipt. */
 export interface AgenticAskAnswerWithReceiptV3 {
   readonly response: PersonAnswerResponseV8;
   readonly receipt: PersonAskReceiptV3;

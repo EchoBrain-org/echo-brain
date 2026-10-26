@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
+import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { NangoConnectionClientV1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1';
@@ -101,14 +101,13 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'linked', external_scope_id: CLOUD })]));
     expect(await tools(employee)).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'unlinked', external_subject_id: null })]));
     telemetry.length = 0;
-    const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should ECHO-1 ship?' }); expect(response.status).toBe(200);
+    const response = await post('/v7/person/ask', { schema_version: 3, question: 'When should ECHO-1 ship?' }); expect(response.status).toBe(200);
     // A named key is read exactly through the bulk issue read, not JQL.
     expect(jiraFetch.mock.calls.filter(([url]) => String(url).endsWith('/search/jql'))).toEqual([]);
     const exactSearch = jiraFetch.mock.calls.find(([url]) => String(url).endsWith('/issue/bulkfetch'))!;
     expect(JSON.parse(exactSearch[1]!.body as string).issueIdsOrKeys).toEqual(['ECHO-1']);
-    const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
+    const answer = validatePersonAnswerResponseV8(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
-    expect(() => validatePersonAnswerResponseV4(response.body)).toThrow();
     expect(generate).toHaveBeenCalledTimes(4);
     const completed = events().find(event => event.diagnostic?.phase === 'research_run' && event.event === 'succeeded');
     expect(completed).toMatchObject({ diagnostic: { result: 'answered', counts: { ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 } } });
@@ -122,9 +121,9 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(releases.find(row => row.operation === 'open').citations[0]).toMatchObject({ coordinates: { object_id: '10001' }, text_sha256: cited.text_sha256 });
     for (const row of rows) { expect(row.body_json).not.toContain('Ship on Friday'); expect(row.body_json).not.toContain('synthetic-jira-oauth-bearer'); expect(row.body_json).not.toContain('jira_item_'); }
     jiraFetch.mockClear(); generate.mockClear();
-    const keywords = await post('/v4/person/ask', { schema_version: 3, question: 'What does the ticket say about the Friday ship date?' });
+    const keywords = await post('/v7/person/ask', { schema_version: 3, question: 'What does the ticket say about the Friday ship date?' });
     expect(keywords.status).toBe(200);
-    expect(validatePersonAnswerResponseV5(keywords.body)).toMatchObject({ outcome: 'answered', citations: [expect.objectContaining({ kind: 'ticket' })] });
+    expect(validatePersonAnswerResponseV8(keywords.body)).toMatchObject({ outcome: 'answered', citations: [expect.objectContaining({ kind: 'ticket' })] });
     expect(jiraFetch.mock.calls.filter(([url]) => String(url).endsWith('/search/jql'))).toHaveLength(1);
     const writerInput = generate.mock.calls.find(([input]) => (input.schema.properties as Record<string, unknown>).sentences !== undefined)![0];
     expect(JSON.parse(writerInput.user_prompt).evidence[0].attributes).toEqual({ status: 'Open', owner: 'Fixture Owner' });
@@ -139,9 +138,9 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const mapped = await post('/v1/person/tools/jira/project/set', mappingCommand);
     expect(mapped).toMatchObject({ status: 200, body: { mapping: { project_id: '10000', project_key: 'ECHO' } } });
     jiraFetch.mockClear(); generate.mockClear(); telemetry.length = 0;
-    const scoped = await post('/v4/person/ask', { schema_version: 3, question: 'What is the status of Project A?', project_id });
+    const scoped = await post('/v7/person/ask', { schema_version: 3, question: 'What is the status of Project A?', project_id });
     expect(scoped.status).toBe(200);
-    expect(validatePersonAnswerResponseV5(scoped.body)).toMatchObject({ scope: { kind: 'project', project_id }, outcome: 'answered', citations: [expect.objectContaining({ kind: 'ticket' })] });
+    expect(validatePersonAnswerResponseV8(scoped.body)).toMatchObject({ scope: { kind: 'project', project_id }, outcome: 'answered', citations: [expect.objectContaining({ kind: 'ticket' })] });
     const search = jiraFetch.mock.calls.find(([url]) => String(url).endsWith('/search/jql'))!;
     expect(JSON.parse(search[1]!.body as string).jql).toContain('project = 10000 AND');
     expect(JSON.parse(generate.mock.calls[0]![0].user_prompt).scope).toContain('live sources are limited to their saved project mappings');
@@ -154,22 +153,22 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect((await post('/v1/person/tools/jira/project/read', mappingRead, employee)).body).toEqual(mapped.body);
     expect((await post('/v1/person/tools/jira/project/set', { ...mappingCommand, request_id: randomUUID(), expected_revision: mapped.body.revision, jira_project: null }, employee)).status).toBe(401);
     jiraFetch.mockClear(); telemetry.length = 0;
-    const unconnected = await post('/v4/person/ask', { schema_version: 3, question: 'What is the status of Project A?', project_id }, employee);
+    const unconnected = await post('/v7/person/ask', { schema_version: 3, question: 'What is the status of Project A?', project_id }, employee);
     expect(unconnected.status).toBe(200);
-    expect(validatePersonAnswerResponseV5(unconnected.body).citations).toHaveLength(0);
+    expect(validatePersonAnswerResponseV8(unconnected.body).citations).toHaveLength(0);
     expect(jiraFetch).not.toHaveBeenCalled();
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'unavailable' }) })]));
     const removed = await post('/v1/person/tools/jira/project/set', { ...mappingCommand, request_id: randomUUID(), expected_revision: mapped.body.revision, jira_project: null });
     expect(removed).toMatchObject({ status: 200, body: { mapping: null } });
     telemetry.length = 0;
-    const unmapped = await post('/v4/person/ask', { schema_version: 3, question: 'What is the status of Project A?', project_id });
+    const unmapped = await post('/v7/person/ask', { schema_version: 3, question: 'What is the status of Project A?', project_id });
     expect(unmapped.status).toBe(200);
-    expect(validatePersonAnswerResponseV5(unmapped.body).citations).toHaveLength(0);
+    expect(validatePersonAnswerResponseV8(unmapped.body).citations).toHaveLength(0);
     expect(jiraFetch).not.toHaveBeenCalled();
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'unavailable' }) })]));
     telemetry.length = 0;
     const jiraCalls = jiraFetch.mock.calls.length;
-    expect((await post('/v4/person/ask', { schema_version: 3, question: 'What are my tickets?', mine: true })).body).toMatchObject({
+    expect((await post('/v7/person/ask', { schema_version: 3, question: 'What are my tickets?', mine: true })).body).toMatchObject({
       outcome: 'not_found', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't find this in the sources you can access." })],
     });
     expect(jiraFetch).toHaveBeenCalledTimes(jiraCalls);
@@ -180,7 +179,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
       jiraFetch.mockImplementation(async (input, init) => new URL(String(input)).pathname.endsWith('/search/jql')
         ? Response.json(status === 200 ? { isLast: true, issues: [] } : { error: 'private-provider-error' }, { status })
         : connectedFetch(input, init));
-      const result = await post('/v4/person/ask', { schema_version: 3, question: 'Find a Jira ticket' });
+      const result = await post('/v7/person/ask', { schema_version: 3, question: 'Find a Jira ticket' });
       if (status === 200) expect(result).toMatchObject({ status: 200, body: {
         outcome: 'partial', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't complete the search. Please try again." })],
       } });
@@ -197,13 +196,13 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect((await tools()).map(tool => tool.tool_id).sort()).toEqual(['granola', 'hand-in', 'jira', 'slack']);
     telemetry.length = 0;
     jiraFetch.mockImplementationOnce(async () => Response.json({ error: 'private-provider-error' }, { status: 401 }));
-    expect((await post('/v4/person/ask', { schema_version: 3, question: 'Check Jira again' })).status).toBe(401);
+    expect((await post('/v7/person/ask', { schema_version: 3, question: 'Check Jira again' })).status).toBe(401);
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'failed', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'authorization' }) })]));
     expect(telemetry.join('')).not.toContain('private-provider-error');
     expect((await post('/v1/person/tools/jira/disconnect', { schema_version: 1 })).status).toBe(200);
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'revoked', external_subject_id: null })]));
     telemetry.length = 0;
-    expect((await post('/v4/person/ask', { schema_version: 3, question: 'What is in Jira?' })).body).toMatchObject({
+    expect((await post('/v7/person/ask', { schema_version: 3, question: 'What is in Jira?' })).body).toMatchObject({
       outcome: 'not_found', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't find this in the sources you can access." })],
     });
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'unlinked' }) })]));

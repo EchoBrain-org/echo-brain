@@ -2,8 +2,9 @@
  * Provider-free read-path construction for the single-meeting core smoke.
  * It deliberately opens the real Authority and record databases and uses the
  * real Person search route and the agentic Ask route (the only Ask since
- * ADR-0022). Caller sessions come from core-identity; this module never
- * accepts a reader tuple or manufactures authorization.
+ * ADR-0022), as `POST /v7/person/ask` composes it, with no live source,
+ * follow-ups or workspace. Caller sessions come from core-identity; this
+ * module never accepts a reader tuple or manufactures authorization.
  */
 import { join } from "node:path";
 import { openAuthorityDatabase } from "../../../packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js";
@@ -11,7 +12,7 @@ import { SqlitePersonAgenticAskAuditV1 } from "../../../services/organization-au
 import { SqlitePersonOriginalContextRetrievalV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/project-context-v1.js";
-import { createPersonAnswerV3Route } from "../../../services/organization-authority/dist/composition/person-answer-v3-route.js";
+import { createPersonLiveAnswerRouteV1 } from "../../../services/organization-authority/dist/composition/person-live-answer-route-v1.js";
 import { createRecordProjectAuthorizationV1 } from "../../../services/organization-authority/dist/composition/person-record-project-scope-v1.js";
 import { createPersonRecordSearchRouteV1 } from "../../../services/organization-authority/dist/composition/person-record-search-route.js";
 import { readableSearchGenerationContractV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
@@ -152,7 +153,7 @@ export function createCoreReadRoutes({ state_directory, sessions, record_input_c
       capture_projects: createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(authority)),
       ...(record_input_codecs === undefined ? {} : { record_input_codecs }),
     });
-    const answer = createPersonAnswerV3Route({
+    const answer = createPersonLiveAnswerRouteV1({
       authority_id: lineage.root.authority_id,
       organization_id: lineage.root.organization_id,
       state_lineage_id: lineage.root.state_lineage_id,

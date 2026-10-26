@@ -179,21 +179,25 @@ describe('document CLI custody and bounded transport', () => {
     expect((await run(f.home, ['documents', 'pending'], offline)).result).toMatchObject({ ok: true, result: { snapshots: [] } });
   });
 
-  it('retries a snapshot an older client retained from a V1 upload, on the V1 route', async () => {
+  it('lists a snapshot an older client retained from a V1 upload as unreadable, never resends it, and abandons it', async () => {
     const f = setup();
     await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });
-    // Only older clients wrote V1 snapshots, so rewrite this retained request's manifest as one.
+    // Only older clients wrote V1 snapshots, so rewrite this retained request's manifest as one. The V1 upload route is
+    // retired (ADR-0048): nothing can resend it.
     const legacy = { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: requestId, filename: 'SCOUT.md', title: 'SCOUT PRD',
       content_length: f.bytes.length, sha256: f.upload.sha256, audience: { kind: 'only_me' }, project_id: projectId };
     writeFileSync(join(snapshotDir(f.home), requestId, 'metadata.json'), canonicalJson({ metadata: legacy }), { mode: 0o600 });
-    const receipt = { ...legacy, kind: 'echo-person-document-receipt-v1', document_id: documentId, detected_media_type: 'text/markdown', received_at: NOW, state: 'saved', extraction_state: 'extracting' };
-    const retry = await run(f.home, ['documents', 'retry', '--request-id', requestId], async (url, init) => {
-      expect(String(url)).toBe(`https://authority.example/v1/person/documents/${requestId}`);
-      expect(JSON.parse(Buffer.from(new Headers(init?.headers).get('x-echo-document-metadata')!, 'base64url').toString())).toEqual(legacy);
-      expect(await consume(init)).toEqual(f.bytes); return json(receipt, 201);
-    });
-    expect(retry.code, retry.stderr).toBe(0); expect(retry.result).toEqual({ ok: true, result: receipt });
-    expect((await run(f.home, ['documents', 'pending'], vi.fn())).result).toMatchObject({ ok: true, result: { snapshots: [] } });
+    const offline = vi.fn();
+    expect((await run(f.home, ['documents', 'pending'], offline)).result).toMatchObject({ ok: true, result: { snapshots: [{ request_id: requestId, local_state: 'unreadable' }] } });
+    const retry = await run(f.home, ['documents', 'retry', '--request-id', requestId], offline);
+    expect(retry.failure).toMatchObject({ code: 'invalid_file' });
+    // A new upload under its request ID conflicts with it, as before, rather than failing as an invalid request.
+    const reuse = await run(f.home, uploadArgs(f.file), offline);
+    expect(reuse.failure).toMatchObject({ code: 'snapshot_conflict', mutation_outcome: 'not_submitted' });
+    const abandoned = await run(f.home, ['documents', 'abandon', '--request-id', requestId], offline);
+    expect(abandoned.result).toMatchObject({ ok: true, result: { request_id: requestId, local_snapshot_removed: true, authority_outcome: 'unchanged' } });
+    expect(offline).not.toHaveBeenCalled();
+    expect((await run(f.home, ['documents', 'pending'], offline)).result).toMatchObject({ ok: true, result: { snapshots: [] } });
   });
 
   it('explicitly abandons a retained local snapshot without claiming the Authority upload was cancelled', async () => {
@@ -319,7 +323,7 @@ describe('document CLI custody and bounded transport', () => {
       document_id: documentId, project_id: projectId, operation, received_at: NOW, state: 'applied' };
     const sent: unknown[] = [];
     const fetch = vi.fn<typeof globalThis.fetch>(async (url, init) => {
-      expect(String(url)).toBe(`https://authority.example/v1/person/documents/${documentId}/${operation}`);
+      expect(String(url)).toBe(`https://authority.example/v2/person/documents/${documentId}/${operation}`);
       expect(init?.method).toBe('POST'); const body = JSON.parse(String(init?.body)); sent.push(body);
       expect(body).toEqual({ schema_version: 1, kind: `echo-person-document-${operation}-v1`, request_id: requestId, document_id: documentId, project_id: projectId });
       if (sent.length === 1) throw new Error('lost');

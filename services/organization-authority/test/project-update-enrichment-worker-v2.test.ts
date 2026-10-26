@@ -6,7 +6,8 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../src/adapters/persistence/sqlite/project-upload-enrichment-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { PersonUpdateProcessingV1 } from '../src/composition/person-update-processing-v1.js';
-import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from './fixtures/project-context-sqlite.js';
+import type { ProjectIdV1 } from '@echo-brain/organization-api';
+import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredNoteV2, projectContextDatabase } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) if (database.open) database.close(); });
@@ -39,13 +40,13 @@ function setupProject(f: ReturnType<typeof fixture>) {
     schema_version: 1, kind: 'echo-project-member-set-v1', request_id: requestId(2),
     project_id: project.project_id, membership_id: MEMBER.membership_id, role: 'member',
   });
-  return project.project_id;
+  return project.project_id as ProjectIdV1;
 }
 
-function submit(f: ReturnType<typeof fixture>, projectId: string, number: number, title = 'Customer notes') {
-  return f.application.submitUpload('owner', {
-    schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(number),
-    title, text: 'The customer prefers a telephone call.', project_id: projectId,
+/** A note stored as V2 before its submit was retired (ADR-0048): its enrichment work may still be pending. */
+function submit(f: ReturnType<typeof fixture>, projectId: ProjectIdV1, number: number, title = 'Customer notes') {
+  return insertStoredNoteV2(f.database, OWNER, {
+    request_id: requestId(number), title, text: 'The customer prefers a telephone call.', project_id: projectId,
     audience: { kind: 'project', project_id: projectId },
   });
 }
@@ -76,7 +77,7 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
 
     await f.worker().runOnce(new AbortController().signal);
     expect(workState(f.database, receipt.context_id)).toEqual({ state: 'ready', search_hints: 'customer telephone preference' });
-    expect(f.application.readUpload('member', receipt.context_id)).toMatchObject({ text: 'The customer prefers a telephone call.' });
+    expect(f.application.readContextV2('member', projectId, receipt.context_id)).toMatchObject({ text: 'The customer prefers a telephone call.' });
     expect(f.generation.structured_output.generate).toHaveBeenCalledTimes(1);
   });
 
@@ -95,7 +96,7 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
 
     await f.worker().runOnce(new AbortController().signal);
     expect(workState(f.database, receipt.context_id)).toEqual({ state: 'unavailable', search_hints: '' });
-    expect(f.application.readUpload('member', receipt.context_id)).toMatchObject({ text: 'The customer prefers a telephone call.' });
+    expect(f.application.readContextV2('member', projectId, receipt.context_id)).toMatchObject({ text: 'The customer prefers a telephone call.' });
   });
 
   it('fails visibly before model handoff when immutable V2 source bytes are corrupt, then defers the item so the next cycle completes', async () => {

@@ -1,5 +1,4 @@
-import { validatePersonAnswerResponseV6, validatePersonAnswerResponseV8 } from './person-answer-v4.js';
-import type { PersonAnswerResponseV6 } from './person-answer-v6.js';
+import { validatePersonAnswerResponseV8 } from './person-answer-v4.js';
 import type { PersonAnswerResponseV8 } from './person-answer-v8.js';
 import { validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
 import { validatePersonQueryText } from './person-query.js';
@@ -54,9 +53,8 @@ export interface PersonResearchEvalReadResponseV1 {
   readonly status: PersonResearchEvalStatusV1;
   /** The loop's research result (eval view, the trimmed bundle); present once completed. */
   readonly research?: Readonly<Record<string, unknown>>;
-  /** A question's output: the writer's input ids and the V6 answer. */
-  /** The V8 answer, as `/v7` answers (research tool contract v1); the V6 answer from an Authority before it. */
-  readonly ask?: { readonly writer_evidence: readonly string[]; readonly response: PersonAnswerResponseV8 | PersonAnswerResponseV6 };
+  /** A question's output: the writer's input ids and the V8 answer, as `/v7` answers (research tool contract v1). */
+  readonly ask?: { readonly writer_evidence: readonly string[]; readonly response: PersonAnswerResponseV8 };
   /**
    * A task's output when its trigger has a renderer: a sweep's result for a
    * sweep, the impact card for an approved record. A research-only trigger has none.
@@ -170,9 +168,7 @@ export function validatePersonResearchEvalReadResponseV1(value: unknown): Person
     exactKeys(value, ['writer_evidence', 'response'], [], 'Research evaluation Ask output');
     if (!Array.isArray(value.writer_evidence) || !value.writer_evidence.every(id => typeof id === 'string' && /^E\d{1,4}$/.test(id))) fail('Research evaluation writer evidence is invalid');
     if (goalKind !== 'question') fail('Research evaluation Ask output needs a question result');
-    const version = typeof value.response === 'object' && value.response !== null ? (value.response as { readonly schema_version?: unknown }).schema_version : undefined;
-    ask = Object.freeze({ writer_evidence: Object.freeze([...value.writer_evidence as string[]]),
-      response: version === 8 ? validatePersonAnswerResponseV8(value.response) : validatePersonAnswerResponseV6(value.response) });
+    ask = Object.freeze({ writer_evidence: Object.freeze([...value.writer_evidence as string[]]), response: validatePersonAnswerResponseV8(value.response) });
   }
   let rendered: PersonResearchEvalReadResponseV1['rendered'];
   if (input.rendered !== undefined) {

@@ -1,11 +1,11 @@
-// The ask bar's own words: "Try asking" for an empty bar (this window's
-// questions in the bar's scope, then the meetings ECHO shows there, then the
-// question for any week; at most three, each once) and the count toward a
-// question's 240 characters.
+// The ask bar's own words: "Try asking" for an empty bar (the questions you
+// asked in the bar's scope, from the Ask timeline, each reopening its turn;
+// then the meetings ECHO shows there, then the question for any week; at most
+// three, each once) and the count toward a question's 240 characters.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, HomeView, ListItem, OpenItemView } from '../../src/shared/protocol.js';
 import { COUNT_FROM, decidedIn, MAX_QUESTION, MAX_SUGGESTIONS, questionCount, suggestedQuestions, weekQuestion } from '../../src/renderer/bar.js';
-import { ACCOUNT, EMPTY_SUMMARY, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { ACCOUNT, EMPTY_SUMMARY, fileOf, flush, Held, ok, project, rpcFor, startStore, storeLifecycle, timelineFiles } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -65,17 +65,23 @@ describe('the count toward a question\'s limit', () => {
   });
 });
 
+/** What the bar suggests, as words. */
+const questions = (suggestions: readonly { question: string }[]) => suggestions.map(suggestion => suggestion.question);
+
 describe('what an empty bar suggests', () => {
-  it('puts this window\'s questions first, then the meetings, then the question for any week, each once and at most three', () => {
+  it('puts the questions you asked first, then the meetings, then the question for any week, each once and at most three', () => {
     expect(MAX_SUGGESTIONS).toBe(3);
-    expect(suggestedQuestions([], [], 'What did we decide this week?')).toEqual(['What did we decide this week?']);
-    expect(suggestedQuestions(['When do we ship?'], ['Pilot planning'], 'What did we decide this week?'))
-      .toEqual(['When do we ship?', 'What did we decide in Pilot planning?', 'What did we decide this week?']);
+    const asked = (question: string, turn: string) => ({ question, turn });
+    expect(suggestedQuestions([], [], 'What did we decide this week?')).toEqual([{ question: 'What did we decide this week?' }]);
+    // One you asked reopens its turn; the others are asked.
+    expect(suggestedQuestions([asked('When do we ship?', 't1')], ['Pilot planning'], 'What did we decide this week?'))
+      .toEqual([{ question: 'When do we ship?', turn: 't1' }, { question: 'What did we decide in Pilot planning?' }, { question: 'What did we decide this week?' }]);
     // The same question twice (by case or spacing), or one a meeting would make again, shows once.
-    expect(suggestedQuestions(['what did we decide in pilot planning?', 'When  do we ship?'], ['Pilot planning', 'Pilot planning'], 'When do we ship?'))
-      .toEqual(['what did we decide in pilot planning?', 'When do we ship?']);
-    expect(suggestedQuestions(['One?', 'Two?', 'Three?', 'Four?'], ['Pilot planning'], 'What did we decide this week?')).toEqual(['One?', 'Two?', 'Three?']);
-    expect(suggestedQuestions([], ['', 'Pilot planning'], 'What did we decide this week?'))
+    expect(questions(suggestedQuestions([asked('what did we decide in pilot planning?', 't1'), asked('When  do we ship?', 't2')], ['Pilot planning', 'Pilot planning'],
+      'When do we ship?'))).toEqual(['what did we decide in pilot planning?', 'When do we ship?']);
+    expect(questions(suggestedQuestions(['One?', 'Two?', 'Three?', 'Four?'].map((question, at) => asked(question, `t${at}`)), ['Pilot planning'], 'What did we decide this week?')))
+      .toEqual(['One?', 'Two?', 'Three?']);
+    expect(questions(suggestedQuestions([], ['', 'Pilot planning'], 'What did we decide this week?')))
       .toEqual(['What did we decide in Pilot planning?', 'What did we decide this week?']);
   });
 
@@ -88,24 +94,49 @@ describe('what an empty bar suggests', () => {
     expect(long).toMatch(/^What did we decide in A+…\?$/);
   });
 
-  it('remembers what was asked in this window, by scope and newest first; Home\'s meetings follow, newest first', async () => {
+  it('lists the questions you asked, from the timeline, by scope and newest first; Home\'s meetings follow, newest first', async () => {
     home = { ...home, send: [{ run_id: 'run_00000000-0000-4000-8000-000000000020', decision: decision('Pilot planning', '2026-10-08T10:00:00.000Z'), items: 2,
       kinds: ['ticket'], owners: ['Mina Patel'], finished_at: '2026-10-08T10:05:00.000Z' }], items: [item('Supplier review', '2026-10-12T10:00:00.000Z')] };
     const store = await startStore();
     await store.loadHome();
     await flush();
-    expect(store.barSuggestions()).toEqual(['What did we decide in Supplier review?', 'What did we decide in Pilot planning?', 'What did we decide this week?']);
+    expect(questions(store.barSuggestions())).toEqual(['What did we decide in Supplier review?', 'What did we decide in Pilot planning?', 'What did we decide this week?']);
 
     await store.ask('When do we ship?');
     await store.ask('Who leads the pilot?');
     await flush();
-    expect(store.barSuggestions()).toEqual(['Who leads the pilot?', 'When do we ship?', 'What did we decide in Supplier review?']);
-    // Asked again, a question moves up rather than showing twice.
+    expect(questions(store.barSuggestions())).toEqual(['Who leads the pilot?', 'When do we ship?', 'What did we decide in Supplier review?']);
+    // Asked again, a question moves up rather than showing twice, and reopens its newest turn.
     await store.ask('when do we ship?');
     await flush();
-    expect(store.barSuggestions()).toEqual(['when do we ship?', 'Who leads the pilot?', 'What did we decide in Supplier review?']);
-    // Kept in memory only: nothing of them is stored.
+    const turns = store.getState().timeline.turns;
+    expect(store.barSuggestions()).toEqual([{ question: 'when do we ship?', turn: turns[2]!.id }, { question: 'Who leads the pilot?', turn: turns[1]!.id },
+      { question: 'What did we decide in Supplier review?' }]);
+    // Kept in the account's timeline on this computer, by the host, never in the page's storage.
+    expect(timelineFiles.get(fileOf(ACCOUNT))?.map(turn => turn.text)).toEqual(['When do we ship?', 'Who leads the pilot?', 'when do we ship?']);
     expect(JSON.stringify(vi.mocked(localStorage.setItem).mock.calls)).not.toMatch(/ship|pilot/i);
+  });
+
+  it('reopens the turn of a question you asked, opened, instead of asking it again', async () => {
+    const store = await startStore();
+    await store.ask('When do we ship?');
+    store.closeAsk();
+    await store.ask('Who leads the pilot?');
+    store.closeAsk();
+    const [first] = store.getState().timeline.turns;
+    const asked = rpc.mock.calls.filter(([method]) => method === 'ask.run').length;
+    const suggestion = store.barSuggestions().find(each => each.question === 'When do we ship?')!;
+    expect(suggestion.turn).toBe(first!.id);
+    store.pickSuggestion(suggestion);
+    await flush();
+    expect(rpc.mock.calls.filter(([method]) => method === 'ask.run')).toHaveLength(asked);
+    expect(store.getState().ask).toMatchObject({ opened: first!.id, focus: first!.id, asked: [] });
+    // The latest is in full already: it stays so, brought into view, and is the turn the next question continues.
+    const latest = store.barSuggestions().find(each => each.question === 'Who leads the pilot?')!;
+    store.closeAsk();
+    store.pickSuggestion(latest);
+    expect(store.getState().ask).toMatchObject({ opened: latest.turn, focus: latest.turn });
+    expect(store.getState().ask?.latest).toBe(latest.turn);
   });
 
   it('keeps a project\'s questions and meetings to its own bar', async () => {
@@ -116,13 +147,13 @@ describe('what an empty bar suggests', () => {
     await store.openProject(apollo);
     await flush();
     expect(store.getState().barScope).toEqual({ kind: 'project', project_id: apollo.project_id });
-    expect(store.barSuggestions()).toEqual(['What did we decide in Apollo kickoff?', 'What did we decide in Apollo readout?', 'What changed in Apollo this week?']);
+    expect(questions(store.barSuggestions())).toEqual(['What did we decide in Apollo kickoff?', 'What did we decide in Apollo readout?', 'What changed in Apollo this week?']);
     await store.ask('What is left for launch?');
     await flush();
-    expect(store.barSuggestions()[0]).toBe('What is left for launch?');
+    expect(store.barSuggestions()[0]?.question).toBe('What is left for launch?');
     // Back in all context, the project's question is not offered.
     store.widenScope();
-    expect(store.barSuggestions()).toEqual(['When do we ship?', 'What did we decide this week?']);
+    expect(questions(store.barSuggestions())).toEqual(['When do we ship?', 'What did we decide this week?']);
   });
 
   it('shows only over a page where live matches could: signed in, the bar empty, and no answer or sheet over it', async () => {

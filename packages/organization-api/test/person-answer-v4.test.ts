@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_ANSWER_PATH_V3,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   validatePersonAnswerRequestV3,
-  validatePersonAnswerResponseV4,
+  validatePersonAnswerResponseV8,
   validatePersonCapabilitiesV1,
   validatePersonEvidenceDeskResponseV1,
   validatePersonEvidenceOpenRequestV1,
@@ -22,8 +21,7 @@ const citation = {
 const receipt_sha256 = `sha256:${'c'.repeat(64)}`;
 
 describe('Agentic Ask V1 public contracts', () => {
-  it('defines the additive Ask, desk, and capability endpoints', () => {
-    expect(PERSON_ANSWER_PATH_V3).toBe('/v3/person/ask');
+  it('defines the desk and capability endpoints, and the Ask request', () => {
     expect(PERSON_EVIDENCE_SEARCH_PATH_V1).toBe('/v3/person/evidence/search');
     expect(PERSON_EVIDENCE_OPEN_PATH_V1).toBe('/v3/person/evidence/open');
     expect(PERSON_CAPABILITIES_PATH_V1).toBe('/v3/person/capabilities');
@@ -34,9 +32,9 @@ describe('Agentic Ask V1 public contracts', () => {
   });
 
   it('accepts a structured answer with cited prose and bounded deterministic fallback records', () => {
-    const response = validatePersonAnswerResponseV4({
-      schema_version: 4,
-      kind: 'echo-clean-person-answer-v4',
+    const response = validatePersonAnswerResponseV8({
+      schema_version: 8,
+      kind: 'echo-clean-person-answer-v8',
       scope: { kind: 'project', project_id },
       outcome: 'partial',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
@@ -55,13 +53,13 @@ describe('Agentic Ask V1 public contracts', () => {
 
   it('rejects uncited statements and citation indexes outside the released packet', () => {
     const response = {
-      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
       parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [1], private: false }] }],
     };
-    expect(() => validatePersonAnswerResponseV4(response)).toThrow();
+    expect(() => validatePersonAnswerResponseV8(response)).toThrow();
     response.parts[0]!.statements[0]!.citation_indexes = [];
-    expect(() => validatePersonAnswerResponseV4(response)).toThrow();
+    expect(() => validatePersonAnswerResponseV8(response)).toThrow();
   });
 
   it('distinguishes an inventory result from released text and validates fresh HTTP open coordinates', () => {
@@ -85,8 +83,8 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(validatePersonEvidenceDeskResponseV1({
       schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false, items: [item],
     }).items[0]?.text).toBe(item.text);
-    expect(() => validatePersonAnswerResponseV4({
-      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+    expect(() => validatePersonAnswerResponseV8({
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
       parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: ' Prose is not trimmed.', citation_indexes: [0], private: false }] }],
     })).toThrow();
@@ -95,23 +93,23 @@ describe('Agentic Ask V1 public contracts', () => {
   it('derives private from cited visibility and refuses evidence in no-evidence outcomes', () => {
     const privateCitation = { citation, kind: 'note' as const, label: 'Private note', visibility: 'only_me' as const };
     const base = {
-      schema_version: 4 as const, kind: 'echo-clean-person-answer-v4' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const,
+      schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const,
       citations: [privateCitation], parts: [{ question: 'What changed?', status: 'answered' as const, statements: [{ text: 'Private evidence.', citation_indexes: [0], private: false }] }],
     };
-    expect(() => validatePersonAnswerResponseV4(base)).toThrow();
+    expect(() => validatePersonAnswerResponseV8(base)).toThrow();
     base.parts[0]!.statements[0]!.private = true;
-    expect(validatePersonAnswerResponseV4(base).parts[0]?.statements[0]?.private).toBe(true);
-    expect(() => validatePersonAnswerResponseV4({
-      ...base, outcome: 'off_scope', direct: { text: 'A direct answer.', citation_indexes: [0], private: true },
-    })).toThrow();
+    expect(validatePersonAnswerResponseV8(base).parts[0]?.statements[0]?.private).toBe(true);
+    expect(() => validatePersonAnswerResponseV8({
+      ...base, outcome: 'not_found', direct: { text: 'A direct answer.', citation_indexes: [0], private: true },
+    })).toThrow('No-evidence outcome is inconsistent');
   });
 
   it('requires one to five consistent parts', () => {
-    expect(() => validatePersonAnswerResponseV4({
-      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered', citations: [], parts: [],
+    expect(() => validatePersonAnswerResponseV8({
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered', citations: [], parts: [],
     })).toThrow();
-    expect(() => validatePersonAnswerResponseV4({
-      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered', citations: [],
+    expect(() => validatePersonAnswerResponseV8({
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered', citations: [],
       parts: [{ question: 'What changed?', status: 'records_only', statements: [] }],
     })).toThrow();
   });
@@ -136,16 +134,16 @@ describe('Agentic Ask V1 public contracts', () => {
 
   it('echoes a mine scope on answers and desk responses, but never a mine scope with a project', () => {
     const answer = (scope: unknown) => ({
-      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope, outcome: 'answered',
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
       parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
     });
     const desk = (scope: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope, truncated: false, items: [] });
-    expect(validatePersonAnswerResponseV4(answer({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
+    expect(validatePersonAnswerResponseV8(answer({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
     expect(validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
-    expect(() => validatePersonAnswerResponseV4(answer({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
+    expect(() => validatePersonAnswerResponseV8(answer({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
     expect(() => validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
-    expect(() => validatePersonAnswerResponseV4(answer({ kind: 'everyone' }))).toThrow('Ask response scope is invalid');
+    expect(() => validatePersonAnswerResponseV8(answer({ kind: 'everyone' }))).toThrow('Ask response scope is invalid');
   });
 
   it('asks with mine, but never mine with a project or mine other than true (ADR-0024)', () => {
@@ -159,7 +157,7 @@ describe('Agentic Ask V1 public contracts', () => {
 
   it('carries a citation ref only when it names the cited item (ADR-0024)', () => {
     const answer = (value: Record<string, unknown>) => ({
-      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'mine' }, outcome: 'answered',
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'mine' }, outcome: 'answered',
       citations: [{ kind: 'decision', label: 'Launch decision', visibility: 'team', ...value }],
       parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
     });
@@ -174,9 +172,9 @@ describe('Agentic Ask V1 public contracts', () => {
       { citation: { ...source, document_id }, kind: 'document_passage', ref: `document:${document_id}` },
       { citation: source, kind: 'note', ref: note },
     ];
-    for (const value of accepted) expect(validatePersonAnswerResponseV4(answer(value)).citations[0]!.ref).toBe(value.ref);
-    // A citation without a ref (from an older server) still validates.
-    expect(validatePersonAnswerResponseV4(answer({ citation }))).not.toHaveProperty('citations.0.ref');
+    for (const value of accepted) expect(validatePersonAnswerResponseV8(answer(value)).citations[0]!.ref).toBe(value.ref);
+    // A citation without a ref still validates.
+    expect(validatePersonAnswerResponseV8(answer({ citation }))).not.toHaveProperty('citations.0.ref');
     const rejected = [
       { citation, ref: `meeting:sha256:${'9'.repeat(64)}` },
       { citation: { ...source, document_id }, kind: 'document_passage', ref: note },
@@ -184,12 +182,12 @@ describe('Agentic Ask V1 public contracts', () => {
       { citation: source, kind: 'note', ref: `document:${document_id}` },
       { citation: source, kind: 'note', ref: `meeting:${citation.record_sha256}` },
     ];
-    for (const value of rejected) expect(() => validatePersonAnswerResponseV4(answer(value))).toThrow('Ask response citation ref is inconsistent');
+    for (const value of rejected) expect(() => validatePersonAnswerResponseV8(answer(value))).toThrow('Ask response citation ref is inconsistent');
     for (const ref of [`record:${citation.record_sha256}`, `meeting:${citation.record_sha256} `, `meeting:sha256:${'A'.repeat(64)}`, 42]) {
-      expect(() => validatePersonAnswerResponseV4(answer({ citation, ref }))).toThrow('Ask response citation ref is invalid');
+      expect(() => validatePersonAnswerResponseV8(answer({ citation, ref }))).toThrow('Ask response citation ref is invalid');
     }
     // The retired transcript ref (ADR-0046) is no ref at all.
-    expect(() => validatePersonAnswerResponseV4(answer({ citation: source, kind: 'note', ref: `transcript:${citation.record_sha256}` })))
+    expect(() => validatePersonAnswerResponseV8(answer({ citation: source, kind: 'note', ref: `transcript:${citation.record_sha256}` })))
       .toThrow('Ask response citation ref is invalid');
   });
 
@@ -202,11 +200,11 @@ describe('Agentic Ask V1 public contracts', () => {
 
   it('allows up to ten statements in a part (RFC-0003) and rejects more', () => {
     const response = (count: number) => ({
-      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch review', visibility: 'team' }],
       parts: [{ question: 'What is the plan?', status: 'answered', statements: Array.from({ length: count }, (_, index) => ({ text: `Fact ${index}.`, citation_indexes: [0], private: false })) }],
     });
-    expect(validatePersonAnswerResponseV4(response(10)).parts[0]!.statements).toHaveLength(10);
-    expect(() => validatePersonAnswerResponseV4(response(11))).toThrow('Ask response part is invalid');
+    expect(validatePersonAnswerResponseV8(response(10)).parts[0]!.statements).toHaveLength(10);
+    expect(() => validatePersonAnswerResponseV8(response(11))).toThrow('Ask response part is invalid');
   });
 });

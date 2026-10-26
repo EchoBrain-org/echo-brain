@@ -2,13 +2,12 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { validatePersonAnswerResponseV4 } from "@echo-brain/organization-api";
+import { validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import {
   AGENTIC_ASK_DEADLINE_MS_V1,
   agenticAskContextBudgetBytesV1,
-  createAgenticAskV1,
-  createAgenticAskV3,
+  createAgenticAskV5,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
@@ -93,7 +92,7 @@ const answer = (sentences: readonly { text: string; evidence: readonly string[] 
 
 function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; context_tokens?: number; asker?: string }) {
   const audit = options.audit ?? [];
-  return createAgenticAskV1({
+  return createAgenticAskV5({
     desk: options.desk, model: options.model, generation: { ...generation, ...(options.context_tokens === undefined ? {} : { context_tokens: options.context_tokens }) }, audit: { append: entry => { audit.push(entry); } },
     today: () => "2026-09-28",
     ...(options.asker === undefined ? {} : { asker: { display_name: options.asker } }),
@@ -125,7 +124,7 @@ describe("agentic Ask: research loop", () => {
       answer([{ text: 'All three records found.', evidence: ['E1', 'E2', 'E3'] }]),
     ]);
     const today = vi.fn().mockReturnValueOnce('2026-10-05').mockReturnValue('2026-10-06');
-    const pending = createAgenticAskV1({ desk: evidence, model: script.model, generation, audit: { append: () => undefined }, today }).answer({ question: 'Which records exist?' });
+    const pending = createAgenticAskV5({ desk: evidence, model: script.model, generation, audit: { append: () => undefined }, today }).answer({ question: 'Which records exist?' });
     try {
       await vi.waitFor(() => expect(calls.map(call => call.source)).toEqual(['meeting', 'document']), { timeout: 500, interval: 5 });
     } finally { releaseMeeting(); }
@@ -276,13 +275,13 @@ describe("agentic Ask: research loop", () => {
     ]);
     const result = await ask({ desk: evidence, model: script.model, audit }).answer({ question: "When is launch?" });
 
-    expect(validatePersonAnswerResponseV4(result)).toEqual(result);
+    expect(validatePersonAnswerResponseV8(result)).toEqual(result);
     expect(result.direct).toBeUndefined();
     expect(result).toMatchObject({ outcome: "answered" });
     expect(result.parts).toEqual([{ question: "When is launch?", status: "answered", statements: [{ text: "Launch is Tuesday.", citation_indexes: [0], private: false }] }]);
     expect(result.citations).toEqual([{ citation: launch.citation, kind: "decision", label: "Meeting launch", visibility: "team" }]);
-    // Every model call and the release are fenced by a cumulative revalidation.
-    expect(evidence.revalidate).toHaveBeenCalledTimes(4);
+    // Every model call is fenced by a cumulative revalidation, and the release by one before its audit and one after.
+    expect(evidence.revalidate).toHaveBeenCalledTimes(5);
     expect(audit).toEqual([expect.objectContaining({ outcome: "answered", rounds: 2, model_calls: 3, repairs: 0, citation_count: 1 })]);
     expect(audit[0]!.generations.map(value => value.role)).toEqual(["step", "step", "answer"]);
   });
@@ -383,10 +382,10 @@ describe("agentic Ask: research loop", () => {
       finish([missing()]),
       finish([missing()]),
     ]);
-    // A V1 desk binds no live source: the V6 core reads this ticket source, which declares no capabilities.
+    // A V1 desk binds no live source: this desk adds a ticket source, which declares no capabilities.
     const evidence = desk();
     const withTickets = { ...evidence, live_sources: [{ source_id: "jira", kind: "ticket", selector: "tickets", description: "Live work items.", metadata_only_list: true, tool_id: "jira" }] } as unknown as EvidenceDeskPortV2;
-    await createAgenticAskV3({ desk: withTickets, model: script.model, generation, audit: { append: () => undefined }, today: () => "2026-09-28" }).answer({ question: "When is launch?" });
+    await createAgenticAskV5({ desk: withTickets, model: script.model, generation, audit: { append: () => undefined }, today: () => "2026-09-28" }).answer({ question: "When is launch?" });
     // No source takes a channel: each list ignores it, says so, and never sends it to the desk.
     expect(evidence.list).toHaveBeenCalledTimes(2);
     expect(evidence.list).toHaveBeenNthCalledWith(1, expect.objectContaining({ source: "jira", since: "2026-09-21" }));
@@ -475,14 +474,14 @@ describe("agentic Ask: research loop", () => {
     const result = await ask({ desk: evidence, model: script.model, audit }).answer({ question });
 
     expect(script.prompt(2).evidence).toEqual([expect.objectContaining({ id: "E1", text: passage.text })]);
-    expect(validatePersonAnswerResponseV4(result)).toEqual(result);
+    expect(validatePersonAnswerResponseV8(result)).toEqual(result);
     expect(result).toMatchObject({
       scope, outcome: "not_found", citations: [],
       parts: [{ status: "not_found", statements: [], gap: "Not found: a decision about the requested staging release within this scope." }],
     });
     expect(result.parts[0]).not.toHaveProperty("records");
     expect(script.inputs).toHaveLength(3);
-    expect(evidence.revalidate).toHaveBeenCalledTimes(4);
+    expect(evidence.revalidate).toHaveBeenCalledTimes(5);
     expect(audit).toEqual([expect.objectContaining({ outcome: "not_found", model_calls: 3, citation_count: 0 })]);
   });
 
@@ -945,7 +944,7 @@ describe("agentic Ask: research loop", () => {
       answer([{ text: "Launch is Tuesday.", evidence: ["E1", "E2", "E3"] }]),
     ]);
     const result = await ask({ desk: desk({ search: () => [meeting, passage, unreferenced] }), model: script.model }).answer({ question: "When is launch?" });
-    expect(validatePersonAnswerResponseV4(result)).toEqual(result);
+    expect(validatePersonAnswerResponseV8(result)).toEqual(result);
     expect(result.citations.map(value => value.ref)).toEqual([meeting.ref, passage.ref, undefined]);
     expect(result.citations[2]).not.toHaveProperty("ref");
     expect(script.inputs).toHaveLength(3);
@@ -963,7 +962,7 @@ describe("agentic Ask: research loop", () => {
       step([{}], [{ tool: 'search', args: { query: 'launch', source: 'meetings', since: '2026-10-15', until: '2026-10-15', date_field: 'occurred' } }]),
       finish([found(['E1'])]), answer([{ text: 'The launch was discussed.', evidence: ['E1'] }]),
     ]);
-    await createAgenticAskV1({ desk: evidence, model: script.model, generation, audit: { append: () => undefined },
+    await createAgenticAskV5({ desk: evidence, model: script.model, generation, audit: { append: () => undefined },
       time_context: { now: '2026-10-17T04:30:00.000Z', time_zone: 'America/Los_Angeles' },
     }).answer({ question: 'Remind me what happened yesterday about launch.' });
     for (const input of script.inputs) expect(JSON.parse(input.user_prompt)).toMatchObject({ today: '2026-10-16', now: '2026-10-17T04:30:00.000Z', time_zone: 'America/Los_Angeles', time_reference: 'client' });
@@ -1089,7 +1088,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(script.inputs).toHaveLength(4);
     expect(script.inputs[1]!.system_prompt).toBe(script.inputs[0]!.system_prompt);
     expect(script.inputs[1]!.user_prompt).toBe(script.inputs[0]!.user_prompt);
-    expect(evidence.revalidate).toHaveBeenCalledTimes(5);
+    expect(evidence.revalidate).toHaveBeenCalledTimes(6);
   });
 
   it.each([
@@ -1107,7 +1106,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(evidence.open).not.toHaveBeenCalled();
     expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "records_only", records: [{ text: launch.text, citation_indexes: [0] }] }] });
     expect(JSON.stringify(result)).not.toContain(failure.message);
-    expect(evidence.revalidate).toHaveBeenCalledTimes(3);
+    expect(evidence.revalidate).toHaveBeenCalledTimes(4);
     expect(audit[0]).toMatchObject({ model_calls: 2, repairs: 0, fallbacks: 1, citation_count: 1 });
   });
 
@@ -1121,7 +1120,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
     expect(result.parts[0]).toMatchObject({ status: "records_only", records: [{ text: "Launch is Tuesday." }] });
     expect(script.inputs).toHaveLength(5);
-    expect(evidence.revalidate).toHaveBeenCalledTimes(6);
+    expect(evidence.revalidate).toHaveBeenCalledTimes(7);
   });
 
   it("does not describe an interrupted search as evidence that no answer exists", async () => {
@@ -1287,7 +1286,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
         expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_RESEARCH_LIVE_BUDGET_V1.writer_reserve_ms - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
       }
       expect(calls[3]!.at + calls[3]!.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
-      expect(evidence.revalidate).toHaveBeenCalledTimes(5);
+      expect(evidence.revalidate).toHaveBeenCalledTimes(6);
       expect(audit[0]).toMatchObject({ outcome: "answered", model_calls: 4, repairs: 0, fallbacks: 0 });
       expect(audit[0]!.generations.map(value => value.role)).toEqual(["step", "step", "step", "answer"]);
     } finally {

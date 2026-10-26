@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ASK_STEP_PROMPT, createStepSchema } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
-import { createAgenticAskV3 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { generation, result } from './fixtures/agentic-scenarios.js';
 
@@ -43,7 +43,7 @@ describe('Ask tool argument contracts', () => {
       { parts: parts('not_found'), actions: [{ tool: 'finish', args: {} }] },
       { lists: [], sentences: [], not_found: ['archive cleanup owner'] },
     ];
-    const ask = createAgenticAskV3({ generation, audit: { append: () => undefined },
+    const ask = createAgenticAskV5({ generation, audit: { append: () => undefined },
       desk: { scope: { kind: 'global' }, live_sources: [], search: async () => result([]),
         list: async () => result([]), open: async () => result([]),
         revalidate: async () => ({ checked_at: '2024-07-20T12:00:00.000Z' }) },

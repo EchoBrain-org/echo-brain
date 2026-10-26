@@ -11,6 +11,8 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0048
+  - ADR-0047
   - ADR-0046
   - ADR-0044
   - ADR-0043
@@ -168,7 +170,11 @@ their selected audience and an immutable receipt. Upload-specific read/search ve
 current reader, enforces that audience, and audits before release. Optional
 search enrichment cannot change permissions or source text. The V1 upload
 route is retired; V1 originals already retained keep their Only me/Team
-visibility and remain citable by Ask. Uploads remain in
+visibility and remain citable by Ask. The V2 note write, status and content
+routes and every V1 document route are retired too
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)): notes
+stored as V2 stay searchable through `POST /v2/person/updates/search`, and
+documents uploaded as V1 are read through the V2 document routes. Uploads remain in
 protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits and indefinite retention.
@@ -177,9 +183,11 @@ describes the original V7 project storage. The current Authority is V15, which
 accepts only fresh state, and its project routes and client operations are live.
 
 Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as
-updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): the V3 route
-and shared evidence desk are composed whenever an answer model is configured,
-with no capability switch. Live qualification is separate.
+updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md), on `/v7`
+alone since [ADR-0047](../decisions/ADR-0047-ask-timeline.md) retired the Ask
+routes before it: the `/v7` Ask and the shared evidence desk are composed
+whenever an answer model is configured, with no capability switch. Live
+qualification is separate.
 
 The desk owns Person authorization, the pinned retrieval snapshot and release
 audits. Record coordinates are resolved through that authorized snapshot before

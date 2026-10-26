@@ -56,6 +56,10 @@ import a provider implementation.
   `GET /v1/person/changes` (ADR-0036): fingerprints of the caller's projects,
   `involved` open items and reviews, read in one Authority read transaction
   with no audit row, through the same policy as those reads.
+  `person-project-activity-v1.ts` serves `GET /v1/person/project-activity`
+  (Ask timeline v1, C2) the same way: per active project, when a note,
+  document, meeting or follow-up move from someone else that the caller can
+  read last arrived.
 - `organization-authority-state-bootstrap.ts`, `organization-authority-setup-cli.ts`
   and `organization-authority-reset-cli.ts` own stopped-state setup and reset.
 - The `person-*` modules wire Person routes and upload processing, the
@@ -103,6 +107,9 @@ known layering debt:
   read transaction on the `better-sqlite3` handle and reads through
   `SqliteProjectContextRepositoryV1.personChangeView` and the open-items
   adapters;
+- `person-project-activity-v1.ts`: project activity (Ask timeline v1, C2),
+  which opens its one read transaction the same way and also reads through
+  `SqlitePersonProjectActivityV1`;
 - `person-record-search-route.ts`: record list, search and open (raw SQL on
   record-log tables), with `person-record-read-route.ts` and
   `person-answer-v3-route.ts` (concrete SQLite audit adapters);

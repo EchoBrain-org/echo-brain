@@ -3,25 +3,24 @@ import {
   validatePersonAskAnswerLayoutHeaderV1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
 import {
-  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  formatPersonAskProgressEventV2, formatPersonAskProgressEventV3, type PersonAskProgressErrorStatusV1,
+  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  formatPersonAskProgressEventV3, type PersonAskProgressErrorStatusV1, type PersonAskProgressEventV3,
 } from "@echo-brain/organization-api";
-import { startPersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
+import { startPersonAskProgressStreamV1, type PersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
   PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
-  validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
+  validateProjectCreateV1, validateProjectCreateReceiptV1,
   validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1, validateProjectSettingsReceiptV1,
   validateProjectListV2, validateProjectPageRequestV2, validateProjectSummaryV2,
-  validateProjectPageRequestV1, validateProjectIdV1, validateProjectSummaryV1,
+  validateProjectIdV1,
   validateProjectContextBrowseV1, validateProjectMembersV1,
   validateProjectDirectorySearchV1, validateProjectDirectoryV1,
   validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
   validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectContextFeedV1, validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectContextSearchResultV1, validateProjectContextSearchResultV2,
-  validateProjectContextReadV1, validateProjectContextReadV2, validatePersonUploadContextId, validatePersonUpdateRequestId,
-  validatePersonUpdateSubmitV2, validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2,
-  validatePersonUploadSearchV2, validatePersonUploadSearchResultV2, validatePersonUploadContentV2,
+  validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectContextSearchResultV2,
+  validateProjectContextReadV2, validatePersonUploadContextId, validatePersonUpdateRequestId,
+  validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
   validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
   validatePersonUploadSearchV3, validatePersonUploadSearchResultV3, validatePersonUploadContentV3,
 } from '@echo-brain/organization-api';
@@ -69,10 +68,6 @@ import {
   type PersonEmployeeHttpApplication,
 } from "./person-employee-http-application.js";
 import {
-  PERSON_ANSWER_PATH_V3,
-  PERSON_ANSWER_PATH_V4,
-  PERSON_ANSWER_PATH_V5,
-  PERSON_ANSWER_PATH_V6,
   PERSON_ANSWER_PATH_V7,
   PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
@@ -95,12 +90,12 @@ import {
 } from "@echo-brain/organization-api";
 import type { PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
-import type {
-  PersonAnswerHttpInputV1, PersonAnswerV4HttpApplication, PersonAnswerV5HttpApplication, PersonAnswerV6HttpApplication, PersonAnswerV7HttpApplication,
-} from "./person-live-answer-http-application.js";
+import type { PersonAnswerV7HttpApplication } from "./person-live-answer-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
 import type { PersonDiagnosticsHttpApplicationV1 } from './person-diagnostics-http-application.js';
+import { PERSON_ASK_CHECK_PATH_V1, validatePersonAskCheckRequestV1 } from '@echo-brain/organization-api';
+import type { PersonAskCheckHttpApplicationV1 } from './person-ask-check-http-application.js';
 import {
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
@@ -110,6 +105,8 @@ import {
 import type { PersonListHttpApplicationV1 } from "./person-list-http-application-v1.js";
 import { PERSON_CHANGES_ROUTE_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import type { PersonChangesHttpApplicationV1 } from "./person-changes-http-application.js";
+import { PERSON_PROJECT_ACTIVITY_PATH_V1 } from '@echo-brain/organization-api';
+import type { PersonProjectActivityHttpApplicationV1 } from "./person-project-activity-http-application.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
@@ -135,15 +132,13 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `DELETE ${PERSON_EMPLOYEES_PATH_V1}`,
   `GET ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
-  `POST ${PERSON_ANSWER_PATH_V3}`,
-  `POST ${PERSON_ANSWER_PATH_V4}`,
-  `POST ${PERSON_ANSWER_PATH_V5}`,
-  `POST ${PERSON_ANSWER_PATH_V6}`,
   `POST ${PERSON_ANSWER_PATH_V7}`,
+  `POST ${PERSON_ASK_CHECK_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
   `GET ${PERSON_CHANGES_ROUTE_V1}`,
+  `GET ${PERSON_PROJECT_ACTIVITY_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
   `POST ${PERSON_LIST_PATH_V1}`,
   `POST ${PERSON_OPEN_PATH_V1}`,
@@ -170,8 +165,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly expected_issuer: string;
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: ProviderHttpApplicationV1;
+  /** The Person tools list, `/v4/person/tools`. */
   readonly person_tools?: ProviderHttpApplicationV1;
-  readonly person_tools_v4?: ProviderHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
   readonly person_record_read?: PersonRecordReadHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
@@ -179,21 +174,18 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees?: PersonEmployeeHttpApplication;
   /**
-   * Agentic Ask (RFC-0003) and the evidence desk: the only Ask (ADR-0022).
-   * Optional until the active Organization Authority runtime has a configured answer model.
+   * The evidence desk (`/v3/person/evidence/search` and `/open`, ADR-0022), composed with the answer model. Its Ask route,
+   * `/v3/person/ask`, was retired with `/v4` to `/v6`: Ask is `person_answer_v7`.
    */
   readonly person_answer_v3?: PersonAnswerV3HttpApplication;
-  /** Optional ticket-capable Ask, selected with its provider runtime. */
-  readonly person_answer_v4?: PersonAnswerV4HttpApplication;
-  /** Optional page-capable Ask. It preserves the V3/V4 routes for installed clients. */
-  readonly person_answer_v5?: PersonAnswerV5HttpApplication;
-  /** Optional follow-up-capable Ask (`/v6`, the V7 answer, ADR-0040). It preserves `/v3` to `/v5` for installed clients. */
-  readonly person_answer_v6?: PersonAnswerV6HttpApplication;
   /**
-   * Optional workspace-capable Ask (`/v7`, the V8 answer, research tool contract v1): it may read and cite the asker's
-   * projects, people, tools and their connected tools' containers. It preserves `/v3` to `/v6` for installed clients.
+   * Ask (`/v7`, the V8 answer, research tool contract v1), optional until the runtime has a configured answer model: it may
+   * read and cite live tickets and pages, ECHO's shared follow-ups (ADR-0040), and the asker's projects, people, tools and
+   * their connected tools' containers.
    */
   readonly person_answer_v7?: PersonAnswerV7HttpApplication;
+  /** The Ask source check (ADR-0047); it needs no answer model, and reads the database and the caller's own tool connections. */
+  readonly person_ask_check?: PersonAskCheckHttpApplicationV1;
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
   readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
@@ -206,6 +198,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_list?: PersonListHttpApplicationV1;
   /** The change check (ADR-0036); it needs no answer model and reads only the database. */
   readonly person_changes?: PersonChangesHttpApplicationV1;
+  /** Project activity (Ask timeline v1, C2); like the change check, it needs no answer model and reads only the database. */
+  readonly person_project_activity?: PersonProjectActivityHttpApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
   readonly project_context?: ProjectContextApplicationV1;
   readonly person_documents?: PersonDocumentApplicationV1;
@@ -216,7 +210,7 @@ function providerIngressRoutes(
   options: OrganizationAuthorityHttpServerOptions,
 ): ReadonlyMap<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }> {
   const mounted = new Map<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }>();
-  for (const application of [options.person_external_identity_link, options.person_tools, options.person_tools_v4, ...(options.person_tool_connections ?? [])]) {
+  for (const application of [options.person_external_identity_link, options.person_tools, ...(options.person_tool_connections ?? [])]) {
     if (application === undefined) continue;
     const routeIds = new Set<string>();
     for (const route of application.routes) {
@@ -229,9 +223,11 @@ function providerIngressRoutes(
       ) throw new Error("invalid provider ingress route");
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
-      // The retired V1 notes path stays reserved so no adapter can mount it.
+      // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
+      // ADR-0048), so no adapter can mount one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
-        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2]
+        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
+          '/v2/person/tools', '/v3/person/tools']
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -489,6 +485,11 @@ async function personBody<Request>(request: IncomingMessage, validate: (value: u
 
 type PersonPostHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
+/** A Person read GET (the change check, ADR-0036; project activity, ADR-0047): no query, no body, no audit row. */
+interface PersonReadGetApplication {
+  read(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<unknown>;
+}
+
 /** Original-source reads validate the body before checking the bearer, then release synchronously. */
 function personSourcePost<Application, Request>(
   application: Application | undefined,
@@ -550,58 +551,22 @@ function personCancellablePost<Application, Request>(
 const streamedFailureStatus = new WeakMap<ServerResponse, number>();
 
 /**
- * `POST /v5/person/ask`, the V6 answer, always as JSON. Its Ask progress V1
- * stream was retired on 2026-10-19: every Authority that streamed it also
- * serves `/v6`, which every streaming client asks first, so a progress header
- * here gets the JSON answer every client handles. A disconnect still cancels the Ask.
- */
-function personAskV5Post(application: PersonAnswerV5HttpApplication | undefined): PersonPostHandler {
-  return personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
-}
-
-/**
- * `POST /v6/person/ask`, the V7 answer (ADR-0040). A client that sends the
- * progress header value `2` gets the same Ask as server-sent events in Ask
- * progress V2 (ADR-0039), once the request authenticated and validated; before
- * that, and for any other value, `1` included, the response is the JSON V7
- * answer: a V1 client never meets a follow-up. A disconnect still cancels the
- * Ask, and nothing more is written.
- */
-function personAskV6Post(application: PersonAnswerV6HttpApplication | undefined): PersonPostHandler {
-  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, response => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV2));
-}
-
-/**
- * `POST /v7/person/ask`, the V8 answer (research tool contract v1), streamed
- * exactly as `/v6` is, in Ask progress V3, for the header value `3`. Any other
- * value gets the JSON V8 answer: a V1 or V2 client never meets a workspace item.
+ * `POST /v7/person/ask`, the V8 answer (research tool contract v1): the only
+ * Ask route, since `/v3` to `/v6` were retired. A client that sends the
+ * progress header value `3` gets the same Ask as server-sent events in Ask
+ * progress V3 (ADR-0039), once the request authenticated and validated; before
+ * that, and for any other value, the response is the JSON V8 answer. The
+ * request may carry the asker's previous turn (ADR-0047), streamed or not. A
+ * disconnect still cancels the Ask, and nothing more is written.
  */
 function personAskV7Post(application: PersonAnswerV7HttpApplication | undefined): PersonPostHandler {
-  return personAskStreamingPost(application, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, response => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV3));
-}
-
-interface StreamingAskApplication<Step, Answered> {
-  ask(input: PersonAnswerHttpInputV1): Promise<unknown>;
-  askWithProgress?(input: PersonAnswerHttpInputV1 & { readonly on_start: () => void; readonly on_progress: (event: Step) => void }): Promise<Answered>;
-}
-interface StreamingAskStream<Step, Answered> {
-  step(event: Step): void;
-  end(event: ({ readonly type: "answer" } & Answered) | { readonly type: "error"; readonly status: PersonAskProgressErrorStatusV1; readonly error: { readonly code: string; readonly message: string } }): void;
-  close(): void;
-}
-
-/** A live Ask route that streams its progress in one version, for that version's exact header value. */
-function personAskStreamingPost<Step, Answered extends { readonly response: unknown; readonly receipt: unknown }>(
-  application: StreamingAskApplication<Step, Answered> | undefined,
-  headerValue: string,
-  startStream: (response: ServerResponse) => StreamingAskStream<Step, Answered>,
-): PersonPostHandler {
   const plain = personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
+  const startStream = (response: ServerResponse) => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV3);
   return async (request, response) => {
-    if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== headerValue) { await plain(request, response); return; }
+    if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V3) { await plain(request, response); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
-    let stream: StreamingAskStream<Step, Answered> | undefined;
+    let stream: PersonAskProgressStreamV1<PersonAskProgressEventV3> | undefined;
     try {
       const requestBody = await personBody(request, validatePersonAnswerRequestV3);
       const answered = await application.askWithProgress({
@@ -610,7 +575,7 @@ function personAskStreamingPost<Step, Answered extends { readonly response: unkn
         on_progress: event => { stream?.step(event); },
       });
       stream ??= startStream(response);
-      stream.end({ type: "answer", response: answered.response, receipt: answered.receipt } as { readonly type: "answer" } & Answered);
+      stream.end({ type: "answer", response: answered.response, receipt: answered.receipt });
     } catch (error) {
       // Before the stream starts, the server's ordinary JSON error.
       if (stream === undefined) throw error;
@@ -723,11 +688,11 @@ async function projectBody(request: IncomingMessage): Promise<unknown> {
   } catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
 }
 
-/** The V1 list accepts limit and cursor; V2 also accepts a status filter. */
-function projectPage(url: URL, v2: boolean): unknown {
+/** The project list accepts limit, cursor and a status filter. */
+function projectPage(url: URL): unknown {
   const page: Record<string, unknown> = {};
   for (const [key, value] of url.searchParams) {
-    if ((key !== 'limit' && key !== 'cursor' && (!v2 || key !== 'status')) || Object.hasOwn(page, key)) {
+    if ((key !== 'limit' && key !== 'cursor' && key !== 'status') || Object.hasOwn(page, key)) {
       throw new AuthorityOperationError('invalid_request', 'request failed');
     }
     if (key === 'limit' && !/^(?:[1-9]|10)$/.test(value)) {
@@ -735,7 +700,7 @@ function projectPage(url: URL, v2: boolean): unknown {
     }
     page[key] = key === 'limit' ? Number(value) : value;
   }
-  return v2 ? projectInput(validateProjectPageRequestV2, page) : projectInput(validateProjectPageRequestV1, page);
+  return projectInput(validateProjectPageRequestV2, page);
 }
 
 function projectResponse(response: ServerResponse, status: number, value: unknown, validate: (value: unknown) => unknown): void {
@@ -750,8 +715,7 @@ function projectResponse(response: ServerResponse, status: number, value: unknow
   json(response, status, value);
 }
 
-type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1,
-  'listProjects' | 'listProjectsV2' | 'readProject' | 'readProjectV2' | 'readContext' | 'readContextV2' | 'uploadStatus' | 'readUpload'>;
+type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1, 'listProjectsV2' | 'readProjectV2' | 'readContextV2'>;
 const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   readonly operation: ProjectBodyOperation;
   readonly request: (value: unknown) => unknown;
@@ -770,11 +734,9 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
-  [`${PERSON_PROJECTS_PATH_V1}/context/feed`, { operation: 'feed', request: validateProjectContextBrowseV1, response: validateProjectContextFeedV1, status: 200 }],
-  [`${PERSON_PROJECTS_PATH_V1}/context/search`, { operation: 'search', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V2}/context/feed`, { operation: 'feedV2', request: validateProjectContextBrowseV1, response: validateProjectContextFeedV2, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V2}/context/search`, { operation: 'searchV2', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV2, status: 200 }],
-  [PERSON_UPDATES_PATH_V2, { operation: 'submitUpload', request: validatePersonUpdateSubmitV2, response: validatePersonUpdateReceiptV2, status: 202 }],
+  // The one V2 notes route: the notes stored as V2, which no V3 read returns (ADR-0048).
   [`${PERSON_UPDATES_PATH_V2}/search`, { operation: 'searchUploads', request: validatePersonUploadSearchV2, response: validatePersonUploadSearchResultV2, status: 200 }],
   [PERSON_UPDATES_PATH_V3, { operation: 'submitUploadV3', request: validatePersonUpdateSubmitV3, response: validatePersonUpdateReceiptV3, status: 202 }],
   [`${PERSON_UPDATES_PATH_V3}/search`, { operation: 'searchUploadsV3', request: validatePersonUploadSearchV3, response: validatePersonUploadSearchResultV3, status: 200 }],
@@ -794,14 +756,12 @@ async function projectRoute(
   }
   if (method !== 'GET') return undefined;
   // Static POST paths cannot be misinterpreted as project/request identifiers.
-  if (route !== undefined && url.pathname !== PERSON_PROJECTS_PATH_V1) return undefined;
-  const projectBase = url.pathname === PERSON_PROJECTS_PATH_V2 || url.pathname.startsWith(`${PERSON_PROJECTS_PATH_V2}/`) ? PERSON_PROJECTS_PATH_V2 : PERSON_PROJECTS_PATH_V1;
-  const projectPath = url.pathname.startsWith(`${projectBase}/`)
-    ? url.pathname.slice(projectBase.length + 1).split('/') : [];
-  const uploadBase = url.pathname.startsWith(`${PERSON_UPDATES_PATH_V3}/`) ? PERSON_UPDATES_PATH_V3 : PERSON_UPDATES_PATH_V2;
-  const uploadPath = url.pathname.startsWith(`${uploadBase}/`)
-    ? url.pathname.slice(uploadBase.length + 1).split('/') : [];
-  const list = url.pathname === PERSON_PROJECTS_PATH_V1 || url.pathname === PERSON_PROJECTS_PATH_V2;
+  if (route !== undefined) return undefined;
+  const projectPath = url.pathname.startsWith(`${PERSON_PROJECTS_PATH_V2}/`)
+    ? url.pathname.slice(PERSON_PROJECTS_PATH_V2.length + 1).split('/') : [];
+  const uploadPath = url.pathname.startsWith(`${PERSON_UPDATES_PATH_V3}/`)
+    ? url.pathname.slice(PERSON_UPDATES_PATH_V3.length + 1).split('/') : [];
+  const list = url.pathname === PERSON_PROJECTS_PATH_V2;
   const readProject = projectPath.length === 1;
   const readContext = projectPath.length === 3 && projectPath[1] === 'context';
   const status = uploadPath.length === 1;
@@ -812,33 +772,23 @@ async function projectRoute(
     throw new AuthorityOperationError('invalid_request', 'request failed');
   }
   if (list) {
-    const page = projectPage(url, projectBase === PERSON_PROJECTS_PATH_V2);
-    return response => projectBase === PERSON_PROJECTS_PATH_V2
-      ? projectResponse(response, 200, application.listProjectsV2(token, page), validateProjectListV2)
-      : projectResponse(response, 200, application.listProjects(token, page), validateProjectListV1);
+    const page = projectPage(url);
+    return response => projectResponse(response, 200, application.listProjectsV2(token, page), validateProjectListV2);
   }
   if (readProject || readContext) {
     const project = projectInput(validateProjectIdV1, projectPath[0]);
     if (readContext) {
       const context = projectInput(validatePersonUploadContextId, projectPath[2]);
-      return response => projectBase === PERSON_PROJECTS_PATH_V2
-        ? projectResponse(response, 200, application.readContextV2(token, project, context), validateProjectContextReadV2)
-        : projectResponse(response, 200, application.readContext(token, project, context), validateProjectContextReadV1);
+      return response => projectResponse(response, 200, application.readContextV2(token, project, context), validateProjectContextReadV2);
     }
-    return response => projectBase === PERSON_PROJECTS_PATH_V2
-      ? projectResponse(response, 200, application.readProjectV2(token, project), validateProjectSummaryV2)
-      : projectResponse(response, 200, application.readProject(token, project), validateProjectSummaryV1);
+    return response => projectResponse(response, 200, application.readProjectV2(token, project), validateProjectSummaryV2);
   }
   if (readUpload) {
     const context = projectInput(validatePersonUploadContextId, uploadPath[1]);
-    return response => uploadBase === PERSON_UPDATES_PATH_V3
-      ? projectResponse(response, 200, application.readUploadV3(token, context), validatePersonUploadContentV3)
-      : projectResponse(response, 200, application.readUpload(token, context), validatePersonUploadContentV2);
+    return response => projectResponse(response, 200, application.readUploadV3(token, context), validatePersonUploadContentV3);
   }
   const id = projectInput(validatePersonUpdateRequestId, uploadPath[0]);
-  return response => uploadBase === PERSON_UPDATES_PATH_V3
-    ? projectResponse(response, 200, application.uploadStatusV3(token, id), validatePersonUpdateStatusResultV3)
-    : projectResponse(response, 200, application.uploadStatus(token, id), validatePersonUpdateStatusV2);
+  return response => projectResponse(response, 200, application.uploadStatusV3(token, id), validatePersonUpdateStatusResultV3);
 }
 
 /** The Organization Authority Person API surface, with no machine routes. */
@@ -851,13 +801,10 @@ export function createOrganizationAuthorityHttpServer(
     options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
-    [PERSON_ANSWER_PATH_V3, personCancellablePost(options.person_answer_v3, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
-    [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input), true)],
-    [PERSON_ANSWER_PATH_V5, personAskV5Post(options.person_answer_v5)],
-    [PERSON_ANSWER_PATH_V6, personAskV6Post(options.person_answer_v6)],
     [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
+    [PERSON_ASK_CHECK_PATH_V1, personCancellablePost(options.person_ask_check, validatePersonAskCheckRequestV1, (application, input) => application.check(input))],
     ...(options.person_research_eval === undefined ? [] : [
       [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],
       [PERSON_RESEARCH_EVAL_READ_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalReadRequestV1, (application, input) => application.read(input))],
@@ -897,6 +844,10 @@ export function createOrganizationAuthorityHttpServer(
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
     [PERSON_LIST_PATH_V1, personCancellablePost(options.person_list, validatePersonListRequestV1, (application, input) => application.list(input))],
     [PERSON_OPEN_PATH_V1, personCancellablePost(options.person_list, validatePersonOpenRequestV1, (application, input) => application.open(input))],
+  ]);
+  const personReadGets: ReadonlyMap<string, PersonReadGetApplication | undefined> = new Map<string, PersonReadGetApplication | undefined>([
+    [PERSON_CHANGES_ROUTE_V1, options.person_changes],
+    [PERSON_PROJECT_ACTIVITY_PATH_V1, options.person_project_activity],
   ]);
   const handoffs = new Map<string, PendingLoopbackHandoff>();
   const oidcBeginWindows = new Map<string, OidcBeginClientWindow>();
@@ -1226,12 +1177,13 @@ export function createOrganizationAuthorityHttpServer(
         }));
         return;
       }
-      if (method === "GET" && url.pathname === PERSON_CHANGES_ROUTE_V1) {
-        if (options.person_changes === undefined) {
+      if (method === "GET" && personReadGets.has(url.pathname)) {
+        const personRead = personReadGets.get(url.pathname);
+        if (personRead === undefined) {
           fail(response, 503, "unavailable");
           return;
         }
-        // Authenticated first, as capabilities is; the check takes no query and no body.
+        // Authenticated first, as capabilities is; the read takes no query and no body.
         const access_token = accessToken(request.headers.authorization);
         options.sessions.authenticateAccess({ access_token });
         if (url.search !== "" || (await rawBody(request)).byteLength !== 0) {
@@ -1239,7 +1191,7 @@ export function createOrganizationAuthorityHttpServer(
         }
         const disconnect = disconnectSignal(request, response);
         try {
-          json(response, 200, await options.person_changes.read({ access_token, signal: disconnect.signal }));
+          json(response, 200, await personRead.read({ access_token, signal: disconnect.signal }));
         } finally {
           disconnect.dispose();
         }
@@ -1248,10 +1200,7 @@ export function createOrganizationAuthorityHttpServer(
       if (method === "POST" && url.search === "") {
         const personRead = personReadPosts.get(url.pathname);
         if (personRead !== undefined) {
-          // Distinguish a provider's not-found from an older server with no V5,
-          // V6 or V7 route. Set this before body validation or application execution.
-          if (url.pathname === PERSON_ANSWER_PATH_V5) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '5');
-          if (url.pathname === PERSON_ANSWER_PATH_V6) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '6');
+          // Tells the route's own not-found from an Authority with no `/v7`. Set before body validation or application execution.
           if (url.pathname === PERSON_ANSWER_PATH_V7) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '7');
           await personRead(request, response); return;
         }

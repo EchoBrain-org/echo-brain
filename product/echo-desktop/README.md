@@ -37,8 +37,8 @@ hidden while Ask works): the reader, where a meeting opens scrolled to the
 items the pane lit, lit too, a follow-up's item page, the project, or Tools. A
 person has no page to open. A follow-up's source row says only who owns it and
 its status ("Mara · Open"), and a Jira project's, Confluence space's or Slack
-channel's says its tool and key ("Jira · THERM"). An older Authority answers
-on its newest route, without what that route cannot cite
+channel's says its tool and key ("Jira · THERM"). Every Ask asks `/v7`, the
+V8 answer
 ([Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)).
 
 An answer the Authority lays out (answer layout v1, ADR-0045) reads as a short
@@ -49,9 +49,61 @@ sources' numbers and lights on its own; a table shows ISO dates as "Oct 14",
 only your own late row's due date in the signal colour, and scrolls in its own
 box when the window is narrow. An answer without a layout reads as a paragraph
 per sentence. Either way, its sources start as one closed line ("4 sources ·
-Tuesday sync · …") that a click or a source's number opens, what research did
-not cover is one quiet note after the answer, and **Copy answer** writes
-Markdown with the sources numbered as the page numbers them.
+Tuesday sync · …") that a click or a source's number opens, and **Copy answer**
+writes Markdown with the sources numbered as the page numbers them. What
+research did not cover is not shown, and an answer that came has no Try again:
+only a question that failed does. "Nothing in Apollo matched", with **Ask
+across everything you can see**, stays.
+
+Ask keeps a timeline (ADR-0047): every question you asked and its answer, on
+this computer only, in one owner-only file per account beside the person
+session (`ask-timeline-v1`), at most 200 turns and 90 days. Our own sign-out,
+or another account signing in here, deletes it; a session that merely ended
+keeps it. The Authority never stores it. Ask opens over the page on the
+timeline: the latest turn, and those asked since Ask opened, in full, the
+question reading as your message; every earlier turn is one line with its
+project's square (none for all context or Mine), its full question,
+**Changed** when a source it cited changed, and when it was asked, with a quiet
+Today line above today's first turn. Back, Escape or any page closes Ask and
+keeps the timeline. Opening Ask checks what the newest ten turns cited in one
+content-free read (`person ask-check`): at most every five minutes, and quiet
+when it fails. A turn opened from its line or
+a suggestion is checked too when nothing in the last five minutes said what
+its sources are now, and what a check said shows for five minutes only. A line
+opens its answer as it was, dimmed: a sentence whose source changed is lit in
+the signal, one citing something you can no longer read is left out, and **Ask
+again** sits beside "Highlighted parts changed since Oct 14", or "Nothing
+changed since Oct 20" when every source its sentences cite was checked and is
+the same; a check that could not tell says nothing.
+Ask again asks the same full question in the same scope: the new answer lands
+at the bottom, opening with "Since Oct 14" and what is different, each cited,
+or "Nothing changed since Oct 14", and the old line loses its tag. The empty
+bar suggests the questions you asked in its scope first, newest first; one
+opens Ask at its turn instead of asking it again.
+
+Typed while Ask is open, a question continues the conversation: it carries the
+earlier turn opened, or else the latest one when it was asked in the last hour
+(the question, and the sentences a check of the last five minutes found you can
+still read, within the Ask's 16 KiB). It waits for that check; with none, it
+carries the question alone. A turn asked in the last five minutes needs none:
+its answer just read what it cites.
+ECHO works out what "it" or "that ticket" means: when one thing fits it answers
+at once, and the turn's line later reads the full question ("Who owns
+THERM-482?"); when several fit, the turn says "Which one?" with a button each,
+which asks that one's full question. It never guesses.
+
+The refresh checks also read what arrived in your projects (`person
+project-activity`): the first check after sign-in, a return to ECHO and a wake
+read it at once; any other check shares one read every two minutes, and no
+check waits for it. A project shows a small signal dot in the sidebar when a
+note or document was filed in it, a meeting record approved into it, or a
+follow-up of its meetings moved, by someone else and readable by you, since you
+last opened it; live Jira and Confluence edits do not count. Opening it clears
+the dot, and its rows added since your previous visit say **New** for that
+visit. When you last opened each project is kept in the window's storage, per
+account under a hash of it, and goes when the timeline does: at our own
+sign-out, or when another account signs in here. A project seen for the first
+time has no dot, and a read that fails leaves the dots as they were.
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 
@@ -117,8 +169,7 @@ found). "Open" is one status only: a total of not sent and open together is
 A **follow-ups list** is a meeting's (from its Send row, its line in the
 reader, its decision page, or a follow-up's page), a project's (from the line
 above its feed), or **Follow-ups**: everything you sent, own or last handed
-on, in every status, from the sidebar or Home's footer (on an Authority
-without that list, what you sent or own). When that list is already open
+on, in every status, from the sidebar or Home's footer. When that list is already open
 under what shows, its links go back to it, ticks and place kept, instead of
 opening it again. Rows are grouped Not sent, Open, Done and Dismissed, each
 group counted over the whole list, the meeting's actions first; each row
@@ -207,10 +258,7 @@ and the decision page. Coming back reads the page on screen again once, with
 what its check found moved (and the sidebar, when its last read failed or
 the check could not say whether projects moved), keeping what it shows. While the window is hidden, minimized or covered, or
 another app is in front, checks go on, and what shows is read once it can be
-seen. An Authority without the change check: ECHO scans what you sent or own,
-rows only, every five minutes and on wake, and notifies what someone else did
-among them; the sidebar is read again on each return, and Follow-ups lists
-what you sent or own.
+seen.
 
 What someone else did to a follow-up you are involved in (handed to you, done,
 not relevant, reopened, or handed on, for one you sent or last handed on) and
@@ -223,8 +271,8 @@ notification brings the window forward and opens that item's page, a list of
 exactly the follow-ups a summary counted (at most 100, each read again by its
 id, one you can no longer read left out), or the project; only what this
 account was told of opens, and a sheet or Capture that is up stays.
-desktop.log records `lifecycle conceal|resume|shown|wake`, `changes moved
-<areas>` (by area name only) and `changes unsupported`.
+desktop.log records `lifecycle conceal|resume|shown|wake` and `changes moved
+<areas>` (by area name only).
 
 Under the rows, and on an empty Home (with no projects too), a footer says how
 many items you sent wait on others and when ECHO last checked ("2 waiting on

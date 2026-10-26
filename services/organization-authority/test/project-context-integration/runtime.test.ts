@@ -41,17 +41,20 @@ it('uses default API composition and real Person session checks through CLI, inc
     });
     // No transcript is ever shared (ADR-0046), so its read has no route at all.
     expect(transcriptRead.status).toBe(404);
-    const askWithoutModel = await fetch(`http://127.0.0.1:${runtime.address.port}/v3/person/ask`, {
+    const askWithoutModel = await fetch(`http://127.0.0.1:${runtime.address.port}/v7/person/ask`, {
       method: 'POST', headers: { authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ schema_version: 3, question: 'What changed?' }),
     });
     expect(askWithoutModel.status).toBe(503);
-    // The retired one-shot Ask has no route at all (ADR-0022).
-    const retired = await fetch(`http://127.0.0.1:${runtime.address.port}/v2/person/ask`, {
-      method: 'POST', headers: { authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ schema_version: 2, question: 'What changed?' }),
-    });
-    expect(retired.status).toBe(404);
+    // The retired one-shot Ask (ADR-0022) and the Ask routes before `/v7` have no route at all.
+    for (const [path, schema_version] of [['/v2/person/ask', 2], ['/v3/person/ask', 3], ['/v4/person/ask', 3], ['/v5/person/ask', 3], ['/v6/person/ask', 3]] as const) {
+      const retired = await fetch(`http://127.0.0.1:${runtime.address.port}${path}`, {
+        method: 'POST', headers: { authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ schema_version, question: 'What changed?' }),
+      });
+      expect(retired.status).toBe(404);
+      expect(retired.headers.has('x-echo-person-ask-route')).toBe(false);
+    }
     const home = join(root, 'person'); mkdirSync(home, { mode: 0o700 });
     new PersonSessionStore(home).install('https://authority.example', initialized.authority_id, session);
     const cli = async (argv: string[]) => {
@@ -83,7 +86,7 @@ it('uses default API composition and real Person session checks through CLI, inc
     const status = await cli(['updates', 'status-v3', '--request-id', requestId]);
     expect(status.code).toBe(0); expect(JSON.parse(status.stdout)).toMatchObject({ context_id: receipt.context_id, metadata: 'pending' });
     const logout = await cli(['logout']); expect(logout.code).toBe(0);
-    const denied = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/projects/${project}`, { headers: { authorization: `Bearer ${session.access_token}` } });
+    const denied = await fetch(`http://127.0.0.1:${runtime.address.port}/v2/person/projects/${project}`, { headers: { authorization: `Bearer ${session.access_token}` } });
     expect(denied.status).toBe(401);
     expect(await denied.json()).toEqual({ error: { code: 'unauthorized', message: 'request failed' } });
   } finally {

@@ -21,11 +21,9 @@ answers on the full catalog, which may also cite ECHO's shared follow-ups
 ([ADR-0040](../../../docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md)),
 the asker's projects, people and tools, and the Jira projects and Confluence
 spaces of the tools they connected
-([ADR-0042](../../../docs/decisions/ADR-0042-research-tool-contract.md)). An
-Authority from before that change answers V6, as `/v5` does, with none of
-them, and its results still read. To see the exact request a desktop sends,
-use the `trace` command below: it captures the ordinary live Ask, which is
-`/v7` once the Authority serves it.
+([ADR-0042](../../../docs/decisions/ADR-0042-research-tool-contract.md)). To see
+the exact request a desktop sends, use the `trace` command below: it captures
+the ordinary live Ask on `/v7`.
 
 The report keeps the loop and the renderers apart. **Research loop**: every
 trigger, graded on its research result (needs, found, read, handed,

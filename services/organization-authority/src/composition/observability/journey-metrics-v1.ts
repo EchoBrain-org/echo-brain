@@ -1,3 +1,4 @@
+import { PERSON_ANSWER_OUTCOMES_V8 } from "@echo-brain/organization-api";
 import { EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "@echo-brain/organization-authority-kernel/shared/telemetry-vocabulary-v1";
 import {
   createJourneyTelemetryEventV1,
@@ -149,7 +150,7 @@ export function formatJourneyTelemetryMetricsV1(
       ["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"],
     ]));
     const outcome = diagnostic.phase === "research_run" &&
-      ["answered", "partial", "not_found", "off_scope", "completed"].includes(diagnostic.result ?? "")
+      [...PERSON_ANSWER_OUTCOMES_V8, "completed"].includes(diagnostic.result ?? "")
       ? diagnostic.result : null;
     if (outcome !== null) {
       records.push(record(namespace, timestamp, {

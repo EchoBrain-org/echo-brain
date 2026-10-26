@@ -5,7 +5,7 @@ import type Database from "better-sqlite3";
 import { appendAuditRowV1 } from "./audit-row-v1.js";
 import { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticAskAuditEntryV1, type AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AGENTIC_TRIGGER_NAMES_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
-import { PERSON_ASK_PROGRESS_NAMED_MAX_V1, validatePersonWorkspaceCitationV1 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_OUTCOMES_V8, PERSON_ASK_PROGRESS_NAMED_MAX_V1, validatePersonWorkspaceCitationV1 } from "@echo-brain/organization-api";
 
 export interface AgenticAskAuditRequestContextV1 {
   readonly authority_id: string;
@@ -173,7 +173,8 @@ export class SqlitePersonAgenticAskAuditV1 {
       entry.kind !== "echo-agentic-ask-audit-v1" ||
       (entry.trigger !== undefined && !AGENTIC_TRIGGER_NAMES_V1.includes(entry.trigger)) ||
       (entry.budget !== undefined && entry.budget !== "background") ||
-      !["answered", "partial", "not_found", "off_scope", "cancelled", "timed_out"].includes(entry.outcome) ||
+      // A follow-up that asked which one is released as `clarify` (ADR-0047).
+      ![...PERSON_ANSWER_OUTCOMES_V8, "cancelled", "timed_out"].includes(entry.outcome) ||
       !Array.isArray(entry.receipt_digests) || entry.receipt_digests.length > limits.receipts ||
       new Set(entry.receipt_digests).size !== entry.receipt_digests.length ||
       !entry.receipt_digests.every((digest) => /^sha256:[a-f0-9]{64}$/.test(digest)) ||

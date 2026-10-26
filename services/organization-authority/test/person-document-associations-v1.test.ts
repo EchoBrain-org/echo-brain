@@ -4,14 +4,14 @@ import { once } from 'node:events';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import type { PersonDocumentAssociateV1, PersonDocumentDissociateV1, PersonDocumentUploadMetadataV1 } from '@echo-brain/organization-api';
+import type { PersonDocumentAssociateV1, PersonDocumentDissociateV1, PersonDocumentUploadMetadataV2 } from '@echo-brain/organization-api';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { createPersonDocumentUploadStagingV1 } from '../src/adapters/files/document-upload-staging-v1.js';
-import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertStoredDocumentV1, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
 const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
@@ -29,9 +29,9 @@ function setup() {
   const repository = new SqlitePersonDocumentRepositoryV1(db, () => PROJECT_CONTEXT_NOW);
   const app = createPersonDocumentApplicationV1({ repository, authenticate: token => authorization(token === 'member' ? MEMBER : token === 'returned' ? RETURNED_MEMBER : OWNER) });
   const bytes = Buffer.from('immutable SCOUT requirements');
-  const upload = (token = 'owner', changes: Partial<PersonDocumentUploadMetadataV1> = {}) => app.upload(token, {
-    schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: randomUUID(), filename: 'SCOUT.md', title: 'SCOUT',
-    content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: 'team' }, project_id: null, ...changes,
+  const upload = (token = 'owner', changes: Partial<PersonDocumentUploadMetadataV2> = {}) => app.uploadV2(token, {
+    schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: randomUUID(), filename: 'SCOUT.md', title: 'SCOUT',
+    content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: 'team' }, association_project_ids: [], ...changes,
   }, bytes);
   return { db, repository, app, bytes, upload };
 }
@@ -45,7 +45,7 @@ function dissociate(request: PersonDocumentAssociateV1): PersonDocumentDissociat
   return { ...request, kind: 'echo-person-document-dissociate-v1', request_id: randomUUID() };
 }
 function search(project_id: typeof PROJECT_ALPHA | typeof PROJECT_BETA) {
-  return { schema_version: 1, kind: 'echo-person-document-search-v1', project_id, query: '', limit: 20, cursor: null };
+  return { schema_version: 2, kind: 'echo-person-document-search-v2', project_id, query: '', limit: 20, cursor: null };
 }
 
 describe('document project associations', () => {
@@ -97,14 +97,14 @@ describe('document project associations', () => {
     servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const address = server.address(); if (!address || typeof address === 'string') throw new Error('No test address');
     const origin = `http://127.0.0.1:${address.port}`;
     const request = associate(saved.document_id);
-    const send = (body: unknown, action = 'associate', documentId = saved.document_id, token = 'owner') => fetch(`${origin}/v1/person/documents/${documentId}/${action}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) });
+    const send = (body: unknown, action = 'associate', documentId = saved.document_id, token = 'owner') => fetch(`${origin}/v2/person/documents/${documentId}/${action}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) });
     const attached = await send(request); expect(attached.status).toBe(200); expect(await attached.json()).toMatchObject({ document_id: saved.document_id, operation: 'associate', request_id: request.request_id, state: 'applied' });
     for (const response of [await send({ ...request, audience: { kind: 'project', project_id: PROJECT_ALPHA } }), await send(request, 'dissociate'), await send(request, 'associate', `doc_${'a'.repeat(64)}`), await send(JSON.stringify(request).replace('"schema_version":1', '"schema_version":1,"schema_version":1')), await send('x'.repeat(4097))]) {
       expect(response.status).toBe(400); expect(await response.json()).toMatchObject({ error: { code: 'invalid_request' } });
     }
     expect((await send(dissociate(request), 'dissociate', saved.document_id, 'member')).status).toBe(404);
     const removed = await send(dissociate(request), 'dissociate'); expect(removed.status).toBe(200); expect(await removed.json()).toMatchObject({ operation: 'dissociate', state: 'applied' });
-    expect(app.read('member', saved.document_id)).toMatchObject({ project_id: null, audience: { kind: 'team' } });
+    expect(app.readV2('member', saved.document_id)).toMatchObject({ association_project_ids: [], audience: { kind: 'team' } });
     const validAssociate = app.associate;
     app.associate = (token, input) => ({ ...validAssociate(token, input), project_id: PROJECT_BETA });
     const next = associate(saved.document_id); const mismatch = await send(next);
@@ -112,32 +112,33 @@ describe('document project associations', () => {
     app.associate = validAssociate;
     expect((await send(next)).status).toBe(200);
   });
-  it('associates and dissociates originals without changing their audience or initial receipt', () => {
-    const { app, db, upload, bytes } = setup(); const saved = upload(); const request = associate(saved.document_id);
+  it('associates and dissociates the single project link of a stored V1 original without changing its audience or initial receipt', () => {
+    // The retired V1 upload (ADR-0048) stored at most one project link; V2 reads release it as the association set.
+    const { app, db, bytes } = setup(); const saved = insertStoredDocumentV1(db, OWNER, { filename: 'SCOUT.md', title: 'SCOUT', audience: { kind: 'team' }, project_id: null }, bytes); const request = associate(saved.document_id);
     const initialReceipt = db.prepare('SELECT receipt_json FROM authority_person_document_receipts_v1 WHERE request_id=?').get(saved.request_id);
     const receipt = app.associate('owner', request);
     expect(receipt).toEqual({ schema_version: 1, kind: 'echo-person-document-association-receipt-v1', request_id: request.request_id, document_id: saved.document_id, project_id: PROJECT_ALPHA, operation: 'associate', received_at: PROJECT_CONTEXT_NOW, state: 'applied' });
     expect(app.associate('owner', request)).toEqual(receipt);
-    expect(app.read('member', saved.document_id)).toMatchObject({ project_id: PROJECT_ALPHA, audience: { kind: 'team' } });
-    expect(app.search('member', search(PROJECT_ALPHA)).documents.map(x => x.document_id)).toEqual([saved.document_id]);
+    expect(app.readV2('member', saved.document_id)).toMatchObject({ association_project_ids: [PROJECT_ALPHA], audience: { kind: 'team' } });
+    expect(app.searchV2('member', search(PROJECT_ALPHA)).documents.map(x => x.document_id)).toEqual([saved.document_id]);
     expect(() => app.associate('owner', associate(saved.document_id, PROJECT_BETA))).toThrow(expect.objectContaining({ code: 'conflict' }));
     const removed = app.dissociate('owner', dissociate(request)); expect(removed.operation).toBe('dissociate');
-    expect(app.search('member', search(PROJECT_ALPHA)).documents).toEqual([]);
-    expect(app.read('member', saved.document_id)).toMatchObject({ project_id: null, audience: { kind: 'team' } });
-    expect(app.original('member', saved.document_id).bytes).toEqual(bytes);
+    expect(app.searchV2('member', search(PROJECT_ALPHA)).documents).toEqual([]);
+    expect(app.readV2('member', saved.document_id)).toMatchObject({ association_project_ids: [], audience: { kind: 'team' } });
+    expect(app.originalV2('member', saved.document_id).bytes).toEqual(bytes);
     app.associate('owner', associate(saved.document_id, PROJECT_BETA));
-    expect(app.read('owner', saved.document_id).project_id).toBe(PROJECT_BETA);
+    expect(app.readV2('owner', saved.document_id).association_project_ids).toEqual([PROJECT_BETA]);
     expect(db.prepare('SELECT receipt_json FROM authority_person_document_receipts_v1 WHERE request_id=?').get(saved.request_id)).toEqual(initialReceipt);
     expect(db.prepare('SELECT project_id,audience_kind FROM authority_person_documents_v1 WHERE document_id=?').get(saved.document_id)).toEqual({ project_id: null, audience_kind: 'team' });
   });
   it('keeps associated private content private and checks uploader, current grants and readable audience', () => {
     const { app, upload } = setup(); const privateDoc = upload('owner', { audience: { kind: 'only_me' } });
     app.associate('owner', associate(privateDoc.document_id));
-    expect(app.search('member', search(PROJECT_ALPHA)).documents).toEqual([]);
+    expect(app.searchV2('member', search(PROJECT_ALPHA)).documents).toEqual([]);
     expect(() => app.dissociate('member', dissociate(associate(privateDoc.document_id)))).toThrow(expect.objectContaining({ code: 'not_found' }));
     const memberPrivate = upload('member', { audience: { kind: 'only_me' } });
     app.associate('member', associate(memberPrivate.document_id));
-    expect(() => app.read('owner', memberPrivate.document_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(() => app.readV2('owner', memberPrivate.document_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
     expect(() => app.dissociate('owner', dissociate(associate(memberPrivate.document_id)))).toThrow(expect.objectContaining({ code: 'not_found' }));
     const team = upload();
     expect(() => app.associate('member', associate(team.document_id))).toThrow(expect.objectContaining({ code: 'not_found' }));
@@ -151,7 +152,7 @@ describe('document project associations', () => {
     app.associate('member', attached);
     db.prepare(`UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE membership_id=? AND project_id=?`).run(PROJECT_CONTEXT_NOW, MEMBER.membership_id, PROJECT_ALPHA);
     expect(app.dissociate('member', dissociate(attached))).toMatchObject({ operation: 'dissociate', state: 'applied' });
-    expect(app.search('owner', search(PROJECT_ALPHA)).documents).toEqual([]);
+    expect(app.searchV2('owner', search(PROJECT_ALPHA)).documents).toEqual([]);
   });
   it('replays only the same actor tenure minimal receipt after project removal, never a changed command', () => {
     const { app, db, upload } = setup(); const saved = upload('member', { audience: { kind: 'project', project_id: PROJECT_ALPHA } }); const request = associate(saved.document_id);
@@ -160,7 +161,7 @@ describe('document project associations', () => {
     expect(app.associate('member', request)).toEqual(receipt);
     expect(() => app.associate('member', { ...request, project_id: PROJECT_BETA })).toThrow(expect.objectContaining({ code: 'conflict' }));
     expect(() => app.dissociate('member', { ...request, kind: 'echo-person-document-dissociate-v1' })).toThrow(expect.objectContaining({ code: 'conflict' }));
-    expect(() => app.read('member', saved.document_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(() => app.readV2('member', saved.document_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
     revokeMembership(db, MEMBER); addMembership(db, RETURNED_MEMBER, 'Returned', 'member@example.test'); grant(db, PROJECT_ALPHA, RETURNED_MEMBER, 'member');
     expect(() => app.associate('member', request)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
     expect(() => app.associate('returned', request)).toThrow(expect.objectContaining({ code: 'not_found' }));

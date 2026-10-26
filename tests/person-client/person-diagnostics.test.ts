@@ -43,7 +43,7 @@ describe('ordinary request diagnostics client', () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const client = new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch });
     await expect(client.diagnostics('bearer', { schema_version: 1, operation: 'read', capture_id: 'guess' } as never)).rejects.toThrow();
-    await expect(client.askV5('bearer', 'What changed?', undefined, undefined, 'guess' as never)).rejects.toThrow();
+    await expect(client.askV7('bearer', 'What changed?', undefined, undefined, 'guess' as never)).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
   });
 

@@ -93,16 +93,3 @@ test('a hidden window is notified, and reads what shows once it is shown again',
   await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toBeVisible();
   expect(desktopLog()).toMatch(/lifecycle shown\n/);
 });
-
-test('an Authority without the change check: logged once, and the sidebar is read again on each return', async () => {
-  run = await launch('no-changes');
-  const { page, app } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await expect.poll(desktopLog).toMatch(/changes unsupported\n/);
-  const before = lists();
-  await emit(app, 'echo-test:conceal');
-  await emit(app, 'echo-test:resume');
-  await expect.poll(lists).toBe(before + 2);
-  expect(desktopLog().match(/changes unsupported/g)).toHaveLength(1);
-  expect(desktopLog()).toMatch(/lifecycle conceal\n.*lifecycle resume\n/s);
-});

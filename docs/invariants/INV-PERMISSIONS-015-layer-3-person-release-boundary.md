@@ -113,10 +113,11 @@ citation projection alone, and only the final check keeps a since-revoked item
 out of the answer and its receipt. What an event may carry, the terminal error
 and the audit are ADR-0039's
 [Decision and consequences](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md#decision-and-consequences).
-Since 2026-10-19 only `/v6` and `/v7` stream; `/v5` answers in JSON
-([Later decisions](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md#later-decisions)).
+Only `/v7` streams, in progress V3: every Ask route before it is retired
+([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
 
-ADR-0026 extends this boundary to Jira live evidence on `POST /v4/person/ask`.
+ADR-0026 extends this boundary to Jira live evidence, added on `POST /v4/person/ask`
+and read on `POST /v7/person/ask` since ADR-0047 retired the routes before it.
 The provider reads as the authenticated Person's current Jira grant. Audits commit
 only coordinates, digests and authorization commitments before releasing evidence;
 tool bodies and metadata remain request-local and never enter Layer 1 or Layer 2.
@@ -131,8 +132,8 @@ invalidate in-flight evidence. A runtime project fence cannot be widened by a
 mapping. The mapping stores configuration coordinates only, never tool content.
 Mine and unmapped ECHO projects exclude Jira.
 
-Update, 2026-10-11: Confluence page evidence on the additive
-`POST /v5/person/ask` (V6 answers) runs through the same audited live-evidence
+Update, 2026-10-11: Confluence page evidence, added on `POST /v5/person/ask`
+(V6 answers) and read on `POST /v7/person/ask` now, runs through the same audited live-evidence
 path, under the asker's own Confluence grant and, in a project, only the
 lead-mapped spaces; Mine and unmapped projects exclude it. Its decision record,
 [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md), is
@@ -173,8 +174,8 @@ transaction, not inside it: access another process revokes in that instant is
 not seen, a known gap of open items and Home v1.
 
 [ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md) adds open
-items to Ask as follow-ups, on V7 answers served by the additive
-`POST /v6/person/ask`. The follow-ups source releases exactly what the
+items to Ask as follow-ups, first on V7 answers served by `POST /v6/person/ask`
+and now on the V8 answers of `POST /v7/person/ask`. The follow-ups source releases exactly what the
 open-items policy shows the asker, and each check puts the follow-ups released
 since the last one through that policy again. Who sees what, its audit and its
 checks are ADR-0040's
@@ -224,7 +225,7 @@ An open of anything the caller cannot read is one fixed `not_found`, and list
 holds meetings only when a record the reader can read in that scope (under
 mine, one the reader approved) is waiting to be indexed.
 
-ADR-0024's mine scope on `POST /v3/person/ask` is a caller-selected narrowing
+ADR-0024's mine scope, on `POST /v7/person/ask` now (it began on `/v3`), is a caller-selected narrowing
 of the same global readable set: the evidence desk pushes it into every store
 query, mine with a project is a 400, and mine without the composed approver
 projectors is a 503 rather than global. The answer audit and the per-store release audits are unchanged.

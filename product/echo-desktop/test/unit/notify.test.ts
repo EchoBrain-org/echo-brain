@@ -132,6 +132,35 @@ describe('what notifies (N2)', () => {
     expect(notices()).toEqual([{ text: 'You were added to Comet', target: { kind: 'project', project_id: comet.project_id } }]);
   });
 
+  it('a project you were added to, told without waiting on the read of what arrived in your projects; a return goes on without it too', async () => {
+    authority.active = [project(1, 20)];
+    let hold = false;
+    const arrivals: ((value: unknown) => void)[] = [];
+    rpc.mockImplementation(changesRpc({
+      'app.status': () => ok(account ? { signed_in: true, account } : { signed_in: false, account: null }),
+      'projects.activity': () => (hold ? new Promise(resolve => { arrivals.push(resolve); }) : ok({ items: [] })),
+    }));
+    const store = await signedIn();
+    // The read of what arrived starts with the check and hangs; the check acts on what moved all the same.
+    hold = true;
+    const comet = project(2, 25, { name: 'Comet', role: 'member' });
+    authority.active = [comet, project(1, 20)];
+    await wake();
+    await flush();
+    expect(arrivals).toHaveLength(1);
+    expect(texts()).toEqual(['You were added to Comet']);
+    // Coming back reads the account and the page again without it, too.
+    let back = false;
+    void show(store).then(() => { back = true; });
+    await flush();
+    expect(arrivals).toHaveLength(2);
+    expect(back).toBe(true);
+    // Answered late, quietly.
+    for (const arrived of arrivals) arrived(fail('unavailable', { retryable: true }));
+    await flush();
+    expect(texts()).toEqual(['You were added to Comet']);
+  });
+
   it('a project you were added to that sorts past the sidebar\'s pages, once, opening it though no sidebar row has it', async () => {
     authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
     const store = await signedIn();
@@ -285,18 +314,6 @@ describe('a follow-up sent and closed between two checks (review C)', () => {
     authority.items = [stated(item, 'not_relevant', MINA, 10)];
     await nextCheck();
     expect(texts()).toEqual(['Mina marked Action 1 not relevant']);
-  });
-
-  it('on an older Authority (no change check, nor changed_since), reads none closed, and tells the rest as before', async () => {
-    authority.changes = 'not_supported';
-    await startStore();
-    authority.items = [stated(sent(1, MINA), 'done', MINA, 2)];
-    await nextCheck(300);
-    expect(notices()).toEqual([]);
-    authority.items = [...authority.items, followUp(3)];
-    await nextCheck(300);
-    expect(texts()).toEqual(['Mina handed you Action 3']);
-    expect(closedReads()).toEqual([]);
   });
 });
 
@@ -484,22 +501,6 @@ describe('noise (N4)', () => {
     await flush();
     expect(notices()).toEqual([]);
     expect(rpc.mock.calls.filter(([method]) => method === 'changes.read').at(-1)?.[1]).toMatchObject({ expect: { membership_id: 'other' } });
-  });
-});
-
-describe('an older Authority (R8)', () => {
-  it('scans what you sent or own every five minutes, learning first, then telling what someone else did', async () => {
-    authority.changes = 'not_supported';
-    await signedIn([sent(1, MINA)]);
-    expect(followed().map(([, params]) => params.request.scope)).toEqual(['mine']);
-    authority.items = [stated(sent(1, MINA), 'done', MINA, 30)];
-    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
-    expect(followed()).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await flush();
-    expect(texts()).toEqual(['Mina marked Action 1 done']);
-    // The change check is not asked again until the next start.
-    expect(rpc.mock.calls.filter(([method]) => method === 'changes.read')).toHaveLength(1);
   });
 });
 

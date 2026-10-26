@@ -9,6 +9,13 @@ import { replay, SCENARIOS, type Scenario } from "./fixtures/agentic-scenarios.j
  * fixture retains its output-level semantic control; the Granola Phase 2
  * fixture is an immutable historical full-fingerprint control. The separate
  * quality baseline pins current prompt, model-input and audit fingerprints.
+ *
+ * Every fixture was recorded while these scenarios answered V4 (and
+ * `live_ticket_and_page` V6). Ask now answers only V8, whose answer to each
+ * scenario is the recorded one with its `schema_version` and `kind` alone
+ * changed: the replay checks that the audit binds the V8 answer it released,
+ * then fingerprints that answer, and the audit record, under the version the
+ * scenario recorded. Every other byte is compared as recorded.
  */
 const HISTORICAL_FIXTURE = new URL("./agentic-ask-golden.v1.json", import.meta.url);
 const HISTORICAL_FIXTURE_SHA256 = "sha256:8aff56ec626c367b738acb98217c406e2be46ef255279ac6331227b3bcf0f417";
@@ -28,9 +35,17 @@ const GRANOLA_PHASE2_HISTORICAL_SHA256 = "sha256:74eb19f50284fd33ca09c5cc030531d
 const RETIRED_SCENARIOS = new Set(["small_scope_preload"]);
 const current = <T>(recorded: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(recorded).filter(([name]) => !RETIRED_SCENARIOS.has(name)));
 
+/** The released V8 answer as the fixtures recorded it: in the scenario's recorded version, every other byte unchanged. */
+function asRecorded(response: object, version: Scenario["recorded"]) {
+  return { ...response, schema_version: version, kind: `echo-clean-person-answer-v${version}` };
+}
+
 async function run(name: string, scenario: Scenario) {
   const { response, inputs, audit } = await replay(name, scenario);
-  const entry = audit.at(-1)!;
+  const released = audit.at(-1)!;
+  expect(response).toMatchObject({ schema_version: 8, kind: "echo-clean-person-answer-v8" });
+  expect(released.response_sha256).toBe(canonicalSha256(response));
+  const entry = { ...released, response_sha256: canonicalSha256(asRecorded(response, scenario.recorded)) };
   return {
     calls: inputs.length,
     prompt_sha256: entry.prompt_sha256,

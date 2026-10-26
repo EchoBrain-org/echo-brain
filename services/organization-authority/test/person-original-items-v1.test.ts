@@ -12,9 +12,10 @@ import { createPersonDocumentApplicationV1 } from "../src/application/document-v
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import type { PersonItemPositionV1, PersonStoreDocumentRowV1, PersonStoreNoteRowV1, PersonStoreReleaseV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
+import type { PersonUploadAudienceV2, ProjectIdV1 } from "@echo-brain/organization-api";
 import {
   MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, RETURNED_MEMBER,
-  addMembership, authorization, projectContextDatabase, revokeMembership,
+  addMembership, authorization, insertStoredDocumentV1, insertStoredNoteV2, projectContextDatabase, revokeMembership,
 } from "./fixtures/project-context-sqlite.js";
 import { failure } from "./authority-failure.js";
 
@@ -75,11 +76,12 @@ function fixture() {
   const requestIds: string[] = [];
   const authors = new Map<string, Actor>();
 
+  /** A V3 note through its submit, or a note stored as V2 before that submit was retired (ADR-0048). */
   const note = (token: string, audience: NoteAudience, associations: readonly string[] = [], version: 2 | 3 = 3, text = "note text"): `ctx_${string}` => {
     const request_id = randomUUID();
     requestIds.push(request_id);
     const receipt = version === 2
-      ? projects.submitUpload(token, { schema_version: 2, kind: "echo-person-update-submit-v2", request_id, title: `Note ${requestIds.length}`, text, project_id: associations[0] ?? null, audience })
+      ? insertStoredNoteV2(database, ACTORS[token]!, { request_id, title: `Note ${requestIds.length}`, text, project_id: (associations[0] ?? null) as ProjectIdV1 | null, audience: audience as PersonUploadAudienceV2 }, now())
       : projects.submitUploadV3(token, { schema_version: 3, kind: "echo-person-update-submit-v3", request_id, title: `Note ${requestIds.length}`, text, association_project_ids: associations, audience });
     authors.set(receipt.context_id, ACTORS[token]!);
     return receipt.context_id as `ctx_${string}`;
@@ -93,8 +95,9 @@ function fixture() {
     const chunks = options.chunks ?? ["document text"];
     const bytes = Buffer.from(chunks.join("\n"));
     const common = { request_id, filename: `document-${requestIds.length}.md`, title: `Doc ${requestIds.length}`, content_length: bytes.byteLength, sha256: sha256Digest(bytes), audience };
+    // A V1 document is one stored before its upload was retired (ADR-0048).
     const saved = options.version === 1
-      ? documents.upload(token, { schema_version: 1, kind: "echo-person-document-upload-v1", ...common, project_id: associations[0] ?? null }, bytes)
+      ? insertStoredDocumentV1(database, ACTORS[token]!, { request_id, filename: common.filename, title: common.title, audience: audience as PersonUploadAudienceV2, project_id: (associations[0] ?? null) as ProjectIdV1 | null }, bytes, now())
       : documents.uploadV2(token, { schema_version: 2, kind: "echo-person-document-upload-v2", ...common, association_project_ids: associations }, bytes);
     const state = options.state ?? "extracting";
     // "unavailable" is terminal only on the third attempt.
@@ -461,12 +464,20 @@ describe("person original items store", () => {
 
   it("uses Ask's ACL: documents list like document search, notes like the upload reads", () => {
     const f = fixture();
+    // A V2 note is found by the V2 search alone: each carries its own word to search for.
+    const markers = new Map<string, string>();
+    const stored = (token: string, audience: NoteAudience) => {
+      const marker = `oraclemarker${markers.size}`;
+      const id = f.note(token, audience, [], 2, marker);
+      markers.set(id, marker);
+      return id;
+    };
     const notes = [
-      f.note("owner", { kind: "only_me" }, [], 2), f.note("owner", { kind: "team" }, [], 2),
-      f.note("owner", { kind: "project", project_id: PROJECT_ALPHA }, [], 2), f.note("owner", { kind: "project", project_id: PROJECT_BETA }, [], 2),
+      stored("owner", { kind: "only_me" }), stored("owner", { kind: "team" }),
+      stored("owner", { kind: "project", project_id: PROJECT_ALPHA }), stored("owner", { kind: "project", project_id: PROJECT_BETA }),
       f.note("owner", { kind: "only_me" }), f.note("owner", { kind: "team" }),
       f.note("owner", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }), f.note("owner", { kind: "projects", project_ids: [PROJECT_BETA] }),
-      f.note("member", { kind: "only_me" }), f.note("member", { kind: "project", project_id: PROJECT_ALPHA }, [], 2),
+      f.note("member", { kind: "only_me" }), stored("member", { kind: "project", project_id: PROJECT_ALPHA }),
     ];
     f.document("owner", { kind: "only_me" }, [], { version: 1 });
     f.document("owner", { kind: "project", project_id: PROJECT_BETA }, [PROJECT_ALPHA], { version: 1 });
@@ -481,7 +492,10 @@ describe("person original items store", () => {
       for (const id of notes) {
         const version = (f.database.prepare("SELECT request_version FROM authority_person_updates_v2 WHERE context_id=?").get(id) as { request_version: 2 | 3 }).request_version;
         let readable = true;
-        try { if (version === 2) f.projects.readUpload(token, id); else f.projects.readUploadV3(token, id); } catch { readable = false; }
+        try {
+          if (version === 2) readable = f.projects.searchUploads(token, { query: markers.get(id)! }).results.some((result) => result.context_id === id);
+          else f.projects.readUploadV3(token, id);
+        } catch { readable = false; }
         expect(listed.has(id), `${token} ${id}`).toBe(readable);
       }
     }

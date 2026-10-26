@@ -112,7 +112,8 @@ and Slack
 `providers/slack/server/test/private-approval/slack-approval-presenter-v1.test.ts`
 cover them. The multi-fragment Person identity composer was also removed: the
 composition root passes only the Slack identity bundle, and
-`services/organization-authority/test/presentation/person-tools-http-application-v3.test.ts`
-keeps the V3/V4 status authorization, account/session revalidation and
-duplicate-tool rejection tests. Provider identity/signature qualification
+`services/organization-authority/test/presentation/person-tools-http-application.test.ts`
+keeps the V4 status authorization, account/session revalidation and
+duplicate-tool rejection tests (the V3 list is retired,
+[ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). Provider identity/signature qualification
 remains in each real adapter's tests.

@@ -10,7 +10,7 @@ import { SqlitePersonDocumentRepositoryV1 } from "../../src/adapters/persistence
 import { SqlitePersonOriginalContextRetrievalV1 } from "../../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonAgenticAskAuditV1 } from "../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { createPersonDocumentApplicationV1 } from "../../src/application/document-v1.js";
-import { createPersonAnswerV3Route } from "../../src/composition/person-answer-v3-route.js";
+import { createPersonLiveAnswerRouteV1 } from "../../src/composition/person-live-answer-route-v1.js";
 import { PersonRecordSearchIndexLagV1 } from "../../src/composition/person-record-search-route.js";
 import { createJourneyTelemetryTransportV1 } from "../../src/composition/observability/journey-telemetry-transport-v1.js";
 import { OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "../fixtures/project-context-sqlite.js";
@@ -47,7 +47,7 @@ function fixture() {
   const repository = new SqlitePersonDocumentRepositoryV1(database, () => new Date(tick += 1000).toISOString());
   const documents = createPersonDocumentApplicationV1({ repository, authenticate: () => authorization(OWNER) });
   const bytes = Buffer.from("The launch window is October.");
-  documents.upload("owner", { schema_version: 1, kind: "echo-person-document-upload-v1", request_id: randomUUID(), filename: "Atlas plan.md", title: "Atlas plan", content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: "team" }, project_id: PROJECT_ALPHA }, bytes);
+  documents.uploadV2("owner", { schema_version: 2, kind: "echo-person-document-upload-v2", request_id: randomUUID(), filename: "Atlas plan.md", title: "Atlas plan", content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: "team" }, association_project_ids: [PROJECT_ALPHA] }, bytes);
   const claim = repository.claimExtraction(); if (claim === undefined) throw new Error("missing extraction claim");
   repository.completeExtraction(claim, { status: "ready", sourceSha256: claim.source_sha256, extractorVersion: "fixture-1", chunks: [{ anchor_kind: "paragraph", anchor_start: 1, text: "The launch window is October." }], message: null });
 
@@ -78,7 +78,7 @@ function fixture() {
       return new Response(JSON.stringify({ id: `gen-${randomUUID()}`, choices: [{ finish_reason: "stop", message: { content: JSON.stringify(reply) } }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, prompt_tokens_details: { cached_tokens: 10 }, completion_tokens_details: { reasoning_tokens: 5 } } }), { status: 200 });
     },
   });
-  const route = createPersonAnswerV3Route({
+  const route = createPersonLiveAnswerRouteV1({
     authority_id: "oau_project_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess } as never, originals,
     records: { initializeDesk() { throw new PersonRecordSearchIndexLagV1(); } } as never,
@@ -113,7 +113,8 @@ describe("agentic Ask observability through the canonical runtime channel", () =
     });
     expect(closed(f.lines, "evidence_list").map(line => line.diagnostic.counts)).toEqual([expect.objectContaining({ included_count: 1, document_items: 1, meeting_items: 0 })]);
     expect(closed(f.lines, "evidence_open").map(line => line.diagnostic.counts)).toEqual([expect.objectContaining({ included_count: 1, document_items: 1 })]);
-    expect(closed(f.lines, "evidence_revalidate")).toHaveLength(5);
+    // Before each of the four model calls, before the audit and after it.
+    expect(closed(f.lines, "evidence_revalidate")).toHaveLength(6);
     expect(closed(f.lines, "ask_planner")).toHaveLength(3);
     expect(closed(f.lines, "ask_answer")).toHaveLength(1);
     const modelCalls = closed(f.lines, "model_call");

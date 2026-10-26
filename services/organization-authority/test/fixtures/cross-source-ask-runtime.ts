@@ -79,7 +79,7 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
   ] as const) {
     const documents = createPersonDocumentApplicationV1({ repository, authenticate: () => authorization(actor) });
     const bytes = Buffer.from(text);
-    documents.upload('synthetic-seed', { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: randomUUID(), filename: 'launchscope.md', title: 'Launchscope document', content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: audience }, project_id: null }, bytes);
+    documents.uploadV2('synthetic-seed', { schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: randomUUID(), filename: 'launchscope.md', title: 'Launchscope document', content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: audience }, association_project_ids: [] }, bytes);
     const claim = repository.claimExtraction();
     if (claim === undefined) throw new Error('Missing synthetic document extraction claim');
     expect(repository.completeExtraction(claim, { status: 'ready', sourceSha256: claim.source_sha256, extractorVersion: 'cross-source-fixture-v1', chunks: [{ anchor_kind: 'paragraph', anchor_start: 1, text }], message: null })).toBe(true);
@@ -136,8 +136,8 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
     expect(connect.status).toBe(201); nango.finish();
     expect(await post(`/v1/person/tools/${tool}/status`, { schema_version: 1, attempt: connect.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
   }
-  // The V6 answer is the first that cites pages.
-  const ask = () => post('/v5/person/ask', { schema_version: 3, question: 'Combine the Launchscope approved meeting, document, Jira ticket, and Confluence page.' });
+  // Ask, `/v7`: the V8 answer.
+  const ask = () => post('/v7/person/ask', { schema_version: 3, question: 'Combine the Launchscope approved meeting, document, Jira ticket, and Confluence page.' });
   /**
    * One open follow-up (ADR-0033) on the approved Launchscope meeting, as its
    * impact check finds it and the owner, who approved the meeting, sends it to

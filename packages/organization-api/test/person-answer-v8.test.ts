@@ -1,14 +1,12 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_ANSWER_PATH_V6,
   PERSON_ANSWER_PATH_V7,
+  PERSON_ANSWER_ROUTE_HEADER_V5,
   personAnswerCitationKeyV8,
   personWorkspaceRefV1,
   validatePersonAnswerCitationV6,
-  validatePersonAnswerCitationV7,
   validatePersonAnswerCitationV8,
-  validatePersonAnswerResponseV7,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceDeskResponseV1,
   validatePersonItemRefV1,
@@ -41,7 +39,7 @@ const response = (citations: readonly { readonly visibility: string }[] = [proje
 describe('Workspace answer V8 (research tool contract v1)', () => {
   it('serves on its own route and cites projects, people, tools and tool containers', () => {
     expect(PERSON_ANSWER_PATH_V7).toBe('/v7/person/ask');
-    expect(PERSON_ANSWER_PATH_V7).not.toBe(PERSON_ANSWER_PATH_V6);
+    expect(PERSON_ANSWER_ROUTE_HEADER_V5).toBe('x-echo-person-ask-route');
     const all = [project, person, tool, container];
     const accepted = validatePersonAnswerResponseV8(response(all));
     expect(accepted.citations).toEqual(all);
@@ -49,20 +47,21 @@ describe('Workspace answer V8 (research tool contract v1)', () => {
     for (const citation of all) expect(validatePersonAnswerCitationV8(citation)).toEqual(citation);
   });
 
-  it('keeps V7 and every earlier version closed to workspace citations', () => {
-    for (const citation of [project, person, tool, container]) {
-      expect(() => validatePersonAnswerCitationV7(citation)).toThrow();
-      expect(() => validatePersonAnswerCitationV6(citation)).toThrow();
-      expect(() => validatePersonAnswerResponseV7({ ...response([citation]), schema_version: 7, kind: 'echo-clean-person-answer-v7' })).toThrow();
-    }
+  it('keeps impact cards and the evidence desk closed to workspace citations', () => {
+    // Stored impact cards and open items' live parts validate V6 citations.
+    for (const citation of [project, person, tool, container]) expect(() => validatePersonAnswerCitationV6(citation)).toThrow();
     // The model-free evidence doors stay V4.
     expect(() => validatePersonEvidenceDeskResponseV1({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false,
       items: [{ id: 'desk_project', kind: 'project', citation: project.citation, label: 'Thermal recovery', visibility: 'project', receipt_sha256: record }] })).toThrow();
-    // A V8 answer is never read as V7.
-    expect(() => validatePersonAnswerResponseV7(response())).toThrow('Ask response is invalid');
   });
 
-  it('accepts every V7 citation unchanged', () => {
+  it('refuses every retired answer version', () => {
+    for (const version of [4, 5, 6, 7]) {
+      expect(() => validatePersonAnswerResponseV8({ ...response(), schema_version: version, kind: `echo-clean-person-answer-v${version}` })).toThrow('Ask response is invalid');
+    }
+  });
+
+  it('accepts a meeting, a page, a follow-up and a project together', () => {
     const accepted = validatePersonAnswerResponseV8(response([meeting, page, followUp, project]));
     expect(accepted.citations).toEqual([meeting, page, followUp, project]);
   });
@@ -111,8 +110,8 @@ describe('Workspace answer V8 (research tool contract v1)', () => {
       expect(() => validatePersonAnswerCitationV8(value)).toThrow('applies only to a tool container');
     }
     for (const key of ['', ' THERM', 'THE\nRM', 'x'.repeat(257), 7]) expect(() => validatePersonAnswerCitationV8({ ...container, key })).toThrow();
-    // V7 has no key at all.
-    expect(() => validatePersonAnswerCitationV7({ ...meeting, key: 'THERM' })).toThrow('unexpected shape');
+    // An impact card's citation has no key at all.
+    expect(() => validatePersonAnswerCitationV6({ ...meeting, key: 'THERM' })).toThrow('unexpected shape');
   });
 
   it('cites each project, person, tool and container once, by what it names and never by its label', () => {

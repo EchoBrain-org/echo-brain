@@ -65,7 +65,7 @@ function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort) {
     projects: createProjectContextApplicationV1({ authenticate: access_token => sessions.authenticateAccess({ access_token }), repository: projects }),
     grants: personWorkspaceGrantsV1(projects), people: f.directory, tools,
   } };
-  return serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(options, 8) });
+  return serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(options) });
 }
 
 function ask(base: string, headers: Readonly<Record<string, string>>) {

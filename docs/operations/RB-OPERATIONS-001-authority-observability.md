@@ -597,7 +597,7 @@ Ask journey, so it is listed, counted and alarmed like any Ask:
 | `ask_context` | Items handed to the answer call (`context_atom_count`). |
 | `ask_answer` | The answer call (and its repair), usage and citations. A failed answer call that still ends in records or not found stays `succeeded`; its span shows the failure. |
 | `ask_revalidation`, `ask_audit` | The final fence and the terminal audit. |
-| `ask_response` | `answered`, `partial`, `not_found` or `off_scope`. |
+| `ask_response` | `answered`, `partial`, `not_found` or `clarify` (a follow-up that asked which one, ADR-0047). |
 
 The retrieval summary also records `research_stop_reason`: `finished`,
 `empty_catalog`, `no_progress`, `step_limit`, `budget`, or `unusable_step`.
@@ -628,7 +628,9 @@ ends its journey even when the failure is retryable; a retry is a new journey.
 
 Its core operations hold the detail. Each research step and answer call
 is an `ask_planner` or `ask_answer` span with its provider `model_call` inside
-(purpose `ask_planner` or `ask_answer`). Each desk call is one span:
+(purpose `ask_planner` or `ask_answer`). A follow-up's resolver call, before
+research, is an `ask_resolve` span the same way (ADR-0047); a follow-up that
+asked which one ends its run `clarify`, with no research and no citation. Each desk call is one span:
 `evidence_search`, `evidence_open`, `evidence_list` or `evidence_revalidate`.
 Desk spans carry `included_count` and, by source, `meeting_items` and
 `document_items`. The evidence HTTP doors use the same desk spans.
@@ -716,10 +718,11 @@ the durable Ask audit and the research result's `cost`, and as `recovery` on a
 LangSmith model run. A gate counter is counted once the extra call is admitted
 past its access check, as the audit counts repairs.
 
-Renderers (`ask-renderer-v1.ts`, `impact-card-renderer-v1.ts`, `sweep-renderer-v1.ts`):
+Ask's follow-up resolver (`agentic-follow-up-resolver-v1.ts`) and the renderers (`ask-renderer-v1.ts`, `impact-card-renderer-v1.ts`, `sweep-renderer-v1.ts`):
 
 | Name | What code did |
 | --- | --- |
+| `resolver_fallback` | Answered a follow-up as asked after its resolver gave no usable reply (ADR-0047) |
 | `writer_repeat_dropped` | Dropped an Ask statement that exactly repeats an earlier one (the temporary exact-repeat guard, ADR-0041) |
 | `writer_unknown_id_dropped` | Dropped an id the writer was not shown from a sentence, a list use or a list's members |
 | `writer_uncited_sentence_dropped` | Left out a writer sentence that cites no evidence text it read |
@@ -768,11 +771,9 @@ do not add separate live-source spans. Older releases have no Jira fields;
 their absence is not evidence that Jira was skipped or returned no data.
 Requests that fail before the Ask loop starts have no ticket summary counters.
 
-A streamed `/v6/person/ask` (`x-echo-ask-progress: 2`, ADR-0040) or
-`/v7/person/ask` (`x-echo-ask-progress: 3`, ADR-0042) always answers HTTP
-`200` once its stream starts (`/v5` stopped streaming on 2026-10-19 and
-answers in JSON, ADR-0039); a later failure is its terminal
-`error` event. Its terminal `http_request` span records that event's status
+A streamed `/v7/person/ask` (`x-echo-ask-progress: 3`, ADR-0042), the only
+Ask route since ADR-0047 retired `/v3` to `/v6`, always answers HTTP `200`
+once its stream starts; a later failure is its terminal `error` event. Its terminal `http_request` span records that event's status
 as `http_status`, the status the JSON route would have returned, so a filter
 on `http_status` finds streamed failures as it finds JSON ones. A streamed
 Ask the client disconnected records `200` with no answer.

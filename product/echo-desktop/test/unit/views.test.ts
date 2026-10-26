@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, listView, membersView, noteMatchesView,
-  noteTitle, openItemsView, openItemView, openView, revokedView, NotReadable, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
+  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, listView, membersView, noteMatchesView,
+  noteTitle, openItemsView, openItemView, openView, revokedView, NotReadable, projectActivityView, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { createHash } from 'node:crypto';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
+import { checkOf } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
 import { layoutAnswer } from '../../src/host/test-authority.js';
 
@@ -28,28 +29,36 @@ const MEMBERSHIP = (digit: string) => `mem_${digit.repeat(8)}-${digit.repeat(4)}
 const REQUEST = (digit: string) => `${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`;
 const AT = '2026-09-21T22:01:00.000Z';
 
+/**
+ * An answer's sources as the page reads them: without the citation each keeps
+ * as the response carried it (`cited`), the opaque value a follow-up sends back
+ * and whose evidence citation a check asks about (ADR-0047).
+ */
+const visible = (sources: readonly Record<string, unknown>[]) => sources.map(({ cited: _cited, ...rest }) => rest);
+
 describe('view models copy only what the renderer may see', () => {
   it.each(['confluence', 'notion', 'knowledge-base'])('preserves %s page identity without provider coordinates', tool_id => {
     const permalink = 'https://wiki.example.test/pages/view?pageId=12345';
-    const source = (tool: unknown) => ({ schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: { kind: 'global' }, outcome: 'answered',
+    const source = (tool: unknown) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ kind: 'page', label: 'Launch plan', visibility: 'only_me', citation: { kind: 'page', tool_id: tool,
         external_scope_id: 'private-tenant', page_id: '12345', section_id: 'one', version: '7', permalink, text_sha256: sha('a') } }],
       parts: [{ question: 'When?', status: 'answered', statements: [{ text: 'Tuesday.', citation_indexes: [0], private: true }] }],
     });
     const answer = answerView({ ok: true, result: source(tool_id) }, { kind: 'global' });
     // Only you can read it: an answer's source says so (ADR-0045).
-    expect(answer.sources).toEqual([{ kind: 'page', tool_id, label: 'Launch plan', permalink, private: true }]);
-    expect(JSON.stringify(answer)).not.toContain('private-tenant');
+    expect(visible(answer.sources)).toEqual([{ kind: 'page', tool_id, label: 'Launch plan', permalink, private: true }]);
+    // Its coordinates cross only inside what a check and a follow-up send back as they came.
+    expect(JSON.stringify({ ...answer, sources: visible(answer.sources) })).not.toContain('private-tenant');
   });
   it('keeps a ticket citation by its tool and direct link alone', () => {
     const permalink = 'https://example.atlassian.net/browse/ECHO-7';
-    const answer = answerView({ ok: true, result: { schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: { kind: 'global' }, outcome: 'answered',
+    const answer = answerView({ ok: true, result: { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
         kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10007', permalink, text_sha256: sha('a'),
       } }], parts: [{ question: 'Which ticket?', status: 'answered', statements: [{ text: 'ECHO-7 covers launch.', citation_indexes: [0], private: true }] }],
     } }, { kind: 'global' });
-    expect(answer.sources).toEqual([{ kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink, private: true }]);
-    expect(JSON.stringify(answer)).not.toContain('private-tenant');
+    expect(visible(answer.sources)).toEqual([{ kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink, private: true }]);
+    expect(JSON.stringify({ ...answer, sources: visible(answer.sources) })).not.toContain('private-tenant');
   });
   it('an open item turns its live citation into a source it can open, an item you cannot open stays without one, and who and when cross', () => {
     const permalink = 'https://example.atlassian.net/browse/ECHO-12';
@@ -166,14 +175,13 @@ describe('view models copy only what the renderer may see', () => {
     const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' };
     const original = { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
       representation_sha256: sha('5'), anchor_sha256: sha('6') };
-    // V5, the /v4 answer: the oldest an Ask reads now that none asks /v3.
-    const v5 = (citations: unknown[]) => ({ schema_version: 5, kind: 'echo-clean-person-answer-v5', scope: { kind: 'global' }, outcome: 'answered',
+    const answered = (citations: unknown[]) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations, parts: [{ question: 'What did we ship?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }] }] });
-    const answer = answerView({ ok: true, result: v5([
+    const answer = answerView({ ok: true, result: answered([
       { citation: record, kind: 'decision', label: 'Tuesday sync', visibility: 'team' },
       { citation: { ...original, label: 'Pricing call' }, kind: 'document_passage', label: 'Pricing call', visibility: 'team' },
     ]) }, { kind: 'global' });
-    expect(answer.sources).toEqual([
+    expect(visible(answer.sources)).toEqual([
       { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') },
       { kind: 'original', label: 'Pricing call', ref: { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
         representation_sha256: sha('5'), anchor_sha256: sha('6') } },
@@ -182,31 +190,33 @@ describe('view models copy only what the renderer may see', () => {
     expect(answer.text).toBe('Ship it.');
   });
 
-  it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace', () => {
+  it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace; the notice stays behind', () => {
     const citation = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' };
     const answer = answerView({ ok: true, result: {
-      schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: { kind: 'global' }, outcome: 'partial',
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'partial',
       citations: [{ citation, kind: 'decision', label: 'Project review', visibility: 'project' }],
       direct: { text: 'A summary.', citation_indexes: [0], private: false },
       parts: [{ question: 'What changed?', status: 'records_only', statements: [], gap: 'No prose was available.',
         records: [{ text: 'Exact\n  fallback', citation_indexes: [0], private: false }] }],
-      assumption: 'Ecko means Echo', notice: 'Meeting records were unavailable.',
+      notice: 'Meeting records were unavailable.',
     } }, { kind: 'global' });
-    expect(answer).toMatchObject({ outcome: 'partial', assumption: 'Ecko means Echo', notice: 'Meeting records were unavailable.',
+    expect(answer).toMatchObject({ outcome: 'partial',
       direct: { private: false, citation_indexes: [0] }, parts: [{ status: 'records_only', records: [{ text: 'Exact\n  fallback' }] }],
       sources: [{ kind: 'record', label: 'Project review', record: { policy_id: 'project-members-readable-person-v1' } }],
     });
+    // The page no longer shows what research did not cover (ADR-0047): neither the notice nor a gap reaches it, nor its plain reading.
+    expect(answer).not.toHaveProperty('notice');
+    expect(answer.text).toBe('A summary.\nExact\n  fallback');
   });
 
-  it('keeps not-found and off-scope outcomes, and reads a not-found answer as its gap', () => {
+  it('keeps a not-found outcome, whose plain reading leaves its gap out', () => {
     const project = { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' } as const;
-    const empty = (outcome: string) => ({ schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: project, outcome, citations: [],
+    const empty = (outcome: string) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: project, outcome, citations: [],
       parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }] });
     expect(answerView({ ok: true, result: empty('not_found') }, project)).toEqual({
-      text: 'Not found.', scope: project, sources: [], outcome: 'not_found',
+      text: '', scope: project, sources: [], outcome: 'not_found',
       parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }],
     });
-    expect(answerView({ ok: true, result: empty('off_scope') }, project)).toMatchObject({ outcome: 'off_scope' });
   });
 
   it('accepts a receipt only for the request that was sent', () => {
@@ -641,26 +651,26 @@ const ticket = { kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'on
   ticket_id: '10007', permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: sha('7') } };
 const named = { citation: record, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${sha('2')}` };
 const namedSource = { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') };
-/** A V6 answer whose one statement cites its first source, private as that source is. */
-const v6 = (citations: readonly Record<string, unknown>[]) => ({ schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: { kind: 'global' }, outcome: 'answered', citations,
+/** A V8 answer whose one statement cites its first source, private as that source is. */
+const v8 = (citations: readonly Record<string, unknown>[]) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered', citations,
   parts: [{ question: 'What did we ship?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0],
     private: ['only_me', 'approver_only'].includes(String(citations[0]?.visibility)) }] }] });
 
 describe('an Ask citation opens the exact item it cites', () => {
-  const sources = (citations: readonly Record<string, unknown>[]) => answerView({ ok: true, result: v6(citations) }, { kind: 'global' }).sources;
+  const sources = (citations: readonly Record<string, unknown>[]) => answerView({ ok: true, result: v8(citations) }, { kind: 'global' }).sources;
 
   it('keeps what each citation opens: its record item, and its note, document or imported meeting', () => {
     const note = `ctx_${'8'.repeat(64)}`;
     const imported = `cap_${'9'.repeat(64)}`;
     const document = `doc_${'a'.repeat(64)}`;
-    expect(sources([
+    expect(visible(sources([
       named,
       { citation: passage('a'), kind: 'note', label: 'Launch notes', visibility: 'only_me', ref: `note:${note}` },
       { citation: passage('b'), kind: 'imported_meeting', label: 'Kickoff', visibility: 'only_me', ref: `imported_meeting:${imported}` },
       { citation: { ...passage('c'), document_id: document }, kind: 'document_passage', label: 'Plan.md', visibility: 'team', ref: `document:${document}` },
       { citation: { ...passage('d'), document_id: document }, kind: 'document_passage', label: 'Plan.md', visibility: 'team' },
       { citation: passage('f'), kind: 'note', label: 'Older note', visibility: 'team' },
-    ])).toEqual([
+    ]))).toEqual([
       namedSource,
       { kind: 'original', label: 'Launch notes', ref: coordinates('a'), item: { kind: 'note', id: note }, private: true },
       { kind: 'original', label: 'Kickoff', ref: coordinates('b'), item: { kind: 'imported_meeting', id: imported }, private: true },
@@ -686,17 +696,16 @@ describe('Ask progress lines and the receipt (ADR-0039)', () => {
   });
 });
 
-// A follow-up as the V7 answer and Ask progress V2 cite it (ADR-0040).
+// A follow-up as an answer and Ask progress cite it (ADR-0040).
 const followUp = { citation: { kind: 'follow_up', item_id: 'itm_launch-1' }, kind: 'follow_up', label: 'Ship the launch checklist', visibility: 'team', ref: 'follow_up:itm_launch-1' };
-const v7 = (citations: readonly Record<string, unknown>[]) => ({ ...v6(citations), schema_version: 7, kind: 'echo-clean-person-answer-v7' });
 const followUpSource = { kind: 'follow_up', label: 'Ship the launch checklist', item_id: 'itm_launch-1' };
 
-describe('follow-ups in a V7 answer and its progress (ADR-0040)', () => {
-  it('reads a V7 answer whose source is a follow-up, by its item id alone, beside the kinds V6 cites', () => {
-    const answer = answerView({ ok: true, result: v7([followUp, named, ticket]) }, { kind: 'global' });
-    expect(answer.sources).toEqual([followUpSource, namedSource,
+describe('follow-ups in an answer and its progress (ADR-0040)', () => {
+  it('reads an answer whose source is a follow-up, by its item id alone, beside a decision and a ticket', () => {
+    const answer = answerView({ ok: true, result: v8([followUp, named, ticket]) }, { kind: 'global' });
+    expect(visible(answer.sources)).toEqual([followUpSource, namedSource,
       { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7', private: true }]);
-    expect(JSON.stringify(answer)).not.toContain('follow_up:');
+    expect(JSON.stringify({ ...answer, sources: visible(answer.sources) })).not.toContain('follow_up:');
   });
 
   it('carries a step that searched follow-ups or read one', () => {
@@ -706,7 +715,7 @@ describe('follow-ups in a V7 answer and its progress (ADR-0040)', () => {
   });
 });
 
-// Your workspace and your tools' containers as the V8 answer and Ask progress V3 cite them (research tool contract v1).
+// Your workspace and your tools' containers as an answer and Ask progress cite them (research tool contract v1).
 const PROJECT = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
 const MEMBER = 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e';
 const project = { citation: { kind: 'project', project_id: PROJECT }, kind: 'project', label: 'Thermal recovery', visibility: 'project', ref: `project:${PROJECT}` };
@@ -715,7 +724,6 @@ const tool = { citation: { kind: 'tool', tool_id: 'jira' }, kind: 'tool', label:
 const containerCitation = { kind: 'tool_container', tool_id: 'jira', external_scope_id: 'cloud-1', container: 'jira_project', container_id: '10001',
   permalink: 'https://example.atlassian.net/browse/THERM' };
 const container = { citation: containerCitation, kind: 'tool_container', label: 'Thermal', visibility: 'only_me', key: 'THERM' };
-const v8 = (citations: readonly Record<string, unknown>[]) => ({ ...v6(citations), schema_version: 8, kind: 'echo-clean-person-answer-v8' });
 const workspaceSources = [
   { kind: 'project', label: 'Thermal recovery', project_id: PROJECT },
   { kind: 'person', label: 'Mara Lind', membership_id: MEMBER },
@@ -723,75 +731,74 @@ const workspaceSources = [
   { kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: 'https://example.atlassian.net/browse/THERM', container: 'jira_project', key: 'THERM' },
 ];
 
-describe('your workspace and your tools\' containers in a V8 answer and its progress (research tool contract v1)', () => {
-  it('reads a V8 answer that cites your project, a person, a tool and a Jira project, by what each names, beside the kinds V7 cites', () => {
+describe('your workspace and your tools\' containers in an answer and its progress (research tool contract v1)', () => {
+  it('reads an answer that cites your project, a person, a tool and a Jira project, by what each names, beside a follow-up, a decision and a ticket', () => {
     const answer = answerView({ ok: true, result: v8([project, person, tool, container, followUp, named, ticket]) }, { kind: 'global' });
     // The tool, the Jira project and the ticket only you can read.
     const [ours, mara, jira, therm] = workspaceSources;
-    expect(answer.sources).toEqual([ours, mara, { ...jira, private: true }, { ...therm, private: true }, followUpSource, namedSource,
+    expect(visible(answer.sources)).toEqual([ours, mara, { ...jira, private: true }, { ...therm, private: true }, followUpSource, namedSource,
       { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7', private: true }]);
-    // A container's scope and its own id in its tool stay behind, as a ticket's do; refs stay with the host.
-    for (const behind of ['cloud-1', '10001', 'project:', 'tool:', 'tool_container']) expect(JSON.stringify(answer)).not.toContain(behind);
+    // A container's scope and its own id in its tool stay behind, as a ticket's do; refs stay with the host: all of them only inside
+    // what a follow-up sends back as it came.
+    for (const behind of ['cloud-1', '10001', 'project:', 'tool:', 'tool_container']) {
+      expect(JSON.stringify({ ...answer, sources: visible(answer.sources) })).not.toContain(behind);
+    }
   });
 
   it('keeps a container with no key, and a Confluence space, each by its link', () => {
     const { key: _key, ...unkeyed } = container;
     const space = { ...container, label: 'Thermal team', key: 'THT', citation: { ...containerCitation, tool_id: 'confluence', container: 'confluence_space',
       container_id: '98765', permalink: 'https://example.atlassian.net/wiki/spaces/THT' } };
-    const [jira, confluence] = answerView({ ok: true, result: v8([unkeyed, space]) }, { kind: 'global' }).sources;
+    const [jira, confluence] = visible(answerView({ ok: true, result: v8([unkeyed, space]) }, { kind: 'global' }).sources);
     expect(jira).toEqual({ kind: 'container', tool_id: 'jira', label: 'Thermal', permalink: containerCitation.permalink, container: 'jira_project', private: true });
     expect(jira).not.toHaveProperty('key');
     expect(confluence).toEqual({ kind: 'container', tool_id: 'confluence', label: 'Thermal team', permalink: 'https://example.atlassian.net/wiki/spaces/THT',
       container: 'confluence_space', key: 'THT', private: true });
   });
 
-  it('carries a V3 step that searched your workspace or a tool\'s containers, or read one of them', () => {
+  it('carries a step that searched your workspace or a tool\'s containers, or read one of them', () => {
     const sources = [{ kind: 'meetings' }, { kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }];
     expect(askStepView({ ok: true, progress: { type: 'searched', sources, found: 9 } })).toEqual({ type: 'searched', sources, found: 9 });
     expect(askStepView({ ok: true, progress: { type: 'read', items: [project, person, tool, container] } })).toEqual({ type: 'read', items: workspaceSources });
-    // A V2 step is a V3 step too.
-    expect(askStepView({ ok: true, progress: { type: 'read', items: [followUp] } })).toEqual({ type: 'read', items: [followUpSource] });
   });
 });
 
 describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
-  // Each answer version's own receipt, and the rows it names as they cross.
-  const v1 = { looked_through: 14, elapsed_ms: 48_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [named] }] };
-  const v2 = { looked_through: 2, elapsed_ms: 31_000, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 3 }, { type: 'read', items: [followUp, named] }] };
-  const v3 = { looked_through: 4, elapsed_ms: 31_000, rows: [
+  // A receipt, and the rows it names as they cross: what was searched, and the items read, of any kind an answer cites.
+  const meetings = { looked_through: 14, elapsed_ms: 48_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [named] }] };
+  const followUps = { looked_through: 2, elapsed_ms: 31_000, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 3 }, { type: 'read', items: [followUp, named] }] };
+  const workspace = { looked_through: 4, elapsed_ms: 31_000, rows: [
     { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 9 }, { type: 'read', items: [project, person, tool, container] },
   ] };
+  const namedMeeting = [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [namedSource] }];
   it.each([
-    { answer: v6([named]), receipt: v1, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [namedSource] }] },
-    { answer: v7([followUp]), receipt: v2, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 3 }, { type: 'read', items: [followUpSource, namedSource] }] },
-    { answer: v8([project]), receipt: v3, rows: [
+    { read: 'a decision', answer: v8([named]), receipt: meetings, rows: namedMeeting },
+    { read: 'a follow-up', answer: v8([followUp]), receipt: followUps, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 3 }, { type: 'read', items: [followUpSource, namedSource] }] },
+    { read: 'your workspace', answer: v8([project]), receipt: workspace, rows: [
       { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'containers', tool_id: 'jira' }], found: 9 }, { type: 'read', items: workspaceSources },
     ] },
-    // A V8 answer's receipt that names no workspace item is still its own.
-    { answer: v8([named]), receipt: { looked_through: 1, elapsed_ms: 1_000, rows: [{ type: 'read', items: [named] }] }, rows: [{ type: 'read', items: [namedSource] }] },
-  ])('keeps a V$answer.schema_version answer\'s receipt as its version has it', ({ answer, receipt, rows }) => {
+    // A receipt with no search is still one.
+    { read: 'only what it read', answer: v8([named]), receipt: { looked_through: 1, elapsed_ms: 1_000, rows: [{ type: 'read', items: [named] }] }, rows: [{ type: 'read', items: [namedSource] }] },
+  ])('keeps the receipt of an answer that read $read as it came', ({ answer, receipt, rows }) => {
     expect(answerView({ ok: true, result: answer, receipt }, { kind: 'global' }).receipt)
       .toEqual({ looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows });
   });
 
-  it('comes only with a streamed answer, and only in that answer\'s version', () => {
-    expect(answerView({ ok: true, result: v6([named]) }, { kind: 'global' }).receipt).toBeUndefined();
-    // The /v4 fallback's V5 answer never streams.
-    const v5 = { ...v6([]), schema_version: 5, kind: 'echo-clean-person-answer-v5', outcome: 'not_found',
-      parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Nothing.' }] };
-    expect(answerView({ ok: true, result: v5 }, { kind: 'global' })).toMatchObject({ outcome: 'not_found', sources: [] });
-    expect(() => answerView({ ok: true, result: v5, receipt: v1 }, { kind: 'global' })).toThrow(ViewError);
-    expect(() => answerView({ ok: true, result: v6([named]), receipt: v2 }, { kind: 'global' })).toThrow(ViewError);
-    expect(() => answerView({ ok: true, result: v7([followUp]), receipt: v3 }, { kind: 'global' })).toThrow(ViewError);
+  it('comes only with a streamed answer, and never with an answer from before V8, which no Ask asks now', () => {
+    expect(answerView({ ok: true, result: v8([named]) }, { kind: 'global' }).receipt).toBeUndefined();
+    expect(() => answerView({ ok: true, result: v8([named]), receipt: { ...meetings, looked_through: -1 } }, { kind: 'global' })).toThrow(ViewError);
+    for (const version of [4, 5, 6, 7]) {
+      const older = { ...v8([named]), schema_version: version, kind: `echo-clean-person-answer-v${version}` };
+      expect(() => answerView({ ok: true, result: older }, { kind: 'global' })).toThrow(ViewError);
+      expect(() => answerView({ ok: true, result: older, receipt: meetings }, { kind: 'global' })).toThrow(ViewError);
+    }
   });
 
-  it('reads a Mine answer as any other, from every route an Ask asks, and never /v3\'s V4 answer, which no Ask asks now', () => {
+  it('reads a Mine answer as any other, with its receipt when it streamed', () => {
     const mine = { kind: 'mine' } as const;
-    const answer = (version: number) => ({ ...v6([named]), scope: mine, schema_version: version, kind: `echo-clean-person-answer-v${version}` });
-    for (const version of [5, 6, 7, 8]) expect(answerView({ ok: true, result: answer(version) }, mine)).toMatchObject({ scope: mine, sources: [namedSource] });
-    expect(answerView({ ok: true, result: answer(8), receipt: v1 }, mine).receipt)
-      .toEqual({ looked_through: 14, elapsed_ms: 48_000, rows: [{ type: 'searched', sources: [{ kind: 'meetings' }], found: 6 }, { type: 'read', items: [namedSource] }] });
-    expect(() => answerView({ ok: true, result: answer(4) }, mine)).toThrow(ViewError);
+    const answer = { ...v8([named]), scope: mine };
+    expect(answerView({ ok: true, result: answer }, mine)).toMatchObject({ scope: mine, sources: [namedSource] });
+    expect(answerView({ ok: true, result: answer, receipt: meetings }, mine).receipt).toEqual({ looked_through: 14, elapsed_ms: 48_000, rows: namedMeeting });
   });
 });
 
@@ -807,9 +814,9 @@ describe('a laid-out answer (answer layout v1, ADR-0045)', () => {
     const plain = answerView({ ok: true, result: layoutAnswer(question, scope, false) }, scope);
     expect(plain.parts[0]).not.toHaveProperty('layout');
     expect(plain.parts[0]!.statements).toEqual(laid.parts[0]!.statements);
-    // The plain reading, for earlier turns, stays the statements, in order.
+    // The plain reading, for Copy answer, stays the statements, in order, without what research did not cover.
     expect(laid.text).toBe(plain.text);
-    expect(laid.notice).toBe('One of three THERM meetings in range was not read before the time limit.');
+    expect(laid.text).not.toContain('THERM meetings in range');
   });
 
   it('marks a cited item only you or the approver can read as private, for the lock on a table row that cites it', () => {
@@ -831,5 +838,79 @@ describe('a laid-out answer (answer layout v1, ADR-0045)', () => {
     const table = part!.layout[4] as { rows: { cells: string[]; citation_indexes: number[] }[] };
     const wrong = { ...answer, parts: [{ ...part, layout: [...part!.layout.slice(0, 4), { ...table, rows: [{ ...table.rows[0], citation_indexes: [0] }, ...table.rows.slice(1)] }] }] };
     expect(() => answerView({ ok: true, result: wrong }, scope)).toThrow(ViewError);
+  });
+});
+
+describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)', () => {
+  const scope = { kind: 'global' } as const;
+  const page = { kind: 'page', label: 'DVT plan', visibility: 'team', citation: { kind: 'page', tool_id: 'confluence', external_scope_id: 'cloud-1', page_id: '31010',
+    section_id: 'summary', version: '3', permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=31010', text_sha256: sha('9') } };
+  const note = { citation: passage('a'), kind: 'note', label: 'Launch notes', visibility: 'team' };
+  /** The last line `person ask --progress` printed: a V8 answer, with what an Ask that carried `previous` adds (`fields`). */
+  const line = (fields: Record<string, unknown>) => ({ ok: true, result: { ...v8([ticket]), ...fields } });
+
+  it('keeps every source\'s citation as the answer carried it, and the evidence citation of each that can change or go', () => {
+    const cited = [named, ticket, followUp, page, note, project, person, tool, container];
+    const answer = answerView({ ok: true, result: v8(cited) }, scope);
+    answer.sources.forEach((source, at) => expect(source.cited).toEqual(cited[at]));
+    // A record's item, a ticket, a follow-up, a page and an original's passage can change or go: what a check asks about, kept once.
+    expect(answer.sources.map(checkOf)).toEqual([record, ticket.citation, followUp.citation, page.citation, passage('a'),
+      undefined, undefined, undefined, undefined]);
+    for (const source of answer.sources) expect(source).not.toHaveProperty('check');
+    // A progress row's items keep neither: only an answer's sources are checked or carried back.
+    expect(JSON.stringify(askStepView({ ok: true, progress: { type: 'read', items: cited } }))).not.toMatch(/"cited"|"check"/u);
+  });
+
+  it('reads the full question an answer answers, and Ask again\'s "since", whose citations are the answer\'s own', () => {
+    const since = { statements: [{ text: 'ECHO-7 moved to In Progress.', citation_indexes: [0], private: true }] };
+    const answer = answerView(line({ question: 'Who owns ECHO-7?', since }), scope);
+    expect(answer).toMatchObject({ outcome: 'answered', question: 'Who owns ECHO-7?', since: since.statements, text: 'Ship it.' });
+    // Nothing material changed: an empty list, which the page says as "Nothing changed since".
+    expect(answerView(line({ question: 'Who owns ECHO-7?', since: { statements: [] } }), scope).since).toEqual([]);
+    // A "since" sentence that cites what the answer does not is not the client's output.
+    expect(() => answerView(line({ question: 'Who owns ECHO-7?', since: { statements: [{ text: 'Moved.', citation_indexes: [1], private: false }] } }), scope))
+      .toThrow(ViewError);
+    expect(() => answerView(line({ question: 7 }), scope)).toThrow(ViewError);
+    // An answer to an Ask that carried nothing says none of it.
+    const plain = answerView(line({}), scope);
+    for (const key of ['question', 'since', 'choices']) expect(plain).not.toHaveProperty(key);
+  });
+
+  it('reads "Which one?": two to four choices, and no part; never the off_scope outcome that left the contract', () => {
+    const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
+    // "Which one?" names the question asked, and says nothing else.
+    const clarify = (fields: Record<string, unknown>) => line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?', choices, ...fields });
+    expect(answerView(clarify({}), scope)).toEqual({ text: '', scope, sources: [], parts: [], outcome: 'clarify', question: 'Who owns it?', choices });
+    expect(() => answerView(clarify({ choices: choices.slice(0, 1) }), scope)).toThrow(ViewError);
+    expect(() => answerView(line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?' }), scope)).toThrow(ViewError);
+    expect(() => answerView(clarify({ choices: [...choices, { label: 'More' }] }), scope)).toThrow(ViewError);
+    // `off_scope` left the contract (C4; no current path produces it): an answer that says it is not one the page reads.
+    expect(() => answerView(line({ outcome: 'off_scope' }), scope)).toThrow(ViewError);
+  });
+
+  it('reads a source check (C1): a state per item asked, in order, and a readable ticket\'s marker; anything else is not its output', () => {
+    const check = (items: unknown[]) => ({ schema_version: 1, kind: 'echo-person-ask-check-v1', items });
+    const marker = sha('c');
+    expect(askCheckView(check([{ state: 'same', marker }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }]), 4))
+      .toEqual({ items: [{ state: 'same', marker }, { state: 'changed' }, { state: 'unreadable' }, { state: 'unknown' }] });
+    expect(() => askCheckView(check([{ state: 'same' }]), 2)).toThrow(ViewError);
+    expect(() => askCheckView(check([{ state: 'gone' }]), 1)).toThrow(ViewError);
+    expect(() => askCheckView(check([{ state: 'same', marker: 'v2' }]), 1)).toThrow(ViewError);
+    expect(() => askCheckView(check([{ state: 'same', why: 'deleted' }]), 1)).toThrow(ViewError);
+    expect(() => askCheckView({ ...check([{ state: 'same' }]), text: 'x' }, 1)).toThrow(ViewError);
+    expect(() => askCheckView({ ...check([{ state: 'same' }]), kind: 'echo-person-ask-check-v2' }, 1)).toThrow(ViewError);
+  });
+
+  it('reads project activity (C2): each project you are in once, with its newest arrival or none', () => {
+    const activity = (items: unknown[]) => ({ schema_version: 1, kind: 'echo-person-project-activity-v1', items });
+    const other = 'prj_22222222-2222-4222-8222-222222222222';
+    expect(projectActivityView(activity([{ project_id: PROJECT, latest_at: AT }, { project_id: other, latest_at: null }])))
+      .toEqual({ items: [{ project_id: PROJECT, latest_at: AT }, { project_id: other, latest_at: null }] });
+    expect(() => projectActivityView(activity([{ project_id: PROJECT, latest_at: AT }, { project_id: PROJECT, latest_at: null }]))).toThrow(ViewError);
+    expect(() => projectActivityView(activity([{ project_id: 'Apollo', latest_at: null }]))).toThrow(ViewError);
+    expect(() => projectActivityView(activity([{ project_id: PROJECT, latest_at: 'yesterday' }]))).toThrow(ViewError);
+    expect(() => projectActivityView(activity([{ project_id: PROJECT, latest_at: null, by: MEMBER }]))).toThrow(ViewError);
+    expect(() => projectActivityView(activity(Array.from({ length: 501 }, (_, at) => ({ project_id: `prj_${String(at).padStart(8, '0')}-2222-4222-8222-222222222222`,
+      latest_at: null }))))).toThrow(ViewError);
   });
 });

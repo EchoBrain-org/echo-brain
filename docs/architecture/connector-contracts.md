@@ -81,9 +81,9 @@ boundary checks that digest for every other citation, and the audit commits a
 container's released value instead.
 Ticket tools use
 [`PersonTicketCitationV1`](../../packages/organization-api/src/person-ticket-citation-v1.ts),
-whose coordinates include the tool, tenant and ticket identity. It does not change
-the citation union of `PersonAnswerResponseV4`; ticket citations reach Ask only
-through `PersonAnswerResponseV5`.
+whose coordinates include the tool, tenant and ticket identity. Ask cites
+tickets through the evidence citations of `PersonAnswerCitationV8`
+(`PersonAnswerEvidenceCitationV5` and its successors), in `PersonAnswerResponseV8`.
 
 [`createAuditedPersonLiveEvidenceSourceV1`](../../packages/organization-authority-kernel/src/shared/audited-person-live-evidence-v1.ts)
 implements the common release boundary:
@@ -245,13 +245,12 @@ conformance tests independently. Meeting work uses the existing admission ports.
 The provider-neutral tests exercise the common release boundary with both Slack
 and ticket fixtures; they do not call either service.
 
-Ticket evidence reaches Ask through Evidence Desk V2 and `PersonAnswerResponseV5`
-at `POST /v4/person/ask`, and live page evidence through `PersonAnswerResponseV6`
-at `POST /v5/person/ask`, `PersonAnswerResponseV7` at `POST /v6/person/ask`
-(which also reads ECHO's follow-ups, ADR-0040) and `PersonAnswerResponseV8`
-at `POST /v7/person/ask` (which also reads the asker's workspace and their
-tools' Jira projects and Confluence spaces, ADR-0042), all with the durable
-live-read audit. The Authority mounts these routes whenever an answer model is bound; ticket or page evidence
+Ticket and page evidence reach Ask through Evidence Desk V2 and
+`PersonAnswerResponseV8` at `POST /v7/person/ask`, which also reads ECHO's
+follow-ups (ADR-0040) and the asker's workspace and their tools' Jira projects
+and Confluence spaces (ADR-0042), with the durable live-read audit. The Ask
+routes before it, which carried tickets from `/v4` and pages from `/v5`, are
+retired (ADR-0047). The Authority mounts the route whenever an answer model is bound; ticket or page evidence
 appears only when the matching Jira or Confluence live runtime is selected.
 [ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted
 and [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md) is

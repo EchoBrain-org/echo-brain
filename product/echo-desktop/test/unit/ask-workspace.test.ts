@@ -7,7 +7,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, ConnectedTool, Expect } from '../../src/shared/protocol.js';
 import { Folder, Plug } from '../../src/renderer/screens/icons.js';
-import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, render, rpcFor, storeLifecycle, text } from './harness.js';
+import {
+  ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, latestTurn, ok, paneTurn, plainHooks, project, render, rpcFor, storeLifecycle, text,
+} from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -100,16 +102,17 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     const { store, release, pane } = await asking();
     release(ok(answering([unlisted])));
     await flush();
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     await flush();
     expect(called('projects.read')).toEqual([]);
     expect(byTestId(pane(), 'source-open')).toHaveLength(1);
-    const answer = store.getState().ask!.shown;
+    const answer = latestTurn(store);
     store.openFullPage();
     await flush();
     expect(called('projects.read')).toEqual([{ expect: EXPECT, project_id: thermal.project_id }]);
-    // Ask goes only once the project is read: a project that could not be read leaves the answer as it was.
-    expect(store.getState().ask?.shown ?? null).toBe(opened ? null : answer);
+    // Ask goes only once the project is read: a project that could not be read leaves the answer as it was. The timeline stays either way.
+    expect(store.getState().ask === null).toBe(opened);
+    expect(latestTurn(store)).toEqual(answer);
     expect(store.getState().route).toEqual(route);
     expect(store.getState().toast).toBe(toast);
   });
@@ -118,11 +121,12 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     const { store, release } = await asking();
     release(ok(answering([unlisted])));
     await flush();
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     const read = held.hold('projects.read');
     store.openFullPage();
     await flush();
-    expect(store.getState().ask?.shown?.answer.sources).toEqual([unlisted]);
+    expect(store.getState().ask).not.toBeNull();
+    expect(latestTurn(store)?.answer.sources).toEqual([unlisted]);
     const again = held.hold('ask.run');
     void store.ask('Who else is in Thermal recovery?');
     await flush();
@@ -138,7 +142,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     const { store, release } = await asking();
     release(ok(answering([unlisted])));
     await flush();
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     const read = held.hold('projects.read');
     store.openFullPage();
     await flush();
@@ -155,7 +159,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     release(ok(answering([mara])));
     await flush();
     const before = rpc.mock.calls.length;
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     await flush();
     expect(rpc.mock.calls).toHaveLength(before);
     const shown = pane();
@@ -166,7 +170,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     expect(store.getState().ask).not.toBeNull();
     // Explicitly expanding sources names them, with no qualifier.
     expect(byTestId(thread(), 'source-row')).toEqual([]);
-    store.toggleSourceList();
+    store.toggleSourceList(paneTurn(store));
     expect(text(byTestId(thread(), 'source-row'))).toBe('1Mara Lind');
   });
 
@@ -176,12 +180,12 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     release(ok(answering([jira])));
     await flush();
     // The sources start closed (ADR-0045): their line opens them.
-    store.toggleSourceList();
+    store.toggleSourceList(paneTurn(store));
     const [row] = byTestId(thread(), 'source-row');
     expect(text(row)).toBe('1Jira');
     expect(drawn(row)).toEqual(drawn(render(Plug())));
     const before = rpc.mock.calls.length;
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     await flush();
     // Tools has not been read here: its name alone, and nothing is read for it.
     expect(rpc.mock.calls).toHaveLength(before);
@@ -202,7 +206,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     await flush();
     again(ok(answering([jira])));
     await flush();
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     expect(text(byTestId(pane(), 'pane-tool'))).toBe('Jira');
     expect(byTestId(pane(), 'pane-tool-status')).toEqual([]);
   });
@@ -211,7 +215,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     const { store, release, pane, thread } = await asking();
     release(ok(answering([therm, space])));
     await flush();
-    store.toggleSourceList();
+    store.toggleSourceList(paneTurn(store));
     const rows = byTestId(thread(), 'source-row');
     // "Jira · THERM"; a container with no key says its tool alone.
     expect(rows.map(text)).toEqual(['1ThermalJira · THERM', '2Thermal teamConfluence']);
@@ -219,7 +223,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     expect(drawn(rows[0])).toEqual(drawn(render(Folder())));
     expect(drawn(rows[1])).toEqual(drawn(render(Folder())));
     const before = rpc.mock.calls.length;
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     await flush();
     expect(rpc.mock.calls).toHaveLength(before);
     const shown = pane();
@@ -230,7 +234,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     expect(text(open)).toBe('Open in Jira');
     await (open!.props.onClick as () => Promise<void>)();
     expect(called('source.openExternal')).toEqual([{ kind: 'container', permalink: 'https://example.atlassian.net/browse/THERM' }]);
-    store.chooseSource(1);
+    store.chooseSource(1, null, paneTurn(store));
     expect(heading(pane())).toBe('Confluence · Space');
     expect(text(byTestId(pane(), 'pane-container-meta'))).toBe('Confluence');
   });

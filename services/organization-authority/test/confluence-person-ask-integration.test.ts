@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV6 } from '@echo-brain/organization-api';
+import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { FIXTURE_CONFLUENCE_CLOUD_V1 as CLOUD, FIXTURE_CONFLUENCE_SITE_V1 as SITE, fakeConfluenceCloudFetchV1, fakeConfluenceNangoV1 } from './fixtures/fake-confluence-v1.js';
@@ -16,7 +16,7 @@ const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
 
 /** Production Authority composition with synthetic OIDC/model/provider boundaries. */
-it('catalogs, connects, maps, cites, and disconnects Confluence page evidence through the V6 Ask route', async () => {
+it('catalogs, connects, maps, cites, and disconnects Confluence page evidence through the Ask route', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-confluence-ask-proof-'))); chmodSync(root, 0o700); roots.push(root);
   const genesis = ownerGenesis({ root, oidc: OIDC, email: EMAIL, authority_url: AUTHORITY, revision: 'confluence-fixture' });
   const { initialized, credentials: keys } = genesis;
@@ -69,26 +69,27 @@ it('catalogs, connects, maps, cites, and disconnects Confluence page evidence th
     const mapped = await post('/v1/person/tools/confluence/project/set', { ...mappingRead, request_id: randomUUID(), expected_revision: null, space_ids: ['123'] });
     expect(mapped).toMatchObject({ status: 200, body: { mapping: { cloud_id: CLOUD, space_ids: ['123'] } } });
     generate.mockClear(); confluenceFetch.mockClear(); vi.mocked(confluence.nango.connection).mockClear();
-    const answer = await post('/v5/person/ask', { schema_version: 3, question: 'What did we decide for the release?', project_id });
+    const answer = await post('/v7/person/ask', { schema_version: 3, question: 'What did we decide for the release?', project_id });
     expect(answer.status).toBe(200);
-    expect(validatePersonAnswerResponseV6(answer.body)).toMatchObject({ schema_version: 6, outcome: 'answered', scope: { kind: 'project', project_id }, citations: [expect.objectContaining({ kind: 'page', citation: expect.objectContaining({ page_id: '100', external_scope_id: CLOUD, permalink: `${SITE}/wiki/pages/viewpage.action?pageId=100` }) })] });
+    expect(validatePersonAnswerResponseV8(answer.body)).toMatchObject({ schema_version: 8, outcome: 'answered', scope: { kind: 'project', project_id }, citations: [expect.objectContaining({ kind: 'page', citation: expect.objectContaining({ page_id: '100', external_scope_id: CLOUD, permalink: `${SITE}/wiki/pages/viewpage.action?pageId=100` }) })] });
     expect(confluenceFetch.mock.calls.some(([url]) => {
       const request = new URL(String(url));
       return request.pathname.endsWith('/api/v2/pages') && request.searchParams.get('space-id') === '123';
     })).toBe(true);
-    // One Ask creates one request-owned Confluence reader. Its discovery,
-    // open, verification, and citation revalidation all share that reader's
-    // credential lookup; the next Ask must create a fresh one.
-    expect(vi.mocked(confluence.nango.connection)).toHaveBeenCalledTimes(1);
+    // One Ask creates one request-owned Confluence reader for each of its two
+    // Confluence sources, the pages and the spaces (research tool contract v1).
+    // A reader's discovery, open, verification, and citation revalidation all
+    // share its credential lookup; the next Ask must create fresh ones.
+    expect(vi.mocked(confluence.nango.connection)).toHaveBeenCalledTimes(2);
     expect(confluenceFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/oauth/token/accessible-resources').length).toBeGreaterThan(1);
     expect(confluenceFetch.mock.calls.filter(([url]) => {
       const request = new URL(String(url));
       return request.pathname.endsWith('/api/v2/pages') && request.searchParams.has('id');
     }).length).toBeGreaterThan(0);
     generate.mockClear(); confluenceFetch.mockClear(); vi.mocked(confluence.nango.connection).mockClear();
-    const fresh = await post('/v5/person/ask', { schema_version: 3, question: 'What did we decide for the release?', project_id });
+    const fresh = await post('/v7/person/ask', { schema_version: 3, question: 'What did we decide for the release?', project_id });
     expect(fresh.status).toBe(200);
-    expect(vi.mocked(confluence.nango.connection)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(confluence.nango.connection)).toHaveBeenCalledTimes(2);
     expect((await post('/v1/person/tools/confluence/disconnect', { schema_version: 1 })).status).toBe(200);
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'confluence', personal_status: 'revoked', external_subject_id: null })]));
   } finally { await runtime.close(); }

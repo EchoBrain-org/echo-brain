@@ -2,10 +2,10 @@ import { canonicalJson, canonicalJsonBytes } from '@echo-brain/federation-protoc
 import { asEnumerableRecord as object, assertExactKeys, assertToolId, fail, validateOrganizationApiError } from './validation.js';
 
 /**
- * The Ask progress stream's validators and framing, shared by every version
- * of it (ADR-0039). A version names what it admits: its plain source kinds,
- * the citation projection of a named item, its answer and its bounds.
- * Internal: each version's own module exports its typed functions.
+ * The Ask progress stream's validators and framing (ADR-0039), for the
+ * version that names what it admits: its plain source kinds, the citation
+ * projection of a named item, its answer and its bounds. Internal: Ask
+ * progress V3 (person-ask-progress-v3.ts) exports its typed functions.
  */
 export interface AskProgressDialect {
   /** Source kinds a searched row names without a tool id. */

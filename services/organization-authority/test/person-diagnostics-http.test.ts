@@ -2,7 +2,7 @@ import { once } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V5, PERSON_DIAGNOSTICS_PATH_V1, PERSON_RUNS_PATH_V1,
+  PERSON_ANSWER_PATH_V7, PERSON_DIAGNOSTICS_PATH_V1, PERSON_RUNS_PATH_V1,
   validatePersonDiagnosticsResultV1,
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -12,7 +12,7 @@ import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import type { PersonDiagnosticsHttpApplicationV1 } from '../src/presentation/person-diagnostics-http-application.js';
-import type { PersonAnswerV5HttpApplication } from '../src/presentation/person-live-answer-http-application.js';
+import type { PersonAnswerV7HttpApplication } from '../src/presentation/person-live-answer-http-application.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../src/presentation/person-trigger-runs-http-application.js';
 
 const capture_id = 'cap_00000000-0000-4000-8000-000000000001';
@@ -25,10 +25,10 @@ afterEach(async () => {
   for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; }
   for (const registry of registries.splice(0)) registry.close();
 });
-async function origin(input: { diagnostics?: PersonDiagnosticsHttpApplicationV1; ask?: PersonAnswerV5HttpApplication; runs?: PersonTriggerRunsHttpApplicationV1 }) {
+async function origin(input: { diagnostics?: PersonDiagnosticsHttpApplicationV1; ask?: PersonAnswerV7HttpApplication; runs?: PersonTriggerRunsHttpApplicationV1 }) {
   const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
     ...(input.diagnostics === undefined ? {} : { person_diagnostics: input.diagnostics }),
-    ...(input.ask === undefined ? {} : { person_answer_v5: input.ask }), ...(input.runs === undefined ? {} : { person_trigger_runs: input.runs }),
+    ...(input.ask === undefined ? {} : { person_answer_v7: input.ask }), ...(input.runs === undefined ? {} : { person_trigger_runs: input.runs }),
   });
   servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
@@ -70,7 +70,7 @@ function captureFixture() {
     generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 },
     audit: { forRequest: () => ({ append: vi.fn() }), forLiveRequest: () => ({ record: async () => canonicalSha256('live release') }) },
   } as unknown as CreatePersonLiveAnswerRouteOptionsV1;
-  return { diagnostics, route: createPersonLiveAnswerRouteV1(options, 6), generate, replies, originals, authenticateAccess, revoke() { revoked = true; } };
+  return { diagnostics, route: createPersonLiveAnswerRouteV1(options), generate, replies, originals, authenticateAccess, revoke() { revoked = true; } };
 }
 
 describe('person diagnostics HTTP integration', () => {
@@ -100,13 +100,13 @@ describe('person diagnostics HTTP integration', () => {
   });
 
   it('forwards capture selection on the ordinary Ask and run start routes, rejecting it for retry/view', async () => {
-    const ask = vi.fn(async () => ({ schema_version: 6 as const, kind: 'echo-clean-person-answer-v6' as const, scope: { kind: 'global' as const }, outcome: 'not_found' as const, citations: [], parts: [{ question: 'What changed?', status: 'not_found' as const, statements: [], gap: 'No evidence found.' }] }));
+    const ask = vi.fn(async () => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'not_found' as const, citations: [], parts: [{ question: 'What changed?', status: 'not_found' as const, statements: [], gap: 'No evidence found.' }] }));
     const runs = { list: vi.fn(async () => ({ runs: [] })), start: vi.fn(async () => ({ state: 'running' as const })), retry: vi.fn(), view: vi.fn(),
       home: vi.fn(), items: vi.fn(), item: vi.fn(), send: vi.fn(), set_state: vi.fn(), assign: vi.fn(), sweep: vi.fn(), close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
     const base = await origin({ ask: { ask }, runs });
     const askRequest = { schema_version: 3, question: 'What changed?', capture_id };
     const startRequest = { schema_version: 1, operation: 'start', run_id, capture_id };
-    expect((await post(base, PERSON_ANSWER_PATH_V5, askRequest)).status).toBe(200);
+    expect((await post(base, PERSON_ANSWER_PATH_V7, askRequest)).status).toBe(200);
     expect(ask).toHaveBeenCalledExactlyOnceWith({ access_token: 'owner', request: askRequest, signal: expect.any(AbortSignal) });
     expect((await post(base, PERSON_RUNS_PATH_V1, startRequest)).status).toBe(200);
     expect(runs.start).toHaveBeenCalledExactlyOnceWith({ access_token: 'owner', request: startRequest, signal: expect.any(AbortSignal) });
@@ -114,7 +114,7 @@ describe('person diagnostics HTTP integration', () => {
     expect(runs.retry).not.toHaveBeenCalled(); expect(runs.view).not.toHaveBeenCalled();
   });
 
-  it('captures a real ordinary V5 Ask with exact model/tool payloads and fences every authenticated read', async () => {
+  it('captures a real ordinary Ask with exact model/tool payloads and fences every authenticated read', async () => {
     const f = captureFixture();
     const base = await origin({ diagnostics: f.diagnostics, ask: f.route });
     const prepare = { schema_version: 1, operation: 'prepare', target: { kind: 'ask' } };
@@ -125,9 +125,9 @@ describe('person diagnostics HTTP integration', () => {
     const initial = validatePersonDiagnosticsResultV1('read', await (await post(base, PERSON_DIAGNOSTICS_PATH_V1, readRequest)).json());
     expect(initial.status).toBe('prepared'); expect(initial).not.toHaveProperty('trace');
     expect((await post(base, PERSON_DIAGNOSTICS_PATH_V1, readRequest, 'other')).status).toBe(404);
-    const answer = await post(base, PERSON_ANSWER_PATH_V5, { schema_version: 3, question: 'Is the PVT fixture ready?', mine: true, capture_id: receipt.capture_id });
+    const answer = await post(base, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'Is the PVT fixture ready?', mine: true, capture_id: receipt.capture_id });
     expect(answer.status).toBe(200);
-    expect(await answer.json()).toMatchObject({ schema_version: 6, outcome: 'answered', parts: [{ statements: [{ text: 'The PVT fixture is ready and Manufacturing approved it.' }] }] });
+    expect(await answer.json()).toMatchObject({ schema_version: 8, outcome: 'answered', parts: [{ statements: [{ text: 'The PVT fixture is ready and Manufacturing approved it.' }] }] });
     const fencesBeforeRead = f.originals.revalidateDeskRelease.mock.calls.length;
     const result = validatePersonDiagnosticsResultV1('read', await (await post(base, PERSON_DIAGNOSTICS_PATH_V1, readRequest)).json());
     expect(result).toMatchObject({ status: 'completed', trace: { complete: true, dropped_events: 0 } });

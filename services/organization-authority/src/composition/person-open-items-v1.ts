@@ -30,7 +30,8 @@ import { triggerRunStateAtV1, type SqliteTriggerRunsV1, type TriggerRunRowV1, ty
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { openItemAccessV1, openItemDecisionAccessV1, openItemSendAccessV1, type OpenItemAccessV1, type OpenItemFactsV1 } from './open-items-policy-v1.js';
 import type { bindPersonLiveEvidenceDeskV1, CreatePersonLiveAnswerRouteOptionsV1, PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
-import type { PersonReadableDecisionV1, PersonReadableDecisionsV1 } from './person-record-search-route.js';
+import type { RecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
+import type { PersonReadableDecisionProjectsV1, PersonReadableDecisionV1, PersonReadableDecisionsV1 } from './person-record-search-route.js';
 import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
 import type { SweepCountsV1 } from './person-sweep-runs-v1.js';
 
@@ -104,6 +105,26 @@ type DecisionProjects = Pick<PersonReadableDecisionV1, 'project_ids'>;
 /** Where the policy pass learns which decisions the viewer reads: the decisions a list names, or only their projects (the change check). */
 export interface OpenItemDecisionsReaderV1<D extends DecisionProjects> {
   readableDecisions(input: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }): ReadonlyMap<Sha256Digest, D>;
+}
+/**
+ * Which records the viewer reads, with their projects (`readableDecisionProjects`), from the grants `projects` gives (read in
+ * the caller's own read transaction, once a record is looked up); each record is looked up once per reader.
+ */
+export function openItemDecisionsReaderV1(records: PersonReadableDecisionProjectsV1, access_token: string, projects: () => RecordProjectAuthorizationV1): OpenItemDecisionsReaderV1<DecisionProjects> {
+  const known = new Map<Sha256Digest, DecisionProjects | null>();
+  return {
+    readableDecisions: ({ record_sha256s }) => {
+      const missing = [...new Set(record_sha256s)].filter(record => !known.has(record));
+      if (missing.length > 0) {
+        const found = records.readableDecisionProjects({ access_token, record_sha256s: missing, projects: projects() });
+        for (const record of missing) known.set(record, found.get(record) ?? null);
+      }
+      return new Map(record_sha256s.flatMap(record => {
+        const decision = known.get(record);
+        return decision === null || decision === undefined ? [] : [[record, decision] as const];
+      }));
+    },
+  };
 }
 
 type Desk = Awaited<ReturnType<typeof bindPersonLiveEvidenceDeskV1>>;
@@ -420,7 +441,10 @@ function outsideToolOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefine
   const { kind, tool_id: toolId } = row.pointer;
   return (kind === 'ticket' || kind === 'page') && typeof toolId === 'string' ? `${kind}:${toolId}` : undefined;
 }
-/** The live sources task research reads (trigger runs, sweeps, open items, the evaluation's tasks): those the V6 answer reads. */
+/**
+ * The live sources task research reads (trigger runs, sweeps, open items, the evaluation's tasks): a tool's tickets and
+ * pages, which an impact card's V6 citations name, never its containers.
+ */
 export function taskLiveSourcesV1(sources: CreatePersonLiveAnswerRouteOptionsV1['live_sources']): NonNullable<CreatePersonLiveAnswerRouteOptionsV1['live_sources']> {
   return (sources ?? []).filter(source => source.minimum_response_version <= 6);
 }

@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { canonicalSha256, sha256Digest, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
-  PERSON_ANSWER_PATH_V3,
+  PERSON_ANSWER_PATH_V7,
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
-  validatePersonAnswerResponseV4,
+  validatePersonAnswerResponseV8,
   type PersonListResponseV1,
   type PersonOpenMeetingV1,
   type PersonOpenResponseV1,
@@ -25,7 +25,7 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import type { PersonMeetingItemsPortV1, PersonOriginalItemsPortV1 } from "../src/application/ports/person-list-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
-import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-route.js";
+import { createPersonLiveAnswerRouteV1 } from "../src/composition/person-live-answer-route-v1.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import { decodePersonListCursorV1, encodePersonListCursorV1, type PersonListPositionsV1 } from "../src/composition/person-list-cursor-v1.js";
 import { createPersonListRouteV1 } from "../src/composition/person-list-v1-route.js";
@@ -198,7 +198,7 @@ async function disclosureWorld() {
       organization_id: org, sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(w.authority),
       originals: items, meetings,
     }),
-    person_answer_v3: createPersonAnswerV3Route({
+    person_answer_v7: createPersonLiveAnswerRouteV1({
       authority_id: COORDINATES.authority_id, organization_id: org, state_lineage_id: COORDINATES.state_lineage_id,
       sessions: sessions as never, originals, records, model: everything,
       generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
@@ -252,7 +252,7 @@ async function disclosureWorld() {
   const originalAudits = () => (w.authority.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1").all() as { readonly body_json: string }[])
     .map((row) => JSON.parse(row.body_json) as Record<string, unknown>).filter((body) => body.kind === "echo-person-original-item-release-audit-v1");
   const meeting = (name: string) => `meeting:${w.digest(name)}`;
-  const ask = async (token: Token, request: Readonly<Record<string, unknown>> = {}) => post(PERSON_ANSWER_PATH_V3, token, { schema_version: 3, question: "What did I add?", ...request });
+  const ask = async (token: Token, request: Readonly<Record<string, unknown>> = {}) => post(PERSON_ANSWER_PATH_V7, token, { schema_version: 3, question: "What did I add?", ...request });
   return { w, refs, requestIds, list, open, walk, listed, refsOf, openAll, ask, admitNotes, bodies, pageAudits, originalAudits, meeting, storeCalls, hooks };
 }
 
@@ -500,7 +500,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       for (const ref of teammates) expect({ token, ref, global: global.includes(ref), mine: mine.includes(ref) }).toEqual({ token, ref, global: true, mine: false });
       const response = await f.ask(token, { mine: true });
       expect(response.status).toBe(200);
-      const answer = validatePersonAnswerResponseV4(JSON.parse(response.text));
+      const answer = validatePersonAnswerResponseV8(JSON.parse(response.text));
       expect(answer.scope).toEqual({ kind: "mine" });
       expect(answer.citations.length).toBeGreaterThan(0);
       const refs: string[] = answer.citations.map((citation) => citation.ref ?? "");

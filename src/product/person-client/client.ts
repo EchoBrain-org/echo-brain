@@ -1,4 +1,4 @@
-import type { PersonDiagnosticCaptureIdV1, PersonDiagnosticsRequestV1, PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
+import type { PersonAnswerPreviousV1, PersonDiagnosticCaptureIdV1, PersonDiagnosticsRequestV1, PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentIdV1, validatePersonDocumentSearchV2, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
 import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
@@ -8,8 +8,10 @@ import { validatePersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceRea
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import type { PersonChangesV1 } from '@echo-brain/organization-api';
+import type { PersonProjectActivityV1 } from '@echo-brain/organization-api';
 import type { PersonResearchEvalReadResponseV1, PersonResearchEvalStartReceiptV1, PersonResearchEvalStartRequestV1 } from '@echo-brain/organization-api';
 import type { PersonRunsRequestV1, PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import type { PersonAskCheckRequestV1, PersonAskCheckV1 } from '@echo-brain/organization-api';
 import {
   validateProjectPageRequestV2, validateProjectCreateV1, validateProjectIdV1,
   validateProjectContextBrowseV1, validateProjectDirectorySearchV1,
@@ -32,10 +34,6 @@ import {
   unknownContextMutation,
   unknownDocumentMutation,
   type EmployeeRosterV1,
-  type PersonAnswer,
-  type PersonAnswerV5,
-  type PersonAnswerV6,
-  type PersonAnswerV7,
   type PersonAnswerV8,
   type PersonEvidenceDeskV1,
   type PersonEvidenceOpenV1,
@@ -214,20 +212,6 @@ function sameAccount(current: StoredPersonClientSessionV1, stored: StoredPersonC
     current.session.principal_id === stored.session.principal_id &&
     current.session.membership_id === stored.session.membership_id &&
     current.session.session_family_id === stored.session.session_family_id;
-}
-
-/** Only an Authority with no V7 (or V6, or V5) route answers 404 without the route header; any other failure never falls back. */
-function withoutLiveAskRoute(error: unknown): boolean {
-  return error instanceof PersonAuthorityClientError && error.status === 404 && error.code === 'not_found' && !error.routeMatched;
-}
-
-/** Asks each live Ask route, newest first, and the next only when an older Authority has no such route; the last one answers. */
-async function newestLiveAskRoute<T>(routes: readonly (() => Promise<T>)[]): Promise<T> {
-  for (const route of routes.slice(0, -1)) {
-    try { return await route(); }
-    catch (error) { if (!withoutLiveAskRoute(error)) throw error; }
-  }
-  return routes.at(-1)!();
 }
 
 function summary(
@@ -707,46 +691,24 @@ export class PersonClient {
   }
 
   /**
-   * The oldest agentic Ask, `/v3` with V4 answers (ADR-0022). No command asks
-   * it since `person ask` moved to the newest route; it goes when `/v3` is
-   * retired.
+   * The Ask `person ask` asks, `POST /v7/person/ask`, in every scope: all
+   * request-advertised live evidence sources, ECHO's shared follow-ups
+   * (ADR-0040), and the asker's projects, people, tools and tool containers
+   * (research tool contract v1). It may carry the asker's previous turn
+   * (ADR-0047). An Authority without `/v7` fails with `not_supported`.
    */
-  async ask(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswer> {
+  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
+    previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
     validateAskInput(question, scope);
-    return this.withReadSession((authority, token) => authority.askV3(token, question, scope, signal, captureId));
-  }
-
-  /** Explicit opt-in to the versioned ticket-capable response. */
-  async askWithTickets(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV5> {
-    validateAskInput(question, scope);
-    return this.withReadSession((authority, token) => authority.askV4(token, question, scope, signal, captureId));
+    return this.withReadSession((authority, token) => authority.askV7(token, question, scope, signal, captureId, previous));
   }
 
   /**
-   * The Ask `person ask` asks, in every scope: all request-advertised live
-   * evidence sources, from `/v6` ECHO's shared follow-ups (ADR-0040), and
-   * from `/v7` the asker's projects, people, tools and tool containers
-   * (research tool contract v1). It falls back from `/v7` to `/v6`, to `/v5`,
-   * and then to `/v4`, only when an older Authority has no such route. A
-   * capture also reads on `/v5`, never on `/v4`.
-   */
-  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5> {
-    validateAskInput(question, scope);
-    return this.withReadSession((authority, token) => newestLiveAskRoute<PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5>([
-      () => authority.askV7(token, question, scope, signal, captureId),
-      () => authority.askV6(token, question, scope, signal, captureId),
-      () => authority.askV5(token, question, scope, signal, captureId),
-      ...(captureId === undefined ? [() => authority.askV4(token, question, scope, signal)] : []),
-    ]));
-  }
-
-  /**
-   * `askWithLiveSources` with Ask progress (ADR-0039): each step event reaches
-   * `onProgress` as it arrives, and the answer carries its receipt only when
-   * the Authority streamed: V3 on `/v7`, whose steps may name projects, people,
-   * tools and tool containers, V2 on `/v6`, whose steps may name follow-ups,
-   * or V1 on `/v5`. An older Authority's JSON answer, and the V4 fallback,
-   * come back without progress or a receipt.
+   * `askWithLiveSources` with Ask progress V3 (ADR-0039): each step event
+   * reaches `onProgress` as it arrives, and may name a follow-up, a project, a
+   * person, a tool or a tool container; the answer carries its receipt only
+   * when the Authority streamed. A JSON answer comes back without progress or a
+   * receipt.
    *
    * A step is passed on only while the account that asked is the signed-in
    * one. Another account stops the Ask at once. A step that arrives while no
@@ -757,7 +719,8 @@ export class PersonClient {
    * refused before anything is sent, so no step of that account reaches it.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {}): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {},
+    previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     const stored = await this.accessSession();
     if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
@@ -775,14 +738,7 @@ export class PersonClient {
       if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
       onProgress(event);
     };
-    // `/v7` streams progress V3 (research tool contract v1); an Authority without it streams V2 on `/v6` (ADR-0040), one without
-    // that streams V1 on `/v5`, and one without that answers `/v4` with no progress.
-    const answer = await newestLiveAskRoute<PersonLiveAnswerV3>([
-      () => authority.askV7WithProgress(token, question, scope, signal, forward),
-      () => authority.askV6WithProgress(token, question, scope, signal, forward),
-      () => authority.askV5WithProgress(token, question, scope, signal, forward),
-      async () => Object.freeze({ result: await authority.askV4(token, question, scope, signal) }),
-    ]);
+    const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous);
     this.assertCurrentSession(stored);
     return answer;
   }
@@ -801,13 +757,23 @@ export class PersonClient {
     return this.withReadSession((authority, token) => authority.readResearchEval(token, runId, signal));
   }
 
-  /** What moved in this person's own view, one fingerprint per area (ADR-0036); `not_supported` from an older Authority. */
+  /** What moved in this person's own view, one fingerprint per area (ADR-0036). */
   async changes(signal?: AbortSignal): Promise<PersonChangesV1> {
     return this.withReadSession((authority, token) => authority.changes(token, signal));
   }
 
+  /** When each of this person's active projects last had news from someone else (Ask timeline v1, C2). */
+  async projectActivity(signal?: AbortSignal): Promise<PersonProjectActivityV1> {
+    return this.withReadSession((authority, token) => authority.projectActivity(token, signal));
+  }
+
   async runs<K extends PersonRunsRequestV1['operation']>(value: Extract<PersonRunsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonRunsResultsV1[K]> {
     return this.withReadSession((authority, token) => authority.runs(token, value, signal));
+  }
+
+  /** Whether each source old answers cited is the same, changed, unreadable or unknown now (ADR-0047); `not_supported` from an older Authority. */
+  async askCheck(value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
+    return this.withReadSession((authority, token) => authority.askCheck(token, value, signal));
   }
 
   /** Each evidence invocation creates a new authenticated, scope-bound desk request. */

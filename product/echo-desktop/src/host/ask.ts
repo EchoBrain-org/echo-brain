@@ -2,21 +2,59 @@
 // the reads of what it cites), and the reader of the progress lines the Ask
 // prints while it works. Kept apart from host.ts so the whole path, Authority
 // to page, is tested as it runs.
-import type { AskProgressNotice, AskScope, AskStep, Expect, RecordRef, SourceRef } from '../shared/protocol.js';
+import {
+  PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validatePersonQueryText, validateProjectIdV1,
+} from '@echo-brain/organization-api';
+import type { AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRef, SourceRef } from '../shared/protocol.js';
+import { askText } from '../shared/query.js';
 import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
 
 /**
  * The client command for an Ask of `text` (already askText's), for the
  * account the page shows. Every Ask, Mine as much as global or project, asks
- * the newest route and its progress, pinned to that account: a client signed
- * in as another by then asks nothing and prints no step, so the page's
- * account check of each step is the client's own. An older Authority answers
- * on its newest route, and one that predates progress with none.
+ * `/v7` with its progress, pinned to that account: a client signed in as
+ * another by then asks nothing and prints no step, so the page's account
+ * check of each step is the client's own. A follow-up or Ask again carries
+ * the earlier turn (`previous`, ADR-0047), already checked by askPrevious.
  */
-export function askArgv(text: string, scope: AskScope, expect: Expect): string[] {
-  return ['ask', `--question=${text}`, '--live', '--progress', `--expected-membership-id=${expect.membership_id}`, `--expected-authority=${expect.authority}`,
-    ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : scope.kind === 'mine' ? ['--mine'] : [])];
+export function askArgv(text: string, scope: AskScope, expect: Expect, previous?: AskPrevious): string[] {
+  return ['ask', `--question=${text}`, '--progress', `--expected-membership-id=${expect.membership_id}`, `--expected-authority=${expect.authority}`,
+    ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : scope.kind === 'mine' ? ['--mine'] : []),
+    ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`])];
+}
+
+/** Whether the API's own validator takes `value`. */
+const checks = (validate: (value: unknown) => unknown, value: unknown): boolean => { try { validate(value); return true; } catch { return false; } };
+
+/**
+ * The earlier turn an Ask of `question` (already askText's) in `scope`
+ * carries, checked as the client checks it (C3): with the whole request it
+ * rides on, by the API's own validator, its earlier question as askText would
+ * send it. Null when that refuses it. A question or project that fails on its
+ * own is the client's to report, as it does with or without the earlier turn,
+ * so then the turn goes as it came.
+ */
+export function askPrevious(value: unknown, question: string, scope: AskScope): AskPrevious | null {
+  if (!checks(validatePersonQueryText, question) || (scope.kind === 'project' && !checks(validateProjectIdV1, scope.project_id))) return value as AskPrevious;
+  const where = scope.kind === 'project' ? { project_id: scope.project_id } : scope.kind === 'mine' ? { mine: true } : {};
+  try {
+    const previous = validatePersonAnswerRequestV3({ schema_version: 3, question, ...where, previous: value }).previous!;
+    return askText(previous.question) === previous.question ? value as AskPrevious : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The request a check sends (C1), as the API's own validator takes it, or null when the page's items are not one. */
+export function askCheckRequest(items: unknown): string | null {
+  const request = { schema_version: 1, kind: PERSON_ASK_CHECK_REQUEST_KIND_V1, items };
+  return checks(validatePersonAskCheckRequestV1, request) ? JSON.stringify(request) : null;
+}
+
+/** The client command for a check (C1): it validates the request, posts it, and prints the validated response last. */
+export function askCheckArgv(request: string): string[] {
+  return ['ask-check', `--request=${request}`];
 }
 
 /** The client command that reads a cited meeting's approved record, for the pane to light the cited items. */

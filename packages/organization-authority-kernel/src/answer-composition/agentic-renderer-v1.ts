@@ -1,5 +1,5 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonAnswerResponseV4 } from "@echo-brain/organization-api";
+import type { PersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { AgenticAskOutputErrorV1 } from "./agentic-ask-v1-model-protocol.js";
 import type { AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import { AGENTIC_ASK_MIN_ANSWER_MS_V1, isAbort, type AgenticModelCallV1, type AgenticModelGateV1 } from "./agentic-model-gate-v1.js";
@@ -38,7 +38,8 @@ export interface AgenticRenderOutputV1<Out> {
   readonly result: Out;
   /** Short ids of the bundle items the result cites, in citation order. */
   readonly cited: readonly string[];
-  readonly outcome: PersonAnswerResponseV4["outcome"];
+  /** Only a follow-up's resolver asks which one (ADR-0047): no renderer does. */
+  readonly outcome: Exclude<PersonAnswerResponseV8["outcome"], "clarify">;
   /** Model failures the renderer recovered from with its no-model fallback. */
   readonly fallbacks: number;
   /** The fingerprint of the result's answer, which the audit binds beside the release step's fingerprint of the whole result. */

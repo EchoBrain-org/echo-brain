@@ -1,3 +1,4 @@
+import { PERSON_ANSWER_OUTCOMES_V8 } from "@echo-brain/organization-api";
 import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, telemetryLabelV1, type TelemetryVocabularyV1 } from "./telemetry-vocabulary-v1.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
@@ -13,6 +14,8 @@ export const CORE_RUNTIME_PHASES_V1 = [
   "search_reconciliation", "search_snapshot", "search_build",
   "search_validation", "search_publication", "model_call",
   "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer",
+  // What a follow-up refers to, before its research (ADR-0047).
+  "ask_resolve",
   // A research trigger renderer's model call (research trigger contract v1), such as the impact card's.
   "research_render", "research_run", "research_brief", "research_starting_read", "research_preload", "research_loop", "research_output", "research_output_view", "research_revalidation", "research_audit", "research_release",
   // One evidence-desk call each (search, open, list, revalidate), from Ask or the evidence doors.
@@ -39,7 +42,7 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds",
 ] as const;
 export type CoreRuntimeCountsV1 = Partial<Record<(typeof CORE_RUNTIME_COUNT_KEYS_V1)[number], number | null>>;
-export const CORE_RUNTIME_RESULTS_V1 = ["held", "unrepresentable", "current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", "answered", "partial", "not_found", "off_scope"] as const;
+export const CORE_RUNTIME_RESULTS_V1 = ["held", "unrepresentable", "current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", ...PERSON_ANSWER_OUTCOMES_V8] as const;
 export const CORE_RUNTIME_GROUNDING_STAGES_V1 = ["evidence_id", "evidence_duplicate", "evidence_quote", "due_before_meeting", "decided_question_only", "rationale_supports"] as const;
 export const CORE_RUNTIME_UPSTREAM_SERVICES_V1 = ["nango", "jira", "confluence", "granola", "other"] as const;
 export const CORE_RUNTIME_UPSTREAM_OPERATIONS_V1 = ["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"] as const;
@@ -65,6 +68,8 @@ export const CORE_RUNTIME_MODEL_CORRECTIONS_V1 = Object.freeze([
   "model_json_fence_stripped", "model_json_outer_text_dropped",
   "model_text_truncated", "model_items_capped", "model_entry_dropped", "model_repeat_dropped", "model_id_respelled", "model_enum_respelled", "model_bare_string",
   "model_inline_ids_stripped",
+  // Ask's follow-up resolver (ADR-0047).
+  "resolver_fallback",
   // Renderers: Ask's writer, the impact card and the sweep.
   "writer_repeat_dropped", "writer_unknown_id_dropped", "writer_uncited_sentence_dropped", "writer_fallback",
   "card_line_screened", "card_unknown_id_dropped", "card_date_dropped", "card_fallback",

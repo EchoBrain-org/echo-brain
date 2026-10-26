@@ -8,7 +8,7 @@ import { observePersonResearchV1 } from '../../src/composition/person-research-o
 import { PersonRecordSearchIndexLagV1 } from '../../src/composition/person-record-search-route.js';
 import { createLangSmithObserverV1, type LangSmithRunV1 } from '../../src/composition/observability/langsmith-observer-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { createAgenticAskV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { createAgenticAskV5 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import { createOpenRouterStructuredGenerationAdapter } from '../../../../providers/openrouter/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js';
 
@@ -201,7 +201,7 @@ describe('LangSmith projection of the shared observer', () => {
     } });
     let answer: unknown;
     const runs = await exported(async () => {
-      answer = await createAgenticAskV1({ desk, model, audit: { append: () => {} }, today: () => '2026-10-16',
+      answer = await createAgenticAskV5({ desk, model, audit: { append: () => {} }, today: () => '2026-10-16',
         generation: { generation_adapter_id: 'openrouter', planner_model: 'deepseek/deepseek-v3.2', answer_model: 'deepseek/deepseek-v3.2', timeout_ms: 30_000 } })
         .answer({ question: 'When is launch?' });
     });

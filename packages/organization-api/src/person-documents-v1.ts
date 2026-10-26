@@ -1,9 +1,10 @@
 import { sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonUpdateRequestId } from './person-updates.js';
-import { validateProjectContextAudienceV1, validateProjectIdV1, type ProjectContextAudienceV1, type ProjectIdV1 } from './project-context-v1.js';
+import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validateAssociationProjectIdsV1, validatePersonUploadAudienceV3, type PersonUploadAudienceV3 } from './person-upload-audience-v3.js';
 import { fail } from './validation.js';
 
+/** Retired route (ADR-0048). The Authority keeps it reserved against provider adapters. */
 export const PERSON_DOCUMENTS_PATH_V1 = '/v1/person/documents';
 export const PERSON_DOCUMENTS_PATH_V2 = '/v2/person/documents';
 export const PERSON_DOCUMENT_MAX_ORIGINAL_BYTES = 25 * 1024 * 1024;
@@ -15,25 +16,6 @@ export const PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES = 2 * 1024 * 1024;
 export const PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES = 3 * 1024;
 export type PersonDocumentMediaTypeV1 = 'text/plain' | 'text/markdown' | 'application/pdf' | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 export type PersonDocumentExtractionStateV1 = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out' | 'unsupported' | 'unavailable';
-
-export interface PersonDocumentUploadMetadataV1 {
-  readonly schema_version: 1; readonly kind: 'echo-person-document-upload-v1'; readonly request_id: string;
-  readonly filename: string; readonly title: string; readonly content_length: number; readonly sha256: `sha256:${string}`;
-  readonly audience: ProjectContextAudienceV1; readonly project_id: ProjectIdV1 | null;
-}
-export interface PersonDocumentReceiptV1 extends Omit<PersonDocumentUploadMetadataV1, 'kind'> {
-  readonly kind: 'echo-person-document-receipt-v1'; readonly document_id: `doc_${string}`;
-  readonly detected_media_type: PersonDocumentMediaTypeV1; readonly received_at: string;
-  readonly state: 'saved'; readonly extraction_state: PersonDocumentExtractionStateV1;
-}
-/** Own account-scoped admission proof; contains no retained content or access coordinates. */
-export interface PersonDocumentSavedV1 {
-  readonly schema_version: 1; readonly kind: 'echo-person-document-saved-v1';
-  readonly request_id: string; readonly document_id: `doc_${string}`;
-  readonly received_at: string; readonly state: 'saved';
-}
-export type PersonDocumentUploadResultV1 = PersonDocumentReceiptV1 | PersonDocumentSavedV1;
-export type PersonDocumentStatusV1 = PersonDocumentMetadataV1 | PersonDocumentSavedV1;
 
 /** V2 records an immutable initial multi-project association set. */
 export interface PersonDocumentUploadMetadataV2 {
@@ -71,15 +53,6 @@ function documentUploadFields(input: Record<string, unknown>): void {
   if (/[\\/]/u.test(input.filename) || input.filename === '.' || input.filename === '..') fail('Document filename must be a basename');
   if (!Number.isSafeInteger(input.content_length) || (input.content_length as number) < 1 || (input.content_length as number) > PERSON_DOCUMENT_MAX_ORIGINAL_BYTES) fail('Document content length is invalid');
   if (typeof input.sha256 !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(input.sha256)) fail('Document SHA-256 is invalid');
-}
-export function validatePersonDocumentUploadMetadataV1(value: unknown): PersonDocumentUploadMetadataV1 {
-  const input = plainObject(value);
-  const keys = ['audience','content_length','filename','kind','project_id','request_id','schema_version','sha256','title'];
-  if (Object.keys(input).sort().join() !== keys.join() || input.schema_version !== 1 || input.kind !== 'echo-person-document-upload-v1') fail('Document metadata shape is invalid');
-  documentUploadFields(input);
-  const audience = validateProjectContextAudienceV1(input.audience);
-  const project_id = input.project_id === null ? null : validateProjectIdV1(input.project_id, 'Document associated project_id');
-  return { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: input.request_id as string, filename: input.filename as string, title: input.title as string, content_length: input.content_length as number, sha256: input.sha256 as `sha256:${string}`, audience, project_id };
 }
 export function validatePersonDocumentUploadMetadataV2(value: unknown): PersonDocumentUploadMetadataV2 {
   const input = plainObject(value); const keys = ['association_project_ids','audience','content_length','filename','kind','request_id','schema_version','sha256','title'];
@@ -167,21 +140,13 @@ function validUtf8(bytes: Uint8Array): boolean {
   return true;
 }
 
-export function assertPersonDocumentOriginalV1(metadata: PersonDocumentUploadMetadataV1, bytes: Uint8Array): PersonDocumentMediaTypeV1 {
+export function assertPersonDocumentOriginalV1(metadata: Pick<PersonDocumentUploadMetadataV2, 'content_length' | 'sha256' | 'filename'>, bytes: Uint8Array): PersonDocumentMediaTypeV1 {
   if (bytes.byteLength !== metadata.content_length) fail('Document content length does not match metadata');
   if (sha256Digest(bytes) !== metadata.sha256) fail('Document SHA-256 does not match metadata');
   return detectPersonDocumentMediaTypeV1(bytes, metadata.filename);
 }
 
 export const PERSON_DOCUMENT_JSON_MAX_BYTES = 32 * 1024;
-/** `request_id` is null unless the reader uploaded the document (ADR-0023). */
-export interface PersonDocumentMetadataV1 extends Omit<PersonDocumentReceiptV1, 'kind' | 'request_id'> {
-  readonly kind: 'echo-person-document-metadata-v1';
-  readonly request_id: string | null;
-  readonly extraction_detail: string | null;
-  readonly extractor: string | null;
-  readonly extracted_text_bytes: number;
-}
 export interface PersonDocumentTextChunkV1 {
   readonly ordinal: number; readonly anchor_kind: 'page' | 'paragraph'; readonly anchor_start: number; readonly text: string;
 }
@@ -191,17 +156,7 @@ export interface PersonDocumentTextV1 {
   readonly extraction_state: PersonDocumentExtractionStateV1;
   readonly chunks: readonly PersonDocumentTextChunkV1[]; readonly next_cursor: string | null;
 }
-export interface PersonDocumentSearchV1 {
-  readonly schema_version: 1; readonly kind: 'echo-person-document-search-v1';
-  readonly project_id: ProjectIdV1 | null; readonly query: string; readonly limit: number; readonly cursor: string | null;
-}
-export interface PersonDocumentSearchResultV1 {
-  readonly schema_version: 1; readonly kind: 'echo-person-document-search-result-v1';
-  readonly documents: readonly (PersonDocumentMetadataV1 & { readonly excerpt: string | null; readonly anchor: { readonly kind: 'page' | 'paragraph'; readonly start: number } | null })[];
-  readonly next_cursor: string | null;
-}
-/** V2 preserves the same bounded query and project-view selector, but returns
- * multi-project audience and current association coordinates. */
+/** A bounded query and an optional project view; results carry multi-project audience and current association coordinates. */
 export interface PersonDocumentSearchV2 {
   readonly schema_version: 2; readonly kind: 'echo-person-document-search-v2';
   readonly project_id: ProjectIdV1 | null; readonly query: string; readonly limit: number; readonly cursor: string | null;
@@ -215,25 +170,15 @@ export function validatePersonDocumentIdV1(value: unknown): `doc_${string}` {
   if (typeof value !== 'string' || !/^doc_[a-f0-9]{64}$/.test(value)) fail('Document ID is invalid');
   return value as `doc_${string}`;
 }
-export function validatePersonDocumentSearchV1(value: unknown): PersonDocumentSearchV1 {
-  return documentSearch(value, 1) as PersonDocumentSearchV1;
-}
 export function validatePersonDocumentSearchV2(value: unknown): PersonDocumentSearchV2 {
-  return documentSearch(value, 2) as PersonDocumentSearchV2;
-}
-function documentSearch(value: unknown, version: 1 | 2): PersonDocumentSearchV1 | PersonDocumentSearchV2 {
   const input = plainObject(value);
-  if (Object.keys(input).sort().join() !== ['cursor','kind','limit','project_id','query','schema_version'].join() || input.schema_version !== version || input.kind !== `echo-person-document-search-v${version}`) fail('Document search shape is invalid');
+  if (Object.keys(input).sort().join() !== ['cursor','kind','limit','project_id','query','schema_version'].join() || input.schema_version !== 2 || input.kind !== 'echo-person-document-search-v2') fail('Document search shape is invalid');
   if (typeof input.query !== 'string' || utf8Bytes(input.query) > 200 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.query)) fail('Document query is invalid');
   if (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > 20) fail('Document search limit is invalid');
   if (input.cursor !== null && (typeof input.cursor !== 'string' || input.cursor.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))) fail('Document cursor is invalid');
-  const fields = { project_id: input.project_id === null ? null : validateProjectIdV1(input.project_id, 'project_id'), query: input.query.normalize('NFC').trim(), limit: input.limit as number, cursor: input.cursor as string | null };
-  return version === 1
-    ? { schema_version: 1, kind: 'echo-person-document-search-v1', ...fields }
-    : { schema_version: 2, kind: 'echo-person-document-search-v2', ...fields };
+  return { schema_version: 2, kind: 'echo-person-document-search-v2', project_id: input.project_id === null ? null : validateProjectIdV1(input.project_id, 'project_id'), query: input.query.normalize('NFC').trim(), limit: input.limit as number, cursor: input.cursor as string | null };
 }
 
-const documentReceiptKeys = ['schema_version','kind','request_id','filename','title','content_length','sha256','audience','project_id','document_id','detected_media_type','received_at','state','extraction_state'];
 const documentStates = ['extracting','ready','partial','no_text','encrypted','malformed','limit_exceeded','timed_out','unsupported','unavailable'];
 const documentMedia = ['text/plain','text/markdown','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
 function exactDocumentKeys(value: Record<string, unknown>, keys: readonly string[]): void { if(Object.keys(value).sort().join()!==[...keys].sort().join())fail('Document response shape is invalid'); }
@@ -241,25 +186,9 @@ function documentJsonBound(value: unknown, maximum = PERSON_DOCUMENT_JSON_MAX_BY
 /** Metadata withholds another uploader's request ID; the upload validators still check the rest. */
 const WITHHELD_REQUEST_ID = '00000000-0000-4000-8000-000000000000';
 function metadataRequestId(value: Record<string,unknown>): unknown { return value.request_id === null ? WITHHELD_REQUEST_ID : value.request_id; }
-function documentBase(value: Record<string,unknown>, requestId: unknown = value.request_id): void {
-  validatePersonDocumentUploadMetadataV1({schema_version:value.schema_version,kind:'echo-person-document-upload-v1',request_id:requestId,filename:value.filename,title:value.title,content_length:value.content_length,sha256:value.sha256,audience:value.audience,project_id:value.project_id});
-  documentReceiptFields(value);
-}
 function documentReceiptFields(value: Record<string, unknown>): void {
   validatePersonDocumentIdV1(value.document_id);
   if(!documentMedia.includes(value.detected_media_type as string)||!documentStates.includes(value.extraction_state as string)||value.state!=='saved'||typeof value.received_at!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.received_at)||!Number.isFinite(Date.parse(value.received_at)))fail('Document receipt fields are invalid');
-}
-export function validatePersonDocumentReceiptV1(value: unknown): PersonDocumentReceiptV1 {
-  const input=plainObject(value);exactDocumentKeys(input,documentReceiptKeys);if(input.kind!=='echo-person-document-receipt-v1')fail('Document receipt kind is invalid');documentBase(input);documentJsonBound(input);return input as unknown as PersonDocumentReceiptV1;
-}
-export function validatePersonDocumentSavedV1(value: unknown): PersonDocumentSavedV1 {
-  return documentSaved(value, 1) as unknown as PersonDocumentSavedV1;
-}
-export function validatePersonDocumentUploadResultV1(value: unknown): PersonDocumentUploadResultV1 {
-  return plainObject(value).kind==='echo-person-document-saved-v1'?validatePersonDocumentSavedV1(value):validatePersonDocumentReceiptV1(value);
-}
-export function validatePersonDocumentStatusV1(value: unknown): PersonDocumentStatusV1 {
-  return plainObject(value).kind==='echo-person-document-saved-v1'?validatePersonDocumentSavedV1(value):validatePersonDocumentMetadataV1(value);
 }
 function documentBaseV2(value: Record<string, unknown>, requestId: unknown = value.request_id): void {
   validatePersonDocumentUploadMetadataV2({ schema_version: value.schema_version, kind: 'echo-person-document-upload-v2', request_id: requestId, filename: value.filename, title: value.title, content_length: value.content_length, sha256: value.sha256, audience: value.audience, association_project_ids: value.association_project_ids });
@@ -270,12 +199,9 @@ export function validatePersonDocumentReceiptV2(value: unknown): PersonDocumentR
   if (input.kind !== 'echo-person-document-receipt-v2') fail('Document receipt kind is invalid'); documentBaseV2(input); documentJsonBound(input); return input as unknown as PersonDocumentReceiptV2;
 }
 export function validatePersonDocumentSavedV2(value: unknown): PersonDocumentSavedV2 {
-  return documentSaved(value, 2) as unknown as PersonDocumentSavedV2;
-}
-function documentSaved(value: unknown, version: 1 | 2): Record<string, unknown> {
   const input = plainObject(value); exactDocumentKeys(input, ['schema_version','kind','request_id','document_id','received_at','state']);
-  if (input.schema_version !== version || input.kind !== `echo-person-document-saved-v${version}` || input.state !== 'saved' || typeof input.received_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input.received_at) || !Number.isFinite(Date.parse(input.received_at))) fail('Document saved receipt is invalid');
-  validatePersonUpdateRequestId(input.request_id); validatePersonDocumentIdV1(input.document_id); documentJsonBound(input); return input;
+  if (input.schema_version !== 2 || input.kind !== 'echo-person-document-saved-v2' || input.state !== 'saved' || typeof input.received_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input.received_at) || !Number.isFinite(Date.parse(input.received_at))) fail('Document saved receipt is invalid');
+  validatePersonUpdateRequestId(input.request_id); validatePersonDocumentIdV1(input.document_id); documentJsonBound(input); return input as unknown as PersonDocumentSavedV2;
 }
 export function validatePersonDocumentUploadResultV2(value: unknown): PersonDocumentUploadResultV2 { return plainObject(value).kind === 'echo-person-document-saved-v2' ? validatePersonDocumentSavedV2(value) : validatePersonDocumentReceiptV2(value); }
 export function validatePersonDocumentMetadataV2(value: unknown): PersonDocumentMetadataV2 {
@@ -284,10 +210,6 @@ export function validatePersonDocumentMetadataV2(value: unknown): PersonDocument
   documentExtractionFields(input); return input as unknown as PersonDocumentMetadataV2;
 }
 export function validatePersonDocumentStatusV2(value: unknown): PersonDocumentStatusV2 { return plainObject(value).kind === 'echo-person-document-saved-v2' ? validatePersonDocumentSavedV2(value) : validatePersonDocumentMetadataV2(value); }
-export function validatePersonDocumentMetadataV1(value: unknown): PersonDocumentMetadataV1 {
-  const input=plainObject(value);exactDocumentKeys(input,[...documentReceiptKeys,'extraction_detail','extractor','extracted_text_bytes']);if(input.kind!=='echo-person-document-metadata-v1')fail('Document metadata kind is invalid');documentBase(input,metadataRequestId(input));
-  documentExtractionFields(input);return input as unknown as PersonDocumentMetadataV1;
-}
 function documentExtractionFields(input: Record<string, unknown>): void {
   if (input.extraction_detail !== null && (typeof input.extraction_detail !== 'string' || utf8Bytes(input.extraction_detail) > 512 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.extraction_detail))) fail('Document extraction detail is invalid');
   documentExtractor(input.extractor);
@@ -306,15 +228,8 @@ export function validatePersonDocumentTextV1(value: unknown): PersonDocumentText
   documentNextCursor(input.next_cursor);documentJsonBound(input,24*1024);return input as unknown as PersonDocumentTextV1;
 }
 function documentNextCursor(value: unknown): void { if(value!==null&&(typeof value!=='string'||value.length>1024||!/^[A-Za-z0-9_-]+$/.test(value)))fail('Document next cursor is invalid'); }
-export function validatePersonDocumentSearchResultV1(value: unknown): PersonDocumentSearchResultV1 {
-  return documentSearchResult(value, 1) as unknown as PersonDocumentSearchResultV1;
-}
 export function validatePersonDocumentSearchResultV2(value: unknown): PersonDocumentSearchResultV2 {
-  return documentSearchResult(value, 2) as unknown as PersonDocumentSearchResultV2;
-}
-function documentSearchResult(value: unknown, version: 1 | 2): Record<string, unknown> {
-  const input = plainObject(value); exactDocumentKeys(input,['schema_version','kind','documents','next_cursor']); if(input.schema_version!==version||input.kind!==`echo-person-document-search-result-v${version}`||!Array.isArray(input.documents)||input.documents.length>20)fail('Document search result is invalid');
-  const validateMetadata = version === 1 ? validatePersonDocumentMetadataV1 : validatePersonDocumentMetadataV2;
-  for(const value of input.documents){const item=plainObject(value);const {excerpt,anchor,...metadata}=item;validateMetadata(metadata);if(excerpt!==null&&(typeof excerpt!=='string'||Array.from(excerpt).length>240))fail('Document excerpt is invalid');if(anchor!==null){const a=plainObject(anchor);exactDocumentKeys(a,['kind','start']);if(!['page','paragraph'].includes(a.kind as string)||!Number.isSafeInteger(a.start)||(a.start as number)<1)fail('Document search anchor is invalid');}}
-  documentNextCursor(input.next_cursor);documentJsonBound(input);return input;
+  const input = plainObject(value); exactDocumentKeys(input,['schema_version','kind','documents','next_cursor']); if(input.schema_version!==2||input.kind!=='echo-person-document-search-result-v2'||!Array.isArray(input.documents)||input.documents.length>20)fail('Document search result is invalid');
+  for(const value of input.documents){const item=plainObject(value);const {excerpt,anchor,...metadata}=item;validatePersonDocumentMetadataV2(metadata);if(excerpt!==null&&(typeof excerpt!=='string'||Array.from(excerpt).length>240))fail('Document excerpt is invalid');if(anchor!==null){const a=plainObject(anchor);exactDocumentKeys(a,['kind','start']);if(!['page','paragraph'].includes(a.kind as string)||!Number.isSafeInteger(a.start)||(a.start as number)<1)fail('Document search anchor is invalid');}}
+  documentNextCursor(input.next_cursor);documentJsonBound(input);return input as unknown as PersonDocumentSearchResultV2;
 }

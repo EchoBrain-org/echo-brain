@@ -36,14 +36,14 @@ export {
 
 
 
-export { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type OrganizationPersonToolV3, type OrganizationPersonToolsV3 } from './person-tools-v3.js';
-export { ORGANIZATION_API_PERSON_TOOLS_PATH_V4, validateOrganizationPersonToolsV4, organizationPersonToolV3FromV4, type OrganizationPersonToolV4, type OrganizationPersonToolsV4, type OrganizationToolSetupStatusV4 } from './person-tools-v4.js';
+export { ORGANIZATION_API_PERSON_TOOLS_PATH_V4, validateOrganizationPersonToolsV4, type OrganizationPersonToolV4, type OrganizationPersonToolsV4, type OrganizationToolSetupStatusV4 } from './person-tools-v4.js';
 export type { PersonToolJsonRequestV1, PersonToolGetRequestV1, PersonToolTransportV1, PersonToolSessionV1, PersonToolHostV1, PersonToolVerbNameV1, PersonToolVerbContextV1, PersonToolVerbV1, PersonToolProviderV1 } from './person-tool-client.js';
 export { PersonToolOutcomeErrorV1, PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1 } from './person-tool-client.js';
 
 export { PersonQueryInputError, validatePersonQueryText } from "./person-query.js";
 
 export * from './person-changes-v1.js';
+export * from './person-project-activity-v1.js';
 export * from './person-updates.js';
 export * from './person-updates-v2.js';
 export * from './person-updates-v3.js';
@@ -67,11 +67,11 @@ export * from './person-answer-v6.js';
 export * from './person-answer-v7.js';
 export * from './person-answer-v8.js';
 export * from './person-answer-layout-v1.js';
+export * from './person-answer-previous-v1.js';
 export * from './person-follow-up-evidence-v1.js';
 export * from './person-workspace-citation-v1.js';
-export * from './person-ask-progress-v1.js';
-export * from './person-ask-progress-v2.js';
 export * from './person-ask-progress-v3.js';
+export * from './person-ask-check-v1.js';
 
 export * from './person-tool-connection-v1.js';
 export * from './person-tool-connection-client-v1.js';

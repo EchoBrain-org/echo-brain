@@ -11,6 +11,8 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0048
+  - ADR-0047
   - ADR-0046
   - ADR-0043
   - ADR-0045
@@ -120,9 +122,11 @@ optional metadata do not settle the final context shape. See the
 [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
 Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as
-updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): the V3 route
-and shared evidence desk are composed whenever an answer model is configured,
-with no capability switch. Live qualification is separate.
+updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md), on `/v7`
+alone since [ADR-0047](../decisions/ADR-0047-ask-timeline.md) retired the Ask
+routes before it: the `/v7` Ask and the shared evidence desk are composed
+whenever an answer model is configured, with no capability switch. Live
+qualification is separate.
 
 `person list [--project <project-id> | --mine] [--cursor <next_cursor>]` and
 `person open --ref <ref> [--cursor <next_cursor>]` read the Authority's
@@ -139,10 +143,20 @@ the request is validated before any session or network use
 ([ADR-0036](../decisions/ADR-0036-person-change-check.md)) under the signed-in
 session. It prints `echo-person-changes-v1` (one fingerprint each for
 `projects`, `follow_ups` and `reviews`, and `check_again_after_seconds`) as
-its last stdout line, exactly as the API validator accepts it. An Authority
-without the route answers 404, which the client reports as code
-`not_supported`, never `not_found`
-([`person-changes.test.ts`](../../tests/person-client/person-changes.test.ts)).
+its last stdout line, exactly as the API validator accepts it. Every Authority
+serves the check, so a failure keeps the code the Authority sent, a 404's
+`not_found` included
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md),
+[`person-changes.test.ts`](../../tests/person-client/person-changes.test.ts)).
+
+`person project-activity` takes no options and reads the Authority's project
+activity ([Ask timeline v1](../product/2026-10-25-ask-timeline-v1.md) C2) under
+the signed-in session. It prints `echo-person-project-activity-v1` (for each
+active project, when something new last arrived from someone else that the
+caller can read, or null) as its last stdout line, exactly as the API validator
+accepts it. As with the change check, a failure keeps the code the Authority
+sent
+([`person-project-activity.test.ts`](../../tests/person-client/person-project-activity.test.ts)).
 
 The shared `person tools <verb> --tool <id>` dispatcher selects client-only
 provider fragments at composition. Slack and the Jira and Confluence flows (Jira

@@ -11,7 +11,8 @@ import { createJiraCloudTransportV1, type JiraCloudTransportV1 } from './jira-cl
 import { createJiraPersonLiveContainerReaderV1 } from './jira-person-live-container-reader-v1.js';
 import { createJiraPersonLiveEvidenceReaderV1 } from './jira-person-live-evidence-reader-v1.js';
 import type { JiraNangoV1 } from './jira-nango-v1.js';
-import { jiraProjectMatches, parseJiraProject, readJiraAssigneeAccountsV1, verifyJiraConnectionV1 } from './jira-payload-v1.js';
+import { jiraProjectMatches, parseJiraProject, readJiraAssigneeAccountsV1, readJiraTicketMarkersV1, verifyJiraConnectionV1 } from './jira-payload-v1.js';
+export { jiraTicketMarkerV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, jiraFailure } from './jira-validation-v1.js';
 
 export type JiraPersonAuthorizationV1 = PersonConnectionAuthorizationV1;
@@ -55,6 +56,14 @@ export function createJiraPersonConnectionV1(options: {
     current(); input.signal?.throwIfAborted();
     const transport = createJiraCloudTransportV1(authenticated(binding, stored.reference, tags(person, stored.attempt), current));
     return Object.freeze({ transport, require_current: current });
+  }
+  /** A bulk issue read with this person's own connection, of the distinct valid issue ids among `ticket_ids`; none reads nothing. */
+  async function readTickets<T>(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal },
+    read: (transport: JiraCloudTransportV1, request: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<ReadonlyMap<string, T>>): Promise<ReadonlyMap<string, T>> {
+    const ticket_ids = [...new Set(input.ticket_ids)].filter(id => JIRA_ID.test(id));
+    if (ticket_ids.length === 0) return new Map();
+    const { transport } = await captureConnection(input);
+    return read(transport, { cloud_id: cloud, ticket_ids, signal: input.signal });
   }
   return Object.freeze({
     ...shared.application,
@@ -103,11 +112,16 @@ export function createJiraPersonConnectionV1(options: {
     },
     captureConnection,
     /** Assignee account ids by ticket id, read in bulk with this person's own connection. */
-    async assigneeAccounts(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
-      const ticket_ids = [...new Set(input.ticket_ids)].filter(id => JIRA_ID.test(id));
-      if (ticket_ids.length === 0) return new Map();
-      const { transport } = await captureConnection(input);
-      return readJiraAssigneeAccountsV1(transport, { cloud_id: cloud, ticket_ids, signal: input.signal });
+    assigneeAccounts(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
+      return readTickets(input, readJiraAssigneeAccountsV1);
+    },
+    /**
+     * The Ask source check's tickets (Ask timeline v1, C1; ADR-0047): each ticket's marker by its id, read in bulk with this
+     * person's own connection, at most 100 ids in two calls. A ticket they cannot read now does not come back and is left out;
+     * one whose fields no marker can be made from is null.
+     */
+    ticketMarkers(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string | null>> {
+      return readTickets(input, readJiraTicketMarkersV1);
     },
     async source(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined> {
       const { person, requirePerson } = actor(input.access_token);

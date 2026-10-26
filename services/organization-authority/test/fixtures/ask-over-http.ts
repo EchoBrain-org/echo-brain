@@ -12,7 +12,7 @@ import { PersonRecordSearchIndexLagV1 } from '../../src/composition/person-recor
 import { createOrganizationAuthorityHttpServer } from '../../src/presentation/organization-authority-http-server.js';
 import type { FixturePerson, OpenItemsFixtureV1 } from './open-items.js';
 
-/** The streamed Ask routes over HTTP, behind the real server, over the open-items Authority state (ADR-0039, ADR-0040). */
+/** The streamed Ask route over HTTP, behind the real server, over the open-items Authority state (ADR-0039, ADR-0040). */
 
 type Server = ReturnType<typeof createOrganizationAuthorityHttpServer>;
 const servers: Server[] = [];
@@ -102,9 +102,9 @@ export function askClient(defaults: { readonly path: string; readonly progress: 
 }
 
 /**
- * What every streamed Ask route answers in JSON: a progress value other than its own gets the answer `validate`
- * accepts, and a failure before the stream starts is the ordinary JSON error with the route header, so a client never
- * falls back on it.
+ * What the streamed Ask route answers in JSON: a progress value other than its own gets the answer `validate` accepts,
+ * and a failure before the stream starts is the ordinary JSON error with the route header, so a client never takes it
+ * for an Authority without the route.
  */
 export async function expectJsonAskFallbacks(ask: ReturnType<typeof askClient>, base: string,
   route: { readonly header: string; readonly others: readonly string[]; readonly validate: (value: unknown) => unknown; readonly reset?: () => void }): Promise<void> {
@@ -119,7 +119,7 @@ export async function expectJsonAskFallbacks(ask: ReturnType<typeof askClient>, 
     .toEqual([401, 'application/json; charset=utf-8', route.header]);
 }
 
-/** A streamed Ask route the Authority did not compose answers unavailable, still route-matched. */
+/** The streamed Ask route, when the Authority did not compose its Ask, answers unavailable, still route-matched. */
 export async function expectAskRouteUnavailable(ask: ReturnType<typeof askClient>, base: string, header: string): Promise<void> {
   const response = await ask(base);
   expect([response.status, response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)]).toEqual([503, header]);

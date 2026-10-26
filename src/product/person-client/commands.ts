@@ -7,7 +7,9 @@ import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/orga
 import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
+import { validatePersonAskCheckRequestV1, type PersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
+import { validatePersonAnswerRequestV3, type PersonAnswerPreviousV1 } from '@echo-brain/organization-api';
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbNameV1, type PersonToolVerbV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -48,8 +50,6 @@ export interface PersonClientCliDependencies {
 }
 
 const OPTIONS = {
-  tickets: { type: "boolean" },
-  live: { type: "boolean" },
   progress: { type: "boolean" },
   "document-id": { type: "string" },
   audience: { type: "string" },
@@ -76,6 +76,7 @@ const OPTIONS = {
   "authority-url": { type: "string" },
   invitation: { type: "string" },
   question: { type: "string" },
+  previous: { type: "string" },
   query: { type: "string" },
   name: { type: "string" },
   email: { type: "string" },
@@ -136,19 +137,21 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "mine", "tickets", "live", "progress", "expected-membership-id", "expected-authority"],
+    accepts: ["question", "project", "mine", "progress", "expected-membership-id", "expected-authority", "previous"],
     requires: ["question"],
   },
   list: { accepts: ["project", "mine", "cursor"] },
   open: { accepts: ["ref", "cursor"], requires: ["ref"] },
   runs: { accepts: ["request"], requires: ["request"] },
   changes: {},
+  "project-activity": {},
   "evidence-search": { accepts: ["query", "project", "kind", "limit"], requires: [] },
   "evidence-open": { accepts: ["item", "project", "neighbours"], requires: ["item"] },
   "ask-source": {
     accepts: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256", "document-id", "project"],
     requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
   },
+  "ask-check": { accepts: ["request"], requires: ["request"] },
   records: { accepts: ["limit", "query", "record-sha256"] },
   "tools": {},
   "employee-invite": {
@@ -188,6 +191,7 @@ Commands:
   list        List the newest notes, documents, imported meetings and approved meetings you can read.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
+  ask-check   Check whether what earlier answers cited changed, with no content.
   evidence    Search or open released Ask evidence.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
@@ -197,6 +201,7 @@ Commands:
   employee    List, invite, reissue, or revoke an employee.
   tools       List tools, or set up, connect and disconnect one.
   changes     Check what moved in your own view, with no content.
+  project-activity  When each of your projects last had something new from someone else, with no content.
 
 Run \`echo-brain person <command> --help\` for command options.
 `,
@@ -220,13 +225,15 @@ Run \`echo-brain person tools <verb> --help\` for each tool's options.
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --progress [--expected-membership-id <id> --expected-authority <origin>]]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
 
 Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
-Ask uses the newest Ask route, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools, follow-ups and the workspace. An older Authority answers on its newest route: without /v7 it cites no projects, people, tools or tool containers, and without /v6 no follow-ups. --live, which once chose this route, is still accepted and changes nothing; it is refused beside --tickets. --tickets retains the prior ticket-capable response for compatibility, and never streams progress.
+Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools, follow-ups and the workspace. An Authority without /v7 fails with code not_supported.
 
 --progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
+
+--previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with at most 8 sentences of at most 400 characters each and at most 12 of that answer's citations, as it carried them. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request.
 `,
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
@@ -253,9 +260,13 @@ Runs a versioned request against approved-record impact runs, the open items the
   assign               with item_id and owner_membership_id; before send the approver only, then the approver, the owner or a lead of the decision's projects
   sweep                with scope mine, record or project, and an id for record and project; re-checks the open items you can see
 `,
+  "project-activity": `usage: echo-brain person project-activity
+
+Reads when something new last arrived in each of your active projects from someone else, with no content: a meeting approved into it, a note or document filed into it, or a follow-up of its meetings sent, handed on or set to a new state. Each counts only when you can read it, and your own never counts. Prints echo-person-project-activity-v1 as its last line: one item per project, latest_at a UTC time or null when nothing arrived.
+`,
   changes: `usage: echo-brain person changes
 
-Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review), and how many seconds to wait before checking again. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line. An Authority without the check fails with code not_supported.
+Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review), and how many seconds to wait before checking again. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line.
 `,
   evidence: `usage: echo-brain person evidence <search|open> [options]
 
@@ -272,6 +283,10 @@ Opens one cited evidence item under a fresh signed-in request. --item is the cit
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
 Reads one bounded immutable source-evidence packet cited by Ask. Use the exact citation fields. The server rechecks your current access and project association before returning it; this never downloads an original file.
+`,
+  "ask-check": `usage: echo-brain person ask-check --request <json>
+
+Checks whether the sources earlier answers cited changed, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket may add the "marker" an earlier check returned. Each item is answered in order: same, changed, unreadable (never why) or unknown (its tool is not connected, failed or ran out of time), and a readable ticket with its current marker. Prints echo-person-ask-check-v1 as its last line. An Authority without the check fails with code not_supported.
 `,
   directory: `usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 
@@ -604,6 +619,27 @@ async function readBoundedLine(input: NodeJS.ReadableStream, output: NodeJS.Writ
   }
 }
 
+/** A `--previous` this client refuses before anything is sent (ADR-0047). */
+class AskPreviousError extends Error {}
+
+/** `--previous` as the Ask request would carry it, validated with the whole request; anything wrong with it is an AskPreviousError. */
+function askPreviousOf(values: Record<Option, string | boolean | undefined>): PersonAnswerPreviousV1 {
+  let previous: unknown;
+  try { previous = JSON.parse(requiredText(values, "previous")); }
+  catch { throw new AskPreviousError("Ask previous JSON is invalid"); }
+  // The question and project are checked on their own first, so their own errors are reported as today.
+  validatePersonQueryText(values.question);
+  if (values.project !== undefined) validateProjectIdV1(requiredText(values, "project"));
+  try {
+    return validatePersonAnswerRequestV3({
+      schema_version: 3, question: values.question,
+      ...(typeof values.project === "string" ? { project_id: values.project } : values.mine === true ? { mine: true } : {}), previous,
+    }).previous!;
+  } catch (error) {
+    throw new AskPreviousError(`Ask previous is invalid: ${(error as Error).message}`);
+  }
+}
+
 function requiredText(
   values: Record<Option, string | boolean | undefined>,
   option: Option,
@@ -611,6 +647,12 @@ function requiredText(
   const value = values[option];
   if (typeof value !== "string") throw new Error(`missing --${option}`);
   return value;
+}
+
+/** `--request` as JSON, validated; JSON that does not parse is "<name> request JSON is invalid". */
+function requestOf<T>(values: Record<Option, string | boolean | undefined>, validate: (value: unknown) => T, name: string): T {
+  try { return validate(JSON.parse(requiredText(values, 'request'))); }
+  catch (error) { if (error instanceof SyntaxError) throw new Error(`${name} request JSON is invalid`); throw error; }
 }
 
 function optionalRecordLimit(
@@ -843,6 +885,8 @@ export async function runPersonClientCli(
   let listRequest: PersonListRequestV1 | undefined;
     let openRequest: PersonOpenRequestV1 | undefined;
     let runsRequest: PersonRunsRequestV1 | undefined;
+    let askCheckRequest: PersonAskCheckRequestV1 | undefined;
+    let askPrevious: PersonAnswerPreviousV1 | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
   try {
     const args = argv.slice(subcommandAction === undefined ? 1 : 2);
@@ -860,7 +904,7 @@ export async function runPersonClientCli(
       strict: true,
       tokens: true,
       allowPositionals: false,
-      options: { ...OPTIONS, ...(action === 'runs' ? RUNS_OPTIONS : {}), ...(verbName === undefined ? {} : { tool: { type: 'string' as const }, ...toolOptions }) },
+      options: { ...OPTIONS, ...(action === 'runs' || action === 'ask-check' ? RUNS_OPTIONS : {}), ...(verbName === undefined ? {} : { tool: { type: 'string' as const }, ...toolOptions }) },
     });
     values = parsed.values as Record<Option, string | boolean | undefined>;
     if (isContextAction(action)) {
@@ -929,14 +973,13 @@ export async function runPersonClientCli(
     if ((action === "ask" || action === "list") && values.project !== undefined && values.mine === true) {
       throw new Error(`--project and --mine cannot be combined with \`echo-brain person ${action}\``);
     }
-    // The ticket route never streams progress (ADR-0039).
-    if (action === "ask" && values.progress === true && values.tickets === true) {
-      throw new Error("--tickets and --progress cannot be combined with `echo-brain person ask`");
-    }
     // Only the streamed Ask checks a pinned account: on any other, a pin would be silently ignored.
     if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
       throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
     }
+    // The previous turn (ADR-0047) is validated with the whole request, its 16 KiB bound included, before any network or
+    // session use.
+    if (action === "ask" && values.previous !== undefined) askPrevious = askPreviousOf(values);
     // List and open requests are complete and validated before any network or session use.
     if (action === "list") {
       listRequest = validatePersonListRequestV1({
@@ -953,10 +996,8 @@ export async function runPersonClientCli(
         ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
       });
     }
-    if (action === 'runs') {
-      try { runsRequest = validatePersonRunsRequestV1(JSON.parse(requiredText(values, 'request'))); }
-      catch (error) { if (error instanceof SyntaxError) throw new Error('Runs request JSON is invalid'); throw error; }
-    }
+    if (action === 'runs') runsRequest = requestOf(values, validatePersonRunsRequestV1, 'Runs');
+    if (action === 'ask-check') askCheckRequest = requestOf(values, validatePersonAskCheckRequestV1, 'Ask check');
   } catch (error) {
     if (isContextAction(action)) {
       print(stderr, contextCliFailure(action, error, values));
@@ -969,6 +1010,8 @@ export async function runPersonClientCli(
     print(stderr, {
       ok: false,
       error: (error as Error).message,
+      // A previous turn this client refuses fails as one an Authority refuses (ADR-0047), so a caller can ask without it.
+      ...(error instanceof AskPreviousError ? { action, code: "invalid_request" } : {}),
       ...(employeeMutation
         ? {
             action,
@@ -1193,26 +1236,19 @@ export async function runPersonClientCli(
         break;
       case "ask": {
         validatePersonQueryText(values.question);
-        if (values.tickets === true && values.live === true) throw new Error('Choose --tickets or --live');
         const question = requiredText(values, "question");
         const scope = values.project !== undefined
           ? validateProjectIdV1(requiredText(values, "project"))
           : values.mine === true ? { mine: true } as const : undefined;
         if (values.progress === true) {
-          // One line per step event as it arrives; the last line is today's, with the receipt when the Authority streamed.
-          // Progress V3 lines: a `/v7` step may name a project, a person, a tool or a tool container, and a `/v6` or `/v5` step is a V3 step too.
+          // One line per step event as it arrives; the last line is the answer's, with the receipt when the Authority streamed.
+          // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
-            progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), expectedAccount(values));
+            progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), expectedAccount(values), askPrevious);
           print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
           break;
         }
-        // The newest route, with or without its old flag --live; --tickets keeps the ticket route.
-        print(stdout, {
-          ok: true,
-          result: await (values.tickets === true ? client.askWithTickets.bind(client) : client.askWithLiveSources.bind(client))(
-            question, scope, dependencies.abort_signal,
-          ),
-        });
+        print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, undefined, askPrevious) });
         break;
       }
       case "list":
@@ -1224,9 +1260,17 @@ export async function runPersonClientCli(
       case 'runs':
         print(stdout, { ok: true, result: await client.runs(runsRequest!, dependencies.abort_signal) });
         break;
+      case 'ask-check':
+        // The bare check is the last line, as the desktop reads it.
+        print(stdout, await client.askCheck(askCheckRequest!, dependencies.abort_signal));
+        break;
       case 'changes':
         // The bare change check is the last line, as the desktop reads it.
         print(stdout, await client.changes(dependencies.abort_signal));
+        break;
+      case 'project-activity':
+        // The bare project activity is the last line, as the desktop reads it.
+        print(stdout, await client.projectActivity(dependencies.abort_signal));
         break;
       case 'evidence-search': {
         const project_id = optionalProject(values);

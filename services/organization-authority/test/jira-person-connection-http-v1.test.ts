@@ -67,7 +67,7 @@ it('mounts only the selected shared Jira tool routes and refuses client-selected
       '/v1/person/tools/jira/connect', '/v1/person/tools/jira/status', '/v1/person/tools/jira/cancel', '/v1/person/tools/jira/disconnect',
       '/v1/person/jira/connect', '/v1/person/jira/complete', '/v1/person/jira/disconnect',
     ]) expect((await fetch(`${disabled.origin}${path}`, { method: 'POST' })).status).toBe(404);
-    expect((await fetch(`${disabled.origin}/v4/person/ask`, { method: 'POST' })).status).toBe(503);
+    expect((await fetch(`${disabled.origin}/v7/person/ask`, { method: 'POST' })).status).toBe(503);
   } finally { await disabled.close(); }
 });
 

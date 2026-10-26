@@ -1,7 +1,7 @@
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonAnswerResponseV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
+import { validatePersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
-import { createAgenticAskV2, type AgenticAskAuditEntryV1 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
@@ -60,11 +60,11 @@ function fixture(options: {
     auditEntries.push(entry);
     return options.append?.(entry);
   });
-  const ask = createAgenticAskV2({ desk, model: { generate }, audit: { append }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 } });
+  const ask = createAgenticAskV5({ desk, model: { generate }, audit: { append }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 } });
   return { desk, inputs, fenceSnapshots, auditEntries, append, generate, run: (signal?: AbortSignal) => ask.answer({ question: 'When is launch?', signal }) };
 }
 
-describe('Agentic Ask V2 ticket release', () => {
+describe('Agentic Ask ticket release', () => {
   it('advertises a connected source and its provider in one catalog used by the tool schemas', async () => {
     const f = fixture();
     await f.run();
@@ -92,7 +92,7 @@ describe('Agentic Ask V2 ticket release', () => {
       live_sources: [],
       search: async () => empty, list: async () => empty, open: async () => empty, revalidate: async () => checked,
     };
-    await createAgenticAskV2({ desk,
+    await createAgenticAskV5({ desk,
       model: { generate: async input => { inputs.push(input); return { parts: [{ question: 'What exists?', needs: [], notes: '' }], actions: [{ tool: 'finish', args: {} }] }; } },
       audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 },
     }).answer({ question: 'What exists?' });
@@ -123,10 +123,10 @@ describe('Agentic Ask V2 ticket release', () => {
       { parts: need('found', ['E1']), actions: [{ tool: 'finish', args: {} }] },
       replies[3],
     ];
-    const ask = createAgenticAskV2({ desk, model: { generate: async input => { inputs.push(input); return script[inputs.length - 1]; } },
+    const ask = createAgenticAskV5({ desk, model: { generate: async input => { inputs.push(input); return script[inputs.length - 1]; } },
       audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } });
     const result = await ask.answer({ question: `When is launch according to ${identifier}?` });
-    expect(validatePersonAnswerResponseV5(result)).toMatchObject({ outcome: 'answered', citations: [{ citation: ticket.citation }] });
+    expect(validatePersonAnswerResponseV8(result)).toMatchObject({ outcome: 'answered', citations: [{ citation: ticket.citation }] });
     expect(desk.search).toHaveBeenCalledWith(expect.objectContaining({ query: identifier, kinds: ['ticket'] }));
     expect(desk.list).not.toHaveBeenCalled();
     expect(desk.open).not.toHaveBeenCalled();
@@ -169,12 +169,11 @@ describe('Agentic Ask V2 ticket release', () => {
     expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({ counts: { ticket_retrieved_items: 2, ticket_context_items: 0, ticket_citations: 0 } });
   });
 
-  it('lists ticket metadata, opens its request-owned item, and returns a strict V5 citation', async () => {
+  it('lists ticket metadata, opens its request-owned item, and returns a strict ticket citation', async () => {
     const f = fixture();
     const answer = await f.run();
-    expect(validatePersonAnswerResponseV5(answer)).toEqual(answer);
-    expect(() => validatePersonAnswerResponseV4(answer)).toThrow();
-    expect(answer).toMatchObject({ schema_version: 5, outcome: 'answered', citations: [{ citation: opened.citation, kind: 'ticket', label: opened.label, visibility: 'only_me' }] });
+    expect(validatePersonAnswerResponseV8(answer)).toEqual(answer);
+    expect(answer).toMatchObject({ schema_version: 8, outcome: 'answered', citations: [{ citation: opened.citation, kind: 'ticket', label: opened.label, visibility: 'only_me' }] });
     expect(answer.parts[0]?.statements[0]).toMatchObject({ citation_indexes: [0], private: true });
     expect(f.desk.list).toHaveBeenCalledWith(expect.objectContaining({ source: 'ticket', limit: 50 }));
     const metadataPrompt = JSON.parse(f.inputs[1]!.user_prompt);

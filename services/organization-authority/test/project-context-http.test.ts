@@ -20,15 +20,15 @@ interface Fixture {
 }
 const fixtures = (JSON.parse(readFileSync(new URL('../../../tests/fixtures/project-context-v1/operations.json', import.meta.url), 'utf8')) as { operations: Fixture[] }).operations;
 const operations: Record<string, Operation> = {
-  'projects-list': 'listProjects', 'projects-create': 'createProject', 'projects-read': 'readProject',
+  'projects-list-v2': 'listProjectsV2', 'projects-create': 'createProject', 'projects-read-v2': 'readProjectV2',
   'projects-members': 'listMembers', 'projects-directory': 'searchDirectory',
   'person-directory': 'searchOrganizationDirectory',
   'projects-member-add': 'addMember',
   'projects-member-set': 'setMember', 'projects-member-remove': 'removeMember',
   'projects-associate': 'associateContext', 'projects-dissociate': 'dissociateContext',
-  'projects-feed': 'feed', 'projects-search': 'search', 'projects-read-context': 'readContext',
-  'updates-submit-v2': 'submitUpload', 'updates-status-v2': 'uploadStatus',
-  'updates-search-v2': 'searchUploads', 'updates-read-v2': 'readUpload',
+  'projects-feed-v2': 'feedV2', 'projects-search-v2': 'searchV2', 'projects-read-context-v2': 'readContextV2',
+  'updates-submit-v3': 'submitUploadV3', 'updates-status-v3': 'uploadStatusV3',
+  'updates-search-v2': 'searchUploads', 'updates-read-v3': 'readUploadV3',
 };
 const fixture = (id: string) => fixtures.find(row => row.id === id)!;
 const calls: { operation: Operation; args: unknown[] }[] = [];
@@ -110,23 +110,23 @@ describe('frozen project/V2 HTTP transport', () => {
     let input: unknown[];
     const parts = row.http.path.split('/');
     if (row.http.body !== undefined) input = [row.http.body];
-    else if (row.id === 'projects-list') input = [{ limit: 10, cursor: 'eyJsYXN0Ijoicm93In0' }];
-    else if (row.id === 'projects-read-context') input = [parts[4], parts[6]];
+    else if (row.id === 'projects-list-v2') input = [{ limit: 10, cursor: 'eyJsYXN0Ijoicm93In0', status: 'active' }];
+    else if (row.id === 'projects-read-context-v2') input = [parts[4], parts[6]];
     else input = [parts.at(-1)];
     expect(calls).toEqual([{ operation: operations[row.id], args: ['fixture-session', ...input] }]);
   });
 
   it('defaults a bounded project list and feed without inventing a search query', async () => {
     const origin = await start();
-    expect((await fetch(`${origin}/v1/person/projects`, { headers })).status).toBe(200);
-    const row = fixture('projects-feed');
+    expect((await fetch(`${origin}/v2/person/projects`, { headers })).status).toBe(200);
+    const row = fixture('projects-feed-v2');
     expect((await send(origin, row, { body: JSON.stringify({ project_id: row.http.body!.project_id }) })).status).toBe(200);
-    expect(calls.map(call => call.args[1])).toEqual([{ limit: 10 }, { project_id: row.http.body!.project_id, limit: 10 }]);
+    expect(calls.map(call => call.args[1])).toEqual([{ limit: 10, status: 'active' }, { project_id: row.http.body!.project_id, limit: 10 }]);
     expect((await send(origin, { ...fixture('projects-directory'), http: { ...fixture('projects-directory').http, body: { project_id: fixture('projects-directory').http.body!.project_id } } })).status).toBe(200);
-    for (const id of ['projects-search', 'updates-search-v2']) {
+    for (const id of ['projects-search-v2', 'updates-search-v2']) {
       await failure(await send(origin, fixture(id), { body: JSON.stringify({ ...fixture(id).http.body, query: '' }) }));
     }
-    expect(calls.map(call => call.operation)).toEqual(['listProjects', 'feed', 'searchDirectory']);
+    expect(calls.map(call => call.operation)).toEqual(['listProjectsV2', 'feedV2', 'searchDirectory']);
   });
 
   it('rejects caller authority fields and cross-version bodies before application calls', async () => {
@@ -139,17 +139,17 @@ describe('frozen project/V2 HTTP transport', () => {
         await failure(await send(origin, row, { body: JSON.stringify({ ...row.http.body, membership_id: 'untrusted' }) }));
       }
     }
-    await failure(await send(origin, fixture('updates-submit-v2'), { body: JSON.stringify({ ...fixture('updates-submit-v2').http.body, schema_version: 1 }) }));
+    await failure(await send(origin, fixture('updates-submit-v3'), { body: JSON.stringify({ ...fixture('updates-submit-v3').http.body, schema_version: 2 }) }));
     expect(calls).toEqual([]);
   });
 
   it('rejects malformed, duplicate, nested duplicate and non-UTF-8 JSON', async () => {
-    const origin = await start(); const row = fixture('updates-submit-v2');
+    const origin = await start(); const row = fixture('updates-submit-v3');
     const serialized = JSON.stringify(row.http.body);
     for (const body of [
       '', '{', 'null', '[]',
-      serialized.replace('"schema_version":2', '"schema_version":1,"schema_version":2'),
-      serialized.replace('"schema_version":2', '"schema_version":1,"schema_\\u0076ersion":2'),
+      serialized.replace('"schema_version":3', '"schema_version":1,"schema_version":3'),
+      serialized.replace('"schema_version":3', '"schema_version":1,"schema_\\u0076ersion":3'),
       serialized.replace('"kind":"project"', '"kind":"team","kind":"project"'),
       Buffer.concat([Buffer.from(serialized.slice(0, -1)), Buffer.from([0xc3, 0x28]), Buffer.from('}')]),
     ]) await failure(await send(origin, row, { body }));
@@ -168,9 +168,9 @@ describe('frozen project/V2 HTTP transport', () => {
   it('rejects unknown/duplicate query parameters, invalid page bounds and noncanonical IDs', async () => {
     const origin = await start();
     for (const query of ['limit=0', 'limit=11', 'limit=01', 'limit=1e0', 'limit=', 'limit=1&limit=2', 'cursor=YQ&cursor=Yg', 'cursor=!', 'cursor=', 'principal_id=untrusted']) {
-      await failure(await fetch(`${origin}/v1/person/projects?${query}`, { headers }));
+      await failure(await fetch(`${origin}/v2/person/projects?${query}`, { headers }));
     }
-    for (const path of ['/v1/person/projects/not-an-id', '/v2/person/updates/not-a-request', '/v2/person/updates/content/not-a-context', fixture('projects-read').http.path + '?organization_id=untrusted']) {
+    for (const path of ['/v2/person/projects/not-an-id', '/v3/person/updates/not-a-request', '/v3/person/updates/content/not-a-context', fixture('projects-read-v2').http.path + '?organization_id=untrusted']) {
       await failure(await fetch(origin + path, { headers }));
     }
     for (const row of fixtures.filter(row => row.http.body !== undefined)) {
@@ -183,7 +183,7 @@ describe('frozen project/V2 HTTP transport', () => {
     const origin = await start();
     const result = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
       const body = JSON.stringify({ principal_id: 'untrusted' });
-      const request = httpRequest(`${origin}/v1/person/projects`, { method: 'GET', headers: { ...headers, 'content-length': Buffer.byteLength(body) } }, response => {
+      const request = httpRequest(`${origin}/v2/person/projects`, { method: 'GET', headers: { ...headers, 'content-length': Buffer.byteLength(body) } }, response => {
         let data = ''; response.on('data', chunk => { data += String(chunk); });
         response.on('end', () => resolve({ status: response.statusCode, body: data }));
       });
@@ -198,15 +198,24 @@ describe('frozen project/V2 HTTP transport', () => {
     for (const row of fixtures) {
       await failure(await send(origin, row, { method: 'PUT', body: '{}' }), 404, 'not_found');
     }
-    for (const path of ['/v1/person/projects/context/feed', '/v1/person/projects/members', '/v2/person/updates/search', '/v2/person/updates']) {
+    for (const path of ['/v2/person/projects/context/feed', '/v1/person/projects/members', '/v2/person/updates/search', '/v3/person/updates']) {
       await failure(await fetch(origin + path, { headers }), 404, 'not_found');
+    }
+    // The reads and writes ADR-0048 retired are routes that never existed.
+    for (const path of ['/v1/person/projects', '/v1/person/projects/prj_11111111-1111-4111-8111-111111111111',
+      `/v1/person/projects/prj_11111111-1111-4111-8111-111111111111/context/ctx_${'a'.repeat(64)}`,
+      '/v2/person/updates/00000000-0000-4000-8000-000000000006', `/v2/person/updates/content/ctx_${'a'.repeat(64)}`]) {
+      await failure(await fetch(origin + path, { headers }), 404, 'not_found');
+    }
+    for (const path of ['/v1/person/projects/context/feed', '/v1/person/projects/context/search', '/v2/person/updates']) {
+      await failure(await fetch(origin + path, { method: 'POST', headers, body: '{}' }), 404, 'not_found');
     }
     expect(calls).toEqual([]);
     const disabled = await start(fake(), { project_context: undefined });
     for (const row of fixtures) await failure(await send(disabled, row), 404, 'not_found');
-    const hidden = await start(fake({ readProject() { throw new AuthorityOperationError('not_found', 'private project'); } }));
-    expect((await fetch(`${hidden}/v1/person/projects`, { headers })).status).toBe(200);
-    await failure(await send(hidden, fixture('projects-read')), 404, 'not_found');
+    const hidden = await start(fake({ readProjectV2() { throw new AuthorityOperationError('not_found', 'private project'); } }));
+    expect((await fetch(`${hidden}/v2/person/projects`, { headers })).status).toBe(200);
+    await failure(await send(hidden, fixture('projects-read-v2')), 404, 'not_found');
   });
 
   it.each(fixtures)('requires Person bearer authentication: $id', async row => {
@@ -220,8 +229,8 @@ describe('frozen project/V2 HTTP transport', () => {
     ['invalid_request', 400], ['conflict', 409], ['invalid_output', 502], ['not_found', 404],
     ['stale_access_state', 400], ['unauthorized', 401], ['rate_limited', 429], ['unavailable', 503],
   ] as const)('preserves canonical %s errors without diagnostics', async (code, status) => {
-    const origin = await start(fake({ listProjects() { throw new AuthorityOperationError(code, 'sensitive source diagnostic'); } }));
-    await failure(await fetch(`${origin}/v1/person/projects`, { headers }), status, code);
+    const origin = await start(fake({ listProjectsV2() { throw new AuthorityOperationError(code, 'sensitive source diagnostic'); } }));
+    await failure(await fetch(`${origin}/v2/person/projects`, { headers }), status, code);
   });
 
   it.each(fixtures)('sanitizes unexpected application failures as unavailable: $id', async row => {
@@ -232,21 +241,21 @@ describe('frozen project/V2 HTTP transport', () => {
   });
 
   it('rejects invalid application output and permits a full 8 KiB original response', async () => {
-    const row = fixture('projects-read-context');
+    const row = fixture('projects-read-context-v2');
     const large = { ...row.http.response, text: '\t'.repeat(8191) + 'x' };
     expect(Buffer.byteLength(JSON.stringify(large))).toBeGreaterThan(16 * 1024);
     expect(Buffer.byteLength(JSON.stringify(large))).toBeLessThan(PROJECT_CONTEXT_RESPONSE_MAX_BYTES);
-    const origin = await start(fake({ readContext: () => large as never }));
+    const origin = await start(fake({ readContextV2: () => large as never }));
     const response = await send(origin, row);
     expect(response.status).toBe(200); expect(await response.json()).toEqual(large);
     for (const output of [{ ...large, hidden_count: 1 }, { ...large, text: 'x'.repeat(PROJECT_CONTEXT_RESPONSE_MAX_BYTES) }, { ...large, kind: 'echo-person-upload-content-v2' }]) {
-      const bad = await start(fake({ readContext: () => output as never }));
+      const bad = await start(fake({ readContextV2: () => output as never }));
       await failure(await send(bad, row), 502, 'invalid_output');
     }
   });
 
   it('reserves project and V2 route families against every provider ingress', () => {
-    for (const path of ['/v1/person/projects', fixture('projects-read-context').http.path, '/v2/person/updates', '/v2/person/updates/search', '/v1/person/directory', '/v1/person/directory/next']) {
+    for (const path of ['/v1/person/projects', fixture('projects-read-context-v2').http.path, '/v2/person/updates', '/v2/person/updates/search', '/v3/person/updates', '/v1/person/directory', '/v1/person/directory/next']) {
       const application = { routes: [{ route_id: 'collision', method: 'POST' as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
       for (const ingress of [{ person_tool_connections: [application] }, { person_external_identity_link: application }, { person_tools: application }]) {
         expect(() => createOrganizationAuthorityHttpServer({ ...options(), ...ingress })).toThrow('collides with Authority route');

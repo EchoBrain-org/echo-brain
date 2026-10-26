@@ -46,12 +46,15 @@ interface StoredItemV1 {
   readonly checked_verdict: ImpactItemVerdictV1 | null; readonly checked_by: string | null; readonly checked_at: string | null; readonly checked_run_id: string | null;
   readonly created_at: string; readonly updated_at: string;
 }
-const selectItems = `SELECT item.item_id, item.run_id, item.item_key, item.pointer_json, item.record_sha256, item.organization_id,
+const ITEM_COLUMNS = `item.item_id, item.run_id, item.item_key, item.pointer_json, item.record_sha256, item.organization_id,
   item.approver_principal_id, item.approver_membership_id, item.relation, item.expected, item.owner_membership_id, item.owner_match,
   item.owner_set_by, item.owner_set_at, item.state, item.state_set_by, item.state_set_at, item.sent_at, item.send_command_id, item.send_included,
-  item.checked_verdict, item.checked_by, item.checked_at, item.checked_run_id, item.created_at, item.updated_at
+  item.checked_verdict, item.checked_by, item.checked_at, item.checked_run_id, item.created_at, item.updated_at`;
+const selectItems = `SELECT ${ITEM_COLUMNS}
   FROM authority_impact_items_v1 AS item`;
 const ORDER = 'ORDER BY item.created_at, item.item_id';
+/** The canonical time the store writes (`2026-10-25T17:05:00.000Z`), as a GLOB pattern. */
+const CANONICAL_TIME_GLOB = '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z';
 /** A page's position in ORDER: the last row of the previous page. */
 type After = { readonly created_at: string; readonly item_id: string };
 /** The rows after `after` in ORDER: a clause and its parameters, none for a first page. */
@@ -96,6 +99,9 @@ function limitOf(limit: number): number {
  * it returns or changes a row.
  */
 export class SqliteImpactItemsV1 {
+  /** `movedByOthers`' statements, for a first page and for a later one, each prepared once. */
+  private readonly movedStatements = new Map<boolean, Database.Statement>();
+
   constructor(private readonly database: Database.Database, private readonly now: () => Date = () => new Date()) {
     if (!isCurrentAuthorityState(database)) {
       throw new Error(`Open items require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION} state with foreign keys enabled`);
@@ -123,6 +129,13 @@ export class SqliteImpactItemsV1 {
     return found === undefined ? undefined : publicItem(found);
   }
 
+  /** Not fenced: the items of these ids that exist, by id, in one read. */
+  readMany(itemIds: readonly string[]): ReadonlyMap<string, ImpactItemRowV1> {
+    if (itemIds.length === 0) return new Map();
+    const found = this.database.prepare(`${selectItems} WHERE item.item_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(itemIds)])) as StoredItemV1[];
+    return new Map(found.map(item => [item.item_id, publicItem(item)]));
+  }
+
   forRun(runId: string): readonly ImpactItemRowV1[] {
     return (this.database.prepare(`${selectItems} WHERE item.run_id=? ${ORDER}`).all(runId) as StoredItemV1[]).map(publicItem);
   }
@@ -136,6 +149,40 @@ export class SqliteImpactItemsV1 {
       WHERE item.record_sha256 IN (SELECT value FROM json_each(?)) AND item.state IN (SELECT value FROM json_each(?))
       ${after.clause} ${ORDER} LIMIT ?`).all(
       JSON.stringify([...new Set(recordSha256s)]), JSON.stringify([...new Set(options.states)]), ...after.params, limit) as StoredItemV1[]).map(publicItem);
+  }
+
+  /**
+   * Project activity (Ask timeline v1, C2): the items of these records that someone other than `membershipId` moved, newest
+   * move first (then by item id), each with `moved_at`, the latest of: its owner set by someone else, its state set by
+   * someone else, and its send when someone else approved it (only the approver sends). A time counts only in the canonical
+   * form the store writes. `after` is the last entry of the previous page. Nothing here decides who sees a row: the caller
+   * asks the open-items policy of each row it uses. The records index finds the rows (`+` keeps the organization term off
+   * the organization-led indexes, which would scan the whole organization); `moved_at` depends on who asks, so no index orders
+   * them, and SQLite sorts the matched rows for the page.
+   */
+  movedByOthers(organizationId: string, membershipId: string, recordSha256s: readonly Sha256Digest[],
+    options: { readonly limit: number; readonly after?: { readonly moved_at: string; readonly item_id: string } }): readonly { readonly row: ImpactItemRowV1; readonly moved_at: string }[] {
+    const limit = limitOf(options.limit);
+    if (recordSha256s.length === 0 || limit === 0) return [];
+    const later = options.after !== undefined;
+    let statement = this.movedStatements.get(later);
+    if (statement === undefined) {
+      // One time a move by someone else set, or '' (before every time) when this member set it, nobody did, or it is not canonical.
+      const by = (who: string, at: string) => `CASE WHEN item.${who} != @membership AND item.${at} GLOB '${CANONICAL_TIME_GLOB}' THEN item.${at} ELSE '' END`;
+      statement = this.database.prepare(`SELECT * FROM (
+          SELECT ${ITEM_COLUMNS},
+            nullif(max(${by('owner_set_by', 'owner_set_at')}, ${by('state_set_by', 'state_set_at')}, ${by('approver_membership_id', 'sent_at')}), '') AS moved_at
+          FROM authority_impact_items_v1 AS item
+          WHERE +item.organization_id = @organization AND item.record_sha256 IN (SELECT value FROM json_each(@records)))
+        WHERE moved_at IS NOT NULL ${later ? 'AND (moved_at < @after_at OR (moved_at = @after_at AND item_id > @after_id))' : ''}
+        ORDER BY moved_at DESC, item_id LIMIT @limit`);
+      this.movedStatements.set(later, statement);
+    }
+    const rows = statement.all({
+      organization: organizationId, membership: membershipId, records: JSON.stringify([...new Set(recordSha256s)]), limit,
+      ...(options.after === undefined ? {} : { after_at: options.after.moved_at, after_id: options.after.item_id }),
+    }) as (StoredItemV1 & { readonly moved_at: string })[];
+    return rows.map(({ moved_at, ...row }) => Object.freeze({ row: publicItem(row), moved_at }));
   }
 
   /**

@@ -20,7 +20,6 @@ const HISTORICAL_ASK_TERMINAL_OUTCOMES = [
   "completed",
   "partial",
   "not_found",
-  "off_scope",
 ] as const;
 
 const template = () => readTemplate(TEMPLATE);
@@ -226,7 +225,8 @@ describe("staging journey observability overview stack", () => {
     for (const outcome of HISTORICAL_ASK_TERMINAL_OUTCOMES) {
       expect(metricSerialized).toContain(`"TerminalOutcome","workflow","ask","stage","ask_response","outcome","${outcome}"`);
     }
-    for (const outcome of ["answered", "partial", "not_found", "off_scope", "completed"]) {
+    // A follow-up that asked which one ends `clarify` (ADR-0047).
+    for (const outcome of ["answered", "partial", "not_found", "clarify", "completed"]) {
       expect(metricSerialized).toContain(`"TerminalOutcome","workflow","core_runtime","stage","research_run","outcome","${outcome}"`);
     }
     expect(metricSerialized).toContain('"outcome","actionable"');

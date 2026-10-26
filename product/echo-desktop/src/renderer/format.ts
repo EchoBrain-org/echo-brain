@@ -35,6 +35,12 @@ export function documentDetail(document: { type: 'pdf' | 'word' | 'markdown' | '
   return `${TYPES[document.type]} · ${bytes(document.size)}`;
 }
 
+/** Midnight today, here. */
+function startOfDay(now: number): number {
+  const today = new Date(now);
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+}
+
 /** 2h, Yesterday, Mon, Sep 18: short, like a message list. */
 export function when(iso: string, now = Date.now()): string {
   const time = Date.parse(iso);
@@ -43,12 +49,30 @@ export function when(iso: string, now = Date.now()): string {
   if (minutes < 1) return 'now';
   if (minutes < 60) return `${minutes}m`;
   const date = new Date(time);
-  const today = new Date(now);
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startOfToday = startOfDay(now);
   if (time >= startOfToday) return `${Math.round(minutes / 60)}h`;
   if (time >= startOfToday - 86_400_000) return 'Yesterday';
   if (time >= startOfToday - 6 * 86_400_000) return date.toLocaleDateString(undefined, { weekday: 'short' });
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/** How an Ask turn's row says when it was asked: the time ("3:41 PM"), the day ("Oct 14"), and the day of another year ("Oct 14, 2025"). */
+const ASKED_TIME = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' });
+const ASKED_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+const ASKED_DAY_AND_YEAR = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+/** Whether an Ask turn was asked today, here. */
+export function askedToday(iso: string, now = Date.now()): boolean {
+  return Date.parse(iso) >= startOfDay(now);
+}
+
+/** When an Ask turn was asked, as its row says it: the time for today ("3:41 PM"), else the day ("Oct 14"), with its year when not this year's. */
+export function askedWhen(iso: string, now = Date.now()): string {
+  const time = Date.parse(iso);
+  if (Number.isNaN(time)) return '';
+  const date = new Date(time);
+  if (time >= startOfDay(now)) return ASKED_TIME.format(date);
+  return (date.getFullYear() === new Date(now).getFullYear() ? ASKED_DAY : ASKED_DAY_AND_YEAR).format(date);
 }
 
 /** A file's size the way Finder shows it: 15 bytes, 340 KB, 2.1 MB. */

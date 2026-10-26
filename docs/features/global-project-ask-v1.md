@@ -43,8 +43,10 @@ still needs the project's lead grant.
 
 A valid Ask submission displays the submitted question and clears the input.
 Invalid input remains editable. A second submission must not silently replace
-a running request. This is one question and answer at a time; it does not add
-persistent chat history or conversational memory.
+a running request. The desktop keeps every question and answer in a
+device-only timeline that says when an old answer's sources changed, and a
+question can follow from the answer before it
+([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
 
 In the desktop app, Escape steps back one level: a sheet, then Capture, then
 the answer with the source beside it, then the reader, then the project, Mine
@@ -162,17 +164,17 @@ evidence still requires current access when opened.
 This version shipped as `POST /v2/person/ask` (request schema 2, response
 schema 3), beside the approved-record-only `/v1/person/ask`. Both were retired
 by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md). Every Ask, the
-CLI's and the desktop's in every scope, Mine included, asks on the newest Ask
-route, and the scope rules here still apply to every route. The CLI accepts
-`person ask --question <text> [--project <project-id> | --mine] [--tickets | --progress [--expected-membership-id <id> --expected-authority <origin>]]`;
-`--project` and `--mine` are exclusive, as are `--tickets` and `--progress`.
-`--live`, which once chose the newest route, is still accepted, changes
-nothing, and is refused beside `--tickets`. The client does not silently
+CLI's and the desktop's in every scope, Mine included, asks
+`POST /v7/person/ask`, the only Ask route since
+[ADR-0047](../decisions/ADR-0047-ask-timeline.md) retired the ones before it,
+and the scope rules here apply to it. The CLI accepts
+`person ask --question <text> [--project <project-id> | --mine] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]`;
+`--project` and `--mine` are exclusive. The client does not silently
 downgrade a project or mine request to global Ask.
 
 The
 [Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)
-owns the routes, refs, fallback to an older Authority and `--progress` stream.
+owns the route, refs and `--progress` stream.
 Ask may cite ECHO's shared follow-ups
 ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)), the asker's
 workspace ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)), and
@@ -183,8 +185,7 @@ lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
 workspace is that project, its roster and the containers its lead mapped. Mine
 and unmapped projects exclude live tools, and Mine excludes follow-ups and the
 workspace. The desktop shows every question's progress, Mine's too.
-Permission failures never fall back. `--tickets` keeps the ticket-capable
-`/v4` route for compatibility, and on `/v7` the receipt counts every item
+Permission failures never fall back, and the receipt counts every item
 research looked through
 ([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)).
 

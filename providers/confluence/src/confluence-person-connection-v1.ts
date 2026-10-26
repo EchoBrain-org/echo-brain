@@ -9,7 +9,8 @@ import type { PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { ConfluenceConnectionStoreV1 } from './confluence-connection-store-v1.js';
-import { createConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
+import { createConfluenceCloudTransportV1, type ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
+import { readConfluencePageSectionsV1, readConfluencePageVersionsV1 } from './confluence-page-check-v1.js';
 import { createConfluencePersonLiveContainerReaderV1 } from './confluence-person-live-container-reader-v1.js';
 import { createConfluencePersonLiveEvidenceReaderV1 } from './confluence-person-live-evidence-reader-v1.js';
 import type { ConfluenceNangoV1 } from './confluence-nango-v1.js';
@@ -51,6 +52,11 @@ export function createConfluencePersonConnectionV1(options: {
       }
     }
     return Object.freeze(selected);
+  }
+  /** This person's own current connection, for the Ask source check; with none, `unauthorized`. */
+  function checkTransport(input: { readonly access_token: string; readonly signal?: AbortSignal }): ConfluenceCloudTransportV1 {
+    const { person, requirePerson } = actor(input.access_token);
+    return createConfluenceCloudTransportV1(shared.open(person, requirePerson, input.signal).transport);
   }
   return Object.freeze({
     ...shared.application,
@@ -154,6 +160,24 @@ export function createConfluencePersonConnectionV1(options: {
           identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'],
         },
       });
+    },
+    /**
+     * The Ask source check's pages (Ask timeline v1, C1; ADR-0047): each page's current version by its id, read by id with this
+     * person's own connection, at most 100 ids in two calls. A page they cannot read now, trashed or deleted included, is left out.
+     */
+    async pageVersions(input: { readonly access_token: string; readonly page_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
+      const page_ids = [...new Set(input.page_ids)].filter(id => CONFLUENCE_ID.test(id));
+      if (page_ids.length === 0) return new Map();
+      return readConfluencePageVersionsV1(checkTransport(input), { cloud_id: cloud, page_ids, signal: input.signal });
+    },
+    /**
+     * The Ask source check's page bodies: the digest of each non-blank section of each page's current body, read with this
+     * person's own connection, at most ten pages. A page they cannot read now is left out; one whose body is not text is null.
+     */
+    async pageSections(input: { readonly access_token: string; readonly page_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, readonly Sha256Digest[] | null>> {
+      const page_ids = [...new Set(input.page_ids)].filter(id => CONFLUENCE_ID.test(id));
+      if (page_ids.length === 0) return new Map();
+      return readConfluencePageSectionsV1(checkTransport(input), { page_ids, signal: input.signal });
     },
     /** The Confluence spaces the asker can view, as tool containers (research tool contract v1); a project scope reads only its mapped ones. */
     containerSource: (input: Parameters<typeof access.containerSource>[1]) => access.containerSource({

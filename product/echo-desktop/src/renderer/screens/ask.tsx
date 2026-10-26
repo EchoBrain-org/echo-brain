@@ -2,14 +2,14 @@ import { Fragment, type ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
   Answer, AnswerBlock, AnswerPart, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, OpenItemView, RecordItem,
-  ToolContainerKind,
+  TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerSentences, coverage, documentName, dueColumn, externalSourceProvider, lateForYou, passageBlocks, rowId, rowStatement, statementGroups, tableDay, yoursIn,
-  type AnswerTable, type Inline, type SourceGroup,
+  answerSentences, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownBlocks, statementGroups, tableDay,
+  yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
 } from '../answer.js';
-import { marked, meetingTime, snippet, when } from '../format.js';
+import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { sourceKey } from '../openers.js';
@@ -18,13 +18,16 @@ import {
   type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
-  answerGroups, answerSources, ask, askEverywhere, askSuggestion, barSuggestions, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject,
-  fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, retryEvidence, retryRecord,
-  searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleSourceList, widenScope, UNTITLED, type AskTurn, type PaneTarget, type Read, type RecordSectionKey,
-  type State,
+  activeTurn, askAgain, askEverywhere, barSuggestions, cancelAsk, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
+  fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
+  retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleSourceList, toggleTurn, turnOf, widenScope, UNTITLED,
+  type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
-import { Caret, Check, Chevron, Close, Doc, Folder, Info, Lock, Meeting, OnePerson, Plug, Plus, Ticks, Up } from './icons.js';
+import {
+  allOmitted, askedAgain, markOf, shownInFull, showsOf, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
+} from '../timeline.js';
+import { Caret, Check, Chevron, Close, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticks, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -79,16 +82,17 @@ function Matches({ state, scopeName }: { state: State; scopeName: string | null 
 /**
  * "Try asking": the empty bar's suggestions, over the page where live matches
  * show. The caret stays in the bar: the arrow keys light one, and Return or a
- * click asks it.
+ * click asks it, or, for a question you asked, opens its turn (ADR-0047).
  */
-function Suggestions({ questions, active, onPick }: { questions: readonly string[]; active: number; onPick: (question: string) => void }) {
+function Suggestions({ suggestions, active, onPick }: { suggestions: readonly Suggestion[]; active: number; onPick: (suggestion: Suggestion) => void }) {
   return (
     <div class="matches suggestions" data-testid="suggestions" id="ask-suggestions" role="listbox" aria-label="Try asking">
       <div class="matches-head" aria-hidden="true">Try asking</div>
-      {questions.map((question, index) => (
-        <div key={question} id={`ask-suggestion-${index}`} role="option" aria-selected={index === active} data-testid="suggestion"
-          class={`match-row suggestion${index === active ? ' active' : ''}`} onMouseDown={event => event.preventDefault()} onClick={() => onPick(question)}>
-          <Up /><span class="label">{question}</span>
+      {suggestions.map((suggestion, index) => (
+        <div key={suggestion.question} id={`ask-suggestion-${index}`} role="option" aria-selected={index === active} data-testid="suggestion"
+          data-asked={suggestion.turn === undefined ? undefined : 'true'} class={`match-row suggestion${index === active ? ' active' : ''}`}
+          onMouseDown={event => event.preventDefault()} onClick={() => onPick(suggestion)}>
+          <Up /><span class="label">{suggestion.question}</span>
         </div>
       ))}
     </div>
@@ -122,7 +126,7 @@ export function Bar({ state }: { state: State }) {
   // Another page, project or scope: the suggestions were for the one before.
   const where = `${state.route.page === 'project' ? state.route.project.project_id : state.route.page} ${state.barScope.kind}`;
   useEffect(() => { setSuggesting(CLOSED); }, [where]);
-  const pick = (question: string) => { setSuggesting(CLOSED); askSuggestion(question); };
+  const pick = (suggestion: Suggestion) => { setSuggesting(CLOSED); pickSuggestion(suggestion); };
   const onKeyDown = (event: KeyboardEvent) => {
     if (text !== '' || !suggestionsShown(state)) return;
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
@@ -143,7 +147,7 @@ export function Bar({ state }: { state: State }) {
   return (
     <div class={`bar-wrap${state.ask && !covered ? ' with-ask' : ''}`}>
       {matchesShown(state) && <Matches state={state} scopeName={chip} />}
-      {shown.length > 0 && <Suggestions questions={shown} active={active} onPick={pick} />}
+      {shown.length > 0 && <Suggestions suggestions={shown} active={active} onPick={pick} />}
       <form class="bar" onSubmit={event => { event.preventDefault(); submitBar(); }}>
         {state.route.page !== 'mine' && (
           <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
@@ -174,72 +178,116 @@ export function Bar({ state }: { state: State }) {
   );
 }
 
+/**
+ * One turn's answer as the page shows it (ADR-0047): its sources, numbered as
+ * its sentences cite them, what the last check found of them, when one
+ * applies (never to a turn asked in this Ask), and so which sentences and rows
+ * it shows.
+ */
+interface TurnView {
+  readonly id: string;
+  readonly answer: Answer;
+  readonly groups: readonly SourceGroup[];
+  readonly checks: TurnChecks | undefined;
+  readonly shows: Shows;
+}
+
+function turnView(turn: TimelineTurn, checks: TurnChecks | undefined): TurnView {
+  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer.sources, checks), checks, shows: showsOf(checks) };
+}
+
 /** A source's first citation stands for it: its kind, its label, its record or its link. */
-function firstSource(state: State, group: SourceGroup): AnswerSource {
-  return answerSources(state)[group.indexes[0]!]!;
+function firstSource(view: TurnView, group: SourceGroup): AnswerSource {
+  return view.answer.sources[group.indexes[0]!]!;
+}
+
+/** Whether the pane shows a source of this turn. */
+function paneOn(state: State, view: TurnView): boolean {
+  return state.sources?.turn === view.id;
 }
 
 /** A source's number after a sentence: it opens the pane on that source, for that sentence. */
-function Marker({ state, group, focus }: { state: State; group: number; focus: string }) {
-  const on = state.sources?.open === group && state.sources.focus === focus;
-  const name = sourceName(firstSource(state, answerGroups(state)[group]!), state.sources);
+function Marker({ state, view, group, focus }: { state: State; view: TurnView; group: number; focus: string }) {
+  const on = paneOn(state, view) && state.sources?.open === group && state.sources.focus === focus;
+  const name = sourceName(firstSource(view, view.groups[group]!), state.sources);
   return (
     <button type="button" class={`marker${on ? ' on' : ''}`} data-testid="citation" aria-pressed={on} aria-label={`Source ${group + 1}: ${name}`}
-      title={name} onClick={() => chooseSource(group, focus)}>{group + 1}</button>
+      title={name} onClick={() => chooseSource(group, focus, view.id)}>{group + 1}</button>
   );
 }
 
 /** Numbers after a sentence, one per source it cites, and a lock when only you can read one of them. */
-function Markers({ state, statement, id }: { state: State; statement: AnswerStatement; id: string }) {
+function Markers({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
   return <>
-    {statementGroups(statement.citation_indexes, answerGroups(state)).map(group => <Marker key={group} state={state} group={group} focus={id} />)}
+    {statementGroups(statement.citation_indexes, view.groups).map(group => <Marker key={group} state={state} view={view} group={group} focus={id} />)}
     {statement.private && (
       <span class="private-mark" data-testid="private-mark" role="img" aria-label="Only you can read a source of this" title="Only you can read a source of this"><Lock /></span>
     )}
   </>;
 }
 
-/** Whether the sentence or row `id` is lit: its number opened the pane. */
-function lit(state: State, id: string): boolean {
-  return state.sources?.open != null && state.sources.focus === id;
+/** Whether the sentence or row `id` of a turn is lit: its number opened the pane. */
+function lit(state: State, view: TurnView, id: string): boolean {
+  return paneOn(state, view) && state.sources?.open != null && state.sources.focus === id;
 }
 
-/** A sentence and the numbers of its sources. The one whose number opened the pane is lit. */
-function Statement({ state, statement, id }: { state: State; statement: AnswerStatement; id: string }) {
-  const on = lit(state, id);
+/** What a check says of a sentence: lit in the signal when a source it cites changed (`changed`), left out when you can no longer read one (`omitted`). */
+function markIn(view: TurnView, citations: readonly number[]): Mark {
+  return markOf(citations, view.checks);
+}
+
+/** A sentence's or row's classes: lit by its number, and changed since it was said. */
+function markClass(base: string, on: boolean, mark: Mark): string {
+  return [base, on ? 'on' : '', mark === 'changed' ? 'changed' : ''].filter(Boolean).join(' ');
+}
+
+/** A sentence and the numbers of its sources. The one whose number opened the pane is lit. One a check left out is not shown. */
+function Statement({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
+  const mark = markIn(view, statement.citation_indexes);
+  if (mark === 'omitted') return null;
   return (
-    <p class={`answer-statement selectable${on ? ' on' : ''}`} data-testid="statement">
+    <p class={markClass('answer-statement selectable', lit(state, view, id), mark)} data-testid="statement" data-mark={mark ?? undefined}>
       <span data-testid="statement-text">{statement.text}</span>
-      <Markers state={state} statement={statement} id={id} />
+      <Markers state={state} view={view} statement={statement} id={id} />
     </p>
   );
 }
 
 /** No sentence could be written: what research found, as its passages read, with their sources' numbers. */
-function Found({ state, statement, id }: { state: State; statement: AnswerStatement; id: string }) {
-  const source = answerSources(state)[statement.citation_indexes[0]!];
+function Found({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
+  const mark = markIn(view, statement.citation_indexes);
+  if (mark === 'omitted') return null;
+  const source = view.answer.sources[statement.citation_indexes[0]!];
   return (
-    <div class="passage selectable" data-testid="found">
+    <div class={markClass('passage selectable', false, mark)} data-testid="found" data-mark={mark ?? undefined}>
       <Passage text={statement.text} label={source?.label ?? ''} />
-      <div><Markers state={state} statement={statement} id={id} /></div>
+      <div><Markers state={state} view={view} statement={statement} id={id} /></div>
     </div>
   );
 }
 
 /** A sentence of the lead or a paragraph, inline with the others: its text and its numbers, lit on its own. */
-function Claim({ state, statement, id }: { state: State; statement: AnswerStatement; id: string }) {
+function Claim({ state, view, statement, id, mark }: { state: State; view: TurnView; statement: AnswerStatement; id: string; mark: Mark }) {
   return (
-    <span class={`claim${lit(state, id) ? ' on' : ''}`} data-testid="statement">
+    <span class={markClass('claim', lit(state, view, id), mark)} data-testid="statement" data-mark={mark ?? undefined}>
       <span data-testid="statement-text">{statement.text}</span>
-      <Markers state={state} statement={statement} id={id} />
+      <Markers state={state} view={view} statement={statement} id={id} />
     </span>
   );
 }
 
+/** The places of a block's sentences a check leaves to show. */
+function shownPlaces(view: TurnView, part: AnswerPart, places: readonly number[]): number[] {
+  return places.filter(place => view.shows(part.statements[place]!.citation_indexes));
+}
+
 /** The sentences of a lead or a paragraph, one after another, each with its own numbers. */
-function Claims({ state, part, index, statements }: { state: State; part: AnswerPart; index: number; statements: readonly number[] }) {
-  return <>{statements.map((place, at) => <Fragment key={place}>{at > 0 && ' '}
-    <Claim state={state} statement={part.statements[place]!} id={`${index}.${place}`} /></Fragment>)}</>;
+function Claims({ state, view, part, index, statements }: { state: State; view: TurnView; part: AnswerPart; index: number; statements: readonly number[] }) {
+  return <>{statements.map((place, at) => {
+    const statement = part.statements[place]!;
+    return <Fragment key={place}>{at > 0 && ' '}
+      <Claim state={state} view={view} statement={statement} id={`${index}.${place}`} mark={markIn(view, statement.citation_indexes)} /></Fragment>;
+  })}</>;
 }
 
 /** One cell of a table that is not its first: an ISO date as "Oct 14" in mono, late when the row is yours and late; you, as the owner, heavier. */
@@ -257,26 +305,27 @@ function Cell({ cell, late, you }: { cell: string; late: boolean; you: boolean }
  * narrow; the page never does. Its caption above it, in the lead's type when
  * the table opens the answer (`opens`). Each row's numbers are in its first
  * cell, and a row is lit on its own. Only your row's late due date is in the
- * signal colour.
+ * signal colour, but for a row whose sources changed since.
  */
-function Table({ state, sources, index, block, place, opens, label }: {
-  state: State; sources: readonly AnswerSource[]; index: number; block: AnswerTable; place: number; opens: boolean; label: string;
+function Table({ state, view, index, block, place, opens, label }: {
+  state: State; view: TurnView; index: number; block: AnswerTable; place: number; opens: boolean; label: string;
 }) {
   const me = state.status?.account?.display_name ?? null;
   const due = dueColumn(block.columns);
+  const rows = block.rows.map((row, at) => ({ row, at, mark: markIn(view, row.citation_indexes) })).filter(({ mark }) => mark !== 'omitted');
   return <>
     {block.caption && <p class={`${opens ? 'answer-lead' : 'answer-caption'} selectable`}>{block.caption}</p>}
     <div class="answer-table selectable" role="region" tabIndex={0} aria-label={block.caption ?? label}>
       <table class={`cols-${block.columns.length}`}>
         <thead><tr>{block.columns.map(column => <th key={column} scope="col">{column}</th>)}</tr></thead>
         <tbody>
-          {block.rows.map((row, at) => {
+          {rows.map(({ row, at, mark }) => {
             const id = rowId(index, place, at);
             const late = lateForYou(block.columns, row.cells, me);
             return (
-              <tr key={at} class={lit(state, id) ? 'on' : undefined} data-testid="answer-row">
+              <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-mark={mark ?? undefined}>
                 {row.cells.map((cell, column) => column === 0
-                  ? <td key={column}><span class="first">{cell}<Markers state={state} statement={rowStatement(row, sources)} id={id} /></span></td>
+                  ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row, view.answer.sources)} id={id} /></span></td>
                   : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
               </tr>
             );
@@ -292,81 +341,95 @@ function Table({ state, sources, index, block, place, opens, label }: {
  * the lead, its first sentence heavier; headings; paragraphs; bullets; and
  * tables. Every sentence and row keeps its own numbers and is lit on its own.
  * `opening`: the part opens the answer, so a table first has no lead above it.
+ * A block a check leaves empty goes, and so does a heading with nothing under it.
  */
-function LaidOut({ state, sources, part, index, layout, opening }: {
-  state: State; sources: readonly AnswerSource[]; part: AnswerPart; index: number; layout: readonly AnswerBlock[]; opening: boolean;
+function LaidOut({ state, view, part, index, layout, opening }: {
+  state: State; view: TurnView; part: AnswerPart; index: number; layout: readonly AnswerBlock[]; opening: boolean;
 }) {
   // A table without a caption is named by the heading above it.
   let heading = 'Table';
+  const showing = shownBlocks(part, layout, view.shows);
   return (
     <div class="answer-layout">
       {layout.map((block, place) => {
+        if (!showing[place]) return null;
         if (block.kind === 'heading') { heading = block.text; return <h3 key={place} class="answer-heading">{block.text}</h3>; }
-        if (block.kind === 'lead') return <p key={place} class="answer-lead selectable"><Claims state={state} part={part} index={index} statements={block.statements} /></p>;
-        if (block.kind === 'paragraph') return <p key={place} class="answer-paragraph selectable"><Claims state={state} part={part} index={index} statements={block.statements} /></p>;
+        if (block.kind === 'lead') {
+          return <p key={place} class="answer-lead selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
+        }
+        if (block.kind === 'paragraph') {
+          return <p key={place} class="answer-paragraph selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
+        }
         if (block.kind === 'bullets') {
           return (
             <ul key={place} class="answer-bullets selectable">
-              {block.statements.map(at => {
+              {shownPlaces(view, part, block.statements).map(at => {
                 const id = `${index}.${at}`;
                 const statement = part.statements[at]!;
-                return <li key={at} class={lit(state, id) ? 'on' : undefined} data-testid="statement">
-                  <span><span data-testid="statement-text">{statement.text}</span><Markers state={state} statement={statement} id={id} /></span>
+                const mark = markIn(view, statement.citation_indexes);
+                return <li key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="statement" data-mark={mark ?? undefined}>
+                  <span><span data-testid="statement-text">{statement.text}</span><Markers state={state} view={view} statement={statement} id={id} /></span>
                 </li>;
               })}
             </ul>
           );
         }
-        return <Table key={place} state={state} sources={sources} index={index} block={block} place={place} opens={opening && place === 0} label={heading} />;
+        return <Table key={place} state={state} view={view} index={index} block={block} place={place} opens={opening && place === 0} label={heading} />;
       })}
     </div>
   );
 }
 
 /**
- * What research did not cover, as one quiet note after the answer, never a
- * banner over it: the notice, then each part's gap, after its part's
- * question when there are several.
+ * The answer: each part, laid out when it carries a layout and a paragraph
+ * per sentence when not. A part with nothing to show is left out, and so is a
+ * sentence citing a source you can no longer read; one whose source changed is
+ * lit in the signal (ADR-0047). What research did not cover is not shown; an
+ * answer with nothing to say says nothing matched, unless the project's own
+ * line says so.
  */
-function CoverageNote({ answer }: { answer: Answer }) {
-  const { notice, gaps } = coverage(answer);
-  if (!notice && gaps.length === 0) return null;
+function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
+  const answer = view.answer;
+  const parts = answer.parts.map((part, index) => ({ part, index })).filter(({ part }) => partShows(part, view.shows));
+  const said = parts.length > 0 || (answer.direct !== undefined && view.shows(answer.direct.citation_indexes));
   return (
-    <p class="coverage-note selectable" data-testid="coverage-note">
-      <Info />
-      <span>
-        {notice && <span data-testid="answer-notice">{notice}</span>}
-        {gaps.map((gap, at) => <Fragment key={at}>{(notice || at > 0) && ' '}
-          {gap.question && <span class="part">{gap.question} </span>}<span data-testid="answer-gap">{gap.text}</span></Fragment>)}
-      </span>
-    </p>
-  );
-}
-
-/**
- * The answer: an assumption or an off-scope line on top, then each part, laid
- * out when it carries a layout and a paragraph per sentence when not, then
- * what research did not cover. A part with nothing to show is left out: its
- * gap is in the note.
- */
-function AgenticAnswer({ state, turn }: { state: State; turn: AskTurn }) {
-  const answer = turn.answer;
-  return (
-    <div class="agentic-answer" data-testid="answer">
-      {answer.assumption && <div class="answer-banner" data-testid="answer-assumption">{answer.assumption}</div>}
-      {answer.outcome === 'off_scope' && <div class="answer-banner" data-testid="answer-off-scope">The accessible evidence may be about a different subject.</div>}
-      {answer.direct && <Statement state={state} statement={answer.direct} id="direct" />}
-      {answer.parts.map((part, index) => part.statements.length === 0 && !part.records?.length ? null : (
+    <div class={`agentic-answer${dimmed ? ' dimmed' : ''}`} data-testid="answer">
+      {answer.direct && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
+      {parts.map(({ part, index }) => (
         <section class="answer-part" key={index}>
           {/* One part answers the question itself: its label would repeat it. */}
           {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
           {part.layout
-            ? <LaidOut state={state} sources={answer.sources} part={part} index={index} layout={part.layout} opening={index === 0 && !answer.direct} />
-            : part.statements.map((statement, place) => <Statement key={place} state={state} statement={statement} id={`${index}.${place}`} />)}
-          {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} statement={statement} id={`${index}.r${place}`} />)}
+            ? <LaidOut state={state} view={view} part={part} index={index} layout={part.layout} opening={index === 0 && !answer.direct} />
+            : part.statements.map((statement, place) => <Statement key={place} state={state} view={view} statement={statement} id={`${index}.${place}`} />)}
+          {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} view={view} statement={statement} id={`${index}.r${place}`} />)}
         </section>
       ))}
-      <CoverageNote answer={answer} />
+      {!said && empty && <p class="answer-empty" data-testid="answer-empty">Nothing you can see matched.</p>}
+    </div>
+  );
+}
+
+/**
+ * Ask again's "Since Oct 14": what is different now, each cited, from the
+ * answer itself; or that nothing material changed. `at` is when the turn it
+ * asked again was asked.
+ */
+function SinceList({ state, view, since, at }: { state: State; view: TurnView; since: readonly AnswerStatement[]; at: string | null }) {
+  const when = at === null ? 'then' : askedWhen(at);
+  const shown = since.map((statement, place) => ({ statement, place })).filter(({ statement }) => view.shows(statement.citation_indexes));
+  if (since.length === 0) return <p class="since-note" data-testid="since-nothing">Nothing changed since {when}</p>;
+  if (shown.length === 0) return null;
+  return (
+    <div class="since" data-testid="since">
+      <div class="since-label">Since {when}</div>
+      <ul class="since-items selectable">
+        {shown.map(({ statement, place }) => (
+          <li key={place} class={lit(state, view, `since.${place}`) ? 'on' : undefined} data-testid="since-item">
+            <span><span data-testid="since-text">{statement.text}</span><Markers state={state} view={view} statement={statement} id={`since.${place}`} /></span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -408,26 +471,26 @@ function shortName(name: string): string {
 }
 
 /**
- * The answer's sources: one line, "4 sources · Tuesday sync · Apollo update",
+ * A turn's sources: one line, "4 sources · Tuesday sync · Apollo update",
  * that opens onto a row per source, numbered as the sentences cite it. It
  * starts closed (ADR-0045). Citation numbers open the source pane without
  * expanding this list. If expanded explicitly, the row the pane shows is lit.
  */
-function SourceList({ state }: { state: State }) {
-  const groups = answerGroups(state);
+function SourceList({ state, view }: { state: State; view: TurnView }) {
+  const groups = view.groups;
   if (groups.length === 0) return null;
-  const open = state.sources?.open ?? null;
-  const listed = state.sources?.listed === true;
-  const names = groups.map(group => sourceName(firstSource(state, group), state.sources));
+  const open = paneOn(state, view) ? state.sources?.open ?? null : null;
+  const listed = state.sources?.listed.includes(view.id) === true;
+  const names = groups.map(group => sourceName(firstSource(view, group), state.sources));
   return (
     <div class="source-list" data-testid="source-list">
-      <button type="button" class={`sources-toggle${listed ? ' open' : ''}`} data-testid="sources-toggle" aria-expanded={listed} onClick={toggleSourceList}>
+      <button type="button" class={`sources-toggle${listed ? ' open' : ''}`} data-testid="sources-toggle" aria-expanded={listed} onClick={() => toggleSourceList(view.id)}>
         <span class="count">{groups.length === 1 ? '1 source' : `${groups.length} sources`}</span>
         <span class="names">{names.map(shortName).join(' · ')}</span>
         <Caret />
       </button>
       {listed && <div class="source-rows">{groups.map((group, index) => {
-        const source = firstSource(state, group);
+        const source = firstSource(view, group);
         // One short qualifier only where it helps: a document's version and passages, a follow-up's owner and status, a
         // container's tool and key. A project, a person and a tool are named by their label alone.
         const row = source.kind === 'follow_up' ? followUpRow(state, source) : null;
@@ -436,7 +499,7 @@ function SourceList({ state }: { state: State }) {
             : row ? ownerAndStatus(row, state.status?.account?.membership_id) : '';
         return (
           <button type="button" key={index} class={`source-row${open === index ? ' on' : ''}`} data-testid="source-row" aria-pressed={open === index}
-            title={source.kind === 'original' ? source.label : undefined} onClick={() => chooseSource(index)}>
+            title={source.kind === 'original' ? source.label : undefined} onClick={() => chooseSource(index, null, view.id)}>
             <span class="marker">{index + 1}</span>
             <KindIcon source={source} />
             <span class="label">{names[index]}</span>
@@ -448,24 +511,11 @@ function SourceList({ state }: { state: State }) {
   );
 }
 
-/** An earlier question and, collapsed, two lines of its answer. A click shows or hides the rest. */
-function EarlierTurn({ turn }: { turn: AskTurn }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <button type="button" class={`earlier${open ? ' open' : ''}`} data-testid="earlier-turn" aria-expanded={open} title={turn.scopeName}
-      onClick={() => setOpen(!open)}>
-      <span class="q">{turn.question}</span>
-      <span class="a">{turn.answer.text}</span>
-    </button>
-  );
-}
-
 /** How long Copy answer says Copied. */
 const COPIED_MS = 1_600;
 
-/** The current answer: its sources, and what can be done with it. */
-function CurrentAnswer({ state, turn, line }: { state: State; turn: AskTurn; line: Line }) {
-  const thread = state.ask!;
+/** Copy answer, under a turn's answer: Copied, for a moment, once it is on the clipboard. */
+function CopyAnswer({ turn }: { turn: TimelineTurn }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -473,55 +523,169 @@ function CurrentAnswer({ state, turn, line }: { state: State; turn: AskTurn; lin
     return () => clearTimeout(timer);
   }, [copied]);
   return (
-    <div class="turn">
-      <div class="question selectable" data-testid="question">{turn.question}</div>
-      <div class="asked">{turn.scopeName}</div>
-      {turn.receipt && <Receipt state={state} receipt={turn.receipt} took={turn.took ?? 0} line={line} />}
-      <AgenticAnswer state={state} turn={turn} />
+    <button type="button" class="link-button" data-testid="copy-answer" aria-label={copied ? 'Answer copied' : 'Copy answer'}
+      onClick={() => void copyAnswer(turn.id).then(done => setCopied(done))}>{copied ? 'Copied' : 'Copy answer'}</button>
+  );
+}
+
+/**
+ * Under an answer asked before this Ask (ADR-0047): Ask again, and what the
+ * last check says of it: "Highlighted parts changed since Oct 14" when a
+ * sentence it shows cites a source that changed, or "Nothing changed since
+ * Oct 20" only when every source they cite was checked and is the same. A
+ * check that could not tell, or none, says nothing; with every sentence left
+ * out, only Ask again shows.
+ */
+function AgainRow({ state, turn, view, children }: { state: State; turn: TimelineTurn; view: TurnView; children?: ComponentChildren }) {
+  const when = askedWhen(turn.asked_at);
+  const note = turnNote(turn, view.checks);
+  return (
+    <div class="again-row">
+      <button type="button" class="again-button" data-testid="ask-again" disabled={Boolean(state.ask?.asking)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
+      {note && (
+        <span class={`again-note${note === 'changed' ? ' changed' : ''}`} data-testid="again-note">
+          {note === 'changed' ? `Highlighted parts changed since ${when}` : `Nothing changed since ${when}`}
+        </span>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/** When the turn a turn asked again was asked, while the timeline still has it. */
+function againAt(state: State, turn: TimelineTurn): string | null {
+  return turn.again_of === undefined ? null : turnOf(turn.again_of, state)?.asked_at ?? null;
+}
+
+/**
+ * A turn in full: the latest, or one asked since Ask was opened. The question
+ * as the asker typed it, what it looked through when this Ask asked it
+ * (`took`), Ask again's "since", the answer, the project's own line when
+ * nothing in it matched, the sources, and Copy answer. One asked before this
+ * Ask also says what changed since, with Ask again (`current` false).
+ */
+function FullTurn({ state, turn, took, current, line }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; line: Line }) {
+  const view = turnView(turn, shownChecks(turn, state));
+  const omitted = allOmitted(turn, view.checks);
+  return (
+    <div class="turn" data-testid="turn" data-turn={turn.id}>
+      <div class="question selectable" data-testid="question">{turn.text}</div>
+      {took && <Receipt state={state} receipt={took.receipt} took={took.took} line={line} />}
+      {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
+      {!omitted && <AgenticAnswer state={state} view={view} empty={!foundNothingInProject(turn)} />}
       {foundNothingInProject(turn) && (
         <div class="project-empty" data-testid="project-empty">
-          <span>Nothing in {turn.scopeName} matched.</span>
-          {!thread.failed && (
-            <button type="button" class="link-button" data-testid="ask-everywhere" onClick={askEverywhere}>Ask across everything you can see</button>
+          <span>Nothing in {scopeName(turn.scope, state)} matched.</span>
+          {/* Offered on the latest turn only, as the next step; never under a question that failed. */}
+          {!state.ask?.failed && state.timeline.turns.at(-1)?.id === turn.id && (
+            <button type="button" class="link-button" data-testid="ask-everywhere" onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
           )}
         </div>
       )}
-      <SourceList state={state} />
-      <div class="actions">
-        <button type="button" class="link-button" data-testid="copy-answer" aria-label={copied ? 'Answer copied' : 'Copy answer'}
-          onClick={() => void copyAnswer().then(done => setCopied(done))}>{copied ? 'Copied' : 'Copy answer'}</button>
-        {/* A question that failed below has its own Try again. */}
-        {!thread.failed && (
-          <button type="button" class="link-button" data-testid="ask-again" onClick={() => void ask(turn.question, turn.scope)}>Try again</button>
-        )}
+      {!omitted && <SourceList state={state} view={view} />}
+      {/* One asked before this Ask says what changed, with Ask again; Copy answer joins that row. */}
+      {current ? <div class="actions"><CopyAnswer turn={turn} /></div>
+        : <AgainRow state={state} turn={turn} view={view}>{!omitted && <CopyAnswer turn={turn} />}</AgainRow>}
+    </div>
+  );
+}
+
+/**
+ * An earlier turn, folded to one line (ADR-0047): its project's square (none
+ * for all context or Mine), its full question, "Changed" when a source it
+ * cited changed and no later turn asked it again (`again`, askedAgain's), and
+ * when it was asked. The line opens the answer as it was (OpenedTurn).
+ */
+function FoldedTurn({ state, turn, opened, again }: { state: State; turn: TimelineTurn; opened: boolean; again: ReadonlySet<string> }) {
+  const checks = checksOf(turn, state);
+  const changed = turnChanged(turn, checks, again);
+  const square = turn.scope.kind === 'project'
+    ? <span class="turn-square" style={identity(turn.scope.project_id)} aria-hidden="true">{initial(scopeName(turn.scope, state))}</span>
+    : <span class="turn-square none" aria-hidden="true" />;
+  return (
+    <div class={`folded-turn${opened ? ' open' : ''}`} data-turn={turn.id}>
+      <button type="button" class="folded" data-testid="timeline-row" aria-expanded={opened} onClick={() => toggleTurn(turn.id)}>
+        {square}
+        <span class="q" data-testid="timeline-question">{turn.question}</span>
+        {changed && <span class="changed-tag" data-testid="changed-tag">Changed</span>}
+        <span class="when">{askedWhen(turn.asked_at)}</span>
+      </button>
+      {opened && <OpenedTurn state={state} turn={turn} checks={checks} />}
+    </div>
+  );
+}
+
+/**
+ * An earlier turn opened from its line: its answer as it was, dimmed, what
+ * changed lit, what you can no longer read left out, then Ask again and what
+ * the check said.
+ */
+function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn; checks: TurnChecks | undefined }) {
+  const view = turnView(turn, checks);
+  const omitted = allOmitted(turn, checks);
+  return (
+    <div class="opened" data-testid="opened-turn">
+      {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
+      {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
+      {!omitted && <SourceList state={state} view={view} />}
+      <AgainRow state={state} turn={turn} view={view} />
+    </div>
+  );
+}
+
+/** "Which one?": a follow-up that could mean several things, and a button for each; one asks its full question. */
+function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
+  return (
+    <div class="turn" data-testid="clarify">
+      <div class="question selectable" data-testid="question">{clarify.question}</div>
+      <p class="answer-paragraph">Which one?</p>
+      <div class="choices">
+        {clarify.choices.map(choice => (
+          <button type="button" key={choice.question} class="choice" data-testid="choice" disabled={Boolean(state.ask?.asking)} title={choice.question}
+            onClick={() => chooseClarified(choice)}>{choice.label}</button>
+        ))}
       </div>
     </div>
   );
 }
 
-/** How near its bottom the thread counts as read to the end: a new row of the Ask on its way follows it there. */
+/** The quiet line above the first of today's turns, when earlier days have turns. */
+function Today() {
+  return <div class="today" role="separator" data-testid="today"><span>Today</span></div>;
+}
+
+/** How near its bottom the timeline counts as read to the end: a new row of the Ask on its way follows it there. */
 const FOLLOW_PX = 40;
 
 /**
- * The Ask thread: earlier answers collapsed at the top, the current answer,
- * then a question on its way or one that failed. Newest at the bottom.
+ * Ask, on the timeline (ADR-0047): every earlier turn as one line, the latest
+ * and those asked since Ask was opened in full, then a question on its way,
+ * "Which one?", or one that failed. Newest at the bottom, with a quiet Today
+ * above the first of today's turns.
  */
 export function AskView({ state }: { state: State }) {
   const thread = state.ask!;
+  const { turns } = state.timeline;
   const scroller = useRef<HTMLElement>(null);
-  // Whether the person was at the bottom when they last scrolled, or the thread last took them there.
+  // Whether the person was at the bottom when they last scrolled, or the timeline last took them there.
   const atBottom = useRef(true);
-  // Where the thread last put the view: the scroll event that records a person's scroll can arrive after a new row.
+  // Where the timeline last put the view: the scroll event that records a person's scroll can arrive after a new row.
   const placedAt = useRef<number | null>(null);
   const toBottom = () => {
     const view = scroller.current;
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
     atBottom.current = true;
   };
-  // A new question, answer or failure scrolls to the bottom.
-  useLayoutEffect(toBottom, [thread.seq, thread.shown, thread.asking === null, thread.failed]);
+  // A new question, answer, choice or failure scrolls to the bottom.
+  useLayoutEffect(toBottom, [thread.seq, turns.length, thread.asking === null, thread.failed, thread.clarify]);
+  // A suggestion opened Ask at a turn: that turn comes into view.
+  useLayoutEffect(() => {
+    if (thread.focus === null) return;
+    scroller.current?.querySelector(`[data-turn="${thread.focus}"]`)?.scrollIntoView({ block: 'start' });
+    atBottom.current = false;
+  }, [thread.focus]);
   // A row of the question on its way only when the person is there: one who scrolled up to read stays put, even before
-  // their scroll event has arrived, because the view is no longer where the thread left it.
+  // their scroll event has arrived, because the view is no longer where the timeline left it.
   const follow = useCallback(() => {
     const view = scroller.current;
     if (view && placedAt.current !== null && view.scrollTop < placedAt.current - FOLLOW_PX) atBottom.current = false;
@@ -531,30 +695,42 @@ export function AskView({ state }: { state: State }) {
     const view = scroller.current;
     if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
   };
-  // Which Ask's line is open: the question on its way and its answer share an id, so a line opened while Ask works
+  // Which Ask's line is open: the question on its way and its answer share its seq, so a line opened while Ask works
   // stays open as its receipt, and the next question's line starts closed.
   const [openFor, setOpenFor] = useState<number | null>(null);
   const lineFor = (id: number): Line => ({ open: openFor === id, toggle: () => setOpenFor(openFor === id ? null : id) });
-  const { asking, failed } = thread;
+  const { asking, failed, clarify } = thread;
+  const now = Date.now();
+  // Today's line goes above its first turn, or, with none yet, above the question on its way; only when earlier days have turns.
+  const first = turns.findIndex(turn => askedToday(turn.asked_at, now));
+  const today = first > 0 ? first : first === -1 && turns.length > 0 && (asking || clarify || failed) ? turns.length : -1;
+  const full = fullTurns(thread);
+  const again = askedAgain(turns);
   return (
-    <section class="ask" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
-      {earlierTurns(thread).map(turn => <EarlierTurn key={turn.id} turn={turn} />)}
-      {thread.shown && <CurrentAnswer key={thread.shown.id} state={state} turn={thread.shown} line={lineFor(thread.shown.id)} />}
+    <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
+      {turns.map((turn, index) => (
+        <Fragment key={turn.id}>
+          {index === today && <Today />}
+          {shownInFull(turn, turns, full)
+            ? <FullTurn state={state} turn={turn} took={thread.took[turn.id]} current={thread.asked.includes(turn.id)} line={lineFor(thread.took[turn.id]?.seq ?? -1)} />
+            : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} again={again} />}
+        </Fragment>
+      ))}
+      {today === turns.length && <Today />}
       {asking && (
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>
-          <div class="asked">{asking.scopeName}</div>
           <Asking state={state} progress={asking.progress} follow={follow} line={lineFor(thread.seq)} />
         </div>
       )}
+      {clarify && <Clarify state={state} clarify={clarify} />}
       {failed && (
         <div class="turn" data-testid="ask-failed">
           <div class="question selectable">{failed.question}</div>
-          <div class="asked">{failed.scopeName}</div>
           <div class="error" data-testid="ask-error">{message(failed.failure)}</div>
           {failed.failure.retryable && (
             <div class="actions">
-              <button type="button" class="link-button" data-testid="ask-retry" onClick={() => void ask(failed.question, failed.scope)}>Try again</button>
+              <button type="button" class="link-button" data-testid="ask-retry" onClick={retryAsk}>Try again</button>
             </div>
           )}
         </div>
@@ -830,7 +1006,7 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
   const places = paneCitations(target);
   const count = places.length;
   const meta = target.group ? originalMeta(source, target.group, 'passages cited') : documentName(source.label).version ?? '';
-  const answer = state.ask?.shown?.answer;
+  const answer = activeTurn(state)?.answer;
   const focused = target.group && answer ? answerSentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
   const lit = places.filter(index => focused.includes(index));
   const light = lit.length > 0 && lit.length < count;

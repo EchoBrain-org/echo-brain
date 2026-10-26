@@ -110,15 +110,16 @@ describe('a notification', () => {
 });
 
 describe('the change check in desktop.log', () => {
-  it('names the areas that moved, in the contract\'s order, or that the Authority has none', () => {
+  it('names the areas that moved, in the contract\'s order', () => {
     expect(changesLogLine({ moved: ['follow_ups', 'projects'] })).toBe('changes moved projects,follow_ups');
     expect(changesLogLine({ moved: ['reviews'] })).toBe('changes moved reviews');
-    expect(changesLogLine({ unsupported: true })).toBe('changes unsupported');
   });
 
   it.each([
     ['nothing', null], ['no area', { moved: [] }], ['an area not known', { moved: ['sha256:abc'] }], ['an area twice', { moved: ['projects', 'projects'] }],
-    ['a digest beside it', { moved: ['projects'], projects: 'sha256:abc' }], ['unsupported said otherwise', { unsupported: 'yes' }],
+    ['a digest beside it', { moved: ['projects'], projects: 'sha256:abc' }],
+    // An older desktop logged a missing change check; every Authority has one (ADR-0048).
+    ['the retired unsupported line', { unsupported: true }],
   ])('refuses %s', (_name, params) => {
     expect(changesLogLine(params)).toBeNull();
   });

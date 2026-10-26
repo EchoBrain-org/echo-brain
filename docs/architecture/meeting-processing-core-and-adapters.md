@@ -469,7 +469,8 @@ and
 
 ## Explicit Person uploads
 
-The `/v1/person/documents` family preserves exact originals up to 25 MiB and
+The `/v2/person/documents` family (the `/v1` routes are retired,
+[ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)) preserves exact originals up to 25 MiB and
 uses the common Person source adapter for text/Markdown, PDF and `.docx`.
 The generic source content is an immutable document descriptor; original bytes
 stay in the document BLOB table. A serialized, cancellable worker performs
@@ -492,8 +493,10 @@ extracted document evidence. Existing meeting sources retain their explicitly
 composed `automatic` decision workflow; common admission does not imply every
 source executes every downstream stage.
 
-The legacy `/v2/person/updates` note contract retains its existing original
-inbox, read indexes and optional search-enrichment worker. The client-less
+Notes stored under the legacy `/v2/person/updates` contract keep their original
+inbox, read indexes and optional search-enrichment worker. Only its search route
+is still served; its write, status and content routes are retired
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). The client-less
 `/v1/person/updates` route and its V1 search-hint worker are retired. Retained
 V1 notes stay in custody and remain citable by Ask. Server pull also admits
 accepted text notes, including retained V1 notes, through the same Person

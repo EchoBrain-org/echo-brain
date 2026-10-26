@@ -4,18 +4,18 @@
 // printed through the same validator, and copies explicitly only the fields
 // the renderer needs, so nothing else the client prints can reach it.
 import type {
-  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
+  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
   CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
-  ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef,
-  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
+  ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
+  RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_HAND_IN_MEETING_ID_V1, validatePersonMeetingResultV2,
-  validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
-  validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonSourceEvidenceV1, validatePersonUploadSearchResultV2,
-  validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2, validateProjectMembersV1,
-  validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2,
+  validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
+  validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
+  validatePersonUploadSearchResultV2, validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
+  validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2,
   type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
 } from '@echo-brain/organization-api';
@@ -301,34 +301,65 @@ export function isRecordRef(value: unknown): value is RecordRef {
 }
 
 /**
- * A versioned Agentic Ask answer: its statements, each with the exact
- * sources that support it, in the answer's order, and a streamed answer's
- * receipt, built by the Authority from what passed its final check. It is
- * the last line `person ask --live --progress` printed, in every scope: the
- * answer of the newest route the Authority has, V8 on `/v7` down to V5 on
- * `/v4`, with the receipt of its version when the Authority streamed it
- * (ADR-0039, ADR-0040, research tool contract v1).
+ * An Agentic Ask answer (V8): its statements, each with the exact sources
+ * that support it, in the answer's order, and a streamed answer's receipt,
+ * built by the Authority from what passed its final check. It is the last
+ * line `person ask --progress` printed, in every scope: the answer on `/v7`,
+ * with its receipt when the Authority streamed it (ADR-0039, ADR-0040,
+ * research tool contract v1). An answer to an Ask that carried `previous`
+ * (ADR-0047) also says the full question it answers, Ask again's "since" (its
+ * citations among the answer's), or, asking which one (`clarify`), the
+ * choices and no part. Its notice and its parts' gaps stay out of its plain
+ * reading: the page shows neither.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
-  const { direct, parts, outcome, assumption, notice } = result;
+  const { direct, parts, outcome } = result;
+  const sources = result.citations.map(citedSource);
   // One part answers the question itself, so its question is not repeated.
   const single = parts.length === 1;
   const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
-    ...(part.records?.map(record => record.text) ?? []), part.gap])]
+    ...(part.records?.map(record => record.text) ?? [])])]
     .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
-  return { text: textValue, scope, sources: (result.citations as readonly PersonAnswerCitationV8[]).map(citedSource), ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }),
-    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) } }) };
+  return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
+    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) } }),
+    ...(result.question === undefined ? {} : { question: result.question }),
+    ...(result.since === undefined ? {} : { since: result.since.statements }),
+    ...(result.choices === undefined ? {} : { choices: result.choices }) };
 }
 
 /** Who alone may read an item cited as private: you, or the approver. */
 const PRIVATE_VISIBILITY: ReadonlySet<string> = new Set(['only_me', 'approver_only']);
 
-/** An answer's cited item, and whether only you can read it: a table row that cites it shows the lock (ADR-0045). */
+/**
+ * An answer's cited item, and whether only you can read it: a table row that
+ * cites it shows the lock (ADR-0045). It keeps the citation as the response
+ * carried it, for a later follow-up's `previous` and, when it can change or
+ * go, a later check (ADR-0047).
+ */
 function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
-  const source = answerSource(citation);
+  const source = { ...answerSource(citation), cited: citation };
   return PRIVATE_VISIBILITY.has(citation.visibility) ? { ...source, private: true } : source;
+}
+
+/**
+ * What `person ask-check` printed (C1), as the page may see it: one state per
+ * item asked, in their order, and a readable ticket's current marker. A reply
+ * with another number of items, or anything else, is not its output.
+ */
+export function askCheckView(raw: unknown, asked: number): { items: AskCheckResult[] } {
+  const check = validated(validatePersonAskCheckV1, raw);
+  if (check.items.length !== asked) throw new ViewError();
+  return { items: check.items.map(({ state, marker }) => ({ state, ...(marker === undefined ? {} : { marker }) })) };
+}
+
+/**
+ * What `person project-activity` printed (C2): per project you are in, the
+ * newest arrival from someone else that you can read, or null. At most 500,
+ * each project once.
+ */
+export function projectActivityView(raw: unknown): { items: ProjectActivity[] } {
+  return { items: validated(validatePersonProjectActivityV1, raw).items.map(({ project_id, latest_at }) => ({ project_id, latest_at })) };
 }
 
 function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {
@@ -338,12 +369,11 @@ function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {
 }
 
 /**
- * One line `person ask --live --progress` printed before its answer: a step
- * of the Ask, as the contract has it (ADR-0039; V2, ADR-0040; V3, research
- * tool contract v1, which a V1 or V2 step is too). Only the stage, a search's
- * source kinds and count, and the items just read cross, each item as an
- * answer's citation does, a follow-up, a project, a person, a tool or a
- * tool's container included. Anything else is refused.
+ * One line `person ask --progress` printed before its answer: a step of the
+ * Ask, as progress V3 has it (ADR-0039, ADR-0040, research tool contract v1).
+ * Only the stage, a search's source kinds and count, and the items just read
+ * cross, each item as an answer's citation does, a follow-up, a project, a
+ * person, a tool or a tool's container included. Anything else is refused.
  */
 export function askStepView(raw: unknown): AskStep {
   const step = validated(validatePersonAskProgressLineV3, raw).progress;

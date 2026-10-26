@@ -5,8 +5,8 @@ import Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { applyAuthorityBaseline } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import {
-  validatePersonUpdateSubmitV2,
-  type PersonUpdateSubmitV2, type PersonUploadAudienceV2, type ProjectIdV1,
+  validatePersonUpdateSubmitV3,
+  type PersonUpdateSubmitV3, type PersonUploadAudienceV3, type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
@@ -75,14 +75,17 @@ export class SyntheticProjectHarness {
     )).project_id;
   }
 
-  draft(project_id: ProjectIdV1 | null, audience: PersonUploadAudienceV2, original = SCENARIO.originals.team as { title: string; text: string }): PersonUpdateSubmitV2 {
-    return validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: this.requestId(), ...original, project_id, audience });
+  draft(project_id: ProjectIdV1 | null, audience: PersonUploadAudienceV3, original = SCENARIO.originals.team as { title: string; text: string }): PersonUpdateSubmitV3 {
+    return validatePersonUpdateSubmitV3({
+      schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: this.requestId(), ...original,
+      association_project_ids: project_id === null ? [] : [project_id], audience,
+    });
   }
 
   submit(input: unknown, actor = PEOPLE.alice) {
-    const request = validatePersonUpdateSubmitV2(input);
-    return this.repository.withWriteTransaction(tx => tx.submitUpload(
-      tx.captureAuthorization(authorization(actor), { operation: 'upload_submit', request }), request,
+    const request = validatePersonUpdateSubmitV3(input);
+    return this.repository.withWriteTransaction(tx => tx.submitUploadV3(
+      tx.captureAuthorization(authorization(actor), { operation: 'upload_submit_v3', request }), request,
     ));
   }
 
@@ -103,8 +106,8 @@ export class SyntheticProjectHarness {
 
   original(actor: AuthorityPersonMembershipBinding, context_id: string, project_id?: ProjectIdV1) {
     return project_id === undefined
-      ? this.read(actor, { operation: 'upload_read', context_id }, (tx, scope) => tx.readUpload(scope, context_id))
-      : this.read(actor, { operation: 'context_read', context_id, project_id }, (tx, scope) => tx.readContext(scope, project_id, context_id));
+      ? this.read(actor, { operation: 'upload_read_v3', context_id }, (tx, scope) => tx.readUploadV3(scope, context_id))
+      : this.read(actor, { operation: 'context_read_v2', context_id, project_id }, (tx, scope) => tx.readContextV2(scope, project_id, context_id));
   }
 
   /** Fault seam only: models PC-02's future atomic eligibility/commit binding. */

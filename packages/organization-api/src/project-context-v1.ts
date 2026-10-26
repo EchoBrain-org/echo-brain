@@ -31,14 +31,6 @@ export interface ProjectCreateV1 {
   readonly request_id: string;
   readonly name: string;
 }
-export interface ProjectSummaryV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-project-summary-v1';
-  readonly project_id: ProjectIdV1;
-  readonly name: string;
-  readonly created_at: string;
-  readonly role: ProjectRoleV1;
-}
 export interface ProjectCreateReceiptV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-project-create-receipt-v1';
@@ -80,12 +72,6 @@ export interface ProjectSettingsReceiptV1 {
 export type ProjectMutationReceiptV1 =
   | { readonly schema_version: 1; readonly kind: 'echo-project-mutation-receipt-v1'; readonly request_id: string; readonly project_id: ProjectIdV1; readonly operation: 'member_set' | 'member_remove'; readonly membership_id: string; readonly received_at: string; readonly state: 'applied' }
   | { readonly schema_version: 1; readonly kind: 'echo-project-mutation-receipt-v1'; readonly request_id: string; readonly project_id: ProjectIdV1; readonly operation: 'associate' | 'dissociate'; readonly context_id: string; readonly received_at: string; readonly state: 'applied' };
-export interface ProjectListV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-project-list-v1';
-  readonly items: readonly ProjectSummaryV1[];
-  readonly next_cursor: string | null;
-}
 export interface ProjectMemberV1 {
   readonly membership_id: string;
   readonly display_name: string;
@@ -152,40 +138,13 @@ export interface ProjectContextAssociateV1 {
 export interface ProjectContextDissociateV1 extends Omit<ProjectContextAssociateV1, 'kind'> {
   readonly kind: 'echo-project-context-dissociate-v1';
 }
-export interface ProjectPageRequestV1 { readonly limit?: number; readonly cursor?: string }
 export interface ProjectContextBrowseV1 { readonly project_id: ProjectIdV1; readonly limit?: number; readonly cursor?: string }
 export interface ProjectContextSearchV1 extends ProjectContextBrowseV1 { readonly query: string }
+/** Only me, the organization, or one project: a V2 note's stored audience, and every V3 audience but `projects`. */
 export type ProjectContextAudienceV1 =
   | { readonly kind: 'only_me' }
   | { readonly kind: 'team' }
   | { readonly kind: 'project'; readonly project_id: ProjectIdV1 };
-export interface ProjectContextItemV1 {
-  readonly context_id: string;
-  readonly received_at: string;
-  readonly title: string;
-  readonly excerpt: string;
-  readonly audience: ProjectContextAudienceV1;
-}
-export interface ProjectContextFeedV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-project-context-feed-v1';
-  readonly project_id: ProjectIdV1;
-  readonly items: readonly ProjectContextItemV1[];
-  readonly next_cursor: string | null;
-}
-export interface ProjectContextSearchResultV1 extends Omit<ProjectContextFeedV1, 'kind'> {
-  readonly kind: 'echo-project-context-search-result-v1';
-}
-export interface ProjectContextReadV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-project-context-read-v1';
-  readonly project_id: ProjectIdV1;
-  readonly context_id: string;
-  readonly received_at: string;
-  readonly title: string;
-  readonly text: string;
-  readonly audience: ProjectContextAudienceV1;
-}
 
 function snapshot(value: unknown, label: string): Record<string, unknown> {
   const record = object(value, label);
@@ -244,12 +203,6 @@ export function validateProjectCreateV1(value: unknown): ProjectCreateV1 {
   validatePersonUpdateRequestId(record.request_id); validateProjectNameV1(record.name);
   return record as unknown as ProjectCreateV1;
 }
-export function validateProjectSummaryV1(value: unknown): ProjectSummaryV1 {
-  const record = object(value, 'Project summary'); assertExactKeys(record, ['schema_version', 'kind', 'project_id', 'name', 'created_at', 'role'], 'Project summary');
-  if (record.schema_version !== 1 || record.kind !== 'echo-project-summary-v1') fail('Project summary version or kind is unsupported');
-  project(record, 'Project summary'); validateProjectNameV1(record.name); assertTimestamp(record.created_at, 'Project summary created_at'); validateProjectRoleV1(record.role);
-  return record as unknown as ProjectSummaryV1;
-}
 export function validateProjectCreateReceiptV1(value: unknown): ProjectCreateReceiptV1 {
   const record = object(value, 'Project create receipt'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'project_id', 'created_at', 'state'], 'Project create receipt');
   if (record.schema_version !== 1 || record.kind !== 'echo-project-create-receipt-v1' || record.state !== 'created') fail('Project create receipt is invalid');
@@ -293,12 +246,6 @@ export function validateProjectMutationReceiptV1(value: unknown): ProjectMutatio
   }
   validatePersonUploadContextId(record.context_id);
   return { schema_version: 1, kind: 'echo-project-mutation-receipt-v1', request_id: record.request_id as string, project_id, operation: record.operation, context_id: record.context_id as string, received_at: record.received_at as string, state: 'applied' };
-}
-export function validateProjectListV1(value: unknown): ProjectListV1 {
-  const record = object(value, 'Project list'); assertExactKeys(record, ['schema_version', 'kind', 'items', 'next_cursor'], 'Project list');
-  if (record.schema_version !== 1 || record.kind !== 'echo-project-list-v1') fail('Project list version or kind is unsupported');
-  const result = page({ items: record.items, next_cursor: record.next_cursor }, 'Project list', validateProjectSummaryV1); unique(result.items as ProjectSummaryV1[], 'project_id', 'Project list');
-  const response = { schema_version: 1 as const, kind: 'echo-project-list-v1' as const, ...result }; responseBound(response, 'Project list'); return response;
 }
 function member(value: unknown): ProjectMemberV1 {
   const record = object(value, 'Project member'); assertExactKeys(record, ['membership_id', 'display_name', 'role'], 'Project member');
@@ -360,9 +307,6 @@ function association(value: unknown, kind: ProjectContextAssociateV1['kind'] | P
 }
 export function validateProjectContextAssociateV1(value: unknown): ProjectContextAssociateV1 { return association(value, 'echo-project-context-associate-v1', 'Project context association') as ProjectContextAssociateV1; }
 export function validateProjectContextDissociateV1(value: unknown): ProjectContextDissociateV1 { return association(value, 'echo-project-context-dissociate-v1', 'Project context dissociation') as ProjectContextDissociateV1; }
-export function validateProjectPageRequestV1(value: unknown): ProjectPageRequestV1 {
-  const record = snapshot(value, 'Project page request'); assertExactKeys(record, [...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], 'Project page request'); return optionalPaging(record, 'Project page request');
-}
 function browse(value: unknown, search: boolean): ProjectContextBrowseV1 | ProjectContextSearchV1 {
   const label = search ? 'Project context search' : 'Project context browse'; const record = snapshot(value, label);
   assertExactKeys(record, ['project_id', ...(search ? ['query'] : []), ...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], label);
@@ -371,25 +315,3 @@ function browse(value: unknown, search: boolean): ProjectContextBrowseV1 | Proje
 }
 export function validateProjectContextBrowseV1(value: unknown): ProjectContextBrowseV1 { return browse(value, false) as ProjectContextBrowseV1; }
 export function validateProjectContextSearchV1(value: unknown): ProjectContextSearchV1 { return browse(value, true) as ProjectContextSearchV1; }
-function item(value: unknown): ProjectContextItemV1 {
-  const record = object(value, 'Project context item'); assertExactKeys(record, ['context_id', 'received_at', 'title', 'excerpt', 'audience'], 'Project context item');
-  validatePersonUploadContextId(record.context_id); assertTimestamp(record.received_at, 'Project context item received_at'); text(record.title, 'Project context item title', 200); text(record.excerpt, 'Project context item excerpt', 1200, true);
-  if ([...(record.excerpt as string)].length > 300) fail('Project context item excerpt is invalid');
-  return { context_id: record.context_id as string, received_at: record.received_at as string, title: record.title as string, excerpt: record.excerpt as string, audience: validateProjectContextAudienceV1(record.audience) };
-}
-function contextPage(value: unknown, kind: ProjectContextFeedV1['kind'] | ProjectContextSearchResultV1['kind']): ProjectContextFeedV1 | ProjectContextSearchResultV1 {
-  const record = object(value, 'Project context page'); assertExactKeys(record, ['schema_version', 'kind', 'project_id', 'items', 'next_cursor'], 'Project context page');
-  if (record.schema_version !== 1 || record.kind !== kind) fail('Project context page version or kind is unsupported');
-  const result = page({ items: record.items, next_cursor: record.next_cursor }, 'Project context page', item); unique(result.items as ProjectContextItemV1[], 'context_id', 'Project context page');
-  const response = { schema_version: 1 as const, kind, project_id: project(record, 'Project context page'), ...result } as ProjectContextFeedV1 | ProjectContextSearchResultV1;
-  responseBound(response, 'Project context page'); return response;
-}
-export function validateProjectContextFeedV1(value: unknown): ProjectContextFeedV1 { return contextPage(value, 'echo-project-context-feed-v1') as ProjectContextFeedV1; }
-export function validateProjectContextSearchResultV1(value: unknown): ProjectContextSearchResultV1 { return contextPage(value, 'echo-project-context-search-result-v1') as ProjectContextSearchResultV1; }
-export function validateProjectContextReadV1(value: unknown): ProjectContextReadV1 {
-  const record = object(value, 'Project context read'); assertExactKeys(record, ['schema_version', 'kind', 'project_id', 'context_id', 'received_at', 'title', 'text', 'audience'], 'Project context read');
-  if (record.schema_version !== 1 || record.kind !== 'echo-project-context-read-v1') fail('Project context read version or kind is unsupported');
-  const project_id = project(record, 'Project context read'); validatePersonUploadContextId(record.context_id); assertTimestamp(record.received_at, 'Project context read received_at'); text(record.title, 'Project context read title', 200); text(record.text, 'Project context read text', 8 * 1024, true);
-  const response = { schema_version: 1 as const, kind: 'echo-project-context-read-v1' as const, project_id, context_id: record.context_id as string, received_at: record.received_at as string, title: record.title as string, text: record.text as string, audience: validateProjectContextAudienceV1(record.audience) };
-  responseBound(response, 'Project context read'); return response;
-}

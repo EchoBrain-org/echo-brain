@@ -49,8 +49,8 @@ function fixture(options: { readonly membership?: (id: string) => Membership | u
   const uploadChunks = (title: string, texts: readonly string[], audience: "team" | "only_me" | "project" = "team") => {
     const bytes = Buffer.from(texts.join("\n"));
     const metadata = { request_id: randomUUID(), filename: `${title}.md`, title, content_length: bytes.length, sha256: sha256Digest(bytes) };
-    if (audience === "project") documents.uploadV2("owner", { ...metadata, schema_version: 2, kind: "echo-person-document-upload-v2", audience: { kind: "projects", project_ids: [PROJECT_ALPHA] }, association_project_ids: [PROJECT_ALPHA] }, bytes);
-    else documents.upload("owner", { ...metadata, schema_version: 1, kind: "echo-person-document-upload-v1", audience: { kind: audience }, project_id: PROJECT_ALPHA }, bytes);
+    documents.uploadV2("owner", { ...metadata, schema_version: 2, kind: "echo-person-document-upload-v2",
+      audience: audience === "project" ? { kind: "projects", project_ids: [PROJECT_ALPHA] } : { kind: audience }, association_project_ids: [PROJECT_ALPHA] }, bytes);
     const claim = repository.claimExtraction(); if (claim === undefined) throw new Error("missing extraction claim");
     expect(repository.completeExtraction(claim, {
       status: "ready", sourceSha256: claim.source_sha256, extractorVersion: "fixture-1",
@@ -84,14 +84,16 @@ function fixture(options: { readonly membership?: (id: string) => Membership | u
     if (prompt.step === 1) return { parts: [part("open")], actions: [{ tool: "list", args: { source: "documents" } }] };
     return { parts: [part("not_found")], actions: [{ tool: "finish", args: {} }] };
   } };
-  const route = createPersonAnswerV3Route({
+  const routeOptions = {
     authority_id: "oau_project_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess } as never, originals,
     records: { initializeDesk() { recordProbes += 1; throw new PersonRecordSearchIndexLagV1(); } } as never,
     model, generation: { generation_adapter_id: "fixture", planner_model: "unused", answer_model: "fixture", timeout_ms: 1000 },
     audit: new SqlitePersonAgenticAskAuditV1(database),
     ...(options.membership === undefined ? {} : { memberships: { membership: options.membership } }),
-  });
+  };
+  // Ask, as `/v7` composes it with no live source, follow-ups or workspace, beside the evidence desk's reads.
+  const route = { ...createPersonAnswerV3Route(routeOptions), ...createPersonLiveAnswerRouteV1(routeOptions) };
   const ask = (access_token = "owner") => route.ask({ access_token, request: { schema_version: 3, question: "Summarize this project", project_id: PROJECT_ALPHA } });
   return {
     database, originals, route, upload, uploadChunks, ask, prompts, roles,
@@ -222,7 +224,7 @@ describe("Agentic Ask with stored source evidence", () => {
 });
 
 
-describe("Agentic Ask V5 combined request-local sources", () => {
+describe("Agentic Ask combined request-local sources", () => {
   const live = <C extends PersonTicketCitationV1 | PersonPageCitationV1>(tool_id: string, item: PersonLiveEvidenceItemV1<C>): PersonLiveEvidenceSourceV1<C> => {
     const result = Object.freeze({ items: Object.freeze([item]), truncated: false, receipt_digests: Object.freeze([item.receipt_sha256]) });
     return Object.freeze({ tool_id, search: vi.fn(async () => result), list: vi.fn(async () => result), open: vi.fn(async () => result), revalidate: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) });
@@ -234,9 +236,9 @@ describe("Agentic Ask V5 combined request-local sources", () => {
     model, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1_000 },
     audit: { forRequest: () => ({ append: () => undefined }), forLiveRequest: () => ({ record: async () => canonicalSha256("live-audit") }) } as never,
     live_sources,
-  }, 6);
+  });
 
-  it("combines stored evidence, a work item and a live page in one V6 answer without provider-specific planner paths", async () => {
+  it("combines stored evidence, a work item and a live page in one answer without provider-specific planner paths", async () => {
     const f = fixture();
     f.upload("Launch meeting notes", "The meeting approved an EVT launch review.");
     const ticketText = "ECHO-7 reports EVT is scheduled for Tuesday.";
@@ -264,7 +266,7 @@ describe("Agentic Ask V5 combined request-local sources", () => {
     } };
     const route = liveRoute(f, model, [{ ...JIRA_LIVE_CONNECTOR_V1, application: { source: async () => ticketSource } }, { ...CONFLUENCE_LIVE_CONNECTOR_V1, application: { source: async () => pageSource } }]);
     const answer = await route.ask({ access_token: "owner", request: { schema_version: 3, question: "When does EVT start?" } });
-    expect(answer).toMatchObject({ schema_version: 6, outcome: "answered" });
+    expect(answer).toMatchObject({ schema_version: 8, outcome: "answered" });
     expect(answer.citations.map(value => value.kind).sort()).toEqual(["document_passage", "page", "ticket"]);
     expect(ticketSource.search).toHaveBeenCalledTimes(1);
     expect(pageSource.search).toHaveBeenCalledTimes(1);

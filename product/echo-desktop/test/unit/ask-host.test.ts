@@ -12,10 +12,10 @@ const decision = { citation: { kind: 'approved_record', atom_id: sha('1'), recor
 const line = (value: unknown) => JSON.stringify(value);
 
 describe('the command an Ask runs', () => {
-  it('asks every Ask, Mine included, on the newest route with its progress, as the account the page shows', () => {
+  it('asks every Ask, Mine included, on /v7 with its progress, as the account the page shows', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
     // The client refuses to ask as any other account, so no step of another reaches the page.
-    const asked = ['ask', '--question=What did we agree?', '--live', '--progress', `--expected-membership-id=${EXPECT.membership_id}`, `--expected-authority=${EXPECT.authority}`];
+    const asked = ['ask', '--question=What did we agree?', '--progress', `--expected-membership-id=${EXPECT.membership_id}`, `--expected-authority=${EXPECT.authority}`];
     expect(askArgv('What did we agree?', { kind: 'global' }, EXPECT)).toEqual(asked);
     expect(askArgv('What did we agree?', { kind: 'project', project_id: project }, EXPECT)).toEqual([...asked, `--project=${project}`]);
     expect(askArgv('What did we agree?', { kind: 'mine' }, EXPECT)).toEqual([...asked, '--mine']);
@@ -44,7 +44,7 @@ describe('the progress lines of an Ask', () => {
     read(line({ ok: true, progress: { type: 'stage', stage: 'reading', note: 'Mara owns THERM-48' } }));
     read(line({ ok: true, progress: { type: 'read', items: [decision] } }));
     // The answer line is the command's result, never a step.
-    read(line({ ok: true, result: { schema_version: 6 } }));
+    read(line({ ok: true, result: { schema_version: 8 } }));
     expect(refused).toHaveBeenCalledTimes(1);
     expect(posted).toEqual([
       { cancel_id: CANCEL, expect: EXPECT, step: { type: 'stage', stage: 'searching' } },

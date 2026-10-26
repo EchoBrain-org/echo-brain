@@ -21,6 +21,9 @@ echo-brain person <command>
 The client has no background runtime, adapter registry, local processor,
 approval store, delivery outbox, database, installation key, access lease, or
 service manager.
+The desktop app keeps its Ask timeline in one owner-only file per account
+([ADR-0047](../decisions/ADR-0047-ask-timeline.md)); the client itself keeps
+none.
 
 The opt-in [client updater](../features/client-updates-v1.md) runs a bounded
 release check before command dispatch. Its public publisher trust and local
@@ -135,8 +138,9 @@ not claim that the employee is currently online or has a live device session.
 
 ## Account and answer Sources
 
-Ask uses the agentic routes ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md));
-the earlier `/v1` and `/v2/person/ask` routes are retired. Every Ask, the CLI's
+Ask uses the agentic route ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md));
+every Ask route before `/v7` is retired
+([ADR-0047](../decisions/ADR-0047-ask-timeline.md)). Every Ask, the CLI's
 `person ask` and the desktop's in every scope, Mine included, uses
 `/v7/person/ask` with V8 answers so the person's connected Jira and Confluence
 accounts can contribute live evidence when the Authority configures those
@@ -145,14 +149,8 @@ sources, with ECHO's shared follow-ups
 person's workspace: their projects, the people in their organization, their
 tools, and their connected tools' Jira projects and Confluence spaces
 ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). Mine reads none
-of these. An older Authority without `/v7` gets `/v6/person/ask` with V7
-answers, one without `/v6` `/v5/person/ask` with V6 answers, and one without
-`/v5` either `/v4/person/ask` with V5 answers; only a 404 without the route
-header falls back. `--live`, which once selected this route, is still accepted
-and changes nothing; `--tickets` keeps `/v4/person/ask` with V5 answers. Since
-2026-10-19 this client never asks `/v3/person/ask` (V4 answers, from the one
-Ask core with no access check after its audit write); the Authority still
-serves it for clients installed before. A cited follow-up opens its item page, a project its project page and a
+of these. The client asks no other route: an Authority without `/v7` answers
+404 without the route header, and the Ask fails with `not_supported`. A cited follow-up opens its item page, a project its project page and a
 tool the Tools screen; a person opens nothing. Ticket and page citations, and
 cited Jira projects and Confluence spaces, open directly in Jira or
 Confluence; they are not retained originals. Project leads configure one Jira project from the project settings menu;
@@ -167,31 +165,28 @@ records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
 `person ask --progress` asks `/v7/person/ask` to stream its progress
-([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) in progress V3 by sending `x-echo-ask-progress: 3`;
-on an Authority without `/v7`, `/v6/person/ask` in V2 with `x-echo-ask-progress: 2`;
-and on one without `/v6`, `/v5/person/ask` in V1 with `x-echo-ask-progress: 1`,
-which every Authority without `/v6` answers in JSON.
+([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md)) in progress V3 by sending `x-echo-ask-progress: 3`.
 
 - **Reading the stream.** The client reads the server-sent events with the
-  shared decoder of the route's version in `@echo-brain/organization-api`.
+  shared progress V3 decoder in `@echo-brain/organization-api`.
 - **Output.** It prints each stage, searched or read event as its own
-  `{"ok": true, "progress": …}` line, valid as V3 (every V1 and V2 step is
-  one); on `/v6` a read may name a follow-up, and on `/v7` also a project, a
-  person, a tool or a tool container. The final line keeps today's
-  `{"ok": true, "result": …}` and adds the answer's `receipt`.
+  `{"ok": true, "progress": …}` line, valid as V3; a read may name a
+  follow-up, a project, a person, a tool or a tool container. The final line
+  keeps the plain Ask's `{"ok": true, "result": …}` and adds the answer's
+  `receipt`.
 - **Errors.** An error after the stream started becomes the same client
   error the JSON error response would have produced.
-- **Older Authority.** It answers with JSON, so the command prints only
-  today's final line.
-- **Flag rules.** `--progress` needs no `--live`. With `--tickets`, whose
-  route never streams, it is a usage error. Without the flag, the output is
-  unchanged.
+- **No stream.** An Authority that answers with JSON gets the plain Ask's one
+  final line, with no receipt.
+- **Flag rules.** Without `--progress`, the output is the plain Ask's.
+  `--live` and `--tickets` are retired: the client refuses them as unknown
+  options.
 - **Pinned account.** Paired `--expected-membership-id` and
   `--expected-authority` (only with `--progress`) bind the Ask to the
   caller's account, as the desktop sends them: signed in as another, the
   client sends nothing and prints no step.
 
-The desktop runs this command, as `person ask --live --progress`, for every
+The desktop runs this command, as `person ask --progress`, for every
 Ask, Mine included. Its host forwards
 the progress lines to the renderer as it already forwards sign-in phases, and
 drops lines that belong to an earlier Ask or another account.
@@ -361,12 +356,13 @@ The repository root is workspace orchestration only. It is private and has no
 runtime export or executable.
 
 The neutral client uses `/v4/person/tools`, a bounded generic status contract
-that adds `organization_setup` for owners; the v3 route strips that field and
-keeps serving older clients. Each tool registers its own verbs (`setup`,
-`connect`, `disconnect`, `status`, `cancel`) as a `PersonToolProviderV1` at an
-explicit entrypoint; `person tools` dispatches to them by `--tool`. Supported
-v2 routes remain in the Slack provider for existing clients; the disconnect
-command decodes that retained response there.
+that adds `organization_setup` for owners; the v3 route and Slack's
+`GET /v2/person/tools` are retired
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). Each tool
+registers its own verbs (`setup`, `connect`, `disconnect`, `status`, `cancel`)
+as a `PersonToolProviderV1` at an explicit entrypoint; `person tools`
+dispatches to them by `--tool`. Slack's disconnect reply still carries its V2
+tool shape, which the disconnect command decodes in the Slack provider.
 
 ## Deliberate context uploads
 
@@ -430,8 +426,10 @@ the original source pathname. `documents pending` lists local retained requests
 without a network call or revealing paths. A matching full or minimal saved
 receipt resolves the local attempt. A minimal receipt confirms admission after
 project access is lost without returning document content or access coordinates.
-A full `status-v2` receipt never matches a snapshot an older client kept from a
-V1 upload; `retry` or `abandon` settles that one.
+A snapshot an older client kept from a V1 upload cannot be resent, because the
+V1 routes are retired
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)):
+`documents pending` lists it as unreadable, and `abandon` removes it.
 
 `documents abandon --request-id` explicitly removes only local retry material.
 It cannot cancel or delete a possibly completed Authority upload. The desktop

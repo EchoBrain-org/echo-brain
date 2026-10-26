@@ -29,15 +29,13 @@ deployment remains unconfigured.
 The desktop **Tools** screen uses the same per-person connect, reconnect, cancel,
 status, and disconnect flow as Jira. The equivalent initial connection is
 `echo-brain person tools connect --tool confluence`; consent occurs in the browser.
-Desktop Ask selects the additive `/v7/person/ask` route with a strict V8 response
-([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)) and falls
-back on an older Authority as the
+Desktop Ask, and the CLI's `echo-brain person ask --question '<question>'`
+(optionally with `--project <id>`), ask `/v7/person/ask`, the only Ask route,
+with a strict V8 response
+([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), as the
 [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
-describes.
-The CLI uses `echo-brain person ask --question '<question>'`, optionally
-with `--project <id>`. Older ticket-only and local-context response contracts remain
-unchanged; an older Authority that has no new route receives the ticket-capable
-fallback. Permission failures never trigger that fallback.
+describes. An Authority without it fails the Ask as `not_supported`; no
+failure falls back to another route.
 
 Project leads configure [Confluence spaces](../../docs/features/project-settings-v1.md#confluence-space-mapping)
 independently of the asker's personal grant. Connection state and mappings store

@@ -10,6 +10,9 @@ import { createPersonResearchEvalV1 } from './person-research-eval-v1.js';
 import { createPersonTriggerRunsV1 } from './person-trigger-runs-v1.js';
 import { createPersonOpenItemsV1 } from './person-open-items-v1.js';
 import { createPersonChangesV1 } from './person-changes-v1.js';
+import { createPersonProjectActivityV1 } from './person-project-activity-v1.js';
+import { SqlitePersonProjectActivityV1 } from '../adapters/persistence/sqlite/person-project-activity-v1.js';
+import { createPersonAskCheckV1 } from './person-ask-check-v1.js';
 import type { PersonReviewStatusesV1 } from './person-meeting-runtime-v1.js';
 import { createPersonDiagnosticsV1, type PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { SqliteTriggerRunsV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
@@ -22,7 +25,7 @@ import { createProjectContextApplicationV1 } from '../application/project-contex
 import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import { createRecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
 import { everyProjectPageV1 } from './person-local-source-helpers-v1.js';
-import { createPersonToolsHttpApplicationV3, createPersonToolsHttpApplicationV4 } from '../presentation/person-tools-http-application.js';
+import { createPersonToolsHttpApplicationV4 } from '../presentation/person-tools-http-application.js';
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
@@ -361,14 +364,25 @@ export async function startOrganizationAuthorityApiRuntime(
       database, sessions, projects: projectRepository, items, people, records: recordSearch,
       ...(reviewStatuses === undefined ? {} : { reviews: reviewStatuses }),
     });
+    // Project activity (Ask timeline v1, C2) reads the same way: only the database, in one read transaction.
+    const activityRows = new SqlitePersonProjectActivityV1(database);
+    const projectActivity = createPersonProjectActivityV1({
+      database, sessions, projects: projectRepository, originals: activityRows, approvals: activityRows, items, people, records: recordSearch,
+    });
+    // The Ask source check (ADR-0047) needs no answer model either: the database in one read transaction, then each connected
+    // tool's own check through the caller's connection.
+    const askCheck = createPersonAskCheckV1({
+      database, sessions, projects: projectRepository, records: recordSearch, originals, items, people,
+      live: liveConnectors.flatMap(({ runtime }) => (runtime.checks === undefined ? [] : [runtime.checks])),
+    });
     const projectContext = createProjectContextApplicationV1({
       authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
       repository: projectRepository,
     });
     const runs = answerOptions === undefined ? undefined : new SqliteTriggerRunsV1(database);
-    // The V7 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040); the V8 answer also reads the asker's
-    // projects, people and tools as the project pages and the tools page show them (research tool contract v1), each
-    // release audited without content.
+    // Ask's V8 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040), and the asker's projects, people and
+    // tools as the project pages and the tools page show them (research tool contract v1), each release audited without
+    // content.
     const followUps = runs === undefined ? undefined : { runs, items, people, records: recordSearch };
     const workspace = { projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools };
     // The staging research evaluation asks a question as `/v7` does, on the same sources.
@@ -421,23 +435,21 @@ export async function startOrganizationAuthorityApiRuntime(
         originals: originalItems,
         meetings: recordSearch,
       }),
-      // Agentic Ask is the only Ask (ADR-0022); it needs the bound answer model.
+      // Agentic Ask is the only Ask (ADR-0022), on `/v7`; it and the evidence desk need the bound answer model.
       ...(answerOptions === undefined ? {} : {
         person_answer_v3: createPersonAnswerV3Route(answerOptions),
-        // A response version is available with the model even when no external
-        // source is configured. The request catalog still contains local context.
-        person_answer_v4: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 5),
-        person_answer_v5: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 6),
-        // Without the follow-up sources the V7 and V8 desks would bind none, so those answers need them.
+        // Without the follow-up sources the V8 desk would bind none, so the Ask needs them. The request catalog contains
+        // local context even when no external source is configured.
         ...(followUps === undefined ? {} : {
-          person_answer_v6: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps }, 7),
-          person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }, 8),
+          person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }),
         }),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
       ...(diagnostics === undefined ? {} : { person_diagnostics: diagnostics }),
       person_trigger_runs: triggerRuns,
+      person_ask_check: askCheck,
       person_changes: personChanges,
+      person_project_activity: projectActivity,
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
         repository: documents,
@@ -452,11 +464,7 @@ export async function startOrganizationAuthorityApiRuntime(
           },
         }),
       ),
-      person_tools: createPersonToolsHttpApplicationV3({
-        authenticate: (access_token) => sessions.authenticateAccess({ access_token }),
-        tools: personTools,
-      }),
-      person_tools_v4: createPersonToolsHttpApplicationV4({
+      person_tools: createPersonToolsHttpApplicationV4({
         authenticate: (access_token) => sessions.authenticateAccess({ access_token }),
         tools: personTools,
       }),

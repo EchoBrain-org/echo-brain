@@ -5,7 +5,7 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import type { EvidenceDeskPortV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../tests/support/telemetry-fixture-vocabulary-v1.js";
-import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-route.js";
+import { createPersonLiveAnswerRouteV1 } from "../src/composition/person-live-answer-route-v1.js";
 import { createPersonEvidenceDeskV1 } from "../src/composition/person-evidence-desk-v1.js";
 
 vi.mock("../src/composition/person-evidence-desk-v1.js", () => ({ createPersonEvidenceDeskV1: vi.fn() }));
@@ -21,12 +21,12 @@ function fixture() {
   const authenticateAccess = vi.fn(() => ({ principal_id: "person_fixture", membership_id: "member_fixture", session_family_id: "session_fixture" }));
   const append = vi.fn();
   const generate = vi.fn();
-  const route = createPersonAnswerV3Route({
+  const route = createPersonLiveAnswerRouteV1({
     authority_id: "authority_fixture", organization_id: "organization_fixture", state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess } as never, originals: {} as never, records: {} as never,
     model: { generate },
     generation: { generation_adapter_id: "fixture", planner_model: "deepseek/deepseek-v3.2", answer_model: "deepseek/deepseek-v3.2", timeout_ms: 25_000 },
-    audit: { forRequest: () => ({ append }) } as never,
+    audit: { forRequest: () => ({ append }), forLiveRequest: () => ({}) } as never,
   });
   return {
     append, generate, revalidate, authenticateAccess, events,
@@ -122,6 +122,8 @@ describe("Agentic Ask deadline at the Person route boundary", () => {
     const f = fixture();
     const controller = new AbortController();
     const rejected = expect(f.ask(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    // Cancelled while research waits on its first access check: the desk is bound and the Ask has started.
+    await vi.waitFor(() => expect(f.revalidate).toHaveBeenCalled());
     controller.abort();
     await rejected;
 
