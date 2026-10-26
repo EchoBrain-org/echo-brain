@@ -70,7 +70,8 @@ export function help() {
     "statements, lead and grade (synthetic text), the writer prompt's digest and model metadata; never prompts, raw",
     "replies, credentials or provider payloads.",
     "",
-    "Exit 0 when all three rules pass (the wording ships), 1 when any fails, 2 on a usage error.",
+    "Exit 0 when a complete run passes all three rules (the wording ships); 1 when any rule fails or the run is smaller,",
+    "which never ships; 2 on a usage error.",
   ].join("\n");
 }
 
@@ -98,7 +99,7 @@ export function parseArgs(argv) {
   options.trials = boundedInteger(options.trials, "--trials", 1, MAX_TRIALS);
   options.timeoutMs = boundedInteger(options.timeoutMs, "--timeout-ms", MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
   const known = new Set(loadCases().cases.map((entry) => entry.id));
-  if (options.caseIds !== null && (options.caseIds.length === 0 || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases");
+  if (options.caseIds !== null && (options.caseIds.length === 0 || new Set(options.caseIds).size < options.caseIds.length || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases, each once");
   if ((options.caseIds?.length ?? known.size) * options.trials * 2 > MAX_TOTAL_MODEL_CALLS) throw new Error(`requested model-call budget exceeds ${MAX_TOTAL_MODEL_CALLS}`);
   options.out = outputDirectory(options.out);
   return Object.freeze(options);
@@ -261,18 +262,21 @@ export async function run(options, dependencies = {}) {
     }
   }
   const identityAfter = codeIdentity();
+  // Only the whole pre-registered set, each case once and three trials each, decides whether the wording ships.
+  const complete = new Set(selected.map((entry) => entry.id)).size === ALL_CASES && options.trials === MAX_TRIALS;
+  const summary = summarizeRules(results);
   const report = Object.freeze({
     kind: "echo-ask-wording-evaluation-v1",
     observed_at: new Date().toISOString(),
     synthetic_only: true,
-    // Only the whole pre-registered set, three trials each, decides whether the wording ships.
-    complete: selected.length === ALL_CASES && options.trials === MAX_TRIALS,
+    complete,
     cases_sha256: sha256(readFileSync(CASES_FILE)),
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
     writer_prompt_sha256: Object.freeze([...new Set(results.flatMap((result) => result.writer_prompt_sha256))]),
     model: Object.freeze({ adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
     limits: Object.freeze({ cases: selected.length, trials: options.trials, timeout_ms: options.timeoutMs, max_total_model_calls: MAX_TOTAL_MODEL_CALLS }),
-    ...summarizeRules(results),
+    // A smaller diagnostic run keeps its rule scores, and never ships the wording.
+    ...summary, wording_ships: complete && summary.wording_ships,
     groups: Object.freeze(Object.fromEntries(Object.keys(GROUPS).map((group) => {
       const trials = results.filter((entry) => entry.group === group);
       const count = (name) => trials.filter((entry) => entry.grade.rules[name]).length;

@@ -49,6 +49,8 @@ test("makes no request, and reads no credential, unless asked to run with a priv
   chmodSync(credential, 0o600);
   assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(ROOT, "tools", "evals", "ask-wording")]), /outside the repository/u);
   assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out"), "--cases", "no-such-case"]), /known cases/u);
+  // One case named ten times is not the ten registered cases.
+  assert.throws(() => parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out"), "--cases", "owner-plain,owner-plain"]), /each once/u);
   const options = parseArgs(["--run", "--credential-file", credential, "--out", join(root, "out")]);
   assert.deepEqual({ trials: options.trials, caseIds: options.caseIds, timeoutMs: options.timeoutMs }, { trials: 3, caseIds: null, timeoutMs: 60_000 });
   assert.equal(statSync(options.out).mode & 0o777, 0o700);
@@ -87,5 +89,8 @@ test("writes a private report outside the repository that applies the three pre-
   const restating = await run({ ...options, caseIds: [founder.id, "owner-plain"], trials: 1 },
     { loaded: { structured_output: writer((entry) => `${entry.expect.facts[0].at(-1)} answers: ${entry.question}`), generation }, progress: () => undefined });
   assert.deepEqual([restating.report.complete, restating.report.rules.no_restating.passed_trials, restating.report.wording_ships], [false, 0, false]);
-  assert.equal(readdirSync(out).length, 2);
+  // A smaller run that passes every rule keeps its scores, and still never ships the wording.
+  const diagnostic = await run({ ...options, caseIds: ["owner-plain"], trials: 1 }, { loaded: { structured_output: writer(), generation }, progress: () => undefined });
+  assert.deepEqual([diagnostic.report.complete, Object.values(diagnostic.report.rules).map((rule) => rule.passed), diagnostic.report.wording_ships], [false, [true, true, true], false]);
+  assert.equal(readdirSync(out).length, 3);
 });
