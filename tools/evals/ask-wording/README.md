@@ -83,6 +83,37 @@ pass on the code with the change. The same run on the code before it is
 reported beside it, with each trial's mean and longest shared run, its lead's
 length, and how many times long identifiers were written.
 
+## Result, 2026-10-26
+
+Cases `sha256:6ad26dc1…6a2bfa`, the product route `anthropic/claude-sonnet-5.5`
+through OpenRouter, 30 trials a run, no errors and no repairs. Before is the
+writer at `7d28e8f` (main's prompt, `sha256:9363a07e…`); after is the change
+at `daa503d` (`sha256:f575af97…`). Rules 1 and 2 failed before; all three
+passed after, so the wording ships.
+
+| | Before | After |
+| --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 22 | 28 |
+| 2. Long identifiers once (27 of 30 to pass) | 23 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 |
+| Words shared with the question, mean and longest run | 5.3, 16 | 2.0, 5 |
+| Lead length, mean words | 18.4 | 10.2 |
+| Long identifiers written | 13 | 6, each one the answer had to name |
+| Leads writing an identifier the question named | 7 | 0 |
+
+The same trials, before and after:
+
+| Case | Before | After |
+| --- | --- | --- |
+| `follow-up-owner-quoted-title` | Noor Haddad (you) owns the follow-up "Approve release clean-v1-20261026-ask-timeline-aa79d90 and choose who can read it."; its status is open. | You own it. |
+| `follow-up-due-quoted-title` | The follow-up "Publish the release notes for clean-v1-20261020-meeting-routing-b62b11b to the team space" is due on 2026-10-30. | It is due Oct 30, 2026. |
+| `decision-approver-quoted-title` | Lena Brandt approved the decision "Ship fan curve v2 before DVT and hold PVT until the soak passes" on 2026-10-14. | Lena Brandt approved it. |
+| `release-decision-named-id` | The release review decided that clean-v1-20261022-ask-layout-56461ff may go to staging once the desktop layout check passes, then waits one day in staging before production. | It may go to staging once the desktop layout check passes, then waits one day there before production. |
+
+Both trials that failed rule 1 after the change are `blocker-plain`, whose leads
+said THERM-482 "is blocking the DVT gate", 5 words of the question; one of its
+three trials did so before too.
+
 ## Limits
 
 - One model route and synthetic items only: a staging release and the
