@@ -10,7 +10,7 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AskPrevious, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
-  allOmitted, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged,
+  allOmitted, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups,
 } from '../../src/renderer/timeline.js';
 import {
   ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, type Node,
@@ -306,6 +306,31 @@ describe('Ask on the timeline', () => {
     await store.ask('Later?');
     await flush();
     expect(opening()).toHaveLength(2);
+  });
+
+  it('leaves a source you can no longer read out of its turn\'s sources, the numbers of the page, its list and the pane agreeing', async () => {
+    const one = turn('One?', 2 * DAY, status());
+    // Out only when every citation of a place is unreadable; the rest keep their places among the answer's sources.
+    expect(turnGroups(one.answer.sources, { 0: 'same', 1: 'changed', 2: 'unreadable' }).map(group => group.indexes)).toEqual([[0], [1]]);
+    expect(turnGroups(one.answer.sources, undefined)).toHaveLength(3);
+    const twice = [ticket('THERM-482', '20482'), page('31010'), page('31010')];
+    expect(turnGroups(twice, { 1: 'unreadable', 2: 'same' }).map(group => group.indexes)).toEqual([[0], [1, 2]]);
+    seed(one, turn('Two?', DAY, status()));
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    store.toggleSourceList(one.id);
+    const thread = await view();
+    const opened = byTestId(thread(store), 'opened-turn')[0]!;
+    expect(text(byTestId(opened, 'sources-toggle'))).toMatch(/^2 sources/u);
+    expect(byTestId(opened, 'source-row').map(text)).toEqual(['1THERM-482 · Sensor drift', '2DVT plan']);
+    expect(byTestId(opened, 'citation').map(text)).toEqual(['1', '2']);
+    // The second number opens the DVT plan, as the pane numbers it.
+    click(byTestId(opened, 'citation')[1]);
+    expect(store.getState().sources).toMatchObject({ turn: one.id, open: 1 });
+    expect(store.paneTarget()).toMatchObject({ number: 1, sources: [one.answer.sources[1]] });
+    expect(store.answerGroups()).toHaveLength(2);
   });
 
   it('says nothing changed, and with every sentence left out shows only Ask again', async () => {

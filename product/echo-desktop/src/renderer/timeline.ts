@@ -8,7 +8,7 @@ import type {
 } from '../shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
-import { answerSentences, MAX_SOURCES } from './answer.js';
+import { answerSentences, MAX_SOURCES, sourceGroups, type SourceGroup } from './answer.js';
 
 /** A follow-up continues the latest turn while it was asked this recently, and Ask is open. */
 export const FOLLOW_UP_MS = 60 * 60_000;
@@ -91,6 +91,17 @@ export function markOf(citations: readonly number[], checks: TurnChecks | undefi
   if (!checks) return null;
   if (citations.some(at => checks[at] === 'unreadable')) return 'omitted';
   return citations.some(at => checks[at] === 'changed') ? 'changed' : null;
+}
+
+/**
+ * A turn's sources as its page numbers them: the first 32, one per place,
+ * without a place every citation of which a check found you can no longer
+ * read, as the sentences citing it are left out. Each keeps its citations'
+ * places among the answer's sources.
+ */
+export function turnGroups(sources: readonly AnswerSource[], checks: TurnChecks | undefined): SourceGroup[] {
+  const groups = sourceGroups(sources.slice(0, MAX_SOURCES));
+  return checks === undefined ? groups : groups.filter(group => !group.indexes.every(at => checks[at] === 'unreadable'));
 }
 
 /** Whether a later turn asked this one again: then it shows no Changed tag. */

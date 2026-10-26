@@ -6,8 +6,8 @@ import type {
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerSentences, documentName, dueColumn, externalSourceProvider, lateForYou, MAX_SOURCES, passageBlocks, rowId, rowStatement, sourceGroups, statementGroups, tableDay,
-  yoursIn, type AnswerTable, type Inline, type SourceGroup,
+  answerSentences, documentName, dueColumn, externalSourceProvider, lateForYou, passageBlocks, rowId, rowStatement, statementGroups, tableDay, yoursIn,
+  type AnswerTable, type Inline, type SourceGroup,
 } from '../answer.js';
 import { identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
@@ -18,14 +18,14 @@ import {
   type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
-  activeTurn, askAgain, askEverywhere, barSuggestions, cancelAsk, checksOf, chipName, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
+  activeTurn, askAgain, askEverywhere, barSuggestions, cancelAsk, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleSourceList, toggleTurn, turnOf, widenScope, UNTITLED,
   type AskClarify, type PaneTarget, type Read, type RecordSectionKey, type ShownTurn, type State,
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
-  allOmitted, askedToday, askedWhen, checkedTurn, markOf, shownInFull, turnChanged, type Mark, type Suggestion, type TurnChecks,
+  allOmitted, askedToday, askedWhen, checkedTurn, markOf, shownInFull, turnChanged, turnGroups, type Mark, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { Caret, Check, Chevron, Close, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticks, Up } from './icons.js';
 
@@ -191,7 +191,7 @@ interface TurnView {
 }
 
 function turnView(turn: TimelineTurn, checks: TurnChecks | undefined): TurnView {
-  return { id: turn.id, answer: turn.answer, groups: sourceGroups(turn.answer.sources.slice(0, MAX_SOURCES)), checks };
+  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer.sources, checks), checks };
 }
 
 /** A source's first citation stands for it: its kind, its label, its record or its link. */
@@ -577,7 +577,7 @@ function againAt(state: State, turn: TimelineTurn): string | null {
  * what changed since, with Ask again (`current` false).
  */
 function FullTurn({ state, turn, current, line }: { state: State; turn: ShownTurn; current: boolean; line: Line }) {
-  const view = turnView(turn, current ? undefined : checksOf(turn, state));
+  const view = turnView(turn, shownChecks(turn, state));
   const omitted = allOmitted(turn, view.checks);
   return (
     <div class="turn" data-testid="turn" data-turn={turn.id}>

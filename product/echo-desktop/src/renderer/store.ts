@@ -15,7 +15,7 @@ import { askText, searchQuery } from '../shared/query.js';
 import { answerMarkdown, answerSentences, documentName, MAX_SOURCES, sourceGroups, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, previousOf, sameScope, shownInFull, type Suggestion, type TurnChecks,
+  askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, previousOf, sameScope, shownInFull, turnGroups, type Suggestion, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
@@ -3496,6 +3496,11 @@ export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks
   return current.timeline.checks?.turns[turn.id];
 }
 
+/** What the page shows of the last check on a turn: nothing on one asked in this Ask, which is current. */
+export function shownChecks(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
+  return current.ask?.asked.includes(turn.id) ? undefined : checksOf(turn, current);
+}
+
 /** The latest turn, as the page shows it: with what its Ask looked through, when this Ask asked it. Null with none. */
 export function latestTurn(current: State = state): ShownTurn | null {
   const turn = current.timeline.turns.at(-1);
@@ -3822,9 +3827,13 @@ export function answerSources(current: State = state): readonly AnswerSource[] {
   return activeTurn(current)?.answer.sources.slice(0, MAX_SOURCES) ?? [];
 }
 
-/** That answer's sources, numbered from one: each document, meeting record or live item it cites. */
+/**
+ * That answer's sources, numbered from one as its page numbers them: each
+ * document, meeting record or live item it cites, but one you can no longer read.
+ */
 export function answerGroups(current: State = state): SourceGroup[] {
-  return sourceGroups(answerSources(current));
+  const turn = activeTurn(current);
+  return turn ? turnGroups(turn.answer.sources, shownChecks(turn, current)) : [];
 }
 
 /** The turns Ask shows an answer of: the earlier one opened, then those in full; the one the pane's numbers are of first. */
@@ -4073,9 +4082,8 @@ function readPane(gen: number, source: AnswerSource): void {
 export function chooseSource(group: number, focus: string | null = null, turn: string | null = state.sources?.turn ?? null): void {
   const sources = state.sources;
   const shown = turnOf(turn);
-  const all = shown?.answer.sources.slice(0, MAX_SOURCES) ?? [];
-  const chosen = sourceGroups(all)[group];
-  const source = chosen ? all[chosen.indexes[0]!] : undefined;
+  const chosen = shown ? turnGroups(shown.answer.sources, shownChecks(shown))[group] : undefined;
+  const source = chosen ? shown!.answer.sources[chosen.indexes[0]!] : undefined;
   if (!sources || !shown || !source) return;
   set({ sources: { ...sources, turn: shown.id, open: group, focus, named: null, evidence: null } });
   readPane(sources.gen, source);

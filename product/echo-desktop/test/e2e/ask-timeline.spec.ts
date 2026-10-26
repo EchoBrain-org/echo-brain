@@ -94,7 +94,10 @@ test('a line tagged Changed opens with what changed lit and what you can no long
   const opened = page.getByTestId('opened-turn');
   await expect(opened.getByTestId('statement-text')).toHaveText(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
   await expect(opened.locator('[data-mark="changed"]')).toHaveText(/The DVT plan moved the retest to Oct 30\./u);
+  // What you can no longer read is gone from its sources too, and the rest keep the numbers its sentences show.
   await expect(opened).not.toContainText('Confirm the trace');
+  await expect(opened.getByTestId('sources-toggle')).toHaveText(/^2 sources\s*THERM-482 · DVT plan$/u);
+  await expect(opened.getByTestId('citation')).toHaveText(['1', '2']);
   await expect(opened.getByTestId('again-note')).toHaveText(/^Highlighted parts changed since \d{1,2}:\d{2}\s?(AM|PM)$/u);
   const checks = run.calls().filter(call => call.path === '/v1/person/ask/check');
   expect(checks.length).toBeGreaterThan(0);
