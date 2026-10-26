@@ -15,9 +15,10 @@ import type { PersonAnswerCitationV8 } from './person-answer-v8.js';
  *   resolved, starting research from the earlier citations it is about; or,
  *   when more than one thing could fit, it asks which one (outcome `clarify`,
  *   with `choices`); or the question stands alone and is answered as asked.
- * - `ask_again`: the same question again. The answer also says what is
- *   different `since` the earlier answer, each sentence citing current
- *   evidence.
+ * - `ask_again`: the same question again: the request's `question` must be
+ *   the earlier `question` itself, or the request is refused
+ *   (`invalid_request`). The answer also says what is different `since` the
+ *   earlier answer, each sentence citing current evidence.
  *
  * Only an answer to a request that carried `previous` names its `question`,
  * and only such an answer may carry `since` or `choices`: a client that never

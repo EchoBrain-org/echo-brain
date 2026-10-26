@@ -124,13 +124,15 @@ describe('person ask --previous (ADR-0047)', () => {
     expect(bodyOf(streamed.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
     const plain = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer, 200, V7_HEADERS));
     const once = cli(plain);
-    expect(await once.run(['ask', `--question=${QUESTION}`, '--mine', `--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })}`])).toBe(1);
+    expect(await once.run(['ask', `--question=${PREVIOUS.question}`, '--mine', `--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })}`])).toBe(1);
     // A Mine Ask is answered in its own scope; this answer's global scope is refused, but the request carried the turn and the scope.
-    expect(bodyOf(plain.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, mine: true, previous: { ...PREVIOUS, purpose: 'ask_again' } });
+    expect(bodyOf(plain.mock.calls[0]![1])).toEqual({ schema_version: 3, question: PREVIOUS.question, mine: true, previous: { ...PREVIOUS, purpose: 'ask_again' } });
   });
 
   it('refuses a turn it cannot send before anything is sent, as invalid_request, so a caller can ask without it', async () => {
-    for (const previous of ['{not json', JSON.stringify({ ...PREVIOUS, purpose: 'guess' }), JSON.stringify({ ...PREVIOUS, statements: [{ text: 'x'.repeat(401), citation_indexes: [] }] })]) {
+    // An Ask again asks the earlier question itself: one of another question is refused too.
+    for (const previous of ['{not json', JSON.stringify({ ...PREVIOUS, purpose: 'guess' }), JSON.stringify({ ...PREVIOUS, statements: [{ text: 'x'.repeat(401), citation_indexes: [] }] }),
+      JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })]) {
       const fetch = vi.fn<typeof globalThis.fetch>();
       const run = cli(fetch);
       expect(await run.run(['ask', `--question=${QUESTION}`, '--progress', `--previous=${previous}`])).toBe(2);

@@ -45,9 +45,9 @@ sidebar.
   under each question, and no divider between turns.
 - Answers render as today (ADR-0045 layout, citations, collapsed sources),
   without the coverage note, without the assumption and off-scope banners
-  (nothing produces them) and without "Try again" on a successful answer. A
-  failed Ask keeps its Try again. "Nothing in <project> matched" with "Ask
-  across everything you can see" stays.
+  (no current path produces them) and without "Try again" on a successful
+  answer. A failed Ask keeps its Try again. "Nothing in <project> matched"
+  with "Ask across everything you can see" stays.
 
 ### Opening an old answer, and Ask again
 
@@ -254,11 +254,14 @@ interface PersonAnswerPreviousV1 {
     writer is told. Anything else still fails the Ask: a cancel, the
     deadline, `stale_access_state`, and any other error.
   - `clarify`: 2 to 4 choices, each a label (at most 60 characters) and a
-    full question (at most 300). No research runs.
+    full question (at most 240 characters, the Ask question rule). No
+    research runs.
 
   A resolver that fails after one repair counts as `same`. It must never pick
   one of several plausible referents.
-- **`ask_again`:** research runs on the question as usual. The writer also
+- **`ask_again`:** the request's question must equal `previous.question`;
+  a request whose question differs is refused with `invalid_request`.
+  Research runs on the question as usual. The writer also
   receives the earlier statements with their date and returns `since`: 0 to 6
   sentences, each citing current evidence, saying what is different now. A
   `since` sentence without a valid current citation is dropped. No new
@@ -280,7 +283,9 @@ interface PersonAnswerPreviousV1 {
 
 ### C4. Removed from the contract
 
-Nothing ever produced them:
+No current path produces them. Only the A1 pipeline did, from `298ebfd`
+(2026-09-27) to `e0b6980` (2026-09-28), and nothing re-reads stored audit
+outcomes:
 
 - `assumption` on Ask responses (V4 to V8 validators, the kernel's
   pass-through, the person client's validator, the desktop).
@@ -393,8 +398,10 @@ is private, outside the repository.
   tags, no dots) and `invalid_request` for `previous` (the desktop retries
   without it).
 - The desktop always sends the existing headers; nothing new is header-gated.
-- Removing `assumption` and `off_scope` changes no response anyone receives:
-  nothing produced them.
+- Removing `assumption` and `off_scope` changes no response anyone receives
+  now: no current path produces them (only the A1 pipeline did, from
+  `298ebfd` on 2026-09-27 to `e0b6980` on 2026-09-28), and nothing re-reads
+  stored audit outcomes.
 
 ## Known limits
 
