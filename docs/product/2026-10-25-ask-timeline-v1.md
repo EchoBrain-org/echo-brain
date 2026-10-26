@@ -371,6 +371,16 @@ If rule 1 or 2 fails, follow-ups ship switched off: the desktop sends
 `previous` only for Ask again, and the result goes to the founder. Rules 3 and
 4 failing is reported and judged by the founder.
 
+**Result, 2026-10-26T00:44Z** (source `cffe227`, cases
+`sha256:0ee0b552…47be94`, the product route `anthropic/claude-sonnet-5.5`
+through OpenRouter): all four rules passed, and follow-ups ship. 90 of 90
+trials passed. Several-referent cases asked "Which one?" in 30 of 30 trials,
+one-referent cases resolved in 30 of 30, unrelated and standalone questions
+were left alone in 30 of 30, and no trial outside the several-referent group
+asked back. There were no fallbacks and no repairs. The resolver's time was
+1.1 s at the median and 2.6 s at p95, using 142,504 tokens in all. The report
+is private, outside the repository.
+
 ## Release and compatibility
 
 - Server first. The Authority with C1 to C4 must be live before a desktop that
