@@ -27,8 +27,8 @@ import * as freshness from './freshness.js';
 import { meetingMessage, message } from './messages.js';
 import { ACTIVE_STATES, CLOSED_STATES, firstName, reopenSends, sentWords } from './needs.js';
 
-/** Mine: only what you added, to see and to ask about. Follow-ups: everything you sent, own or last handed on. */
-type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' } | { page: 'tools' } | { page: 'decision' }
+/** Only me: everything only you can read, filed in a project or not (ADR-0049). Follow-ups: everything you sent, own or last handed on. */
+type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'only-me' } | { page: 'tools' } | { page: 'decision' }
   | { page: 'follow-ups' };
 
 /** A question, in the scope it was asked in. */
@@ -60,13 +60,14 @@ export interface AskClarify extends AskQuestion {
   previous: AskPrevious | null;
 }
 
-/** What an answer looked through, above it: only when the Authority streamed it and the Ask took long enough to show it. */
+/**
+ * What an answer looked through, on the line under it (ADR-0049): only when the Authority streamed it and the Ask took long
+ * enough to show it.
+ */
 export interface AskTook {
   receipt: AskReceipt;
-  /** How long the person waited for it, by the page's clock, as its timer counted: the receipt's time. */
+  /** How long the person waited for it, by the page's clock, as its timer counted. */
   took: number;
-  /** The Ask it came from, as its live line was keyed: a line opened while it worked stays open as its receipt. */
-  seq: number;
 }
 
 /**
@@ -163,26 +164,28 @@ export interface SourcesState {
   evidence: { seq: number; group: number | null; reads: Readonly<Record<number, Read<SourceEvidence>>> } | null;
 }
 
-/** Who can read a capture: only you, the members of the projects ticked under Projects, or everyone in the organization. */
-export type Readers = 'only-me' | 'projects' | 'team';
+/** Where a capture goes (ADR-0049): the projects ticked, no project (only you can read it), or the whole organization. */
+export type Place = 'projects' | 'none' | 'team';
 
-/** Capture: one page, a note or one file, and who can read it. */
+/** Capture: one page, a note or one file, where it goes, and whether only you can read it. */
 export interface ComposeState {
   seq: number;
   text: string;
   file: FileHandle | null;
-  /** The project Capture was opened for: the page's, or the row a file was dropped on. */
+  /** The project Capture was opened for: the page's, or the row a file was dropped on. It leads the place list. */
   context: ProjectSummary | null;
-  /**
-   * The projects ticked under Projects, in the order they were ticked. The
-   * capture is filed in them whoever can read it, or in the context when
-   * none is ticked.
-   */
+  /** The projects ticked in the place list, in the order they were ticked: a project choice is filed in them. */
   projects: ProjectSummary[];
   /** 'projects' with none ticked has nothing to save until one is. */
-  readers: Readers;
-  /** The Projects list is open: the choice it goes back to if it closes with none ticked. */
-  picking: { readers: Readers; projects: ProjectSummary[] } | null;
+  place: Place;
+  /**
+   * The Only me lock on a project choice: only you can read it, filed in the
+   * projects ticked. No project is always only you, and Organization takes no
+   * lock, whatever this says.
+   */
+  onlyMe: boolean;
+  /** The place list is open: the place it goes back to if it closes with no project ticked. */
+  picking: { place: Place; projects: ProjectSummary[] } | null;
   /** unknown: the save may or may not have arrived; the text is locked. */
   status: 'editing' | 'sending' | 'error' | 'unknown' | 'checking';
   /** The exact request a retry resends. */
@@ -368,8 +371,8 @@ export interface CitedItem {
   readonly index: number;
 }
 
-/** Where an item was opened: a project's page (a row or a match in it), Mine, or a saved note found in all context. */
-export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'mine' } | { kind: 'search' };
+/** Where an item was opened: a project's page (a row or a match in it), Only me, or a saved note found in all context. */
+export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'only-me' } | { kind: 'search' };
 
 /**
  * An item open in the reader, by its ref: a note's text, a document's text a
@@ -394,7 +397,7 @@ export interface ReaderState {
   save?: { status: 'saving' | 'saved' | 'failed'; failure?: Failure };
 }
 
-/** A page's list: what you added, or a project's notes, documents and meetings, newest first, a page at a time. */
+/** A page's list: what only you can read, or a project's notes, documents and meetings, newest first, a page at a time. */
 export interface ListState {
   scope: ListScope;
   /** This visit to the page: where its list was scrolled is kept while it lasts. */
@@ -532,8 +535,8 @@ export interface State {
   change: ChangeState | null;
   projectSettings: ProjectSettingsState | null;
   /**
-   * What the bar asks about, and searches: a project or Mine (the chip), or
-   * all context. The page never moves with it.
+   * What the bar asks about, and searches: a project (the chip), or all
+   * context; never Mine (ADR-0049). The page never moves with it.
    */
   barScope: AskScope;
   /** The bar's text. Only asking, Escape, or a real change of access empties it. */
@@ -714,7 +717,7 @@ function applyStatus(status: AppStatus): void {
   const next = status.account;
   set({ status, booting: false, startFailed: false });
   weeklySignIn(next);
-  // Signed out: the sign-in page covers everything until someone signs in. Mine, and what was read in it, goes.
+  // Signed out: the sign-in page covers everything until someone signs in. Only me, and what was read in it, goes.
   if (!next) {
     // A sign-out the host lost mid-way did happen: the account goes as it would have. Any other sign-out still drops what
     // a screen keeps beside its sheet, as the sheet goes, even one the cover has away.
@@ -727,7 +730,7 @@ function applyStatus(status: AppStatus): void {
     // New project with work on its way stays, out of sight behind the sign-in page: its outcome is still owed, and the
     // same person signing back in finds it as it is. Another account's sign-in forgets it.
     set({ sheet: state.sheet?.kind === 'new-project' ? state.sheet : null });
-    if (state.route.page === 'mine') {
+    if (state.route.page === 'only-me') {
       readSeq += 1;
       set({ route: { page: 'home' }, list: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' } });
     }
@@ -1617,15 +1620,16 @@ export function newOnVisit(current: State, projectId: string, addedAt: string): 
 }
 
 /**
- * Mine, from the sidebar or a toast: only what you added, newest first. The
- * bar asks about it (its chip is Mine); nothing is captured or dropped here.
+ * Only me, from Home's footer or a toast (ADR-0049): everything only you can
+ * read, filed in a project or not, newest first. Its bar is Home's, all
+ * context, and a capture from it starts in no project.
  */
-export async function openMine(): Promise<void> {
+export async function openOnlyMe(): Promise<void> {
   if (!expect()) return;
   readSeq += 1;
   set({
-    route: { page: 'mine' }, reader: null, ask: null, sources: null, toast: null, organization: null, roster: null, barScope: { kind: 'mine' },
-    list: { scope: { kind: 'mine' }, opened: ++seq, items: [], next: null, loading: true },
+    route: { page: 'only-me' }, reader: null, ask: null, sources: null, toast: null, organization: null, roster: null, barScope: { kind: 'global' },
+    list: { scope: { kind: 'only-me' }, opened: ++seq, items: [], next: null, loading: true },
   });
   syncSearch();
   freshness.navigated();
@@ -1699,7 +1703,7 @@ function refreshList(scope: ListScope): void {
 }
 
 function sameList(a: ListScope, b: ListScope): boolean {
-  return a.kind === b.kind && (a.kind === 'mine' || (b.kind === 'project' && a.project_id === b.project_id));
+  return a.kind === b.kind && (a.kind === 'only-me' || (b.kind === 'project' && a.project_id === b.project_id));
 }
 
 /** A project's members, the first page or the next one (More, in People). */
@@ -1729,7 +1733,7 @@ export function moreMembers(): void {
 /** A row of the page's list, read in place: the list stays, and Back returns to it. */
 export function openListItem(item: ListItem): Promise<void> {
   const route = state.route;
-  if (route.page === 'mine') return openReader(item.ref, { kind: 'mine' });
+  if (route.page === 'only-me') return openReader(item.ref, { kind: 'only-me' });
   if (route.page !== 'project') return Promise.resolve();
   return openReader(item.ref, { kind: 'project', project_id: route.project.project_id });
 }
@@ -2554,14 +2558,14 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
     const fresh = { ...project, name: detail.name! };
     replaceProject(fresh);
     set({ toast: `Renamed to ${fresh.name}` });
-    // Mine's rows name the projects they are filed in: every row shown takes the new name, then the first page is read again.
-    // Rows hold names only, so when another of your projects had the old name, Mine is read again from its first page.
+    // Only me's rows name the projects they are filed in: every row shown takes the new name, then the first page is read again.
+    // Rows hold names only, so when another of your projects had the old name, Only me is read again from its first page.
     const list = state.list;
-    if (state.route.page === 'mine' && list?.scope.kind === 'mine') {
+    if (state.route.page === 'only-me' && list?.scope.kind === 'only-me') {
       const shared = [...state.projects.items, ...state.archivedProjects.items].some(item => item.project_id !== project.project_id && item.name === project.name);
       if (shared) { void loadList('first'); return; }
       set({ list: { ...list, items: renamedProject(list.items, project.name, fresh.name) } });
-      refreshList({ kind: 'mine' });
+      refreshList({ kind: 'only-me' });
     }
     return;
   }
@@ -2589,11 +2593,14 @@ function forgetLeftProject(projectId: string): void {
   const compose = state.compose;
   let nextCompose = compose;
   // A capture on its way, or kept to resend, was sent as it was: only the Authority's answer changes it.
+  // A project choice left with none ticked goes to no project: only you can read it.
   if (compose && !locked(compose) && !compose.kept) {
-    const picked = compose.projects.filter(project => project.project_id !== projectId);
-    const previous = compose.picking ? { ...compose.picking, projects: compose.picking.projects.filter(project => project.project_id !== projectId) } : null;
-    nextCompose = { ...compose, context: compose.context?.project_id === projectId ? null : compose.context, projects: picked, picking: previous,
-      ...(compose.readers === 'projects' && picked.length === 0 ? { readers: 'only-me' as const } : {}) };
+    const left = (place: Place, projects: ProjectSummary[]) => {
+      const picked = projects.filter(project => project.project_id !== projectId);
+      return { place: place === 'projects' && picked.length === 0 ? 'none' as const : place, projects: picked };
+    };
+    nextCompose = { ...compose, context: compose.context?.project_id === projectId ? null : compose.context, ...left(compose.place, compose.projects),
+      picking: compose.picking ? left(compose.picking.place, compose.picking.projects) : null };
   }
   readSeq += 1;
   emptyBar();
@@ -3498,6 +3505,8 @@ export function toggleEmployeeMenu(email: string): void {
 export function widenScope(): void {
   set({ barScope: { kind: 'global' } });
   syncSearch();
+  // Ask open moves to Home's thread: what changed of its newest turns is checked as opening Ask there would.
+  if (state.ask) void checkTimeline();
 }
 
 /** What a scope is called: all context, Mine, or the project by its name, as the sidebar has it. */
@@ -3517,8 +3526,11 @@ let timelineSeq = 0;
 let checkSeq = 0;
 /** The checks on their way, by each turn they speak for: a follow-up or Ask again of one waits for its reply. */
 const checking = new Map<string, Promise<void>>();
-/** When the newest turns were last checked, as the check went (this computer's clock): Ask opening checks them again five minutes on. */
-let newestCheckedAt = Number.NEGATIVE_INFINITY;
+/**
+ * When each place's newest turns were last checked, as the check went (this computer's clock), by its thread (`threadKey`):
+ * Ask opening in that place checks them again five minutes on (ADR-0049).
+ */
+const newestCheckedAt = new Map<string, number>();
 /** Clears what checks said once the first of them is no longer good. */
 let checksExpire: ReturnType<typeof setTimeout> | null = null;
 
@@ -3606,7 +3618,7 @@ function forgetTimeline(): void {
 function forgetChecks(): void {
   checkSeq += 1;
   checking.clear();
-  newestCheckedAt = Number.NEGATIVE_INFINITY;
+  newestCheckedAt.clear();
   if (checksExpire) { clearTimeout(checksExpire); checksExpire = null; }
 }
 
@@ -3638,16 +3650,24 @@ function keepTurn(turn: TimelineTurn): void {
   void rpc('timeline.put', { expect: account, turn });
 }
 
+/** A place's thread, as its checks are kept: Home's, or a project's by its id. */
+function threadKey(scope: AskScope): string {
+  return scope.kind === 'project' ? `project:${scope.project_id}` : 'home';
+}
+
 /**
- * Ask opened: what changed of what the newest ten turns cited, in one check
- * (C5), unless the last one went under five minutes ago; and of the turn a
- * suggestion opened it at (`opened`), first in that check or in one of its
- * own, unless what its sources are now is known or on its way.
+ * Ask opened: what changed of what the newest ten turns its place's thread
+ * shows cited, in one check (C5), unless that place's last one went under
+ * five minutes ago (ADR-0049); and of the turn a suggestion opened it at
+ * (`opened`), first in that check or in one of its own, unless what its
+ * sources are now is known or on its way.
  */
 function checkTimeline(opened?: TimelineTurn): Promise<void> {
-  const newest = Date.now() - newestCheckedAt < CHECK_FRESH_MS ? [] : threadOf(state.timeline.turns, state.barScope).slice(-CHECK_TURNS).reverse();
+  const key = threadKey(state.barScope);
+  const fresh = Date.now() - (newestCheckedAt.get(key) ?? Number.NEGATIVE_INFINITY) < CHECK_FRESH_MS;
+  const newest = fresh ? [] : askThread().slice(-CHECK_TURNS).reverse();
   const first = opened !== undefined && (newest.includes(opened) || (freshChecksOf(opened) === undefined && !checking.has(opened.id))) ? [opened] : [];
-  return checkTurns([...first, ...newest.filter(turn => turn !== opened)], newest.length > 0);
+  return checkTurns([...first, ...newest.filter(turn => turn !== opened)], newest.length > 0 ? key : null);
 }
 
 /**
@@ -3666,10 +3686,11 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * later one did; a turn citing nothing a check asks about is spoken for
  * without asking. It fails quietly, with no tags: what an earlier check said
  * that is no longer good goes with it. A ticket it reads for the first time
- * keeps the marker it read as its baseline. `newest`: Ask opening's check of
- * the newest turns, made again five minutes after it went.
+ * keeps the marker it read as its baseline. `newest`: the place (`threadKey`)
+ * whose newest turns Ask opening checked, made again there five minutes after
+ * it went.
  */
-function checkTurns(turns: readonly TimelineTurn[], newest = false): Promise<void> {
+function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null): Promise<void> {
   const account = expect();
   if (!account || turns.length === 0) return Promise.resolve();
   const plan = checkPlan(turns);
@@ -3684,7 +3705,7 @@ function checkTurns(turns: readonly TimelineTurn[], newest = false): Promise<voi
       return;
     }
     const found = checkedOf(plan, result?.value.items ?? []);
-    if (newest) newestCheckedAt = at;
+    if (newest !== null) newestCheckedAt.set(newest, at);
     const before = state.timeline.checks;
     const latest = Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
     keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
@@ -3829,7 +3850,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   keepTurn(turn);
   // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
   const took = Date.now() - started;
-  const shown = receipt !== undefined && took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took, seq: mine } } : current.took;
+  const shown = receipt !== undefined && took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
   set({ ask: { ...current, asking: null, asked: [...current.asked, turn.id], took: shown } });
   startSources(answerNames(answer), turn.id);
   void baseline(turn);
@@ -3882,7 +3903,8 @@ export function askEverywhere(id: string): void {
 export function askAgain(id: string): void {
   const turn = turnOf(id);
   if (!turn || state.ask?.asking) return;
-  void ask(askText(turn.question), turn.scope, { againOf: turn.id });
+  // A turn asked in Mine before it went is asked again at Home, on whose thread it stays (ADR-0049).
+  void ask(askText(turn.question), turn.scope.kind === 'mine' ? { kind: 'global' } : turn.scope, { againOf: turn.id });
 }
 
 /** A choice of "Which one?": its full question, asked with the same earlier turn. */
@@ -4115,7 +4137,7 @@ export function openFullPage(): void {
   const cited = read !== undefined && !read.loading && 'value' in read ? citedItems(read.value, litAtoms(state, target)) : [];
   closeAsk();
   if (page.kind === 'reader') {
-    void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : scope?.kind === 'mine' ? { kind: 'mine' } : { kind: 'search' },
+    void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' },
       undefined, { cited });
   }
 }
@@ -4376,8 +4398,6 @@ function syncSearch(fresh = false, typed = false): void {
   const sameList = current !== null && sameScope(current.scope, wanted.scope);
   if (!fresh && sameList && current.query === wanted.query && !current.failure) return;
   if (typed && state.reader) closeReader();
-  // Mine is not searched: the bar only asks it.
-  if (wanted.scope.kind === 'mine') { set({ matches: { seq: ++seq, query: wanted.query, scope: wanted.scope, loading: false, items: [] } }); return; }
   void runSearch(wanted.query, wanted.scope, sameList ? current.items : []);
 }
 
@@ -4433,22 +4453,21 @@ export function matchesShown(current: State = state): boolean {
 }
 
 /**
- * Another app is in front and the page is covered: a project, Mine, People &
- * invites, Tools, Home, a decision, follow-ups and an item's page, an answer
+ * Another app is in front and the page is covered: a project, Only me, People
+ * & invites, Tools, Home, a decision, follow-ups and an item's page, an answer
  * or an original. The bar's text is covered with it.
  */
 export function pageCovered(current: State = state): boolean {
   const { route } = current;
   return current.concealed && (current.ask !== null || route.page === 'home' || route.page === 'decision' || route.page === 'follow-ups' || route.page === 'project' ||
-    route.page === 'mine' || current.reader !== null || followUpsShown(current) !== null ||
+    route.page === 'only-me' || current.reader !== null || followUpsShown(current) !== null ||
     (route.page === 'organization' && current.organization !== null) || (route.page === 'tools' && current.tools !== null));
 }
 
-/** What the chip names while its page is on screen: the project, or Mine. */
+/** What the chip names while its page is on screen: the project. */
 export function chipName(current: State = state): string | null {
   const { route, barScope } = current;
   if (current.concealed) return null;
-  if (route.page === 'mine' && barScope.kind === 'mine') return 'Mine';
   return route.page === 'project' && barScope.kind === 'project' && barScope.project_id === route.project.project_id ? route.project.name : null;
 }
 
@@ -4456,7 +4475,7 @@ export function chipName(current: State = state): string | null {
 
 /**
  * The approved meetings ECHO shows for the bar's scope, newest first: Home's
- * decisions for all context; the page's own list, for a project or Mine.
+ * decisions for all context; the page's own list, for a project.
  */
 function shownMeetings(current: State): string[] {
   const scope = current.barScope;
@@ -4546,10 +4565,10 @@ function setCompose(compose: ComposeState | null): void {
   unresolvedChanged();
 }
 
-/** A new capture: filed in this project and readable by its members, or only yours. */
+/** A new capture: filed in this project and readable by its members, or in no project, only yours. */
 function fresh(project: ProjectSummary | null): ComposeState {
   return {
-    seq: ++seq, text: '', file: null, context: project, projects: project ? [project] : [], readers: project ? 'projects' : 'only-me',
+    seq: ++seq, text: '', file: null, context: project, projects: project ? [project] : [], place: project ? 'projects' : 'none', onlyMe: false,
     picking: null, status: 'editing', requestId: crypto.randomUUID(), kept: false, hidden: false, confirmNew: false,
   };
 }
@@ -4581,7 +4600,7 @@ export function openCompose(): void {
 
 /**
  * ⌘⇧E, from any app: the draft comes back as it was, or a new capture starts
- * as Only me. Whatever page was left open never picks who can read it.
+ * in no project. Whatever page was left open never picks who can read it.
  */
 export function openCapture(): void {
   const current = state.compose;
@@ -4606,7 +4625,7 @@ function editCompose(patch: Partial<ComposeState>): void {
   const compose = state.compose;
   if (!compose || locked(compose)) return;
   // Any change to what would be saved, for whom, or where it is filed, makes it a new request.
-  const changesContent = 'text' in patch || 'file' in patch || 'projects' in patch || 'readers' in patch;
+  const changesContent = 'text' in patch || 'file' in patch || 'projects' in patch || 'place' in patch || 'onlyMe' in patch;
   if (changesContent) release(compose);
   setCompose({ ...compose, notice: undefined, ...patch,
     ...(changesContent ? { requestId: crypto.randomUUID(), kept: false, status: 'editing' as const, failure: undefined } : {}) });
@@ -4615,47 +4634,48 @@ function editCompose(patch: Partial<ComposeState>): void {
 export function setComposeText(text: string): void { editCompose({ text }); }
 
 /**
- * A choice in Who can read. Only me and Organization keep the projects
- * ticked: the capture stays filed in them. Chosen with the list open, they
- * close it as it stands, so projects just unticked stay unticked. Projects
- * with none ticked has nothing to save until one is.
- */
-export function chooseReaders(readers: Readers): void {
-  const compose = state.compose;
-  if (!compose || locked(compose)) return;
-  if (compose.picking && readers !== 'projects') { editCompose({ picking: null, readers }); return; }
-  closeProjects();
-  if (readers !== state.compose!.readers) editCompose({ readers });
-}
-
-/**
- * Projects: choosing it opens the list of projects to tick, and choosing it
- * again closes the list.
+ * The place button: it opens the place list (your projects to tick, then No
+ * project and Organization), and closes it again. Opening it changes nothing.
  */
 export function openProjects(): void {
   const compose = state.compose;
   if (!compose || locked(compose)) return;
   if (compose.picking) { closeProjects(); return; }
-  const picking = { readers: compose.readers, projects: compose.projects };
-  if (compose.readers === 'projects') setCompose({ ...compose, picking });
-  else editCompose({ readers: 'projects', picking });
+  setCompose({ ...compose, picking: { place: compose.place, projects: compose.projects } });
 }
 
-/** Ticks a project in the list, or unticks it. No more than the API takes. */
+/** Ticks a project in the place list, or unticks it: either way the place is a project choice. No more than the API takes. */
 export function tickProject(project: ProjectSummary): void {
   const compose = state.compose;
   if (!compose?.picking || project.status !== 'active') return;
   const ticked = compose.projects.some(entry => entry.project_id === project.project_id);
   if (!ticked && compose.projects.length >= MAX_CAPTURE_PROJECTS) return;
-  editCompose({ projects: ticked ? compose.projects.filter(entry => entry.project_id !== project.project_id) : [...compose.projects, project] });
+  editCompose({ place: 'projects', projects: ticked ? compose.projects.filter(entry => entry.project_id !== project.project_id) : [...compose.projects, project] });
 }
 
-/** Done, a click outside or Escape: closed with none ticked, the choice goes back to what it was before. */
+/**
+ * No project or Organization, from the place list: chosen, they close it,
+ * and no project stays ticked. Neither is filed in a project.
+ */
+export function choosePlace(place: 'none' | 'team'): void {
+  const compose = state.compose;
+  if (!compose || locked(compose)) return;
+  if (compose.place === place && compose.projects.length === 0) setCompose({ ...compose, picking: null });
+  else editCompose({ place, projects: [], picking: null });
+}
+
+/** Done, a click outside or Escape: closed with no project ticked, the place goes back to what it was before. */
 export function closeProjects(): void {
   const compose = state.compose;
   if (!compose?.picking) return;
-  if (compose.projects.length > 0) setCompose({ ...compose, picking: null });
-  else editCompose({ picking: null, readers: compose.picking.readers, projects: compose.picking.projects });
+  if (!choosingProjects(compose)) setCompose({ ...compose, picking: null });
+  else editCompose({ picking: null, place: compose.picking.place, projects: compose.picking.projects });
+}
+
+/** The Only me lock, on a project choice: on, only you can read it, and it stays filed in the projects ticked. */
+export function toggleOnlyMe(): void {
+  const compose = state.compose;
+  if (compose?.place === 'projects') editCompose({ onlyMe: !compose.onlyMe });
 }
 
 /** A few project names, the short way: "tdk", "tdk and lin", "tdk, lin and 1 more". */
@@ -4676,9 +4696,14 @@ export async function attachFile(): Promise<void> {
   else if (!result.ok && state.compose && !locked(state.compose)) setCompose({ ...state.compose, notice: message(result.failure) });
 }
 
-/** Projects with none ticked: nothing to save yet. */
+/** A project choice with none ticked: nothing to save yet. */
 export function choosingProjects(compose: ComposeState): boolean {
-  return compose.readers === 'projects' && compose.projects.length === 0;
+  return compose.place === 'projects' && compose.projects.length === 0;
+}
+
+/** Only you can read it: no project, or a project choice under the Only me lock. */
+export function onlyYou(compose: ComposeState): boolean {
+  return compose.place === 'none' || (compose.place === 'projects' && compose.onlyMe);
 }
 
 /** A project moved to Archived after a draft started cannot be silently replaced with a different audience. */
@@ -4686,25 +4711,27 @@ function archivedComposeTarget(compose: ComposeState): ProjectSummary | null {
   // Home can hold only its first active page. Absence from that page says
   // nothing about a target chosen from a later page, so only a known archived
   // record (or the target's own current status) closes the admission path.
+  // No project and Organization are filed in none, so only a project choice has one.
   const archived = new Set(state.archivedProjects.items.map(project => project.project_id));
   const unavailable = (project: ProjectSummary) => project.status === 'archived' || archived.has(project.project_id);
-  const target = compose.projects.find(unavailable) ??
-    (compose.projects.length === 0 && compose.context && unavailable(compose.context) ? compose.context : null);
-  return target ?? null;
+  return compose.place === 'projects' ? compose.projects.find(unavailable) ?? null : null;
 }
 
-/** One project's members, or several projects' (sorted, so a resend is the identical request). */
+/**
+ * Who can read it (ADR-0049): one project's members, or several projects'
+ * (sorted, so a resend is the identical request); only you, for no project
+ * or a locked project choice; or everyone, for Organization.
+ */
 function audienceOf(compose: ComposeState): Audience {
-  if (compose.readers === 'team') return { kind: 'team' };
-  if (compose.readers !== 'projects' || compose.projects.length === 0) return { kind: 'only-me' };
+  if (compose.place === 'team') return { kind: 'team' };
+  if (onlyYou(compose) || compose.projects.length === 0) return { kind: 'only-me' };
   const ids = compose.projects.map(project => project.project_id).sort();
   return ids.length === 1 ? { kind: 'project', project_id: ids[0]! } : { kind: 'projects', project_ids: ids };
 }
 
-/** Where it is filed: the projects ticked, or else the project Capture was opened for. */
+/** Where it is filed: the projects ticked, locked or not. No project and Organization are filed in none. */
 function filedIn(compose: ComposeState): string[] {
-  const projects = compose.projects.length > 0 ? compose.projects : compose.context ? [compose.context] : [];
-  return projects.map(project => project.project_id).sort();
+  return compose.place === 'projects' ? compose.projects.map(project => project.project_id).sort() : [];
 }
 
 /** A document's extraction state, in the app's own words. */
@@ -4715,32 +4742,35 @@ export const EXTRACTION: Record<Extraction, string> = {
   unavailable: 'Text unavailable',
 };
 
-/** Where an Only me save, or one for the whole organization, went: Mine, which its toast opens. */
+/** Where a save in no project went: Only me, which its toast opens. */
 const SAVED_FOR_YOU = 'Saved for you';
-const SHARED = 'Shared with your organization';
 
-/** Where a confirmed save went, and for a file how its text is coming along. */
+/**
+ * Where a confirmed save went: "Saved to THERM", "Saved to THERM · only you",
+ * "Saved for you" or "Shared with your organization"; and for a file how its
+ * text is coming along.
+ */
 function savedLabel(compose: ComposeState, extraction: Extraction | undefined): string {
-  const where = compose.readers === 'team' ? SHARED
-    : compose.readers === 'projects' && compose.projects.length > 0 ? `Saved to ${projectNames(compose.projects)}` : SAVED_FOR_YOU;
+  const where = compose.place === 'team' ? 'Shared with your organization'
+    : compose.place === 'projects' && compose.projects.length > 0 ? `Saved to ${projectNames(compose.projects)}${compose.onlyMe ? ' · only you' : ''}` : SAVED_FOR_YOU;
   return compose.file && extraction ? `${where} · ${EXTRACTION[extraction]}` : where;
 }
 
-/** A save no project page shows says where it went, and a click opens Mine on it. */
-export function toastOpensMine(toast: string): boolean {
-  return [SAVED_FOR_YOU, SHARED].some(where => toast === where || toast.startsWith(`${where} · `));
+/** A save in no project, which no project page shows, says it was saved for you, and a click opens Only me on it. */
+export function toastOpensOnlyMe(toast: string): boolean {
+  return toast === SAVED_FOR_YOU || toast.startsWith(`${SAVED_FOR_YOU} · `);
 }
 
 /**
  * The Authority confirmed it: the sheet closes itself, and the toast says
- * where it went. The list on screen that holds it is read again: Mine holds
- * every save, a project page what is filed in it.
+ * where it went. The list on screen that holds it is read again: Only me
+ * holds every save only you can read, a project page what is filed in it.
  */
 function saved(compose: ComposeState, extraction: Extraction | undefined): void {
   setCompose(null);
   set({ toast: savedLabel(compose, extraction) });
   const route = state.route;
-  if (route.page === 'mine') refreshList({ kind: 'mine' });
+  if (route.page === 'only-me' && audienceOf(compose).kind === 'only-me') refreshList({ kind: 'only-me' });
   if (route.page === 'project' && filedIn(compose).includes(route.project.project_id)) refreshList({ kind: 'project', project_id: route.project.project_id });
 }
 
@@ -4763,7 +4793,7 @@ export async function sendCompose(): Promise<void> {
     setCompose({ ...compose, notice: TOO_LONG });
     return;
   }
-  // ⌘↩ from the Projects list saves: the list closes with what is ticked.
+  // ⌘↩ from the place list saves: the list closes with what is ticked.
   setCompose({ ...compose, status: 'sending', picking: null, failure: undefined, confirmNew: false, notice: undefined });
   const audience = audienceOf(compose);
   const project_ids = filedIn(compose);
@@ -4802,14 +4832,14 @@ export async function checkCompose(): Promise<void> {
 
 /**
  * Start over while a save is unconfirmed asks once, then clears the note or
- * file. Who can read it stays as it was chosen.
+ * file. Where it goes, and its lock, stay as they were chosen.
  */
 export function newCompose(): void {
   const compose = state.compose;
   if (!compose || compose.status === 'sending' || compose.status === 'checking') return;
   if (compose.status === 'unknown' && !compose.confirmNew) { setCompose({ ...compose, confirmNew: true }); return; }
   release(compose);
-  setCompose({ ...fresh(compose.context), readers: compose.readers, projects: compose.projects });
+  setCompose({ ...fresh(compose.context), place: compose.place, projects: compose.projects, onlyMe: compose.onlyMe });
 }
 
 export function keepUnresolved(): void {
@@ -4826,20 +4856,15 @@ export function canDrop(event: DragEvent): boolean {
   return state.status?.signed_in === true && !sheetShown() && !projectSettingsModal() && items?.length === 1 && items[0]!.kind === 'file';
 }
 
-/** The window takes a file dropped anywhere but a project row: not on Mine, which only shows and asks, unless Capture is up over it. */
-export function windowTakesDrop(current: State = state): boolean {
-  return current.route.page !== 'mine' || Boolean(current.compose && !current.compose.hidden);
-}
-
 /**
- * A dropped file. On the open sheet it is attached, and who can read it
- * stays; on a project row it is captured into that project; anywhere else
- * into the project on screen, or Only me. A draft with words in it, or a save
+ * A dropped file. On the open sheet it is attached, and where it goes stays;
+ * on a project row it is captured into that project; anywhere else into the
+ * project on screen, or in no project. A draft with words in it, or a save
  * not yet settled, is never changed: it comes back and says the file was not
  * attached.
  */
 export async function acceptDrop(file: File, on: ProjectSummary | 'window' | 'sheet'): Promise<void> {
-  if (!expect() || sheetShown() || projectSettingsModal() || (on === 'window' && !windowTakesDrop())) return;
+  if (!expect() || sheetShown() || projectSettingsModal()) return;
   const target = on === 'window' || on === 'sheet' ? (on === 'window' ? state.route.page === 'project' ? state.route.project : null : null) : on;
   if (target?.status === 'archived') { set({ toast: 'Restore this project to add files or notes.' }); return; }
   const result = await dropFile(file);
@@ -4956,11 +4981,11 @@ const SURFACES: readonly Surface[] = [
   { areas: ['follow_ups'], shows: () => topView() !== null, busy: () => Boolean(topView()?.loading || topView()?.busy), read: () => rereadViews() },
   { areas: ['follow_ups'], shows: () => projectShown() !== null, read: () => loadLine('projectLine', 'project', projectShown()!.project_id) },
   { areas: ['follow_ups'], shows: () => impactLineShown() !== null, read: () => loadLine('impactLine', impactLineShown()!.scope, impactLineShown()!.id) },
-  // The page itself, on a return: a project's feed and members, Mine, Tools, People & invites, a sidebar whose read failed,
+  // The page itself, on a return: a project's feed and members, Only me, Tools, People & invites, a sidebar whose read failed,
   // and the bar's matches.
   { areas: [], shows: () => projectShown() !== null, read: () => Promise.all([loadList('quiet'),
     state.roster?.projectId === projectShown()?.project_id ? loadRoster(state.roster!.projectId) : null]) },
-  { areas: [], shows: () => state.route.page === 'mine', read: () => loadList('quiet') },
+  { areas: [], shows: () => state.route.page === 'only-me', read: () => loadList('quiet') },
   { areas: [], shows: () => state.route.page === 'tools', read: () => loadToolList(true) },
   { areas: [], shows: () => state.route.page === 'organization', read: () => loadEmployees() },
   { areas: [], shows: () => Boolean(state.projects.failure || state.archivedProjects.failure), read: () => refreshSidebar() },

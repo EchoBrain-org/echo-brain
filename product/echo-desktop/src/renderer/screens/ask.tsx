@@ -14,7 +14,7 @@ import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, duration, foundBefore, headline, liveRows, namedPlaces, placeLabel, PROGRESS_AFTER_MS, searchedWords, type AskProgress,
+  announceAfter, announcement, duration, foundBefore, headline, liveRows, lookedThrough, namedPlaces, placeLabel, PROGRESS_AFTER_MS, searchedWords, type AskProgress,
   type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
@@ -48,28 +48,23 @@ function MatchRow({ match, terms }: { match: Match; terms: readonly string[] }) 
   );
 }
 
-/** Live matches above the bar, within its scope, and the Ask that Return makes. Mine is only asked, never searched. */
+/** Live matches above the bar, within its scope, and the Ask that Return makes. */
 function Matches({ state, scopeName }: { state: State; scopeName: string | null }) {
   const matches = state.matches!;
   const terms = queryTerms(matches.query);
-  const searched = matches.scope.kind !== 'mine';
   return (
     <div class="matches" data-testid="matches" role="group" aria-label="Matches">
-      {searched && (
-        <>
-          <div class="matches-head" data-testid="matches-head">Matches in {scopeName ?? 'all context'}</div>
-          {matches.items.map(match => <MatchRow key={match.context_id} match={match} terms={terms} />)}
-          {matches.loading && matches.items.length === 0 && <div class="matches-note">Searching</div>}
-          {!matches.loading && !matches.failure && matches.items.length === 0 && <div class="matches-note" data-testid="matches-empty">No matches</div>}
-          {matches.failure && (
-            <div class="matches-note" data-testid="matches-error">
-              <span class="error">{message(matches.failure)}</span>
-              <button type="button" class="link-button" onClick={searchAgain}>Try again</button>
-            </div>
-          )}
-          <div class="matches-rule" />
-        </>
+      <div class="matches-head" data-testid="matches-head">Matches in {scopeName ?? 'all context'}</div>
+      {matches.items.map(match => <MatchRow key={match.context_id} match={match} terms={terms} />)}
+      {matches.loading && matches.items.length === 0 && <div class="matches-note">Searching</div>}
+      {!matches.loading && !matches.failure && matches.items.length === 0 && <div class="matches-note" data-testid="matches-empty">No matches</div>}
+      {matches.failure && (
+        <div class="matches-note" data-testid="matches-error">
+          <span class="error">{message(matches.failure)}</span>
+          <button type="button" class="link-button" onClick={searchAgain}>Try again</button>
+        </div>
       )}
+      <div class="matches-rule" />
       <button type="button" class="match-row ask-row" data-testid="match-ask" onClick={submitBar}>
         <Up />
         <span class="label">Ask {scopeName ?? 'ECHO'} about “{askText(state.barText)}”</span>
@@ -103,9 +98,8 @@ const CLOSED = { open: false, active: -1 };
 
 /**
  * The one bar on every page. ⊕ captures and Return asks, both in the bar's
- * scope; typing shows live matches in it. The chip names a project scope, or
- * Mine, which is only asked; its × widens to all context without moving the
- * page. Mine is not a place to capture: it has no ⊕.
+ * scope; typing shows live matches in it. The chip names a project scope; its
+ * × widens to all context without moving the page.
  *
  * Going to the empty bar (a click, or an arrow key) offers what to ask in its
  * scope; the caret only waiting there, as it does whenever the window comes
@@ -118,7 +112,7 @@ export function Bar({ state }: { state: State }) {
   const chip = chipName(state);
   const covered = pageCovered(state);
   const text = covered ? '' : state.barText;
-  const verb = state.ask || (chip !== null && state.barScope.kind === 'mine') ? 'Ask' : 'Search or ask';
+  const verb = state.ask ? 'Ask' : 'Search or ask';
   const name = `${verb} ${chip ?? 'ECHO'}`;
   const [suggesting, setSuggesting] = useState(CLOSED);
   const shown = suggesting.open && suggestionsShown(state) ? barSuggestions(state) : [];
@@ -149,9 +143,7 @@ export function Bar({ state }: { state: State }) {
       {matchesShown(state) && <Matches state={state} scopeName={chip} />}
       {shown.length > 0 && <Suggestions suggestions={shown} active={active} onPick={pick} />}
       <form class="bar" onSubmit={event => { event.preventDefault(); submitBar(); }}>
-        {state.route.page !== 'mine' && (
-          <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
-        )}
+        <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
         {chip && (
           <span class="chip" data-testid="scope-chip">
             <span>{chip}</span>
@@ -518,7 +510,7 @@ function SourceRows({ state, view }: { state: State; view: TurnView }) {
 function TrailRows({ state, receipt }: { state: State; receipt: AskReceipt }) {
   return (
     <div class="foot-trail">
-      <div class="foot-trail-head">Looked through {receipt.looked_through} {receipt.looked_through === 1 ? 'item' : 'items'}</div>
+      <div class="foot-trail-head">{lookedThrough(receipt)}</div>
       <ul class="ask-steps" data-testid="receipt-rows" aria-live="off">
         {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} earlier={foundBefore(receipt.rows, index)} />
           : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
@@ -547,7 +539,7 @@ function CopyAnswer({ turn }: { turn: TimelineTurn }) {
 /**
  * The one quiet line under an answer (ADR-0049): how many sources, and how
  * long it took when this Ask asked it ("3 sources · 20s"); with no sources,
- * what it looked through ("Looked through 68 · 41s"). It opens onto a row per
+ * what it looked through ("Looked through 68 items · 41s"). It opens onto a row per
  * source, then what it looked through. On the right, Ask again on a turn
  * asked before this Ask (`again`), and Copy answer (`copy`), which shows
  * while the pointer is on the turn or focus is in it.
@@ -556,7 +548,7 @@ function TurnFoot({ state, turn, view, took, again, copy }: {
   state: State; turn: TimelineTurn; view: TurnView; took: AskTook | undefined; again: boolean; copy: boolean;
 }) {
   const count = view.groups.length;
-  const what = count > 0 ? (count === 1 ? '1 source' : `${count} sources`) : took ? `Looked through ${took.receipt.looked_through}` : null;
+  const what = count > 0 ? (count === 1 ? '1 source' : `${count} sources`) : took ? lookedThrough(took.receipt) : null;
   const label = [what, took ? duration(took.took) : null].filter(Boolean).join(' · ');
   const listed = state.sources?.listed.includes(view.id) === true;
   if (label === '' && !again && !copy) return null;
@@ -614,7 +606,8 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
           )}
         </div>
       )}
-      <TurnFoot state={state} turn={turn} view={view} took={took} again={!current} copy={!omitted} />
+      {/* With every sentence left out, its sources go too: only Ask again shows. */}
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current} copy={!omitted} />
     </div>
   );
 }
@@ -658,7 +651,7 @@ function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn;
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {!omitted && turnNote(turn, checks) === 'changed' && <ChangedSince at={turn.asked_at} />}
       {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
-      <TurnFoot state={state} turn={turn} view={view} took={undefined} again copy={!omitted} />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} />
     </div>
   );
 }
@@ -726,8 +719,7 @@ export function AskView({ state }: { state: State }) {
     const view = scroller.current;
     if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
   };
-  // Which Ask's line is open: the question on its way and its answer share its seq, so a line opened while Ask works
-  // stays open as its receipt, and the next question's line starts closed.
+  // Which Ask's line is open, by the question on its way's seq: the next question's line starts closed.
   const [openFor, setOpenFor] = useState<number | null>(null);
   const lineFor = (id: number): Line => ({ open: openFor === id, toggle: () => setOpenFor(openFor === id ? null : id) });
   const { asking, failed, clarify } = thread;

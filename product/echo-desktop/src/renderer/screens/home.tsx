@@ -2,8 +2,10 @@ import { useState } from 'preact/hooks';
 import { identity, initial, when } from '../format.js';
 import { message } from '../messages.js';
 import { actionCount, homeFooter, itemLine, itemNames, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
-import { awaitingLive, homeRows, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openYourFollowUps, type NeedRow, type State } from '../store.js';
-import { EchoRings, KindMark, Plus } from './icons.js';
+import {
+  awaitingLive, homeRows, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openOnlyMe, openYourFollowUps, type NeedRow, type State,
+} from '../store.js';
+import { EchoRings, KindMark, Lock, Plus } from './icons.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
 const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', review: 'Review', failed: 'Retry', checking: 'Checking' };
@@ -157,17 +159,20 @@ export function homeGroups(rows: readonly NeedRow[], open: ReadonlySet<HomeGroup
 }
 
 /**
- * Under the rows, and on an empty Home (F9): one line, its link first. "2
+ * Under the rows, and on an empty Home (F9): one line, its links first. "2
  * waiting on others" while anything waits on others, else "Follow-ups": it
  * opens Follow-ups (everything you sent, own or last handed on), so Home
- * keeps its own way there even with the sidebar hidden. Then when ECHO last
- * checked.
+ * keeps its own way there even with the sidebar hidden. Then Only me, with
+ * its lock and no count: everything only you can read, filed in a project or
+ * not (ADR-0049). Then when ECHO last checked.
  */
 export function Footer({ state }: { state: State }) {
   const { link, checked } = homeFooter(state.home?.open ?? null);
   return (
     <div class="needs-foot" data-testid="needs-foot">
       <button type="button" class="link-button inline needs-foot-link" data-testid="your-follow-ups" onClick={() => void openYourFollowUps()}>{link}</button>
+      <span class="needs-foot-words">{' · '}</span>
+      <button type="button" class="link-button inline needs-foot-link" data-testid="home-only-me" onClick={() => void openOnlyMe()}><Lock />Only me</button>
       {checked !== null && <span class="needs-foot-words">{` · ${checked}`}</span>}
     </div>
   );

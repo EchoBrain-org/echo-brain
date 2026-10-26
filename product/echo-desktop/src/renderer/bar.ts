@@ -23,10 +23,9 @@ export function decidedIn(meeting: string): string {
   return `What did we decide in ${clip(meeting.trim(), 120)}?`;
 }
 
-/** The question for any week, in the bar's scope: all context, a project by its name, or Mine. */
+/** The question for any week, in the bar's scope: all context, or a project by its name. */
 export function weekQuestion(scope: AskScope, project: string | null): string {
   if (scope.kind === 'project') return `What changed in ${clip(project ?? 'this project', 120)} this week?`;
-  if (scope.kind === 'mine') return 'What did I add this week?';
   return 'What did we decide this week?';
 }
 

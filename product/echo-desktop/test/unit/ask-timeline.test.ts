@@ -1080,3 +1080,89 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
     expect(calls('projects.activity')).toHaveLength(4);
   });
 });
+
+describe('one thread per place (ADR-0049)', () => {
+  const inApollo = { kind: 'project' as const, project_id: apollo.project_id };
+  /** The opening checks: each asks about more than a new answer's own ticket. */
+  const opening = () => calls('ask.check').filter(call => (call.items as unknown[]).length > 1).map(call => (call.items as { asked_at: string }[]).map(item => item.asked_at));
+
+  it('checks each place\'s newest turns when Ask opens there, each place on its own five minutes', async () => {
+    // Apollo's one turn is older than Home's newest ten, so Home's opening check leaves it out.
+    const apolloTurn = turn('What is left in Apollo?', 20 * DAY, status(), { scope: inApollo });
+    const homeTurns = Array.from({ length: 10 }, (_, at) => turn(`Home ${at}?`, (10 - at) * DAY, status()));
+    seed(apolloTurn, ...homeTurns);
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
+    const store = await startStore();
+    await store.ask('Anything new?');
+    await flush();
+    expect(opening()).toHaveLength(1);
+    expect(opening()[0]).not.toContain(apolloTurn.asked_at);
+    // A minute on, Ask opens in Apollo: Apollo's thread has not been checked, so it is now.
+    store.closeAsk();
+    vi.setSystemTime(NOW.getTime() + 60_000);
+    await store.openProject(apollo);
+    await store.ask('And now?');
+    await flush();
+    expect(opening()).toHaveLength(2);
+    expect(opening()[1]).toContain(apolloTurn.asked_at);
+    expect(store.checksOf(apolloTurn)).toBeDefined();
+    // Within its five minutes, Ask opening in Apollo again checks nothing more.
+    store.closeAsk();
+    await store.ask('Once more?');
+    await flush();
+    expect(opening()).toHaveLength(2);
+  });
+
+  it('checks Home\'s thread when × widens an Ask open in a project', async () => {
+    const homeTurn = turn('What did we agree?', 2 * DAY, status());
+    const apolloTurn = turn('What is left in Apollo?', DAY, status(), { scope: inApollo });
+    seed(homeTurn, apolloTurn);
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.ask('Anything new in Apollo?');
+    await flush();
+    expect(opening().flat()).not.toContain(homeTurn.asked_at);
+    store.widenScope();
+    await flush();
+    expect(opening().at(-1)).toContain(homeTurn.asked_at);
+    expect(store.checksOf(homeTurn)).toBeDefined();
+  });
+
+  it('shows no sources for a turn with every sentence left out, though some of its sources are still readable', async () => {
+    // Each sentence cites the ticket, which you can no longer read; the page and the follow-up you still can.
+    const both = answerOf('What is open on THERM?', [ticket('THERM-482', '20482'), page('31010'), followUp('itm_timeline-1')],
+      [['THERM-482 waits on the DVT plan.', [0, 1]], ['THERM-482 has a follow-up.', [0, 2]]]);
+    const one = turn('What is open on THERM?', 2 * DAY, both);
+    seed(one, turn('Two?', DAY, status()));
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'ticket' ? 'unreadable' : 'same' })) });
+    const store = await startStore();
+    store.pickSuggestion({ question: one.question, turn: one.id });
+    await flush();
+    const opened = byTestId((await view())(store), 'opened-turn')[0]!;
+    expect(byTestId(opened, 'answer')).toEqual([]);
+    expect(byTestId(opened, 'sources-toggle')).toEqual([]);
+    expect(byTestId(opened, 'copy-answer')).toEqual([]);
+    expect(byTestId(opened, 'ask-again')).toHaveLength(1);
+  });
+
+  it('never suggests a turn folded away, even one an Ask again asked in other words', () => {
+    const first = turn('When do we ship?', 2 * DAY, status());
+    const again = turn('When do we ship Apollo?', DAY, status(), { again_of: first.id });
+    expect(askedSuggestions([first, again], { kind: 'global' })).toEqual([{ question: again.question, turn: again.id }]);
+  });
+
+  it('keeps a turn asked in Mine before it went on Home\'s thread: asked again at Home, and folded by the same question there', async () => {
+    const mine = turn('What did I note?', 2 * DAY, status(), { scope: { kind: 'mine' } });
+    seed(mine);
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
+    const store = await startStore();
+    store.pickSuggestion({ question: mine.question, turn: mine.id });
+    await flush();
+    store.askAgain(mine.id);
+    await flush();
+    expect(calls('ask.run')[0]).toMatchObject({ question: 'What did I note?', scope: { kind: 'global' } });
+    const asked = turn('what did I note?', HOUR, status());
+    expect(visibleTurns([mine, asked])).toEqual([asked]);
+  });
+});

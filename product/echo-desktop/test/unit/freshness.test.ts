@@ -121,7 +121,7 @@ describe('when a check runs (R2)', () => {
 
   it('opening a page: at most once in ten seconds', async () => {
     const store = await startStore();
-    await store.openMine();
+    await store.openOnlyMe();
     expect(checks()).toBe(1);
     await vi.advanceTimersByTimeAsync(10_000);
     await store.openProject(apollo);
@@ -332,7 +332,7 @@ describe('what coming back reads again, on each page (R4)', () => {
     ['Home: its rows, read live again', async () => undefined, () => [homeReads()]],
     ['a project: its feed\'s first page, its members and its line', (store: Store) => store.openProject(apollo),
       () => [calls('list.page').length, calls('projects.members').length, runs('items', request => request.scope === 'project')]],
-    ['Mine', (store: Store) => store.openMine(), () => [calls('list.page').length]],
+    ['Only me', (store: Store) => store.openOnlyMe(), () => [calls('list.page').length]],
     ['Tools', (store: Store) => store.openTools(), () => [calls('account.tools').length]],
     ['People & invites', (store: Store) => store.openOrganization(), () => [calls('employees.list').length]],
     ['the Follow-ups list', (store: Store) => store.openYourFollowUps(), () => [listRows()]],

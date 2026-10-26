@@ -44,7 +44,7 @@ test('a lead renames then archives and restores a project while its existing fee
   await expect(page.getByTestId('archived-projects-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('archived-project-row')).toHaveCount(1);
   await page.getByTestId('sidebar-capture').click();
-  await page.getByTestId('readers-projects').click();
+  await page.getByTestId('capture-place').click();
   await expect(page.getByTestId('projects-row')).toHaveText(['Beacon']);
   await page.getByTestId('compose-close').click();
   await page.getByTestId('archived-project-row').click();
@@ -262,11 +262,13 @@ test('a lead maps a Jira project on Tools, Save closes it, asks in that scope, a
   expect(removed.body?.jira_project).toBeNull(); expect(removed.body?.expected_revision).toMatch(/^[0-9a-f-]{36}$/);
   await page.getByTestId('ask-field').fill('What is the status of Apollo?');
   await page.getByTestId('ask-field').press('Enter');
-  // The answer before stays in full above it, where Ask opened; the new one finds nothing in Apollo, and cites nothing.
+  // The new answer finds nothing in Apollo, and cites nothing. Asked word for word in the same place, it stands for the one
+  // before, which folds away: the question shows once (ADR-0049).
   const latest = page.getByTestId('turn').last();
   await expect(latest.getByTestId('project-empty')).toContainText('Nothing in Apollo matched.');
   await expect(latest.getByTestId('sources-toggle')).toHaveCount(0);
-  await expect(page.getByTestId('turn')).toHaveCount(2);
+  await expect(page.getByTestId('turn')).toHaveCount(1);
+  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
 });
 
 test('a lead maps accessible Confluence spaces, loads another page, asks with a page citation, and stops reading them', async () => {

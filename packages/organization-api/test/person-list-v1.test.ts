@@ -9,6 +9,7 @@ import {
   PERSON_OPEN_RESPONSE_MAX_BYTES_V1,
   personRefIdV1,
   personRefKindV1,
+  validatePersonAnswerScopeV3,
   validatePersonItemRefV1,
   validatePersonListRequestV1,
   validatePersonListResponseV1,
@@ -90,11 +91,14 @@ describe('Person list and open public contracts', () => {
 
   it('accepts one scope and an opaque cursor, and nothing else', () => {
     for (const request of [
-      { schema_version: 1 }, { schema_version: 1, project_id: PROJECT_A }, { schema_version: 1, mine: true },
-      { schema_version: 1, cursor: 'AnR3_-9' }, { schema_version: 1, mine: true, cursor: 'A'.repeat(512) },
+      { schema_version: 1 }, { schema_version: 1, project_id: PROJECT_A }, { schema_version: 1, mine: true }, { schema_version: 1, only_me: true },
+      { schema_version: 1, cursor: 'AnR3_-9' }, { schema_version: 1, mine: true, cursor: 'A'.repeat(512) }, { schema_version: 1, only_me: true, cursor: 'AnR3_-9' },
     ]) expect(validatePersonListRequestV1(request)).toEqual(request);
     for (const request of [
       { schema_version: 1, project_id: PROJECT_A, mine: true },
+      { schema_version: 1, only_me: true, mine: true }, { schema_version: 1, only_me: true, project_id: PROJECT_A },
+      { schema_version: 1, only_me: true, mine: true, project_id: PROJECT_A },
+      { schema_version: 1, only_me: false }, { schema_version: 1, only_me: 'true' }, { schema_version: 1, onlyMe: true },
       { schema_version: 1, mine: false }, { schema_version: 1, mine: 'true' },
       { schema_version: 1, kind: 'note' }, { schema_version: 1, limit: 25 }, { schema_version: 1, query: 'pricing' },
       { schema_version: 1, since: '2026-09-01' }, { schema_version: 1, scope: { kind: 'global' } },
@@ -128,7 +132,7 @@ describe('Person list and open public contracts', () => {
     for (const key of Object.keys(globalHeader)) {
       expect(() => validatePersonListResponseV1(page({ scope: { kind: 'global' }, ...without(globalHeader, key) }))).toThrow('header is invalid');
     }
-    for (const scope of [{ kind: 'mine' }, { kind: 'project', project_id: PROJECT_A }]) {
+    for (const scope of [{ kind: 'mine' }, { kind: 'only_me' }, { kind: 'project', project_id: PROJECT_A }]) {
       expect(() => validatePersonListResponseV1(page({ scope, ...globalHeader }))).toThrow('header is invalid');
       expect(() => validatePersonListResponseV1(page({ scope, me: globalHeader.me, connected: [], projects: [], projects_more: false }))).toThrow();
     }
@@ -138,7 +142,17 @@ describe('Person list and open public contracts', () => {
     expect(() => validatePersonListResponseV1(page({ scope: { kind: 'project', project_id: PROJECT_B }, project }))).toThrow('inconsistent');
     expect(() => validatePersonListResponseV1(page({ scope: { kind: 'global' }, ...globalHeader, project }))).toThrow('header is invalid');
     expect(() => validatePersonListResponseV1(page({ scope: { kind: 'mine' }, project }))).toThrow('header is invalid');
+    expect(() => validatePersonListResponseV1(page({ scope: { kind: 'only_me' }, project }))).toThrow('header is invalid');
     expect(() => validatePersonListResponseV1(page({ scope: { kind: 'mine', project_id: PROJECT_A } }))).toThrow();
+  });
+
+  it('echoes only_me, a scope the list alone takes, exactly (ADR-0049)', () => {
+    expect(validatePersonListResponseV1(page({ scope: { kind: 'only_me' }, next_cursor: 'AnR3' })).scope).toEqual({ kind: 'only_me' });
+    for (const scope of [{ kind: 'only_me', project_id: PROJECT_A }, { kind: 'only_me', mine: true }, { kind: 'only-me' }, { kind: 'onlyMe' }, 'only_me', null]) {
+      expect(() => validatePersonListResponseV1(page({ scope }))).toThrow('Person list scope');
+    }
+    // Ask's scope is unchanged: it never takes only_me.
+    expect(() => validatePersonAnswerScopeV3({ kind: 'only_me' })).toThrow();
   });
 
   it('bounds and orders the header lists', () => {

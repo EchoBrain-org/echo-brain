@@ -67,11 +67,12 @@ test('the reader says who can read an original when it is not the project\'s mem
   await page.getByTestId('sidebar-project').nth(1).click();
   const rows = page.getByTestId('feed-row');
   await expect(rows).toHaveCount(10);
+  // Captured in Beacon under the Only me lock: it lists there for you, with the lock (ADR-0049).
   await page.getByTestId('write-button').click();
-  await page.getByTestId('readers-only-me').click();
+  await page.getByTestId('capture-lock').click();
   await page.getByTestId('compose-body').fill('My own reminder');
   await page.keyboard.press('ControlOrMeta+Enter');
-  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon · only you');
   await expect(rows.first()).toContainText('My own reminder');
   await expect(rows.first().getByLabel('Only me')).toBeVisible();
   await rows.first().click();
@@ -198,7 +199,7 @@ test('a document reads a page of text at a time, and Save original writes the ch
 });
 
 test('a document leaves a project its lead opened it in', async () => {
-  run = await launch('mine');
+  run = await launch('only-me');
   const { page } = run;
   await page.getByTestId('sidebar-project').nth(0).click();
   await page.locator('[data-kind="document"]').click();
@@ -246,7 +247,7 @@ test('an original can leave the project it is in, or be added to another, and th
   // An empty project offers Capture, into it.
   await page.getByTestId('sidebar-project').nth(0).click();
   await page.getByTestId('empty-capture').click();
-  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
+  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
 });
 
 test('a lead adds someone at once, Undo removes only them, and making a lead or removing is asked first', async () => {

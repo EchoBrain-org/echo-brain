@@ -1527,11 +1527,11 @@ export class PersonAuthorityClient {
       validate_request: validatePersonListRequestV1, validate_response: validatePersonListResponseV1,
       access_token: accessToken, maximum_response_bytes: PERSON_LIST_RESPONSE_MAX_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal });
     const expectedScope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id }
-      : request.mine === true ? { kind: 'mine' } : { kind: 'global' };
+      : request.mine === true ? { kind: 'mine' } : request.only_me === true ? { kind: 'only_me' } : { kind: 'global' };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different list scope');
-    // Global page 1 carries me; project page 1 carries project; mine and cursor pages carry no header.
+    // Global page 1 carries me; project page 1 carries project; mine, only_me and cursor pages carry no header.
     const hasHeader = response.me !== undefined || response.project !== undefined;
-    if (hasHeader !== (request.cursor === undefined && expectedScope.kind !== 'mine')) {
+    if (hasHeader !== (request.cursor === undefined && (expectedScope.kind === 'global' || expectedScope.kind === 'project'))) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a list header on the wrong page');
     }
     return response;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerSource, AskReceipt } from '../../src/shared/protocol.js';
 import {
-  ANNOUNCE_MS, announceAfter, announcement, duration, headline, liveRows, listWords, namedPlaces, placeLabel, receiptWords, searchedWords, startProgress,
+  ANNOUNCE_MS, announceAfter, announcement, duration, headline, liveRows, listWords, namedPlaces, placeLabel, lookedThrough, searchedWords, startProgress,
   withStep, type AskProgress,
 } from '../../src/renderer/progress.js';
 
@@ -147,8 +147,10 @@ describe('the receipt', () => {
   ] };
   it('says how many items it looked through and how long the person waited', () => {
     // The wait is the page's own, as its timer counted it, not the Authority's shorter research time.
-    expect(receiptWords(receipt, 52_900)).toBe('Looked through 14 items · 52s');
-    expect(receiptWords({ ...receipt, looked_through: 1 }, 72_400)).toBe('Looked through 1 item · 1m 12s');
+    expect(lookedThrough(receipt)).toBe('Looked through 14 items');
+    expect(lookedThrough({ ...receipt, looked_through: 1 })).toBe('Looked through 1 item');
+    expect(duration(52_900)).toBe('52s');
+    expect(duration(72_400)).toBe('1m 12s');
     // As the live timer shows it: whole seconds gone.
     expect(duration(72_000)).toBe('1m 12s');
     expect(duration(33_900)).toBe('33s');

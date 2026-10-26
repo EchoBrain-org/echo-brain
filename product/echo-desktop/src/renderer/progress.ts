@@ -166,14 +166,14 @@ export function duration(ms: number): string {
 }
 
 /**
- * The receipt's one line: "Looked through 58 items · 48s", every item Ask
+ * What an answer looked through: "Looked through 58 items", every item Ask
  * looked through as the Authority counted it (since progress V3, ADR-0043,
- * the rows it was shown as well as what it read in full). The time is the
- * wait the person watched (`took`, by the page's clock), never the
+ * the rows it was shown as well as what it read in full). The line under the
+ * answer adds the wait the person watched (by the page's clock), never the
  * Authority's own `elapsed_ms`, which leaves out the client and the network.
  */
-export function receiptWords(receipt: AskReceipt, took: number): string {
-  return `Looked through ${receipt.looked_through} ${receipt.looked_through === 1 ? 'item' : 'items'} · ${duration(took)}`;
+export function lookedThrough(receipt: AskReceipt): string {
+  return `Looked through ${receipt.looked_through} ${receipt.looked_through === 1 ? 'item' : 'items'}`;
 }
 
 /** What a screen reader hears while Ask works: the stage, and how many items it is reading. */
