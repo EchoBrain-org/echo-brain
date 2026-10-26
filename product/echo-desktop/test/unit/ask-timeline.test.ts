@@ -570,6 +570,36 @@ describe('Ask on the timeline', () => {
     expect(copied[1]).toBe(long);
   });
 
+  it('copies Ask again\'s "Since" first, as the page shows it: with its numbers, "Nothing changed" for an empty one, and nothing a check left out', async () => {
+    const sources = [ticket('THERM-482', '20482'), page('31010'), followUp('itm_timeline-1')];
+    const answer = answerOf('What is open on THERM?', sources, [['THERM-482, Sensor drift, is open.', [0]]]);
+    const earlier = turn('What is open on THERM?', 3 * DAY, answer);
+    const again = turn('What is open on THERM?', 2 * DAY, answer, { again_of: earlier.id,
+      since: [said('The DVT plan moved the retest to Oct 30.', [1], sources), said('Confirm the trace is still open.', [2], sources)] });
+    const quiet = turn('What is open on THERM?', DAY, answer, { again_of: earlier.id, since: [] });
+    // The follow-up is no longer yours to read: what cites it is left out of the copy as it is of the page.
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
+    const copied: string[] = [];
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.check': params => checks!(params.items as never),
+      'clipboard.writeText': params => { copied.push(String(params.text)); return ok(null); },
+      'ask.record': () => fail('not_found'),
+    }, () => ({ active: [apollo], archived: [] })));
+    seed(earlier, again, quiet);
+    const store = await startStore();
+    store.pickSuggestion({ question: again.question, turn: again.id });
+    await flush();
+    const when = askedWhen(earlier.asked_at, NOW.getTime());
+    expect(await store.copyAnswer(again.id)).toBe(true);
+    expect(copied[0]).toBe([
+      `**Since ${when}**`, '', '- The DVT plan moved the retest to Oct 30. [2]', '',
+      'THERM-482, Sensor drift, is open. [1]', '',
+      'Sources', '', '1. THERM-482 · Sensor drift', '2. DVT plan',
+    ].join('\n'));
+    expect(await store.copyAnswer(quiet.id)).toBe(true);
+    expect(copied[1]!.startsWith(`Nothing changed since ${when}\n\nTHERM-482, Sensor drift, is open. [1]`)).toBe(true);
+  });
+
   it('keeps of a turn only what the page reads back: its full question and "since" once, no receipt, and each source\'s citation once', async () => {
     const receipt: AskReceipt = { looked_through: 1, elapsed_ms: 4_000, rows: [{ type: 'read', items: [ticket('THERM-482', '20482')] }] };
     rpc.mockImplementation(rpcFor(held, {

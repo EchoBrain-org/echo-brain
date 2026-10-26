@@ -22,6 +22,7 @@ import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
+import { askedWhen } from './format.js';
 import * as freshness from './freshness.js';
 import { meetingMessage, message } from './messages.js';
 import { ACTIVE_STATES, CLOSED_STATES, firstName, reopenSends, sentWords } from './needs.js';
@@ -3980,8 +3981,11 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   const checks = shownChecks(turn);
   const groups = turnGroups(answer.sources, checks);
   const shows = showsOf(checks);
-  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows);
-  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : checks === undefined ? answer.text : answerText(answer, shows);
+  // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
+  const earlier = turn.again_of === undefined ? undefined : turnOf(turn.again_of)?.asked_at;
+  const since = turn.since === undefined ? undefined : { statements: turn.since, when: earlier === undefined ? 'then' : askedWhen(earlier) };
+  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows, since);
+  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : checks === undefined && since === undefined ? answer.text : answerText(answer, shows, since);
   return text !== '' && (await rpc('clipboard.writeText', { text })).ok;
 }
 
