@@ -7,7 +7,7 @@
 // Authority refuses it; and the sidebar's dots with a project's New rows.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
-import type { Answer, AnswerSource, AnswerStatement, AskPrevious, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
+import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
   allOmitted, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
@@ -26,6 +26,8 @@ const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
 const sha = (text: string) => `sha256:${[...text].map(character => character.charCodeAt(0).toString(16)).join('').padEnd(64, '0').slice(0, 64)}` as const;
 const apollo = project(1, 30, { name: 'Apollo' });
+/** The window's own key for the sidebar, which no account's sign-out touches. */
+const SIDEBAR = 'echo.sidebarOpen';
 
 /** A ticket as an answer cites it: its source, with the citation as the response carried it and its evidence citation. */
 function ticket(key: string, id: string, permalink = `https://example.atlassian.net/browse/${key}`): AnswerSource {
@@ -85,7 +87,10 @@ beforeEach(() => {
   activity = null;
   feed = [];
   storage = new Map();
-  vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: vi.fn((key: string, value: string) => { storage.set(key, value); }) });
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string) => storage.get(key) ?? null, setItem: vi.fn((key: string, value: string) => { storage.set(key, value); }),
+    removeItem: (key: string) => { storage.delete(key); }, key: (index: number) => [...storage.keys()][index] ?? null, get length() { return storage.size; },
+  });
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
     'ask.run': params => ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is open.', [0]]])),
@@ -708,6 +713,45 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
     freshness.navigated();
     await flush();
     expect(calls('projects.activity')).toHaveLength(3);
+  });
+
+  it('forgets when an account last opened its projects at our own sign-out, and every other account\'s when one signs in', async () => {
+    const other = { ...ACCOUNT, membership_id: 'another-member' };
+    let status: AppStatus = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    activity = () => ok({ items: [{ project_id: apollo.project_id, latest_at: at(DAY) }] });
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok(status),
+      'account.signOut': () => { status = { signed_in: false, account: null, client_version: 'test' }; return ok(status); },
+      'projects.activity': () => activity!(),
+    }, () => ({ active: [apollo], archived: [] })));
+    // An account that signed in here before left its times behind.
+    storage.set('echo.projectSeen.0123456789abcdef', '{}');
+    storage.set(SIDEBAR, 'false');
+    const store = await startStore();
+    await flush();
+    const seenKeys = () => [...storage.keys()].filter(name => name.startsWith('echo.projectSeen.'));
+    const of = (account: { authority: string; membership_id: string }) => `echo.projectSeen.${store.accountHash(account)}`;
+    // As the host keeps only the signed-in account's timeline, only its times are kept; nothing else in storage is touched.
+    expect(seenKeys()).toEqual([of(ACCOUNT)]);
+    expect(storage.get(SIDEBAR)).toBe('false');
+    // Another account signs in: the last one's times go.
+    status = { signed_in: true, account: other, client_version: 'test' };
+    await store.refreshStatus();
+    await flush();
+    expect(seenKeys()).toEqual([of(other)]);
+    // Our own sign-out: its times go with its timeline.
+    store.accountCommand('signout');
+    await store.signOut();
+    expect(store.getState().status?.signed_in).toBe(false);
+    expect(seenKeys()).toEqual([]);
+    // A session that merely ended keeps them, as it keeps the timeline.
+    status = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    await store.refreshStatus();
+    await flush();
+    expect(seenKeys()).toEqual([of(ACCOUNT)]);
+    status = { signed_in: false, account: null, client_version: 'test' };
+    await store.refreshStatus();
+    expect(seenKeys()).toEqual([of(ACCOUNT)]);
   });
 
   it('shows no dots, and asks no more, when the Authority has no activity read', async () => {

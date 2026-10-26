@@ -94,8 +94,9 @@ follow-up of its meetings moved, by someone else and readable by you, since you
 last opened it; live Jira and Confluence edits do not count. Opening it clears
 the dot, and its rows added since your previous visit say **New** for that
 visit. When you last opened each project is kept in the window's storage, per
-account under a hash of it; a project seen for the first time has no dot, and
-an Authority without the read shows none.
+account under a hash of it, and goes when the timeline does: at our own
+sign-out, or when another account signs in here. A project seen for the first
+time has no dot, and an Authority without the read shows none.
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 

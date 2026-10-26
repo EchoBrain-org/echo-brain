@@ -835,7 +835,7 @@ function forgetAccount(): void {
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, archivedProjects: { items: [], next: null, loading: false },
     projectSettings: null, organization: null, tools: null, employeeWrite: null, home: null, decision: null, followUps: null, impactLine: null, projectLine: null,
     projectReads: null, news: new Set(), visit: null });
-  seen = null;
+  forgetSeen();
   listChanged();
   setCompose(null);
   setChange(null);
@@ -1497,7 +1497,9 @@ function projectToolsAvailable(tools: readonly ConnectedTool[]): boolean {
 
 /** When this account last opened each project on this computer, by project id; null while no one is signed in. */
 let seen: Record<string, string> | null = null;
-/** Where they are kept: `echo.projectSeen.<a hash of the account>`, never the account itself. */
+/** What their keys start with: `echo.projectSeen.<a hash of the account>`, never the account itself. */
+const SEEN_PREFIX = 'echo.projectSeen.';
+/** Where this account's are kept; null while no one is signed in. */
 let seenKey: string | null = null;
 /** The newest arrival in each project from someone else, as the last activity read said. */
 let arrivals: ReadonlyMap<string, string | null> = new Map();
@@ -1520,9 +1522,14 @@ export function accountHash(account: Expect): string {
   }).join('');
 }
 
-/** Signed in: this account's last-opened times, as this computer remembers them. Anything else in storage is ignored. */
+/**
+ * Signed in: this account's last-opened times, as this computer remembers
+ * them. Any other account's go, as the host deletes any other account's
+ * timeline when this one's is read (ADR-0047); nothing else in storage is
+ * touched.
+ */
 function rememberSeen(account: Expect): void {
-  seenKey = `echo.projectSeen.${accountHash(account)}`;
+  seenKey = `${SEEN_PREFIX}${accountHash(account)}`;
   activityUnsupported = false;
   activityReadAt = 0;
   arrivals = new Map();
@@ -1531,6 +1538,21 @@ function rememberSeen(account: Expect): void {
   seen = kept !== null && typeof kept === 'object' && !Array.isArray(kept)
     ? Object.fromEntries(Object.entries(kept).filter(([id, at]) => typeof at === 'string' && !Number.isNaN(Date.parse(at)) && id.startsWith('prj_'))) as Record<string, string>
     : {};
+  const own = seenKey;
+  try {
+    const others = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter((key): key is string => key !== null && key !== own
+      && key.startsWith(SEEN_PREFIX));
+    for (const key of others) localStorage.removeItem(key);
+  } catch { /* no storage: nothing of another account's is kept here */ }
+}
+
+/** Our own sign-out, or another account: when this one last opened its projects goes with its timeline (ADR-0047). */
+function forgetSeen(): void {
+  if (seenKey !== null) {
+    try { localStorage.removeItem(seenKey); } catch { /* no storage: nothing was kept */ }
+  }
+  seen = null;
+  seenKey = null;
 }
 
 function storeSeen(): void {
