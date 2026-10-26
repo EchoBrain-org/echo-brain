@@ -432,7 +432,7 @@ describe('Ask on the timeline', () => {
     expect(turnNote(named, { 0: 'same' })).toBeNull();
   });
 
-  it('shows nothing a check said once it is five minutes old, and a check that fails then leaves nothing of the last one', async () => {
+  it('shows no tag or line from a check once it is five minutes old, nor from one that fails then, and still hides what cites an unreadable source', async () => {
     const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
     seed(one, two);
     let failing = false;
@@ -445,13 +445,13 @@ describe('Ask on the timeline', () => {
     const marks = () => byTestId(byTestId(thread(store), 'opened-turn')[0], 'statement').map(node => node.props['data-mark'] ?? null);
     expect(byTestId(thread(store), 'changed-tag')).toHaveLength(1);
     expect(marks()).toEqual([null, 'changed']);
-    // Five minutes on, Ask still open: no tag, no line, and nothing left out.
+    // Five minutes on, Ask still open: no tag, no line, nothing highlighted; the follow-up the check could not read stays out.
     vi.setSystemTime(NOW.getTime() + 5 * 60_000);
     expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
     expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'again-note')).toEqual([]);
-    expect(marks()).toEqual([null, null, null]);
-    expect(store.checksOf(one)).toBeUndefined();
-    // Ask opened again: its check fails, and what the last one said goes with it.
+    expect(marks()).toEqual([null, null]);
+    expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
+    // Ask opened again: its check fails, and what the last one said goes with it, but not what it could not read.
     store.closeAsk();
     failing = true;
     store.pickSuggestion({ question: 'One?', turn: one.id });
@@ -459,6 +459,53 @@ describe('Ask on the timeline', () => {
     expect(calls('ask.check')).toHaveLength(2);
     expect(store.getState().timeline.checks).toEqual({});
     expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
+    expect(marks()).toEqual([null, null]);
+  });
+
+  it('keeps what cites a source a check found unreadable hidden, in the file too, until a check finds it readable again', async () => {
+    const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
+    seed(one, two);
+    let followUp = 'unreadable';
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? followUp : 'same' })) });
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    const thread = await view();
+    const said = () => byTestId(byTestId(thread(store), 'opened-turn')[0], 'statement').map(text);
+    const trace = (lines: string[]) => lines.some(line => line.includes('Confirm the trace'));
+    expect(trace(said())).toBe(false);
+    expect(kept().find(each => each.id === one.id)?.unreadable).toEqual([2]);
+    // Long past the five minutes a check is good for, and through a check that cannot tell, it stays out.
+    followUp = 'unknown';
+    vi.setSystemTime(NOW.getTime() + 60 * 60_000);
+    store.closeAsk();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    expect(trace(said())).toBe(false);
+    expect(kept().find(each => each.id === one.id)?.unreadable).toEqual([2]);
+    // A check that reads it again shows it again, and the file lets it go.
+    followUp = 'same';
+    vi.setSystemTime(NOW.getTime() + 2 * 60 * 60_000);
+    store.closeAsk();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    expect(trace(said())).toBe(true);
+    expect(kept().find(each => each.id === one.id)).not.toHaveProperty('unreadable');
+  });
+
+  it('hides what the file says a check found unreadable before any check runs, as after a restart', async () => {
+    const [one, two] = [turn('One?', 2 * DAY, status(), { unreadable: [2] }), turn('Two?', DAY, status())];
+    seed(one, two);
+    checks = () => fail('unavailable', { retryable: true });
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    const thread = await view();
+    const opened = byTestId(thread(store), 'opened-turn')[0]!;
+    expect(byTestId(opened, 'statement').map(text).some(line => line.includes('Confirm the trace'))).toBe(false);
+    expect(byTestId(opened, 'statement')).toHaveLength(2);
+    // Nothing it carries into a follow-up cites the source either.
+    expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
   });
 
   it('clears what a check said when it goes stale, so the page stops showing it then', async () => {

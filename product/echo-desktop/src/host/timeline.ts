@@ -223,5 +223,11 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
   if (value.markers !== undefined && !(record(value.markers) && Object.entries(value.markers).every(([at, marker]) => /^\d{1,3}$/.test(at) && string(marker) && SHA256.test(marker)))) {
     return null;
   }
+  // The sources a check found unreadable: distinct places among the answer's own sources.
+  const sources = (value.answer as TimelineAnswer).sources.length;
+  if (value.unreadable !== undefined && !(indexes(value.unreadable, 256) && new Set(value.unreadable).size === value.unreadable.length
+      && value.unreadable.every(at => at < sources))) {
+    return null;
+  }
   return value as unknown as TimelineTurn;
 }
