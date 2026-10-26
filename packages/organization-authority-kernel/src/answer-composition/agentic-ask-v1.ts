@@ -516,9 +516,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
           layout: responseVersion === 8 && options.answer_layout === true,
           // An answer to an Ask that carried its previous turn names the question it answers, and an Ask again's writer also
-          // says what is different since the earlier answer (ADR-0047).
+          // says what is different since the earlier answer (ADR-0047). With none of its sentences left to compare with, an
+          // Ask again is answered as asked: it cannot say what changed.
           ...(previous === undefined ? {} : { answers: resolvedQuestion ?? goal.question }),
-          ...(previous?.purpose === "ask_again" ? { earlier: earlierAnswer(previous, temporal?.time_zone ?? "UTC") } : {}),
+          ...(previous?.purpose === "ask_again" && previous.statements.length > 0 ? { earlier: earlierAnswer(previous, temporal?.time_zone ?? "UTC") } : {}),
         });
         let selectedEvidence: readonly string[] = [];
         progress?.stage("writing");

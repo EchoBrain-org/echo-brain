@@ -235,6 +235,15 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     expect(empty).not.toHaveProperty("since");
   });
 
+  it("answers an Ask again with no earlier sentence left as asked, naming its question and saying nothing of what changed", async () => {
+    const { run, ask } = again({ lists: [], sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }], not_found: [] });
+    const response = await ask.answer({ question: ASK_AGAIN.question, previous: { ...ASK_AGAIN, statements: [], citations: [] } });
+    expect(response).toMatchObject({ outcome: "answered", question: ASK_AGAIN.question });
+    expect(response).not.toHaveProperty("since");
+    expect(run.of("writer")[0]!.schema).toBe(answerSchema);
+    expect(JSON.parse(run.of("writer")[0]!.user_prompt)).not.toHaveProperty("earlier");
+  });
+
   it("lays out the answer and keeps since beside it when the client asked for layout", async () => {
     const { run, ask } = again({ lists: [], sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"], form: "lead" }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] }, { answer_layout: true });
     const response = await ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN });
