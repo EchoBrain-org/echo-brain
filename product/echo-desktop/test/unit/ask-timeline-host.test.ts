@@ -238,8 +238,15 @@ describe('what the page sends with an Ask and a check', () => {
   });
 
   it('takes an earlier turn only within C3\'s bounds', () => {
-    expect(askPrevious(previous)).toEqual(previous);
-    expect(askPrevious({ ...previous, purpose: 'ask_again', statements: [], citations: [] })).not.toBeNull();
+    const global = { kind: 'global' } as const;
+    /** As a follow-up asks: its own question, with the earlier turn. */
+    const asked = (value: unknown) => askPrevious(value, 'Who owns it?', global);
+    expect(asked(previous)).toEqual(previous);
+    expect(askPrevious({ ...previous, purpose: 'ask_again', statements: [], citations: [] }, previous.question, global)).not.toBeNull();
+    // Ask again asks the earlier question itself.
+    expect(askPrevious({ ...previous, purpose: 'ask_again' }, 'Who owns it?', global)).toBeNull();
+    // A question that fails on its own is the client's to report, as it would be without the earlier turn: that goes as it came.
+    expect(askPrevious(previous, '?', global)).toEqual(previous);
     const many = <T>(item: T, count: number) => Array.from({ length: count }, () => item);
     for (const bad of [
       { ...previous, purpose: 'guess' }, { ...previous, question: '' }, { ...previous, question: ` ${previous.question}` }, { ...previous, asked_at: 'today' },
@@ -250,10 +257,10 @@ describe('what the page sends with an Ask and a check', () => {
       { ...previous, citations: [{ ...cited, visibility: 'everyone' }] }, { ...previous, citations: [ticketCitation] },
       // Each citation once, and each sentence citing each once.
       { ...previous, citations: [cited, cited] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: [0, 0] }] },
-    ]) expect(askPrevious(bad)).toBeNull();
+    ]) expect(asked(bad)).toBeNull();
     // 400 characters as the API counts them: code points, so a sentence of 400 emoji passes, and one more does not.
-    expect(askPrevious({ ...previous, statements: [{ text: '🙂'.repeat(400), citation_indexes: [0] }] })).not.toBeNull();
-    expect(askPrevious({ ...previous, statements: [{ text: '🙂'.repeat(401), citation_indexes: [0] }] })).toBeNull();
+    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(400), citation_indexes: [0] }] })).not.toBeNull();
+    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(401), citation_indexes: [0] }] })).toBeNull();
   });
 
   it('checks 1 to 100 items, each a citation that can change or go, a ticket\'s marker only on a ticket, within 64 KiB', () => {

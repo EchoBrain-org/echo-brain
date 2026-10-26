@@ -12,10 +12,10 @@ import type {
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_HAND_IN_MEETING_ID_V1, validatePersonMeetingResultV2,
-  validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
-  validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonSourceEvidenceV1, validatePersonUploadSearchResultV2,
-  validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2, validateProjectMembersV1,
-  validateProjectIdV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2,
+  validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
+  validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
+  validatePersonUploadSearchResultV2, validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
+  validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2,
   type PersonAnswerCitationV8, type PersonAskProgressResultLineV3, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
 } from '@echo-brain/organization-api';
@@ -384,27 +384,15 @@ function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
   return PRIVATE_VISIBILITY.has(citation.visibility) ? { ...source, private: true } : source;
 }
 
-const MARKER = /^sha256:[0-9a-f]{64}$/;
-const CHECK_STATES: ReadonlySet<unknown> = new Set<AskCheckResult['state']>(['same', 'changed', 'unreadable', 'unknown']);
-
 /**
  * What `person ask-check` printed (C1), as the page may see it: one state per
  * item asked, in their order, and a readable ticket's current marker. A reply
  * with another number of items, or anything else, is not its output.
  */
 export function askCheckView(raw: unknown, asked: number): { items: AskCheckResult[] } {
-  const value = object(raw);
-  if (Object.keys(value).sort().join() !== 'items,kind,schema_version' || value.schema_version !== 1 || value.kind !== 'echo-person-ask-check-v1') throw new ViewError();
-  const items = list(value.items);
-  if (items.length !== asked) throw new ViewError();
-  return { items: items.map(entry => {
-    const item = object(entry);
-    const keys = Object.keys(item).sort().join();
-    if (!CHECK_STATES.has(item.state) || (keys !== 'state' && !(keys === 'marker,state' && typeof item.marker === 'string' && MARKER.test(item.marker)))) {
-      throw new ViewError();
-    }
-    return { state: item.state as AskCheckResult['state'], ...(item.marker === undefined ? {} : { marker: item.marker as string }) };
-  }) };
+  const check = validated(validatePersonAskCheckV1, raw);
+  if (check.items.length !== asked) throw new ViewError();
+  return { items: check.items.map(({ state, marker }) => ({ state, ...(marker === undefined ? {} : { marker }) })) };
 }
 
 /**
@@ -413,18 +401,7 @@ export function askCheckView(raw: unknown, asked: number): { items: AskCheckResu
  * each project once.
  */
 export function projectActivityView(raw: unknown): { items: ProjectActivity[] } {
-  const value = object(raw);
-  if (Object.keys(value).sort().join() !== 'items,kind,schema_version' || value.schema_version !== 1 || value.kind !== 'echo-person-project-activity-v1') throw new ViewError();
-  const items = list(value.items);
-  if (items.length > 500) throw new ViewError();
-  const activity = items.map(entry => {
-    const item = object(entry);
-    if (Object.keys(item).sort().join() !== 'latest_at,project_id' || (item.latest_at !== null && isoTime(item.latest_at) === undefined)) throw new ViewError();
-    try { validateProjectIdV1(item.project_id); } catch { throw new ViewError(); }
-    return { project_id: item.project_id as string, latest_at: item.latest_at as string | null };
-  });
-  if (new Set(activity.map(item => item.project_id)).size !== activity.length) throw new ViewError();
-  return { items: activity };
+  return { items: validated(validatePersonProjectActivityV1, raw).items.map(({ project_id, latest_at }) => ({ project_id, latest_at })) };
 }
 
 function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {
