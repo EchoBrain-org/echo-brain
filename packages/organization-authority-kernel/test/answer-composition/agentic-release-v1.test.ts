@@ -1,5 +1,5 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import type { PersonAnswerResponseV4 } from "@echo-brain/organization-api";
+import type { PersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { describe, expect, it } from "vitest";
 import type { AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import type { AgenticModelGateStatsV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
@@ -11,7 +11,7 @@ import { withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 }
 import { checked as deskCheck, need, part, replay, researchHarness, SCENARIOS, step } from "./fixtures/agentic-scenarios.js";
 
 /** The release step on its own: a scripted desk and audit port, one trace of both. */
-function release(options: { readonly fence_after_audit: boolean; readonly on_append?: () => void; readonly fence?: (index: number) => Promise<{ readonly checked_at: string }> }) {
+function release(options: { readonly on_append?: () => void; readonly fence?: (index: number) => Promise<{ readonly checked_at: string }> } = {}) {
   const trace: string[] = [];
   const entries: AgenticAskAuditEntryV1[] = [];
   const checked: string[] = [];
@@ -25,12 +25,12 @@ function release(options: { readonly fence_after_audit: boolean; readonly on_app
     audit: { append: (entry: AgenticAskAuditEntryV1) => { trace.push("append"); entries.push(entry); options.on_append?.(); } },
     generation_adapter_id: "fixture", gate_stats: () => stats, background: false, receipts: [canonicalSha256({ receipt: 1 })], rounds: 3, fallbacks: 1,
   };
-  const response: PersonAnswerResponseV4 = { schema_version: 4, kind: "echo-clean-person-answer-v4", scope: { kind: "global" }, outcome: "answered", parts: [{ question: "Q", status: "answered", statements: [] }], citations: [] };
+  const response: PersonAnswerResponseV8 = { schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "answered", parts: [{ question: "Q", status: "answered", statements: [] }], citations: [] };
   const run = () => releaseAgenticResultV1({
     ...context,
     desk: { revalidate: () => { trace.push("revalidate"); fences += 1; return options.fence?.(fences) ?? Promise.resolve({ checked_at: `2026-10-06T00:00:0${fences}.000Z` }); } },
     outcome: "answered", citation_count: 2, result: response, answer_sha256: canonicalSha256({ answer: "fixture" }),
-    fence_after_audit: options.fence_after_audit, signal: controller.signal,
+    signal: controller.signal,
     assert_live: () => { if (controller.signal.aborted) throw new DOMException("Ask cancelled", "AbortError"); },
     on_checked: at => { checked.push(at); }, on_audited: () => { audited += 1; },
   });
@@ -38,8 +38,8 @@ function release(options: { readonly fence_after_audit: boolean; readonly on_app
 }
 
 describe("release step", () => {
-  it("checks access, audits once and checks again before handing over when the fence after the audit is on", async () => {
-    const r = release({ fence_after_audit: true });
+  it("checks access, audits once and checks again before handing over", async () => {
+    const r = release();
     await expect(r.run()).resolves.toBe(r.response);
     expect(r.trace).toEqual(["revalidate", "append", "revalidate"]);
     expect(r.checked).toEqual(["2026-10-06T00:00:01.000Z", "2026-10-06T00:00:02.000Z"]);
@@ -49,15 +49,8 @@ describe("release step", () => {
     expect(r.audited()).toBe(1);
   });
 
-  it("checks access and audits, with no second check, when the fence after the audit is off", async () => {
-    const r = release({ fence_after_audit: false });
-    await expect(r.run()).resolves.toBe(r.response);
-    expect(r.trace).toEqual(["revalidate", "append"]);
-    expect(r.checked).toEqual(["2026-10-06T00:00:01.000Z"]);
-  });
-
-  it.each([true, false])("releases nothing when the request is cancelled during the append (fence after audit: %s)", async fence_after_audit => {
-    const r = release({ fence_after_audit, on_append: () => r.controller.abort() });
+  it("releases nothing when the request is cancelled during the append", async () => {
+    const r = release({ on_append: () => r.controller.abort() });
     await expect(r.run()).rejects.toMatchObject({ name: "AbortError" });
     expect(r.trace).toEqual(["revalidate", "append"]);
     // The completed audit stays; the caller must not write a second witness.
@@ -66,7 +59,7 @@ describe("release step", () => {
 
   it("releases nothing and writes no audit when the final access check refuses", async () => {
     const refusal = new Error("membership revoked");
-    const r = release({ fence_after_audit: true, fence: () => Promise.reject(refusal) });
+    const r = release({ fence: () => Promise.reject(refusal) });
     await expect(r.run()).rejects.toBe(refusal);
     expect(r.trace).toEqual(["revalidate"]);
     expect(r.audited()).toBe(0);
@@ -74,28 +67,28 @@ describe("release step", () => {
 
   it.each(["before", "after"] as const)("retries one transient failure of the check %s the audit, then releases", async at => {
     const failing = at === "before" ? 1 : 2;
-    const r = release({ fence_after_audit: true, fence: index => index === failing ? Promise.reject(new AuthorityOperationError("unavailable", "Live evidence operation could not be completed")) : Promise.resolve({ checked_at: `2026-10-06T00:00:0${index}.000Z` }) });
+    const r = release({ fence: index => index === failing ? Promise.reject(new AuthorityOperationError("unavailable", "Live evidence operation could not be completed")) : Promise.resolve({ checked_at: `2026-10-06T00:00:0${index}.000Z` }) });
     await expect(r.run()).resolves.toBe(r.response);
     expect(r.trace).toEqual(at === "before" ? ["revalidate", "revalidate", "append", "revalidate"] : ["revalidate", "append", "revalidate", "revalidate"]);
     expect(r.entries).toHaveLength(1);
   });
 
   it.each(["unauthorized", "stale_access_state", "not_found"] as const)("never retries a %s release check and releases nothing", async code => {
-    const r = release({ fence_after_audit: true, fence: () => Promise.reject(new AuthorityOperationError(code, "Live evidence operation could not be completed")) });
+    const r = release({ fence: () => Promise.reject(new AuthorityOperationError(code, "Live evidence operation could not be completed")) });
     await expect(r.run()).rejects.toMatchObject({ code });
     expect(r.trace).toEqual(["revalidate"]);
     expect(r.audited()).toBe(0);
   });
 
   it("releases nothing when the retried release check fails again", async () => {
-    const r = release({ fence_after_audit: true, fence: () => Promise.reject(new AuthorityOperationError("rate_limited", "Live evidence operation could not be completed")) });
+    const r = release({ fence: () => Promise.reject(new AuthorityOperationError("rate_limited", "Live evidence operation could not be completed")) });
     await expect(r.run()).rejects.toMatchObject({ code: "rate_limited" });
     expect(r.trace).toEqual(["revalidate", "revalidate"]);
     expect(r.audited()).toBe(0);
   });
 
   it("audits the fingerprint of the result it hands over and of its answer", async () => {
-    const r = release({ fence_after_audit: false });
+    const r = release();
     await r.run();
     expect(r.entries[0]).toMatchObject({
       outcome: "answered", citation_count: 2, rounds: 3, model_calls: 2, repairs: 1, fallbacks: 1,
@@ -107,7 +100,7 @@ describe("release step", () => {
   });
 
   it.each(["timed_out", "cancelled"] as const)("writes a %s witness with no prompt, answer or response digest", async kind => {
-    const r = release({ fence_after_audit: true });
+    const r = release();
     await auditAgenticTerminalV1(kind, { ...r.context, trigger: "sweep", background: true, checked_at: null });
     expect(r.trace).toEqual(["append"]);
     expect(r.entries[0]).toMatchObject({

@@ -1,6 +1,6 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
-  createAgenticAskV1,
+  createAgenticAskV5,
   type AgenticAskAuditEntryV1,
 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import type {
@@ -121,7 +121,7 @@ describe("Agentic Ask and OpenRouter timeout contract", () => {
     const audit: AgenticAskAuditEntryV1[] = [];
 
     try {
-      const answer = await createAgenticAskV1({
+      const answer = await createAgenticAskV5({
         desk: desk(launchEvidence()),
         model: adapter,
         generation: {

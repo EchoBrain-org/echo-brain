@@ -78,8 +78,6 @@ export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 
   readonly result: R;
   /** The fingerprint of the result's answer, from its renderer. */
   readonly answer_sha256: Sha256Digest;
-  /** A second access check after the audit write (V5 to V8 Ask and every task brief; V4 Ask has none). */
-  readonly fence_after_audit: boolean;
   /** The request's active signal (caller cancel, deadline or terminal stop). */
   readonly signal: AbortSignal;
   /** Throws when the caller cancelled or the request deadline passed. */
@@ -129,12 +127,10 @@ export async function releaseAgenticResultV1<R>(options: ReleaseAgenticResultV1O
   // 3. A disconnect or membership change during the durable append still
   // suppresses release. Checking liveness first never leaves a desk call
   // started on an already-stopped request.
-  if (options.fence_after_audit) {
-    assertLive();
-    const released = await revalidateWithTransientRetryV1(() => observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'after_audit' },
-      () => raceAbort(signal, desk.revalidate({ signal })), value => ({ checked_at: value.checked_at })), { signal, assert_live: assertLive });
-    options.on_checked(released.checked_at);
-  }
+  assertLive();
+  const released = await revalidateWithTransientRetryV1(() => observeAgenticLifecycleV1('revalidation', 'research_revalidation', { purpose: 'after_audit' },
+    () => raceAbort(signal, desk.revalidate({ signal })), value => ({ checked_at: value.checked_at })), { signal, assert_live: assertLive });
+  options.on_checked(released.checked_at);
   // An abort that races the terminal audit still suppresses publication.
   assertLive();
   // 4. Hand over.

@@ -1,6 +1,6 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
-import { createAgenticAskV1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from "../../src/shared/evidence-desk-v1.js";
 import { deferred } from "./fixtures/deferred.js";
@@ -41,7 +41,7 @@ function fixture(options: {
   };
   const append = vi.fn(async (entry: AgenticAskAuditEntryV1) => options.append?.(entry));
   const published = vi.fn();
-  const ask = createAgenticAskV1({
+  const ask = createAgenticAskV5({
     desk, model: { generate }, audit: { append },
     generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 30_000 },
   });
@@ -99,7 +99,7 @@ describe("agentic Ask: final publication boundary", () => {
     // The reader loses access after research finished, before the writer runs.
     const generate = vi.fn(async () => { if (calls === 1) revoked = true; return replies[calls++]; });
     const append = vi.fn();
-    const ask = createAgenticAskV1({ desk, model: { generate }, audit: { append },
+    const ask = createAgenticAskV5({ desk, model: { generate }, audit: { append },
       generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 30_000 } });
     await expect(ask.answer({ question: "When is launch?" })).rejects.toMatchObject({ code: "unauthorized" });
     // Three incremental pre-call checks (the writer's passes: launch was

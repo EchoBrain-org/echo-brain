@@ -266,7 +266,10 @@ function matches(item, query) {
   return terms.some((term) => haystack.includes(term));
 }
 
-/** A V1/V2 evidence desk with synthetic records and non-sensitive trace data. */
+/**
+ * An evidence desk with synthetic records and non-sensitive trace data: ECHO's context alone for a `v1` case, and a live
+ * ticket source too for a `v2` case whose ticket tool is available.
+ */
 export function createFixtureDesk(caseDefinition) {
   const items = caseDefinition.items;
   const handles = new Map(items.map((item, index) => [item.id, index]));

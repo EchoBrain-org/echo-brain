@@ -1,16 +1,9 @@
-import { AuthorityOperationError } from "../../domain/errors.js";
 import {
-  isPersonWorkspaceCitationV1,
-  personAnswerCitationKeyV7,
   personAnswerCitationKeyV8,
   validatePersonAnswerLayoutV1,
   type PersonAnswerBlockV1,
   type PersonAnswerResponseV8,
   type PersonAnswerPartV4,
-  type PersonAnswerResponseV4,
-  type PersonAnswerResponseV5,
-  type PersonAnswerResponseV6,
-  type PersonAnswerResponseV7,
 } from "@echo-brain/organization-api";
 import {
   AGENTIC_ASK_MAX_SENTENCES_V1,
@@ -29,7 +22,7 @@ import {
   type AnswerSentence,
 } from "../agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, agenticAskResponseFitsV1, compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
-import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
+import { citationOfAgenticEvidenceItemV8, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_WRITER_LISTS_MAX_V1,
   agenticListCheckedNoteV1,
@@ -66,7 +59,7 @@ import { buildAskLayoutV1, orderAskLayoutV1, type AskLayoutShapeV1 } from "./ask
  * need of the plan cites, whatever the writer replies, and for each list the
  * writer chooses. The writer's sentences follow, each standing only on text it
  * read. With no usable writer reply code still states those lists, or falls
- * back to the records research read, or says what it could not find. A V8
+ * back to the records research read, or says what it could not find. An
  * Ask that asked for its layout (ADR-0045) gives its writer the layout prompt
  * and schema; its answer reads lead first and its part carries the blocks its
  * kept statements read as, or, when that cannot be released, it is exactly the
@@ -107,13 +100,12 @@ type DraftShape = Exclude<AskLayoutShapeV1, { kind: "list" }> | {
   readonly rows: readonly { readonly cells: readonly string[]; readonly shorts: readonly string[] }[];
 };
 const PROSE: DraftShape = Object.freeze({ kind: "text" });
-type AskResponse = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8;
 
 export interface AskRendererInputV1 {
   readonly question: string;
 }
 export interface AskRenderedV1 {
-  readonly response: AskResponse;
+  readonly response: PersonAnswerResponseV8;
   /** Short ids the writer was given, in order: items whose text it read, then list rows it saw; empty when no writer call ran. */
   readonly writer_evidence: readonly string[];
 }
@@ -127,9 +119,8 @@ export interface AskEarlierAnswerV1 {
   readonly statements: readonly { readonly text: string; readonly sources: readonly string[] }[];
 }
 
+/** Ask's writer, for the V8 answer (research tool contract v1), the only Ask answer. */
 export interface CreateAskRendererV1Options {
-  /** 4 (V1 core), 5 (V2), 6 (V3 and the research core), 7 (V4: follow-ups, ADR-0040) or 8 (V5: the workspace and tool containers). */
-  readonly response_version: 4 | 5 | 6 | 7 | 8;
   /** The writer's system prompt, with the live-source guidance when live sources are available. */
   readonly answer_prompt: string;
   /** The sources research could read, as the research model saw them. */
@@ -140,14 +131,14 @@ export interface CreateAskRendererV1Options {
   readonly context: { readonly asked_by?: string; readonly today: string; readonly time_zone?: string };
   /** The response's scope: the desk's. */
   readonly desk_scope: AgenticEvidenceBundleV1["gathered_for"]["scope"];
-  /** V8 only: the part carries its layout (answer layout v1, ADR-0045), because the client asked for it. */
+  /** The part carries its layout (answer layout v1, ADR-0045), because the client asked for it. */
   readonly layout?: boolean;
   /**
-   * V8 only, for an Ask that carried its previous turn (ADR-0047): the full question the answer answers, which the
-   * response names. Without it the response names none.
+   * For an Ask that carried its previous turn (ADR-0047): the full question the answer answers, which the response names.
+   * Without it the response names none.
    */
   readonly answers?: string;
-  /** V8 only, for an Ask again (ADR-0047): the earlier answer; the writer also says what is different since, and the response carries it. */
+  /** For an Ask again (ADR-0047): the earlier answer; the writer also says what is different since, and the response carries it. */
   readonly earlier?: AskEarlierAnswerV1;
 }
 
@@ -210,10 +201,8 @@ function laidOutBlocks(blocks: readonly PersonAnswerBlockV1[], statements: reado
 }
 
 export function createAskRendererV1(options: CreateAskRendererV1Options): AgenticRendererV1<AskRendererInputV1, AskRenderedV1> {
-  const responseVersion = options.response_version;
-  const tickets = responseVersion >= 5;
-  const laidOut = responseVersion === 8 && options.layout === true;
-  const earlier = responseVersion === 8 ? options.earlier : undefined;
+  const laidOut = options.layout === true;
+  const earlier = options.earlier;
   return Object.freeze({
     async render(input: AgenticRenderInputV1<AskRendererInputV1>) {
       const { bundle } = input;
@@ -354,13 +343,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       type Statement = { text: string; citation_indexes: number[]; private: boolean };
       // One citation per key, the key the Ask response checks for duplicates: a listed ticket's row and its opened body
       // are two items with one key, so they share one citation.
-      // A workspace item cites only in the V8 answer, whose renderer keys it (research tool contract v1).
-      const keyOf = (short: string) => {
-        const citation = byShort.get(short)!.item.citation;
-        if (responseVersion === 8) return personAnswerCitationKeyV8(citation);
-        if (isPersonWorkspaceCitationV1(citation)) throw new AuthorityOperationError("invalid_output", "A workspace item has no V7 citation");
-        return personAnswerCitationKeyV7(citation);
-      };
+      const keyOf = (short: string) => personAnswerCitationKeyV8(byShort.get(short)!.item.citation);
       const question = partQuestion(askedQuestion);
       /**
        * The response `reply` (the writer's answer, or null) gives, laid out (ADR-0045) or not, with an Ask again's `since`
@@ -577,7 +560,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         };
         const since = !withSince || reply?.since === undefined || !anyEvidence ? undefined : sinceOf(reply.since);
         const result = Object.freeze({
-          schema_version: responseVersion, kind: responseVersion === 8 ? "echo-clean-person-answer-v8" : responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
+          schema_version: 8, kind: "echo-clean-person-answer-v8", scope: options.desk_scope, outcome,
           parts: Object.freeze([Object.freeze({
             question, status: draft.status,
             statements: released(draft.statements),
@@ -585,10 +568,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             ...(draft.records === undefined ? {} : { records: released(draft.records) }),
             ...(layout === undefined ? {} : { layout }),
           })]),
-          citations: Object.freeze(anyEvidence ? used.map(entry => (responseVersion === 8 ? citationOfAgenticEvidenceItemV8 : citationOfAgenticEvidenceItemV1)(entry.item, options.context.time_zone ?? 'UTC')) : []),
+          citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV8(entry.item, options.context.time_zone ?? 'UTC')) : []),
           ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
           // Only an answer to a request that carried its previous turn names its question and says what is different since (ADR-0047).
-          ...(options.answers === undefined || responseVersion !== 8 ? {} : { question: options.answers }),
+          ...(options.answers === undefined ? {} : { question: options.answers }),
           ...(since === undefined ? {} : { since: Object.freeze({ statements: released(since) }) }),
         });
         return { result, used, laid_out: layout !== undefined };
@@ -603,7 +586,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const laidOutReleased = laidOutResponse === undefined ? undefined : releasable(laidOutResponse)
         ?? (laidOutResponse.laid_out && "since" in laidOutResponse.result ? releasable(respond(answer, true, false, false)) : undefined);
       const { result, used } = laidOutReleased ?? respond(answer, false, laidOutResponse === undefined, true);
-      const validated: AskResponse = responseVersion === 8 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV8) : responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
+      const validated = compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV8);
       return Object.freeze({
         result: Object.freeze({ response: validated, writer_evidence: writerEvidence }),
         // `used` is in first-citation order, and fitting the byte bound drops
@@ -611,7 +594,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // are always the first ones of `used`.
         cited: Object.freeze(used.slice(0, validated.citations.length).map(entry => entry.short)),
         // The writer never asks which one: only a follow-up's resolver does (ADR-0047).
-        outcome: validated.outcome as PersonAnswerResponseV4["outcome"],
+        outcome: validated.outcome as Exclude<PersonAnswerResponseV8["outcome"], "clarify">,
         fallbacks: written?.value === null ? 1 : 0,
         // Ask's answer is its direct statement and parts, and an answer to a request that carried its previous turn names
         // its question and what is different since (ADR-0047).

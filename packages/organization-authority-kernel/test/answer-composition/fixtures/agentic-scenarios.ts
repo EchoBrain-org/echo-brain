@@ -1,6 +1,6 @@
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { vi } from "vitest";
-import { createAgenticAskV1, createAgenticAskV3, createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
+import { createAgenticAskV5, createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
 import type { AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import { createAgenticModelGateV1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1, type AgenticResearchBudgetV1 } from "../../../src/answer-composition/agentic-research-v1.js";
@@ -51,7 +51,11 @@ export const result = <T extends EvidenceDeskItemV1 | EvidenceDeskItemV2>(items:
   ({ items, truncated: false, receipt_digests: [canonicalSha256({ desk: items.map(item => item.id) })], ...extra });
 
 export type Scenario = {
-  readonly version: 4 | 6;
+  /**
+   * The answer version the golden fixtures recorded this scenario's fingerprints in. Ask answers only V8 now, which differs
+   * from those answers only in its `schema_version` and `kind` (agentic-ask-golden.test.ts).
+   */
+  readonly recorded: 4 | 6;
   readonly question: string;
   readonly desk: () => EvidenceDeskPortV1 | EvidenceDeskPortV2;
   readonly replies: readonly unknown[];
@@ -67,7 +71,7 @@ export const step = (parts: readonly ReturnType<typeof part>[], actions: readonl
 /** The Ask golden scenarios. Both golden fixtures pin every one byte for byte: change one only by recording a reviewed baseline. */
 export const SCENARIOS: Readonly<Record<string, Scenario>> = {
   finish_after_search_and_open: {
-    version: 4, question: "When does DVT start?", asker: "Zhen Ye",
+    recorded: 4, question: "When does DVT start?", asker: "Zhen Ye",
     desk: () => ({
       scope: { kind: "global" }, live_sources: [],
       search: async () => result([listed("dvt-start")]),
@@ -82,7 +86,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     ],
   },
   not_found_after_two_searches: {
-    version: 4, question: "Who owns the enclosure supplier follow-up?",
+    recorded: 4, question: "Who owns the enclosure supplier follow-up?",
     desk: () => ({
       scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" }, live_sources: [],
       search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
@@ -94,7 +98,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     ],
   },
   repair_after_invalid_step: {
-    version: 4, question: "What was decided about the battery reserve?",
+    recorded: 4, question: "What was decided about the battery reserve?",
     desk: () => ({
       scope: { kind: "global" }, live_sources: [],
       search: async () => result([record("battery", "Approved: keep a 20% battery reserve for transport mode.")]),
@@ -108,7 +112,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     ],
   },
   writer_fallback_to_records: {
-    version: 4, question: "What did the review decide about calibration?",
+    recorded: 4, question: "What did the review decide about calibration?",
     desk: () => ({
       scope: { kind: "global" }, live_sources: [],
       search: async () => result([record("calibration", "Approved: calibrate every unit on the line at 37 °C.")]),
@@ -122,7 +126,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     ],
   },
   no_progress_stop: {
-    version: 4, question: "What is the latest on the fixture vendor?",
+    recorded: 4, question: "What is the latest on the fixture vendor?",
     desk: () => ({
       scope: { kind: "global" }, live_sources: [],
       search: async (input: { readonly query?: string }) => result(input.query === "fixture vendor" ? [listed("vendor")] : []),
@@ -137,7 +141,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     ],
   },
   list_pages_and_owner_filter: {
-    version: 4, question: "What actions does Mara own?",
+    recorded: 4, question: "What actions does Mara own?",
     desk: () => ({
       scope: { kind: "global" }, live_sources: [],
       search: async () => result([]), open: async () => result([]),
@@ -153,7 +157,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     ],
   },
   budget_stop_with_slow_clock: {
-    version: 4, question: "Is the DVT build on track?",
+    recorded: 4, question: "Is the DVT build on track?",
     // 18 s steps: the fourth step would have 9 s, less than 1.25 times the longest step, so research stops for budget.
     model_call_ms: 18_000,
     desk: () => ({
@@ -169,7 +173,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     ],
   },
   unusable_step_stop: {
-    version: 4, question: "What did the review decide?",
+    recorded: 4, question: "What did the review decide?",
     desk: () => ({
       scope: { kind: "global" }, live_sources: [],
       search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
@@ -177,7 +181,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     replies: [{ thoughts: "no parts" }, { still: "no parts" }],
   },
   step_limit_stop: {
-    version: 4, question: "List every DVT decision.",
+    recorded: 4, question: "List every DVT decision.",
     desk: () => ({
       scope: { kind: "global" }, live_sources: [],
       search: async (input: { readonly query?: string }) => result([record(`decision-${input.query ?? "none"}`)]),
@@ -189,7 +193,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     ],
   },
   empty_catalog_stop: {
-    version: 4, question: "What is open this week?",
+    recorded: 4, question: "What is open this week?",
     desk: () => ({
       scope: { kind: "global" }, live_sources: [],
       search: async () => result([]), open: async () => result([]), list: async () => result([]), revalidate: async () => checked,
@@ -199,7 +203,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
     ],
   },
   live_ticket_and_page: {
-    version: 6, question: "Why is the DVT gate on hold?",
+    recorded: 6, question: "Why is the DVT gate on hold?",
     desk: () => {
       const listedTicket = ticket("THERM-46", undefined, "In Progress");
       const openTicket = ticket("THERM-46", "THERM-46: BUG-412 observed 39.0 °C versus 37.2 °C expected under load.", "In Progress");
@@ -227,7 +231,7 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
   },
 };
 
-/** Replays one scenario through Ask: scripted replies in order, and a clock that moves only when the model is called. */
+/** Replays one scenario through Ask, the V8 core: scripted replies in order, and a clock that moves only when the model is called. */
 export async function replay(name: string, scenario: Scenario, hooks: { readonly signal?: AbortSignal; readonly on_append?: (entry: AgenticAskAuditEntryV1) => void } = {}) {
   const inputs: StructuredGenerationInput[] = [];
   const audit: AgenticAskAuditEntryV1[] = [];
@@ -248,9 +252,7 @@ export async function replay(name: string, scenario: Scenario, hooks: { readonly
     ...(scenario.asker === undefined ? {} : { asker: { display_name: scenario.asker } }),
   };
   const input = { question: scenario.question, ...(hooks.signal === undefined ? {} : { signal: hooks.signal }) };
-  const response = scenario.version === 6
-    ? await createAgenticAskV3(options as Parameters<typeof createAgenticAskV3>[0]).answer(input)
-    : await createAgenticAskV1(options as Parameters<typeof createAgenticAskV1>[0]).answer(input);
+  const response = await createAgenticAskV5(options as Parameters<typeof createAgenticAskV5>[0]).answer(input);
   return { response, inputs, audit };
 }
 

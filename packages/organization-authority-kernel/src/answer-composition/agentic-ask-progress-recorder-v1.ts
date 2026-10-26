@@ -3,15 +3,11 @@ import {
   PERSON_ASK_PROGRESS_COUNT_MAX_V1,
   PERSON_ASK_PROGRESS_NAMED_MAX_V1,
   PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1,
-  PERSON_ASK_PROGRESS_SOURCES_MAX_V1,
   PERSON_ASK_PROGRESS_SOURCES_MAX_V3,
   PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1,
   PERSON_ASK_RECEIPT_ROWS_MAX_V1,
-  validatePersonAnswerCitationV7,
   validatePersonAnswerCitationV8,
-  validatePersonAskProgressStepEventV2,
   validatePersonAskProgressStepEventV3,
-  validatePersonAskReceiptV2,
   validatePersonAskReceiptV3,
   type PersonAskProgressItemV3,
   type PersonAskProgressSourceV3,
@@ -24,7 +20,7 @@ import type { EvidenceDeskItemV2 } from "../shared/evidence-desk-v2.js";
 import type { AgenticAskProgressRequestV1, AgenticAskProgressSinkV3 } from "./agentic-ask-progress-v1.js";
 import { FOLLOW_UP_EVIDENCE_KIND_V1 } from "../shared/follow-up-evidence-v1.js";
 import { WORKSPACE_SOURCE_IDS_V1, type WorkspaceSourceIdV1 } from "../shared/workspace-evidence-v1.js";
-import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8 } from "./agentic-evidence-bundle-v1.js";
+import { citationOfAgenticEvidenceItemV8 } from "./agentic-evidence-bundle-v1.js";
 
 /**
  * Ask progress (ADR-0039): one streamed run's record of what it searched and
@@ -32,12 +28,11 @@ import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8 } from
  * commitments built from that record. Every event comes from what the run
  * ran; nothing here reads a prompt, a plan, a note or a query.
  *
- * A run streams the progress version its answer has: V2 for the V7 answer
- * on `/v6`, which may name follow-ups (ADR-0040), V3 for the V8 answer on
- * `/v7`. Each event is validated as its version before it is sent. A V3
- * receipt counts every item research looked through, rows included; V2 counts
- * only what it read in full (ADR-0043). The V6 answer's progress V1 on `/v5`
- * was retired on 2026-10-19.
+ * A run streams Ask progress V3, the V8 answer's on `/v7`, whose names may be
+ * follow-ups (ADR-0040), workspace items or tool containers. Each event is
+ * validated before it is sent. The receipt counts every item research looked
+ * through, rows included (ADR-0043). Progress V1 and V2 were retired with
+ * `/v5` and `/v6`.
  */
 
 /** What research reports while it runs. The loop calls these; a run without progress passes none. */
@@ -67,8 +62,8 @@ export interface AgenticAskProgressRecorderV1 {
   /** `canonicalSha256` of each item this run named, in naming order: its audit record's commitments. */
   named_citation_digests(): readonly Sha256Digest[];
   /**
-   * Built only after the release step passed, from this run's record, in the run's version. Its `looked_through`
-   * counts, in V3, every item research was shown, as a row or in full; in V2, the items it read in full.
+   * Built only after the release step passed, from this run's record. Its `looked_through` counts every item research
+   * was shown, as a row or in full.
    */
   receipt(elapsed_ms: number): PersonAskReceiptV3;
   /** The run settled: nothing is sent after this. */
@@ -84,33 +79,17 @@ export interface AgenticAskProgressCatalogSourceV1 {
 
 const TOOL_ID = /^[a-z][a-z0-9-]{0,63}$/u;
 
-/** The progress version a run streams, by its answer's version. */
-export type AgenticAskProgressVersionV1 = 2 | 3;
-
-/** Each version's validators; V3 (the V8 answer, research tool contract v1) names workspace items and tool containers. */
-const VERSIONS = {
-  2: { item: validatePersonAnswerCitationV7, step: validatePersonAskProgressStepEventV2, receipt: validatePersonAskReceiptV2 },
-  3: { item: validatePersonAnswerCitationV8, step: validatePersonAskProgressStepEventV3, receipt: validatePersonAskReceiptV3 },
-} as const satisfies Record<AgenticAskProgressVersionV1, {
-  readonly item: (value: unknown) => PersonAskProgressItemV3;
-  readonly step: (value: unknown) => PersonAskProgressStepEventV3;
-  readonly receipt: (value: unknown) => PersonAskReceiptV3;
-}>;
-
-/**
- * A catalog source's progress kind; a source with no displayable kind is never named. The workspace sources and a tool's
- * containers are named from V3.
- */
-function progressSource(source: AgenticAskProgressCatalogSourceV1, version: AgenticAskProgressVersionV1): PersonAskProgressSourceV3 | undefined {
+/** A catalog source's progress kind; a source with no displayable kind is never named. */
+function progressSource(source: AgenticAskProgressCatalogSourceV1): PersonAskProgressSourceV3 | undefined {
   if (source.source_id === "meeting") return Object.freeze({ kind: "meetings" });
   if (source.source_id === "document") return Object.freeze({ kind: "documents" });
-  if ((WORKSPACE_SOURCE_IDS_V1 as readonly string[]).includes(source.source_id)) return version === 3 ? Object.freeze({ kind: source.source_id as WorkspaceSourceIdV1 }) : undefined;
+  if ((WORKSPACE_SOURCE_IDS_V1 as readonly string[]).includes(source.source_id)) return Object.freeze({ kind: source.source_id as WorkspaceSourceIdV1 });
   const [kind] = source.kinds;
   if (source.kinds.length !== 1) return undefined;
   if (kind === FOLLOW_UP_EVIDENCE_KIND_V1) return Object.freeze({ kind: "follow_ups" });
   if (kind === "tool_container") {
     const containerTool = [source.tool_id, source.source_id].find(value => typeof value === "string" && TOOL_ID.test(value));
-    return version === 3 && containerTool !== undefined ? Object.freeze({ kind: "containers", tool_id: containerTool }) : undefined;
+    return containerTool !== undefined ? Object.freeze({ kind: "containers", tool_id: containerTool }) : undefined;
   }
   if (kind !== "ticket" && kind !== "page") return undefined;
   const toolId = [source.tool_id, source.source_id].find(value => typeof value === "string" && TOOL_ID.test(value));
@@ -128,15 +107,15 @@ export function createAgenticAskProgressRequestV1(now: () => number = () => perf
 /** Identity of one released item across reads: its citation's canonical bytes, as the receipt's validator compares them. */
 function itemKey(item: EvidenceDeskItemV2): string { return canonicalJson(item.citation); }
 
-/** Merges neighbouring rows of one type: sources united (at most `sourcesMax`), found summed, items concatenated. */
-function merged(rows: readonly PersonAskReceiptRowV3[], sourcesMax: number = PERSON_ASK_PROGRESS_SOURCES_MAX_V1): PersonAskReceiptRowV3[] {
+/** Merges neighbouring rows of one type: sources united (at most a row's bound), found summed, items concatenated. */
+function merged(rows: readonly PersonAskReceiptRowV3[]): PersonAskReceiptRowV3[] {
   const out: PersonAskReceiptRowV3[] = [];
   for (const row of rows) {
     const last = out.at(-1);
     if (last === undefined || last.type !== row.type) { out.push(row); continue; }
     if (last.type === "searched" && row.type === "searched") {
       const sources = new Map(last.sources.map(source => [canonicalJson(source), source]));
-      for (const source of row.sources) if (sources.size < sourcesMax) sources.set(canonicalJson(source), source);
+      for (const source of row.sources) if (sources.size < PERSON_ASK_PROGRESS_SOURCES_MAX_V3) sources.set(canonicalJson(source), source);
       out[out.length - 1] = { type: "searched", sources: [...sources.values()], found: bounded(last.found + row.found) };
     } else if (last.type === "read" && row.type === "read") out[out.length - 1] = { type: "read", items: [...last.items, ...row.items] };
   }
@@ -158,18 +137,12 @@ interface AgenticAskProgressRecorderOptionsV1 {
 /**
  * The recorder of one streamed run. `signal` is the run's active signal: once
  * the caller cancels or the deadline passes, nothing more is sent, and after
- * `settle` nothing at all. A sink's exception is ignored. `version` is the
- * progress version the run streams; its sink receives only events valid in
- * that version.
+ * `settle` nothing at all. A sink's exception is ignored, and it receives only
+ * events valid in progress V3.
  */
-export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRecorderOptionsV1 & { readonly sink: AgenticAskProgressSinkV3; readonly version: AgenticAskProgressVersionV1 }): AgenticAskProgressRecorderV1 {
-  const { signal, sink, version } = options;
-  // Every event is validated as the run's version before it is sent, so a V2 sink only ever receives V2 events.
-  const validate = VERSIONS[version];
-  const sourcesMax = version === 3 ? PERSON_ASK_PROGRESS_SOURCES_MAX_V3 : PERSON_ASK_PROGRESS_SOURCES_MAX_V1;
-  /** An item as this version's answer cites it: the V8 citation names workspace items and tool containers. */
-  const citationOf = version === 3 ? citationOfAgenticEvidenceItemV8 : citationOfAgenticEvidenceItemV1;
-  const sourcesById = new Map(options.sources.map(source => [source.source_id, progressSource(source, version)]));
+export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRecorderOptionsV1 & { readonly sink: AgenticAskProgressSinkV3 }): AgenticAskProgressRecorderV1 {
+  const { signal, sink } = options;
+  const sourcesById = new Map(options.sources.map(source => [source.source_id, progressSource(source)]));
   const everySource = options.sources.map(source => sourcesById.get(source.source_id)).filter((value): value is PersonAskProgressSourceV3 => value !== undefined);
   let settled = false;
   let lastStage: string | undefined;
@@ -177,7 +150,7 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
   const returnedKeys = new Set<string>();
   /** Items research read in full, and the ones it named. */
   const readKeys = new Set<string>();
-  /** Items research was shown after an access check, as a row or in full: what a V3 receipt counts as looked through. */
+  /** Items research was shown after an access check, as a row or in full: what the receipt counts as looked through. */
   const shownKeys = new Set<string>();
   const named: PersonAskProgressItemV3[] = [];
   /** Every item the request named, an earlier attempt's included: each is named once, and the bound counts them all. */
@@ -191,7 +164,7 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
   const send = (event: PersonAskProgressStepEventV3): PersonAskProgressStepEventV3 | undefined => {
     if (!live()) return undefined;
     let valid: PersonAskProgressStepEventV3;
-    try { valid = validate.step(event); } catch { return undefined; }
+    try { valid = validatePersonAskProgressStepEventV3(event); } catch { return undefined; }
     try { sink(valid); } catch { /* A sink can never change research. */ }
     return valid;
   };
@@ -218,7 +191,7 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
       }
       if (batch === undefined) return;
       const covered = sourceId === undefined ? everySource : [sourcesById.get(sourceId)].filter((value): value is PersonAskProgressSourceV3 => value !== undefined);
-      for (const source of covered) if (batch.sources.size < sourcesMax) batch.sources.set(canonicalJson(source), source);
+      for (const source of covered) if (batch.sources.size < PERSON_ASK_PROGRESS_SOURCES_MAX_V3) batch.sources.set(canonicalJson(source), source);
       batch.found = bounded(batch.found + fresh);
     },
     reads_done() {
@@ -246,8 +219,8 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
         readKeys.add(key);
         // Read in this run either way; an earlier attempt's name is never sent twice.
         if (namedKeys.has(key) || namedKeys.size + fresh.length >= PERSON_ASK_PROGRESS_NAMED_MAX_V1) continue;
-        // The answer citation's projection, in this run's version: kind, label, visibility and the open ref. One that fails it is read, never named.
-        try { fresh.push({ key, item: validate.item(citationOf(item)) }); } catch { continue; }
+        // The answer citation's projection: kind, label, visibility and the open ref. One that fails it is read, never named.
+        try { fresh.push({ key, item: validatePersonAnswerCitationV8(citationOfAgenticEvidenceItemV8(item)) }); } catch { continue; }
       }
       for (let start = 0; start < fresh.length; start += PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1) {
         const chunk = fresh.slice(start, start + PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1);
@@ -265,8 +238,8 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
     named_citation_digests: () => Object.freeze(named.map(item => canonicalSha256(item.citation))),
     receipt(elapsedMs: number): PersonAskReceiptV3 {
       const elapsed = Math.min(PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1, Math.max(0, Math.round(elapsedMs)));
-      // V3 counts every item research looked through, rows included; V2 keeps its count of items read in full.
-      const lookedThrough = bounded(version === 3 ? shownKeys.size : readKeys.size);
+      // Every item research looked through, rows included.
+      const lookedThrough = bounded(shownKeys.size);
       // Fit the byte bound by dropping named items from the end; looked_through stays.
       for (let keep = named.length; ; keep -= 1) {
         let left = keep;
@@ -277,7 +250,7 @@ export function createAgenticAskProgressRecorderV1(options: AgenticAskProgressRe
           return items.length === 0 ? [] : [{ type: "read", items }];
         });
         try {
-          return validate.receipt({ looked_through: lookedThrough, elapsed_ms: elapsed, rows: merged(kept, sourcesMax).slice(0, PERSON_ASK_RECEIPT_ROWS_MAX_V1) });
+          return validatePersonAskReceiptV3({ looked_through: lookedThrough, elapsed_ms: elapsed, rows: merged(kept).slice(0, PERSON_ASK_RECEIPT_ROWS_MAX_V1) });
         } catch (error) {
           if (keep === 0) throw error;
         }

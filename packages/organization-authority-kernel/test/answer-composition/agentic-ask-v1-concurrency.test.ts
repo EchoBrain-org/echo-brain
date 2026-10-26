@@ -1,6 +1,6 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it, vi } from 'vitest';
-import { createAgenticAskV1 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '../../src/shared/evidence-desk-v1.js';
 import { withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
@@ -48,7 +48,7 @@ describe('agentic Ask concurrent reads', () => {
         return { parts: [{ question: 'Which?', needs: [{ need: 'both', status: 'found', evidence: ['E1', 'E2'] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
       }),
     };
-    const pending = withCoreRuntimeDiagnosticsV1(event => { observations.push(event); }, () => createAgenticAskV1({
+    const pending = withCoreRuntimeDiagnosticsV1(event => { observations.push(event); }, () => createAgenticAskV5({
       desk, model, audit: { append: () => undefined },
       generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 },
       now_ms: () => clock,
@@ -89,7 +89,7 @@ describe('agentic Ask concurrent reads', () => {
       actions: [{ tool: 'search', args: { query: 'alpha' } }, { tool: 'search', args: { query: 'beta' } }],
     })) };
     const controller = new AbortController();
-    const pending = createAgenticAskV1({ desk, model, audit: { append: entry => { audit.push(entry); } }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'Which?', signal: controller.signal });
+    const pending = createAgenticAskV5({ desk, model, audit: { append: entry => { audit.push(entry); } }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'Which?', signal: controller.signal });
     await bothEntered.promise;
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
@@ -116,7 +116,7 @@ describe('agentic Ask concurrent reads', () => {
       parts: [{ question: 'Which?', needs: [{ need: 'both', status: 'open', evidence: [] }], notes: '' }],
       actions: [{ tool: 'search', args: { query: 'alpha' } }, { tool: 'search', args: { query: 'beta' } }],
     })) };
-    const pending = createAgenticAskV1({ desk, model, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'Which?' });
+    const pending = createAgenticAskV5({ desk, model, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'Which?' });
     await bothEntered.promise;
     await expect(pending).rejects.toBe(denied);
     expect(model.generate).toHaveBeenCalledTimes(1);
@@ -147,7 +147,7 @@ describe('agentic Ask concurrent reads', () => {
       if (steps === 2) return { parts: [{ question: 'Which?', needs: [{ need: 'both', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'open', args: { id: 'E1' } }, { tool: 'open', args: { id: 'E2' } }] };
       return { parts: [{ question: 'Which?', needs: [{ need: 'both', status: 'found', evidence: ['E1', 'E2'] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
     }) };
-    const pending = createAgenticAskV1({ desk, model, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'Which?' });
+    const pending = createAgenticAskV5({ desk, model, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'ignored', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'Which?' });
     await bothOpened.promise;
     expect(opened).toEqual([first.id, second.id]);
     secondOpen.resolve(result([second]));

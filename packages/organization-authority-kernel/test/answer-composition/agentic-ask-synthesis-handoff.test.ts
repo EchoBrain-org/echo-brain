@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { createAgenticAskV3 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 
@@ -32,7 +32,7 @@ async function run(options: { truncated?: boolean; notice?: string; idle?: boole
   let writer: Record<string, unknown> = {};
   const prompts: Record<string, unknown>[] = [];
   const audit: unknown[] = [];
-  const answer = await createAgenticAskV3({ desk,
+  const answer = await createAgenticAskV5({ desk,
     model: { generate: async input => {
       prompts.push(JSON.parse(input.user_prompt) as Record<string, unknown>);
       if (replies.length > 0) return replies.shift();

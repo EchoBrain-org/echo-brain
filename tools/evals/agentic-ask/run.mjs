@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readPrivateAuthorityCredential } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import { createAgenticAskV1, createAgenticAskV2 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import { createAgenticAskV5 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createOpenRouterStructuredGenerationAdapter } from "../../../providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 import { assertExplicitRun, boundedInteger, json, readFlags, sha256, usage } from "../shared/runner.mjs";
@@ -312,8 +312,8 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
     },
   });
   const audits = [];
-  const create = caseDefinition.mode === "v1" ? createAgenticAskV1 : createAgenticAskV2;
-  const ask = create({
+  // Every case asks Ask's one core; a case's mode only shapes its desk (fixtures.mjs).
+  const ask = createAgenticAskV5({
     desk,
     model,
     generation,

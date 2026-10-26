@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1 } from "../../src/answer-composition/agentic-ask-research-state-v1.js";
-import { createAgenticAskV4, type createAgenticResearchV1 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { createAgenticAskV5, type createAgenticResearchV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import { agenticStartingSlotV1, type AgenticBriefV1 } from "../../src/answer-composition/agentic-brief-v1.js";
 import { agenticListMembershipV1 } from "../../src/answer-composition/agentic-list-evidence-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
@@ -30,7 +30,7 @@ interface Run {
 }
 interface Row {
   readonly id: string; readonly name: string; readonly q: string; readonly need?: string; readonly needs?: readonly string[];
-  readonly desk: () => Partial<EvidenceDeskPortV2>; readonly v4?: { readonly now?: string; readonly time_zone?: string };
+  readonly desk: () => Partial<EvidenceDeskPortV2>; readonly asked?: { readonly now?: string; readonly time_zone?: string };
   readonly steps: readonly Step[]; readonly w: readonly unknown[];
   readonly out: string; readonly status?: string; readonly says?: readonly unknown[]; readonly gap?: string; readonly notice?: string;
   readonly stop?: string; readonly rejected?: readonly string[]; readonly repaired?: true; readonly citations?: number; readonly listed?: number;
@@ -102,10 +102,10 @@ const followUps = (items: readonly EvidenceDeskItemV2[], size = 10, desk: Partia
   scope: { kind: "global" }, live_sources: [FOLLOW_UPS_SOURCE_DESCRIPTOR_V1], list: pager(items, size, { page_full: false }, { page_full: false }),
   search: vi.fn(async () => result([]) as EvidenceDeskResultV2), open: vi.fn(async () => result([]) as EvidenceDeskResultV2), revalidate: vi.fn(async () => checked), ...desk,
 });
-/** Ask's V4 core (V7 answers, the first that cite follow-ups), asked by Mara Lind. */
-function askV4(replies: (input: StructuredGenerationInput) => unknown, desk: EvidenceDeskPortV2, { now = LIST_READ_AT, time_zone }: NonNullable<Row["v4"]>) {
+/** Ask's core over the row's own desk, asked by Mara Lind, at `now` in `time_zone` when the row gives one. */
+function askedByMara(replies: (input: StructuredGenerationInput) => unknown, desk: EvidenceDeskPortV2, { now = LIST_READ_AT, time_zone }: NonNullable<Row["asked"]>) {
   const inputs: StructuredGenerationInput[] = [];
-  const research = createAgenticAskV4({
+  const research = createAgenticAskV5({
     desk, generation, audit: { append: () => undefined }, asker: { display_name: "Mara Lind" }, wall_ms: () => Date.parse(now), ...(time_zone === undefined ? {} : { time_context: { now, time_zone } }),
     model: { generate: async (input: StructuredGenerationInput) => { inputs.push(input); const reply = replies(input); if (reply === undefined) throw new Error("unscripted call"); return reply; } },
   }) as unknown as ReturnType<typeof createAgenticResearchV1>;
@@ -127,7 +127,7 @@ function script(q: string, needs: readonly string[], steps: readonly Step[], wri
 }
 async function run(row: Row) {
   const { replies, left } = script(row.q, row.needs ?? [row.need!], row.steps, row.w);
-  const h = row.v4 === undefined ? harness(replies, row.desk()) : askV4(replies, row.desk() as EvidenceDeskPortV2, row.v4);
+  const h = row.asked === undefined ? harness(replies, row.desk()) : askedByMara(replies, row.desk() as EvidenceDeskPortV2, row.asked);
   const { response, research, writer_evidence } = await h.research.answerWithResearch({ question: row.q }) as { response: any; research: any; writer_evidence: unknown };
   const part = response.parts[0];
   const ran: Run = { h, response, research, writer_evidence, part, steps: prompts(h.inputs, false), writer: prompts(h.inputs, true) };
@@ -169,7 +169,7 @@ const names = (from: number, count: number) => tickets(from, count).map(item => 
 const FOLLOW_UPS = { tool: "list", args: { source: "follow_ups", owner: "Mara Lind", status: "open" } } as const;
 const KEEP_FOLLOW_UPS = 'list L1 is unfinished: keep reading the list (repeat list with {"source":"follow_ups","status":"open","owner":"Mara Lind"})';
 const TWELVE = Array.from({ length: 12 }, (_, index) => followUpItem(index + 1));
-const FU = { q: "What are my open follow-ups?", need: "my open follow-ups", v4: {}, desk: () => followUps(TWELVE) };
+const FU = { q: "What are my open follow-ups?", need: "my open follow-ups", asked: {}, desk: () => followUps(TWELVE) };
 const FU12 = `12 follow-ups with owner Mara Lind and status open: ${TWELVE.map(item => item.label).join("; ")}.`;
 /** Follow-ups with due dates: THERM-41 is overdue on October 18, THERM-43 and THERM-47 are due that week. */
 const DUES: Readonly<Record<number, readonly [string, string]>> = { 1: ["2026-10-09", "October 9, 2026"], 2: ["2026-10-30", "October 30, 2026"], 3: ["2026-10-20", "October 20, 2026"], 7: ["2026-10-22", "October 22, 2026"], 9: ["2026-11-02", "November 2, 2026"] };
@@ -269,7 +269,7 @@ const X27 = { q: "Which Confluence pages were created on October 4, 2026, and is
 const X27_LIST = step([OCT4_LIST], ["open", [], WI], ["open", []]);
 const DVT_GATE = "The Gate reviews page says the DVT gate is on hold pending fixture rework.";
 const RESTATE = "Traceability — requirement threads and BUG-412 walkthrough was created on October 4, 2026.";
-const WEEK = { q: "Which of my open tasks are due this week?", need: "my open follow-ups due from 2026-10-18 to 2026-10-24", v4: { now: "2026-10-18T17:00:00.000Z", time_zone: "UTC" }, desk: () => followUps(DUE_ITEMS), steps: [read([FOLLOW_UPS], WI), read([FOLLOW_UPS], WI), fin(WI, "L1")] };
+const WEEK = { q: "Which of my open tasks are due this week?", need: "my open follow-ups due from 2026-10-18 to 2026-10-24", asked: { now: "2026-10-18T17:00:00.000Z", time_zone: "UTC" }, desk: () => followUps(DUE_ITEMS), steps: [read([FOLLOW_UPS], WI), read([FOLLOW_UPS], WI), fin(WI, "L1")] };
 const due = (since: string | undefined, until: string) => ({ id: "L1", where: { field: "due", ...(since === undefined ? {} : { since }), until } });
 const THIS_WEEK = `2 ${LEAD12} are due from October 18 to October 24, 2026: THERM-43 follow-up (due October 20, 2026); THERM-47 follow-up (due October 22, 2026).`;
 const NOT_DUE = "Not found: follow-ups with owner Mara Lind and status open due from October 23 to October 29, 2026.";
@@ -398,10 +398,10 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       w: [say(TWO, ["E11", "E12"])], out: "answered", says: [TWO], wl: { count: 8, checked: 8 },
       check: ({ research }) => expect(research.rounds[1].actions.map((action: any) => [action.args.id, action.result.id])).toEqual(PAGES.slice(0, 4).map((row, index) => [row.label, `E${index + 1}`])) },
     ...([["C3", ["E1"]], ["C3b", ["L1", "E1"]]] as const).map(([id, evidence]): Row => ({
-      id, name: "answers one follow-up's due date from its text on the list's first page, stating no list: a content need never waits", q: "When is THERM-41 due?", need: "THERM-41's due date", v4: {}, desk: () => followUps(DUE_ITEMS),
+      id, name: "answers one follow-up's due date from its text on the list's first page, stating no list: a content need never waits", q: "When is THERM-41 due?", need: "THERM-41's due date", asked: {}, desk: () => followUps(DUE_ITEMS),
       steps: [read([FOLLOW_UPS], C), fin(C, ...evidence)], w: [say("THERM-41 follow-up is due October 9, 2026.", ["E1"])], out: "answered", says: [cite("THERM-41 follow-up is due October 9, 2026.", 1, true)], listed: 1, wl: { complete: false, count: 10, stated: false },
     })),
-    { id: "C3c (misdeclared)", name: "states all 12 follow-ups for a due-date question declared which_items, then keeps the member's facts by id and in prose", q: "When is THERM-41 due?", need: "THERM-41's due date", v4: {}, desk: () => followUps(DUE_ITEMS),
+    { id: "C3c (misdeclared)", name: "states all 12 follow-ups for a due-date question declared which_items, then keeps the member's facts by id and in prose", q: "When is THERM-41 due?", need: "THERM-41's due date", asked: {}, desk: () => followUps(DUE_ITEMS),
       steps: [read([FOLLOW_UPS], WI), fin(WI, "L1"), read([FOLLOW_UPS], WI), fin(WI, "L1")], w: [say("THERM-41 follow-up is due October 9, 2026.", ["E1"], [{ id: "L1", members: ["E1"] }])],
       rejected: [`need N1 "THERM-41's due date": ${KEEP_FOLLOW_UPS}`], out: "answered", says: [FULL12, `1 ${LEAD12}: ${dueFacts(1)}.`, "THERM-41 follow-up is due October 9, 2026."], citations: 12, listed: 2 },
     ...[say("THERM-46 is owned by Dana Lee.", ["E6"]), use({ id: "L1", members: ["E6"] })].map((writer): Row => ({
@@ -502,7 +502,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     { id: "R7 (R2b)", name: "notes the same form after four opens, never forcing it into a list", q: "Which Jira tickets created on October 4, 2026 mention BUG-412?", need: "tickets created on 2026-10-04 that mention BUG-412",
       desk: () => jira(tickets(1, 8), { body: bodyText }), steps: [read([TICKETS_LIST]), read(opens(ids(1, 4))), fin(WS, "L1", "E3")], w: [say("THERM-3 mentions BUG-412.", ["L1", "E3"])],
       out: "partial", says: [`THERM-3 mentions BUG-412 ${of8(4)}.`], gap: UNCHECKED },
-    { id: "R7 (R3)", name: "answers which follow-ups mention the fan curve: every follow-up row was read in full when shown", q: "Which of my open follow-ups are about the fan curve?", need: "my open follow-ups about the fan curve", v4: {}, desk: () => followUps(TWELVE.slice(0, 4)),
+    { id: "R7 (R3)", name: "answers which follow-ups mention the fan curve: every follow-up row was read in full when shown", q: "Which of my open follow-ups are about the fan curve?", need: "my open follow-ups about the fan curve", asked: {}, desk: () => followUps(TWELVE.slice(0, 4)),
       steps: [read([FOLLOW_UPS]), fin(WS, "L1", "E2", "E4")], w: [say("THERM-42 follow-up and THERM-44 follow-up say to ship fan curve v2 before DVT.", ["L1", "E2", "E4"])], out: "answered", says: ["THERM-42 follow-up and THERM-44 follow-up say to ship fan curve v2 before DVT."] },
     ...([["ZHEN YE", "answered"], ["Mara Quinn", "not_found"]] as const).map(([value, out]): Row => ({
       id: "X1", name: `answers which tickets are assigned to ${value} with only the members that owner records`, q: "Which of the Jira tickets created on October 4, 2026 are assigned to Zhen Ye?", need: TIX.need,
@@ -547,10 +547,10 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       w: [nothing("pages created on October 4 that mention BUG-412")], rejected: BAD, stop: "unusable_step", out: "partial", status: "not_found", says: [], gap: `${INCOMPLETE} Missing context: pages created on October 4 that mention BUG-412. ${WHICH}`,
       check: ({ research }) => expect(research.plan[0].needs).toEqual([{ need: BUG_NEED, kind: "which_say", status: "not_found", evidence: [] }]) },
     { id: "X10", name: "keeps a sentence with no note for a which_say need left open without its list, partial", ...B4, steps: [read([OCT4_LIST], WS), read(opens(ids(1, 4)), WS), ...UNUSABLE], w: [say(TRACE, ["E12"])], rejected: BAD, stop: "unusable_step", out: "partial", says: [TRACE], gap: WHICH },
-    { id: "X11", name: "never waits for the end of a which_say follow-up list, and notes it", q: "Which of my open follow-ups are about the fan curve?", need: "my open follow-ups about the fan curve", v4: {}, desk: () => followUps(TWELVE),
+    { id: "X11", name: "never waits for the end of a which_say follow-up list, and notes it", q: "Which of my open follow-ups are about the fan curve?", need: "my open follow-ups about the fan curve", asked: {}, desk: () => followUps(TWELVE),
       steps: [read([FOLLOW_UPS], WS), fin(WS, "L1", "E2", "E4")], w: [say("THERM-42 follow-up and THERM-44 follow-up say to ship fan curve v2 before DVT.", ["E2", "E4"])], listed: 1,
       out: "partial", says: ["THERM-42 follow-up and THERM-44 follow-up say to ship fan curve v2 before DVT (10 of at least 10 checked so far)."], gap: UNCHECKED },
-    { id: "X11b", name: "refuses a not_found which_say need until the list's end shows absence; all 12 rows shown, all were checked", q: "Which of my open follow-ups are about the oven?", need: "my open follow-ups about the oven", v4: {}, desk: () => followUps(TWELVE),
+    { id: "X11b", name: "refuses a not_found which_say need until the list's end shows absence; all 12 rows shown, all were checked", q: "Which of my open follow-ups are about the oven?", need: "my open follow-ups about the oven", asked: {}, desk: () => followUps(TWELVE),
       steps: [read([FOLLOW_UPS], WS), none(WS, "L1"), read([FOLLOW_UPS], WS), none(WS, "L1")], w: [nothing("open follow-ups about the oven")], rejected: [`need N1 "my open follow-ups about the oven" ${ABSENT}`],
       out: "not_found", says: [], gap: "Not found: open follow-ups about the oven.", listed: 2, wl: { id: "L1", complete: true, count: 12, checked: 12 } },
     { id: "X12", name: "makes a list statement private when one member it names is", ...MARA, desk: () => meetings([meetingAction("a1", { list_label: LINES[0]! }), meetingAction("a2", { visibility: "approver_only", list_label: LINES[1]! })]),
@@ -687,7 +687,7 @@ function x18(time_zone: string) {
   const updates = ["2026-10-10T23:30:00.000Z", "2026-10-11T03:00:00.000Z", "2026-10-12T09:00:00.000Z"];
   const rows = PAGES.map((row, index) => { const { updated: _updated, ...created } = row.dates!; return Object.freeze({ ...row, dates: index === 3 ? created : updates[index] === undefined ? row.dates : { ...row.dates, updated: updates[index] } }); });
   return {
-    q: "Which of the Confluence pages created on October 4, 2026 were updated after October 10?", need: "pages created on 2026-10-04", v4: { now: "2026-10-18T01:00:00.000Z", time_zone },
+    q: "Which of the Confluence pages created on October 4, 2026 were updated after October 10?", need: "pages created on 2026-10-04", asked: { now: "2026-10-18T01:00:00.000Z", time_zone },
     desk: () => followUps(rows, 50, { live_sources: [CONFLUENCE] }), steps: [read([OCT4_LIST], WI), fin(WI, "L1")],
   };
 }

@@ -1,7 +1,7 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerResponseV8, validatePersonFollowUpEvidenceV1, type PersonAskProgressStepEventV3 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
-import { createAgenticAskV4, createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
@@ -47,7 +47,7 @@ function desk(overrides: Partial<EvidenceDeskPortV2> = {}) {
   } satisfies EvidenceDeskPortV2;
 }
 const ask = (port: EvidenceDeskPortV2, model: ReturnType<typeof scripted>['model']) =>
-  createAgenticAskV4({ desk: port, model, audit: { append: () => undefined }, generation, asker: { display_name: 'Mara Lind' }, today: () => '2026-10-19' });
+  createAgenticAskV5({ desk: port, model, audit: { append: () => undefined }, generation, asker: { display_name: 'Mara Lind' }, today: () => '2026-10-19' });
 
 describe('Ask research tool contract v1', () => {
   it('refuses a read its source cannot take before the desk, and answers it again from memory, unsent', async () => {

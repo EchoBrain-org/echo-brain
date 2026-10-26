@@ -1,10 +1,10 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  validatePersonAnswerResponseV7, validatePersonAskProgressStepEventV2, validatePersonAskReceiptV2, validatePersonFollowUpEvidenceV1, type PersonAskProgressStepEventV2,
+  validatePersonAnswerResponseV8, validatePersonAskProgressStepEventV3, validatePersonAskReceiptV3, validatePersonFollowUpEvidenceV1, type PersonAskProgressStepEventV3,
   type PersonFollowUpEvidenceV1,
 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
-import { createAgenticAskV3, createAgenticAskV4 } from '../../src/answer-composition/agentic-ask-v1.js';
+import { createAgenticAskV5 } from '../../src/answer-composition/agentic-ask-v1.js';
 import { ANSWER_PROMPT, ASK_STEP_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, FOLLOW_UPS_STEP_GUIDANCE } from '../../src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { citationOfAgenticEvidenceItemV1, describeAgenticEvidenceItemV1 } from '../../src/answer-composition/agentic-evidence-bundle-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
@@ -67,30 +67,30 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
       step('found', [{ tool: 'finish', args: {} }], ['E1']),
       { sentences: [{ text: 'You own the open fan curve follow-up.', evidence: ['E1'] }], not_found: [] },
     ]);
-    await createAgenticAskV4({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: followUpsOnly.model, audit: { append: () => undefined }, generation, asker }).answer({ question });
+    await createAgenticAskV5({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: followUpsOnly.model, audit: { append: () => undefined }, generation, asker }).answer({ question });
     expect(followUpsOnly.steps()[0]!.system_prompt).toBe(`${ASK_STEP_PROMPT}\n\n${FOLLOW_UPS_STEP_GUIDANCE}`);
     expect(followUpsOnly.writer()!.system_prompt).toBe(`${ANSWER_PROMPT}\n\n${FOLLOW_UPS_ANSWER_GUIDANCE}`);
     expect(listSources(followUpsOnly.steps()[0]!)).toEqual(['meetings', 'documents', 'follow_ups']);
     expect((userOf(followUpsOnly.steps()[0]!).source_catalog as { source: string }[]).at(-1)).toEqual({ source: 'follow_ups', kind: 'follow_up', description: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.description, metadata_only_list: false, capabilities: FOLLOW_UPS_SOURCE_DESCRIPTOR_V1.capabilities });
 
     const withTools = scripted([step('open', [{ tool: 'finish', args: {} }])]);
-    await createAgenticAskV4({ desk: deskWith([JIRA, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: withTools.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
+    await createAgenticAskV5({ desk: deskWith([JIRA, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: withTools.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
     const toolsPrompt = withTools.steps()[0]!.system_prompt;
     expect(toolsPrompt.startsWith(`${ASK_STEP_PROMPT}\n\nLive sources report current tool context`)).toBe(true);
     expect(toolsPrompt.endsWith(`\n\n${FOLLOW_UPS_STEP_GUIDANCE}`)).toBe(true);
     expect(listSources(withTools.steps()[0]!)).toEqual(['meetings', 'documents', 'tickets', 'follow_ups']);
 
-    // A V6 answer never binds follow-ups, so its prompts are exactly what they were before follow-ups existed.
-    const v6 = scripted([step('open', [{ tool: 'finish', args: {} }])]);
-    await createAgenticAskV3({ desk: deskWith([JIRA, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: v6.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
-    const v6Prompt = v6.steps()[0]!.system_prompt;
-    expect(v6Prompt).toBe(toolsPrompt.slice(0, -`\n\n${FOLLOW_UPS_STEP_GUIDANCE}`.length));
-    expect(v6Prompt).not.toContain('follow_ups');
-    expect(listSources(v6.steps()[0]!)).toEqual(['meetings', 'documents', 'tickets']);
+    // A desk without follow-ups, as task research binds, leaves its prompts exactly what they were before follow-ups existed.
+    const without = scripted([step('open', [{ tool: 'finish', args: {} }])]);
+    await createAgenticAskV5({ desk: deskWith([JIRA]), model: without.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
+    const withoutPrompt = without.steps()[0]!.system_prompt;
+    expect(withoutPrompt).toBe(toolsPrompt.slice(0, -`\n\n${FOLLOW_UPS_STEP_GUIDANCE}`.length));
+    expect(withoutPrompt).not.toContain('follow_ups');
+    expect(listSources(without.steps()[0]!)).toEqual(['meetings', 'documents', 'tickets']);
 
-    // Mine reads only what the asker added, so a V7 answer there binds no follow-ups either.
+    // Mine reads only what the asker added, so an answer there binds no follow-ups either.
     const mine = scripted([step('open', [{ tool: 'finish', args: {} }])]);
-    await createAgenticAskV4({ desk: { ...deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), scope: { kind: 'mine' } }, model: mine.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
+    await createAgenticAskV5({ desk: { ...deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), scope: { kind: 'mine' } }, model: mine.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
     expect(mine.steps()[0]!.system_prompt).toBe(ASK_STEP_PROMPT);
     expect(listSources(mine.steps()[0]!)).toEqual(['meetings', 'documents']);
   });
@@ -102,7 +102,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
       step('found', [{ tool: 'finish', args: {} }], ['E1', 'E2']),
       { sentences: [{ text: 'You have two open follow-ups: the fan curve, due Oct 20, and the alarm thresholds.', evidence: ['E1', 'E2'] }], not_found: [] },
     ]);
-    const answer = await createAgenticAskV4({ desk, model: run.model, audit: { append: () => undefined }, generation, asker }).answer({ question });
+    const answer = await createAgenticAskV5({ desk, model: run.model, audit: { append: () => undefined }, generation, asker }).answer({ question });
 
     expect(desk.list).toHaveBeenCalledTimes(1);
     const input = desk.list.mock.calls[0]![0];
@@ -120,18 +120,18 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
       { id: 'E1', source: 'follow_ups', kind: 'follow_up', title: 'THERM-48 Fan curve v2', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open', due_at: '2026-10-20' }, dates: { checked: '2026-10-15T09:30:00.000Z' }, text: fanCurve.text },
       { id: 'E2', source: 'follow_ups', kind: 'follow_up', title: 'THERM-46 Alarm thresholds', provenance: { kind: 'follow_up' }, attributes: { owner: 'Mara Lind', status: 'open' }, text: thresholds.text },
     ]);
-    expect(validatePersonAnswerResponseV7(answer).citations).toEqual([fanCurve, thresholds].map(item => ({ citation: item.citation, kind: 'follow_up', label: item.label, visibility: 'team', ref: item.ref })));
+    expect(validatePersonAnswerResponseV8(answer).citations).toEqual([fanCurve, thresholds].map(item => ({ citation: item.citation, kind: 'follow_up', label: item.label, visibility: 'team', ref: item.ref })));
   });
 
   it('keeps owner and status notes truthful for sources that ignore them', async () => {
-    const noteFor = async (create: typeof createAgenticAskV3 | typeof createAgenticAskV4) => {
+    const noteFor = async (live: NonNullable<EvidenceDeskPortV2['live_sources']>) => {
       const run = scripted([step('open', [{ tool: 'list', args: { source: 'documents', owner: 'Mara', status: 'open' } }]), step('open', [{ tool: 'finish', args: {} }])]);
-      await create({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: run.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
+      await createAgenticAskV5({ desk: deskWith(live), model: run.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
       return userOf(run.steps()[1]!).last_results[0]!.note;
     };
     // A source says itself which filters it takes (research tool contract v1), whatever else the catalog holds.
-    expect(await noteFor(createAgenticAskV4)).toBe('documents takes no status; ignored; documents takes no owner; ignored; nothing more to list');
-    expect(await noteFor(createAgenticAskV3)).toBe('documents takes no status; ignored; documents takes no owner; ignored; nothing more to list');
+    expect(await noteFor([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1])).toBe('documents takes no status; ignored; documents takes no owner; ignored; nothing more to list');
+    expect(await noteFor([])).toBe('documents takes no status; ignored; documents takes no owner; ignored; nothing more to list');
   });
 
   it("reads follow-ups by their own dates, and refuses a due date and statuses outside open and done before the desk", async () => {
@@ -145,7 +145,7 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
       ]),
       step('open', [{ tool: 'finish', args: {} }]),
     ]);
-    await createAgenticAskV4({ desk, model: run.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
+    await createAgenticAskV5({ desk, model: run.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
     // A window with no date field reads any of a follow-up's own dates (research tool contract v1).
     expect(desk.list).toHaveBeenCalledTimes(1);
     expect(desk.list.mock.calls[0]![0]).toMatchObject({ source: 'follow_ups', since: '2026-10-09', date_field: 'any' });
@@ -164,23 +164,23 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
       step('open', [{ tool: 'list', args: { source: 'Open items' } }, { tool: 'search', args: { source: 'follow-ups', query: 'THERM-48' } }]),
       step('open', [{ tool: 'finish', args: {} }]),
     ]);
-    await createAgenticAskV4({ desk, model: run.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
+    await createAgenticAskV5({ desk, model: run.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
     expect(desk.list).toHaveBeenCalledWith(expect.objectContaining({ source: 'follow_ups' }));
     expect(desk.search).toHaveBeenCalledWith(expect.objectContaining({ source: 'follow_ups', query: 'THERM-48', kinds: ['follow_up'] }));
   });
 
-  it('streams a V7 Ask in progress V2: its search names follow-ups, and its reads and receipt name each follow-up it read (ADR-0039)', async () => {
+  it('streams an Ask in progress V3: its search names follow-ups, and its reads and receipt name each follow-up it read (ADR-0039)', async () => {
     const run = scripted([
       step('open', [{ tool: 'list', args: { source: 'follow_ups', owner: 'Mara Lind', status: 'open' } }]),
       step('found', [{ tool: 'finish', args: {} }], ['E1']),
       { sentences: [{ text: 'You own the open fan curve follow-up.', evidence: ['E1'] }], not_found: [] },
     ]);
     const audits: Record<string, unknown>[] = [];
-    const events: PersonAskProgressStepEventV2[] = [];
-    const { response, receipt } = await createAgenticAskV4({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: run.model, audit: { append: entry => { audits.push(entry as never); } }, generation, asker })
+    const events: PersonAskProgressStepEventV3[] = [];
+    const { response, receipt } = await createAgenticAskV5({ desk: deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), model: run.model, audit: { append: entry => { audits.push(entry as never); } }, generation, asker })
       .answerWithReceipt({ question, on_progress: event => { events.push(event); } });
     const named = [fanCurve, thresholds].map(item => ({ citation: item.citation, kind: 'follow_up', label: item.label, visibility: 'team', ref: item.ref }));
-    for (const event of events) expect(validatePersonAskProgressStepEventV2(event)).toEqual(event);
+    for (const event of events) expect(validatePersonAskProgressStepEventV3(event)).toEqual(event);
     expect(events.filter(event => event.type !== 'stage')).toEqual([
       { type: 'searched', sources: [{ kind: 'follow_ups' }], found: 2 },
       { type: 'read', items: named },
@@ -188,8 +188,8 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     // Nothing a follow-up's text holds (its owner, decision or check) travels in a step: only its citation projection.
     expect(JSON.stringify(events)).not.toContain('Mara');
     expect(JSON.stringify(events)).not.toContain(decision.first_line);
-    expect(validatePersonAnswerResponseV7(response).citations).toEqual([named[0]]);
-    expect(validatePersonAskReceiptV2(receipt)).toEqual({ looked_through: 2, elapsed_ms: receipt.elapsed_ms, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 2 }, { type: 'read', items: named }] });
+    expect(validatePersonAnswerResponseV8(response).citations).toEqual([named[0]]);
+    expect(validatePersonAskReceiptV3(receipt)).toEqual({ looked_through: 2, elapsed_ms: receipt.elapsed_ms, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 2 }, { type: 'read', items: named }] });
     expect(audits.at(-1)).toMatchObject({ named_citation_digests: [fanCurve, thresholds].map(item => canonicalSha256(item.citation)) });
   });
 
