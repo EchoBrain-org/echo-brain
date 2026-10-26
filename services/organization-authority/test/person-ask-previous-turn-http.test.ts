@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V3, PERSON_ANSWER_PATH_V4, PERSON_ANSWER_PATH_V5, PERSON_ANSWER_PATH_V6, PERSON_ANSWER_PATH_V7,
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
+  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
   type PersonAnswerPreviousV1,
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -14,8 +12,7 @@ import { CLOUD, sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-ite
 /**
  * The asker's previous turn over HTTP (ADR-0047): `POST /v7/person/ask` takes
  * it, plain and streamed, and hands it to the V8 Ask, which resolves a
- * follow-up before research or asks which one, audited as `clarify`. Every
- * older route refuses a request that carries it before its Ask runs.
+ * follow-up before research or asks which one, audited as `clarify`.
  */
 
 afterEach(closeAskServers);
@@ -56,7 +53,7 @@ function fromOpened(): StructuredGenerationPort & { readonly steps: Record<strin
       actions: [opened === undefined ? { tool: 'search', args: { query: 'ECHO-12' } } : { tool: 'finish', args: {} }] };
   } };
 }
-const v7 = (f: OpenItemsFixtureV1, model: StructuredGenerationPort) => serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(liveAskOptions(f, model), 8) });
+const v7 = (f: OpenItemsFixtureV1, model: StructuredGenerationPort) => serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(liveAskOptions(f, model)) });
 const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: QUESTION });
 const body = (previous: unknown = PREVIOUS, question = QUESTION) => ({ schema_version: 3, question, previous });
 
@@ -120,23 +117,16 @@ describe('the previous turn on /v7 (ADR-0047)', () => {
   });
 });
 
-describe('every route before /v7 refuses the previous turn (ADR-0047)', () => {
-  it('answers invalid_request before its Ask runs, plain and streamed, and still answers the same request without it', async () => {
+describe('the previous turn at the HTTP boundary (ADR-0047)', () => {
+  it('reaches the Ask as sent, and never on a retired route', async () => {
     const asked: unknown[] = [];
     const application = { ask: vi.fn(async (input: { readonly request: unknown }) => { asked.push(input.request); throw new Error('this test only reads the boundary'); }), askWithProgress: vi.fn() };
-    const base = await serveAsk({ person_answer_v3: application as never, person_answer_v4: application as never, person_answer_v5: application as never, person_answer_v6: application as never, person_answer_v7: application as never });
-    const post = (path: string, request: unknown, progress?: string) => fetch(`${base}${path}`, { method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer mina', ...(progress === undefined ? {} : { 'x-echo-ask-progress': progress }) }, body: JSON.stringify(request) });
-    for (const [path, progress] of [[PERSON_ANSWER_PATH_V3], [PERSON_ANSWER_PATH_V4], [PERSON_ANSWER_PATH_V5], [PERSON_ANSWER_PATH_V6], [PERSON_ANSWER_PATH_V6, PERSON_ASK_PROGRESS_HEADER_VALUE_V2]] as const) {
-      const refused = await post(path, body(), progress);
-      expect([path, refused.status]).toEqual([path, 400]);
-      await expect(refused.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
-    }
+    const base = await serveAsk({ person_answer_v7: application as never });
+    const post = (path: string, request: unknown) => fetch(`${base}${path}`, { method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer mina' }, body: JSON.stringify(request) });
+    for (const path of ['/v3/person/ask', '/v4/person/ask', '/v5/person/ask', '/v6/person/ask']) expect([path, (await post(path, body())).status]).toEqual([path, 404]);
     expect(application.ask).not.toHaveBeenCalled();
-    expect(application.askWithProgress).not.toHaveBeenCalled();
-    // Without it, the same request reaches the older route's Ask; with it, /v7 hands it on as sent.
-    await post(PERSON_ANSWER_PATH_V6, { schema_version: 3, question: QUESTION });
     await post(PERSON_ANSWER_PATH_V7, body());
-    expect(asked).toEqual([{ schema_version: 3, question: QUESTION }, body()]);
+    expect(asked).toEqual([body()]);
   });
 });

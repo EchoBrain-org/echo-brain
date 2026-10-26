@@ -3,10 +3,10 @@ import {
   validatePersonAskAnswerLayoutHeaderV1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
 import {
-  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  formatPersonAskProgressEventV2, formatPersonAskProgressEventV3, type PersonAskProgressErrorStatusV1,
+  PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  formatPersonAskProgressEventV3, type PersonAskProgressErrorStatusV1, type PersonAskProgressEventV3,
 } from "@echo-brain/organization-api";
-import { startPersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
+import { startPersonAskProgressStreamV1, type PersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
   PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
@@ -69,10 +69,6 @@ import {
   type PersonEmployeeHttpApplication,
 } from "./person-employee-http-application.js";
 import {
-  PERSON_ANSWER_PATH_V3,
-  PERSON_ANSWER_PATH_V4,
-  PERSON_ANSWER_PATH_V5,
-  PERSON_ANSWER_PATH_V6,
   PERSON_ANSWER_PATH_V7,
   PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
@@ -92,13 +88,10 @@ import {
   validatePersonResearchEvalStartRequestV1,
   validatePersonEvidenceSearchRequestV1,
   validatePersonSourceEvidenceReadRequestV1,
-  type PersonAnswerRequestV3,
 } from "@echo-brain/organization-api";
 import type { PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
-import type {
-  PersonAnswerHttpInputV1, PersonAnswerV4HttpApplication, PersonAnswerV5HttpApplication, PersonAnswerV6HttpApplication, PersonAnswerV7HttpApplication,
-} from "./person-live-answer-http-application.js";
+import type { PersonAnswerV7HttpApplication } from "./person-live-answer-http-application.js";
 import type { PersonResearchEvalHttpApplicationV1 } from "./person-research-eval-http-application.js";
 import type { PersonTriggerRunsHttpApplicationV1 } from './person-trigger-runs-http-application.js';
 import type { PersonDiagnosticsHttpApplicationV1 } from './person-diagnostics-http-application.js';
@@ -140,10 +133,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `DELETE ${PERSON_EMPLOYEES_PATH_V1}`,
   `GET ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
-  `POST ${PERSON_ANSWER_PATH_V3}`,
-  `POST ${PERSON_ANSWER_PATH_V4}`,
-  `POST ${PERSON_ANSWER_PATH_V5}`,
-  `POST ${PERSON_ANSWER_PATH_V6}`,
   `POST ${PERSON_ANSWER_PATH_V7}`,
   `POST ${PERSON_ASK_CHECK_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
@@ -186,19 +175,14 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees?: PersonEmployeeHttpApplication;
   /**
-   * Agentic Ask (RFC-0003) and the evidence desk: the only Ask (ADR-0022).
-   * Optional until the active Organization Authority runtime has a configured answer model.
+   * The evidence desk (`/v3/person/evidence/search` and `/open`, ADR-0022), composed with the answer model. Its Ask route,
+   * `/v3/person/ask`, was retired with `/v4` to `/v6`: Ask is `person_answer_v7`.
    */
   readonly person_answer_v3?: PersonAnswerV3HttpApplication;
-  /** Optional ticket-capable Ask, selected with its provider runtime. */
-  readonly person_answer_v4?: PersonAnswerV4HttpApplication;
-  /** Optional page-capable Ask. It preserves the V3/V4 routes for installed clients. */
-  readonly person_answer_v5?: PersonAnswerV5HttpApplication;
-  /** Optional follow-up-capable Ask (`/v6`, the V7 answer, ADR-0040). It preserves `/v3` to `/v5` for installed clients. */
-  readonly person_answer_v6?: PersonAnswerV6HttpApplication;
   /**
-   * Optional workspace-capable Ask (`/v7`, the V8 answer, research tool contract v1): it may read and cite the asker's
-   * projects, people, tools and their connected tools' containers. It preserves `/v3` to `/v6` for installed clients.
+   * Ask (`/v7`, the V8 answer, research tool contract v1), optional until the runtime has a configured answer model: it may
+   * read and cite live tickets and pages, ECHO's shared follow-ups (ADR-0040), and the asker's projects, people, tools and
+   * their connected tools' containers.
    */
   readonly person_answer_v7?: PersonAnswerV7HttpApplication;
   /** The Ask source check (ADR-0047); it needs no answer model, and reads the database and the caller's own tool connections. */
@@ -538,16 +522,6 @@ function askOptions(request: IncomingMessage): { readonly time_context?: PersonA
   return { ...(time_context === undefined ? {} : { time_context }), ...(askAnswerLayout(request) ? { answer_layout: true as const } : {}) };
 }
 
-/**
- * The Ask request on `/v3` to `/v6`: the V3 request without `previous`, which only `/v7` takes (ADR-0047). A client that
- * sends it to an older route learns `invalid_request` before the Ask runs, as from an Authority that predates it.
- */
-function validatePersonAnswerRequestBeforeV7(value: unknown): PersonAnswerRequestV3 {
-  const request = validatePersonAnswerRequestV3(value);
-  if (request.previous !== undefined) throw new AuthorityOperationError("invalid_request", "Ask previous is only on /v7");
-  return request;
-}
-
 /** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
   application: Application | undefined,
@@ -576,69 +550,31 @@ function personCancellablePost<Application, Request>(
 const streamedFailureStatus = new WeakMap<ServerResponse, number>();
 
 /**
- * `POST /v5/person/ask`, the V6 answer, always as JSON. Its Ask progress V1
- * stream was retired on 2026-10-19: every Authority that streamed it also
- * serves `/v6`, which every streaming client asks first, so a progress header
- * here gets the JSON answer every client handles. A disconnect still cancels the Ask.
- */
-function personAskV5Post(application: PersonAnswerV5HttpApplication | undefined): PersonPostHandler {
-  return personCancellablePost(application, validatePersonAnswerRequestBeforeV7, (served, input) => served.ask(input), true);
-}
-
-/**
- * `POST /v6/person/ask`, the V7 answer (ADR-0040). A client that sends the
- * progress header value `2` gets the same Ask as server-sent events in Ask
- * progress V2 (ADR-0039), once the request authenticated and validated; before
- * that, and for any other value, `1` included, the response is the JSON V7
- * answer: a V1 client never meets a follow-up. A disconnect still cancels the
- * Ask, and nothing more is written.
- */
-function personAskV6Post(application: PersonAnswerV6HttpApplication | undefined): PersonPostHandler {
-  return personAskStreamingPost(application, validatePersonAnswerRequestBeforeV7, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, response => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV2));
-}
-
-/**
- * `POST /v7/person/ask`, the V8 answer (research tool contract v1), streamed
- * exactly as `/v6` is, in Ask progress V3, for the header value `3`. Any other
- * value gets the JSON V8 answer: a V1 or V2 client never meets a workspace item.
- * Only this route takes the asker's previous turn (ADR-0047), streamed or not.
+ * `POST /v7/person/ask`, the V8 answer (research tool contract v1): the only
+ * Ask route, since `/v3` to `/v6` were retired. A client that sends the
+ * progress header value `3` gets the same Ask as server-sent events in Ask
+ * progress V3 (ADR-0039), once the request authenticated and validated; before
+ * that, and for any other value, the response is the JSON V8 answer. The
+ * request may carry the asker's previous turn (ADR-0047), streamed or not. A
+ * disconnect still cancels the Ask, and nothing more is written.
  */
 function personAskV7Post(application: PersonAnswerV7HttpApplication | undefined): PersonPostHandler {
-  return personAskStreamingPost(application, validatePersonAnswerRequestV3, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, response => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV3));
-}
-
-interface StreamingAskApplication<Step, Answered> {
-  ask(input: PersonAnswerHttpInputV1): Promise<unknown>;
-  askWithProgress?(input: PersonAnswerHttpInputV1 & { readonly on_start: () => void; readonly on_progress: (event: Step) => void }): Promise<Answered>;
-}
-interface StreamingAskStream<Step, Answered> {
-  step(event: Step): void;
-  end(event: ({ readonly type: "answer" } & Answered) | { readonly type: "error"; readonly status: PersonAskProgressErrorStatusV1; readonly error: { readonly code: string; readonly message: string } }): void;
-  close(): void;
-}
-
-/** A live Ask route that streams its progress in one version, for that version's exact header value; `validate` is its request's. */
-function personAskStreamingPost<Step, Answered extends { readonly response: unknown; readonly receipt: unknown }>(
-  application: StreamingAskApplication<Step, Answered> | undefined,
-  validate: (value: unknown) => PersonAnswerRequestV3,
-  headerValue: string,
-  startStream: (response: ServerResponse) => StreamingAskStream<Step, Answered>,
-): PersonPostHandler {
-  const plain = personCancellablePost(application, validate, (served, input) => served.ask(input), true);
+  const plain = personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
+  const startStream = (response: ServerResponse) => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV3);
   return async (request, response) => {
-    if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== headerValue) { await plain(request, response); return; }
+    if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V3) { await plain(request, response); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
-    let stream: StreamingAskStream<Step, Answered> | undefined;
+    let stream: PersonAskProgressStreamV1<PersonAskProgressEventV3> | undefined;
     try {
-      const requestBody = await personBody(request, validate);
+      const requestBody = await personBody(request, validatePersonAnswerRequestV3);
       const answered = await application.askWithProgress({
         access_token, request: requestBody, ...askOptions(request), signal: disconnect.signal,
         on_start: () => { stream ??= startStream(response); },
         on_progress: event => { stream?.step(event); },
       });
       stream ??= startStream(response);
-      stream.end({ type: "answer", response: answered.response, receipt: answered.receipt } as { readonly type: "answer" } & Answered);
+      stream.end({ type: "answer", response: answered.response, receipt: answered.receipt });
     } catch (error) {
       // Before the stream starts, the server's ordinary JSON error.
       if (stream === undefined) throw error;
@@ -879,10 +815,6 @@ export function createOrganizationAuthorityHttpServer(
     options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
-    [PERSON_ANSWER_PATH_V3, personCancellablePost(options.person_answer_v3, validatePersonAnswerRequestBeforeV7, (application, input) => application.ask(input), true)],
-    [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestBeforeV7, (application, input) => application.ask(input), true)],
-    [PERSON_ANSWER_PATH_V5, personAskV5Post(options.person_answer_v5)],
-    [PERSON_ANSWER_PATH_V6, personAskV6Post(options.person_answer_v6)],
     [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
@@ -1282,10 +1214,7 @@ export function createOrganizationAuthorityHttpServer(
       if (method === "POST" && url.search === "") {
         const personRead = personReadPosts.get(url.pathname);
         if (personRead !== undefined) {
-          // Distinguish a provider's not-found from an older server with no V5,
-          // V6 or V7 route. Set this before body validation or application execution.
-          if (url.pathname === PERSON_ANSWER_PATH_V5) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '5');
-          if (url.pathname === PERSON_ANSWER_PATH_V6) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '6');
+          // Tells the route's own not-found from an Authority with no `/v7`. Set before body validation or application execution.
           if (url.pathname === PERSON_ANSWER_PATH_V7) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '7');
           await personRead(request, response); return;
         }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { validatePersonAnswerResponseV7, type PersonAnswerRequestV3 } from '@echo-brain/organization-api';
+import { validatePersonAnswerResponseV8, type PersonAnswerRequestV3 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { bindPersonLiveEvidenceDeskV1, createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { auditBodies, liveAskOptions, myOpenTasksPlanner } from './fixtures/ask-over-http.js';
@@ -26,10 +26,9 @@ function scripted(steps: readonly Step[]) {
 }
 
 /** The Ask route as the runtime composes it over the open-items fixture's Authority, with the asker's own directory entry. */
-function routeOf(f: OpenItemsFixtureV1, model: StructuredGenerationPort, version: 5 | 6 | 7 = 7) {
+function routeOf(f: OpenItemsFixtureV1, model: StructuredGenerationPort) {
   const options = liveAskOptions(f, model);
-  const route = version === 7 ? createPersonLiveAnswerRouteV1(options, 7) : version === 6 ? createPersonLiveAnswerRouteV1(options, 6) : createPersonLiveAnswerRouteV1(options, 5);
-  return { route, options };
+  return { route: createPersonLiveAnswerRouteV1(options), options };
 }
 const ask = (route: ReturnType<typeof routeOf>['route'], access_token: FixturePerson, request: Partial<PersonAnswerRequestV3> = {}) =>
   route.ask({ access_token, request: { schema_version: 3, question: 'What are my open tasks?', ...request } });
@@ -38,7 +37,7 @@ function leaveProject(f: OpenItemsFixtureV1, name: FixturePerson) {
     .run(f.clock().toISOString(), f.projectA, f.membership(name));
 }
 
-describe('Ask V7 with follow-ups as evidence (ADR-0040)', () => {
+describe('Ask with follow-ups as evidence (ADR-0040)', () => {
   it('answers from a follow-up, cites it with the ref that opens its item page, and audits every release', async () => {
     const f = await sentFixture();
     const { model, prompts, catalog } = scripted([
@@ -47,8 +46,8 @@ describe('Ask V7 with follow-ups as evidence (ADR-0040)', () => {
     ]);
     const answer = await ask(routeOf(f, model).route, 'mina');
     expect(catalog()).toContain('follow_ups');
-    expect(validatePersonAnswerResponseV7(answer)).toEqual(answer);
-    expect(answer).toMatchObject({ schema_version: 7, kind: 'echo-clean-person-answer-v7', outcome: 'answered' });
+    expect(validatePersonAnswerResponseV8(answer)).toEqual(answer);
+    expect(answer).toMatchObject({ schema_version: 8, kind: 'echo-clean-person-answer-v8', outcome: 'answered' });
     // The follow-up the search found first: the ticket, titled from Mina's own Jira read.
     expect(answer.citations).toEqual([{
       citation: { kind: 'follow_up', item_id: f.ticket.item_id }, kind: 'follow_up', label: `ECHO-12 ${f.outsideText}`, visibility: 'only_me', ref: `follow_up:${f.ticket.item_id}`,
@@ -66,15 +65,13 @@ describe('Ask V7 with follow-ups as evidence (ADR-0040)', () => {
     expect(JSON.stringify(releases)).not.toMatch(/Pilot planning|launch next week|Mina Patel|Kestrel|ECHO-12/);
   });
 
-  it('binds follow-ups only for a V7 answer outside Mine, and never for trigger research or open items', async () => {
+  it('binds follow-ups only for an Ask outside Mine, and never for trigger research or open items', async () => {
     const f = await sentFixture();
     const finish = [{ actions: [{ tool: 'finish', args: {} }] }];
-    for (const [version, request, expected] of [
-      [7, {}, true], [7, { project_id: f.projectA }, true], [7, { mine: true }, false], [6, {}, false], [5, {}, false],
-    ] as const) {
+    for (const [request, expected] of [[{}, true], [{ project_id: f.projectA }, true], [{ mine: true }, false]] as const) {
       const { model, catalog } = scripted(finish);
-      await ask(routeOf(f, model, version).route, 'mina', request as Partial<PersonAnswerRequestV3>).catch(() => undefined);
-      expect([version, request, catalog().includes('follow_ups')]).toEqual([version, request, expected]);
+      await ask(routeOf(f, model).route, 'mina', request as Partial<PersonAnswerRequestV3>).catch(() => undefined);
+      expect([request, catalog().includes('follow_ups')]).toEqual([request, expected]);
     }
     // The desks trigger research and open items bind name no answer version, so they never bind follow-ups.
     const { options } = routeOf(f, scripted([]).model);
@@ -82,16 +79,16 @@ describe('Ask V7 with follow-ups as evidence (ADR-0040)', () => {
       membership_id: f.people.mina.membership_id, session_family_id: 'psf_mina', request_id: `trigger_run_${randomUUID()}` };
     const background = await bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'mina', scope: { kind: 'global' } }, context);
     expect(background.live_sources).toEqual([]);
-    const ask7 = await bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'mina', scope: { kind: 'global' }, response_version: 7 }, context);
-    expect(ask7.live_sources).toEqual([expect.objectContaining({ source_id: 'follow_ups' })]);
+    const asked = await bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'mina', scope: { kind: 'global' }, response_version: 8 }, context);
+    expect(asked.live_sources).toEqual([expect.objectContaining({ source_id: 'follow_ups' })]);
     // A desk bound for one person never reads follow-ups as another.
-    await expect(bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'rafael', scope: { kind: 'global' }, response_version: 7 }, context)).rejects.toMatchObject({ code: 'stale_access_state' });
+    await expect(bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'rafael', scope: { kind: 'global' }, response_version: 8 }, context)).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 });
 
-/** The V7 route as the runtime builds it, with the asker's own directory entry, so the loop reads "my" as their name. */
+/** The Ask route as the runtime builds it, with the asker's own directory entry, so the loop reads "my" as their name. */
 function myTasksRoute(f: OpenItemsFixtureV1, model: StructuredGenerationPort) {
-  return createPersonLiveAnswerRouteV1(liveAskOptions(f, model), 7);
+  return createPersonLiveAnswerRouteV1(liveAskOptions(f, model));
 }
 const followUpReleases = (f: OpenItemsFixtureV1) => auditBodies(f, 'echo-person-follow-up-release-audit-v1') as
   { readonly operation: string; readonly principal_id: string; readonly items: readonly { readonly item_id: string }[] }[];
@@ -104,8 +101,8 @@ describe('"What are my open tasks?" through the real Authority composition (ADR-
     const planner = myOpenTasksPlanner();
     const answer = await myTasksRoute(f, planner.model).ask({ access_token: 'mina', request: { schema_version: 3, question: 'What are my open tasks?' } });
 
-    expect(validatePersonAnswerResponseV7(answer)).toEqual(answer);
-    expect(answer).toMatchObject({ schema_version: 7, kind: 'echo-clean-person-answer-v7', outcome: 'answered' });
+    expect(validatePersonAnswerResponseV8(answer)).toEqual(answer);
+    expect(answer).toMatchObject({ schema_version: 8, kind: 'echo-clean-person-answer-v8', outcome: 'answered' });
     // Research read "my" as her name, and the desk applied owner and status, as the result says: only her follow-up came
     // back, with its decision beside it (research tool contract v1).
     expect(planner.steps[0]!.asked_by).toBe('Mina Patel');

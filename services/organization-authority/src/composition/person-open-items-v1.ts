@@ -441,7 +441,10 @@ function outsideToolOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefine
   const { kind, tool_id: toolId } = row.pointer;
   return (kind === 'ticket' || kind === 'page') && typeof toolId === 'string' ? `${kind}:${toolId}` : undefined;
 }
-/** The live sources task research reads (trigger runs, sweeps, open items, the evaluation's tasks): those the V6 answer reads. */
+/**
+ * The live sources task research reads (trigger runs, sweeps, open items, the evaluation's tasks): a tool's tickets and
+ * pages, which an impact card's V6 citations name, never its containers.
+ */
 export function taskLiveSourcesV1(sources: CreatePersonLiveAnswerRouteOptionsV1['live_sources']): NonNullable<CreatePersonLiveAnswerRouteOptionsV1['live_sources']> {
   return (sources ?? []).filter(source => source.minimum_response_version <= 6);
 }

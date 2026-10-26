@@ -1,12 +1,11 @@
 import { withPersonAskSnapshotRetryV1 } from './person-ask-snapshot-retry-v1.js';
 import {
   validatePersonEvidenceDeskResponseV1,
-  type PersonAnswerResponseV4,
   type PersonEvidenceDeskResponseV1,
   type PersonEvidenceOpenRequestV1,
   type PersonEvidenceSearchRequestV1,
 } from "@echo-brain/organization-api";
-import { AgenticAskDeadlineErrorV1, createAgenticAskV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import { AgenticAskDeadlineErrorV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
@@ -148,22 +147,12 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
   });
 }
 
-/** Composition-only V3 entry point: every operation gets a new request-bound desk. */
+/**
+ * The evidence desk's two reads (ADR-0022): every operation gets a new request-bound desk. Its Ask, `/v3/person/ask`, was
+ * retired; Ask is the live route (person-live-answer-route-v1.ts), which shares this module's request helpers.
+ */
 export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOptions): PersonAnswerV3HttpApplication {
   return Object.freeze({
-    async ask(input: Parameters<PersonAnswerV3HttpApplication["ask"]>[0]): Promise<PersonAnswerResponseV4> {
-      return runPersonAskV1(options, input, async ({ authorization, context, capture, signal }) => {
-        const desk = deskFor(options, input.access_token, input.request);
-        capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
-        const asker = askerOf(options, authorization);
-        return createAgenticAskV1({
-          ...(asker === undefined ? {} : { asker }),
-          ...(input.time_context === undefined ? {} : { time_context: input.time_context }),
-          ...(input.answer_layout === undefined ? {} : { answer_layout: input.answer_layout }),
-          ...personResearchDriverV1(options, context.membership_id), desk, audit: options.audit.forRequest(context),
-        }).answer({ question: input.request.question, signal });
-      });
-    },
     async searchEvidence(input: { readonly access_token: string; readonly request: PersonEvidenceSearchRequestV1; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResponseV1> {
       const desk = deskFor(options, input.access_token, input.request);
       const result = await desk.search({

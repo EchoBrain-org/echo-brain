@@ -1,7 +1,7 @@
 import { rmSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { PERSON_EVIDENCE_OPEN_PATH_V1, PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonAnswerResponseV6, validatePersonEvidenceDeskResponseV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_OPEN_PATH_V1, PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonAnswerResponseV8, validatePersonEvidenceDeskResponseV1 } from '@echo-brain/organization-api';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
 import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
@@ -22,7 +22,7 @@ function finishingModel() {
   return { generate, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } } };
 }
 
-it('registers two page connectors through one lifecycle, catalog, HTTP and versioned Ask path', async () => {
+it('registers two page connectors through one lifecycle, catalog, HTTP and Ask path', async () => {
   const f = await fixture();
   const calls = ['handbook', 'runbooks'].map(source_id => ({ source_id, source: vi.fn(async () => undefined), tools: vi.fn(async () => []), close: vi.fn() }));
   const live_connectors: PersonLiveConnectorDefinitionV1[] = calls.map(call => ({
@@ -49,21 +49,16 @@ it('registers two page connectors through one lifecycle, catalog, HTTP and versi
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ tool_id: call.source_id });
     }
-    // Page-only registration cannot expose page citations through the older ticket response.
-    const ask = (version: number) => fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
-    const legacy = await ask(4);
-    expect(legacy.status).toBe(200);
-    expect(await legacy.json()).toMatchObject({ schema_version: 5, citations: [] });
     expect(calls.every(call => call.source.mock.calls.length === 0)).toBe(true);
-    const answer = await ask(5);
+    const answer = await fetch(`${origin}/v7/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
     expect(answer.status).toBe(200);
-    expect(await answer.json()).toMatchObject({ schema_version: 6 });
+    expect(await answer.json()).toMatchObject({ schema_version: 8 });
     for (const call of calls) expect(call.source).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ access_token: token }));
   } finally { await runtime.close(); }
   for (const call of calls) expect(call.close).toHaveBeenCalledTimes(1);
 });
 
-it('binds a tool\'s containers for the V8 Ask alone, naming only the asker\'s projects (research tool contract v1)', async () => {
+it('binds a tool\'s containers for Ask, naming only the asker\'s projects (research tool contract v1)', async () => {
   const f = await fixture();
   const empty = Object.freeze({ items: Object.freeze([]), truncated: false, receipt_digests: Object.freeze([]) });
   const reader = (): PersonLiveEvidenceSourceV1 => ({ tool_id: 'jira', search: vi.fn(async () => empty), open: vi.fn(async () => empty), list: vi.fn(async () => empty),
@@ -103,15 +98,7 @@ it('binds a tool\'s containers for the V8 Ask alone, naming only the asker\'s pr
     expect(names[0]).toBe(names[1]);
     expect(names[0]!(token, [project_id, 'prj_00000000-0000-4000-8000-0000000000ff'])).toEqual(new Map([[project_id, 'Atlas']]));
 
-    const ask = (version: number) => fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
-    const v6 = await ask(6);
-    expect(v6.status).toBe(200);
-    const v6Catalog = prompts[0]!.source_catalog!.map(entry => entry.source);
-    expect(v6Catalog).toContain(JIRA_LIVE_CONNECTOR_V1.descriptor.selector);
-    for (const source of [JIRA_PROJECTS_LIVE_CONNECTOR_V1.descriptor.selector, 'projects', 'people', 'tools']) expect(v6Catalog).not.toContain(source);
-
-    prompts.length = 0;
-    const v7 = await ask(7);
+    const v7 = await fetch(`${origin}/v7/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
     expect(v7.status).toBe(200);
     expect(await v7.json()).toMatchObject({ schema_version: 8 });
     expect(prompts[0]!.source_catalog!.map(entry => entry.source)).toEqual(expect.arrayContaining([JIRA_LIVE_CONNECTOR_V1.descriptor.selector, 'jira_projects', 'projects', 'people', 'tools']));
@@ -135,21 +122,27 @@ describe('one runtime without live connectors', () => {
   afterAll(async () => { await runtime?.close(); shared.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
   beforeEach(() => { generate.mockClear(); });
 
-  it.each([
-    { version: 4, schema: 5, mine: false }, { version: 4, schema: 5, mine: true }, { version: 5, schema: 6, mine: false }, { version: 5, schema: 6, mine: true },
-    // The V7 Ask (ADR-0040) is mounted with the runtime's follow-up sources: outside Mine its catalog lists follow-ups.
-    { version: 6, schema: 7, mine: false }, { version: 6, schema: 7, mine: true },
-  ])('serves V$version Ask with no live connectors (mine=$mine)', async ({ version, schema, mine }) => {
-    const response = await fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+  // Ask is mounted with the runtime's follow-up and workspace sources: outside Mine its catalog lists them (ADR-0040).
+  it.each([{ mine: false }, { mine: true }])('serves Ask with no live connectors (mine=$mine)', async ({ mine }) => {
+    const response = await fetch(`${origin}/v7/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ schema_version: 3, question: 'What changed?', ...(mine ? { mine: true } : {}) }),
     });
     expect(response.status).toBe(200);
-    expect(response.headers.get('x-echo-person-ask-route')).toBe(version >= 5 ? String(version) : null);
-    expect(await response.json()).toMatchObject({ schema_version: schema, scope: { kind: mine ? 'mine' : 'global' }, citations: [] });
+    expect(response.headers.get('x-echo-person-ask-route')).toBe('7');
+    expect(await response.json()).toMatchObject({ schema_version: 8, scope: { kind: mine ? 'mine' : 'global' }, citations: [] });
     expect(generate).toHaveBeenCalled();
     const [prompt] = generate.mock.calls[0] as unknown as [{ readonly user_prompt: string }];
     const catalog = (JSON.parse(prompt.user_prompt) as { source_catalog?: { source: string }[] }).source_catalog?.map(entry => entry.source) ?? [];
-    expect(catalog.includes('follow_ups')).toBe(version === 6 && !mine);
+    for (const source of ['follow_ups', 'projects', 'people', 'tools']) expect([source, catalog.includes(source)]).toEqual([source, !mine]);
+  });
+
+  it.each([3, 4, 5, 6])('has no /v%i Ask route any more', async version => {
+    const response = await fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ schema_version: 3, question: 'What changed?' }),
+    });
+    expect(response.status).toBe(404);
+    expect(response.headers.has('x-echo-person-ask-route')).toBe(false);
+    expect(generate).not.toHaveBeenCalled();
   });
 });
 
@@ -172,7 +165,7 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
   try {
     const response = await f.ask();
     expect(response.status).toBe(200);
-    const answer = validatePersonAnswerResponseV6(response.body);
+    const answer = validatePersonAnswerResponseV8(response.body);
     expect(answer.outcome).toBe('answered');
     expect(answer.citations.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'page', 'ticket']);
     expect(answer.citations.map(item => item.citation.kind).sort()).toEqual(['approved_record', 'page', 'source_revision', 'ticket']);
@@ -228,7 +221,7 @@ it('refuses unauthenticated Ask and revoked Confluence reads without releasing p
   try {
     const jiraBefore = f.live.jiraFetch.mock.calls.length;
     const confluenceBefore = f.live.confluenceFetch.mock.calls.length;
-    expect((await f.post('/v5/person/ask', { schema_version: 3, question: 'Launchscope' }, 'invalid-person-session')).status).toBe(401);
+    expect((await f.post('/v7/person/ask', { schema_version: 3, question: 'Launchscope' }, 'invalid-person-session')).status).toBe(401);
     expect(f.live.jiraFetch).toHaveBeenCalledTimes(jiraBefore); expect(f.live.confluenceFetch).toHaveBeenCalledTimes(confluenceBefore); expect(f.generate).not.toHaveBeenCalled();
     f.live.denyConfluence();
     const denied = await f.ask();

@@ -1,17 +1,14 @@
 import {
-  createAgenticAskProgressRequestV1, createAgenticAskV2, createAgenticAskV3, createAgenticAskV4, createAgenticAskV5,
-  type AgenticAskAnswerWithReceiptV2, type AgenticAskAnswerWithReceiptV3, type AgenticAskProgressSinkV2, type AgenticAskProgressSinkV3,
+  createAgenticAskProgressRequestV1, createAgenticAskV5, type AgenticAskAnswerWithReceiptV3, type AgenticAskProgressSinkV3,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
-import type { PersonAnswerResponseV5, PersonAnswerResponseV6, PersonAnswerResponseV7, PersonAnswerResponseV8 } from '@echo-brain/organization-api';
+import type { PersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { samePersonV1 } from '../application/person-release-authorization-v1.js';
-import type {
-  PersonAnswerHttpInputV1, PersonAnswerV4HttpApplication, PersonAnswerV5HttpApplication, PersonAnswerV6HttpApplication, PersonAnswerV7HttpApplication,
-} from '../presentation/person-live-answer-http-application.js';
+import type { PersonAnswerHttpInputV1, PersonAnswerV7HttpApplication } from '../presentation/person-live-answer-http-application.js';
 import { askerOf, personResearchDriverV1, runPersonAskV1, scopeOf, type CreatePersonAnswerV3RouteOptions } from './person-answer-v3-route.js';
 import { createPersonEvidenceDeskV1, type PersonEvidenceDeskExclusionsV1 } from './person-evidence-desk-v1.js';
 import { createPersonFollowUpsEvidenceSourceV1, type PersonFollowUpsSourcesV1 } from './person-follow-ups-evidence-v1.js';
@@ -52,8 +49,8 @@ export async function bindPersonLiveEvidenceDeskV1(
   input: {
     readonly access_token: string; readonly scope: ReturnType<typeof scopeOf>; readonly signal?: AbortSignal;
     /**
-     * The answer the desk serves. Follow-ups bind only from V7 and the workspace only from V8; trigger research, open
-     * items and the evidence doors never pass one.
+     * The answer the desk serves: the V8 Ask's binds follow-ups (from V7) and the workspace (from V8). Trigger research,
+     * open items and the evidence doors never pass one.
      */
     readonly response_version?: number;
     /**
@@ -126,27 +123,23 @@ function workspaceFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
   return createPersonWorkspaceEvidenceSourcesV1({ sources, access_token: input.access_token, authenticate, scope, audit: options.audit.forWorkspaceRequest(context) });
 }
 
-/** The application each answer version's route serves, `/v4` (the V5 answer) to `/v7` (the V8 answer). */
-interface PersonLiveAnswerRoutesV1 {
-  readonly 5: PersonAnswerV4HttpApplication;
-  readonly 6: PersonAnswerV5HttpApplication;
-  readonly 7: PersonAnswerV6HttpApplication;
-  readonly 8: PersonAnswerV7HttpApplication;
-}
-/** One authenticated request pipeline; version adapters only select compatible evidence/output. */
-export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAnswerRoutesV1>(options: CreatePersonLiveAnswerRouteOptionsV1, response_version: Version): PersonLiveAnswerRoutesV1[Version] {
+/**
+ * Ask's route, `/v7`: one authenticated request pipeline for the V8 answer (research tool contract v1), plain or
+ * streamed. The routes of the V5 to V7 answers, `/v4` to `/v6`, were retired.
+ */
+export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1): PersonAnswerV7HttpApplication {
+  const response_version = WORKSPACE_MINIMUM_RESPONSE_VERSION_V1;
   const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= response_version);
   type Input = PersonAnswerHttpInputV1;
-  /** A V7 Ask's sink takes progress V2 (ADR-0040), a V8 Ask's progress V3. */
-  type Progress = { readonly on_start: () => void; readonly on_progress: AgenticAskProgressSinkV2 | AgenticAskProgressSinkV3 };
-  /** A streamed V7 or V8 Ask (ADR-0039) also reports when it starts and what it does; every other request is unchanged. */
-  async function run(input: Input): Promise<PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8>;
-  async function run(input: Input, progress: Progress): Promise<AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3>;
+  type Progress = { readonly on_start: () => void; readonly on_progress: AgenticAskProgressSinkV3 };
+  /** A streamed Ask (ADR-0039) also reports when it starts and what it does; every other request is unchanged. */
+  async function run(input: Input): Promise<PersonAnswerResponseV8>;
+  async function run(input: Input, progress: Progress): Promise<AgenticAskAnswerWithReceiptV3>;
   async function run(input: Input, progress?: Progress) {
     // A streamed request spans every attempt a snapshot restart runs: one stream, each item named once, timed from here.
     const streamed = progress === undefined ? undefined : { on_progress: progress.on_progress, request: createAgenticAskProgressRequestV1() };
     const scope = scopeOf(input.request);
-    // The asker's previous turn (ADR-0047): the HTTP boundary takes it only on /v7, the V8 Ask's route.
+    // The asker's previous turn (ADR-0047), when the request carries it.
     const { previous } = input.request;
     input.signal?.throwIfAborted();
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
@@ -154,28 +147,21 @@ export function createPersonLiveAnswerRouteV1<Version extends keyof PersonLiveAn
       const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, response_version, signal }, context);
       capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
-      // Answer layout reaches every version's Ask; only the V8 answer lays its part out (ADR-0045).
+      // An Ask that asked for answer layout v1 has its part laid out (ADR-0045).
       const askOptions = { ...personResearchDriverV1(options, context.membership_id), ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, audit: options.audit.forRequest(context),
         ...(input.answer_layout === undefined ? {} : { answer_layout: input.answer_layout }), ...(asker === undefined ? {} : { asker }),
       };
-      // Each attempt audits what it named; only the released attempt's receipt is returned.
-      // The V8 answer streams progress V3, whose names may be workspace items and tool containers; the V7 answer
-      // streams V2, whose names may be follow-ups.
+      // Each attempt audits what it named; only the released attempt's receipt is returned. It streams progress V3, whose
+      // names may be follow-ups, workspace items and tool containers.
+      const ask = createAgenticAskV5(askOptions);
       if (streamed !== undefined) {
-        const question = { question: input.request.question, signal, request: streamed.request };
-        return response_version === 8
-          ? createAgenticAskV5(askOptions).answerWithReceipt({ ...question, on_progress: streamed.on_progress as AgenticAskProgressSinkV3, ...(previous === undefined ? {} : { previous }) })
-          : createAgenticAskV4(askOptions).answerWithReceipt({ ...question, on_progress: streamed.on_progress as AgenticAskProgressSinkV2 });
+        return ask.answerWithReceipt({ question: input.request.question, signal, request: streamed.request, on_progress: streamed.on_progress, ...(previous === undefined ? {} : { previous }) });
       }
-      if (response_version === 8) return createAgenticAskV5(askOptions).answer({ question: input.request.question, signal, ...(previous === undefined ? {} : { previous }) });
-      const create = response_version === 7 ? createAgenticAskV4 : response_version === 6 ? createAgenticAskV3 : createAgenticAskV2;
-      return create(askOptions).answer({ question: input.request.question, signal });
+      return ask.answer({ question: input.request.question, signal, ...(previous === undefined ? {} : { previous }) });
     }, progress === undefined ? undefined : () => progress.on_start());
   }
   return Object.freeze({
     ask: (input: Input) => run(input),
-    // Only the /v6 (V7) and /v7 (V8) routes stream: /v5, whose progress V1 was retired, and the older routes never do.
-    // A method, so each version's application, with its own progress sink, is this one.
-    ...(response_version >= 7 ? { askWithProgress(input: Input & Progress) { return run(input, input); } } : {}),
-  }) as PersonLiveAnswerRoutesV1[Version];
+    askWithProgress(input: Input & Progress) { return run(input, input); },
+  });
 }

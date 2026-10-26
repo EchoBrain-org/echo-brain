@@ -380,9 +380,9 @@ export async function startOrganizationAuthorityApiRuntime(
       repository: projectRepository,
     });
     const runs = answerOptions === undefined ? undefined : new SqliteTriggerRunsV1(database);
-    // The V7 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040); the V8 answer also reads the asker's
-    // projects, people and tools as the project pages and the tools page show them (research tool contract v1), each
-    // release audited without content.
+    // Ask's V8 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040), and the asker's projects, people and
+    // tools as the project pages and the tools page show them (research tool contract v1), each release audited without
+    // content.
     const followUps = runs === undefined ? undefined : { runs, items, people, records: recordSearch };
     const workspace = { projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools };
     // The staging research evaluation asks a question as `/v7` does, on the same sources.
@@ -435,17 +435,13 @@ export async function startOrganizationAuthorityApiRuntime(
         originals: originalItems,
         meetings: recordSearch,
       }),
-      // Agentic Ask is the only Ask (ADR-0022); it needs the bound answer model.
+      // Agentic Ask is the only Ask (ADR-0022), on `/v7`; it and the evidence desk need the bound answer model.
       ...(answerOptions === undefined ? {} : {
         person_answer_v3: createPersonAnswerV3Route(answerOptions),
-        // A response version is available with the model even when no external
-        // source is configured. The request catalog still contains local context.
-        person_answer_v4: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 5),
-        person_answer_v5: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources }, 6),
-        // Without the follow-up sources the V7 and V8 desks would bind none, so those answers need them.
+        // Without the follow-up sources the V8 desk would bind none, so the Ask needs them. The request catalog contains
+        // local context even when no external source is configured.
         ...(followUps === undefined ? {} : {
-          person_answer_v6: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps }, 7),
-          person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }, 8),
+          person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }),
         }),
       }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),

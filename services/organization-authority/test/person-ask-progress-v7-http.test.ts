@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V6, PERSON_ANSWER_PATH_V7, PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  createPersonAskProgressDecoderV3, validatePersonAnswerResponseV7, validatePersonAnswerResponseV8,
+  PERSON_ANSWER_PATH_V7, PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
   type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
 import { createAgenticAskV5 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
@@ -18,7 +17,7 @@ import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 /**
  * The V8 Ask over HTTP (research tool contract v1): `POST /v7/person/ask`
  * behind the real server, over the real project context and open-items
- * Authority state, streamed as Ask progress V3 exactly as `/v6` streams V2.
+ * Authority state, streamed as Ask progress V3.
  * "Who leads Project A, and what are my open tasks?" lists the asker's
  * projects and follow-ups in one step, reads the follow-up, and cites both:
  * the project by its workspace citation and the ref that opens it.
@@ -69,7 +68,7 @@ const tools = async (access_token: string): Promise<readonly OrganizationPersonT
   external_scope_id: '00000000-0000-4000-8000-0000000000c1', external_subject_id: `acct-${access_token}`, organization_setup: null,
 }];
 
-/** The `/v6` and `/v7` routes as the runtime composes them, the asker's workspace beside the follow-up sources. */
+/** The `/v7` route as the runtime composes it, the asker's workspace beside the follow-up sources. */
 function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mount: { readonly v7?: boolean } = {}) {
   const sessions = f.openItemsOptions.sessions;
   const projects = new SqliteProjectContextRepositoryV1(f.db);
@@ -77,7 +76,7 @@ function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mount: {
     projects: createProjectContextApplicationV1({ authenticate: access_token => sessions.authenticateAccess({ access_token }), repository: projects }),
     grants: personWorkspaceGrantsV1(projects), people: f.directory, tools,
   } };
-  return serveAsk({ person_answer_v6: createPersonLiveAnswerRouteV1(options, 7), ...(mount.v7 === false ? {} : { person_answer_v7: createPersonLiveAnswerRouteV1(options, 8) }) });
+  return serveAsk(mount.v7 === false ? {} : { person_answer_v7: createPersonLiveAnswerRouteV1(options) });
 }
 const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: QUESTION });
 const decode = (text: string) => decodeAll(createPersonAskProgressDecoderV3(), text);
@@ -121,22 +120,12 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').at(-1)).toMatchObject({ outcome: 'answered', named_citation_digests: expect.arrayContaining([canonicalSha256(project.citation)]) });
   });
 
-  it('streams /v7 only for its own header value, and leaves /v6 without the workspace', async () => {
+  it('streams /v7 only for its own header value', async () => {
     const f = await sentFixture();
     const planner = leadsAndTasks();
     const base = await origin(f, planner.model);
-    // A V1 or V2 client's header on /v7 gets the JSON V8 answer, never a V3 stream.
-    await expectJsonAskFallbacks(ask, base, { header: '7', others: [PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, '0', '33'],
-      validate: validatePersonAnswerResponseV8, reset: planner.reset });
-    // /v6's desk binds no workspace: its catalog never names projects, people or tools, and its answer cites no project.
-    planner.reset();
-    planner.catalogs.length = 0;
-    const v6 = await ask(base, { path: PERSON_ANSWER_PATH_V6, progress: null });
-    expect(v6.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('6');
-    const answer = validatePersonAnswerResponseV7(await v6.json());
-    expect(planner.catalogs[0]).not.toEqual(expect.arrayContaining(['projects']));
-    expect(planner.catalogs.flat()).not.toContain('people');
-    expect(answer.citations.map(citation => citation.kind)).not.toContain('project');
+    // Any other value, the retired progress values '1' and '2' among them, gets the JSON V8 answer, never a stream.
+    await expectJsonAskFallbacks(ask, base, { header: '7', others: ['1', '2', '0', '33'], validate: validatePersonAnswerResponseV8, reset: planner.reset });
   });
 
   it('never binds the workspace in Mine, which reads only what the asker added: no projects, people or tools are offered, read or audited', async () => {

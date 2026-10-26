@@ -136,8 +136,8 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
     expect(connect.status).toBe(201); nango.finish();
     expect(await post(`/v1/person/tools/${tool}/status`, { schema_version: 1, attempt: connect.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
   }
-  // The V6 answer is the first that cites pages.
-  const ask = () => post('/v5/person/ask', { schema_version: 3, question: 'Combine the Launchscope approved meeting, document, Jira ticket, and Confluence page.' });
+  // Ask, `/v7`: the V8 answer.
+  const ask = () => post('/v7/person/ask', { schema_version: 3, question: 'Combine the Launchscope approved meeting, document, Jira ticket, and Confluence page.' });
   /**
    * One open follow-up (ADR-0033) on the approved Launchscope meeting, as its
    * impact check finds it and the owner, who approved the meeting, sends it to

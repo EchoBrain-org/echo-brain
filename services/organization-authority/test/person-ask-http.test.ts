@@ -3,35 +3,36 @@ import { request as httpRequest } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
-  PERSON_ANSWER_PATH_V3,
-  PERSON_ANSWER_PATH_V5,
+  PERSON_ANSWER_PATH_V7,
   PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
-  validatePersonAnswerResponseV4,
+  validatePersonAnswerResponseV8,
   validatePersonEvidenceDeskResponseV1,
 } from "@echo-brain/organization-api";
 import type { StructuredGenerationInput } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 
-/** Retired Ask paths (ADR-0022): no route, so the canonical not-found reply. */
-const RETIRED_ASK_PATHS = ["/v1/person/ask", "/v2/person/ask"] as const;
+/** Retired Ask paths: the one-shot Asks (ADR-0022) and every route before `/v7`. No route, so the canonical not-found reply. */
+const RETIRED_ASK_PATHS = ["/v1/person/ask", "/v2/person/ask", "/v3/person/ask", "/v4/person/ask", "/v5/person/ask", "/v6/person/ask"] as const;
 import type { OriginalContextDeskItemV1, PersonOriginalContextEvidenceDeskPortV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-route.js";
+import { createPersonLiveAnswerRouteV1 } from "../src/composition/person-live-answer-route-v1.js";
 import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV3HttpApplication } from "../src/presentation/person-answer-v3-http-application.js";
-import type { PersonAnswerV5HttpApplication } from "../src/presentation/person-live-answer-http-application.js";
+import type { PersonAnswerV7HttpApplication } from "../src/presentation/person-live-answer-http-application.js";
 
-async function server(input: { readonly application?: PersonAnswerV3HttpApplication; readonly live_application?: PersonAnswerV5HttpApplication }) {
+/** The evidence desk (`application`) and Ask on `/v7` (`ask`) behind the real HTTP server. */
+async function server(input: { readonly application?: PersonAnswerV3HttpApplication; readonly ask?: PersonAnswerV7HttpApplication }) {
   const sessions = { authenticateAccess: vi.fn(() => ({})) };
   const instance = createOrganizationAuthorityHttpServer({
     descriptor: {} as never, sessions: sessions as never, oidc_provider: {} as never,
     expected_issuer: "https://issuer.example",
     ...(input.application === undefined ? {} : { person_answer_v3: input.application }),
-    ...(input.live_application === undefined ? {} : { person_answer_v5: input.live_application }),
+    ...(input.ask === undefined ? {} : { person_answer_v7: input.ask }),
   });
   instance.listen(0, "127.0.0.1");
   await once(instance, "listening");
@@ -47,24 +48,24 @@ async function server(input: { readonly application?: PersonAnswerV3HttpApplicat
 describe("Agentic Ask HTTP capability gate", () => {
   it('passes validated optional client time headers to Ask without changing the request body', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'fixture'); });
-    const value = await server({ live_application: { ask } });
+    const value = await server({ ask: { ask } });
     const body = { schema_version: 3, question: 'What happened yesterday?' };
     try {
       const headers = { authorization: 'Bearer token', 'content-type': 'application/json', 'x-echo-client-now': '2026-10-17T04:30:00.000Z', 'x-echo-time-zone': 'America/Los_Angeles' };
-      await fetch(`${value.url}${PERSON_ANSWER_PATH_V5}`, { method: 'POST', headers, body: JSON.stringify(body) });
+      await fetch(`${value.url}${PERSON_ANSWER_PATH_V7}`, { method: 'POST', headers, body: JSON.stringify(body) });
       expect(ask).toHaveBeenCalledWith(expect.objectContaining({ request: body, time_context: { now: headers['x-echo-client-now'], time_zone: headers['x-echo-time-zone'] } }));
-      const bad = await fetch(`${value.url}${PERSON_ANSWER_PATH_V5}`, { method: 'POST', headers: { ...headers, 'x-echo-time-zone': 'Not/AZone' }, body: JSON.stringify(body) });
+      const bad = await fetch(`${value.url}${PERSON_ANSWER_PATH_V7}`, { method: 'POST', headers: { ...headers, 'x-echo-time-zone': 'Not/AZone' }, body: JSON.stringify(body) });
       expect(bad.status).toBe(400);
       expect(ask).toHaveBeenCalledTimes(1);
     } finally { await value.close(); }
   });
 
-  it('passes answer layout to Ask on an older route too, where only the V8 answer reads it, and refuses any other value before the Ask runs', async () => {
+  it('passes answer layout to Ask, and refuses any other value before the Ask runs', async () => {
     const ask = vi.fn(async (_input: unknown) => { throw new AuthorityOperationError('not_found', 'fixture'); });
-    const value = await server({ live_application: { ask } });
+    const value = await server({ ask: { ask } as never });
     const body = { schema_version: 3, question: 'What changed?' };
     try {
-      const post = (headers: Readonly<Record<string, string>>) => fetch(`${value.url}${PERSON_ANSWER_PATH_V5}`, {
+      const post = (headers: Readonly<Record<string, string>>) => fetch(`${value.url}${PERSON_ANSWER_PATH_V7}`, {
         method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
       });
       expect((await post({ 'x-echo-answer-layout': '1' })).status).toBe(404);
@@ -80,32 +81,35 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it('marks matched V5 provider errors so clients cannot mistake them for an unsupported route', async () => {
+  it('marks matched /v7 provider errors so clients cannot mistake them for an Authority with no /v7', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'Provider resource unavailable'); });
-    const value = await server({ live_application: { ask } });
+    const value = await server({ ask: { ask } as never });
     try {
       const post = (path: string, body: unknown) => fetch(`${value.url}${path}`, {
         method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
-      const failed = await post(PERSON_ANSWER_PATH_V5, { schema_version: 3, question: 'What changed?' });
+      const failed = await post(PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What changed?' });
       expect(failed.status).toBe(404);
-      expect(failed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('5');
+      expect(failed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
       await expect(failed.json()).resolves.toEqual({ error: { code: 'not_found', message: 'request failed' } });
-      const invalid = await post(PERSON_ANSWER_PATH_V5, {});
+      const invalid = await post(PERSON_ANSWER_PATH_V7, {});
       expect(invalid.status).toBe(400);
-      expect(invalid.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('5');
-      const absent = await post('/v0/person/ask', { schema_version: 3, question: 'What changed?' });
-      expect(absent.status).toBe(404);
-      expect(absent.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe(false);
+      expect(invalid.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
+      // A retired route, like one that never existed, is a plain 404 with no route header.
+      for (const path of ['/v0/person/ask', ...RETIRED_ASK_PATHS]) {
+        const absent = await post(path, { schema_version: 3, question: 'What changed?' });
+        expect(absent.status).toBe(404);
+        expect(absent.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe(false);
+      }
       expect(ask).toHaveBeenCalledTimes(1);
     } finally { await value.close(); }
   });
 
   it("returns the existing unavailable response when Ask asks the client to try again", async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError("unavailable", "Ask deadline exhausted"); });
-    const value = await server({ application: { ask, searchEvidence: vi.fn(), openEvidence: vi.fn() } });
+    const value = await server({ ask: { ask } as never });
     try {
-      expect(await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: "What changed?" }))
+      expect(await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What changed?" }))
         .toEqual({ status: 503, body: { error: { code: "unavailable", message: "request failed" } } });
       expect(ask).toHaveBeenCalledTimes(1);
     } finally { await value.close(); }
@@ -118,17 +122,17 @@ describe("Agentic Ask HTTP capability gate", () => {
       expect(capabilities.status).toBe(200);
       await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: false });
       expect(value.sessions.authenticateAccess).toHaveBeenCalledWith({ access_token: "token" });
-      expect((await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: "What changed?" })).status).toBe(503);
+      expect((await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What changed?" })).status).toBe(503);
     } finally { await value.close(); }
   });
 
   it("reports agentic Ask to installed clients that still probe, and no longer serves the retired Ask paths", async () => {
-    const value = await server({ application: { ask: vi.fn(), searchEvidence: vi.fn(), openEvidence: vi.fn() } as never });
+    const value = await server({ application: { searchEvidence: vi.fn(), openEvidence: vi.fn() } as never, ask: { ask: vi.fn() } as never });
     try {
       const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
       await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: true });
       for (const path of RETIRED_ASK_PATHS) {
-        expect((await post(value.url, path, { schema_version: 2, question: "What changed?" })).status).toBe(404);
+        expect((await post(value.url, path, { schema_version: path === "/v1/person/ask" || path === "/v2/person/ask" ? 2 : 3, question: "What changed?" })).status).toBe(404);
       }
     } finally { await value.close(); }
   });
@@ -142,7 +146,7 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it("forwards a client disconnect as the V3 route abort signal", async () => {
+  it("forwards a client disconnect as the Ask's abort signal", async () => {
     let started!: () => void;
     let observedAbort!: () => void;
     const startedPromise = new Promise<void>((resolve) => { started = resolve; });
@@ -155,12 +159,10 @@ describe("Agentic Ask HTTP capability gate", () => {
           reject(new Error("client disconnected"));
         }, { once: true });
       })),
-      searchEvidence: vi.fn(),
-      openEvidence: vi.fn(),
-    } as unknown as PersonAnswerV3HttpApplication;
-    const value = await server({ application });
+    } as unknown as PersonAnswerV7HttpApplication;
+    const value = await server({ ask: application });
     try {
-      const request = httpRequest(`${value.url}${PERSON_ANSWER_PATH_V3}`, {
+      const request = httpRequest(`${value.url}${PERSON_ANSWER_PATH_V7}`, {
         method: "POST",
         headers: { authorization: "Bearer token", "content-type": "application/json" },
       });
@@ -175,8 +177,8 @@ describe("Agentic Ask HTTP capability gate", () => {
 });
 
 /**
- * The real V3 route and evidence desk behind the real HTTP server, over fake
- * stores: one only-me note of the asker's, and records still indexing.
+ * The real Ask route (`/v7`) and evidence desk behind the real HTTP server,
+ * over fake stores: one only-me note of the asker's, and records still indexing.
  */
 function mineFixture(nativeDriver = false, personalMember?: string) {
   const checked_at = "2026-09-27T00:00:00.000Z";
@@ -212,14 +214,16 @@ function mineFixture(nativeDriver = false, personalMember?: string) {
       : { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "found", evidence: [hit] }], notes: "" }], actions: [{ tool: "finish", args: {} }] };
   });
   const personalGenerate = vi.fn(generate.getMockImplementation()!);
-  const route = createPersonAnswerV3Route({
+  const options = {
     authority_id: "authority_fixture", organization_id: "organization_fixture", state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess: () => ({ principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker" }) } as never,
     originals: originals as unknown as PersonOriginalContextEvidenceDeskPortV1, records: records as unknown as PersonEvidenceDeskRecordsV1,
     model: { generate }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
     ...(nativeDriver ? { [personalMember === undefined ? 'research_driver' : 'personal_research']: personalMember === undefined ? { run: nativeRun } : { membership_id: personalMember, driver: { run: nativeRun }, structured_output: { generate: personalGenerate }, generation: { generation_adapter_id: 'personal-fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } } : {}),
-    audit: { forRequest: () => ({ append: vi.fn() }) } as never,
-  });
+    audit: { forRequest: () => ({ append: vi.fn() }), forLiveRequest: () => ({}) } as never,
+  };
+  const route = createPersonLiveAnswerRouteV1(options);
+  const desk = createPersonAnswerV3Route(options);
   async function nativeRun(session: AgenticResearchDriverSessionV1) {
       expect(JSON.stringify(session.initial)).toContain('only what the asker added');
       const read = await session.call('search', { query: 'launch' });
@@ -227,7 +231,7 @@ function mineFixture(nativeDriver = false, personalMember?: string) {
       expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
   }
   // The desk cites an original with its display label.
-  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, personalGenerate, route };
+  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, personalGenerate, route, desk };
 }
 
 async function post(url: string, path: string, body: unknown): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
@@ -238,11 +242,11 @@ async function post(url: string, path: string, body: unknown): Promise<{ readonl
 describe("Ask with mine, and citation refs (ADR-0024)", () => {
   it('serves the native research driver through the existing authenticated HTTP route and writer', async () => {
     const f = mineFixture(true);
-    const value = await server({ application: f.route });
+    const value = await server({ application: f.desk, ask: f.route });
     try {
-      const answer = await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: 'What did I decide?', mine: true });
+      const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What did I decide?', mine: true });
       expect(answer.status).toBe(200);
-      const validated = validatePersonAnswerResponseV4(answer.body);
+      const validated = validatePersonAnswerResponseV8(answer.body);
       expect(validated.outcome).toBe('answered');
       expect(validated.scope).toEqual({ kind: 'mine' });
       expect(validated.citations).toEqual([{ citation: f.cited, kind: 'note', label: 'My launch note', visibility: 'only_me', ref: f.note.ref }]);
@@ -269,11 +273,11 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
 
   it("builds a mine desk for every store, echoes mine, and cites with a ref", async () => {
     const f = mineFixture();
-    const value = await server({ application: f.route });
+    const value = await server({ application: f.desk, ask: f.route });
     try {
-      const answer = await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: "What did I decide?", mine: true });
+      const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?", mine: true });
       expect(answer.status).toBe(200);
-      const validated = validatePersonAnswerResponseV4(answer.body);
+      const validated = validatePersonAnswerResponseV8(answer.body);
       expect(validated.scope).toEqual({ kind: "mine" });
       expect(validated.citations).toEqual([{ citation: f.cited, kind: "note", label: "My launch note", visibility: "only_me", ref: f.note.ref }]);
       expect(f.scopes.length).toBeGreaterThan(1);
@@ -288,20 +292,20 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
       }
       // Without mine, the same asker's Ask is global.
       f.scopes.length = 0;
-      expect((await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: "What did I decide?" })).body.scope).toEqual({ kind: "global" });
+      expect((await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?" })).body.scope).toEqual({ kind: "global" });
       for (const scope of f.scopes) expect(scope).toEqual({ kind: "global" });
     } finally { await value.close(); }
   });
 
   it("refuses mine with a project, or mine other than true, before the route runs", async () => {
     const f = mineFixture();
-    const value = await server({ application: f.route });
+    const value = await server({ application: f.desk, ask: f.route });
     try {
       for (const body of [
         { schema_version: 3, question: "What did I decide?", mine: true, project_id: "prj_00000000-0000-4000-8000-000000000001" },
         { schema_version: 3, question: "What did I decide?", mine: false },
       ]) {
-        expect(await post(value.url, PERSON_ANSWER_PATH_V3, body)).toEqual({ status: 400, body: { error: { code: "invalid_request", message: "request failed" } } });
+        expect(await post(value.url, PERSON_ANSWER_PATH_V7, body)).toEqual({ status: 400, body: { error: { code: "invalid_request", message: "request failed" } } });
       }
       expect(f.originals.deskAuthorize).not.toHaveBeenCalled();
       expect(f.generate).not.toHaveBeenCalled();
@@ -313,7 +317,7 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
 
   it("strips ref and the other internal research metadata from the evidence search and open doors, whose contract carries none", async () => {
     const f = mineFixture();
-    const value = await server({ application: f.route });
+    const value = await server({ application: f.desk, ask: f.route });
     try {
       const searched = await post(value.url, PERSON_EVIDENCE_SEARCH_PATH_V1, { schema_version: 1, query: "launch" });
       expect(searched.status).toBe(200);
