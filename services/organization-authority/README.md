@@ -366,13 +366,19 @@ The meeting card routes each decision and action to its own destination
 approving person and that person's current membership tenure to read it; one to
 twenty of the reviewer's own active projects
 (`project-members-readable-person-v1`), whose current members can read it and
-with which it is associated for project Ask; or **Don't keep**. Destinations
+with which it is associated for project Ask; those projects kept for the
+reviewer alone ([ADR-0049](../../docs/decisions/ADR-0049-only-me-is-a-lock.md)),
+where the route says `private: true`; or **Don't keep**. Destinations
 start from the projects suggested at import or watch, which grant nothing.
 There is no organization-wide (Team) choice. The publisher groups the kept
-items by their exact project set and writes one signed record per group,
-holding only its items and the reasons that support them, so every record keeps
-one audience, which is also its association; Only me records carry no project
-association. In the Slack DM copy that a reviewer who linked Slack also gets,
+items by whether they are private and their exact project set, and writes one
+signed record per group, holding only its items and the reasons that support
+them. A project record's audience is also its association; an Only me record
+carries no project; a private record binds `restricted-reviewer-person-v2`
+with no project audience and its projects as association only (record log V6),
+so it shows in those projects to its approver alone. Its approval id hashes
+`private: true` in, and its receipt entry and record refs say `private`. In
+the Slack DM copy that a reviewer who linked Slack also gets,
 Approve sends every item to the suggestion (Only me when there is none), and
 the first decision wins across surfaces. Each action with an owner proposed by
 extraction shows an owner field, pre-filled; only the owners the approver

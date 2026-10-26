@@ -114,13 +114,17 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   the reasons given, open on demand. Each decision and action has a
   destination chip: Only me, one or more of your projects, or Don't keep. It
   starts on the projects the meeting suggests that you are still in, and on
-  Only me when there are none. A meeting names at most 20 projects in all;
+  Only me when there are none. Only me is a lock (ADR-0049): with projects
+  ticked it files the item in them for you alone, the chip shows the lock, and
+  it stays pressed while projects stay ticked; with none ticked it is Only me
+  itself. A meeting names at most 20 projects in all;
   there, a chip offers only the projects it already names ("Up to 20
   projects."). On the right sit **All items** (one chip for every kept item,
   "Mixed" when they differ, where a project only some have is part-ticked and
   a tick adds or removes that project on every kept item, each keeping its
   others), a line saying where Approve sends them, one count per destination
-  ("2 to Thermostat redesign · 1 not kept"), **Approve** (off while nothing
+  ("2 to Thermostat redesign · 1 to Thermostat redesign, only me · 1 not
+  kept"), **Approve** (off while nothing
   is kept) and **Reject**, and who was in the meeting. No transcript is ever
   shared (ADR-0046), so the card has no transcript choice. The card reads each
   item, quote and reason as
