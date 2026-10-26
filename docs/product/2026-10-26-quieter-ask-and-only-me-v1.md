@@ -101,8 +101,8 @@ long identifiers). That is server prompt work, separate from this page.
   records whose only reader is you, filed in a project or not, newest first.
   A filed row names its project; no row carries a lock. Its bar is Home's
   bar (all context). Capture from it starts as "No project".
-- A save that only you can read says "Saved for you" (no project) or "Saved
-  to THERM · only you"; the toast opens the Only me list on it.
+- A save that only you can read says "Saved for you" (no project), which
+  opens the Only me list on it, or "Saved to THERM · only you".
 - The bar has no Mine scope any more. Older turns asked in Mine stay on Home's
   thread.
 

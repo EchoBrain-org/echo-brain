@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerBlock } from '../../src/shared/protocol.js';
 import { layoutAnswer } from '../../src/host/test-authority.js';
 import { answerView } from '../../src/host/views.js';
-import { asking as askingWith, byTestId, elements, flush, Held, ok, paneTurn, plainHooks, rpcFor, storeLifecycle, text, type Node } from './harness.js';
+import { asking as askingWith, byTestId, elements, fail, flush, Held, ok, paneTurn, plainHooks, rpcFor, storeLifecycle, text, type Node } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -103,6 +103,8 @@ describe('a laid-out part reads as its blocks', () => {
         { cells: ['DVT failure review', 'Open'], citation_indexes: [0] }, { cells: ['TRACE-01', 'Open'], citation_indexes: [1] },
         { cells: ['My release review', 'Open'], citation_indexes: [2] },
       ] }] }] };
+    // The record is read for its name, as every cited meeting is; here it cannot be, and keeps its label.
+    rpc.mockImplementation(rpcFor(held, { 'ask.record': () => fail('not_found') }, () => ({ active: [], archived: [] })));
     const { thread } = await answered(answer);
     expect(byTestId(thread(), 'answer-row').map(row => byTestId(row, 'private-mark').length)).toEqual([0, 0, 0]);
     click(byTestId(thread(), 'sources-toggle')[0]);

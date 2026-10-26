@@ -48,28 +48,23 @@ function MatchRow({ match, terms }: { match: Match; terms: readonly string[] }) 
   );
 }
 
-/** Live matches above the bar, within its scope, and the Ask that Return makes. Mine is only asked, never searched. */
+/** Live matches above the bar, within its scope, and the Ask that Return makes. */
 function Matches({ state, scopeName }: { state: State; scopeName: string | null }) {
   const matches = state.matches!;
   const terms = queryTerms(matches.query);
-  const searched = matches.scope.kind !== 'mine';
   return (
     <div class="matches" data-testid="matches" role="group" aria-label="Matches">
-      {searched && (
-        <>
-          <div class="matches-head" data-testid="matches-head">Matches in {scopeName ?? 'all context'}</div>
-          {matches.items.map(match => <MatchRow key={match.context_id} match={match} terms={terms} />)}
-          {matches.loading && matches.items.length === 0 && <div class="matches-note">Searching</div>}
-          {!matches.loading && !matches.failure && matches.items.length === 0 && <div class="matches-note" data-testid="matches-empty">No matches</div>}
-          {matches.failure && (
-            <div class="matches-note" data-testid="matches-error">
-              <span class="error">{message(matches.failure)}</span>
-              <button type="button" class="link-button" onClick={searchAgain}>Try again</button>
-            </div>
-          )}
-          <div class="matches-rule" />
-        </>
+      <div class="matches-head" data-testid="matches-head">Matches in {scopeName ?? 'all context'}</div>
+      {matches.items.map(match => <MatchRow key={match.context_id} match={match} terms={terms} />)}
+      {matches.loading && matches.items.length === 0 && <div class="matches-note">Searching</div>}
+      {!matches.loading && !matches.failure && matches.items.length === 0 && <div class="matches-note" data-testid="matches-empty">No matches</div>}
+      {matches.failure && (
+        <div class="matches-note" data-testid="matches-error">
+          <span class="error">{message(matches.failure)}</span>
+          <button type="button" class="link-button" onClick={searchAgain}>Try again</button>
+        </div>
       )}
+      <div class="matches-rule" />
       <button type="button" class="match-row ask-row" data-testid="match-ask" onClick={submitBar}>
         <Up />
         <span class="label">Ask {scopeName ?? 'ECHO'} about “{askText(state.barText)}”</span>
