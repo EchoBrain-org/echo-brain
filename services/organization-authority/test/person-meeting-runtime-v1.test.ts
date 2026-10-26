@@ -392,7 +392,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.db.prepare('SELECT count(*) AS n FROM authority_source_revisions_v1').get()).toEqual(before); expect(f.extracted()).toBe(0);
   });
-  it('lists and cites imported originals for their importer alone, in global and Mine scope and never in project scope, without releasing transcripts', async () => {
+  it('lists and cites imported originals for their importer alone, in global, Mine and Only me scope and never in project scope, without releasing transcripts', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
@@ -400,6 +400,8 @@ describe('personal meeting intake uses the shared processing path', () => {
     const list = f.listRoute();
     const page = await list.list({ access_token: 'owner', request: { schema_version: 1, mine: true } });
     expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', visibility: 'only_me', projects: [] });
+    // Only me lists it exactly as Mine does (ADR-0049).
+    expect((await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items).toEqual(page.items);
     const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
     expect(JSON.stringify(opened)).toContain('Ship the cohort'); expect(JSON.stringify(opened)).not.toContain('TRANSCRIPT_SECRET');
     // A suggested project grants nothing: its scope holds no unapproved notes, for its members or the importer.
@@ -413,6 +415,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toEqual([]);
       expect(() => originals.deskOpen({ access_token: token, scope: { kind: 'global' }, citation: search.items[0]!.citation })).toThrow();
       await expect(list.open({ access_token: token, request: { schema_version: 1, ref: page.items[0]!.ref } })).rejects.toMatchObject({ code: 'not_found' });
+      expect((await list.list({ access_token: token, request: { schema_version: 1, only_me: true } })).items).toEqual([]);
     }
     expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'TRANSCRIPT_SECRET_DO_NOT_SHARE' }).items).toEqual([]);
     f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?").run(new Date().toISOString(), project);

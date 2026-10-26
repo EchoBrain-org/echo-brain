@@ -9,11 +9,11 @@ import {
   validatePersonListResponseV1,
   validatePersonOpenResponseV1,
   type OrganizationPersonToolV4,
-  type PersonAnswerScopeV3,
   type PersonListProjectV1,
   type PersonListRequestV1,
   type PersonListResponseV1,
   type PersonListRowV1,
+  type PersonListScopeV1,
   type PersonListVisibilityV1,
   type PersonItemRefV1,
   type PersonOpenResponseV1,
@@ -95,9 +95,10 @@ function unknownScope(scope: never): never {
   throw new AuthorityOperationError("invalid_request", `scope ${String((scope as { readonly kind?: unknown }).kind)} is invalid`);
 }
 
-function scopeOf(request: PersonListRequestV1): PersonAnswerScopeV3 {
-  if (request.project_id !== undefined && request.mine !== undefined) invalidRequest();
+function scopeOf(request: PersonListRequestV1): PersonListScopeV1 {
+  if ([request.project_id, request.mine, request.only_me].filter((value) => value !== undefined).length > 1) invalidRequest();
   if (request.project_id !== undefined) return Object.freeze({ kind: "project", project_id: request.project_id });
+  if (request.only_me === true) return Object.freeze({ kind: "only_me" });
   return request.mine === true ? Object.freeze({ kind: "mine" }) : Object.freeze({ kind: "global" });
 }
 
@@ -153,13 +154,14 @@ function compareRows(left: Ordered, right: Ordered): number {
 }
 
 /** A store page must be its own kind, strictly ordered, strictly after the cursor, and inside the scope. */
-function assertSource(kind: PersonListSourceV1, rows: readonly StoreRow[], after: PersonListSourcePositionV1, scope: PersonAnswerScopeV3): void {
+function assertSource(kind: PersonListSourceV1, rows: readonly StoreRow[], after: PersonListSourcePositionV1, scope: PersonListScopeV1): void {
   if (rows.length > COLLECT_LIMIT) invalidOutput();
   let previous: Ordered | undefined = after.state === "after" ? { kind: after.id.startsWith("cap_") ? "imported_meeting" : kind, id: after.id, added_at: after.added_at } : undefined;
   for (const row of rows) {
     if ((row.kind !== kind && !(kind === "note" && row.kind === "imported_meeting")) || !IDS[kind].test(row.id) || !isCanonicalUtcMillisTimestampV1(row.added_at)) invalidOutput();
     if (previous !== undefined && compareRows(previous, row) >= 0) invalidOutput();
     if (scope.kind === "project" && !row.association_project_ids.includes(scope.project_id)) invalidOutput();
+    if (scope.kind === "only_me" && collapse(row.visibility) !== "only_me") invalidOutput();
     previous = row;
   }
 }
@@ -227,6 +229,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
           header = { project: headerProject(project!) };
           break;
         case "mine":
+        case "only_me":
           break;
         default:
           unknownScope(scope);

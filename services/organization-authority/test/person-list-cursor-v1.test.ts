@@ -1,5 +1,5 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import type { PersonAnswerScopeV3, PersonItemRefV1 } from "@echo-brain/organization-api";
+import type { PersonItemRefV1, PersonListScopeV1 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { describe, expect, it } from "vitest";
 import { encodeProjectCursorV1, frameCursorV1 } from "../src/adapters/persistence/sqlite/project-context-cursor-v1.js";
@@ -24,10 +24,10 @@ const NOTE = `ctx_${"a".repeat(64)}`;
 const DOCUMENT = `doc_${"b".repeat(64)}`;
 const MEETING = `sha256:${"c".repeat(64)}`;
 const IMPORTED = `cap_${"d".repeat(64)}`;
-const SCOPES: readonly PersonAnswerScopeV3[] = [
-  { kind: "global" }, { kind: "mine" }, { kind: "project", project_id: PROJECT_A }, { kind: "project", project_id: PROJECT_B },
+const SCOPES: readonly PersonListScopeV1[] = [
+  { kind: "global" }, { kind: "mine" }, { kind: "only_me" }, { kind: "project", project_id: PROJECT_A }, { kind: "project", project_id: PROJECT_B },
 ];
-const list = (scope: PersonAnswerScopeV3 = { kind: "global" }, changes: Partial<PersonListCursorBindingV1> = {}): PersonListCursorBindingV1 =>
+const list = (scope: PersonListScopeV1 = { kind: "global" }, changes: Partial<PersonListCursorBindingV1> = {}): PersonListCursorBindingV1 =>
   ({ scope, organization_id: ORGANIZATION, membership_id: MEMBERSHIP, ...changes });
 const open = (ref: string, changes: Partial<PersonOpenCursorBindingV1> = {}): PersonOpenCursorBindingV1 =>
   ({ ref: ref as PersonItemRefV1, organization_id: ORGANIZATION, membership_id: MEMBERSHIP, ...changes });

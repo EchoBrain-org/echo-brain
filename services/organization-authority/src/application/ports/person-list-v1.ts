@@ -11,6 +11,12 @@ import type {
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import type { PersonAskScopeV2 } from "./person-original-context-retrieval-v1.js";
 
+/**
+ * Ask's scopes, and the list's only_me (ADR-0049): every item whose only
+ * reader is the caller, filed in a project or not. Ask never takes it, and it
+ * is always ⊆ global.
+ */
+export type PersonListStoreScopeV1 = PersonAskScopeV2 | Readonly<{ readonly kind: "only_me" }>;
 /** Last emitted row of ONE source. Store order inside a source: added_at DESC, id ASC (binary). */
 export interface PersonItemPositionV1 { readonly added_at: string; readonly id: string }
 /** Store-raw visibility; only the list route collapses it (ADR-0024). */
@@ -51,7 +57,7 @@ export interface PersonOriginalItemsPortV1 {
   /** Unaudited. Omit a source to skip it. rows.length < limit ⇒ that source is exhausted. */
   collect(input: {
     readonly access_token: string;
-    readonly scope: PersonAskScopeV2;
+    readonly scope: PersonListStoreScopeV1;
     /** 1..26 */
     readonly limit: number;
     readonly notes?: { readonly after: PersonItemPositionV1 | null };
@@ -90,7 +96,7 @@ export interface PersonMeetingItemsPortV1 {
   /** Unaudited. rows.length < limit ⇒ meetings are exhausted. */
   collectMeetings(input: {
     readonly access_token: string;
-    readonly scope: PersonAskScopeV2;
+    readonly scope: PersonListStoreScopeV1;
     readonly after: PersonItemPositionV1 | null;
     /** 1..26 */
     readonly limit: number;
@@ -137,7 +143,7 @@ export interface PersonListDirectoryPortV1 {
   /** One content-free page audit, written only after every fence passed. */
   audit(entry: {
     readonly operation: "person_list" | "person_open";
-    readonly scope_kind: "global" | "project" | "mine" | "item";
+    readonly scope_kind: "global" | "project" | "mine" | "only_me" | "item";
     readonly actor: PersonAccessAuthorization;
     readonly response_sha256: Sha256Digest;
     readonly released_count: number;

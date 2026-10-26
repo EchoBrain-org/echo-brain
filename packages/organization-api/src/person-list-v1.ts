@@ -42,6 +42,11 @@ export type PersonMeetingRefV1 = `meeting:sha256:${string}`;
 export type PersonItemRefV1 = PersonImportedMeetingRefV1 | PersonNoteRefV1 | PersonDocumentRefV1 | PersonMeetingRefV1;
 export type PersonListVisibilityV1 = 'only_me' | 'team' | 'project';
 export type PersonListNoticeV1 = 'meetings_unavailable';
+/**
+ * Ask's scopes, and only_me, which the list alone takes (ADR-0049): every item
+ * whose only reader is the caller, filed in a project or not.
+ */
+export type PersonListScopeV1 = PersonAnswerScopeV3 | { readonly kind: 'only_me' };
 
 export interface PersonListProjectRefV1 { readonly project_id: ProjectIdV1; readonly name: string }
 interface PersonListRowBaseV1 {
@@ -71,11 +76,12 @@ export interface PersonListMeetingRowV1 extends PersonListRowBaseV1 {
 }
 export type PersonListRowV1 = PersonListImportedMeetingRowV1 | PersonListNoteRowV1 | PersonListDocumentRowV1 | PersonListMeetingRowV1;
 
-/** project_id and mine are exclusive; neither means global. */
+/** project_id, mine and only_me are exclusive; none of them means global. */
 export interface PersonListRequestV1 {
   readonly schema_version: 1;
   readonly project_id?: ProjectIdV1;
   readonly mine?: true;
+  readonly only_me?: true;
   readonly cursor?: string;
 }
 export interface PersonListMeV1 { readonly display_name: string; readonly membership_type: 'owner' | 'employee' }
@@ -91,13 +97,13 @@ export interface PersonListProjectV1 {
 }
 /**
  * The first global page carries me, connected, projects and projects_more
- * together; the first project page may carry project; mine pages carry no
- * header. Which page is first is known only to the caller.
+ * together; the first project page may carry project; mine and only_me pages
+ * carry no header. Which page is first is known only to the caller.
  */
 export interface PersonListResponseV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-person-list-v1';
-  readonly scope: PersonAnswerScopeV3;
+  readonly scope: PersonListScopeV1;
   readonly me?: PersonListMeV1;
   readonly connected?: readonly PersonListConnectedToolV1[];
   readonly projects?: readonly PersonListProjectV1[];
@@ -329,23 +335,33 @@ function headerProjects(value: unknown): readonly PersonListProjectV1[] {
   return Object.freeze(projects);
 }
 
+/** Ask's scope validator never accepts only_me, so the list checks that one itself. */
+function listScope(value: unknown): PersonListScopeV1 {
+  const input = object(value, 'Person list scope');
+  if (input.kind !== 'only_me') return validatePersonAnswerScopeV3(input, 'Person list scope');
+  assertExactKeys(input, ['kind'], 'Person list scope');
+  return Object.freeze({ kind: 'only_me' as const });
+}
+
 export function validatePersonListRequestV1(value: unknown): PersonListRequestV1 {
   const input = object(value, 'Person list request');
-  assertExactKeys(input, ['schema_version', ...optionalKeys(input, ['project_id', 'mine', 'cursor'])], 'Person list request');
+  assertExactKeys(input, ['schema_version', ...optionalKeys(input, ['project_id', 'mine', 'only_me', 'cursor'])], 'Person list request');
   if (input.schema_version !== 1) fail('Person list request schema_version is unsupported');
   if (Object.hasOwn(input, 'mine') && input.mine !== true) fail('Person list request mine is invalid');
-  if (Object.hasOwn(input, 'mine') && Object.hasOwn(input, 'project_id')) fail('Person list request scope is invalid');
+  if (Object.hasOwn(input, 'only_me') && input.only_me !== true) fail('Person list request only_me is invalid');
+  if (optionalKeys(input, ['project_id', 'mine', 'only_me']).length > 1) fail('Person list request scope is invalid');
   return Object.freeze({
     schema_version: 1 as const,
     ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Person list request project_id') } : {}),
     ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}),
+    ...(Object.hasOwn(input, 'only_me') ? { only_me: true as const } : {}),
     ...(Object.hasOwn(input, 'cursor') ? { cursor: cursor(input.cursor, 'Person list request cursor') } : {}),
   });
 }
 
 export function validatePersonListResponseV1(value: unknown): PersonListResponseV1 {
   const input = object(value, 'Person list response');
-  const scope = validatePersonAnswerScopeV3(input.scope, 'Person list scope');
+  const scope = listScope(input.scope);
   const header = optionalKeys(input, GLOBAL_HEADER);
   if (header.length !== 0 && (scope.kind !== 'global' || header.length !== GLOBAL_HEADER.length)) fail('Person list header is invalid');
   if (Object.hasOwn(input, 'project') && scope.kind !== 'project') fail('Person list header is invalid');

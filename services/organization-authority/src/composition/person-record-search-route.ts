@@ -63,6 +63,7 @@ import {
 } from "./person-meeting-items-v1.js";
 import type {
   PersonItemPositionV1,
+  PersonListStoreScopeV1,
   PersonMeetingCollectionV1,
   PersonMeetingItemsPortV1,
   PersonMeetingPartPositionV1,
@@ -71,7 +72,6 @@ import type {
   PersonStoreReleaseV1,
   PersonStoreVisibilityV1,
 } from "../application/ports/person-list-v1.js";
-import type { PersonAskScopeV2 } from "../application/ports/person-original-context-retrieval-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { PERSON_MEETING_DATE_FIELDS_V1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
@@ -753,7 +753,7 @@ function readGeneration<T>(read: () => T): T {
 }
 
 const MEETING_COLLECT_MAX = 26;
-/** The Layer 1 reader page limit: a longer lag holds Mine without reading further. */
+/** The Layer 1 reader page limit: a longer lag holds Mine or Only me without reading further. */
 const MEETING_WAITING_MINE_MAX = 100;
 const MEETING_PART_MAX = 65_535;
 const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
@@ -767,7 +767,7 @@ const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 type MeetingCollectionState = {
   readonly authorization: PersonRecordSearchReleaseAuthorizationV1;
   readonly grants_sha256: Sha256Digest;
-  readonly scope: PersonAskScopeV2;
+  readonly scope: PersonListStoreScopeV1;
   readonly rows: readonly PersonStoreMeetingRowV1[];
   consumed: boolean;
 };
@@ -814,12 +814,16 @@ function unknownScope(scope: never): never {
   throw new AuthorityOperationError("invalid_request", `scope ${String((scope as { readonly kind?: unknown }).kind)} is invalid`);
 }
 
-/** The records half of a list scope: mine is the caller's own approvals, never global. */
-function meetingScope(scope: PersonAskScopeV2): Readonly<{ project_id?: string; mine: boolean }> {
+/**
+ * The records half of a list scope: mine is the caller's own approvals, and
+ * only_me the records kept for the caller alone (ADR-0049); neither is ever global.
+ */
+function meetingScope(scope: PersonListStoreScopeV1): Readonly<{ project_id?: string; mine: boolean; only_me: boolean }> {
   switch (scope.kind) {
-    case "global": return { mine: false };
-    case "project": return { project_id: scope.project_id, mine: false };
-    case "mine": return { mine: true };
+    case "global": return { mine: false, only_me: false };
+    case "project": return { project_id: scope.project_id, mine: false, only_me: false };
+    case "mine": return { mine: true, only_me: false };
+    case "only_me": return { mine: false, only_me: true };
     default: return unknownScope(scope);
   }
 }
@@ -847,6 +851,14 @@ function newestFirst(left: PersonItemPositionV1, right: PersonItemPositionV1): n
 
 function isRecordPolicy(value: unknown): value is ReadableSearchResultItemV1["policy_id"] {
   return value === "restricted-reviewer-person-v2" || value === "organization-member-readable-person-v2" || value === "project-members-readable-person-v1";
+}
+
+/**
+ * The policy an admitted record's envelope names, read without validating the
+ * envelope: the hold probe only narrows by it, and anything else is no policy.
+ */
+function envelopePolicy(envelope: JsonObject): unknown {
+  return (envelope.body as { readonly event?: { readonly policy_id?: unknown } } | null | undefined)?.event?.policy_id;
 }
 
 /** The signed receipt's issue time, as a canonical list time. */
@@ -1151,28 +1163,32 @@ export function createPersonRecordSearchRouteV1(
 
   /**
    * Whether a record this reader can read in this scope was appended after the
-   * published head. An approval the reader cannot see, or under mine one the
-   * reader did not approve, never changes what the reader sees. The probe
-   * reads only the log after the published head.
+   * published head. An approval the reader cannot see, under mine one the
+   * reader did not approve, and under only_me one not kept for the reader
+   * alone, never changes what the reader sees. The probe reads only the log
+   * after the published head.
    */
-  function meetingWaiting(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: { readonly mine: boolean; readonly project_id?: string }, publishedHead: number): boolean {
+  function meetingWaiting(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: { readonly mine: boolean; readonly only_me: boolean; readonly project_id?: string }, publishedHead: number): boolean {
+    const narrowed = scope.mine || scope.only_me;
     const waiting = new PersonRecordReaderV1(options.record).list({
       authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
       principal_id: authorization.principal_id, membership_id: authorization.membership_id,
       ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
       ...(scope.project_id === undefined ? {} : { project_id: scope.project_id }),
-      after_position: publishedHead, limit: scope.mine ? MEETING_WAITING_MINE_MAX : 1,
+      after_position: publishedHead, limit: narrowed ? MEETING_WAITING_MINE_MAX : 1,
     });
-    if (!scope.mine) return waiting.length > 0;
-    // A lag longer than one probe holds, rather than list a stale Mine.
+    if (!narrowed) return waiting.length > 0;
+    // A lag longer than one probe holds, rather than list a stale Mine or Only me.
     if (waiting.length === MEETING_WAITING_MINE_MAX) return true;
+    // The Layer 1 read admits a restricted reviewer record to its approver alone.
+    if (scope.only_me) return waiting.some((record) => envelopePolicy(record.envelope) === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
     return waiting.some((record) => {
       const approver = approverTupleV1(record.envelope, record.approval_id, options, options.record_approver);
       return approver !== undefined && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id;
     });
   }
 
-  function meetingCollection(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: PersonAskScopeV2, rows: readonly PersonStoreMeetingRowV1[]): PersonMeetingCollectionV1 {
+  function meetingCollection(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: PersonListStoreScopeV1, rows: readonly PersonStoreMeetingRowV1[]): PersonMeetingCollectionV1 {
     const handle: PersonStoreHandleV1 = Object.freeze({});
     meetingCollections.set(handle, { authorization: releaseAuthorization(authorization), grants_sha256: projects.grants_sha256, scope: Object.freeze({ ...scope }), rows: Object.freeze([...rows]), consumed: false });
     return Object.freeze({ status: "ok" as const, rows: Object.freeze([...rows]), handle });
@@ -1513,7 +1529,9 @@ export function createPersonRecordSearchRouteV1(
         if (pointer === null) return meetingCollection(authorization, projects, input.scope, []);
       }
       const listed = generationRecords(authorization, projects, pointer, scope.project_id, lagging);
-      const candidates = scope.mine ? listed.filter((record) => approvedByCaller(record, authorization)) : listed;
+      // Only me is the restricted reviewer records, which the generation admits to their approver alone.
+      const candidates = scope.mine ? listed.filter((record) => approvedByCaller(record, authorization))
+        : scope.only_me ? listed.filter((record) => record.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2) : listed;
       const added = addedAtOf(candidates);
       const taken = candidates
         .map((record) => ({ record, position: { added_at: added.get(record.record_sha256)!, id: record.record_sha256 } }))
