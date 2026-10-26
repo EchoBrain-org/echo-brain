@@ -5,7 +5,7 @@ import type { PersonAnswerCitationV5, PersonAnswerResponseV5 } from './person-an
 import type { PersonAnswerCitationV6, PersonAnswerResponseV6 } from './person-answer-v6.js';
 import type { PersonAnswerCitationV7, PersonAnswerEvidenceCitationV7, PersonAnswerResponseV7 } from './person-answer-v7.js';
 import {
-  validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
+  PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
   type PersonEvidenceKindV5,
 } from './person-answer-v8.js';
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
@@ -492,7 +492,7 @@ function answerResponse(value: unknown, version: AnswerVersion) {
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous], 'Ask response');
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = version >= 8 && input.outcome === 'clarify';
-  if (input.schema_version !== version || input.kind !== `echo-clean-person-answer-v${version}` || !(clarify || ['answered', 'partial', 'not_found'].includes(input.outcome as string)) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
+  if (input.schema_version !== version || input.kind !== `echo-clean-person-answer-v${version}` || !((PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) && (clarify || input.outcome !== 'clarify')) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
   const citations = input.citations.map(item => answerCitation(item, version));
   const citationKeys = new Set<string>();

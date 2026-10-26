@@ -1,3 +1,4 @@
+import { PERSON_ANSWER_OUTCOMES_V8 } from "@echo-brain/organization-api";
 import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, telemetryLabelV1, type TelemetryVocabularyV1 } from "./telemetry-vocabulary-v1.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
@@ -39,7 +40,7 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds",
 ] as const;
 export type CoreRuntimeCountsV1 = Partial<Record<(typeof CORE_RUNTIME_COUNT_KEYS_V1)[number], number | null>>;
-export const CORE_RUNTIME_RESULTS_V1 = ["held", "unrepresentable", "current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", "answered", "partial", "not_found", "clarify"] as const;
+export const CORE_RUNTIME_RESULTS_V1 = ["held", "unrepresentable", "current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", ...PERSON_ANSWER_OUTCOMES_V8] as const;
 export const CORE_RUNTIME_GROUNDING_STAGES_V1 = ["evidence_id", "evidence_duplicate", "evidence_quote", "due_before_meeting", "decided_question_only", "rationale_supports"] as const;
 export const CORE_RUNTIME_UPSTREAM_SERVICES_V1 = ["nango", "jira", "confluence", "granola", "other"] as const;
 export const CORE_RUNTIME_UPSTREAM_OPERATIONS_V1 = ["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"] as const;
