@@ -141,12 +141,15 @@ async function disclosureWorld() {
     empAOnlyNote: note("emp_a", { kind: "only_me" }),
     empASharedNote: note("emp_a", { kind: "project", project_id: SHARED }, [SHARED]),
     empATeamNote: note("emp_a", { kind: "team" }, [SHARED]),
+    // Only me, filed in SHARED, which the owner holds too (ADR-0049).
+    empAFiledOnlyNote: note("emp_a", { kind: "only_me" }, [SHARED]),
     unjoinedNote: note("approver_x", { kind: "projects", project_ids: [SHARED, UNJOINED] }, [SHARED, UNJOINED]),
     empBTeamNote: note("emp_b", { kind: "team" }),
     ownerOnlyDocument: document("owner", { kind: "only_me" }),
     ownerSharedDocument: document("owner", { kind: "project", project_id: SHARED }, [SHARED]),
     empAOnlyDocument: document("emp_a", { kind: "only_me" }),
     empASharedDocument: document("emp_a", { kind: "project", project_id: SHARED }, [SHARED]),
+    empAFiledOnlyDocument: document("emp_a", { kind: "only_me" }, [SHARED]),
     unjoinedDocument: document("approver_x", { kind: "projects", project_ids: [SHARED, UNJOINED] }, [SHARED, UNJOINED]),
     longDocument: document("emp_b", { kind: "team" }, [], Array.from({ length: 11 }, (_, index) => `Paragraph ${index + 1}.`)),
   };
@@ -263,10 +266,10 @@ const guessed = {
   meeting: `meeting:${sha256Digest("pending-approval-without-a-record")}`,
 };
 
-/** Every scope a reader can list: global, mine and each joined project. */
+/** Every scope a reader can list: global, mine, only me and each joined project. */
 async function scopes(f: World, token: Token): Promise<Readonly<Record<string, unknown>>[]> {
   const first = JSON.parse((await f.list(token)).text) as PersonListResponseV1;
-  return [{}, { mine: true }, ...first.projects!.map((project) => ({ project_id: project.project_id }))];
+  return [{}, { mine: true }, { only_me: true }, ...first.projects!.map((project) => ({ project_id: project.project_id }))];
 }
 
 describe("person list and open negative disclosure (ADR-0024)", () => {
@@ -285,6 +288,10 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       expect(items.find((item) => item.ref === f.refs.empATeamNote)).toMatchObject({ visibility: "team", projects: [] });
     }
     for (const ref of gone) expect(await f.open("emp_a", ref)).toEqual({ status: 404, text: NOT_FOUND_BODY });
+    // Only me is who can read it, not where it is filed: it stays the reader's, filed in no project of theirs.
+    for (const scope of [{}, { mine: true }, { only_me: true }]) {
+      expect((await f.listed("emp_a", scope)).find((item) => item.ref === f.refs.empAFiledOnlyNote)).toMatchObject({ visibility: "only_me", projects: [] });
+    }
     for (const project_id of [SHARED, PROJ_X]) expect(await f.list("emp_a", { project_id })).toEqual({ status: 401, text: UNAUTHORIZED_BODY });
     // Another member of SHARED still sees the association.
     expect((await f.listed("owner")).find((item) => item.ref === f.refs.empATeamNote)?.projects).toEqual([{ project_id: SHARED, name: PROJECT_NAMES[SHARED] }]);
@@ -318,9 +325,9 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
 
     it("N-1, N-8, N-9: another member's only-me items, rejected and pending meetings stay hidden, and every miss is one 404", async () => {
       const hidden: Readonly<Record<Token, readonly string[]>> = {
-        owner: [f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.meeting("emp_a_only"), f.meeting("r5")],
+        owner: [f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.refs.empAFiledOnlyNote, f.refs.empAFiledOnlyDocument, f.meeting("emp_a_only"), f.meeting("r5")],
         emp_a: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.meeting("r2"), f.meeting("r5")],
-        emp_b: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.meeting("r2"), f.meeting("emp_a_only"), f.meeting("r5")],
+        emp_b: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.refs.empAFiledOnlyNote, f.refs.empAFiledOnlyDocument, f.meeting("r2"), f.meeting("emp_a_only"), f.meeting("r5")],
         emp_c: [], returned: [],
       };
       for (const token of ["owner", "emp_a", "emp_b"] as const) {
@@ -395,8 +402,8 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       expect(await f.list("returned", { cursor: empACursor })).toEqual(refused);
       expect((await f.list("emp_a", { cursor: empACursor })).status).toBe(200);
       // Minted cursors: a well-formed position under each scope, replayed under every other.
-      const minted = [{ kind: "global" }, { kind: "mine" }, { kind: "project", project_id: SHARED }, { kind: "project", project_id: OWNER_B }] as const;
-      const request = (scope: (typeof minted)[number]) => scope.kind === "global" ? {} : scope.kind === "mine" ? { mine: true } : { project_id: scope.project_id };
+      const minted = [{ kind: "global" }, { kind: "mine" }, { kind: "only_me" }, { kind: "project", project_id: SHARED }, { kind: "project", project_id: OWNER_B }] as const;
+      const request = (scope: (typeof minted)[number]) => scope.kind === "global" ? {} : scope.kind === "mine" ? { mine: true } : scope.kind === "only_me" ? { only_me: true } : { project_id: scope.project_id };
       for (const scope of minted) {
         const cursor = encodePersonListCursorV1({ scope, organization_id: org, membership_id: OWNER.membership_id }, { note: { state: "start" }, document: { state: "start" }, meeting: { state: "done" } });
         expect((await f.list("owner", { ...request(scope), cursor })).status).toBe(200);
@@ -428,9 +435,42 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       expect(await f.refsOf("emp_a")).toContain(f.meeting("r3"));
       expect(await mine("emp_c")).toEqual([]);
       const ownNotes = (await f.refsOf("emp_a", { mine: true })).filter((ref) => !ref.startsWith("meeting:"));
-      expect(new Set(ownNotes)).toEqual(new Set([f.refs.empAOnlyNote, f.refs.empASharedNote, f.refs.empATeamNote, f.refs.empAOnlyDocument, f.refs.empASharedDocument]));
+      expect(new Set(ownNotes)).toEqual(new Set([
+        f.refs.empAOnlyNote, f.refs.empASharedNote, f.refs.empATeamNote, f.refs.empAFiledOnlyNote, f.refs.empAOnlyDocument, f.refs.empASharedDocument, f.refs.empAFiledOnlyDocument,
+      ]));
       // A new tenure of the same person starts with nothing of its own.
       expect(await f.refsOf("returned", { mine: true })).toEqual([]);
+    });
+
+    it("Only me (ADR-0049): every item whose only reader is the reader, filed in a project or not, and one scope per request", async () => {
+      const onlyMe = async (token: Token) => new Set(await f.refsOf(token, { only_me: true }));
+      expect(await onlyMe("owner")).toEqual(new Set([f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.meeting("r2")]));
+      expect(await onlyMe("emp_a")).toEqual(new Set([f.refs.empAOnlyNote, f.refs.empAFiledOnlyNote, f.refs.empAOnlyDocument, f.refs.empAFiledOnlyDocument, f.meeting("emp_a_only")]));
+      expect(await onlyMe("emp_b")).toEqual(new Set([f.meeting("b_only")]));
+      expect(await onlyMe("emp_c")).toEqual(new Set());
+      // A new tenure of the same person has nothing kept for it alone.
+      expect(await onlyMe("returned")).toEqual(new Set());
+      const pages = await f.walk("emp_a", { only_me: true });
+      for (const page of pages) expect(Object.keys(page).sort()).toEqual(["items", "kind", "next_cursor", "schema_version", "scope"]);
+      expect(pages.map((page) => page.scope)).toEqual(pages.map(() => ({ kind: "only_me" })));
+      const items = pages.flatMap((page) => page.items);
+      expect(items.every((item) => item.visibility === "only_me")).toBe(true);
+      // A filed row names its project; an unfiled one names none.
+      for (const ref of [f.refs.empAFiledOnlyNote, f.refs.empAFiledOnlyDocument]) {
+        expect(items.find((item) => item.ref === ref)?.projects).toEqual([{ project_id: SHARED, name: PROJECT_NAMES[SHARED] }]);
+      }
+      expect(items.find((item) => item.ref === f.refs.empAOnlyNote)?.projects).toEqual([]);
+      // What the reader added for a project or the team, and approved for a project, is mine but never only me.
+      const mine = await f.refsOf("emp_a", { mine: true });
+      for (const ref of [f.refs.empASharedNote, f.refs.empATeamNote, f.refs.empASharedDocument, f.meeting("r4")]) {
+        expect({ ref, mine: mine.includes(ref), only_me: items.some((item) => item.ref === ref) }).toEqual({ ref, mine: true, only_me: false });
+      }
+      // The filed ones list in SHARED for the reader who added them; N-1 shows no other member finds them there.
+      expect(await f.refsOf("emp_a", { project_id: SHARED })).toEqual(expect.arrayContaining([f.refs.empAFiledOnlyNote, f.refs.empAFiledOnlyDocument]));
+      expect(f.pageAudits().filter((audit) => audit.scope_kind === "only_me").length).toBeGreaterThan(0);
+      for (const request of [{ only_me: true, mine: true }, { only_me: true, project_id: SHARED }, { only_me: false }, { only_me: "true" }]) {
+        expect(await f.list("emp_a", request)).toEqual({ status: 400, text: INVALID_BODY });
+      }
     });
 
     it("N-19: a project the reader has not joined, or that does not exist, is one 401 before any store runs", async () => {

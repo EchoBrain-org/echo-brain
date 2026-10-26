@@ -307,8 +307,9 @@ person who runs them; an agent has no membership of its own
 - `person list` is the map: the newest notes, documents and approved meetings
   the person can read now, 25 per page, with no text and no counts. Its first
   page names the person, their connected tools and their projects.
-  `--project <project-id>` narrows it to one joined project and `--mine` to
-  what the person added or approved.
+  `--project <project-id>` narrows it to one joined project, `--mine` to
+  what the person added or approved, and `--only-me` to everything only the
+  person can read, filed in a project or not.
 - Pass `next_cursor` back as `--cursor` with the same scope; `null` is the end.
 - `notice: "meetings_unavailable"` means meetings are still being indexed and
   come on a later page. A first page with no items and that notice is not the

@@ -10,7 +10,7 @@ import { SqlitePersonOriginalItemsV1 } from "../src/adapters/persistence/sqlite/
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
-import type { PersonItemPositionV1, PersonStoreDocumentRowV1, PersonStoreNoteRowV1, PersonStoreReleaseV1 } from "../src/application/ports/person-list-v1.js";
+import type { PersonItemPositionV1, PersonListStoreScopeV1, PersonStoreDocumentRowV1, PersonStoreNoteRowV1, PersonStoreReleaseV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import type { PersonUploadAudienceV2, ProjectIdV1 } from "@echo-brain/organization-api";
 import {
@@ -25,6 +25,7 @@ type NoteAudience = { readonly kind: "only_me" | "team" } | { readonly kind: "pr
 
 const GLOBAL: PersonAskScopeV2 = { kind: "global" };
 const MINE: PersonAskScopeV2 = { kind: "mine" };
+const ONLY_ME: PersonListStoreScopeV1 = { kind: "only_me" };
 const inProject = (project_id: string): PersonAskScopeV2 => ({ kind: "project", project_id });
 const ACTORS: Readonly<Record<string, Actor>> = { owner: OWNER, member: MEMBER, returned: RETURNED_MEMBER };
 const AUDIT_KIND = "echo-person-original-item-release-audit-v1";
@@ -115,7 +116,7 @@ function fixture() {
   };
 
   /** collect(26) → commit(the emitted prefix) → revalidate, until both sources are exhausted. */
-  const walk = (token: string, scope: PersonAskScopeV2, emit: (available: number) => number = (available) => available) => {
+  const walk = (token: string, scope: PersonListStoreScopeV1, emit: (available: number) => number = (available) => available) => {
     const rows: Row[] = [];
     const releases: PersonStoreReleaseV1[] = [];
     const source = { note: { after: null as PersonItemPositionV1 | null, done: false }, document: { after: null as PersonItemPositionV1 | null, done: false } };
@@ -141,7 +142,7 @@ function fixture() {
     }
     return { rows, releases };
   };
-  const ids = (token: string, scope: PersonAskScopeV2) => walk(token, scope).rows.map((row) => row.id);
+  const ids = (token: string, scope: PersonListStoreScopeV1) => walk(token, scope).rows.map((row) => row.id);
   const audits = () => (database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1").all() as { body_json: string }[])
     .map((row) => row.body_json).filter((body) => body.includes(AUDIT_KIND));
 
@@ -228,6 +229,55 @@ describe("person original items store", () => {
     for (const id of earlierTeam) expect(returned.global.map((row) => row.id)).toContain(id);
     // Only-me items of the earlier tenure are not readable at all.
     for (const row of member.mine.filter((value) => value.visibility === "only_me")) expect(returned.global.map((value) => value.id)).not.toContain(row.id);
+  });
+
+  it("lists only_me as the caller's own only-me notes and documents, filed in a project or not (ADR-0049)", () => {
+    const f = fixture();
+    const unfiled = f.note("member", { kind: "only_me" });
+    const filed = f.note("member", { kind: "only_me" }, [PROJECT_ALPHA]);
+    const filedV2 = f.note("member", { kind: "only_me" }, [PROJECT_ALPHA], 2);
+    const filedDocument = f.document("member", { kind: "only_me" }, [PROJECT_ALPHA], { state: "ready" });
+    const unfiledDocument = f.document("member", { kind: "only_me" });
+    const own = [unfiled, filed, filedV2, filedDocument, unfiledDocument];
+    // The caller's team and project items, and the owner's only-me items filed in the same project, are not the caller's only_me.
+    const team = f.note("member", { kind: "team" }, [PROJECT_ALPHA]);
+    const project = f.note("member", { kind: "project", project_id: PROJECT_ALPHA }, [PROJECT_ALPHA]);
+    const projectDocument = f.document("member", { kind: "project", project_id: PROJECT_ALPHA }, [PROJECT_ALPHA]);
+    const ownerFiled = f.note("owner", { kind: "only_me" }, [PROJECT_ALPHA]);
+    const ownerDocument = f.document("owner", { kind: "only_me" }, [PROJECT_ALPHA]);
+
+    const onlyMe = f.walk("member", ONLY_ME).rows;
+    expect(new Set(onlyMe.map((row) => row.id))).toEqual(new Set(own));
+    expect(onlyMe.every((row) => row.visibility === "only_me")).toBe(true);
+    expect(onlyMe.find((row) => row.id === filed)?.association_project_ids).toEqual([PROJECT_ALPHA]);
+    expect(onlyMe.find((row) => row.id === unfiled)?.association_project_ids).toEqual([]);
+    // Each only_me row is the same row in mine and in global, and mine also holds the caller's shared items.
+    const mine = f.walk("member", MINE).rows;
+    const global = f.walk("member", GLOBAL).rows;
+    for (const row of onlyMe) {
+      expect(mine).toContainEqual(row);
+      expect(global).toContainEqual(row);
+    }
+    for (const id of [team, project, projectDocument]) expect(mine.map((row) => row.id)).toContain(id);
+    // The filed ones show in their project, for the caller alone.
+    expect(f.ids("member", inProject(PROJECT_ALPHA))).toEqual(expect.arrayContaining([filed, filedV2, filedDocument]));
+    expect(new Set(f.ids("owner", ONLY_ME))).toEqual(new Set([ownerFiled, ownerDocument]));
+    for (const scope of [GLOBAL, MINE, ONLY_ME, inProject(PROJECT_ALPHA)]) {
+      const owner = f.ids("owner", scope);
+      for (const id of own) expect(owner).not.toContain(id);
+    }
+
+    // Leaving the project leaves them the caller's alone, filed in no project the caller holds.
+    f.projects.leaveProject("member", { schema_version: 1, kind: "echo-project-leave-v1", request_id: randomUUID(), project_id: PROJECT_ALPHA });
+    const left = f.walk("member", ONLY_ME).rows;
+    expect(new Set(left.map((row) => row.id))).toEqual(new Set(own));
+    expect(left.every((row) => row.association_project_ids.length === 0)).toBe(true);
+    // A new tenure of the same person starts with nothing kept for it alone.
+    revokeMembership(f.database, MEMBER);
+    addMembership(f.database, RETURNED_MEMBER, "Returned", "member@example.test");
+    expect(f.ids("returned", ONLY_ME)).toEqual([]);
+    const returned = f.note("returned", { kind: "only_me" });
+    expect(f.ids("returned", ONLY_ME)).toEqual([returned]);
   });
 
   it("drops the caller's own items once their only access path is a left project, but keeps associated team items", () => {
@@ -509,7 +559,7 @@ describe("person original items store", () => {
     f.document("member", { kind: "only_me" });
     const outputs: unknown[] = [];
     for (const token of ["owner", "member"]) {
-      for (const scope of [GLOBAL, MINE, inProject(PROJECT_ALPHA)]) {
+      for (const scope of [GLOBAL, MINE, ONLY_ME, inProject(PROJECT_ALPHA)]) {
         const collected = f.items.collect({ access_token: token, scope, limit: 26, notes: { after: null }, documents: { after: null } });
         outputs.push(collected, f.items.commit({ access_token: token, handle: collected.handle, notes: collected.notes.length, documents: collected.documents.length }));
       }

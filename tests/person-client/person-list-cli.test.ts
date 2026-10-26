@@ -68,6 +68,8 @@ function oneLine(stdout: string): unknown {
 const project = { project_id: projectId, name: 'Apollo', role: 'member', status: 'active' } as const;
 const noteRow = { ref: NOTE, kind: 'note', title: 'Pricing notes', added_at: '2026-09-21T21:30:00.000Z', visibility: 'only_me', projects: [] };
 const meetingRow = { ref: MEETING, kind: 'meeting', title: 'Pricing review', added_at: '2026-09-21T18:00:00.000Z', visibility: 'team', projects: [{ project_id: projectId, name: 'Apollo' }], meeting_date: '2026-09-21' };
+/** Only me: a note filed in Apollo and a meeting kept for the caller alone. */
+const onlyMeRows = [{ ...noteRow, projects: [{ project_id: projectId, name: 'Apollo' }] }, { ...meetingRow, visibility: 'only_me', projects: [] }];
 const globalHeader = { me: { display_name: 'Maya Chen', membership_type: 'employee' }, connected: [{ tool: 'slack', status: 'linked' }], projects: [project], projects_more: false };
 
 function page(scope: unknown, header: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
@@ -98,6 +100,8 @@ describe('person list CLI', () => {
       [['list', '--mine'], { schema_version: 1, mine: true }, page({ kind: 'mine' }, {}, { notice: 'meetings_unavailable', next_cursor: CURSOR })],
       [['list', '--cursor', CURSOR], { schema_version: 1, cursor: CURSOR }, page({ kind: 'global' })],
       [['list', '--mine', '--cursor', CURSOR], { schema_version: 1, mine: true, cursor: CURSOR }, page({ kind: 'mine' })],
+      [['list', '--only-me'], { schema_version: 1, only_me: true }, page({ kind: 'only_me' }, {}, { items: onlyMeRows, next_cursor: CURSOR })],
+      [['list', '--only-me', '--cursor', CURSOR], { schema_version: 1, only_me: true, cursor: CURSOR }, page({ kind: 'only_me' }, {}, { items: onlyMeRows, notice: 'meetings_unavailable' })],
       [['list', '--project', projectId, '--cursor', CURSOR], { schema_version: 1, cursor: CURSOR, project_id: projectId }, page({ kind: 'project', project_id: projectId })],
     ];
     for (const [argv, body, response] of cases) {
@@ -113,7 +117,12 @@ describe('person list CLI', () => {
   it('refuses a scope pair or an unsupported list flag before the network', async () => {
     const cases = [
       ['list', '--project', projectId, '--mine'],
+      ['list', '--mine', '--only-me'],
+      ['list', '--only-me', '--project', projectId],
+      ['list', '--project', projectId, '--mine', '--only-me'],
+      ['list', '--only-me=true'],
       ['ask', '--question', 'What did I decide?', '--project', projectId, '--mine'],
+      ['ask', '--question', 'What did I decide?', '--only-me'],
       ['list', '--kind', 'note'],
       ['list', '--limit', '10'],
       ['list', '--query', 'pricing'],
@@ -132,8 +141,17 @@ describe('person list CLI', () => {
       expect(JSON.parse(result.stderr)).toMatchObject({ ok: false });
       expect(fetch).not.toHaveBeenCalled();
     }
-    const combined = await run(['list', '--project', projectId, '--mine'], vi.fn<typeof globalThis.fetch>());
-    expect(JSON.parse(combined.stderr)).toEqual({ ok: false, error: '--project and --mine cannot be combined with `echo-brain person list`' });
+    for (const [argv, error] of [
+      [['list', '--project', projectId, '--mine'], '--project and --mine cannot be combined with `echo-brain person list`'],
+      [['list', '--only-me', '--mine'], '--mine and --only-me cannot be combined with `echo-brain person list`'],
+      [['list', '--only-me', '--project', projectId], '--project and --only-me cannot be combined with `echo-brain person list`'],
+      [['list', '--project', projectId, '--mine', '--only-me'], '--project, --mine and --only-me cannot be combined with `echo-brain person list`'],
+      // Only me is a list scope; Ask's scopes are unchanged.
+      [['ask', '--question', 'What did I decide?', '--only-me'], '--only-me is not valid with `echo-brain person ask`'],
+    ] as const) {
+      const combined = await run(argv, vi.fn<typeof globalThis.fetch>());
+      expect(JSON.parse(combined.stderr)).toEqual({ ok: false, error });
+    }
   });
 
   it('rejects list pages whose scope or header does not belong to the request', async () => {
@@ -146,6 +164,13 @@ describe('person list CLI', () => {
       [['list'], page({ kind: 'global' })],
       [['list', '--project', projectId], page({ kind: 'project', project_id: projectId })],
       [['list', '--mine'], page({ kind: 'mine' }, globalHeader)],
+      [['list', '--only-me'], page({ kind: 'mine' })],
+      [['list', '--only-me'], page({ kind: 'global' })],
+      [['list', '--mine'], page({ kind: 'only_me' })],
+      [['list'], page({ kind: 'only_me' })],
+      [['list', '--only-me'], page({ kind: 'only_me' }, globalHeader)],
+      [['list', '--only-me'], page({ kind: 'only_me' }, { project })],
+      [['list', '--only-me'], page({ kind: 'only_me', project_id: projectId })],
     ];
     for (const [argv, response] of cases) {
       const result = await run(argv, network(() => json(response)).fetch);

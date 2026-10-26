@@ -96,7 +96,8 @@ describe("Person client help", () => {
     const listHelp = await help(["list", "--help"]);
     expect(listHelp).toContain("the notes, documents, imported meetings and approved meetings ask can read;");
     expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
-    expect(listHelp).toContain("usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]");
+    expect(listHelp).toContain("usage: echo-brain person list [--project <project-id> | --mine | --only-me] [--cursor <next_cursor>]");
+    expect(listHelp).toContain("--only-me lists everything only you can read, filed in a project or not");
   });
 
   it("refuses each retired command, and its help, as unknown before any session or network use", async () => {
