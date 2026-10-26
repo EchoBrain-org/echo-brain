@@ -3505,6 +3505,8 @@ export function toggleEmployeeMenu(email: string): void {
 export function widenScope(): void {
   set({ barScope: { kind: 'global' } });
   syncSearch();
+  // Ask open moves to Home's thread: what changed of its newest turns is checked as opening Ask there would.
+  if (state.ask) void checkTimeline();
 }
 
 /** What a scope is called: all context, Mine, or the project by its name, as the sidebar has it. */
@@ -3524,8 +3526,11 @@ let timelineSeq = 0;
 let checkSeq = 0;
 /** The checks on their way, by each turn they speak for: a follow-up or Ask again of one waits for its reply. */
 const checking = new Map<string, Promise<void>>();
-/** When the newest turns were last checked, as the check went (this computer's clock): Ask opening checks them again five minutes on. */
-let newestCheckedAt = Number.NEGATIVE_INFINITY;
+/**
+ * When each place's newest turns were last checked, as the check went (this computer's clock), by its thread (`threadKey`):
+ * Ask opening in that place checks them again five minutes on (ADR-0049).
+ */
+const newestCheckedAt = new Map<string, number>();
 /** Clears what checks said once the first of them is no longer good. */
 let checksExpire: ReturnType<typeof setTimeout> | null = null;
 
@@ -3613,7 +3618,7 @@ function forgetTimeline(): void {
 function forgetChecks(): void {
   checkSeq += 1;
   checking.clear();
-  newestCheckedAt = Number.NEGATIVE_INFINITY;
+  newestCheckedAt.clear();
   if (checksExpire) { clearTimeout(checksExpire); checksExpire = null; }
 }
 
@@ -3645,16 +3650,24 @@ function keepTurn(turn: TimelineTurn): void {
   void rpc('timeline.put', { expect: account, turn });
 }
 
+/** A place's thread, as its checks are kept: Home's, or a project's by its id. */
+function threadKey(scope: AskScope): string {
+  return scope.kind === 'project' ? `project:${scope.project_id}` : 'home';
+}
+
 /**
- * Ask opened: what changed of what the newest ten turns cited, in one check
- * (C5), unless the last one went under five minutes ago; and of the turn a
- * suggestion opened it at (`opened`), first in that check or in one of its
- * own, unless what its sources are now is known or on its way.
+ * Ask opened: what changed of what the newest ten turns its place's thread
+ * shows cited, in one check (C5), unless that place's last one went under
+ * five minutes ago (ADR-0049); and of the turn a suggestion opened it at
+ * (`opened`), first in that check or in one of its own, unless what its
+ * sources are now is known or on its way.
  */
 function checkTimeline(opened?: TimelineTurn): Promise<void> {
-  const newest = Date.now() - newestCheckedAt < CHECK_FRESH_MS ? [] : threadOf(state.timeline.turns, state.barScope).slice(-CHECK_TURNS).reverse();
+  const key = threadKey(state.barScope);
+  const fresh = Date.now() - (newestCheckedAt.get(key) ?? Number.NEGATIVE_INFINITY) < CHECK_FRESH_MS;
+  const newest = fresh ? [] : askThread().slice(-CHECK_TURNS).reverse();
   const first = opened !== undefined && (newest.includes(opened) || (freshChecksOf(opened) === undefined && !checking.has(opened.id))) ? [opened] : [];
-  return checkTurns([...first, ...newest.filter(turn => turn !== opened)], newest.length > 0);
+  return checkTurns([...first, ...newest.filter(turn => turn !== opened)], newest.length > 0 ? key : null);
 }
 
 /**
@@ -3673,10 +3686,11 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * later one did; a turn citing nothing a check asks about is spoken for
  * without asking. It fails quietly, with no tags: what an earlier check said
  * that is no longer good goes with it. A ticket it reads for the first time
- * keeps the marker it read as its baseline. `newest`: Ask opening's check of
- * the newest turns, made again five minutes after it went.
+ * keeps the marker it read as its baseline. `newest`: the place (`threadKey`)
+ * whose newest turns Ask opening checked, made again there five minutes after
+ * it went.
  */
-function checkTurns(turns: readonly TimelineTurn[], newest = false): Promise<void> {
+function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null): Promise<void> {
   const account = expect();
   if (!account || turns.length === 0) return Promise.resolve();
   const plan = checkPlan(turns);
@@ -3691,7 +3705,7 @@ function checkTurns(turns: readonly TimelineTurn[], newest = false): Promise<voi
       return;
     }
     const found = checkedOf(plan, result?.value.items ?? []);
-    if (newest) newestCheckedAt = at;
+    if (newest !== null) newestCheckedAt.set(newest, at);
     const before = state.timeline.checks;
     const latest = Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
     keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
@@ -3889,7 +3903,8 @@ export function askEverywhere(id: string): void {
 export function askAgain(id: string): void {
   const turn = turnOf(id);
   if (!turn || state.ask?.asking) return;
-  void ask(askText(turn.question), turn.scope, { againOf: turn.id });
+  // A turn asked in Mine before it went is asked again at Home, on whose thread it stays (ADR-0049).
+  void ask(askText(turn.question), turn.scope.kind === 'mine' ? { kind: 'global' } : turn.scope, { againOf: turn.id });
 }
 
 /** A choice of "Which one?": its full question, asked with the same earlier turn. */

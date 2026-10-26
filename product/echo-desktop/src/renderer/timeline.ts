@@ -327,9 +327,9 @@ export function threadOf(turns: readonly TimelineTurn[], scope: AskScope): reado
   return scope.kind === 'project' ? turns.filter(turn => sameScope(turn.scope, scope)) : turns;
 }
 
-/** A question as two turns compare it: where it was asked, and its words in any case and spacing. */
+/** A question as two turns compare it: where it was asked (Mine, before it went, as Home), and its words in any case and spacing. */
 function questionKey(turn: TimelineTurn): string {
-  const where = turn.scope.kind === 'project' ? `project:${turn.scope.project_id}` : turn.scope.kind;
+  const where = turn.scope.kind === 'project' ? `project:${turn.scope.project_id}` : 'home';
   return `${where}\n${turn.question.trim().replace(/\s+/gu, ' ').toLowerCase()}`;
 }
 
@@ -351,7 +351,11 @@ export function visibleTurns(turns: readonly TimelineTurn[]): TimelineTurn[] {
   return shown.reverse();
 }
 
-/** The questions of `scope`'s thread, newest first, each reopening its turn: the bar's suggestions take each once, the newest. */
+/**
+ * The questions of `scope`'s thread as Ask shows it, newest first, each
+ * reopening its turn: never one folded away. The bar's suggestions take each
+ * once, the newest.
+ */
 export function askedSuggestions(turns: readonly TimelineTurn[], scope: AskScope): Suggestion[] {
-  return [...threadOf(turns, scope)].reverse().map(turn => ({ question: turn.question, turn: turn.id }));
+  return visibleTurns(threadOf(turns, scope)).reverse().map(turn => ({ question: turn.question, turn: turn.id }));
 }

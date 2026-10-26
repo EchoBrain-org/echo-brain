@@ -39,8 +39,8 @@ test('global Ask reads Jira live and opens its ticket citation', async () => {
   expect(run.calls().filter(call => call.path.endsWith('/person/ask')).map(call => ({ path: call.path, body: call.body })))
     .toEqual([{ path: '/v7/person/ask', body: { schema_version: 3, question } }]);
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
-  // No lock: ECHO reads the ticket with your own access (ADR-0049).
-  await expect(page.getByTestId('private-mark')).toHaveCount(0);
+  // No lock in the answer: ECHO reads the ticket with your own access (ADR-0049).
+  await expect(page.getByTestId('answer').getByRole('img', { name: /only you/i })).toHaveCount(0);
   // The sources start as the one quiet line under the answer; it opens onto their rows (ADR-0045, ADR-0049).
   const sources = page.getByTestId('sources-toggle');
   await expect(sources).toHaveText(/^1 source$/);
@@ -630,8 +630,10 @@ test('a quick Ask shows nothing more, and its source opens the cited decision li
   const { page } = run;
   await askFromHome(page, 'What did we agree?');
   await expect(page.getByTestId('answer')).toBeVisible();
-  await expect(page.getByTestId('ask-receipt')).toHaveCount(0);
+  // A quick Ask's line says how many sources, with no time and nothing it looked through (ADR-0049).
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^\d+ sources?$/);
   await page.getByTestId('sources-toggle').click();
+  await expect(page.getByTestId('receipt-rows')).toHaveCount(0);
   await page.getByTestId('source-row').nth(0).click();
   const pane = page.getByTestId('source-pane');
   await expect(pane.locator('.record-item.on')).toHaveCount(1);

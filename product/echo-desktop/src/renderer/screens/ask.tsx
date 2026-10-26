@@ -606,7 +606,8 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
           )}
         </div>
       )}
-      <TurnFoot state={state} turn={turn} view={view} took={took} again={!current} copy={!omitted} />
+      {/* With every sentence left out, its sources go too: only Ask again shows. */}
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current} copy={!omitted} />
     </div>
   );
 }
@@ -650,7 +651,7 @@ function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn;
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {!omitted && turnNote(turn, checks) === 'changed' && <ChangedSince at={turn.asked_at} />}
       {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
-      <TurnFoot state={state} turn={turn} view={view} took={undefined} again copy={!omitted} />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} />
     </div>
   );
 }

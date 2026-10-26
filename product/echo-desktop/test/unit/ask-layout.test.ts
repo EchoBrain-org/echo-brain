@@ -77,8 +77,8 @@ describe('a laid-out part reads as its blocks', () => {
     expect(cells.map(row => text(byTestId(row[0], 'citation')))).toEqual(['4', '3', '5', '6']);
     expect(cells.map(row => text(row[0]).replace(/\d+$/u, ''))).toEqual(['Confirm TC-D-03 traces to MRD-01 (TRACE-01)', 'Send the regression-scope proposal to the PM',
       'Fix BUG-412 on the board (HW-11)', 'Run DVT-R2 and publish the report']);
-    // No lock beside a row's number (ADR-0049): a lock is only ever on a source's own row.
-    expect(byTestId(thread(), 'private-mark')).toEqual([]);
+    // No lock beside a row's number, though the ticket only you can read is cited (ADR-0049): a lock is only ever on a source's own row.
+    expect(elements(byTestId(thread(), 'answer')).filter(node => /only you/iu.test(String(node.props['aria-label'] ?? '')))).toEqual([]);
     const due = cells.map(row => row[2]!);
     expect(due.map(cell => text(byType(cell, 'time')))).toEqual(['Oct 14', 'Oct 9', 'Oct 28', 'Oct 30']);
     expect(due.map(cell => byType(cell, 'time')[0]!.props.dateTime)).toEqual(['2026-10-14', '2026-10-09', '2026-10-28', '2026-10-30']);
@@ -106,7 +106,7 @@ describe('a laid-out part reads as its blocks', () => {
     // The record is read for its name, as every cited meeting is; here it cannot be, and keeps its label.
     rpc.mockImplementation(rpcFor(held, { 'ask.record': () => fail('not_found') }, () => ({ active: [], archived: [] })));
     const { thread } = await answered(answer);
-    expect(byTestId(thread(), 'answer-row').map(row => byTestId(row, 'private-mark').length)).toEqual([0, 0, 0]);
+    expect(byTestId(thread(), 'answer-row').map(row => elements(row).filter(node => /only you/iu.test(String(node.props['aria-label'] ?? ''))).length)).toEqual([0, 0, 0]);
     click(byTestId(thread(), 'sources-toggle')[0]);
     expect(byTestId(thread(), 'source-row').map(row => byTestId(row, 'source-lock').length)).toEqual([0, 0, 1]);
   });
