@@ -15,6 +15,12 @@ superseded_by: []
 updates:
   - ADR-0015
   - ADR-0022
+  - ADR-0024
+  - ADR-0026
+  - ADR-0034
+  - ADR-0039
+  - ADR-0040
+  - ADR-0042
   - ADR-0045
 ---
 
@@ -78,11 +84,21 @@ lived in the answer it never saw.
   2026-09-28), and nothing re-reads stored audit outcomes, so ADR-0022's
   off-scope outcome no longer exists. `notice` and `gap` stay in the contract
   for the person client and the evals.
+- **Only `/v7`.** Ask routes before /v7 are retired: no Authority serves only
+  them, and clients older than the 2026-10-22 release update from the feed.
+  `POST /v3/person/ask` to `/v6/person/ask`, Ask progress V1 and V2, and
+  `person ask --tickets` and `--live` go. The person client and the desktop
+  ask `/v7` alone, and an Authority without it fails the Ask as
+  `not_supported`.
 
 ## Migration, rollback, and evidence
 
-- Server first: an older Authority answers 404 for the two new reads (no tags,
-  no dots) and rejects `previous` (the desktop retries without it).
+- Server first: the Authority that takes `previous` and serves the two new
+  reads is released before the desktop that sends and reads them. The desktop
+  never retries an Ask without `previous`, and a failed check or activity
+  read stays quiet (no tags, no dots).
+- An Authority rolled back must still serve `/v7`: no client asks an older Ask
+  route, so one without it fails every Ask as `not_supported`.
 - Rollback is a desktop that stops sending `previous` and stops reading the two
   routes; the timeline file is device-local and can be deleted with the app's
   data.

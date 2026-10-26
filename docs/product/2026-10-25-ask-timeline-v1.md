@@ -234,10 +234,8 @@ interface PersonAnswerPreviousV1 {
 }
 ```
 
-- `previous` is accepted only on `/v7/person/ask`, plain and streamed, whose
-  answers are V8. The older routes that share request V3 reject a request
-  carrying it with `invalid_request`, and the person client never falls back to
-  them when it sends `previous`. It is the asker's own context: the server
+- `previous` is accepted on `/v7/person/ask`, Ask's one route, plain and
+  streamed, whose answers are V8. It is the asker's own context: the server
   neither verifies nor stores it, and it never becomes evidence.
 - **`follow_up`:** before research, one resolver call (role `answer`, span
   `ask_resolve`, through the existing model gate) reads the previous question,
@@ -278,8 +276,8 @@ interface PersonAnswerPreviousV1 {
   move.
 - Audits record `clarify` as an outcome and the resolver as a generation.
   Observability adds the `ask_resolve` span and the `clarify` outcome.
-- **Person client:** `person ask … --previous=<json>` validates and sends it.
-  An Authority that predates this rejects the field (`invalid_request`).
+- **Person client:** `person ask … --previous=<json>` validates it and sends
+  it to `/v7`, the only route `person ask` asks.
 
 ### C4. Removed from the contract
 
@@ -335,19 +333,21 @@ interface TimelineTurn {
   file reads as empty and is replaced on the next put.
 - **Checks:** opening Ask checks the checkable sources of the last ten turns in
   one `ask.check` (at most 100 items, deduplicated per turn), caches results
-  for five minutes and fails quiet (no tags). After a new answer is stored, its
+  for five minutes and fails quiet: no tags, and the next opening checks
+  again. After a new answer is stored, its
   tickets get a baseline check and their markers are saved with `timeline.put`.
   A turn shows Changed when any cited source is `changed`. A statement is
   highlighted when any of its citations changed, and left out when any is
   `unreadable`. A turn asked again later shows no tag.
 - **Previous:** built from the previous turn's statements whose citations are
-  all readable, trimmed from the end until the body fits 16 KiB. When an Ask
-  with `previous` fails with `invalid_request`, the desktop retries once
-  without it and stops sending `previous` for the rest of that window session.
+  all readable, trimmed from the end until the body fits 16 KiB. An Ask
+  refused with it fails as any Ask does, with Try again; the desktop never asks
+  again without it.
 - **Activity:** each freshness tick also reads `projects.activity`. Last-opened
   times live in renderer localStorage per account
   (`echo.projectSeen.<account hash>`). A project seen for the first time is
-  marked seen now (no dot). `not_supported` means no dots.
+  marked seen now (no dot). A read that fails, `not_supported` included, is
+  quiet: it lights no dot, leaves the others, and the next check reads again.
 - **Removed:** `EarlierTurn`, `MAX_EARLIER`, `earlierTurns`, the in-memory
   `askedQuestions`, `CoverageNote` and the Markdown coverage note, the
   assumption and off-scope banners, Try again on a successful answer, and their
@@ -400,9 +400,13 @@ is private, outside the repository.
 ## Release and compatibility
 
 - Server first. The Authority with C1 to C4 must be live before a desktop that
-  uses them reaches anyone. An older Authority answers 404 for C1 and C2 (no
-  tags, no dots) and `invalid_request` for `previous` (the desktop retries
-  without it).
+  uses them reaches anyone. The desktop does not retry an Ask without
+  `previous`, and a failed check or activity read stays quiet (no tags, no
+  dots).
+- Ask routes before `/v7` are retired (ADR-0047): no Authority serves only
+  them, and clients older than the 2026-10-22 release update from the feed.
+  The desktop and `person ask` ask `/v7` alone, streamed in progress V3; an
+  Authority without it fails the Ask as `not_supported`.
 - The desktop always sends the existing headers; nothing new is header-gated.
 - Removing `assumption` and `off_scope` changes no response anyone receives
   now: no current path produces them (only the A1 pipeline did, from

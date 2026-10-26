@@ -178,9 +178,11 @@ describes the original V7 project storage. The current Authority is V15, which
 accepts only fresh state, and its project routes and client operations are live.
 
 Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as
-updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): the V3 route
-and shared evidence desk are composed whenever an answer model is configured,
-with no capability switch. Live qualification is separate.
+updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md), on `/v7`
+alone since [ADR-0047](../decisions/ADR-0047-ask-timeline.md) retired the Ask
+routes before it: the `/v7` Ask and the shared evidence desk are composed
+whenever an answer model is configured, with no capability switch. Live
+qualification is separate.
 
 The desk owns Person authorization, the pinned retrieval snapshot and release
 audits. Record coordinates are resolved through that authorized snapshot before

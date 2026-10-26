@@ -5,7 +5,7 @@ The package has two roles for one Jira Cloud site:
 - **Person connection lifecycle:** Nango-managed 3LO grants behind the shared
   `person tools` commands.
 - **Request-scoped live reader:** `PersonLiveEvidenceReaderV1<PersonTicketCitationV1>`
-  for the ticket-capable Ask path.
+  for Ask's live tickets.
 
 Ticket content is never captured or stored. ECHO reads tickets live at question
 time and keeps only the read audit.
@@ -235,8 +235,8 @@ organization, grant or site selector in model arguments or connection commands.
    before best-effort remote cleanup. Status is a connection workflow operation
    that may finish authorization, not a read of ticket content. There is no
    client-selected Nango locator or separate completion command.
-3. `echo-brain person ask --tickets --question 'What is blocking launch?'` uses
-   `POST /v4/person/ask`, the existing schema-3 request and strict V5 response.
+3. `echo-brain person ask --question 'What is blocking launch?'` uses
+   `POST /v7/person/ask`, the schema-3 request and strict V8 response.
    The server creates a new Jira reader and audited source for this request.
    Generic desk search/open/list keep item IDs and cursors in request memory.
    Every release commits current Person/grant, ticket coordinates and exact
@@ -249,16 +249,13 @@ organization, grant or site selector in model arguments or connection commands.
    omitted from the answer
    ([ADR-0038](../../docs/decisions/ADR-0038-incremental-access-check-before-model-calls.md)).
    The desk rechecks its local snapshot after Jira I/O.
-4. V5 citations open the adapter-verified Jira permalink directly. Plain
-   `person ask`, and the desktop's Ask in every scope, ask
-   `POST /v7/person/ask` (strict V8 response,
-   [ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), which
-   falls back on an older Authority down to the V5 ticket route
-   (`/v4/person/ask`), as the
+4. Ticket citations open the adapter-verified Jira permalink directly. The
+   desktop's Ask asks the same route in every scope
+   ([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), as the
    [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
-   describes; Mine reads no Jira. The desktop validates V5 to V8 answers, with
-   a safe direct-link opener. `--tickets` is kept for compatibility, and
-   `--live`, which once chose `/v7`, changes nothing.
+   describes; Mine reads no Jira. The desktop validates V8 answers, with a
+   safe direct-link opener. The `/v4` ticket route, `--tickets` and `--live`
+   are retired ([ADR-0047](../../docs/decisions/ADR-0047-ask-timeline.md)).
 5. `echo-brain person tools disconnect --tool jira` calls
    `POST /v1/person/tools/jira/disconnect`. Local revocation is committed before
    remote deletion; a failed deletion cannot restore read access. Missing
