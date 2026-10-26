@@ -43,7 +43,7 @@ export interface AskQuestion {
  * again, as a follow-up carries the turn it continues, built once what that
  * turn cited is known now. Try again asks a failed question the same way.
  */
-export interface AskHow {
+interface AskHow {
   previous?: AskPrevious | null;
   againOf?: string;
 }
@@ -104,7 +104,7 @@ export interface AskState {
  * sources said. It outlives Ask, and is read again at sign-in and when the
  * account changes.
  */
-export interface TimelineState {
+interface TimelineState {
   turns: readonly TimelineTurn[];
   /**
    * What checks said of turns' sources, by turn, each with when it went: good for five minutes. One older is read as none
@@ -3910,7 +3910,7 @@ export function toggleTurn(id: string): void {
  * is checked with the newest turns', first, when nothing in the last five
  * minutes said. Suggestions show only while Ask is closed.
  */
-export function openTurn(id: string): void {
+function openTurn(id: string): void {
   const turn = turnOf(id);
   if (!turn || !expect()) return;
   emptyBar();

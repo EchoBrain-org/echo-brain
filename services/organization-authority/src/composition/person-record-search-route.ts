@@ -354,7 +354,7 @@ export interface PersonReadableDecisionProjectsV1 {
 }
 
 /** The records filed in one of a person's projects, as the project activity read takes them (Ask timeline v1, C2). */
-export interface PersonProjectRecordsV1 {
+interface PersonProjectRecordsV1 {
   /**
    * When the newest record filed in the project that this person reads now and did not approve arrived (its receipt time),
    * else null. Only the project's newest 500 filed records are looked at: one older than them never counts.

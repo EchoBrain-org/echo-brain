@@ -41,7 +41,7 @@ export function freshChecks(checks: Readonly<Record<string, TurnCheck>>, now: nu
  * and each citing nothing a check asks about. A turn none of whose sources
  * fit is not one of them.
  */
-export interface CheckPlan {
+interface CheckPlan {
   readonly items: readonly AskCheckItem[];
   readonly places: readonly { readonly turn: string; readonly sources: readonly number[] }[];
   readonly turns: readonly string[];
@@ -162,7 +162,7 @@ function sentences(turn: TimelineTurn): AnswerStatement[] {
  * leave an old answer saying nothing: it never looks current unless the check
  * says so.
  */
-export type TurnNote = 'changed' | 'same' | null;
+type TurnNote = 'changed' | 'same' | null;
 
 export function turnNote(turn: TimelineTurn, checks: TurnChecks | undefined): TurnNote {
   if (checks === undefined) return null;

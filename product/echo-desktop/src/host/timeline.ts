@@ -18,7 +18,7 @@ import {
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
-export const TIMELINE_FOLDER = 'ask-timeline-v1';
+const TIMELINE_FOLDER = 'ask-timeline-v1';
 const KIND = 'echo-desktop-ask-timeline-v1';
 /** More than 200 turns of the largest answers: anything bigger is not a file a put wrote. */
 const MAX_FILE_BYTES = MAX_TIMELINE_TURNS * MAX_TIMELINE_PUT_BYTES;

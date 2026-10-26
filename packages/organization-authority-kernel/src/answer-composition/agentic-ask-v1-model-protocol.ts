@@ -26,7 +26,7 @@ export const AGENTIC_ASK_MAX_NEEDS_PER_PART_V1 = 6;
 /** One paragraph; the V4 part bound is ten statements (RFC-0003). */
 export const AGENTIC_ASK_MAX_SENTENCES_V1 = 10;
 /** What is different since the earlier answer, when Ask is asked again (ADR-0047). */
-export const AGENTIC_ASK_MAX_SINCE_V1 = PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1;
+const AGENTIC_ASK_MAX_SINCE_V1 = PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1;
 export const AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 = 12;
 const QUESTION_CHARS = 400;
 const NEED_CHARS = 200;
