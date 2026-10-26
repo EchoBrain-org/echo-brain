@@ -1505,6 +1505,8 @@ let arrivals: ReadonlyMap<string, string | null> = new Map();
 let activityUnsupported = false;
 /** When the activity read last went out: a timer's or a page's check reads it again only after `ACTIVITY_EVERY_MS`. */
 let activityReadAt = 0;
+/** Which activity read is the latest: no check waits on one, so a reply that lands after a later one went is dropped. */
+let activitySeq = 0;
 /** The activity read costs the Authority a few queries per project, so checks that are not due share one every two minutes. */
 const ACTIVITY_EVERY_MS = 120_000;
 
@@ -1570,8 +1572,9 @@ async function readActivity(due: boolean): Promise<void> {
   if (!account || activityUnsupported || seen === null) return;
   if (!due && Date.now() - activityReadAt < ACTIVITY_EVERY_MS) return;
   activityReadAt = Date.now();
+  const mine = ++activitySeq;
   const result = await rpc('projects.activity', { expect: account });
-  if (!sameAccount(account) || seen === null) return;
+  if (mine !== activitySeq || !sameAccount(account) || seen === null) return;
   if (!result.ok) {
     if (result.failure.code === 'not_supported') { activityUnsupported = true; set({ news: new Set() }); }
     else if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);

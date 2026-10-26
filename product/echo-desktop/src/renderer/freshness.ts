@@ -67,7 +67,8 @@ export interface Surfaces {
   accountLost(failure: Failure): void;
   /**
    * What arrived in your projects (ADR-0047), read with a check: the sidebar's dots. `due` is a check you would expect it
-   * from (the first, a return, a wake); a timer's or a page's reads it at most every two minutes. Quiet, and never thrown.
+   * from (the first, a return, a wake); a timer's or a page's reads it at most every two minutes. The check never waits on
+   * it: what moved is acted on as soon as the change check says so. Quiet, and never thrown.
    */
   readActivity(due: boolean): Promise<void>;
 }
@@ -208,10 +209,10 @@ function schedule(run: Loop): void {
 async function once(run: Loop, trigger: Trigger): Promise<Checked> {
   run.began = Date.now();
   if (run.timer) { clearTimeout(run.timer); run.timer = null; }
-  // A check also reads what arrived in your projects, side by side (ADR-0047).
-  const activity = surfaces.readActivity(trigger === 'start' || trigger === 'came-back' || trigger === 'wake').catch(() => undefined);
-  if (run.older) { await Promise.all([scan(run), activity]); return { outcome: 'older', moved: [] }; }
-  const [result] = await Promise.all([ask<PersonChangesV1>(() => rpc('changes.read', { expect: run.account })), activity]);
+  // A check also reads what arrived in your projects (ADR-0047): it starts with the check, which never waits on it.
+  void surfaces.readActivity(trigger === 'start' || trigger === 'came-back' || trigger === 'wake').catch(() => undefined);
+  if (run.older) { await scan(run); return { outcome: 'older', moved: [] }; }
+  const result = await ask<PersonChangesV1>(() => rpc('changes.read', { expect: run.account }));
   if (loop !== run) return { outcome: 'failed', moved: [] };
   if (!result.ok) {
     if (result.failure.code === 'not_supported') {
