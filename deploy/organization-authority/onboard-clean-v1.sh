@@ -2243,6 +2243,9 @@ retry_extraction() {
     fail 'extraction retry was refused or unconfirmed; Authority remains stopped; inspect extraction-attempts before resuming'
   fi
   start_runtime || fail 'one extraction retry was authorized but Authority restart failed; inspect extraction-attempts and use resume, never repeat the grant'
+  # The proxy shares Authority's network namespace; an Authority stop/start
+  # leaves the existing proxy attached to the old namespace until restarted.
+  compose_clean restart proxy || fail 'one extraction retry was authorized but proxy restart failed; recover the proxy, never repeat the grant'
 }
 
 personal_claude() {

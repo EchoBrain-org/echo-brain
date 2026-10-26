@@ -682,7 +682,11 @@ without a frozen candidate can also require explicit recovery after a crash.
 The wrapper verifies the accepted runtime, excludes staged candidates, takes
 the operation lock, and stops the worker before granting a retry. The CLI
 refuses stale attempts, duplicate grants, lineage mismatch, and any input with
-a frozen candidate. A successful grant restarts the accepted runtime. A refusal
+a frozen candidate. A successful grant restarts the accepted runtime and its
+proxy, which shares the Authority's network namespace. If the proxy restart
+fails after the grant, recover the proxy through the
+[observability runbook](../../docs/operations/RB-OPERATIONS-001-authority-observability.md);
+do not authorize another extraction to recover connectivity. A refusal
 or uncertain grant leaves it stopped: inspect status before resuming, and do
 not repeat the grant to recover a restart failure. Each grant permits exactly
 one reservation and preserves the previous history. On the source's next check,
