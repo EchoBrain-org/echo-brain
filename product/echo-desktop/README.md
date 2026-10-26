@@ -121,22 +121,26 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
 - **Approve**: a meeting waiting for your decision. Its card shows what was
   decided, numbered (a decision still proposed or unresolved says so), and
   what is to be done, with a due date when the meeting set one and an owner
-  you can retype where ECHO proposed one; what was said in the meeting, and
-  the reasons given, open on demand. Each decision and action has a
-  destination chip: Only me, one or more of your projects, or Don't keep. It
-  starts on the projects the meeting suggests that you are still in, and on
-  Only me when there are none. Only me is a lock (ADR-0049): with projects
-  ticked it files the item in them for you alone, the chip shows the lock, and
-  it stays pressed while projects stay ticked; with none ticked it is Only me
-  itself. A meeting names at most 20 projects in all;
-  there, a chip offers only the projects it already names ("Up to 20
-  projects."). On the right sit **All items** (one chip for every kept item,
-  "Mixed" when they differ, where a project only some have is part-ticked and
-  a tick adds or removes that project on every kept item, each keeping its
-  others and its own lock; its lock shows pressed only when every kept item is
-  filed in a project for you alone, and a project ticked from Only me is
-  shared, as on one item's chip), a line saying where Approve sends them, one
-  count per destination
+  you can retype where ECHO proposed one; the reasons given open on demand,
+  and **See the notes** in the card's head opens what was said in the
+  meeting behind every item, each quote once, with who said it and when above
+  the words. Under each decision and action sit, as on Capture (ADR-0049), a
+  place button and the **Only me** lock beside it, then who can read it in
+  words. The place menu holds places only: one or more of your projects, No
+  project, or Don't keep. It starts on the projects the meeting suggests that
+  you are still in, and on No project when there are none. The lock files the
+  item in its projects for you alone and stays pressed while projects stay
+  ticked; with no project it stays on, for there is no one to share it with;
+  not kept, it is gone. A meeting names at most 20 projects in all; there, a
+  place menu offers only the projects it already names ("Up to 20
+  projects."). On the right sit **All items** (one place for every kept item,
+  "Mixed" when their places differ, where a project only some have is
+  part-ticked and a tick adds or removes that project on every kept item, each
+  keeping its others and its own lock; a project ticked from No project is
+  shared, as on one item's place; its lock is pressed when you alone read
+  every kept item, reads "1 of 3" when you alone read only some, and turns
+  every item filed in a project at once), a line saying where Approve sends
+  them, one count per destination
   ("2 to Thermostat redesign · 1 to Thermostat redesign, only me · 1 not
   kept"), **Approve** (off while nothing
   is kept) and **Reject**, and who was in the meeting. No transcript is ever

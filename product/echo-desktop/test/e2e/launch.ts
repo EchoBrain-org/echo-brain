@@ -180,27 +180,22 @@ export async function addMeeting(page: Page): Promise<void> {
 }
 
 /**
- * Sends every item of an open decision card to one place from its All items control: Don't keep, or Only me. Only me is a
- * lock on projects (ADR-0049), so Only me itself is no project: every project the items all have is unticked.
+ * Sends every item of an open decision card to one place from its All items place menu: Don't keep, or No project, where
+ * only you read it (ADR-0049; the Only me lock beside a place is its own button).
  */
-export async function routeAll(card: Locator, choice: 'Only me' | 'Don\'t keep'): Promise<void> {
+export async function routeAll(card: Locator, choice: 'No project' | 'Don\'t keep'): Promise<void> {
   await card.getByTestId('route-all').click();
   const menu = card.getByTestId('route-menu');
-  const ticked = choice === 'Only me' ? await menu.getByRole('checkbox', { checked: true }).all() : [];
-  if (ticked.length === 0) {
-    await menu.getByRole('button', { name: choice, exact: true }).click();
-    return;
-  }
-  for (const box of ticked) await box.uncheck();
-  await card.page().keyboard.press('Escape');
+  // No project names who reads it beside it ("No project only you"); the menu closes on either.
+  await (choice === 'No project' ? menu.getByRole('radio', { name: /^No project\b/ }) : menu.getByRole('radio', { name: choice, exact: true })).click();
 }
 
-/** Adds the fixture meeting, then approves it from Home: every item to the project it suggests, or to Only me. Returns Home's rows. */
+/** Adds the fixture meeting, then approves it from Home: every item to the project it suggests, or to no project, only you. Returns Home's rows. */
 export async function approveFromHome(page: Page, onlyMe = false): Promise<Locator> {
   await addMeeting(page);
   await page.getByTestId('need-row').filter({ hasText: 'Pilot planning' }).click();
   const card = page.getByTestId('decision');
-  if (onlyMe) await routeAll(card, 'Only me');
+  if (onlyMe) await routeAll(card, 'No project');
   await card.getByTestId('decision-approve').click();
   await expect(page.getByTestId('toast')).toContainText('Approved');
   return page.getByTestId('need-row');

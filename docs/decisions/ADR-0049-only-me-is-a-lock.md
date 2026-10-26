@@ -94,7 +94,8 @@ Adopt option 2, the founder's choice.
   Record log V6 binds such association rows to the approval;
   retrieval admits the record to its approver and then narrows it by
   association. Receipts and record refs say `private`; Slack's closed card
-  reads "THERM, only you" and Slack never routes privately; the desktop chip's
-  Only me is a lock that stays pressed while projects stay ticked. Existing
+  reads "THERM, only you" and Slack never routes privately; the desktop review
+  shows the Only me lock beside each item's place, as Capture does, pressed
+  while projects stay ticked and on for good with no project. Existing
   record logs (V5) are refused at startup, so this ships with a fresh-state
   reset.

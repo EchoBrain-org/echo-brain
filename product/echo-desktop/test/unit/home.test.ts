@@ -540,13 +540,11 @@ describe('Home decisions and impact checks', () => {
     store.tickDecisionRoute('act-1', project.project_id);
     store.tickDecisionRoute('act-1', project.project_id);
     expect(store.getState().decision?.routes).toEqual({ 'dec-1': to(project.project_id), 'act-1': store.ONLY_ME });
-    expect(store.sharedDestination(store.getState().decision!)).toBeNull();
     // All items: every kept item at once; Don't keep keeps none, and then a destination goes to every item.
     store.setDecisionRoutes(null);
     expect(store.keptItems(store.getState().decision!)).toEqual([]);
     store.tickDecisionRoutes(project.project_id);
     expect(store.getState().decision?.routes).toEqual({ 'dec-1': to(project.project_id), 'act-1': to(project.project_id) });
-    expect(store.sharedDestination(store.getState().decision!)).toEqual(to(project.project_id));
     store.setDecisionRoute('dec-1', null);
     store.setDecisionRoutes(store.ONLY_ME);
     expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': store.ONLY_ME });
@@ -621,29 +619,26 @@ describe('Home decisions and impact checks', () => {
     expect(routes()).toEqual({ 'dec-1': to(therm), 'act-1': store.ONLY_ME });
     store.lockDecisionRoutes();
     expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': store.ONLY_ME });
-    // Mixed, plain Only me beside an item kept for you alone in THERM: the All items lock is not pressed, and a project ticked
-    // keeps each item's own lock, so the Only me item is shared; the one every item has comes off each.
-    expect(store.allKeptPrivate(store.getState().decision!)).toBe(false);
+    // An item in no project beside one kept for you alone in THERM: a project ticked from All items keeps each item's own
+    // lock, so the item in no project is shared there; the one every item has comes off each.
     store.tickDecisionRoutes(echo);
     expect(routes()).toEqual({ 'dec-1': mine(therm, echo), 'act-1': to(echo) });
     store.tickDecisionRoutes(echo);
     expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': store.ONLY_ME });
-    // Every item at Only me: a project ticked from All items shares them, as from one item's chip.
+    // Every item in no project: a project ticked from All items shares them, as from one item's place menu.
     store.setDecisionRoutes(store.ONLY_ME);
-    expect(store.allKeptPrivate(store.getState().decision!)).toBe(false);
     store.tickDecisionRoutes(therm);
     expect(routes()).toEqual({ 'dec-1': to(therm), 'act-1': to(therm) });
-    // Every item kept for you alone in a project: the lock is pressed, and a project ticked keeps them so.
+    // Every item kept for you alone in a project: a project ticked keeps them so.
     store.setDecisionRoutes(mine(therm));
-    expect(store.allKeptPrivate(store.getState().decision!)).toBe(true);
     store.tickDecisionRoutes(echo);
     expect(routes()).toEqual({ 'dec-1': mine(therm, echo), 'act-1': mine(therm, echo) });
-    // The same projects shared and kept for you alone are two destinations.
+    // The same projects shared and kept for you alone are two destinations, and All items sets one for both.
     store.setDecisionRoute('dec-1', mine(therm));
     store.setDecisionRoute('act-1', to(therm));
-    expect(store.sharedDestination(store.getState().decision!)).toBeNull();
+    expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': to(therm) });
     store.setDecisionRoutes(mine(therm));
-    expect(store.sharedDestination(store.getState().decision!)).toEqual(mine(therm));
+    expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': mine(therm) });
     store.setDecisionRoute('act-1', to(therm));
     rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'publishing', decided_on: 'desktop' } }));
     await store.decide('approve');
@@ -651,12 +646,17 @@ describe('Home decisions and impact checks', () => {
     expect(sent).toEqual([expect.objectContaining({ action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: [therm], private: true }, { signal_id: 'act-1', project_ids: [therm] }] })]);
   });
 
-  it('turns every item to Only me from the All items lock when none is kept in a project', async () => {
+  it('leaves every item as it is from either lock when none is filed in a project: the lock never moves an item', async () => {
     const store = await start();
     await store.openDecision(approval);
     await flush();
     store.setDecisionRoutes(null);
     store.lockDecisionRoutes();
+    store.lockDecisionRoute('dec-1');
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': null });
+    store.setDecisionRoutes(store.ONLY_ME);
+    store.lockDecisionRoutes();
+    store.lockDecisionRoute('act-1');
     expect(store.getState().decision?.routes).toEqual({ 'dec-1': store.ONLY_ME, 'act-1': store.ONLY_ME });
   });
 

@@ -5133,11 +5133,6 @@ function destinationOf(projects: readonly string[], isPrivate: boolean): NonNull
 export function destinationFrom(value: { readonly project_ids: readonly string[] | null; readonly private?: true }): Destination {
   return value.project_ids === null ? null : destinationOf(value.project_ids, value.private === true);
 }
-/** Two destinations are one when they name the same projects with the same lock, or neither is kept. */
-function sameDestination(a: Destination, b: Destination): boolean {
-  return a === null || b === null ? a === b
-    : a.private === b.private && a.projects.length === b.projects.length && a.projects.every((id, index) => id === b.projects[index]);
-}
 /** Whether a destination is filed in projects for you alone: the lock, pressed while projects are ticked. */
 export function keptPrivate(destination: Destination): boolean {
   return destination !== null && destination.projects.length > 0 && destination.private;
@@ -5728,12 +5723,16 @@ export function tickDecisionRoute(signalId: string, projectId: string): void {
   const now = decision.routes[signalId] ?? null, projects = now?.projects ?? [];
   setDecisionRoute(signalId, destinationOf(projects.includes(projectId) ? projects.filter(id => id !== projectId) : [...projects, projectId], keptPrivate(now)));
 }
-/** The Only me lock on one item: on projects it turns whether only you read the item there; with none, or not kept, it is Only me. */
+/**
+ * The Only me lock on one item filed in projects: it turns whether only you read the item there. An item in no project is
+ * yours alone already, and one not kept has no lock: neither changes.
+ */
 export function lockDecisionRoute(signalId: string): void {
   const decision = state.decision;
   if (!decision) return;
   const now = decision.routes[signalId] ?? null;
-  setDecisionRoute(signalId, now === null || now.projects.length === 0 ? ONLY_ME : destinationOf(now.projects, !now.private));
+  if (now === null || now.projects.length === 0) return;
+  setDecisionRoute(signalId, destinationOf(now.projects, !now.private));
 }
 /** Every kept item to one destination, or every item when none is kept. "Don't keep" (null) keeps none. */
 export function setDecisionRoutes(destination: Destination): void {
@@ -5744,14 +5743,6 @@ export function setDecisionRoutes(destination: Destination): void {
   const value = destination === null ? null : destinationOf(destination.projects, destination.private);
   const routes = { ...decision.routes, ...Object.fromEntries(targets.map(item => [item.signal_id, value])) };
   if (withinProjects(routes)) editChoices({ routes });
-}
-/**
- * Whether every kept item is filed in a project for you alone (something is kept): the only time the All items lock shows
- * pressed beside other choices. Plain Only me is a place, as on one item's chip, so it does not count.
- */
-export function allKeptPrivate(decision: DecisionState): boolean {
-  const kept = keptItems(decision);
-  return kept.length > 0 && kept.every(item => keptPrivate(decision.routes[item.signal_id]!));
 }
 /**
  * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects
@@ -5771,24 +5762,17 @@ export function tickDecisionRoutes(projectId: string): void {
   if (withinProjects(routes)) editChoices({ routes });
 }
 /**
- * The Only me lock on every kept item at once (every item when none is kept). With no project among them, every one is Only
- * me. Otherwise each item filed in projects is locked, or unlocked when each already is; an item in none stays Only me.
+ * The Only me lock on every kept item filed in projects at once: each locked, or unlocked when each already is. An item in
+ * no project is yours alone already and stays so; with none filed there is nothing to turn.
  */
 export function lockDecisionRoutes(): void {
   const decision = state.decision;
   if (!decision) return;
   const filed = keptItems(decision).filter(item => decision.routes[item.signal_id]!.projects.length > 0);
-  if (filed.length === 0) { setDecisionRoutes(ONLY_ME); return; }
+  if (filed.length === 0) return;
   const lock = !filed.every(item => decision.routes[item.signal_id]!.private);
   editChoices({ routes: { ...decision.routes, ...Object.fromEntries(filed.map(item => [item.signal_id, destinationOf(decision.routes[item.signal_id]!.projects, lock)])) } });
 }
-/** The one destination every kept item has, its lock included, or null when they differ ("Mixed") or nothing is kept. */
-export function sharedDestination(decision: DecisionState): NonNullable<Destination> | null {
-  const kept = keptItems(decision).map(item => decision.routes[item.signal_id]!);
-  const [first] = kept;
-  return first !== undefined && kept.every(value => sameDestination(value, first)) ? first : null;
-}
-
 /** Approve or Reject: one send per opening. Home shows where it went; the check runs by itself. */
 export async function decide(action: 'approve' | 'reject'): Promise<void> {
   const decision = state.decision;
