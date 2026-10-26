@@ -50,20 +50,23 @@ while one is running join it, with at most one follow-up load. A release
 package carries the release's exact Person-client tarball; other packages carry
 one packed from `HEAD` by `tools/pack-person-client.mjs`.
 
-The sidebar's **Mine** row, under New project, opens a page that reads
-`person list --mine`
-([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)): the
-notes the person saved, the files they uploaded and the meetings they approved,
-newest first, each with the names of their projects it is filed in, and More
-for the next page. A project page reads `person list --project`, and the reader
-opens every list row and live match with `person open --ref`, joining a
-meeting's split parts across pages; Ask's sources still read as described
-under Ask below. On Mine the bar asks with the Mine chip, shows no
-live matches and has no ⊕, and a dropped file is not taken. A save toast that
-no project page shows opens Mine. A 401 on a project's list means the person
-is no longer a member: the page says "This is no longer available to you." and
-status and projects are read again once per visit, without signing out.
-Signing out leaves Mine and clears it.
+Home's footer links to **Only me**
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)), a page that reads
+`person list --only-me`: everything only the person can read, filed in a
+project or not (their only-me notes and uploads, the meetings they imported,
+and approved meetings kept for them alone), newest first, a filed row with the
+names of their projects it is in, no row with a lock, and More for the next
+page. A project page reads `person list --project`, and the reader opens every
+list row and live match with `person open --ref`, joining a meeting's split
+parts across pages; Ask's sources still read as described under Ask below.
+Only me's bar is Home's (all context); its ⊕, and a file dropped on it, start
+Capture in no project, and a "Saved for you" toast opens it. The desktop has no
+Mine page or Mine scope any more; `--mine`
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)) stays
+for the CLI. A 401 on a project's list means the person is no longer a member:
+the page says "This is no longer available to you." and status and projects
+are read again once per visit, without signing out. Signing out leaves Only me
+and clears it.
 
 ### Desktop updates
 
@@ -141,7 +144,7 @@ not claim that the employee is currently online or has a live device session.
 Ask uses the agentic route ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md));
 every Ask route before `/v7` is retired
 ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)). Every Ask, the CLI's
-`person ask` and the desktop's in every scope, Mine included, uses
+`person ask` in every scope (Mine included) and the desktop's, uses
 `/v7/person/ask` with V8 answers so the person's connected Jira and Confluence
 accounts can contribute live evidence when the Authority configures those
 sources, with ECHO's shared follow-ups
@@ -187,7 +190,7 @@ coordinates and a fresh authorized read.
   client sends nothing and prints no step.
 
 The desktop runs this command, as `person ask --progress`, for every
-Ask, Mine included. Its host forwards
+Ask. Its host forwards
 the progress lines to the renderer as it already forwards sign-in phases, and
 drops lines that belong to an earlier Ask or another account.
 
@@ -201,11 +204,11 @@ audits continue to use server clocks. Older clients receive an explicit UTC
 server-time reference. Older Authorities ignore the optional headers, so this
 addition preserves the client-first transition in the release guide.
 
-With the Mine chip, the desktop adds `--mine` to that command: Ask reads only
-the person's own notes and uploads and the meetings they approved, and no live
-tool, follow-up or workspace, and shows its progress as
-every Ask does. A cited original from that answer is read under global scope,
-which contains mine.
+With `--mine`, Ask reads only the person's own notes and uploads and the
+meetings they approved, and no live tool, follow-up or workspace. The desktop no
+longer asks it ([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)): its
+bar asks all context or one project. A cited original from a Mine answer is
+read under global scope, which contains mine.
 
 The desktop app's **Account** menu uses the same Person client and session
 store. An existing member can sign in through Google without another
@@ -394,17 +397,19 @@ pending approvals. See the
 [historical upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
 `person list --mine` lists these uploads from custody as soon as they are
-saved, in every extraction state, so they appear in Mine before Ask can find
-them. Mine is bound to the uploading membership: after a person is provisioned
-again, earlier uploads stay readable wherever their audience allows but no
-longer appear in Mine.
+saved, in every extraction state, before Ask can find them, and `person list
+--only-me` lists the ones only the person can read the same way, so they
+appear in the desktop's Only me at once. Both are bound to the uploading
+membership: after a person is provisioned again, earlier uploads stay readable
+wherever their audience allows but no longer appear in either.
 
 In the desktop app, **Capture** wraps these commands through the Person
-client. Owners and employees write a note or choose a file, choose who can read
-it, and explicitly save it. Search results open through a fresh
-permission-aware read. The document extension below adds persistent, bounded
-original snapshots and recovery commands. Neither path silently uploads files
-or runs a background uploader.
+client. Owners and employees write a note or choose a file, choose where it
+goes (projects, no project or the organization) and, for projects, whether only
+they can read it (the Only me lock), and explicitly save it. Search results
+open through a fresh permission-aware read. The document extension below adds
+persistent, bounded original snapshots and recovery commands. Neither path
+silently uploads files or runs a background uploader.
 
 Each operation passes the host's account fence before and after the client
 call. Account changes clear fetched content. A save that is still running, or
