@@ -246,8 +246,13 @@ interface PersonAnswerPreviousV1 {
   - `same`: the question stands alone. Research runs on it unchanged.
   - `resolved`: a full question and the previous citations it is about.
     Research runs on the full question and starts from those citations
-    (`brief.starting`, `if_unreadable: 'report'`, openable kinds only:
-    approved records, source revisions, tickets, pages).
+    (`brief.starting`, `if_unreadable: 'skip'`, openable kinds only:
+    approved records, source revisions, tickets, pages). A citation that
+    cannot be read is reported, as `report` does. One whose tool cannot be
+    read for now (`unavailable`, `rate_limited`, `quota_exceeded`) is
+    skipped: research goes on without it, and neither the planner nor the
+    writer is told. Anything else still fails the Ask: a cancel, the
+    deadline, `stale_access_state`, and any other error.
   - `clarify`: 2 to 4 choices, each a label (at most 60 characters) and a
     full question (at most 300). No research runs.
 

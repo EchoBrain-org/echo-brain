@@ -147,3 +147,59 @@ describe("brief: unreadable starting items", () => {
     expect(h.generate).not.toHaveBeenCalled();
   });
 });
+
+describe("brief: 'skip' starting items, a follow-up's (ADR-0047)", () => {
+  const readable = record("readable", "SW-22b formats two decimals.");
+  const down = record("down");
+  const deleted = record("deleted");
+  const question = (starting: AgenticBriefV1["starting"]): AgenticBriefV1 =>
+    ({ goal: { kind: "question", question: "How many decimals does SW-22b show?" }, starting, budget: AGENTIC_RESEARCH_LIVE_BUDGET_V1, options: {} });
+  const answer = { sentences: [{ text: "SW-22b formats two decimals.", evidence: ["E1"] }], not_found: [] };
+  /** Opens the readable record; `down` fails as `failure` says, and `deleted` is gone. */
+  const opens = (failure: unknown) => async (input: { readonly citation: unknown }): Promise<EvidenceDeskResultV2> => {
+    const key = JSON.stringify(input.citation);
+    if (key === JSON.stringify(down.citation)) throw failure;
+    if (key === JSON.stringify(deleted.citation)) throw new AuthorityOperationError("not_found", "Evidence item is not available");
+    return result([readable]);
+  };
+  const promptsOf = (h: ReturnType<typeof harness>) => h.inputs.map(({ signal: _signal, ...input }) => input);
+
+  it("leaves out an item its tool cannot read for now: research goes on as if it was never named, and no prompt mentions it", async () => {
+    const alone = harness([finish(["E1"]), answer], { openCitation: opens(new Error("never read")) });
+    const expected = await alone.research.research({ trigger: "ask", brief: question([{ citation: readable.citation, if_unreadable: "skip" }]) });
+    for (const code of ["unavailable", "rate_limited", "quota_exceeded"] as const) {
+      const h = harness([finish(["E1"]), answer], { openCitation: opens(new AuthorityOperationError(code, "Live evidence operation could not be completed")) });
+      const view = await h.research.research({ trigger: "ask", brief: question([{ citation: down.citation, if_unreadable: "skip" }, { citation: readable.citation, if_unreadable: "skip" }]) });
+      expect(view, code).not.toHaveProperty("unreadable_starting");
+      expect([view.items, view.coverage, view.stop], code).toEqual([expected.items, expected.coverage, expected.stop]);
+      expect(promptsOf(h), code).toEqual(promptsOf(alone));
+    }
+  });
+
+  it("reports an item it cannot read, as 'report' does", async () => {
+    const h = harness([finish(["E1"]), answer], { openCitation: opens(new Error("never read")) });
+    const view = await h.research.research({ trigger: "ask", brief: question([{ citation: readable.citation, if_unreadable: "skip" }, { citation: deleted.citation, if_unreadable: "skip" }]) });
+    expect(view.unreadable_starting).toEqual([deleted.citation]);
+    expect(view.coverage.reads.filter(read => read.unavailable)).toHaveLength(1);
+    expect(view.stop).toEqual({ reason: "finished", completed: true });
+  });
+
+  it("still stops on any other failure: a stale access state, a conflict, an invalid request or an error of no known kind", async () => {
+    for (const failure of [
+      new AuthorityOperationError("stale_access_state", "Access changed"), new AuthorityOperationError("conflict", "Changed while read"),
+      new AuthorityOperationError("invalid_request", "Evidence citation is invalid"), new Error("the desk broke"),
+    ]) {
+      const h = harness([], { openCitation: opens(failure) });
+      await expect(h.research.research({ trigger: "ask", brief: question([{ citation: down.citation, if_unreadable: "skip" }]) }), failure.message).rejects.toBe(failure);
+      expect(h.generate, failure.message).not.toHaveBeenCalled();
+    }
+  });
+
+  it("is refused on a task before any read: a task's slots name every starting item", async () => {
+    const openCitation = vi.fn(opens(new Error("never read")));
+    const h = harness([], { openCitation });
+    await expect(h.research.research({ trigger: "sweep", brief: task(`Recheck ${agenticStartingSlotV1(1)}.`, [{ citation: readable.citation, if_unreadable: "skip" }]) }))
+      .rejects.toThrow("research goal is invalid");
+    expect(openCitation).not.toHaveBeenCalled();
+  });
+});

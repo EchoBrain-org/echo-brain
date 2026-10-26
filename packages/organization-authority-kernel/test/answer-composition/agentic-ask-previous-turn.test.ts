@@ -12,7 +12,9 @@ import { createAgenticAskV4, createAgenticAskV5, type AgenticAskAuditEntryV1 } f
 import { ANSWER_SINCE_PROMPT, answerLayoutSinceSchema, answerSchema, answerSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { FOLLOW_UP_RESOLVER_PROMPT, followUpResolutionSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
+import { AgenticAskDeadlineErrorV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
+import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
 import { checked, generation, record, result } from "./fixtures/agentic-scenarios.js";
@@ -180,6 +182,58 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
     expect(response).toMatchObject({ outcome: "answered", question: RESOLVED });
     // The follow-up item is not a kind research opens before its first step; the ticket was tried and reported.
     expect(openCitation.mock.calls.map(([input]) => (input.citation as { kind: string }).kind)).toEqual(["ticket"]);
+  });
+
+  it("goes on without a source its tool cannot read for now, and tells neither the planner nor the writer", async () => {
+    const replies = () => scripted({
+      resolver: [{ resolution: "resolved", question: RESOLVED, about: [1] }],
+      steps: [searchFor(RESOLVED, "THERM-482"), finishOn(RESOLVED, ["E1"])],
+      writer: [{ lists: [], sentences: [{ text: "The DVT gate stays on hold until THERM-482 is fixed.", evidence: ["E1"] }], not_found: [] }],
+    });
+    const promptsOf = (run: ReturnType<typeof scripted>) => run.inputs.map(({ signal: _signal, ...input }) => input);
+    // The same follow-up with nothing to start from: a desk that cannot open an earlier citation is given no starting item.
+    const unseeded = replies();
+    const { openCitation: _none, ...cannotOpen } = desk();
+    const expected = await askV8(cannotOpen, unseeded).ask.answer({ question: QUESTION, previous: FOLLOW_UP });
+    expect(expected).toMatchObject({ outcome: "answered", question: RESOLVED });
+    for (const code of ["unavailable", "rate_limited", "quota_exceeded"] as const) {
+      const run = replies();
+      const openCitation = vi.fn(async (_input: Parameters<NonNullable<EvidenceDeskPortV2["openCitation"]>>[0]): Promise<ReturnType<typeof result>> => {
+        throw new AuthorityOperationError(code, "Live evidence operation could not be completed");
+      });
+      const { ask, audits } = askV8(desk({ openCitation }), run);
+      const response = await ask.answer({ question: QUESTION, previous: FOLLOW_UP });
+      expect(openCitation.mock.calls.map(([input]) => input.citation), code).toEqual([ticketCitation]);
+      // The answer, and every prompt the planner and the writer were given, are those of an Ask with no starting item.
+      expect(response, code).toEqual(expected);
+      expect(promptsOf(run), code).toEqual(promptsOf(unseeded));
+      expect(audits, code).toEqual([expect.objectContaining({ outcome: "answered" })]);
+    }
+  });
+
+  it("still fails on a starting read that fails any other way: a stale access state, a conflict, an error of no known kind, a cancel or the deadline", async () => {
+    const resolved = () => scripted({ resolver: [{ resolution: "resolved", question: RESOLVED, about: [1] }] });
+    for (const error of [
+      new AuthorityOperationError("stale_access_state", "Access changed"), new AuthorityOperationError("conflict", "Changed while read"),
+      new AuthorityOperationError("invalid_request", "Evidence citation is invalid"), new Error("the desk broke"),
+    ]) {
+      const run = resolved();
+      const { ask } = askV8(desk({ openCitation: vi.fn(async () => { throw error; }) }), run);
+      await expect(ask.answer({ question: QUESTION, previous: FOLLOW_UP }), error.message).rejects.toBe(error);
+      expect(run.of("step"), error.message).toEqual([]);
+    }
+    // A cancel or the deadline that ends the read stays what it is, whatever the tool said as it stopped.
+    for (const reason of [new DOMException("Ask cancelled", "AbortError"), new AgenticAskDeadlineErrorV1()]) {
+      const controller = new AbortController();
+      const run = resolved();
+      const { ask, audits } = askV8(desk({ openCitation: vi.fn(async () => {
+        controller.abort(reason);
+        throw new AuthorityOperationError("unavailable", "Live evidence operation could not be completed");
+      }) }), run);
+      await expect(ask.answer({ question: QUESTION, previous: FOLLOW_UP, signal: controller.signal }), reason.name).rejects.toMatchObject({ name: reason.name });
+      expect(run.of("step"), reason.name).toEqual([]);
+      expect(audits, reason.name).toEqual([expect.objectContaining({ outcome: reason instanceof AgenticAskDeadlineErrorV1 ? "timed_out" : "cancelled" })]);
+    }
   });
 
   it("is refused on every answer before V8", async () => {

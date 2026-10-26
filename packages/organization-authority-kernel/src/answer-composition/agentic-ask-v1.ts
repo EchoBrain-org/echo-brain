@@ -155,7 +155,9 @@ function questionText(value: unknown): string | null {
 /** A brief the request can run, or null. Ask's question keeps its existing bounds; a task's definition bounds its own text. */
 function runnableBrief(brief: AgenticBriefV1): AgenticBriefV1 | null {
   const { goal, starting } = brief;
-  if (!Array.isArray(starting) || !starting.every(start => object(start.citation) !== null && (start.if_unreadable === "fail" || start.if_unreadable === "report"))) return null;
+  // Only a question skips a starting item unmentioned: a task's slots name every one of its starting items.
+  if (!Array.isArray(starting) || !starting.every(start => object(start.citation) !== null &&
+    (start.if_unreadable === "fail" || start.if_unreadable === "report" || (start.if_unreadable === "skip" && goal.kind === "question")))) return null;
   // With no planner research only reads its starting items: a question, or a task with none, would read nothing. A
   // question always has the list tool.
   const { planner, list } = object(brief.options) ?? {};
