@@ -319,7 +319,39 @@ export function sameScope(a: AskScope, b: AskScope): boolean {
   return a.kind === b.kind && (a.kind !== 'project' || (b.kind === 'project' && a.project_id === b.project_id));
 }
 
-/** The questions you asked in `scope`, newest first, each reopening its turn: the bar's suggestions take each once, the newest. */
+/**
+ * The thread of a place (ADR-0049): Home's, all context, is every turn; a
+ * project's is only the turns asked in it. One asked in Mine stays on Home's.
+ */
+export function threadOf(turns: readonly TimelineTurn[], scope: AskScope): readonly TimelineTurn[] {
+  return scope.kind === 'project' ? turns.filter(turn => sameScope(turn.scope, scope)) : turns;
+}
+
+/** A question as two turns compare it: where it was asked, and its words in any case and spacing. */
+function questionKey(turn: TimelineTurn): string {
+  const where = turn.scope.kind === 'project' ? `project:${turn.scope.project_id}` : turn.scope.kind;
+  return `${where}\n${turn.question.trim().replace(/\s+/gu, ' ').toLowerCase()}`;
+}
+
+/**
+ * The turns a thread shows (ADR-0049): each question once. A turn a later one
+ * asked again, or whose question a later turn asked in the same place repeats,
+ * folds away, and the newest stands for it. The timeline keeps them all.
+ */
+export function visibleTurns(turns: readonly TimelineTurn[]): TimelineTurn[] {
+  const again = askedAgain(turns);
+  const later = new Set<string>();
+  const shown: TimelineTurn[] = [];
+  for (const turn of [...turns].reverse()) {
+    const key = questionKey(turn);
+    if (again.has(turn.id) || later.has(key)) continue;
+    later.add(key);
+    shown.push(turn);
+  }
+  return shown.reverse();
+}
+
+/** The questions of `scope`'s thread, newest first, each reopening its turn: the bar's suggestions take each once, the newest. */
 export function askedSuggestions(turns: readonly TimelineTurn[], scope: AskScope): Suggestion[] {
-  return [...turns].reverse().filter(turn => sameScope(turn.scope, scope)).map(turn => ({ question: turn.question, turn: turn.id }));
+  return [...threadOf(turns, scope)].reverse().map(turn => ({ question: turn.question, turn: turn.id }));
 }

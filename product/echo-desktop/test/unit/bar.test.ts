@@ -139,7 +139,7 @@ describe('what an empty bar suggests', () => {
     expect(store.getState().ask?.latest).toBe(latest.turn);
   });
 
-  it('keeps a project\'s questions and meetings to its own bar', async () => {
+  it('keeps a project\'s questions and meetings to its own bar, and offers them on Home\'s too, which holds every question (ADR-0049)', async () => {
     feed = [meeting('Apollo kickoff', 14), note('Pricing memo', 13), meeting('Apollo readout', 9)];
     const store = await startStore();
     await store.ask('When do we ship?');
@@ -151,9 +151,9 @@ describe('what an empty bar suggests', () => {
     await store.ask('What is left for launch?');
     await flush();
     expect(store.barSuggestions()[0]?.question).toBe('What is left for launch?');
-    // Back in all context, the project's question is not offered.
+    // Back in all context: Home's thread holds every question, the project's newest first.
     store.widenScope();
-    expect(questions(store.barSuggestions())).toEqual(['When do we ship?', 'What did we decide this week?']);
+    expect(questions(store.barSuggestions())).toEqual(['What is left for launch?', 'When do we ship?', 'What did we decide this week?']);
   });
 
   it('shows only over a page where live matches could: signed in, the bar empty, and no answer or sheet over it', async () => {

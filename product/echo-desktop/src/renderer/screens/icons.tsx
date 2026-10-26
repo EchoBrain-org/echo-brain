@@ -86,6 +86,10 @@ export const Meeting = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2.5" stroke="currentColor" stroke-width="1.6" fill="none" /><path d="M4 10h16M9 3v4M15 3v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none" /></svg>
 );
 /** Tools: a plug, in the sidebar's outline. */
+/** Copy answer: one page over another. */
+export const Copy = () => (
+  <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><rect x="4.75" y="4.75" width="7.5" height="7.5" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none" /><path d="M9.25 2.6V2.5a1 1 0 0 0-1-1H2.75a1 1 0 0 0-1 1v5.5a1 1 0 0 0 1 1h.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none" /></svg>
+);
 /** Ask again: a turn of the arrow back on itself. */
 export const Refresh = () => (
   <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M11.6 6.2A4.7 4.7 0 1 0 10.2 10M11.8 2.6v3.6H8.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>

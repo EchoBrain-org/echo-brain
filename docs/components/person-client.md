@@ -12,6 +12,7 @@ reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
   - ADR-0048
+  - ADR-0049
   - ADR-0047
   - ADR-0046
   - ADR-0043

@@ -15,8 +15,8 @@ import { askText, searchQuery } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, MAX_SOURCES, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  answeredNow, askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, knownStates, previousOf, sameScope, shownInFull, showsOf, unreadableAfter,
-  turnGroups, type Suggestion, type TurnCheck, type TurnChecks,
+  answeredNow, askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, knownStates, previousOf, sameScope, shownInFull, showsOf, threadOf,
+  unreadableAfter, visibleTurns, turnGroups, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
@@ -3645,7 +3645,7 @@ function keepTurn(turn: TimelineTurn): void {
  * own, unless what its sources are now is known or on its way.
  */
 function checkTimeline(opened?: TimelineTurn): Promise<void> {
-  const newest = Date.now() - newestCheckedAt < CHECK_FRESH_MS ? [] : state.timeline.turns.slice(-CHECK_TURNS).reverse();
+  const newest = Date.now() - newestCheckedAt < CHECK_FRESH_MS ? [] : threadOf(state.timeline.turns, state.barScope).slice(-CHECK_TURNS).reverse();
   const first = opened !== undefined && (newest.includes(opened) || (freshChecksOf(opened) === undefined && !checking.has(opened.id))) ? [opened] : [];
   return checkTurns([...first, ...newest.filter(turn => turn !== opened)], newest.length > 0);
 }
@@ -3748,7 +3748,7 @@ async function baseline(turn: TimelineTurn): Promise<void> {
 
 /** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet. */
 function newAsk(): AskState {
-  return { seq: ++seq, latest: state.timeline.turns.at(-1)?.id ?? null, asked: [], opened: null, openedAt: 0, focus: null, asking: null, clarify: null, failed: null, took: {} };
+  return { seq: ++seq, latest: threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null, asked: [], opened: null, openedAt: 0, focus: null, asking: null, clarify: null, failed: null, took: {} };
 }
 
 /** The turns Ask shows in full besides the latest: the latest when it opened, and those asked since. */
@@ -3781,7 +3781,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const againOf = how?.againOf;
   // The turn it carries, unless `how` brings it built: the one it asks again, or the one a follow-up continues.
   const from = how?.previous !== undefined ? null : againOf !== undefined ? turnOf(againOf) ?? null
-    : open && how === undefined ? followedTurn(state.timeline.turns, continued, Date.now()) : null;
+    : open && how === undefined ? followedTurn(threadOf(state.timeline.turns, scope), continued, Date.now()) : null;
   const view = open ?? newAsk();
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
@@ -3912,7 +3912,7 @@ export function toggleTurn(id: string): void {
   set({ ask: { ...view, opened, openedAt: view.asked.length, focus: null } });
   const sources = state.sources;
   if (sources && opened === null && sources.turn === id) {
-    set({ sources: { ...sources, turn: state.timeline.turns.at(-1)?.id ?? null, open: null, focus: null, evidence: null } });
+    set({ sources: { ...sources, turn: threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null, open: null, focus: null, evidence: null } });
   }
   if (opened === null) return;
   void checkTurn(turn);
@@ -4001,11 +4001,16 @@ export function answerGroups(current: State = state): SourceGroup[] {
   return turn ? turnGroups(turn.answer.sources, shownChecks(turn, current)) : [];
 }
 
+/** The turns Ask shows (ADR-0049): its place's thread, each question once. */
+export function askThread(current: State = state): TimelineTurn[] {
+  return visibleTurns(threadOf(current.timeline.turns, current.barScope));
+}
+
 /** The turns Ask shows an answer of: the earlier one opened, then those in full; the one the pane's numbers are of first. */
 function shownTurns(current: State = state): TimelineTurn[] {
   const view = current.ask;
   if (!view) return [];
-  const { turns } = current.timeline;
+  const turns = askThread(current);
   const shown = turns.filter(turn => turn.id === view.opened || shownInFull(turn, turns, fullTurns(view)));
   const active = activeTurn(current);
   return active && shown.includes(active) ? [active, ...shown.filter(turn => turn !== active)] : shown;
@@ -4159,7 +4164,7 @@ function freshSources(turn: string | null): SourcesState {
  * but only those the audited answer names (`keep`): a name cleared while Ask
  * worked lasts only for that run. With no turn to show, there is no pane.
  */
-function startSources(keep: ReadonlySet<string> | null = null, turn: string | null = state.timeline.turns.at(-1)?.id ?? null): void {
+function startSources(keep: ReadonlySet<string> | null = null, turn: string | null = threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null): void {
   const sources = state.sources;
   const named = keep === null ? [] : sources?.named?.filter(item => keep.has(sourceKey(item))) ?? [];
   if (sources && named.length > 0) {

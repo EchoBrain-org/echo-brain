@@ -10,7 +10,8 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
-  allOmitted, answeredNow, askedAgain, askedSuggestions, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
+  allOmitted, answeredNow, askedAgain, askedSuggestions, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, threadOf, turnChanged, turnGroups, turnNote,
+  visibleTurns,
 } from '../../src/renderer/timeline.js';
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
@@ -135,14 +136,28 @@ describe('the timeline\'s rules', () => {
     expect(askedWhen('2025-10-14T12:00:00.000Z', NOW.getTime())).toBe('Oct 14, 2025');
   });
 
-  it('suggests the questions you asked in a scope, newest first, each once', () => {
+  it('suggests the questions of a place\'s thread, newest first, each once: Home\'s every one, a project\'s its own (ADR-0049)', () => {
     const inApollo = { ...status(), scope: { kind: 'project' as const, project_id: apollo.project_id } };
     const turns = [turn('When do we ship?', 3 * DAY, status()), turn('Who owns it?', 2 * DAY, inApollo, { scope: inApollo.scope }), turn('when do we ship?', DAY, status())];
     // As the empty bar offers them: each once, the newest.
     const asked = (scope: AskScope) => suggestedQuestions(askedSuggestions(turns, scope), [], 'What did we decide this week?').filter(each => each.turn !== undefined);
-    expect(asked({ kind: 'global' })).toEqual([{ question: 'when do we ship?', turn: turns[2]!.id }]);
+    expect(asked({ kind: 'global' })).toEqual([{ question: 'when do we ship?', turn: turns[2]!.id }, { question: 'Who owns it?', turn: turns[1]!.id }]);
     expect(asked(inApollo.scope)).toEqual([{ question: 'Who owns it?', turn: turns[1]!.id }]);
-    expect(asked({ kind: 'mine' })).toEqual([]);
+  });
+
+  it('shows each place its own thread, and each question once: a turn asked again, or asked again word for word there, folds away', () => {
+    const inApollo = { kind: 'project' as const, project_id: apollo.project_id };
+    const first = turn('When do we ship?', 4 * DAY, status());
+    const apolloTurn = turn('Who owns it?', 3 * DAY, status(), { scope: inApollo });
+    const again = turn('When do we ship?', 2 * DAY, status(), { again_of: first.id });
+    const typed = turn('who owns  IT?', DAY, status(), { scope: inApollo });
+    const elsewhere = turn('Who owns it?', HOUR, status());
+    const turns = [first, apolloTurn, again, typed, elsewhere];
+    expect(threadOf(turns, { kind: 'global' })).toEqual(turns);
+    expect(threadOf(turns, inApollo)).toEqual([apolloTurn, typed]);
+    // Home's thread: the first was asked again, and Apollo's question was asked again there; the same words asked at Home stay.
+    expect(visibleTurns(threadOf(turns, { kind: 'global' }))).toEqual([again, typed, elsewhere]);
+    expect(visibleTurns(threadOf(turns, inApollo))).toEqual([typed]);
   });
 });
 
@@ -340,7 +355,7 @@ describe('Ask on the timeline', () => {
     expect(statements.map(node => text(byTestId(node, 'statement-text')))).toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
     expect(statements.map(node => node.props['data-mark'] ?? null)).toEqual([null, 'changed']);
     expect(classes(byTestId(opened, 'answer')[0])).toContain('dimmed');
-    expect(text(byTestId(opened, 'again-note'))).toBe(`Highlighted parts changed since ${askedWhen(turns[3]!.asked_at, NOW.getTime())}`);
+    expect(text(byTestId(opened, 'changed-since'))).toBe(`Changed since ${askedWhen(turns[3]!.asked_at, NOW.getTime())}`);
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
     // Within five minutes Ask opens on what that check said; after, it checks again. (Each new answer's ticket has its own baseline read.)
     const opening = () => calls('ask.check').filter(call => (call.items as unknown[]).length > 1);
@@ -451,7 +466,7 @@ describe('Ask on the timeline', () => {
     expect(calls('ask.source')).toHaveLength(1);
   });
 
-  it('says nothing changed, and with every sentence left out shows only Ask again', async () => {
+  it('says nothing when nothing changed (ADR-0049), and with every sentence left out shows only Ask again', async () => {
     const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
     seed(one, two);
     checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
@@ -459,7 +474,8 @@ describe('Ask on the timeline', () => {
     store.pickSuggestion({ question: 'One?', turn: one.id });
     await flush();
     const thread = await view();
-    expect(text(byTestId(thread(store), 'again-note'))).toContain(`Nothing changed since ${askedWhen(one.asked_at, NOW.getTime())}`);
+    expect(byTestId(thread(store), 'changed-since')).toEqual([]);
+    expect(text(thread(store))).not.toContain('Nothing changed');
     checks = items => ok({ items: items.map(() => ({ state: 'unreadable' })) });
     store.closeAsk();
     vi.setSystemTime(NOW.getTime() + 6 * 60_000);
@@ -467,7 +483,7 @@ describe('Ask on the timeline', () => {
     await flush();
     const opened = byTestId(thread(store), 'opened-turn')[0]!;
     expect(byTestId(opened, 'answer')).toEqual([]);
-    expect(byTestId(opened, 'again-note')).toEqual([]);
+    expect(byTestId(opened, 'changed-since')).toEqual([]);
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
   });
 
@@ -482,10 +498,10 @@ describe('Ask on the timeline', () => {
     const thread = await view();
     // No line under the turn opened, nor under the latest, asked before this Ask; Ask again stays, and nothing is tagged.
     const opened = byTestId(thread(store), 'opened-turn')[0]!;
-    expect(byTestId(opened, 'again-note')).toEqual([]);
+    expect(byTestId(opened, 'changed-since')).toEqual([]);
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
     const latest = byTestId(thread(store), 'turn').find(node => node.props['data-turn'] === two.id)!;
-    expect(byTestId(latest, 'again-note')).toEqual([]);
+    expect(byTestId(latest, 'changed-since')).toEqual([]);
     expect(byTestId(latest, 'ask-again')).toHaveLength(1);
     expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
     // What the line says, sentence by sentence: the same only when every source they cite was checked and is the same.
@@ -514,12 +530,14 @@ describe('Ask on the timeline', () => {
     await flush();
     const thread = await view();
     const marks = () => byTestId(byTestId(thread(store), 'opened-turn')[0], 'statement').map(node => node.props['data-mark'] ?? null);
-    expect(byTestId(thread(store), 'changed-tag')).toHaveLength(1);
+    // The line opened says it in the answer, not as a tag; so does the latest, asked before this Ask.
+    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
+    expect(byTestId(thread(store), 'changed-since')).toHaveLength(2);
     expect(marks()).toEqual([null, 'changed']);
     // Five minutes on, Ask still open: no tag, no line, nothing highlighted; the follow-up the check could not read stays out.
     vi.setSystemTime(NOW.getTime() + 5 * 60_000);
     expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
-    expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'again-note')).toEqual([]);
+    expect(byTestId(thread(store), 'changed-since')).toEqual([]);
     expect(marks()).toEqual([null, null]);
     expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
     // Ask opened again: its check fails, and what the last one said goes with it, but not what it could not read.
@@ -792,7 +810,9 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await following;
     expect((calls('ask.run').at(-1)!.previous as AskPrevious).statements.map(statement => statement.text))
       .toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
-    expect(byTestId(thread(store), 'timeline-row').map(row => byTestId(row, 'changed-tag').length)).toEqual([1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    // Opened, its line is its heading: what changed is said in the answer, not as a tag.
+    expect(byTestId(thread(store), 'timeline-row').map(row => byTestId(row, 'changed-tag').length)).toEqual([0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'changed-since')).toHaveLength(1);
   });
 
   it('opens a suggestion past the newest ten checked first, in the one check Ask opening makes', async () => {
@@ -808,7 +828,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect((opening!.items as unknown[]).length).toBe(33);
     const opened = byTestId((await view())(store), 'opened-turn')[0]!;
     expect(byTestId(opened, 'statement').map(node => node.props['data-mark'] ?? null)).toEqual([null, 'changed', null]);
-    expect(text(byTestId(opened, 'again-note'))).toContain('Highlighted parts changed since');
+    expect(text(byTestId(opened, 'changed-since'))).toContain('Changed since');
   });
 
   it('carries no sentence of a turn whose sources no check could read now, only its question', async () => {
@@ -873,7 +893,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(latestTurn(store)?.text).toBe('who owns it?');
   });
 
-  it('asks a turn again with it, keeps the new answer at the end with its "since", and the old one loses its tag', async () => {
+  it('asks a turn again with it, keeps the new answer at the end with what changed since, and the old one folds away (ADR-0049)', async () => {
     const one = turn('What is open on THERM?', 3 * DAY, status());
     checks = items => ok({ items: items.map(item => (item.citation.kind === 'page' ? { state: 'changed' } : { state: 'same' })) });
     rpc.mockImplementation(rpcFor(held, {
@@ -890,7 +910,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     store.pickSuggestion({ question: one.question, turn: one.id });
     await flush();
     const thread = await view();
-    expect(byTestId(thread(store), 'changed-tag')).toHaveLength(1);
+    expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'changed-since')).toHaveLength(1);
     store.askAgain(one.id);
     await flush();
     expect(calls('ask.run')[0]).toMatchObject({ question: 'What is open on THERM?', scope: { kind: 'global' },
@@ -899,13 +919,19 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(store.getState().ask?.opened).toBeNull();
     const shown = thread(store);
     expect(byTestId(shown, 'changed-tag')).toEqual([]);
+    // The question shows once: the old turn folds away, and the new answer stands for it.
+    expect(byTestId(shown, 'timeline-question').map(text)).not.toContain(one.question);
+    expect(byTestId(shown, 'question').map(text).filter(question => question === one.question)).toHaveLength(1);
     const since = byTestId(shown, 'since')[0]!;
-    expect(text(since)).toContain(`Since ${askedWhen(one.asked_at, NOW.getTime())}`);
+    expect(text(byTestId(since, 'changed-since'))).toBe(`Changed since ${askedWhen(one.asked_at, NOW.getTime())}`);
     expect(byTestId(since, 'since-text').map(text)).toEqual(['THERM-482 moved to In Progress.']);
-    // Nothing material changed: one line says so.
-    store.askAgain(store.getState().timeline.turns[1]!.id);
+    // Nothing material changed: nothing is said, and the old turn folds away too.
+    const quiet = store.getState().timeline.turns[1]!;
+    store.askAgain(quiet.id);
     await flush();
-    expect(text(byTestId(thread(store), 'since-nothing').at(-1))).toBe(`Nothing changed since ${askedWhen(store.getState().timeline.turns[1]!.asked_at, NOW.getTime())}`);
+    expect(byTestId(thread(store), 'since')).toHaveLength(1);
+    expect(text(thread(store))).not.toContain('Nothing changed');
+    expect(byTestId(thread(store), 'timeline-question').map(text)).not.toContain(quiet.question);
   });
 });
 

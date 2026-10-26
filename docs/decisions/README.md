@@ -71,6 +71,7 @@ separately.
 | [ADR-0046](ADR-0046-private-meetings-and-item-routing.md) | Meetings stay private until each item is approved to its destination | proposed |
 | [ADR-0047](ADR-0047-ask-timeline.md) | Ask keeps a device-only timeline that says what changed, and answers follow-ups | proposed |
 | [ADR-0048](ADR-0048-retire-older-person-routes.md) | Retire the older Person routes and fallbacks kept only for compatibility | proposed |
+| [ADR-0049](ADR-0049-only-me-is-a-lock.md) | Only me is a lock on an item, Ask shows one thread per place, and Mine goes | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary
