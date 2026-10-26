@@ -592,6 +592,39 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(calls('ask.run').slice(3).map(call => 'previous' in call)).toEqual([false, false]);
   });
 
+  it('stops sending the earlier turn only once a question refused with it is answered without it, and sends it again after the next sign-in', async () => {
+    let refusing = true;
+    let app: AppStatus = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok(app),
+      'ask.run': params => (params.question === 'Bad?' || (params.previous && refusing) ? fail('invalid_request')
+        : ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Open.', [0]]]))),
+    }, () => ({ active: [apollo], archived: [] })));
+    seed(turn('What is open?', 10 * 60_000, status()));
+    const store = await startStore();
+    await store.ask('First?');
+    // Refused with it and without it: the question itself was refused, so the next follow-up still carries its turn.
+    await store.ask('Bad?');
+    expect(store.getState().ask?.failed?.failure.code).toBe('invalid_request');
+    await store.ask('who owns it?');
+    expect(calls('ask.run').slice(1).map(call => 'previous' in call)).toEqual([true, false, true, false]);
+    expect(store.latestTurn()?.text).toBe('who owns it?');
+    // That one was answered without it: none from now on.
+    await store.ask('and then?');
+    expect(calls('ask.run').slice(5).map(call => 'previous' in call)).toEqual([false]);
+    // Until the next sign-in, which may be to an Authority that takes it.
+    refusing = false;
+    store.closeAsk();
+    app = { signed_in: false, account: null, client_version: 'test' };
+    await store.refreshStatus();
+    app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    await store.refreshStatus();
+    await flush();
+    await store.ask('Again?');
+    await store.ask('and who leads it?');
+    expect(calls('ask.run').slice(6).map(call => 'previous' in call)).toEqual([false, true]);
+  });
+
   it('asks again without the earlier turn when an Authority with no /v7 says not_found, and stops sending it once that answers', async () => {
     let answers = true;
     rpc.mockImplementation(rpcFor(held, {
@@ -717,11 +750,11 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
 
   it('forgets when an account last opened its projects at our own sign-out, and every other account\'s when one signs in', async () => {
     const other = { ...ACCOUNT, membership_id: 'another-member' };
-    let status: AppStatus = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    let app: AppStatus = { signed_in: true, account: ACCOUNT, client_version: 'test' };
     activity = () => ok({ items: [{ project_id: apollo.project_id, latest_at: at(DAY) }] });
     rpc.mockImplementation(rpcFor(held, {
-      'app.status': () => ok(status),
-      'account.signOut': () => { status = { signed_in: false, account: null, client_version: 'test' }; return ok(status); },
+      'app.status': () => ok(app),
+      'account.signOut': () => { app = { signed_in: false, account: null, client_version: 'test' }; return ok(app); },
       'projects.activity': () => activity!(),
     }, () => ({ active: [apollo], archived: [] })));
     // An account that signed in here before left its times behind.
@@ -735,7 +768,7 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
     expect(seenKeys()).toEqual([of(ACCOUNT)]);
     expect(storage.get(SIDEBAR)).toBe('false');
     // Another account signs in: the last one's times go.
-    status = { signed_in: true, account: other, client_version: 'test' };
+    app = { signed_in: true, account: other, client_version: 'test' };
     await store.refreshStatus();
     await flush();
     expect(seenKeys()).toEqual([of(other)]);
@@ -745,11 +778,11 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
     expect(store.getState().status?.signed_in).toBe(false);
     expect(seenKeys()).toEqual([]);
     // A session that merely ended keeps them, as it keeps the timeline.
-    status = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
     await store.refreshStatus();
     await flush();
     expect(seenKeys()).toEqual([of(ACCOUNT)]);
-    status = { signed_in: false, account: null, client_version: 'test' };
+    app = { signed_in: false, account: null, client_version: 'test' };
     await store.refreshStatus();
     expect(seenKeys()).toEqual([of(ACCOUNT)]);
   });

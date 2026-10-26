@@ -85,7 +85,8 @@ at once, and the turn's line later reads the full question ("Who owns
 THERM-482?"); when several fit, the turn says "Which one?" with a button each,
 which asks that one's full question. It never guesses. An Authority that
 predates follow-ups refuses the earlier turn: the question is asked once more
-without it, and the window stops sending it.
+without it, and once that is answered the window stops sending it until the
+next sign-in.
 
 Every refresh check also reads what arrived in your projects (`person
 project-activity`). A project shows a small signal dot in the sidebar when a

@@ -3528,7 +3528,10 @@ let newestCheckedAt = Number.NEGATIVE_INFINITY;
 let checksExpire: ReturnType<typeof setTimeout> | null = null;
 /** The Authority has no check (`not_supported`): no Changed tags, and it is not asked again until the next sign-in. */
 let checksUnsupported = false;
-/** An Ask that carried `previous` was refused (`invalid_request`): this window asks without it from now on (C5). */
+/**
+ * An Ask that carried `previous` was refused (`invalid_request`, or `not_found` from an Authority with no `/v7`) and then
+ * answered without it: this window asks without it from now on (C5), until the next sign-in.
+ */
 let previousRefused = false;
 
 /** A turn of the timeline, by its id. */
@@ -3555,13 +3558,16 @@ export function latestTurn(current: State = state): ShownTurn | null {
 /**
  * The account's timeline, read at sign-in and when the account changes, with
  * nothing of the last check. A read that fails leaves it as it was; a turn
- * kept meanwhile (an Ask answered first) stays, after those read.
+ * kept meanwhile (an Ask answered first) stays, after those read. What this
+ * window learned of the last Authority (no check, no `previous`) is learned
+ * again.
  */
 async function loadTimeline(): Promise<void> {
   const account = expect();
   if (!account) return;
   const mine = ++timelineSeq;
   checksUnsupported = false;
+  previousRefused = false;
   const result = await rpc('timeline.read', { expect: account });
   if (mine !== timelineSeq || !sameAccount(account)) return;
   if (!result.ok) {
@@ -3687,8 +3693,8 @@ export function fullTurns(view: AskState): readonly string[] {
  * the last hour (`previous`), unless `how` says how it is asked. Asked from a
  * page, it opens Ask, which checks what changed of the newest turns. An
  * Authority that refuses `previous`, or has no `/v7` to send it to, is asked
- * once more without it, and this window stops sending it. The answer is kept
- * at the end of the timeline, in
+ * once more without it; once that answers, this window stops sending it until
+ * the next sign-in. The answer is kept at the end of the timeline, in
  * full, and its tickets' markers are read as their baseline; "Which one?"
  * waits for a choice and is kept nowhere. While it works, the steps the host
  * reports show under it (ADR-0039); with no answer, they go, and so does any
@@ -3718,15 +3724,14 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const run = (previous: AskPrevious | null) => rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId, ...(previous ? { previous } : {}) });
   let previous = previousRefused ? null : asked.previous;
   let result = await run(previous);
-  // An Authority that predates `previous` refuses it (`invalid_request`): asked once more without it, and never again from this
-  // window (C5). One with no `/v7` at all answers `not_found`, as the client sends `previous` there alone: asked once more without
-  // it too, and not again once that answers.
+  // An Authority that predates `previous` refuses it (`invalid_request`); one with no `/v7` at all answers `not_found`, as the
+  // client sends `previous` there alone. Either way it is asked once more without it, and once that answers, never again from
+  // this window until the next sign-in (C5). Refused without it too, it was the question that was refused, not `previous`.
   const refused = !result.ok && previous !== null && state.ask?.seq === mine ? result.failure.code : null;
   if (refused === 'invalid_request' || refused === 'not_found') {
-    if (refused === 'invalid_request') previousRefused = true;
     previous = null;
     result = await run(null);
-    if (result.ok && refused === 'not_found') previousRefused = true;
+    if (result.ok) previousRefused = true;
   }
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
   const current = state.ask;
