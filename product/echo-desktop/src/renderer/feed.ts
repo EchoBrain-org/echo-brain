@@ -1,4 +1,4 @@
-// A list read again over what it already shows: Mine, or a project's notes,
+// A list read again over what it already shows: Only me, or a project's notes,
 // documents and meetings, newest first, a page at a time.
 
 function time(iso: string): number {

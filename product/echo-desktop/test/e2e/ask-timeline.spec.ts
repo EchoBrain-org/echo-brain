@@ -28,7 +28,7 @@ async function back(page: Page): Promise<void> {
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
 }
 
-test('the timeline stays through navigation, on this computer only, and the bar reopens a question you asked at its turn', async () => {
+test('the timeline stays through navigation, on this computer only, each place shows its own thread, and the bar reopens a question at its turn', async () => {
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -37,12 +37,13 @@ test('the timeline stays through navigation, on this computer only, and the bar 
   await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await ask(page, 'What is left in Apollo?');
-  // The turn Ask opened on stays in full, with the one asked now.
-  await expect(page.getByTestId('question')).toHaveText(['What did we agree?', 'What is left in Apollo?']);
+  // Apollo's thread is its own (ADR-0049): the question asked at Home is not on it.
+  await expect(page.getByTestId('question')).toHaveText(['What is left in Apollo?']);
   await expect(page.getByTestId('timeline-row')).toHaveCount(0);
   await page.getByTestId('sidebar-home').click();
   await ask(page, 'Who approved it?');
-  // An earlier day's turns are lines; this one folds as a line too, with no scope line or date under any question.
+  // Home's thread holds every question: Apollo's latest, Ask opened on, stays in full; the one before folds as a line, with no
+  // scope line or date under any question.
   const rows = page.getByTestId('timeline-row');
   await expect(rows).toHaveCount(1);
   await expect(rows.getByTestId('timeline-question')).toHaveText('What did we agree?');
@@ -63,18 +64,18 @@ test('the timeline stays through navigation, on this computer only, and the bar 
   expect(statSync(folder).mode & 0o777).toBe(0o700);
   expect(statSync(join(folder, files[0]!)).mode & 0o777).toBe(0o600);
 
-  // The empty bar suggests what you asked, newest first; one opens Ask at its turn without asking again.
+  // Home's empty bar suggests every question asked, newest first; one opens Ask at its turn without asking again.
   await back(page);
   await page.getByTestId('ask-field').click();
   const suggestions = page.getByTestId('suggestion');
   await expect(suggestions.first()).toHaveText('Who approved it?');
-  await expect(page.locator('[data-testid="suggestion"][data-asked="true"]')).toHaveText(['Who approved it?', 'What did we agree?']);
+  await expect(page.locator('[data-testid="suggestion"][data-asked="true"]')).toHaveText(['Who approved it?', 'What is left in Apollo?', 'What did we agree?']);
   await page.locator('[data-testid="suggestion"]', { hasText: 'What did we agree?' }).click();
   await expect(page.getByTestId('opened-turn')).toContainText('We agreed to ship Apollo with annual plans first.');
   expect(asks()).toHaveLength(3);
 });
 
-test('a line tagged Changed opens with what changed lit and what you can no longer read left out', async () => {
+test('a line tagged Changed opens as its heading, with what changed lit and what you can no longer read left out', async () => {
   run = await launch('ask-timeline-changed');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -92,15 +93,17 @@ test('a line tagged Changed opens with what changed lit and what you can no long
   await expect(opened.locator('[data-mark="changed"]')).toHaveText(/The DVT plan moved the retest to Oct 30\./u);
   // What you can no longer read is gone from its sources too, and the rest keep the numbers its sentences show.
   await expect(opened).not.toContainText('Confirm the trace');
-  await expect(opened.getByTestId('sources-toggle')).toHaveText(/^2 sources\s*THERM-482 · DVT plan$/u);
+  await expect(opened.getByTestId('sources-toggle')).toHaveText(/^2 sources$/u);
   await expect(opened.getByTestId('citation')).toHaveText(['1', '2']);
-  await expect(opened.getByTestId('again-note')).toHaveText(/^Highlighted parts changed since \d{1,2}:\d{2}\s?(AM|PM)$/u);
+  // Opened, the line is the heading: the tag gives way to what changed since, said once (ADR-0049).
+  await expect(row.getByTestId('changed-tag')).toHaveCount(0);
+  await expect(opened.getByTestId('changed-since')).toHaveText(/^Changed since \d{1,2}:\d{2}\s?(AM|PM)$/u);
   const checks = run.calls().filter(call => call.path === '/v1/person/ask/check');
   expect(checks.length).toBeGreaterThan(0);
   expect(JSON.stringify(checks.map(call => call.body))).not.toContain('Sensor drift');
 });
 
-test('Ask again asks the same question with its turn, and the new answer opens with what is different since', async () => {
+test('Ask again asks the same question with its turn, the new answer opens with what is different since, and the question shows once', async () => {
   run = await launch('ask-timeline');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -108,13 +111,16 @@ test('Ask again asks the same question with its turn, and the new answer opens w
   await back(page);
   await page.getByTestId('ask-field').click();
   await page.getByTestId('suggestion').filter({ hasText: 'What is open on THERM?' }).click();
-  // The latest turn, asked before this Ask: in full, with Ask again and what the check found.
+  // The latest turn, asked before this Ask: in full, with Ask again; nothing changed, so nothing is said (ADR-0049).
   const turn = page.getByTestId('turn').filter({ hasText: 'What is open on THERM?' });
-  await expect(turn.getByTestId('again-note')).toHaveText(/^Nothing changed since /u);
+  await expect(turn.getByTestId('changed-since')).toHaveCount(0);
   await turn.getByTestId('ask-again').click();
   await expect(page.getByTestId('asking')).toHaveCount(0);
   const since = page.getByTestId('since');
-  await expect(since).toContainText(/^Since \d{1,2}:\d{2}\s?(AM|PM)/u);
+  await expect(since.getByTestId('changed-since')).toHaveText(/^Changed since \d{1,2}:\d{2}\s?(AM|PM)$/u);
+  // The question once: the turn asked again folds away into the new one.
+  await expect(page.getByTestId('question').filter({ hasText: 'What is open on THERM?' })).toHaveCount(1);
+  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
   await expect(since.getByTestId('since-text')).toHaveText(['THERM-482 moved to In Progress.']);
   await expect(since.getByTestId('citation')).toHaveText(['1']);
   const [, again] = asks();

@@ -278,28 +278,29 @@ button.account-row:hover { background: var(--raise); }
 .matches-rule { height: 1px; flex-shrink: 0; margin: 4px 6px; background: var(--line); }
 .matches-note { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; color: var(--faint); }
 
-/* Ask: one timeline, newest at the bottom (ADR-0047). The latest turn and those asked since Ask opened are in full; every
-   earlier one is a line that opens it. No borders between turns: space alone sets them apart. */
-/* Ask and its bar use more of a wide window; other pages keep their compact column.
-   The full page scrolls, with a readable column inside it, so its scrollbar stays at the page edge. */
-.main:has(.ask) { --ask-width: 1120px; }
-.ask { align-self: stretch; width: 100%; min-width: 0; overflow-y: auto; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 28px; padding: 20px 24px 16px; }
+/* Ask: the thread of its place, newest at the bottom (ADR-0047, ADR-0049). The latest turn and those asked since Ask opened
+   are in full; every earlier one is a line that opens it. No borders between turns: space alone sets them apart. */
+/* Ask and its bar keep a column short enough to read (ADR-0049). The full page scrolls, with the column inside it, so its
+   scrollbar stays at the page edge. */
+.main:has(.ask) { --ask-width: 720px; --turn-gap: 48px; }
+.ask { align-self: stretch; width: 100%; min-width: 0; overflow-y: auto; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: var(--turn-gap); padding: 24px 24px 16px; }
 .ask > * { width: min(100%, var(--ask-width)); min-width: 0; margin-inline: auto; }
 .turn { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
-/* The question reads as the asker's message, in the answer's size. */
-.ask .question { font-size: 15px; font-weight: 500; line-height: 1.45; color: var(--text); }
+/* The question is the turn's heading: the answer's size, heavier. */
+.ask .question { font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--text); }
 .ask .project-empty { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 13px; color: var(--faint); }
 .answer-empty { margin: 0; font-size: 13px; color: var(--faint); }
 /* Earlier turns: one line each, close together, opening in place. */
 .folded-turn { flex-shrink: 0; display: flex; flex-direction: column; }
 /* Lines sit close together; the line after an opened turn keeps the space between turns. */
-.ask > .folded-turn:not(.open) + .folded-turn { margin-top: -24px; }
+.ask > .folded-turn:not(.open) + .folded-turn { margin-top: calc(4px - var(--turn-gap)); }
 .folded { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 8px 10px; border: 0; border-radius: 8px; text-align: left; background: transparent; }
 .folded:hover { background: var(--hover); }
 .folded .turn-square { width: 16px; height: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 9.5px; font-weight: 600; }
 .folded .turn-square.none { visibility: hidden; }
 .folded .q { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--muted); }
-.folded-turn.open .folded .q { color: var(--text); }
+/* An opened line is its turn's heading: the question once, in full. */
+.folded-turn.open .folded .q { overflow: visible; white-space: normal; font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--text); }
 .folded .when { flex-shrink: 0; font-size: 12px; color: var(--faint); }
 /* An old answer opened: as it was, dimmed, under its question; what changed since is lit in the signal. */
 .opened { display: flex; flex-direction: column; gap: 10px; padding: 6px 0 4px 36px; }
@@ -309,22 +310,13 @@ button.account-row:hover { background: var(--raise); }
 }
 .answer-table tr.changed td { color: var(--text); background: var(--signal-soft); }
 .passage.changed { color: var(--text); border-color: var(--signal-soft); background: var(--signal-soft); }
-.again-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
-.again-button { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 8px; font-size: 13px;
-  font-weight: 500; color: var(--text); background: transparent; }
-.again-button:hover { background: var(--hover); }
-.again-button:disabled { cursor: default; color: var(--faint); background: transparent; }
-.again-note { font-size: 12.5px; color: var(--faint); }
-.again-note.changed { color: var(--signal-text); }
-.again-row .link-button { white-space: nowrap; }
-/* Ask again's "Since Oct 14": what is different now, each cited. No box. */
+/* "Changed since Oct 14": over Ask again's list of what is different now, each cited, and over an old answer that changed. No box. */
 .since { display: flex; flex-direction: column; gap: 6px; }
 .since-label { font-size: 12.5px; font-weight: 500; color: var(--signal-text); }
 .since-items { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 14.5px; line-height: 1.55; color: var(--text); }
 .since-items li { display: flex; gap: 10px; }
 .since-items li::before { content: ""; flex-shrink: 0; width: 5px; height: 5px; margin-top: 9px; border-radius: 3px; background: var(--signal); }
 .since-items li.on { margin: -2px -8px; padding: 2px 8px; border-radius: 8px; background: var(--selected); }
-.since-note { margin: 0; font-size: 12.5px; color: var(--faint); }
 /* "Which one?": a button per thing a follow-up could mean. */
 .choices { display: flex; flex-wrap: wrap; gap: 8px; }
 .choice { min-height: 40px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 10px; font-size: 14px; color: var(--text); background: transparent; text-align: left; }
@@ -340,15 +332,36 @@ button.account-row:hover { background: var(--raise); }
 button.marker:hover { color: var(--text); background: var(--line-strong); }
 .marker + .marker { margin-left: 3px; }
 .marker.on, .source-row.on .marker { color: var(--on-primary); background: var(--primary); }
-.private-mark { display: inline-flex; margin-left: 6px; vertical-align: -1px; color: var(--faint); }
-/* The answer's sources, below it: one line that opens onto a row per source only when explicitly expanded. */
-.source-list { display: flex; flex-direction: column; margin-top: 4px; border-top: 1px solid var(--line); }
-.sources-toggle { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0; border: 0; text-align: left; color: var(--muted); background: transparent; }
-.sources-toggle:hover { color: var(--text); }
-.sources-toggle .count { flex-shrink: 0; font-size: 13px; font-weight: 500; }
-.sources-toggle .names { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--faint); }
-.sources-toggle svg { flex-shrink: 0; transition: transform 0.15s ease; }
-.sources-toggle.open svg { transform: rotate(180deg); }
+/* In an answer a source's number is a faint footnote digit, with no box (ADR-0049): it brightens with its sentence under the
+   pointer, and the one the pane shows is lit as everywhere. */
+:is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage) .marker:not(.on) {
+  min-width: 0; height: auto; padding: 0 1px; margin-left: 2px; border-radius: 3px; font-size: 10px; line-height: 1; color: var(--faint);
+  background: transparent; vertical-align: super;
+}
+:is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage) .marker + .marker { margin-left: 1px; }
+:is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage):hover .marker:not(.on),
+button.marker:not(.on):hover { color: var(--text); background: transparent; }
+/* The sentence under the pointer is lit quietly, as its numbers show. */
+.claim:not(.on, .changed):hover > span:first-child, .answer-statement:not(.on, .changed):hover > span:first-child,
+.answer-bullets li:not(.on, .changed):hover > span > span:first-child, .since-items li:not(.on):hover > span > span:first-child {
+  border-radius: 4px; background: var(--hover); -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
+/* The one line under an answer (ADR-0049): how many sources and how long, then Ask again and Copy on the right. */
+.turn-foot { display: flex; flex-direction: column; gap: 2px; }
+.foot-line { display: flex; align-items: center; gap: 12px; min-height: 28px; font-size: 12.5px; color: var(--faint); }
+.foot-toggle { display: inline-flex; align-items: center; gap: 5px; margin-left: -6px; padding: 3px 6px; border: 0; border-radius: 6px; font-size: inherit; color: inherit; background: transparent; }
+.foot-toggle:hover { color: var(--muted); background: var(--hover); }
+.foot-toggle svg { flex-shrink: 0; transition: transform 0.15s ease; }
+.foot-toggle.open svg { transform: rotate(90deg); }
+.foot-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.foot-action { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border: 0; border-radius: 6px; font-size: 12.5px; color: var(--muted); background: transparent; white-space: nowrap; }
+.foot-action:hover { color: var(--text); background: var(--hover); }
+.foot-action:disabled { cursor: default; color: var(--faint); background: transparent; }
+/* Copy shows while the pointer is on the turn or focus is in it. */
+.foot-action.copy { opacity: 0; transition: opacity 0.12s ease; }
+:is(.turn, .folded-turn):is(:hover, :focus-within) .foot-action.copy, .foot-action.copy:focus-visible { opacity: 1; }
+.foot-trail { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 4px; }
+.foot-trail-head { font-size: 12px; color: var(--faint); }
 .source-rows { display: flex; flex-direction: column; gap: 1px; padding-bottom: 6px; }
 .source-row { display: flex; align-items: center; gap: 10px; height: 34px; margin: 0 -8px; padding: 0 8px; border: 0; border-radius: 8px; font-size: 13.5px; text-align: left; background: transparent; }
 .source-row:hover { background: var(--hover); }
@@ -357,6 +370,7 @@ button.marker:hover { color: var(--text); background: var(--line-strong); }
 .source-row svg { flex-shrink: 0; color: var(--muted); }
 .source-row .label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-row .meta { flex-shrink: 0; font-size: 12.5px; color: var(--faint); }
+.source-row .row-lock { display: inline-flex; flex-shrink: 0; color: var(--faint); }
 
 /* The source pane, beside the answer and the bar, below the title bar. It narrows with the window. */
 .main.with-pane { --pane: min(320px, 45%); }
@@ -401,8 +415,8 @@ button.marker:hover { color: var(--text); background: var(--line-strong); }
 .answer-layout { display: flex; flex-direction: column; gap: 10px; }
 .answer-layout .marker { min-width: 16px; height: 16px; padding: 0 4px; margin-left: 6px; border-radius: 4px; font-size: 10px; vertical-align: 2px; }
 .answer-layout .marker + .marker { margin-left: 3px; }
-.answer-lead { margin: 0; font-size: 18px; line-height: 1.5; letter-spacing: -0.01em; }
-.answer-lead .claim:first-child { font-weight: 500; }
+/* The lead reads in the answer's own size (ADR-0049): the question above it is the heading. */
+.answer-lead { margin: 0; font-size: 15px; line-height: 1.65; }
 .answer-heading { margin: 16px 0 2px; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
 .answer-paragraph { margin: 0; font-size: 15px; line-height: 1.65; }
 /* A sentence inline with others, lit on its own. */
@@ -412,7 +426,6 @@ button.marker:hover { color: var(--text); background: var(--line-strong); }
 .answer-bullets li { display: flex; gap: 12px; }
 .answer-bullets li::before { content: ""; flex-shrink: 0; width: 5px; height: 5px; margin-top: 10px; border-radius: 3px; background: var(--faint); }
 .answer-bullets li.on { margin: -2px -8px; padding: 2px 8px; border-radius: 8px; background: var(--selected); }
-.answer-caption { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--muted); }
 /* A table scrolls in its own box when the window is narrow; the page never scrolls sideways. Only your late due date is in the signal colour.
    A shadow at an edge says more of the table is past it: covers in the workspace's colour scroll with the table (local) over shadows that
    stay with the box (scroll). The first column wraps at about 40% of the box, so the next one shows beside it. */
@@ -509,21 +522,18 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .sheet.capture .sheet-head h2 { font-size: 13px; font-weight: 500; color: var(--muted); }
 .circle.small { width: 28px; height: 28px; border-radius: 8px; }
 .well { flex: 0 1 200px; min-height: 96px; display: flex; flex-direction: column; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--field); }
-/* Who can read: Only me, Projects and Organization, one segmented choice on one row. Only a very long project name is cut off. */
-.readers { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
-.readers .label { font-size: 12.5px; font-weight: 500; color: var(--muted); }
-.readers-row { position: relative; }
-.readers-row [role="radiogroup"], .readers-row[role="radiogroup"] { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--field); }
-.reader-pill { flex: 1 0 auto; height: 30px; padding: 0 12px; border: 0; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--muted); background: transparent; white-space: nowrap; }
-/* Only the choice that names projects gives way: the decision card's cuts its whole label, Only me stays whole. */
-.card-panel .reader-pill + .reader-pill { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.reader-pill:hover:not(:disabled) { color: var(--text); }
-.reader-pill[aria-checked="true"], .reader-pill[aria-checked="true"]:hover { color: var(--text); background: var(--knob); box-shadow: var(--knob-shadow); }
-.reader-pill:disabled { cursor: default; }
-.reader-pill.projects { flex-shrink: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-.reader-pill.projects .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.reader-pill.projects .count, .reader-pill.projects svg { flex-shrink: 0; }
-/* The Projects list: above Projects, over the note. */
+/* Where it goes, one row: the place button, then the Only me lock on a project choice. Only a very long project name is cut off. */
+.place-row { position: relative; flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
+.place-button, .lock-toggle { height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.place-button { min-width: 0; color: var(--text); background: var(--field); }
+.place-button .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.place-button .count, .place-button svg, .lock-toggle { flex-shrink: 0; }
+.place-button:hover:not(:disabled) { background: var(--hover); }
+.lock-toggle { color: var(--muted); background: transparent; }
+.lock-toggle:hover:not(:disabled, [aria-disabled="true"]) { color: var(--text); }
+.lock-toggle[aria-pressed="true"] { color: var(--text); background: var(--knob); box-shadow: var(--knob-shadow); }
+.place-button:disabled, .lock-toggle:disabled, .lock-toggle[aria-disabled="true"] { cursor: default; }
+/* The place list: above the place button, over the note. Its projects, then No project and Organization. */
 .project-list { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 3; width: 300px; max-width: 100%; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 12px; background: var(--raise); box-shadow: var(--pop-shadow); }
 .project-list:focus { outline: none; }
 .project-list .find { flex-shrink: 0; height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; }
@@ -535,6 +545,9 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .project-ticks .link-button { align-self: flex-start; margin: 2px 0; font-size: 13px; }
 .project-ticks .link-button:disabled { opacity: 0.5; cursor: default; }
 .project-note { padding: 4px 8px; font-size: 12.5px; color: var(--faint); }
+.place-choices { flex-shrink: 0; display: flex; flex-direction: column; padding-top: 6px; border-top: 1px solid var(--line); }
+.place-choice { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 8px; border: 0; border-radius: 7px; font-size: 13px; text-align: left; color: var(--text); background: transparent; }
+.place-choice:hover { background: var(--hover); }
 .project-list-foot { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; }
 .plain-button.small { height: 30px; padding: 0 12px; border-radius: 8px; font-size: 13px; }
 .readers-line { font-size: 12.5px; color: var(--muted); }
@@ -595,7 +608,7 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .row .lines { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .row .lines .name { flex-grow: 0; }
 .row .detail { font-size: 12px; color: var(--faint); }
-/* Mine's rows name the projects each is filed in, faintly; a project row's empty mark keeps the times in line. */
+/* Only me's rows name the projects each is filed in, faintly; a project row's empty mark keeps the times in line. */
 .row .projects { flex-shrink: 1; min-width: 0; max-width: 40%; font-size: 12.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-row .mark { width: 12px; justify-content: center; }
 /* Wide enough for "Yesterday", the longest English date label, so every date ends at the same edge. */
@@ -824,9 +837,10 @@ button.toast:hover { background: var(--panel); }
 .needs-group-head { margin: 0; padding: 16px 14px 4px; }
 .needs-more { align-self: flex-start; margin: 2px 6px 6px; font-size: 13px; }
 .home-clear { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; font-size: 14px; color: var(--muted); }
-/* Under the rows, and on an empty Home: one line. Its link (what waits on others, else Follow-ups), then when ECHO last checked. */
+/* Under the rows, and on an empty Home: one line. Its links (what waits on others, else Follow-ups; Only me), then when ECHO last checked. */
 .needs-foot { flex-shrink: 0; margin-top: auto; padding: 14px 14px 4px; font-size: 12.5px; line-height: 1.5; color: var(--faint); }
 .needs-foot-link { font-weight: 500; color: var(--muted); }
+.needs-foot-link svg { margin-right: 4px; vertical-align: -1px; }
 .needs-foot-link:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
 .side-row .badge { min-width: 20px; height: 18px; padding: 0 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--on-signal); background: var(--signal); }
 

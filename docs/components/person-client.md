@@ -12,6 +12,7 @@ reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
   - ADR-0048
+  - ADR-0049
   - ADR-0047
   - ADR-0046
   - ADR-0043
@@ -128,15 +129,18 @@ routes before it: the `/v7` Ask and the shared evidence desk are composed
 whenever an answer model is configured, with no capability switch. Live
 qualification is separate.
 
-`person list [--project <project-id> | --mine] [--cursor <next_cursor>]` and
-`person open --ref <ref> [--cursor <next_cursor>]` read the Authority's
+`person list [--project <project-id> | --mine | --only-me] [--cursor <next_cursor>]`
+and `person open --ref <ref> [--cursor <next_cursor>]` read the Authority's
 [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md) routes and
 print one JSON line. List rows carry a ref, title, time, who can read it and
 the caller's projects it is filed in, never text; open pages a note, document,
-imported meeting or approved meeting by that ref. `person ask --mine` narrows
-Ask to what the caller added or approved, and every citation that carries a
-`ref` opens with `person open`. `--project` and `--mine` are exclusive, and
-the request is validated before any session or network use
+imported meeting or approved meeting by that ref. `person list --only-me`
+lists everything only the caller can read, filed in a project or not
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)); Ask has no such
+scope. `person ask --mine` narrows Ask to what the caller added or approved,
+and every citation that carries a `ref` opens with `person open`. `--project`,
+`--mine` and `--only-me` are exclusive, and the request is validated before
+any session or network use
 ([`person-list-cli.test.ts`](../../tests/person-client/person-list-cli.test.ts)).
 
 `person changes` takes no options and reads the Authority's change check

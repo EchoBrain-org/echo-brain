@@ -282,14 +282,14 @@ const documentRow = (extra: Record<string, unknown> = {}) => row(`document:${DOC
 
 describe('a list shows rows, and nothing else crosses', () => {
   const page = (fields: Record<string, unknown> = {}) => ({ ok: true, result: {
-    schema_version: 1, kind: 'echo-person-list-v1', scope: { kind: 'mine' }, items: [], next_cursor: null, ...fields,
+    schema_version: 1, kind: 'echo-person-list-v1', scope: { kind: 'only_me' }, items: [], next_cursor: null, ...fields,
   } });
 
   it('copies each row, names your projects without their ids, and marks who can read it', () => {
     const view = listView(page({ items: [
       row(`meeting:${RECORD}`, { meeting_date: '2026-09-21' }), documentRow({ visibility: 'project', added_at: '2026-09-21T18:00:00.000Z' }),
       row(`note:${NOTE}`, { visibility: 'team', added_at: '2026-09-20T12:00:00.000Z', projects: [] }),
-    ], next_cursor: 'AnR3' }), { kind: 'mine' });
+    ], next_cursor: 'AnR3' }), { kind: 'only-me' });
     expect(view).toEqual({ next_cursor: 'AnR3', meetings_held: false, items: [
       { ref: { kind: 'meeting', id: RECORD }, title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', visibility: 'only-me', projects: ['Apollo'],
         meeting_date: '2026-09-21' },
@@ -307,15 +307,17 @@ describe('a list shows rows, and nothing else crosses', () => {
   });
 
   it('is only for the scope asked for', () => {
-    expect(() => listView(page({ scope: { kind: 'project', project_id: APOLLO } }), { kind: 'mine' })).toThrow(ViewError);
-    expect(() => listView(page({ scope: { kind: 'global' } }), { kind: 'mine' })).toThrow(ViewError);
+    expect(() => listView(page({ scope: { kind: 'project', project_id: APOLLO } }), { kind: 'only-me' })).toThrow(ViewError);
+    expect(() => listView(page({ scope: { kind: 'global' } }), { kind: 'only-me' })).toThrow(ViewError);
+    // What you added is not what only you can read.
+    expect(() => listView(page({ scope: { kind: 'mine' } }), { kind: 'only-me' })).toThrow(ViewError);
     expect(() => listView(page({ scope: { kind: 'project', project_id: HIDDEN } }), { kind: 'project', project_id: APOLLO })).toThrow(ViewError);
-    expect(() => listView(page().result, { kind: 'mine' })).toThrow(ViewError);
+    expect(() => listView(page().result, { kind: 'only-me' })).toThrow(ViewError);
   });
 
   it('holds meetings only on the closed notice', () => {
-    expect(listView(page({ notice: 'meetings_unavailable' }), { kind: 'mine' }).meetings_held).toBe(true);
-    expect(listView(page(), { kind: 'mine' }).meetings_held).toBe(false);
+    expect(listView(page({ notice: 'meetings_unavailable' }), { kind: 'only-me' }).meetings_held).toBe(true);
+    expect(listView(page(), { kind: 'only-me' }).meetings_held).toBe(false);
   });
 });
 

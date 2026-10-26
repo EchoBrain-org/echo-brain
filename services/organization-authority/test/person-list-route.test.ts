@@ -15,13 +15,13 @@ import type {
   PersonItemPositionV1,
   PersonListDirectoryPortV1,
   PersonListJoinedProjectV1,
+  PersonListStoreScopeV1,
   PersonMeetingItemsPortV1,
   PersonOriginalItemsPortV1,
   PersonStoreDocumentRowV1,
   PersonStoreMeetingRowV1,
   PersonStoreNoteRowV1,
 } from "../src/application/ports/person-list-v1.js";
-import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import { decodePersonListCursorV1, decodePersonOpenCursorV1, type PersonListPositionsV1 } from "../src/composition/person-list-cursor-v1.js";
 import { createPersonListRouteV1 } from "../src/composition/person-list-v1-route.js";
 import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, authorization } from "./fixtures/project-context-sqlite.js";
@@ -47,7 +47,8 @@ function order(left: Row, right: Row): number {
   if (left.added_at !== right.added_at) return left.added_at > right.added_at ? -1 : 1;
   return ref(left) < ref(right) ? -1 : ref(left) > ref(right) ? 1 : 0;
 }
-function inScope(row: Row, scope: PersonAskScopeV2, mine: ReadonlySet<string>): boolean {
+function inScope(row: Row, scope: PersonListStoreScopeV1, mine: ReadonlySet<string>): boolean {
+  if (scope.kind === "only_me") return row.visibility === "only_me" || row.visibility === "approver_only";
   return scope.kind === "global" || (scope.kind === "mine" ? mine.has(row.id) : row.association_project_ids.includes(scope.project_id as never));
 }
 function afterPosition(row: Row, after: PersonItemPositionV1 | null): boolean {
@@ -94,7 +95,7 @@ function fixture(options: Options = {}) {
     tools?: () => void;
   } = {};
   const record = (method: string, input: object) => calls.push({ method, input: { ...input } as Readonly<Record<string, unknown>> });
-  const page = <T extends Row>(rows: readonly T[], scope: PersonAskScopeV2, after: PersonItemPositionV1 | null, limit: number): T[] =>
+  const page = <T extends Row>(rows: readonly T[], scope: PersonListStoreScopeV1, after: PersonItemPositionV1 | null, limit: number): T[] =>
     [...rows].filter((row) => inScope(row, scope, world.mine)).sort(order).filter((row) => afterPosition(row, after)).slice(0, limit);
   const receipt = (value: unknown): Sha256Digest => canonicalSha256({ receipt: value as never });
 
@@ -294,6 +295,40 @@ describe("person list route", () => {
     await f.list({ project_id: PROJECT_ALPHA });
     expect(f.called("collect")[1]!.input.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
     expect(f.called("collectMeetings")[1]!.input.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
+  });
+
+  it("passes only_me to both stores, with no header, and lists filed rows with their projects (ADR-0049)", async () => {
+    const f = fixture({
+      notes: [note(1, T(5), { visibility: "only_me", association_project_ids: [PROJECT_ALPHA] }), note(2, T(4)), note(3, T(3), { visibility: "only_me" })],
+      documents: [document(1, T(2), { visibility: "only_me", association_project_ids: [UNJOINED] })],
+      meetings: [meeting(1, T(1), { visibility: "approver_only" }), meeting(2, T(6), { visibility: "project", association_project_ids: [PROJECT_ALPHA] })],
+      mine: [`ctx_${hex(1)}`, `ctx_${hex(2)}`, `sha256:${hex(2)}`],
+    });
+    const page = await f.list({ only_me: true });
+    expect(page.scope).toEqual({ kind: "only_me" });
+    expect(Object.keys(page).sort()).toEqual(["items", "kind", "next_cursor", "schema_version", "scope"]);
+    expect(page.items.map((item) => item.ref)).toEqual([`note:ctx_${hex(1)}`, `note:ctx_${hex(3)}`, `document:doc_${hex(1)}`, `meeting:sha256:${hex(1)}`]);
+    expect(page.items.every((item) => item.visibility === "only_me")).toBe(true);
+    // A filed row names the caller's project; an unjoined one never leaves.
+    expect(page.items.map((item) => item.projects)).toEqual([[{ project_id: PROJECT_ALPHA, name: "Alpha" }], [], [], []]);
+    expect(f.called("collect")[0]!.input.scope).toEqual({ kind: "only_me" });
+    expect(f.called("collectMeetings")[0]!.input.scope).toEqual({ kind: "only_me" });
+    expect(f.called("tools")).toEqual([]);
+    expect(f.audits).toMatchObject([{ operation: "person_list", scope_kind: "only_me", released_count: 4 }]);
+
+    // A store row someone else may read is outside only_me: nothing is released or audited.
+    const shared = fixture({ notes: [note(1, T(1), { visibility: "only_me" })] });
+    shared.hooks.collect = (rows) => ({ ...rows, notes: rows.notes.map((row) => ({ ...row, visibility: "team" as const })) });
+    expect(await rejected(shared.list({ only_me: true }))).toMatchObject({ code: "invalid_output" });
+    expect(shared.called("commit")).toEqual([]);
+    expect(shared.audits).toEqual([]);
+
+    // One scope at most, even for a request past the contract, before any store.
+    const g = fixture();
+    for (const request of [{ only_me: true, mine: true }, { only_me: true, project_id: PROJECT_ALPHA }, { mine: true, project_id: PROJECT_ALPHA }] as const) {
+      expect(await rejected(g.list(request))).toEqual({ code: "invalid_request", message: "request failed" });
+    }
+    expect(g.calls).toEqual([]);
   });
 
   it("denies a project the caller has not joined, or that does not exist, before any store or tool", async () => {
@@ -531,6 +566,7 @@ describe("person list route", () => {
     await expect(f.open(`document:doc_${hex(1)}`, listed.next_cursor!)).rejects.toMatchObject({ code: "invalid_request" });
     await expect(f.list({ cursor: page.next_cursor! })).rejects.toMatchObject({ code: "invalid_request" });
     await expect(f.list({ mine: true, cursor: listed.next_cursor! })).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(f.list({ only_me: true, cursor: listed.next_cursor! })).rejects.toMatchObject({ code: "invalid_request" });
     await expect(f.list({ cursor: listed.next_cursor! }, "member")).rejects.toMatchObject({ code: "invalid_request" });
   });
 });

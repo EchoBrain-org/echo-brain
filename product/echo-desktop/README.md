@@ -12,17 +12,19 @@ and the build copies it into `build/renderer/fonts`.
 Global Ask includes live Jira and Confluence reads through the person's
 connected accounts, with citations that open directly in Jira or Confluence.
 Project Ask includes them only through the project's saved Jira project and
-Confluence spaces. Mine excludes them.
+Confluence spaces.
 
-While an Ask works, in any scope, Mine included (ADR-0039), one line says what it is
+While an Ask works (ADR-0039), one line says what it is
 doing (Searching, Reading, Checking access, Writing) beside its timer and
 Cancel. Under it, at most three rows say what it searched ("Searched meetings,
 follow-ups and Jira · 22 found", source kinds, never the words searched) and what it read
 ("Read Tuesday sync ×3, ECHO-48 +2": a place once, with how many of its items,
 and "+N" more items), each item named only after ECHO checked you may open it. The first three seconds look as they always did, and an Authority
-that sends no steps keeps "Thinking…". When the answer comes, the rows fold
-into one line above it, "Looked through 14 items · 48s", which opens the rows
-the Authority audited. Cancel, a timeout or a refused answer removes them all.
+that sends no steps keeps "Thinking…". When the answer comes, the line goes:
+the quiet line under the answer says how many sources and how long it took
+("3 sources · 48s", ADR-0049), and opens onto its sources, then "Looked
+through 14 items" and the rows the Authority audited. Cancel, a timeout or a
+refused answer removes them all.
 
 Every name, and every source of an answer, opens beside Ask, which keeps
 working: a meeting's decision, action or rationale opens its meeting with that
@@ -41,15 +43,21 @@ channel's says its tool and key ("Jira · THERM"). Every Ask asks `/v7`, the
 V8 answer
 ([Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)).
 
-An answer the Authority lays out (answer layout v1, ADR-0045) reads as a short
-document, in the desktop's own type: the conclusion first and larger, a heading
-for each distinct topic, bullets for parallel items, and a table for items that
-share owners, dates or statuses. Each sentence and each table row keeps its
-sources' numbers and lights on its own; a table shows ISO dates as "Oct 14",
-only your own late row's due date in the signal colour, and scrolls in its own
-box when the window is narrow. An answer without a layout reads as a paragraph
-per sentence. Either way, its sources start as one closed line ("4 sources ·
-Tuesday sync · …") that a click or a source's number opens, and **Copy answer**
+Ask keeps to a 720px column, short enough to read, and each question is its
+turn's heading (ADR-0049). An answer the Authority lays out (answer layout v1,
+ADR-0045) reads as a short document, in the desktop's own type and the
+answer's one size: the conclusion first, a heading for each distinct topic,
+bullets for parallel items, and a table for items that share owners, dates or
+statuses, with its caption only when the table opens the answer. Each sentence
+and each table row keeps its sources' numbers, faint footnote digits with no
+box that brighten with the sentence under the pointer, and lights on its own;
+a table shows ISO dates as "Oct 14", only your own late row's due date in the
+signal colour, and scrolls in its own box when the window is narrow. An answer
+without a layout reads as a paragraph per sentence. Either way, its sources
+start as one quiet closed line under it ("4 sources") that a click opens, and
+a source's number opens that source beside the answer. A lock shows only on a
+source's row, for what ECHO keeps for you alone, never for a live tool's item.
+**Copy**, on that line while the pointer is on the turn or focus is in it,
 writes Markdown with the sources numbered as the page numbers them. What
 research did not cover is not shown, and an answer that came has no Try again:
 only a question that failed does. "Nothing in Apollo matched", with **Ask
@@ -60,26 +68,29 @@ this computer only, in one owner-only file per account beside the person
 session (`ask-timeline-v1`), at most 200 turns and 90 days. Our own sign-out,
 or another account signing in here, deletes it; a session that merely ended
 keeps it. The Authority never stores it. Ask opens over the page on the
-timeline: the latest turn, and those asked since Ask opened, in full, the
-question reading as your message; every earlier turn is one line with its
-project's square (none for all context or Mine), its full question,
+thread of its place (ADR-0049): from Home every turn, from a project only
+that project's. The latest turn, and those asked since Ask opened, show in
+full; every earlier turn is one line with its
+project's square (none for all context), its full question,
 **Changed** when a source it cited changed, and when it was asked, with a quiet
 Today line above today's first turn. Back, Escape or any page closes Ask and
-keeps the timeline. Opening Ask checks what the newest ten turns cited in one
-content-free read (`person ask-check`): at most every five minutes, and quiet
-when it fails. A turn opened from its line or
+keeps the timeline. Opening Ask checks what the newest ten turns of its thread
+cited in one content-free read (`person ask-check`): at most every five
+minutes for each place, and quiet when it fails. A turn opened from its line or
 a suggestion is checked too when nothing in the last five minutes said what
 its sources are now, and what a check said shows for five minutes only. A line
-opens its answer as it was, dimmed: a sentence whose source changed is lit in
-the signal, one citing something you can no longer read is left out, and **Ask
-again** sits beside "Highlighted parts changed since Oct 14", or "Nothing
-changed since Oct 20" when every source its sentences cite was checked and is
-the same; a check that could not tell says nothing.
-Ask again asks the same full question in the same scope: the new answer lands
-at the bottom, opening with "Since Oct 14" and what is different, each cited,
-or "Nothing changed since Oct 14", and the old line loses its tag. The empty
-bar suggests the questions you asked in its scope first, newest first; one
-opens Ask at its turn instead of asking it again.
+opens its answer as it was, dimmed, under the line as its heading: a sentence
+whose source changed is lit in the signal under "Changed since Oct 14", one
+citing something you can no longer read is left out, and **Ask again** sits on
+the line under it. Nothing is said when nothing changed (ADR-0049); a turn
+with every sentence left out shows only Ask again.
+Ask again asks the same full question in the same scope (a turn asked in Mine
+before it went, at Home): the new answer lands at the bottom, opening with
+"Changed since Oct 14" and what is different, each cited, or nothing when
+nothing material changed, and the old turn folds away. A question shows once
+on a thread: one asked again word for word in the same place folds the one
+before. The empty bar suggests the questions of its place's thread first,
+newest first; one opens Ask at its turn instead of asking it again.
 
 Typed while Ask is open, a question continues the conversation: it carries the
 earlier turn opened, or else the latest one when it was asked in the last hour

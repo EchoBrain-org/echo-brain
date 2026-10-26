@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerBlock } from '../../src/shared/protocol.js';
 import { layoutAnswer } from '../../src/host/test-authority.js';
 import { answerView } from '../../src/host/views.js';
-import { asking as askingWith, byTestId, elements, flush, Held, ok, paneTurn, plainHooks, rpcFor, storeLifecycle, text, type Node } from './harness.js';
+import { asking as askingWith, byTestId, elements, fail, flush, Held, ok, paneTurn, plainHooks, rpcFor, storeLifecycle, text, type Node } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -77,9 +77,8 @@ describe('a laid-out part reads as its blocks', () => {
     expect(cells.map(row => text(byTestId(row[0], 'citation')))).toEqual(['4', '3', '5', '6']);
     expect(cells.map(row => text(row[0]).replace(/\d+$/u, ''))).toEqual(['Confirm TC-D-03 traces to MRD-01 (TRACE-01)', 'Send the regression-scope proposal to the PM',
       'Fix BUG-412 on the board (HW-11)', 'Run DVT-R2 and publish the report']);
-    // A ticket only you can read: the lock beside the row's number.
-    expect(byTestId(cells[0]![0], 'private-mark')).toHaveLength(1);
-    expect(byTestId(cells[1]![0], 'private-mark')).toHaveLength(0);
+    // No lock beside a row's number, though the ticket only you can read is cited (ADR-0049): a lock is only ever on a source's own row.
+    expect(elements(byTestId(thread(), 'answer')).filter(node => /only you/iu.test(String(node.props['aria-label'] ?? '')))).toEqual([]);
     const due = cells.map(row => row[2]!);
     expect(due.map(cell => text(byType(cell, 'time')))).toEqual(['Oct 14', 'Oct 9', 'Oct 28', 'Oct 30']);
     expect(due.map(cell => byType(cell, 'time')[0]!.props.dateTime)).toEqual(['2026-10-14', '2026-10-09', '2026-10-28', '2026-10-30']);
@@ -91,19 +90,25 @@ describe('a laid-out part reads as its blocks', () => {
     expect(classes(cells[1]![1])).not.toContain('you');
   });
 
-  it('locks only the rows whose own citations only you can read', async () => {
+  it('locks only the source row of what ECHO keeps for you alone: never a row of the answer, never a ticket read live (ADR-0049)', async () => {
     const base = therm();
     const [part] = base.parts;
-    // One list statement over a team page, a ticket only you can read and another team page.
-    const sources = [base.sources[0]!, base.sources[3]!, base.sources[1]!];
+    // A team page, a ticket only you can read (read live, with your access) and an approved record only you can read.
+    const mine: Answer['sources'][number] = { kind: 'record', label: 'My release review',
+      record: { record_sha256: 'a'.repeat(64), policy_id: 'restricted-reviewer-person-v2' }, atom_id: 'b'.repeat(64), private: true };
+    const sources = [base.sources[0]!, base.sources[3]!, mine];
     const answer: Answer = { ...base, sources, parts: [{ ...part!,
-      statements: [{ text: '3 items are open: DVT failure review, TRACE-01 and Traceability.', citation_indexes: [0, 1, 2], private: true }],
+      statements: [{ text: '3 items are open: DVT failure review, TRACE-01 and my release review.', citation_indexes: [0, 1, 2], private: true }],
       layout: [{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: '3 items are open', rows: [
         { cells: ['DVT failure review', 'Open'], citation_indexes: [0] }, { cells: ['TRACE-01', 'Open'], citation_indexes: [1] },
-        { cells: ['Traceability', 'Open'], citation_indexes: [2] },
+        { cells: ['My release review', 'Open'], citation_indexes: [2] },
       ] }] }] };
-    const rows = byTestId((await answered(answer)).thread(), 'answer-row');
-    expect(rows.map(row => byTestId(row, 'private-mark').length)).toEqual([0, 1, 0]);
+    // The record is read for its name, as every cited meeting is; here it cannot be, and keeps its label.
+    rpc.mockImplementation(rpcFor(held, { 'ask.record': () => fail('not_found') }, () => ({ active: [], archived: [] })));
+    const { thread } = await answered(answer);
+    expect(byTestId(thread(), 'answer-row').map(row => elements(row).filter(node => /only you/iu.test(String(node.props['aria-label'] ?? ''))).length)).toEqual([0, 0, 0]);
+    click(byTestId(thread(), 'sources-toggle')[0]);
+    expect(byTestId(thread(), 'source-row').map(row => byTestId(row, 'source-lock').length)).toEqual([0, 0, 1]);
   });
 
   it('marks a row yours by your name too, and never a row that is done', async () => {
@@ -132,7 +137,7 @@ describe('a laid-out part reads as its blocks', () => {
     expect(byTestId(thread(), 'statement').map(node => classes(node).includes('on'))).toEqual([false, false, true, false, false]);
   });
 
-  it('shows the caption of a table that opens the answer in the lead\'s type, and a later table\'s as a caption above it', async () => {
+  it('shows the caption of a table that opens the answer in the lead\'s type, and none above a later table, which it names (ADR-0049)', async () => {
     const base = therm();
     const [part] = base.parts;
     const table: Table = { ...part!.layout![4]! as Table, caption: 'Four steps before DVT-R2' };
@@ -143,7 +148,8 @@ describe('a laid-out part reads as its blocks', () => {
     const later = { ...base, parts: [{ ...part!, layout: [...part!.layout!.slice(0, 4), table] }] };
     // Asked in the same Ask, it is the latest turn: the last answer shown.
     const shown = byTestId((await answered(later)).thread(), 'answer').at(-1)!;
-    expect(byClass(shown, 'answer-caption').map(text)).toEqual(['Four steps before DVT-R2']);
+    expect(text(shown)).not.toContain('Four steps before DVT-R2');
+    expect(byClass(shown, 'answer-table')[0]!.props['aria-label']).toBe('Four steps before DVT-R2');
     expect(byClass(shown, 'answer-lead')).toHaveLength(1);
   });
 
@@ -158,14 +164,13 @@ describe('a laid-out part reads as its blocks', () => {
   });
 });
 
-describe('every answer\'s sources start closed, as one line', () => {
-  it('names how many and which on one line, closed, and opens onto a row per source on a click', async () => {
+describe('every answer\'s sources start closed, as the one quiet line under it (ADR-0049)', () => {
+  it('says how many on one line, closed, with no names, and opens onto a row per source on a click', async () => {
     const { store, thread } = await answered(therm());
     const [toggle] = byTestId(thread(), 'sources-toggle');
     expect(toggle!.props['aria-expanded']).toBe(false);
-    expect(text(byClass(toggle, 'count'))).toBe('6 sources');
-    // Each name up to its first " · ": a ticket by its key.
-    expect(text(byClass(toggle, 'names'))).toBe('DVT failure review · Traceability · Gate reviews · TRACE-01 · HW-11 · DVT-R2');
+    // Answered at once: no time to say.
+    expect(text(toggle)).toBe('6 sources');
     expect(byTestId(thread(), 'source-row')).toEqual([]);
     click(toggle);
     expect(byTestId(thread(), 'sources-toggle')[0]!.props['aria-expanded']).toBe(true);
@@ -203,7 +208,7 @@ describe('every answer\'s sources start closed, as one line', () => {
     const base = therm(false);
     const single: Answer = { ...base, sources: base.sources.slice(0, 1), parts: [{ ...base.parts[0]!, statements: [{ text: 'One.', citation_indexes: [0], private: false }] }] };
     const { thread } = await answered(single);
-    expect(text(byClass(byTestId(thread(), 'sources-toggle')[0], 'count'))).toBe('1 source');
+    expect(text(byTestId(thread(), 'sources-toggle')[0])).toBe('1 source');
   });
 });
 

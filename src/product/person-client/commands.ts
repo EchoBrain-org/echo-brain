@@ -88,6 +88,7 @@ const OPTIONS = {
   item: { type: "string" },
   neighbours: { type: "string" },
   mine: { type: "boolean" },
+  "only-me": { type: "boolean" },
   ref: { type: "string" },
 } as const;
 
@@ -140,7 +141,7 @@ const RULES: Readonly<
     accepts: ["question", "project", "mine", "progress", "expected-membership-id", "expected-authority", "previous"],
     requires: ["question"],
   },
-  list: { accepts: ["project", "mine", "cursor"] },
+  list: { accepts: ["project", "mine", "only-me", "cursor"] },
   open: { accepts: ["ref", "cursor"], requires: ["ref"] },
   runs: { accepts: ["request"], requires: ["request"] },
   changes: {},
@@ -179,7 +180,7 @@ const HELP: Readonly<Record<string, string>> = {
 Start here:
   status                                      Who you are on this machine (no network).
   list                                        The newest notes, documents, imported meetings and approved meetings you can read, 25 at a time.
-  list --project <project-id> | --mine        Only one of your projects, or only what you added.
+  list --project <project-id> | --mine | --only-me   Only one of your projects, what you added, or what only you can read.
   open --ref <ref>                            Read one item from list or from an ask citation.
   ask --question <text> [--project <project-id> | --mine]   Answer with citations.
 list shows only what you can read now; next_cursor means more.
@@ -235,11 +236,11 @@ Ask asks POST /v7/person/ask, with every configured request-local live source, i
 
 --previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with at most 8 sentences of at most 400 characters each and at most 12 of that answer's citations, as it carried them. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request.
 `,
-  list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
+  list: `usage: echo-brain person list [--project <project-id> | --mine | --only-me] [--cursor <next_cursor>]
 
 Lists the newest things you can read now, 25 per page: notes, documents, imported meetings and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
 Without a scope flag the list covers the notes, documents, imported meetings and approved meetings ask can read; the first page also shows who you are, your connected tools and your projects.
---project lists one project you belong to. --mine lists only what you added: notes you saved, documents you uploaded and meetings you imported or approved (approved means you were the approver, not an attendee or action owner).
+--project lists one project you belong to. --mine lists only what you added: notes you saved, documents you uploaded and meetings you imported or approved (approved means you were the approver, not an attendee or action owner). --only-me lists everything only you can read, filed in a project or not: your only-me notes and documents, meetings you imported, and approved meetings kept for you alone; a filed row names its projects.
 Pass next_cursor as --cursor with the same scope for the next page; null means the end.
 notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A first page with no items and that notice is not the end: follow its next_cursor later. A later page that could only wait for meetings fails with unavailable (503): retry the same --cursor later.
 `,
@@ -970,8 +971,10 @@ export async function runPersonClientCli(
         throw new Error("--record-sha256 must be sha256 followed by 64 lowercase hex characters");
       }
     }
-    if ((action === "ask" || action === "list") && values.project !== undefined && values.mine === true) {
-      throw new Error(`--project and --mine cannot be combined with \`echo-brain person ${action}\``);
+    // At most one scope. Only list accepts --only-me; ask has already refused it as not valid.
+    const scopeFlags = ["project", "mine", "only-me"].filter((name) => values[name] !== undefined && values[name] !== false).map((name) => `--${name}`);
+    if ((action === "ask" || action === "list") && scopeFlags.length > 1) {
+      throw new Error(`${scopeFlags.slice(0, -1).join(", ")} and ${scopeFlags.at(-1)} cannot be combined with \`echo-brain person ${action}\``);
     }
     // Only the streamed Ask checks a pinned account: on any other, a pin would be silently ignored.
     if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
@@ -986,6 +989,7 @@ export async function runPersonClientCli(
         schema_version: 1,
         ...(values.project === undefined ? {} : { project_id: values.project }),
         ...(values.mine === true ? { mine: true } : {}),
+        ...(values["only-me"] === true ? { only_me: true } : {}),
         ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
       });
     }

@@ -3,11 +3,11 @@ import { dateTime, identity, initial } from '../format.js';
 import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
 import {
-  goHome, installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openMine, openNewProject, openOrganization, openProject, openTools,
+  goHome, installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openNewProject, openOrganization, openProject, openTools,
   openYourFollowUps, settleWords, showAccountMenu, signInAgain, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Capture, Chevron, Home as HomeIcon, OnePerson, People, Person, Plug, Plus, Ticks, Up } from './icons.js';
+import { Capture, Chevron, Home as HomeIcon, People, Person, Plug, Plus, Ticks, Up } from './icons.js';
 import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
@@ -91,22 +91,22 @@ export function SignInDueRow({ state }: { state: State }) {
 }
 
 /**
- * Always beside the page: Capture, Mine, Follow-ups (everything you sent, own
- * or last handed on), your projects (one click switches) under a Projects
- * header whose "+" starts a new project, People & invites for owners, Tools,
- * a new version, the weekly sign-in once it is a day away, and who is signed
- * in. It shares the list Home loads. While another app is in front the page is
- * covered, but the project rows stay, so a dropped file lands. Mine never
- * takes a drop.
+ * Always beside the page: Home (Only me is a link there, ADR-0049), Capture,
+ * Follow-ups (everything you sent, own or last handed on), your projects (one
+ * click switches) under a Projects header whose "+" starts a new project,
+ * People & invites for owners, Tools, a new version, the weekly sign-in once
+ * it is a day away, and who is signed in. It shares the list Home loads. While
+ * another app is in front the page is covered, but the project rows stay, so
+ * a dropped file lands.
  */
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
   const { items, next, loading, failure } = state.projects;
   const current = !state.concealed && state.route.page === 'project' ? state.route.project.project_id : null;
-  const mine = !state.concealed && state.route.page === 'mine';
   const tools = !state.concealed && state.route.page === 'tools';
   const followUps = !state.concealed && state.route.page === 'follow-ups';
-  const home = !state.concealed && (state.route.page === 'home' || state.route.page === 'decision');
+  // Home's own pages: a decision opened from it, and Only me.
+  const home = !state.concealed && (state.route.page === 'home' || state.route.page === 'decision' || state.route.page === 'only-me');
   const needs = needsCount(state);
   const archived = state.archivedProjects;
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -122,10 +122,6 @@ export function Sidebar({ state }: { state: State }) {
           </button>
           <button type="button" class="side-row" data-testid="sidebar-capture" onClick={() => openCompose()}>
             <Capture /><span class="label">Capture</span><span class="hint">{CAPTURE_HINT}</span>
-          </button>
-          <button type="button" class={`side-row${mine ? ' current' : ''}`} data-testid="sidebar-mine" aria-current={mine ? 'page' : undefined}
-            onClick={() => void openMine()} onDragOver={noDrop} onDrop={noDrop}>
-            <OnePerson /><span class="label">Mine</span>
           </button>
           <button type="button" class={`side-row${followUps ? ' current' : ''}`} data-testid="sidebar-follow-ups" aria-current={followUps ? 'page' : undefined}
             onClick={() => void openYourFollowUps()} onDragOver={noDrop} onDrop={noDrop}>

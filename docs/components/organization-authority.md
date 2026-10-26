@@ -12,6 +12,7 @@ reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
   - ADR-0048
+  - ADR-0049
   - ADR-0047
   - ADR-0046
   - ADR-0044
@@ -204,11 +205,16 @@ Person list and open by ref are specified in
 [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md).
 `POST /v1/person/list` returns the newest notes, documents, imported meetings
 and approved meetings the caller can read, 25 per page under an opaque cursor,
-in global, joined-project or mine scope; `POST /v1/person/open` reads one of
-them by its ref. Both are model-free and served outside the
+in global, joined-project, mine or only-me scope; `POST /v1/person/open` reads
+one of them by its ref. Both are model-free and served outside the
 answer-model gate. The originals store lists custody rows under the evidence
 desk's access rule, and the records route lists meetings from the pinned search
 generation and opens them through the Layer 1 exact read; neither returns the
 envelope. Mine is the caller's own notes and uploads plus meetings they
-finally approved, and Ask accepts the same `mine` scope. Each store audits its
-released rows before the route revalidates and writes one page audit.
+finally approved, and Ask accepts the same `mine` scope. Only me
+(`only_me: true`, [ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)) is
+a list-only scope: the caller's own only-me notes and uploads, filed in a
+project or not, approved meetings under the restricted reviewer policy, and
+the caller's imported meetings, each row naming the caller's projects it is
+filed in. Each store audits its released rows before the route revalidates
+and writes one page audit.

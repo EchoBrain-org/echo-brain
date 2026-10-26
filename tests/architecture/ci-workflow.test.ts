@@ -106,6 +106,7 @@ describe("CI workflow", () => {
       "npm run test:research-loop-eval",
       "npm run test:agentic-ask-eval",
       "npm run test:ask-follow-up-eval",
+      "npm run test:ask-wording-eval",
       "npm run test:capacity",
       "npm run capacity:checkpoint",
     ]);
