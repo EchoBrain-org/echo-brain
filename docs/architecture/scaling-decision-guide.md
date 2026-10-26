@@ -1,0 +1,78 @@
+# ECHO scaling decision guide
+
+Scale the resource that is actually limiting completed work. Start with host
+capacity and concurrency tuning; change the architecture when measurements show
+that shared state or processing is the bottleneck.
+
+Source baseline: `8cc3ffffe517ba5e67fc96890d40ae8eef39304d`, checked October 25,
+2026. Numbers below are configuration limits, not a tested maximum customer count.
+
+## Choose what to change
+
+| Symptom | Who controls it | First change to evaluate |
+| --- | --- | --- |
+| Questions wait before research starts | ECHO | Raise SDK session and model-call concurrency together, with enough memory. |
+| Memory fills or processes are killed | AWS capacity and SDK resource use | Increase host RAM; measure the whole process tree, not just the ECHO process. |
+| Requests expire while waiting | ECHO, plus proxy timeouts | Improve admission and queue handling. Use durable asynchronous jobs if work needs to outlive a request. |
+| Meetings or sweeps fall behind while Ask stays busy | ECHO | Reserve background capacity and improve scheduling; then increase worker concurrency. |
+| Documents wait to be processed | ECHO | Increase the bounded parser worker pool; it currently parses one document at a time. |
+| The app slows as stored history grows | ECHO | Profile synchronous database work and full search rebuilds; improve queries and consider incremental indexing or separate workers. |
+| Older items disappear from search or summaries | ECHO | Fix coverage limits with pagination or indexed queries. More RAM does not fix a truncated search. |
+| Providers return rate or budget errors | OpenRouter, model provider, or connector service | Check the exact account, app, tenant, and endpoint limit. Add capacity where available; batch and pace requests. |
+| More customers are hard to provision or upgrade | ECHO operations and AWS quotas | Automate isolated deployments, staged rollouts, backups, and recovery; check regional quotas before adding hosts. |
+| One organization needs several active servers | ECHO architecture | Design shared persistence and job coordination before adding replicas. |
+
+## Limits to check first
+
+- **Research:** 3 SDK sessions total, at most 2 background. Model calls: 6 total,
+  at most 4 background. These are ECHO settings, not SDK service limits.
+- **Request duration:** Ask has 90 seconds including waiting, with 25 seconds
+  reserved for writing. Background research has 300 seconds. Ask allows 24
+  model requests; background research allows 48.
+- **Intake:** 3 meeting-processing lanes; 4 running trigger jobs, which still
+  share the smaller research limits. One document parser.
+- **Coverage:** upload-search V2/V3 endpoints consider the newest 1,000
+  submissions. Some open-item scopes read at most 500 project records or 5,000
+  item rows. A 25-row research list page supports continuation and is not a
+  total inventory limit.
+- **Infrastructure:** the staging template permits only `t4g.nano`, `small`,
+  and `medium`. Larger hosts require a template change. AWS CPU, memory,
+  storage performance, and regional quotas are separate capacity decisions.
+
+See the [concurrency settings](../../services/organization-authority/src/composition/model-call-limiter-v1.ts),
+[research budgets](../../packages/organization-authority-kernel/src/answer-composition/agentic-research-v1.ts),
+[upload search](../../services/organization-authority/src/adapters/persistence/sqlite/project-context-v1.ts),
+[open-item limits](../../services/organization-authority/src/composition/person-open-items-v1.ts),
+and [deployment template](../../deploy/organization-authority/authority-staging-host-v1.template.json)
+when updating these values.
+
+## Prove an improvement
+
+1. Compare the same workload at 1, 3, 6, and 10 simultaneous questions, with
+   representative data and background processing enabled.
+2. Measure completed answers per minute, queue wait, slow-answer latency,
+   partial answers/errors, peak host memory, CPU, and background backlog.
+3. Keep the change only if completed work improves without unacceptable
+   failures or delayed background work. Stop increasing concurrency when the
+   bottleneck moves elsewhere.
+
+More concurrency does not inherently increase tokens per answer. It increases
+the rate of work and can increase wasted spend if failures cause retries.
+
+## Boundaries to preserve
+
+More organizations can reuse the same application image. The accepted design
+keeps [one isolated Authority per organization](../decisions/ADR-0008-echo-hosted-authority-by-default.md).
+Running several replicas for one organization requires the later coordination
+design described in [workspace boundaries](organization-workspace-boundaries.md).
+Keep identity, access checks, and evidence isolation intact when parallelizing.
+
+Provider limits must be checked for the actual account and route:
+[OpenRouter](https://openrouter.ai/docs/api_reference/limits),
+[SDK hosting](https://code.claude.com/docs/en/agent-sdk/hosting),
+[AWS quotas](https://docs.aws.amazon.com/ec2/latest/instancetypes/ec2-instance-quotas.html),
+[Cloudflare](https://developers.cloudflare.com/fundamentals/reference/connection-limits/),
+[Jira](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/), and
+[Confluence](https://developer.atlassian.com/cloud/confluence/rate-limiting/).
+Use the [Authority operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md)
+for deployment changes.
