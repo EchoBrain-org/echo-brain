@@ -509,8 +509,8 @@ function answerResponse(value: unknown, version: AnswerVersion) {
   if (result.outcome === 'not_found' && (result.direct !== undefined || result.citations.length !== 0 || result.parts.some((item) => item.status !== 'not_found' || item.statements.length !== 0 || item.records !== undefined))) fail('No-evidence outcome is inconsistent');
   // Choices come only with clarify, which answers a follow-up: it names the question asked, and says nothing else.
   if (clarify !== previous.includes('choices') || (clarify && (result.citations.length !== 0 || result.direct !== undefined || result.notice !== undefined || !previous.includes('question') || previous.includes('since')))) fail('Clarify outcome is inconsistent');
-  // `since` answers an Ask again, which names its question; an answer with no evidence cannot say what is different.
-  if (previous.includes('since') && (!previous.includes('question') || result.outcome === 'not_found')) fail('Ask response since is inconsistent');
+  // `since` answers an Ask again, which names its question; an answer that cites nothing cannot say what is different.
+  if (previous.includes('since') && (!previous.includes('question') || result.citations.length === 0)) fail('Ask response since is inconsistent');
   if (canonicalJsonBytes(result).byteLength > PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) fail('Ask response exceeds JSON byte bound');
   return Object.freeze(result);
 }

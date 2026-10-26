@@ -117,6 +117,7 @@ describe('what an answer to the previous turn carries (ADR-0047)', () => {
       answered({ since: { statements: [statement], extra: [] } }),
       (({ question: _question, ...rest }) => rest)(answered({ since: { statements: [] } })),
       { ...answered({ since: { statements: [] } }), outcome: 'not_found', citations: [], parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Not found.' }] },
+      { ...answered({ since: { statements: [] } }), outcome: 'partial', citations: [], parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Research stopped early.' }] },
       answered({ question: 'x'.repeat(241) }),
     ]) expect(() => validatePersonAnswerResponseV8(value)).toThrow();
   });
