@@ -8,6 +8,11 @@ let run: Launched;
 test.afterEach(async () => { await run?.close(); });
 
 const refreshes = () => run.calls().filter(call => call.path === '/v2/session/refresh');
+/** Waits until no refresh has gone out for half a second: what returning read again has all failed, each having tried one. */
+async function refreshesSettled(): Promise<void> {
+  let last = -1;
+  await expect.poll(() => { const now = refreshes().length; const still = now === last; last = now; return still; }, { intervals: [500], timeout: 15_000 }).toBe(true);
+}
 
 /**
  * The startup reads, the change check among them, fail before sending; a known-not-sent refresh preserves the session for the
@@ -100,11 +105,13 @@ test('an offline foreground refresh keeps you signed in, and a note is not sent 
   await emit(app, 'echo-test:resume');
   await expect.poll(statuses).toBe(before + 1);
   await expect(page.getByTestId('home-error')).toBeVisible();
-  expect(refreshes().length).toBeGreaterThan(tried);
+  await expect.poll(() => refreshes().length).toBeGreaterThan(tried);
   await expect(page.getByTestId('sidebar-projects-error').getByRole('button', { name: 'Try again' })).toBeEnabled();
   await expect(page.getByTestId('signed-out')).toHaveCount(0);
 
-  // A note written while the refresh cannot leave the machine: that call refreshes again.
+  // A note written while the refresh cannot leave the machine: that call refreshes again. What returning read again is
+  // waited out first, since each of those reads tries a refresh too.
+  await refreshesSettled();
   const startupRefreshes = refreshes().length;
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Offline note');
