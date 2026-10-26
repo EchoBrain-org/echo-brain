@@ -11,7 +11,7 @@ import {
 } from "@echo-brain/federation-protocol";
 import { approvalRecordIdV2 } from "@echo-brain/organization-protocol";
 import {
-  applyOrganizationRecordLogBaselineV5,
+  applyOrganizationRecordLogBaselineV6,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
@@ -277,7 +277,7 @@ function setup(pointer = true) {
       "2026-08-22T11:00:00.000Z",
     );
   const record = openOrganizationRecordDatabase(":memory:");
-  applyOrganizationRecordLogBaselineV5(record);
+  applyOrganizationRecordLogBaselineV6(record);
   if (pointer) pointAt(authority, { generation_id: digest("generation"), manifest_sha256: digest("manifest"), exact_head: HEAD });
   return { authority, record, state_directory: root() };
 }

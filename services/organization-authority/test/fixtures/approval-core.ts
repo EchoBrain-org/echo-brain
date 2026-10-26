@@ -9,7 +9,7 @@ import { SqliteApprovalWorkflowStateV1, SqliteAuthorityMeetingProcessingStateV1 
 import { bindApprovalWorkflowStateV1, type ApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
 import type { ActionSignal, DecisionSet, DecisionSignal, MeetingDocument, RationaleSignal } from '@echo-brain/organization-processing/core';
 import { meetingSourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
-import { applyOrganizationRecordLogBaselineV5, OrganizationRecordAppenderV4, RecordRetrievalSourceSnapshotPortV1, type RecordPolicyFactProjectorRegistryV1, type RecordRetrievalSourceAtomV1 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { applyOrganizationRecordLogBaselineV6, OrganizationRecordAppenderV4, RecordRetrievalSourceSnapshotPortV1, type RecordPolicyFactProjectorRegistryV1, type RecordRetrievalSourceAtomV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { organizationAuthorityPinSha256, verifyOrganizationAuthorityPin, verifyOrganizationRecordEnvelopeV4 } from '@echo-brain/organization-protocol';
 import type { ApprovalWorkflowContextV1, ApprovalWorkflowProcessingV1 } from '@echo-brain/organization-processing/ports/approval-workflow-bundle-v1';
 import { testAuthority } from '../../../../packages/organization-protocol/test/fixtures/record-v4-fixture.js';
@@ -72,7 +72,7 @@ export async function approvalContextFixture(options: { readonly path?: string }
     const row = old.prepare(`SELECT * FROM ${table}`).get() as Record<string, unknown>;
     db.prepare(`INSERT INTO ${table} (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(() => '?').join(',')})`).run(...Object.values(row).map(value => typeof value === 'string' && substitutions[value] !== undefined ? substitutions[value] : value));
   }
-  const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys=ON'); applyOrganizationRecordLogBaselineV5(record);
+  const record = new Database(':memory:'); opened.push(record); record.pragma('foreign_keys=ON'); applyOrganizationRecordLogBaselineV6(record);
   const coordinates = { authority_id: authority.descriptor.authority_id, organization_id: actor.organization_id, state_lineage_id: 'lineage-test' };
   record.prepare('INSERT INTO organization_record_log_metadata VALUES (1,?,?,?,?)').run(coordinates.authority_id, coordinates.organization_id, coordinates.state_lineage_id, '2026-10-06T00:00:00.000Z');
   const append = new OrganizationRecordAppenderV4(record, coordinates, authorityRecordPolicyProjectorsV1());

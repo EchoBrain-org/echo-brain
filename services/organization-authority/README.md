@@ -480,7 +480,7 @@ Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
 Current state uses six byte-pinned baselines, one per role: Authority V15,
-control-plane V4, record-log V5, retrieval facts V3, retrieval lexical V2 and
+control-plane V4, record-log V6, retrieval facts V3, retrieval lexical V2 and
 retrieval content V2. The V2 root binds exactly these six roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
 database. Old roots, retired databases, and mismatched schemas refuse before

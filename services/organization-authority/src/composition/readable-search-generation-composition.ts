@@ -167,6 +167,8 @@ export function readableSearchGenerationContractV1(): ReadableSearchGenerationCo
           policy_id: "restricted-reviewer-person-v2",
           policy_contract_sha256: restrictedReviewerPolicy,
           reader: "exact-current-approver-principal-and-membership-tenure",
+          // Its approver may file it in projects (ADR-0049), so a project scope narrows it as it narrows a project record.
+          scope: "selected-project-requires-current-membership-and-record-association",
         },
       ],
       query: {

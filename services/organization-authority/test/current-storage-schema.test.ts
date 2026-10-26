@@ -5,14 +5,15 @@ import Database from "better-sqlite3";
 import { afterEach, expect, it } from "vitest";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import { organizationRecordLogBaselineSha256V5 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { organizationRecordLogBaselineSha256V6 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { READABLE_SEARCH_FACTS_BASELINE_V3, readableSearchPlaneBaselineSha256 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 it("pins the current record-log baseline bytes", () => {
-  expect(organizationRecordLogBaselineSha256V5()).toBe("sha256:fd7fb6f5d68a4e9256dc6f333bead382ec83c279db1b770b8243450f7073a72b");
+  // V6 lets a record its approver alone reads be filed in projects (ADR-0049).
+  expect(organizationRecordLogBaselineSha256V6()).toBe("sha256:46832643d35713a49c3372c17e07f32d1f86d6ae39f6d80a8b4c37f7d4a74df3");
 });
 
 it("pins the readable-search facts baseline bytes, retired related-atom table included", () => {
@@ -32,7 +33,7 @@ it("initializes only the active storage roles and tables", () => {
   expect(verification.root.schema_version).toBe(2);
   expect(verification.root.databases).toHaveLength(6);
   expect(existsSync(join(state, "record-derived.sqlite"))).toBe(false);
-  for (const [file, count, version] of [["authority.sqlite", 55, 15], ["integrations.sqlite", 7, 4], ["record-log.sqlite", 8, 5]] as const) {
+  for (const [file, count, version] of [["authority.sqlite", 55, 15], ["integrations.sqlite", 7, 4], ["record-log.sqlite", 8, 6]] as const) {
     const db = new Database(join(state, file), { readonly: true, fileMustExist: true });
     try {
       expect(db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'echo_state_lineage_manifest'").get()).toEqual({ n: count });
@@ -45,7 +46,7 @@ it("initializes only the active storage roles and tables", () => {
       }
       if (file === "record-log.sqlite") {
         expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'organization_record_member_readable_person_fact_by_record'").get()).toBeUndefined();
-        // V5 retires the meeting transcript grant (ADR-0046).
+        // V5 retired the meeting transcript grant (ADR-0046); V6 keeps it retired.
         expect(db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'organization_record_meeting_transcript_grant%'").all()).toEqual([]);
       }
     } finally { db.close(); }
@@ -63,6 +64,25 @@ it("refuses an Authority database whose schema header predates V15", () => {
   const database = new Database(join(state, "authority.sqlite"), { fileMustExist: true });
   try {
     database.pragma("user_version = 10");
+  } finally {
+    database.close();
+  }
+  expect(() => verifyAuthorityStateLineage(state)).toThrow();
+});
+
+it("refuses a record log whose schema header predates V6", () => {
+  const root = mkdtempSync(join(tmpdir(), "echo-current-storage-"));
+  chmodSync(root, 0o700);
+  roots.push(root);
+  const state = join(root, "state");
+  bootstrapOrganizationAuthorityState({ state_directory: state,
+    organization_display_name: "Schema fixture", owner_display_name: "Owner",
+    created_at: "2026-09-12T00:00:00.000Z", creating_artifact_revision: "current-storage-test" });
+  expect(verifyAuthorityStateLineage(state).root.databases).toHaveLength(6);
+  // A V5 record log is fresh state no migration reaches: it is refused before any writable open.
+  const database = new Database(join(state, "record-log.sqlite"), { fileMustExist: true });
+  try {
+    database.pragma("user_version = 5");
   } finally {
     database.close();
   }
