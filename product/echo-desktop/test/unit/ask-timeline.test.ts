@@ -449,6 +449,41 @@ describe('Ask on the timeline', () => {
     expect(calls('ask.check')).toHaveLength(1);
   });
 
+  it('copies an old answer as the page shows it: nothing a check left out, its sources numbered as the page numbers them', async () => {
+    const sources = [ticket('THERM-482', '20482'), followUp('itm_timeline-1'), page('31010')];
+    const base = answerOf('What is open on THERM?', sources, [['THERM-482, Sensor drift, is open.', [0]], ['Confirm the trace is still open.', [1]],
+      ['The DVT plan moved the retest to Oct 30.', [2]]]);
+    const laidOut: Answer = { ...base, parts: [{ ...base.parts[0]!, layout: [
+      { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Still to do' }, { kind: 'bullets', statements: [1] },
+      { kind: 'table', statements: [0, 1, 2], columns: ['Item', 'Status'], rows: [{ cells: ['THERM-482', 'Open'], citation_indexes: [0] },
+        { cells: ['Trace', 'Open'], citation_indexes: [1] }, { cells: ['DVT plan', 'Moved'], citation_indexes: [2] }] },
+    ] }] };
+    const long = 'x'.repeat(11_990);
+    const plain = answerOf('Long?', sources, [[long, [0]], ['Confirm the trace is still open.', [1]]]);
+    const [one, two] = [turn('What is open on THERM?', 2 * DAY, laidOut), turn('Long?', DAY, plain)];
+    // The follow-up is no longer yours to read; the DVT plan changed.
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : item.citation.kind === 'page' ? 'changed' : 'same' })) });
+    const copied: string[] = [];
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.check': params => checks!(params.items as never),
+      'clipboard.writeText': params => { copied.push(String(params.text)); return ok(null); },
+      'ask.record': () => fail('not_found'),
+    }, () => ({ active: [apollo], archived: [] })));
+    seed(one, two);
+    const store = await startStore();
+    store.pickSuggestion({ question: one.question, turn: one.id });
+    await flush();
+    expect(await store.copyAnswer(one.id)).toBe(true);
+    expect(copied[0]).toBe([
+      'THERM-482, Sensor drift, is open. [1]', '',
+      '| Item | Status |', '| --- | --- |', '| THERM-482 [1] | Open |', '| DVT plan [2] | Moved |', '',
+      'Sources', '', '1. THERM-482 · Sensor drift', '2. DVT plan',
+    ].join('\n'));
+    // Past what Copy answer takes, its plain text, without what was left out.
+    expect(await store.copyAnswer(two.id)).toBe(true);
+    expect(copied[1]).toBe(long);
+  });
+
   it('reads a new answer\'s tickets once, for the baseline a later check compares with', async () => {
     checks = items => ok({ items: items.map(() => ({ state: 'same', marker: sha('base') })) });
     const store = await startStore();

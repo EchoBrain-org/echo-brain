@@ -12,10 +12,10 @@ import type {
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { answerMarkdown, answerSentences, documentName, MAX_SOURCES, sourceGroups, type SourceGroup } from './answer.js';
+import { answerMarkdown, answerSentences, answerText, documentName, MAX_SOURCES, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, previousOf, sameScope, shownInFull, turnGroups,
+  askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, markOf, previousOf, sameScope, shownInFull, turnGroups,
   type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
@@ -3850,17 +3850,21 @@ export function cancelAsk(): void {
 
 /**
  * Copy answer: a turn's answer (the one the pane's numbers are of, when none
- * is named) as Markdown (ADR-0045), its sources numbered and named as the page
- * shows them, onto the clipboard; its plain text when the Markdown is longer
- * than Copy answer takes. Says whether it got there.
+ * is named) as Markdown (ADR-0045), as the page shows it: without what the
+ * check it shows left out, its sources numbered and named as the page shows
+ * them (ADR-0047). Onto the clipboard; its plain text when the Markdown is
+ * longer than Copy answer takes. Says whether it got there.
  */
 export async function copyAnswer(id: string | null = state.sources?.turn ?? null): Promise<boolean> {
-  const answer = turnOf(id)?.answer;
-  if (answer === undefined) return false;
-  const all = answer.sources.slice(0, MAX_SOURCES);
-  const markdown = answerMarkdown(answer, sourceGroups(all).map(group => sourceName(all[group.indexes[0]!]!, state.sources)));
-  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : answer.text;
-  return (await rpc('clipboard.writeText', { text })).ok;
+  const turn = turnOf(id);
+  if (turn === undefined) return false;
+  const { answer } = turn;
+  const checks = shownChecks(turn);
+  const groups = turnGroups(answer.sources, checks);
+  const shows = (citations: readonly number[]) => markOf(citations, checks) !== 'omitted';
+  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows);
+  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : checks === undefined ? answer.text : answerText(answer, shows);
+  return text !== '' && (await rpc('clipboard.writeText', { text })).ok;
 }
 
 /** Back or Escape: Ask closes over the page. The timeline stays, and opens again with the next question or a suggestion. */
