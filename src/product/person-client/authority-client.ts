@@ -1420,20 +1420,13 @@ export class PersonAuthorityClient {
    * no content. An Authority without the route answers 404, which is `not_supported` here, never `not_found`.
    */
   async changes(accessToken: string, signal?: AbortSignal): Promise<PersonChangesV1> {
-    try {
-      return await this.getJson({
-        path: PERSON_CHANGES_ROUTE_V1,
-        access_token: accessToken,
-        validate_response: validatePersonChangesV1,
-        maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-        signal,
-      });
-    } catch (error) {
-      if (error instanceof PersonAuthorityClientError && error.status === 404) {
-        throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no change check");
-      }
-      throw error;
-    }
+    return this.notSupportedOn404(this.getJson({
+      path: PERSON_CHANGES_ROUTE_V1,
+      access_token: accessToken,
+      validate_response: validatePersonChangesV1,
+      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+      signal,
+    }), "This Authority has no change check");
   }
 
   /**
@@ -1442,18 +1435,21 @@ export class PersonAuthorityClient {
    * which is `not_supported` here, never `not_found`.
    */
   async projectActivity(accessToken: string, signal?: AbortSignal): Promise<PersonProjectActivityV1> {
+    return this.notSupportedOn404(this.getJson({
+      path: PERSON_PROJECT_ACTIVITY_PATH_V1,
+      access_token: accessToken,
+      validate_response: validatePersonProjectActivityV1,
+      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+      signal,
+    }), "This Authority has no project activity");
+  }
+
+  /** A read of a route an older Authority lacks: its 404 is `not_supported`, with this message, never `not_found`. */
+  private async notSupportedOn404<T>(read: Promise<T>, message: string): Promise<T> {
     try {
-      return await this.getJson({
-        path: PERSON_PROJECT_ACTIVITY_PATH_V1,
-        access_token: accessToken,
-        validate_response: validatePersonProjectActivityV1,
-        maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-        signal,
-      });
+      return await read;
     } catch (error) {
-      if (error instanceof PersonAuthorityClientError && error.status === 404) {
-        throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no project activity");
-      }
+      if (error instanceof PersonAuthorityClientError && error.status === 404) throw new PersonAuthorityClientError("not_supported", 404, message);
       throw error;
     }
   }
@@ -1592,18 +1588,11 @@ export class PersonAuthorityClient {
    */
   async askCheck(accessToken: string, value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
     const request = validatePersonAskCheckRequestV1(value);
-    try {
-      return await this.json({
-        path: PERSON_ASK_CHECK_PATH_V1, body: request, validate_request: validatePersonAskCheckRequestV1,
-        validate_response: response => validatePersonAskCheckV1(response, request), access_token: accessToken,
-        maximum_request_bytes: PERSON_ASK_CHECK_LIMITS_V1.body_bytes, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_CHECK_TIMEOUT_MS, signal,
-      });
-    } catch (error) {
-      if (error instanceof PersonAuthorityClientError && error.status === 404) {
-        throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no Ask source check");
-      }
-      throw error;
-    }
+    return this.notSupportedOn404(this.json({
+      path: PERSON_ASK_CHECK_PATH_V1, body: request, validate_request: validatePersonAskCheckRequestV1,
+      validate_response: response => validatePersonAskCheckV1(response, request), access_token: accessToken,
+      maximum_request_bytes: PERSON_ASK_CHECK_LIMITS_V1.body_bytes, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_CHECK_TIMEOUT_MS, signal,
+    }), "This Authority has no Ask source check");
   }
 
   evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {

@@ -651,6 +651,12 @@ function requiredText(
   return value;
 }
 
+/** `--request` as JSON, validated; JSON that does not parse is "<name> request JSON is invalid". */
+function requestOf<T>(values: Record<Option, string | boolean | undefined>, validate: (value: unknown) => T, name: string): T {
+  try { return validate(JSON.parse(requiredText(values, 'request'))); }
+  catch (error) { if (error instanceof SyntaxError) throw new Error(`${name} request JSON is invalid`); throw error; }
+}
+
 function optionalRecordLimit(
   values: Record<Option, string | boolean | undefined>,
   maximum = 100,
@@ -999,14 +1005,8 @@ export async function runPersonClientCli(
         ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
       });
     }
-    if (action === 'runs') {
-      try { runsRequest = validatePersonRunsRequestV1(JSON.parse(requiredText(values, 'request'))); }
-      catch (error) { if (error instanceof SyntaxError) throw new Error('Runs request JSON is invalid'); throw error; }
-    }
-    if (action === 'ask-check') {
-      try { askCheckRequest = validatePersonAskCheckRequestV1(JSON.parse(requiredText(values, 'request'))); }
-      catch (error) { if (error instanceof SyntaxError) throw new Error('Ask check request JSON is invalid'); throw error; }
-    }
+    if (action === 'runs') runsRequest = requestOf(values, validatePersonRunsRequestV1, 'Runs');
+    if (action === 'ask-check') askCheckRequest = requestOf(values, validatePersonAskCheckRequestV1, 'Ask check');
   } catch (error) {
     if (isContextAction(action)) {
       print(stderr, contextCliFailure(action, error, values));
