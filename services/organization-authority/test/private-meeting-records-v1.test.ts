@@ -2,7 +2,10 @@
 // approver and for another member of the same project.
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import { approvalRecordIdV2 } from "@echo-brain/organization-protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { PersonRecordReaderV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
+import { createRecordProjectAuthorizationV1 } from "../src/composition/person-record-project-scope-v1.js";
 import type { PersonItemPositionV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
@@ -95,6 +98,31 @@ describe("a meeting item kept private inside a project (ADR-0049)", () => {
     const audits = [...w.audits("person_list"), ...w.audits("layer2")].filter((body) => body.membership_id === EMP_A.membership_id);
     expect(audits.length).toBeGreaterThan(0);
     expect(JSON.stringify(audits)).not.toContain(kept);
+  });
+
+  it("leaves another member's project activity and project records as they were, however many records an approver keeps private there", async () => {
+    // The standard world: SHARED holds r4 (EMP_A's) and r3 (OWNER's). Then OWNER keeps 500 more in SHARED for himself.
+    const w = await meetingWorld();
+    worlds.push(w);
+    for (let index = 0; index < 500; index += 1) {
+      await w.approve({ name: `kept-${index}`, approval_id: `apr_kept_${index}`, projects: [SHARED], private: true, final_approver: OWNER, issued_at: T(8) });
+    }
+    const route = w.route();
+    const projectsOf = (access_token: ReaderToken) => createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(w.authority))(w.sessions.authenticateAccess({ access_token }));
+    const activity = (access_token: ReaderToken) => route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids: [SHARED], own: new Set() }).get(SHARED);
+    const arrival = (name: string) => w.record.prepare("SELECT receipt_issued_at FROM organization_record_log WHERE record_sha256 = ?").pluck().get(w.digest(name)) as string;
+    const kept = Array.from({ length: 500 }, (_, index) => w.digest(`kept-${499 - index}`));
+    // To EMP_A they are not filed in SHARED at all: OWNER's r3 is still the news, past none of them.
+    expect(activity("emp_a")).toEqual({ meeting_at: arrival("r3"), filed: [w.digest("r4"), w.digest("r3")] });
+    // OWNER finds them, newest first: his own, so no meeting time among his newest 500.
+    expect(activity("owner")).toEqual({ meeting_at: null, filed: kept });
+    // EMP_A's project records cost one exact read each, none for OWNER's private ones; OWNER's are his newest.
+    const reads = vi.spyOn(PersonRecordReaderV1.prototype, "list");
+    try {
+      expect(route.projectRecords({ access_token: "emp_a", project_id: SHARED, limit: 500 })).toEqual([w.digest("r4"), w.digest("r3")]);
+      expect(reads).toHaveBeenCalledTimes(2);
+    } finally { reads.mockRestore(); }
+    expect(route.projectRecords({ access_token: "owner", project_id: SHARED, limit: 500 })).toEqual(kept);
   });
 
   it("follows its approver's current grants: out of the project scope once they leave it, still theirs alone", async () => {
