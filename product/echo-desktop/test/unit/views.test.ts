@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerOf, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, listView, membersView, noteMatchesView,
+  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, listView, membersView, noteMatchesView,
   noteTitle, openItemsView, openItemView, openView, revokedView, NotReadable, projectActivityView, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
@@ -853,8 +853,8 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
   const page = { kind: 'page', label: 'DVT plan', visibility: 'team', citation: { kind: 'page', tool_id: 'confluence', external_scope_id: 'cloud-1', page_id: '31010',
     section_id: 'summary', version: '3', permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=31010', text_sha256: sha('9') } };
   const note = { citation: passage('a'), kind: 'note', label: 'Launch notes', visibility: 'team' };
-  /** What the client validated, as answerOf takes it: a check of `previous`'s fields comes before C3's validator reaches this checkout. */
-  const validatedV8 = (fields: Record<string, unknown>) => ({ ...v8([ticket]), ...fields }) as unknown as Parameters<typeof answerOf>[0];
+  /** The last line `person ask --live --progress` printed: a V8 answer, with what an Ask that carried `previous` adds (`fields`). */
+  const line = (fields: Record<string, unknown>) => ({ ok: true, result: { ...v8([ticket]), ...fields } });
 
   it('keeps every source\'s citation as the answer carried it, and the evidence citation of each that can change or go', () => {
     const cited = [named, ticket, followUp, page, note, project, person, tool, container];
@@ -870,27 +870,29 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
 
   it('reads the full question an answer answers, and Ask again\'s "since", whose citations are the answer\'s own', () => {
     const since = { statements: [{ text: 'ECHO-7 moved to In Progress.', citation_indexes: [0], private: true }] };
-    const answer = answerOf(validatedV8({ question: 'Who owns ECHO-7?', since }), undefined, scope);
+    const answer = answerView(line({ question: 'Who owns ECHO-7?', since }), scope);
     expect(answer).toMatchObject({ outcome: 'answered', question: 'Who owns ECHO-7?', since: since.statements, text: 'Ship it.' });
     // Nothing material changed: an empty list, which the page says as "Nothing changed since".
-    expect(answerOf(validatedV8({ since: { statements: [] } }), undefined, scope).since).toEqual([]);
+    expect(answerView(line({ question: 'Who owns ECHO-7?', since: { statements: [] } }), scope).since).toEqual([]);
     // A "since" sentence that cites what the answer does not is not the client's output.
-    expect(() => answerOf(validatedV8({ since: { statements: [{ text: 'Moved.', citation_indexes: [1], private: false }] } }), undefined, scope)).toThrow(ViewError);
-    expect(() => answerOf(validatedV8({ question: 7 }), undefined, scope)).toThrow(ViewError);
+    expect(() => answerView(line({ question: 'Who owns ECHO-7?', since: { statements: [{ text: 'Moved.', citation_indexes: [1], private: false }] } }), scope))
+      .toThrow(ViewError);
+    expect(() => answerView(line({ question: 7 }), scope)).toThrow(ViewError);
     // An answer to an Ask that carried nothing says none of it.
-    const plain = answerOf(validatedV8({}), undefined, scope);
+    const plain = answerView(line({}), scope);
     for (const key of ['question', 'since', 'choices']) expect(plain).not.toHaveProperty(key);
   });
 
   it('reads "Which one?": two to four choices, and no part; never the off_scope outcome that left the contract', () => {
     const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
-    const clarify = (fields: Record<string, unknown>) => validatedV8({ outcome: 'clarify', citations: [], parts: [], choices, ...fields });
-    expect(answerOf(clarify({}), undefined, scope)).toEqual({ text: '', scope, sources: [], parts: [], outcome: 'clarify', choices });
-    expect(() => answerOf(clarify({ choices: choices.slice(0, 1) }), undefined, scope)).toThrow(ViewError);
-    expect(() => answerOf(clarify({ choices: undefined }), undefined, scope)).toThrow(ViewError);
-    expect(() => answerOf(clarify({ choices: [...choices, { label: 'More' }] }), undefined, scope)).toThrow(ViewError);
+    // "Which one?" names the question asked, and says nothing else.
+    const clarify = (fields: Record<string, unknown>) => line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?', choices, ...fields });
+    expect(answerView(clarify({}), scope)).toEqual({ text: '', scope, sources: [], parts: [], outcome: 'clarify', question: 'Who owns it?', choices });
+    expect(() => answerView(clarify({ choices: choices.slice(0, 1) }), scope)).toThrow(ViewError);
+    expect(() => answerView(line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?' }), scope)).toThrow(ViewError);
+    expect(() => answerView(clarify({ choices: [...choices, { label: 'More' }] }), scope)).toThrow(ViewError);
     // `off_scope` left the contract (C4; no current path produces it): an answer that says it is not one the page reads.
-    expect(() => answerOf(validatedV8({ outcome: 'off_scope' }), undefined, scope)).toThrow(ViewError);
+    expect(() => answerView(line({ outcome: 'off_scope' }), scope)).toThrow(ViewError);
   });
 
   it('reads a source check (C1): a state per item asked, in order, and a readable ticket\'s marker; anything else is not its output', () => {
