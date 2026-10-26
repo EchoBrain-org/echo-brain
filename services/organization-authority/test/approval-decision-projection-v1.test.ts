@@ -7,7 +7,7 @@ import {
 } from '@echo-brain/organization-protocol';
 import { validateApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
 import { approvalCoreFixture, type ApprovalCoreFixtureV1 } from './fixtures/approval-core.js';
-import type { ApprovalDecisionBodyV1 } from '../src/composition/approval-core-v1.js';
+import type { ApprovalDecisionBodyV1, ApprovalRouteV1 } from '../src/composition/approval-core-v1.js';
 import {
   approvalDecisionGroupsV1, approvalDecisionWitnessV1, buildApprovalDecisionRecordsV1, createApprovalDecisionPolicyProjectorV1, projectApprovalDecisionApproverV1,
   type ApprovalDecisionWitnessV1, type BuiltApprovalDecisionRecordV1,
@@ -307,6 +307,30 @@ describe('approval decision projection', () => {
     ]);
     expect(new Set(groups.map(group => group.approval_id)).size).toBe(3);
     expect(groups.map(group => Object.keys(group).sort().join())).toEqual(['approval_id,private,project_ids,signal_ids', 'approval_id,project_ids,signal_ids', 'approval_id,project_ids,signal_ids']);
+  });
+  it('gives the reasons that support no item to the Only-me group, else to the first private group alone', () => {
+    const A = 'prj_00000000-0000-4000-8000-0000000000a1', B = 'prj_00000000-0000-4000-8000-0000000000b1', approval_id = `apr_${'c'.repeat(64)}`;
+    const marks = (routes: readonly ApprovalRouteV1[]) => approvalDecisionGroupsV1({ approval_id, routes }).map(group => [group.project_ids, group.private === true, group.unsupported_reasons === true]);
+    // Nothing kept for Only me: the first private group in group order takes them, and no other.
+    expect(marks([{ signal_id: 'd1', project_ids: [B] }, { signal_id: 'd2', project_ids: [A], private: true }, { signal_id: 'a1', project_ids: [B], private: true },
+      { signal_id: 'a2', project_ids: [A], private: true }])).toEqual([[[B], false, false], [[A], true, true], [[B], true, false]]);
+    // With an item kept for Only me, that group takes them, unmarked as ever.
+    expect(marks([{ signal_id: 'd1', project_ids: [A], private: true }, { signal_id: 'd2', project_ids: [] }])).toEqual([[[A], true, false], [[], false, false]]);
+  });
+  it('refuses at append a reason that supports no item in any record but the one the grouping gives it', async () => {
+    const f = await approvalCoreFixture({ rationales: [{ id: 'reason-loose', supports: [] }] });
+    // The decision kept for the reviewer alone in A, both actions in B: no Only me, so the first private group (A) takes it.
+    f.core.decide('desktop', f.approve({ routes: f.routes(id => id === 'decision-1' ? [f.projectA] : [f.projectB]).map(route => ({ ...route, private: true as const })) }), () => f.session);
+    const [first, second] = buildApprovalDecisionRecordsV1(source(f));
+    const reasons = (built: BuiltApprovalDecisionRecordV1) => built.human_act_record_input.event.approved_snapshot.approved_payload.brief.rationales.map(reason => reason.id);
+    expect([reasons(first!), reasons(second!)]).toEqual([['reason-loose'], []]);
+    // The second record with it as well: the record codec accepts that, the projector recomputing the groups refuses it.
+    const proposal = clone(source(f).approved_snapshot) as { approved_payload: { brief: { rationales: readonly Mutable[] } } };
+    const { input, key } = reshaped(second!, brief => { brief.rationales.push({ ...proposal.approved_payload.brief.rationales.find(reason => reason.id === 'reason-loose')! }); });
+    expect(() => validateApprovalDecisionRecordInputV2(input)).not.toThrow();
+    await expect(appendRaw(f, input, second!.authorization_witness, key)).rejects.toThrow('Approval decision witness differs from its record');
+    expect(f.recordCount()).toBe(0);
+    await expect(appendRaw(f, clone(first!.human_act_record_input) as never, first!.authorization_witness, first!.semantic_idempotency_key)).resolves.toMatchObject({ outcome: 'appended' });
   });
   it('refuses a route that says private other than as true beside a project, rather than read it as shared', () => {
     const B = 'prj_00000000-0000-4000-8000-0000000000b1', approval_id = `apr_${'c'.repeat(64)}`;

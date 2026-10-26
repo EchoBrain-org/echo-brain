@@ -89,8 +89,9 @@ Adopt option 2, the founder's choice.
   project set); a private group's record binds the restricted reviewer with no
   project audience and the projects as its association, and its approval id
   hashes `private: true` in. Like Only me it keeps its quotes and the reasons
-  for its own items; a reason that supports nothing goes to the plain Only me
-  group alone. Record log V6 binds such association rows to the approval;
+  for its own items. A reason that supports no item goes to one record only:
+  the plain Only me group's, else the first private group's in group order.
+  Record log V6 binds such association rows to the approval;
   retrieval admits the record to its approver and then narrows it by
   association. Receipts and record refs say `private`; Slack's closed card
   reads "THERM, only you" and Slack never routes privately; the desktop chip's

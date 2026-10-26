@@ -110,10 +110,13 @@ export function isPrivateApprovalRecordV2(record: { readonly policy_id: string; 
 
 /**
  * One destination group of a decision: the record's own approval id, its project set ([] = Only me), whether it is kept
- * private inside those projects (only with at least one), its decisions then actions.
+ * private inside those projects (only with at least one), its decisions then actions, and, on a private group only,
+ * `unsupported_reasons`: it takes the reasons that support no item. The grouping sets it on the first private group when the
+ * decision keeps nothing for Only me; the Only-me group, when there is one, always takes them.
  */
 export interface ApprovalDecisionGroupV2 {
-  readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true; readonly signal_ids: readonly string[];
+  readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true; readonly unsupported_reasons?: true;
+  readonly signal_ids: readonly string[];
 }
 /**
  * The snapshot one destination group's record carries: the frozen proposal snapshot the reviewer saw, under the record's own
@@ -122,10 +125,11 @@ export interface ApprovalDecisionGroupV2 {
  * of the evidence unit the item cites (a note line, or part of a paragraph or turn), which may speak of any item of the
  * meeting, so a project group's spans keep their meeting, block and times but never a quote. A group only its approver
  * reads (Only me, or kept private inside its projects) keeps its quotes and takes every reason that supports one of its
- * items, its links pruned to them. A reason that supports nothing goes to the Only-me group alone, so it is never copied into
- * several records; with no Only-me group it is left out, as is any other reason. Pure: the publisher builds each record with
- * it and the append projector recomputes it from the proposal snapshot, so the two cannot drift. Throws unless every group
- * item is a decision or action of the proposal, and unless a private group names a project.
+ * items, its links pruned to them. A reason that supports nothing goes to one record only: the Only-me group's, else the
+ * first private group's (`unsupported_reasons`); with neither it is left out, as is any other reason. Pure: the publisher
+ * builds each record with it and the append projector recomputes it from the proposal snapshot, so the two cannot drift.
+ * Throws unless every group item is a decision or action of the proposal, unless a private group names a project, and
+ * unless only a private group takes the unsupported reasons.
  */
 export function approvalDecisionSubsetSnapshotV2(proposal: unknown, group: ApprovalDecisionGroupV2): ApprovedDecisionSnapshotV2 {
   const snapshot = validateApprovedDecisionSnapshotV2(proposal);
@@ -134,12 +138,15 @@ export function approvalDecisionSubsetSnapshotV2(proposal: unknown, group: Appro
   const items = new Set([...brief.decisions, ...brief.actions].map(signal => signal.id));
   if (ids.size === 0 || ids.size !== group.signal_ids.length || group.signal_ids.some(id => !items.has(id))) fail('Approval decision group names items its proposal does not');
   if (group.private !== undefined && (group.private !== true || group.project_ids.length === 0)) fail('A private approval decision group is kept inside one or more projects');
+  if (group.unsupported_reasons !== undefined && (group.unsupported_reasons !== true || group.private !== true)) {
+    fail('Only a private approval decision group takes the reasons that support no item');
+  }
   const project = group.project_ids.length > 0 && group.private !== true;
   const unquoted = <T extends OrganizationRecordSignalV1>(signal: T): T => project
     ? { ...signal, evidence: signal.evidence.map(({ quote, ...span }) => span) } : signal;
   const rationales = brief.rationales.flatMap(reason => {
     if (project) return reason.supports_signal_ids.length > 0 && reason.supports_signal_ids.every(id => ids.has(id)) ? [unquoted(reason)] : [];
-    if (reason.supports_signal_ids.length === 0) return group.project_ids.length === 0 ? [reason] : [];
+    if (reason.supports_signal_ids.length === 0) return group.project_ids.length === 0 || group.unsupported_reasons === true ? [reason] : [];
     const supports = reason.supports_signal_ids.filter(id => ids.has(id));
     return supports.length === 0 ? [] : [{ ...reason, supports_signal_ids: supports }];
   });

@@ -357,6 +357,20 @@ describe("approval decision record input v2", () => {
     expect(() => approvalDecisionSubsetSnapshotV2(proposal, { ...group, project_ids: [] })).toThrow("kept inside one or more projects");
     expect(() => approvalDecisionSubsetSnapshotV2(proposal, { ...group, private: false } as never)).toThrow("kept inside one or more projects");
   });
+  it("gives the reasons that support no item to one record: the Only-me group's, else the private group the grouping marks", () => {
+    const proposal = snapshot({ decisions: 2, rationales: [{ id: "why-1", supports: ["dec-1"] }, { id: "why-loose", supports: [] }] }, PROPOSAL_ID);
+    const kept = (extra: Record<string, unknown> = {}) => ({ approval_id: approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1], true), project_ids: [PROJECT_1], private: true as const,
+      signal_ids: ["dec-1"], ...extra });
+    const reasons = (group: Parameters<typeof approvalDecisionSubsetSnapshotV2>[1]) => approvalDecisionSubsetSnapshotV2(proposal, group).approved_payload.brief.rationales.map(reason => reason.id);
+    expect(reasons(kept())).toEqual(["why-1"]);
+    expect(reasons(kept({ unsupported_reasons: true }))).toEqual(["why-1", "why-loose"]);
+    expect(reasons({ approval_id: approvalRecordIdV2(PROPOSAL_ID, []), project_ids: [], signal_ids: ["dec-2"] })).toEqual(["why-loose"]);
+    // Only a private group is marked: the Only-me group takes them unmarked, and a shared project group never does.
+    for (const group of [kept({ unsupported_reasons: false }), { approval_id: approvalRecordIdV2(PROPOSAL_ID, [PROJECT_1]), project_ids: [PROJECT_1], unsupported_reasons: true, signal_ids: ["dec-1"] },
+      { approval_id: approvalRecordIdV2(PROPOSAL_ID, []), project_ids: [], unsupported_reasons: true, signal_ids: ["dec-2"] }]) {
+      expect(() => approvalDecisionSubsetSnapshotV2(proposal, group as never)).toThrow("Only a private approval decision group takes the reasons that support no item");
+    }
+  });
   it("freezes its result and does not alias the input", () => {
     const input = validInput();
     const result = validateApprovalDecisionRecordInputV2(input);

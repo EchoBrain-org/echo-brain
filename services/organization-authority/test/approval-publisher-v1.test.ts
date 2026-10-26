@@ -597,6 +597,16 @@ describe('approval publisher: kept private inside a project (ADR-0049)', () => {
     expect(atoms.every(atom => atom.policy_id === 'restricted-reviewer-person-v2' && atom.reviewer_principal_id === f.actor.principal_id
       && atom.audience_project_ids.length === 0 && canonicalJson(atom.association_project_ids as JsonValue) === canonicalJson(A as JsonValue))).toBe(true);
   });
+  it('keeps the reasons that support no item when everything kept is private, in the first private record alone', async () => {
+    const f = await approvalCoreFixture({ rationales: [{ id: 'why-loose', supports: [] }, { id: 'why-act', supports: ['act-1'] }] });
+    // The decision kept for the reviewer alone in A, both actions in B: nothing for Only me.
+    const routes = f.routes(id => id === 'decision-1' ? [f.projectA] : [f.projectB]).map(route => ({ ...route, private: true as const }));
+    expect(f.core.decide('desktop', f.approve({ routes }), () => f.session).kind).toBe('decided');
+    await f.core.processing.appendFinalizedApprovalsToV4(signal());
+    const briefs = f.records().map(record => record.body.event.approved_snapshot.approved_payload.brief);
+    expect(f.records().map(record => record.body.human_act_resolution_ref.approval_id)).toEqual([approvalRecordIdV2(f.approvalId, [f.projectA], true), approvalRecordIdV2(f.approvalId, [f.projectB], true)]);
+    expect(briefs.map(brief => brief.rationales.map((reason: { id: string }) => reason.id))).toEqual([['why-loose'], ['why-act']]);
+  });
 });
 
 describe('approval publisher: failures', () => {

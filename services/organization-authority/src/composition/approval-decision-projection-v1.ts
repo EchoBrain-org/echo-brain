@@ -67,14 +67,17 @@ export interface ApprovalDecisionGroupV1 {
   readonly project_ids: readonly string[];
   /** Kept for the reviewer alone inside those projects (ADR-0049); absent otherwise. */
   readonly private?: true;
+  /** On the first private group when the decision keeps nothing for Only me: it takes the reasons that support no item. */
+  readonly unsupported_reasons?: true;
   /** Its decisions then actions, in brief order. */
   readonly signal_ids: readonly string[];
 }
 /**
  * Pure: the kept routes grouped by whether they are kept private and their exact project set, ordered by each group's first
- * item in the routes' (brief) order. The same projects shared and kept private are two groups, and two records. Throws on a
- * route that says `private` other than as `true` beside a project: the Authority's tables do not check it, and read any other
- * way it would publish the item to the whole project.
+ * item in the routes' (brief) order. The same projects shared and kept private are two groups, and two records. The reasons
+ * that support no item go to the Only-me group; with none, the first private group takes them (`unsupported_reasons`), so
+ * they land in one record. Throws on a route that says `private` other than as `true` beside a project: the Authority's
+ * tables do not check it, and read any other way it would publish the item to the whole project.
  */
 export function approvalDecisionGroupsV1(request: { readonly approval_id: string; readonly routes: readonly ApprovalRouteV1[] }): readonly ApprovalDecisionGroupV1[] {
   const groups = new Map<string, { readonly project_ids: readonly string[]; readonly private: boolean; readonly signal_ids: string[] }>();
@@ -89,8 +92,11 @@ export function approvalDecisionGroupsV1(request: { readonly approval_id: string
     group.signal_ids.push(route.signal_id);
     groups.set(key, group);
   }
-  return Object.freeze([...groups.values()].map(group => Object.freeze({ approval_id: approvalRecordIdV2(request.approval_id, group.project_ids, group.private),
-    project_ids: group.project_ids, ...(group.private ? { private: true as const } : {}), signal_ids: Object.freeze(group.signal_ids) })));
+  const all = [...groups.values()];
+  const loose = all.some(group => group.project_ids.length === 0 && !group.private) ? undefined : all.find(group => group.private);
+  return Object.freeze(all.map(group => Object.freeze({ approval_id: approvalRecordIdV2(request.approval_id, group.project_ids, group.private),
+    project_ids: group.project_ids, ...(group.private ? { private: true as const } : {}), ...(group === loose ? { unsupported_reasons: true as const } : {}),
+    signal_ids: Object.freeze(group.signal_ids) })));
 }
 
 export interface ApprovalDecisionRecordSourceV1 {
@@ -217,7 +223,11 @@ function verifyApprovalDecisionWitnessV1(parsed: ReturnType<typeof validateAppro
   let proposal: ApprovedDecisionSnapshotV2, subset: ApprovedDecisionSnapshotV2;
   try {
     proposal = validateApprovedDecisionSnapshotV2(w.proposal_snapshot);
-    subset = approvalDecisionSubsetSnapshotV2(proposal, { approval_id: ref.approval_id, project_ids: projects, ...(kept ? { private: true as const } : {}), signal_ids: routed as string[] });
+    // The record's group as the publisher made it from the same routes, which also says whether it takes the reasons that
+    // support no item.
+    const group = approvalDecisionGroupsV1({ approval_id: d.approval_id, routes: d.routes as ApprovalRouteV1[] }).find(entry => entry.approval_id === ref.approval_id);
+    if (group === undefined || !same(group.signal_ids, routed) || !same(group.project_ids, projects) || (group.private === true) !== kept) refuse();
+    subset = approvalDecisionSubsetSnapshotV2(proposal, group);
   } catch { refuse(); }
   const brief = proposal.approved_payload.brief;
   const proposal_sha256 = canonicalSha256(proposal as unknown as JsonValue);
