@@ -375,13 +375,13 @@ test('Home sweeps by itself, and the Follow-ups page lists everything you sent o
   const { page } = app;
   const foot = page.getByTestId('needs-foot');
   // The sweep found the PRD page changed: it waits on Ari, who owns it.
-  await expect(foot).toContainText('4 waiting on others · ECHO checked just now', { timeout: 20_000 });
+  await expect(foot).toContainText('4 waiting on others · Only me · ECHO checked just now', { timeout: 20_000 });
   await expect(foot).not.toContainText('match');
   // Home asked for one sweep of Ari's own items and started it; a sweep makes no Home row of its own.
   expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
   expect(runOperations().indexOf('start')).toBeGreaterThan(runOperations().indexOf('sweep'));
   await expect(page.getByTestId('need-row')).toHaveCount(1);
-  // The footer's one link is named for what waits on others, and opens Follow-ups.
+  // The footer's first link is named for what waits on others, and opens Follow-ups.
   await foot.getByRole('button', { name: '4 waiting on others', exact: true }).click();
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Follow-ups', exact: true })).toBeVisible();
