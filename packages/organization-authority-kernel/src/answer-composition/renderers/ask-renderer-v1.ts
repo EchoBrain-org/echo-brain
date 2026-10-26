@@ -1,8 +1,6 @@
 import { AuthorityOperationError } from "../../domain/errors.js";
-import { canonicalJsonBytes } from "@echo-brain/federation-protocol";
 import {
   isPersonWorkspaceCitationV1,
-  PERSON_ANSWER_RESPONSE_MAX_BYTES_V4,
   personAnswerCitationKeyV7,
   personAnswerCitationKeyV8,
   validatePersonAnswerLayoutV1,
@@ -30,7 +28,7 @@ import {
   type Answer,
   type AnswerSentence,
 } from "../agentic-ask-v1-model-protocol.js";
-import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
+import { agenticAskAnswerSha256V1, agenticAskResponseFitsV1, compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
 import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_WRITER_LISTS_MAX_V1,
@@ -154,6 +152,11 @@ export interface CreateAskRendererV1Options {
 }
 
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }
+
+/** Statements or records as the response carries them: each its text, citation indexes and privacy, frozen. */
+function released(statements: readonly { readonly text: string; readonly citation_indexes: readonly number[]; readonly private: boolean }[]) {
+  return Object.freeze(statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private })));
+}
 
 /**
  * Items research checked (addition 4, ADR-0041): read in full, or opened by an
@@ -460,14 +463,19 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           if (sentence.form === "row" && !noted) return { kind: "row", ...section, columns: reply!.tables!.find(table => table.section === sentence.section)!.columns, cells: sentence.cells! };
           return { kind: sentence.form === undefined ? "text" : sentence.form === "row" ? "bullet" : sentence.form, ...section };
         };
-        const writerSentences = sentences.flatMap(sentence => {
+        /** A writer's or `since` sentence as code keeps it: on the text the writer read (W1), then the rows it may carry, noted (W5); or none. */
+        const drafted = (sentence: Pick<AnswerSentence, "text" | "evidence">) => {
           const read = sentence.evidence.filter(short => textGiven.has(short));
-          if (read.length === 0) { correct("writer_uncited_sentence_dropped"); return []; }
+          if (read.length === 0) { correct("writer_uncited_sentence_dropped"); return undefined; }
           // An id that is no text, row or list the writer saw cites nothing.
           const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
           if (unknown > 0) correct("writer_unknown_id_dropped", unknown);
           const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
-          return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, shape: shapeOf(sentence, notes.length > 0) }];
+          return { text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, noted: notes.length > 0 };
+        };
+        const writerSentences = sentences.flatMap(sentence => {
+          const kept = drafted(sentence);
+          return kept === undefined ? [] : [{ text: kept.text, shorts: kept.shorts, read: kept.read, shape: shapeOf(sentence, kept.noted) }];
         });
         // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
         // What fits is decided in that order whatever the layout, so a long lead never crowds out a stated list (W3). A laid-out
@@ -555,16 +563,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const sinceOf = (given: NonNullable<Answer["since"]>): Statement[] | undefined => {
           const keys = new Set<string>();
           const drafts = given.flatMap(sentence => {
-            const read = sentence.evidence.filter(short => textGiven.has(short));
-            if (read.length === 0) { correct("writer_uncited_sentence_dropped"); return []; }
-            const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
-            if (unknown > 0) correct("writer_unknown_id_dropped", unknown);
-            const shorts = [...read, ...sentence.evidence.flatMap(rowsOf)];
-            const key = JSON.stringify([sentence.text, [...new Set(shorts.map(keyOf))].sort()]);
+            const kept = drafted(sentence);
+            if (kept === undefined) return [];
+            const key = JSON.stringify([sentence.text, [...new Set(kept.shorts.map(keyOf))].sort()]);
             if (keys.has(key)) { correct("writer_repeat_dropped"); return []; }
             keys.add(key);
-            const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
-            return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts }];
+            return [kept];
           });
           if (given.length > 0 && drafts.length === 0) return undefined;
           const fresh = new Set(drafts.flatMap(value => value.shorts.map(keyOf)).filter(key => !usedKeys.has(key)));
@@ -576,29 +580,29 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           schema_version: responseVersion, kind: responseVersion === 8 ? "echo-clean-person-answer-v8" : responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
           parts: Object.freeze([Object.freeze({
             question, status: draft.status,
-            statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
+            statements: released(draft.statements),
             ...(draft.gap === undefined ? {} : { gap: draft.gap }),
-            ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
+            ...(draft.records === undefined ? {} : { records: released(draft.records) }),
             ...(layout === undefined ? {} : { layout }),
           })]),
           citations: Object.freeze(anyEvidence ? used.map(entry => (responseVersion === 8 ? citationOfAgenticEvidenceItemV8 : citationOfAgenticEvidenceItemV1)(entry.item, options.context.time_zone ?? 'UTC')) : []),
           ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
           // Only an answer to a request that carried its previous turn names its question and says what is different since (ADR-0047).
           ...(options.answers === undefined || responseVersion !== 8 ? {} : { question: options.answers }),
-          ...(since === undefined ? {} : { since: Object.freeze({ statements: Object.freeze(since.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }) }),
+          ...(since === undefined ? {} : { since: Object.freeze({ statements: released(since) }) }),
         });
         return { result, used, laid_out: layout !== undefined };
       };
-      const withinBound = (value: unknown) => canonicalJsonBytes(value).byteLength <= PERSON_ANSWER_RESPONSE_MAX_BYTES_V4;
+      /** A laid-out response as it may be released: with its layout, within its byte bound. Each is measured once, and only then. */
+      const releasable = (responded: ReturnType<typeof respond>) => responded.laid_out && agenticAskResponseFitsV1(responded.result) ? responded : undefined;
       const laidOutResponse = laidOut ? respond(answer, true, true, true) : undefined;
-      // An Ask again's laid-out answer that cannot fit with its `since` keeps its layout without it (ADR-0047).
-      const laidOutLean = laidOutResponse?.laid_out === true && !withinBound(laidOutResponse.result) && "since" in laidOutResponse.result ? respond(answer, true, false, false) : undefined;
-      // A laid-out answer is released only with its layout and within its byte bound. Otherwise the same claims are released
-      // without layout, in the order and numbering an answer without layout has (ADR-0045): a row is still its cells' claim,
-      // and what cannot fit the bound is dropped from the end and said to be missing, an Ask again's `since` first.
-      const { result, used } = laidOutResponse?.laid_out === true && withinBound(laidOutResponse.result) ? laidOutResponse
-        : laidOutLean?.laid_out === true && withinBound(laidOutLean.result) ? laidOutLean
-          : respond(answer, false, laidOutResponse === undefined, true);
+      // A laid-out answer is released only with its layout and within its byte bound; an Ask again's that cannot fit with its
+      // `since` keeps its layout without it (ADR-0047). Otherwise the same claims are released without layout, in the order
+      // and numbering an answer without layout has (ADR-0045): a row is still its cells' claim, and what cannot fit the bound
+      // is dropped from the end and said to be missing, an Ask again's `since` first.
+      const laidOutReleased = laidOutResponse === undefined ? undefined : releasable(laidOutResponse)
+        ?? (laidOutResponse.laid_out && "since" in laidOutResponse.result ? releasable(respond(answer, true, false, false)) : undefined);
+      const { result, used } = laidOutReleased ?? respond(answer, false, laidOutResponse === undefined, true);
       const validated: AskResponse = responseVersion === 8 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV8) : responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
       return Object.freeze({
         result: Object.freeze({ response: validated, writer_evidence: writerEvidence }),
