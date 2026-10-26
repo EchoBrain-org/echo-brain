@@ -380,6 +380,77 @@ describe('Ask on the timeline', () => {
     expect(store.answerGroups()).toHaveLength(2);
   });
 
+  it.each([1, 2])('keeps the selected source when a pending check removes a preceding group (%i)', async selected => {
+    const one = turn('One?', DAY, answerOf('One?', [ticket('A', '1'), page('2'), page('3')], [['Three sources.', [0, 1, 2]]]));
+    seed(one);
+    const checked = held.hold('ask.check');
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    store.chooseSource(selected, '0.0', one.id);
+    expect(store.paneTarget()?.sources).toEqual([one.answer.sources[selected]]);
+    checked(ok({ items: [{ state: 'unreadable' }, { state: 'same' }, { state: 'same' }] }));
+    await flush();
+    expect(store.paneTarget()).toMatchObject({ number: selected - 1, sources: [one.answer.sources[selected]] });
+    expect(store.getState().sources).toMatchObject({ open: selected - 1, focus: '0.0' });
+  });
+
+  it('closes the pane when the pending check removes its selected source', async () => {
+    const one = turn('One?', DAY, answerOf('One?', [ticket('A', '1'), page('2'), page('3')], [['Three sources.', [0, 1, 2]]]));
+    seed(one);
+    const checked = held.hold('ask.check');
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    store.chooseSource(1, '0.0', one.id);
+    checked(ok({ items: [{ state: 'same' }, { state: 'unreadable' }, { state: 'same' }] }));
+    await flush();
+    expect(store.paneTarget()).toBeNull();
+    expect(store.getState().sources).toMatchObject({ open: null, focus: null, evidence: null });
+  });
+
+  it('keeps the selected source when a check restores a preceding group', async () => {
+    const one = turn('One?', DAY, status(), { unreadable: [0] });
+    seed(one);
+    const checked = held.hold('ask.check');
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    store.chooseSource(0, null, one.id);
+    expect(store.paneTarget()?.sources).toEqual([one.answer.sources[1]]);
+    checked(ok({ items: [{ state: 'same' }, { state: 'same' }, { state: 'same' }] }));
+    await flush();
+    expect(store.paneTarget()).toMatchObject({ number: 1, sources: [one.answer.sources[1]] });
+  });
+
+  it.each(['pending', 'settled', 'removed'])('keeps or discards original evidence with its selected source (%s)', async reading => {
+    const ref = {
+      source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha('6'),
+    } as const;
+    const original: AnswerSource = { kind: 'original', label: 'Launch notes', ref,
+      cited: { kind: 'note', label: 'Launch notes', visibility: 'only_me', citation: { kind: 'source_revision', ...ref } } };
+    const one = turn('One?', DAY, answerOf('One?', [ticket('A', '1'), original, page('3')], [['Three sources.', [0, 1, 2]]]));
+    seed(one);
+    const checked = held.hold('ask.check');
+    const evidence = held.hold('ask.source');
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    store.chooseSource(1, null, one.id);
+    if (reading === 'settled') { evidence(ok({ label: 'Launch notes', text: 'We agreed to ship.' })); await flush(); }
+    checked(ok({ items: [{ state: 'unreadable' }, { state: reading === 'removed' ? 'unreadable' : 'same' }, { state: 'same' }] }));
+    await flush();
+    if (reading !== 'settled') { evidence(ok({ label: 'Launch notes', text: 'We agreed to ship.' })); await flush(); }
+    if (reading === 'removed') {
+      expect(store.paneTarget()).toBeNull();
+      expect(store.getState().sources).toMatchObject({ open: null, evidence: null });
+      return;
+    }
+    expect(store.paneTarget()).toMatchObject({ number: 0, sources: [original] });
+    expect(store.getState().sources?.evidence).toMatchObject({ group: 0, reads: { 1: { loading: false, value: { text: 'We agreed to ship.' } } } });
+    const { SourcePane } = await import('../../src/renderer/screens/ask.js');
+    const pane = render(SourcePane({ state: store.getState() }));
+    expect(text(byTestId(pane, 'evidence-text'))).toBe('We agreed to ship.');
+    expect(text(pane)).not.toContain('Loading verified evidence');
+    expect(calls('ask.source')).toHaveLength(1);
+  });
+
   it('says nothing changed, and with every sentence left out shows only Ask again', async () => {
     const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
     seed(one, two);

@@ -3533,6 +3533,24 @@ function freshChecksOf(turn: TimelineTurn, current: State = state): TurnChecks |
 }
 
 /**
+ * Keep a timeline change and its pane selection together. Source groups can
+ * move when a check hides or restores a source; the selected group's original
+ * citation stays its identity, while its displayed number and evidence move
+ * with it. If that group goes, close the pane and discard its pending reads.
+ */
+function setTimeline(timeline: State['timeline']): void {
+  const sources = state.sources;
+  const selected = paneTarget()?.group?.indexes[0];
+  if (!sources || sources.open === null || selected === undefined) { set({ timeline }); return; }
+  const next = { ...state, timeline };
+  const open = answerGroups(next).findIndex(group => group.indexes.includes(selected));
+  set({ timeline, sources: {
+    ...sources, open: open < 0 ? null : open, focus: open < 0 ? null : sources.focus,
+    evidence: open < 0 || sources.evidence === null ? null : { ...sources.evidence, group: open },
+  } });
+}
+
+/**
  * What is known of a turn's sources (C5): what a check said in the last five
  * minutes, and the sources a check found unreadable, which stay so until one
  * finds them readable again however long ago it was.
@@ -3574,14 +3592,14 @@ async function loadTimeline(): Promise<void> {
   const read = result.value.turns;
   const kept = state.timeline.turns.filter(turn => !read.some(other => other.id === turn.id));
   forgetChecks();
-  set({ timeline: { turns: [...read, ...kept].slice(-MAX_TIMELINE_TURNS), checks: {} } });
+  setTimeline({ turns: [...read, ...kept].slice(-MAX_TIMELINE_TURNS), checks: {} });
 }
 
 /** Nothing of the account's timeline stays on screen or in memory: signed out, or another account. Its file is the host's. */
 function forgetTimeline(): void {
   timelineSeq += 1;
   forgetChecks();
-  if (state.timeline.turns.length > 0 || Object.keys(state.timeline.checks).length > 0) set({ timeline: { turns: [], checks: {} } });
+  if (state.timeline.turns.length > 0 || Object.keys(state.timeline.checks).length > 0) setTimeline({ turns: [], checks: {} });
 }
 
 /** No check is good any more, none on its way counts, and none is waited on to go stale: the next Ask checks afresh. */
@@ -3601,7 +3619,7 @@ function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
   if (checksExpire) { clearTimeout(checksExpire); checksExpire = null; }
   const now = Date.now();
   const kept = freshChecks(checks, now);
-  set({ timeline: { ...state.timeline, checks: kept } });
+  setTimeline({ ...state.timeline, checks: kept });
   const next = Math.min(...Object.values(kept).map(check => check.at + CHECK_FRESH_MS));
   if (Number.isFinite(next)) checksExpire = setTimeout(() => { checksExpire = null; keepChecks(state.timeline.checks); }, next - now);
 }
@@ -3616,7 +3634,7 @@ function keepTurn(turn: TimelineTurn): void {
   if (!account) return;
   const turns = state.timeline.turns;
   const kept = turns.some(other => other.id === turn.id) ? turns.map(other => (other.id === turn.id ? turn : other)) : [...turns, turn];
-  set({ timeline: { ...state.timeline, turns: kept.slice(-MAX_TIMELINE_TURNS) } });
+  setTimeline({ ...state.timeline, turns: kept.slice(-MAX_TIMELINE_TURNS) });
   void rpc('timeline.put', { expect: account, turn });
 }
 
