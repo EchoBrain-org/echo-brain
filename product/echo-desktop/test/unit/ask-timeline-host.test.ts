@@ -128,6 +128,33 @@ describe('the timeline file (C5)', () => {
     deleteTimeline(person, ARI);
   });
 
+  it('deletes from a folder open to others all the same, but never through a link or from a folder that is not yours to use', () => {
+    putTimeline(person, ARI, turn(), NOW);
+    putTimeline(person, MINA, turn(), NOW);
+    chmodSync(folder(), 0o755);
+    // Reads stay strict; deletion does not wait on the folder's mode.
+    expect(readTimeline(person, MINA)).toEqual([]);
+    deleteOtherTimelines(person, MINA);
+    expect(existsSync(timelinePath(person, ARI))).toBe(false);
+    expect(existsSync(timelinePath(person, MINA))).toBe(true);
+    deleteTimeline(person, MINA);
+    expect(readdirSync(folder())).toEqual([]);
+    // A folder that is a link: nothing it points at goes.
+    rmSync(folder(), { recursive: true });
+    const elsewhere = mkdtempSync(join(tmpdir(), 'echo-elsewhere-'));
+    try {
+      const name = timelinePath(person, ARI).split('/').at(-1)!;
+      writeFileSync(join(elsewhere, name), 'kept', { mode: 0o600 });
+      symlinkSync(elsewhere, folder());
+      deleteTimeline(person, ARI);
+      deleteOtherTimelines(person, MINA);
+      expect(readdirSync(elsewhere)).toEqual([name]);
+    } finally {
+      rmSync(folder(), { force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   it('takes only a turn as a put writes it: a page that sends anything else is refused', () => {
     const good = turn(0, { since: [], again_of: randomUUID(), markers: { 0: sha('b') } });
     expect(timelineTurn(good)).toEqual(good);

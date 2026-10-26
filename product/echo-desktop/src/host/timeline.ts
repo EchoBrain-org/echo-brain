@@ -30,18 +30,20 @@ export function timelinePath(personDirectory: string, account: Expect): string {
 
 /**
  * The timeline's folder, owner-only: made so when it is missing, and made so
- * again before a write (`make`). One that is a link, not a folder, or not
- * yours is never used, and one open to others is never read.
+ * again before a write (`write`). One that is a link, not a folder, or not
+ * yours is never used. One open to others is never read from (`read`), but a
+ * timeline in it still goes when it should (`delete`): its mode never keeps
+ * one that our own sign-out or an account change removes.
  */
-function folder(personDirectory: string, make: boolean): string | null {
+function folder(personDirectory: string, use: 'read' | 'write' | 'delete'): string | null {
   const path = join(personDirectory, TIMELINE_FOLDER);
   try {
-    if (make) mkdirSync(path, { recursive: true, mode: 0o700 });
+    if (use === 'write') mkdirSync(path, { recursive: true, mode: 0o700 });
     const found = lstatSync(path);
     const uid = process.getuid?.();
     if (!found.isDirectory() || found.isSymbolicLink() || (uid !== undefined && found.uid !== uid)) return null;
-    if ((found.mode & 0o777) !== 0o700) {
-      if (!make) return null;
+    if ((found.mode & 0o777) !== 0o700 && use !== 'delete') {
+      if (use === 'read') return null;
       chmodSync(path, 0o700);
     }
     return path;
@@ -52,7 +54,7 @@ function folder(personDirectory: string, make: boolean): string | null {
 
 /** The account's turns, oldest first. A missing, unreadable or malformed file is empty. */
 export function readTimeline(personDirectory: string, account: Expect): TimelineTurn[] {
-  if (folder(personDirectory, false) === null) return [];
+  if (folder(personDirectory, 'read') === null) return [];
   const path = timelinePath(personDirectory, account);
   try {
     const found = lstatSync(path);
@@ -78,7 +80,7 @@ export function pruneTurns(turns: readonly TimelineTurn[], now: number): Timelin
 
 /** Keeps `turn` in the account's file: in place of the turn with its id, or at the end; then prunes, and writes the file whole. */
 export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn, now: number): void {
-  const directory = folder(personDirectory, true);
+  const directory = folder(personDirectory, 'write');
   if (directory === null) throw new Error('The Ask timeline folder is not private');
   const turns = readTimeline(personDirectory, account);
   const at = turns.findIndex(kept => kept.id === turn.id);
@@ -104,13 +106,13 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
 
 /** Our own sign-out: the account's file goes. */
 export function deleteTimeline(personDirectory: string, account: Expect): void {
-  if (folder(personDirectory, false) === null) return;
+  if (folder(personDirectory, 'delete') === null) return;
   rmSync(timelinePath(personDirectory, account), { force: true });
 }
 
 /** An account change: every other account's file goes, and anything a put left half done. */
 export function deleteOtherTimelines(personDirectory: string, account: Expect): void {
-  const directory = folder(personDirectory, false);
+  const directory = folder(personDirectory, 'delete');
   if (directory === null) return;
   const own = timelinePath(personDirectory, account);
   for (const name of readdirSync(directory)) {
