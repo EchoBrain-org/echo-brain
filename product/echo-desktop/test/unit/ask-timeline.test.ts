@@ -7,13 +7,15 @@
 // Authority refuses it; and the sidebar's dots with a project's New rows.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
-import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
+import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
-  allOmitted, answeredNow, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
+  allOmitted, answeredNow, askedAgain, askedSuggestions, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
 } from '../../src/renderer/timeline.js';
+import { suggestedQuestions } from '../../src/renderer/bar.js';
+import { askedWhen } from '../../src/renderer/format.js';
 import {
-  ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, type Node,
+  ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, latestTurn, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, type Node,
 } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -136,9 +138,11 @@ describe('the timeline\'s rules', () => {
   it('suggests the questions you asked in a scope, newest first, each once', () => {
     const inApollo = { ...status(), scope: { kind: 'project' as const, project_id: apollo.project_id } };
     const turns = [turn('When do we ship?', 3 * DAY, status()), turn('Who owns it?', 2 * DAY, inApollo, { scope: inApollo.scope }), turn('when do we ship?', DAY, status())];
-    expect(askedSuggestions(turns, { kind: 'global' })).toEqual([{ question: 'when do we ship?', turn: turns[2]!.id }]);
-    expect(askedSuggestions(turns, inApollo.scope)).toEqual([{ question: 'Who owns it?', turn: turns[1]!.id }]);
-    expect(askedSuggestions(turns, { kind: 'mine' })).toEqual([]);
+    // As the empty bar offers them: each once, the newest.
+    const asked = (scope: AskScope) => suggestedQuestions(askedSuggestions(turns, scope), [], 'What did we decide this week?').filter(each => each.turn !== undefined);
+    expect(asked({ kind: 'global' })).toEqual([{ question: 'when do we ship?', turn: turns[2]!.id }]);
+    expect(asked(inApollo.scope)).toEqual([{ question: 'Who owns it?', turn: turns[1]!.id }]);
+    expect(asked({ kind: 'mine' })).toEqual([]);
   });
 });
 
@@ -175,10 +179,10 @@ describe('what a check asks, and what it says of a turn', () => {
     // Unreadable wins: a sentence citing both is left out.
     expect(markOf([1, 2], states)).toBe('omitted');
     expect(markOf([1], undefined)).toBeNull();
-    expect(turnChanged(one, states, [one])).toBe(true);
-    expect(turnChanged(one, { 0: 'same', 1: 'unknown', 2: 'same' }, [one])).toBe(false);
+    expect(turnChanged(one, states, askedAgain([one]))).toBe(true);
+    expect(turnChanged(one, { 0: 'same', 1: 'unknown', 2: 'same' }, askedAgain([one]))).toBe(false);
     // Asked again later: no tag.
-    expect(turnChanged(one, states, [one, turn('One?', HOUR, status(), { again_of: one.id })])).toBe(false);
+    expect(turnChanged(one, states, askedAgain([one, turn('One?', HOUR, status(), { again_of: one.id })]))).toBe(false);
     expect(allOmitted(one, { 0: 'unreadable', 1: 'unreadable', 2: 'unreadable' })).toBe(true);
     expect(allOmitted(one, states)).toBe(false);
   });
@@ -296,7 +300,7 @@ describe('Ask on the timeline', () => {
     await store.ask('What else?');
     await store.ask('who owns it?');
     await flush();
-    const latest = store.latestTurn()!;
+    const latest = latestTurn(store)!;
     expect(latest).toMatchObject({ text: 'who owns it?', question: 'Who owns THERM-482?' });
     const thread = await view();
     expect(byTestId(thread(store), 'question').map(text).at(-1)).toBe('who owns it?');
@@ -555,7 +559,7 @@ describe('Ask on the timeline', () => {
     await store.ask('What is open?');
     await flush();
     const [baseline] = calls('ask.check');
-    expect(baseline!.items).toEqual([{ asked_at: store.latestTurn()!.asked_at, citation: ticket('THERM-482', '20482').cited!.citation }]);
+    expect(baseline!.items).toEqual([{ asked_at: latestTurn(store)!.asked_at, citation: ticket('THERM-482', '20482').cited!.citation }]);
     expect(kept()[0]!.markers).toEqual({ 0: sha('base') });
   });
 });
@@ -696,7 +700,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await flush();
     expect(calls('ask.run')[2]).toMatchObject({ question: 'Who owns THERM-482?', previous });
     expect(store.getState().ask?.clarify).toBeNull();
-    expect(store.latestTurn()).toMatchObject({ text: 'Who owns THERM-482?', question: 'Who owns THERM-482?' });
+    expect(latestTurn(store)).toMatchObject({ text: 'Who owns THERM-482?', question: 'Who owns THERM-482?' });
   });
 
   it('asks again once without the earlier turn when the Authority refuses it, and from then on sends none', async () => {
@@ -710,9 +714,9 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await flush();
     expect(calls('ask.run').slice(1).map(call => 'previous' in call)).toEqual([true, false]);
     expect(store.getState().ask?.failed).toBeNull();
-    expect(store.latestTurn()?.text).toBe('who owns it?');
+    expect(latestTurn(store)?.text).toBe('who owns it?');
     await store.ask('and then?');
-    store.askAgain(store.latestTurn()!.id);
+    store.askAgain(latestTurn(store)!.id);
     await flush();
     expect(calls('ask.run').slice(3).map(call => 'previous' in call)).toEqual([false, false]);
   });
@@ -733,7 +737,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(store.getState().ask?.failed?.failure.code).toBe('invalid_request');
     await store.ask('who owns it?');
     expect(calls('ask.run').slice(1).map(call => 'previous' in call)).toEqual([true, false, true, false]);
-    expect(store.latestTurn()?.text).toBe('who owns it?');
+    expect(latestTurn(store)?.text).toBe('who owns it?');
     // That one was answered without it: none from now on.
     await store.ask('and then?');
     expect(calls('ask.run').slice(5).map(call => 'previous' in call)).toEqual([false]);
@@ -768,7 +772,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await store.ask('and who leads it?');
     await flush();
     expect(calls('ask.run').slice(1).map(call => 'previous' in call)).toEqual([true, false, true, false]);
-    expect(store.latestTurn()?.text).toBe('and who leads it?');
+    expect(latestTurn(store)?.text).toBe('and who leads it?');
     // That one answered without it: the window sends none from now on.
     await store.ask('and then?');
     expect(calls('ask.run').slice(5).map(call => 'previous' in call)).toEqual([false]);
@@ -796,7 +800,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await flush();
     expect(calls('ask.run')[0]).toMatchObject({ question: 'What is open on THERM?', scope: { kind: 'global' },
       previous: { purpose: 'ask_again', question: 'What is open on THERM?', asked_at: one.asked_at } });
-    expect(store.latestTurn()).toMatchObject({ again_of: one.id, since: [{ text: 'THERM-482 moved to In Progress.' }] });
+    expect(latestTurn(store)).toMatchObject({ again_of: one.id, since: [{ text: 'THERM-482 moved to In Progress.' }] });
     expect(store.getState().ask?.opened).toBeNull();
     const shown = thread(store);
     expect(byTestId(shown, 'changed-tag')).toEqual([]);

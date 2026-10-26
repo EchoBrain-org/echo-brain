@@ -6,10 +6,10 @@ import type {
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerSentences, documentName, dueColumn, externalSourceProvider, lateForYou, passageBlocks, rowId, rowStatement, statementGroups, tableDay, yoursIn,
-  type AnswerTable, type Inline, type SourceGroup,
+  answerSentences, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownBlocks, statementGroups, tableDay,
+  yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
 } from '../answer.js';
-import { identity, initial, marked, meetingTime, snippet, when } from '../format.js';
+import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { sourceKey } from '../openers.js';
@@ -21,11 +21,11 @@ import {
   activeTurn, askAgain, askEverywhere, barSuggestions, cancelAsk, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleSourceList, toggleTurn, turnOf, widenScope, UNTITLED,
-  type AskClarify, type PaneTarget, type Read, type RecordSectionKey, type ShownTurn, type State,
+  type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
-  allOmitted, askedToday, askedWhen, markOf, shownInFull, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
+  allOmitted, askedAgain, markOf, shownInFull, showsOf, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { Caret, Check, Chevron, Close, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticks, Up } from './icons.js';
 
@@ -180,18 +180,20 @@ export function Bar({ state }: { state: State }) {
 
 /**
  * One turn's answer as the page shows it (ADR-0047): its sources, numbered as
- * its sentences cite them, and what the last check found of them, when one
- * applies (never to a turn asked in this Ask).
+ * its sentences cite them, what the last check found of them, when one
+ * applies (never to a turn asked in this Ask), and so which sentences and rows
+ * it shows.
  */
 interface TurnView {
   readonly id: string;
   readonly answer: Answer;
   readonly groups: readonly SourceGroup[];
   readonly checks: TurnChecks | undefined;
+  readonly shows: Shows;
 }
 
 function turnView(turn: TimelineTurn, checks: TurnChecks | undefined): TurnView {
-  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer.sources, checks), checks };
+  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer.sources, checks), checks, shows: showsOf(checks) };
 }
 
 /** A source's first citation stands for it: its kind, its label, its record or its link. */
@@ -234,9 +236,9 @@ function markIn(view: TurnView, citations: readonly number[]): Mark {
   return markOf(citations, view.checks);
 }
 
-/** A sentence's classes: lit by its number, and changed since it was said. */
+/** A sentence's or row's classes: lit by its number, and changed since it was said. */
 function markClass(base: string, on: boolean, mark: Mark): string {
-  return `${base}${on ? ' on' : ''}${mark === 'changed' ? ' changed' : ''}`;
+  return [base, on ? 'on' : '', mark === 'changed' ? 'changed' : ''].filter(Boolean).join(' ');
 }
 
 /** A sentence and the numbers of its sources. The one whose number opened the pane is lit. One a check left out is not shown. */
@@ -276,7 +278,7 @@ function Claim({ state, view, statement, id, mark }: { state: State; view: TurnV
 
 /** The places of a block's sentences a check leaves to show. */
 function shownPlaces(view: TurnView, part: AnswerPart, places: readonly number[]): number[] {
-  return places.filter(place => markIn(view, part.statements[place]!.citation_indexes) !== 'omitted');
+  return places.filter(place => view.shows(part.statements[place]!.citation_indexes));
 }
 
 /** The sentences of a lead or a paragraph, one after another, each with its own numbers. */
@@ -321,8 +323,7 @@ function Table({ state, view, index, block, place, opens, label }: {
             const id = rowId(index, place, at);
             const late = lateForYou(block.columns, row.cells, me);
             return (
-              <tr key={at} class={[lit(state, view, id) ? 'on' : '', mark === 'changed' ? 'changed' : ''].filter(Boolean).join(' ') || undefined}
-                data-testid="answer-row" data-mark={mark ?? undefined}>
+              <tr key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="answer-row" data-mark={mark ?? undefined}>
                 {row.cells.map((cell, column) => column === 0
                   ? <td key={column}><span class="first">{cell}<Markers state={state} view={view} statement={rowStatement(row, view.answer.sources)} id={id} /></span></td>
                   : <Cell key={column} cell={cell} late={late && column === due} you={yoursIn(block.columns[column]!, cell, me)} />)}
@@ -333,13 +334,6 @@ function Table({ state, view, index, block, place, opens, label }: {
       </table>
     </div>
   </>;
-}
-
-/** Whether a laid-out block shows anything once a check leaves out what you can no longer read. */
-function blockShows(view: TurnView, part: AnswerPart, block: AnswerBlock): boolean {
-  if (block.kind === 'heading') return true;
-  if (block.kind === 'table') return block.rows.some(row => markIn(view, row.citation_indexes) !== 'omitted');
-  return shownPlaces(view, part, block.statements).length > 0;
 }
 
 /**
@@ -354,12 +348,11 @@ function LaidOut({ state, view, part, index, layout, opening }: {
 }) {
   // A table without a caption is named by the heading above it.
   let heading = 'Table';
-  const shows = layout.map((block, place) => blockShows(view, part, block) && (block.kind !== 'heading' || (layout[place + 1] !== undefined && layout[place + 1]!.kind !== 'heading'
-    && blockShows(view, part, layout[place + 1]!))));
+  const showing = shownBlocks(part, layout, view.shows);
   return (
     <div class="answer-layout">
       {layout.map((block, place) => {
-        if (!shows[place]) return null;
+        if (!showing[place]) return null;
         if (block.kind === 'heading') { heading = block.text; return <h3 key={place} class="answer-heading">{block.text}</h3>; }
         if (block.kind === 'lead') {
           return <p key={place} class="answer-lead selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
@@ -374,8 +367,7 @@ function LaidOut({ state, view, part, index, layout, opening }: {
                 const id = `${index}.${at}`;
                 const statement = part.statements[at]!;
                 const mark = markIn(view, statement.citation_indexes);
-                return <li key={at} class={[lit(state, view, id) ? 'on' : '', mark === 'changed' ? 'changed' : ''].filter(Boolean).join(' ') || undefined}
-                  data-testid="statement" data-mark={mark ?? undefined}>
+                return <li key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="statement" data-mark={mark ?? undefined}>
                   <span><span data-testid="statement-text">{statement.text}</span><Markers state={state} view={view} statement={statement} id={id} /></span>
                 </li>;
               })}
@@ -388,11 +380,6 @@ function LaidOut({ state, view, part, index, layout, opening }: {
   );
 }
 
-/** Whether a part shows anything once a check leaves out what you can no longer read. */
-function partShows(view: TurnView, part: AnswerPart): boolean {
-  return [...part.statements, ...(part.records ?? [])].some(statement => markIn(view, statement.citation_indexes) !== 'omitted');
-}
-
 /**
  * The answer: each part, laid out when it carries a layout and a paragraph
  * per sentence when not. A part with nothing to show is left out, and so is a
@@ -403,8 +390,8 @@ function partShows(view: TurnView, part: AnswerPart): boolean {
  */
 function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
   const answer = view.answer;
-  const parts = answer.parts.map((part, index) => ({ part, index })).filter(({ part }) => partShows(view, part));
-  const said = parts.length > 0 || (answer.direct !== undefined && markIn(view, answer.direct.citation_indexes) !== 'omitted');
+  const parts = answer.parts.map((part, index) => ({ part, index })).filter(({ part }) => partShows(part, view.shows));
+  const said = parts.length > 0 || (answer.direct !== undefined && view.shows(answer.direct.citation_indexes));
   return (
     <div class={`agentic-answer${dimmed ? ' dimmed' : ''}`} data-testid="answer">
       {answer.direct && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
@@ -430,7 +417,7 @@ function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: S
  */
 function SinceList({ state, view, since, at }: { state: State; view: TurnView; since: readonly AnswerStatement[]; at: string | null }) {
   const when = at === null ? 'then' : askedWhen(at);
-  const shown = since.map((statement, place) => ({ statement, place })).filter(({ statement }) => markIn(view, statement.citation_indexes) !== 'omitted');
+  const shown = since.map((statement, place) => ({ statement, place })).filter(({ statement }) => view.shows(statement.citation_indexes));
   if (since.length === 0) return <p class="since-note" data-testid="since-nothing">Nothing changed since {when}</p>;
   if (shown.length === 0) return null;
   return (
@@ -572,18 +559,18 @@ function againAt(state: State, turn: TimelineTurn): string | null {
 
 /**
  * A turn in full: the latest, or one asked since Ask was opened. The question
- * as the asker typed it, what it looked through when this Ask asked it, Ask
- * again's "since", the answer, the project's own line when nothing in it
- * matched, the sources, and Copy answer. One asked before this Ask also says
- * what changed since, with Ask again (`current` false).
+ * as the asker typed it, what it looked through when this Ask asked it
+ * (`took`), Ask again's "since", the answer, the project's own line when
+ * nothing in it matched, the sources, and Copy answer. One asked before this
+ * Ask also says what changed since, with Ask again (`current` false).
  */
-function FullTurn({ state, turn, current, line }: { state: State; turn: ShownTurn; current: boolean; line: Line }) {
+function FullTurn({ state, turn, took, current, line }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; line: Line }) {
   const view = turnView(turn, shownChecks(turn, state));
   const omitted = allOmitted(turn, view.checks);
   return (
     <div class="turn" data-testid="turn" data-turn={turn.id}>
       <div class="question selectable" data-testid="question">{turn.text}</div>
-      {turn.receipt && <Receipt state={state} receipt={turn.receipt} took={turn.took ?? 0} line={line} />}
+      {took && <Receipt state={state} receipt={took.receipt} took={took.took} line={line} />}
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {!omitted && <AgenticAnswer state={state} view={view} empty={!foundNothingInProject(turn)} />}
       {foundNothingInProject(turn) && (
@@ -606,15 +593,12 @@ function FullTurn({ state, turn, current, line }: { state: State; turn: ShownTur
 /**
  * An earlier turn, folded to one line (ADR-0047): its project's square (none
  * for all context or Mine), its full question, "Changed" when a source it
- * cited changed and no later turn asked it again, and when it was asked. The
- * line opens the answer as it was, dimmed: what changed lit, what you can no
- * longer read left out, then Ask again and what the check said.
+ * cited changed and no later turn asked it again (`again`, askedAgain's), and
+ * when it was asked. The line opens the answer as it was (OpenedTurn).
  */
-function FoldedTurn({ state, turn, opened }: { state: State; turn: TimelineTurn; opened: boolean }) {
+function FoldedTurn({ state, turn, opened, again }: { state: State; turn: TimelineTurn; opened: boolean; again: ReadonlySet<string> }) {
   const checks = checksOf(turn, state);
-  const changed = turnChanged(turn, checks, state.timeline.turns);
-  const view = turnView(turn, checks);
-  const omitted = allOmitted(turn, checks);
+  const changed = turnChanged(turn, checks, again);
   const square = turn.scope.kind === 'project'
     ? <span class="turn-square" style={identity(turn.scope.project_id)} aria-hidden="true">{initial(scopeName(turn.scope, state))}</span>
     : <span class="turn-square none" aria-hidden="true" />;
@@ -626,14 +610,25 @@ function FoldedTurn({ state, turn, opened }: { state: State; turn: TimelineTurn;
         {changed && <span class="changed-tag" data-testid="changed-tag">Changed</span>}
         <span class="when">{askedWhen(turn.asked_at)}</span>
       </button>
-      {opened && (
-        <div class="opened" data-testid="opened-turn">
-          {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
-          {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
-          {!omitted && <SourceList state={state} view={view} />}
-          <AgainRow state={state} turn={turn} view={view} />
-        </div>
-      )}
+      {opened && <OpenedTurn state={state} turn={turn} checks={checks} />}
+    </div>
+  );
+}
+
+/**
+ * An earlier turn opened from its line: its answer as it was, dimmed, what
+ * changed lit, what you can no longer read left out, then Ask again and what
+ * the check said.
+ */
+function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn; checks: TurnChecks | undefined }) {
+  const view = turnView(turn, checks);
+  const omitted = allOmitted(turn, checks);
+  return (
+    <div class="opened" data-testid="opened-turn">
+      {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
+      {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
+      {!omitted && <SourceList state={state} view={view} />}
+      <AgainRow state={state} turn={turn} view={view} />
     </div>
   );
 }
@@ -709,14 +704,16 @@ export function AskView({ state }: { state: State }) {
   // Today's line goes above its first turn, or, with none yet, above the question on its way; only when earlier days have turns.
   const first = turns.findIndex(turn => askedToday(turn.asked_at, now));
   const today = first > 0 ? first : first === -1 && turns.length > 0 && (asking || clarify || failed) ? turns.length : -1;
+  const full = fullTurns(thread);
+  const again = askedAgain(turns);
   return (
     <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
       {turns.map((turn, index) => (
         <Fragment key={turn.id}>
           {index === today && <Today />}
-          {shownInFull(turn, turns, fullTurns(thread))
-            ? <FullTurn state={state} turn={{ ...turn, ...thread.took[turn.id] }} current={thread.asked.includes(turn.id)} line={lineFor(thread.took[turn.id]?.seq ?? -1)} />
-            : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} />}
+          {shownInFull(turn, turns, full)
+            ? <FullTurn state={state} turn={turn} took={thread.took[turn.id]} current={thread.asked.includes(turn.id)} line={lineFor(thread.took[turn.id]?.seq ?? -1)} />
+            : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} again={again} />}
         </Fragment>
       ))}
       {today === turns.length && <Today />}

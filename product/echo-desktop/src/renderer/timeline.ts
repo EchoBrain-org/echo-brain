@@ -8,10 +8,10 @@ import type {
 } from '../shared/protocol.js';
 import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
-import { answerSentences, MAX_SOURCES, sourceGroups, type SourceGroup } from './answer.js';
+import { answerSentences, MAX_SOURCES, sourceGroups, type Shows, type SourceGroup } from './answer.js';
 
 /** A follow-up continues the latest turn while it was asked this recently, and Ask is open. */
-export const FOLLOW_UP_MS = 60 * 60_000;
+const FOLLOW_UP_MS = 60 * 60_000;
 /** Opening Ask checks the sources of this many of the newest turns, and a check is good for five minutes. */
 export const CHECK_TURNS = 10;
 export const CHECK_FRESH_MS = 5 * 60_000;
@@ -126,6 +126,11 @@ export function markOf(citations: readonly number[], checks: TurnChecks | undefi
   return citations.some(at => checks[at] === 'changed') ? 'changed' : null;
 }
 
+/** Which sentences and rows of a turn the page shows after a check: all but those it leaves out. */
+export function showsOf(checks: TurnChecks | undefined): Shows {
+  return citations => markOf(citations, checks) !== 'omitted';
+}
+
 /**
  * A turn's sources as its page numbers them: the first 32, one per place,
  * without a place every citation of which a check found you can no longer
@@ -137,9 +142,9 @@ export function turnGroups(sources: readonly AnswerSource[], checks: TurnChecks 
   return checks === undefined ? groups : groups.filter(group => !group.indexes.every(at => checks[at] === 'unreadable'));
 }
 
-/** Whether a later turn asked this one again: then it shows no Changed tag. */
-export function askedAgain(turn: TimelineTurn, turns: readonly TimelineTurn[]): boolean {
-  return turns.some(later => later.again_of === turn.id);
+/** The turns a later turn asked again, by id: they show no Changed tag. */
+export function askedAgain(turns: readonly TimelineTurn[]): ReadonlySet<string> {
+  return new Set(turns.flatMap(turn => (turn.again_of === undefined ? [] : [turn.again_of])));
 }
 
 /** Every sentence a turn shows: its answer's, and Ask again's "since" list. */
@@ -160,19 +165,21 @@ function sentences(turn: TimelineTurn): AnswerStatement[] {
 export type TurnNote = 'changed' | 'same' | null;
 
 export function turnNote(turn: TimelineTurn, checks: TurnChecks | undefined): TurnNote {
+  if (checks === undefined) return null;
   const shown = sentences(turn).filter(statement => markOf(statement.citation_indexes, checks) !== 'omitted');
   if (shown.some(statement => markOf(statement.citation_indexes, checks) === 'changed')) return 'changed';
   const cited = shown.flatMap(statement => statement.citation_indexes);
-  return checks !== undefined && cited.length > 0 && cited.every(at => checks[at] === 'same') ? 'same' : null;
+  return cited.length > 0 && cited.every(at => checks[at] === 'same') ? 'same' : null;
 }
 
-/** A turn's Changed tag: a source one of the sentences it shows cites changed, and no later turn asked it again. */
-export function turnChanged(turn: TimelineTurn, checks: TurnChecks | undefined, turns: readonly TimelineTurn[]): boolean {
-  return !askedAgain(turn, turns) && turnNote(turn, checks) === 'changed';
+/** A turn's Changed tag: a source one of the sentences it shows cites changed, and no later turn asked it again (`again`, askedAgain's). */
+export function turnChanged(turn: TimelineTurn, checks: TurnChecks | undefined, again: ReadonlySet<string>): boolean {
+  return !again.has(turn.id) && turnNote(turn, checks) === 'changed';
 }
 
 /** Whether every sentence of a turn is left out: then an opened turn shows only Ask again. */
 export function allOmitted(turn: TimelineTurn, checks: TurnChecks | undefined): boolean {
+  if (checks === undefined) return false;
   const all = sentences(turn);
   return all.length > 0 && all.every(statement => markOf(statement.citation_indexes, checks) === 'omitted');
 }
@@ -286,37 +293,7 @@ export function sameScope(a: AskScope, b: AskScope): boolean {
   return a.kind === b.kind && (a.kind !== 'project' || (b.kind === 'project' && a.project_id === b.project_id));
 }
 
-/** The questions you asked in `scope`, newest first, each once (the newest turn of it), each reopening its turn. */
+/** The questions you asked in `scope`, newest first, each reopening its turn: the bar's suggestions take each once, the newest. */
 export function askedSuggestions(turns: readonly TimelineTurn[], scope: AskScope): Suggestion[] {
-  const seen = new Set<string>();
-  const suggestions: Suggestion[] = [];
-  for (const turn of [...turns].reverse()) {
-    if (!sameScope(turn.scope, scope)) continue;
-    const key = turn.question.replace(/\s+/gu, ' ').trim().toLowerCase();
-    if (key === '' || seen.has(key)) continue;
-    seen.add(key);
-    suggestions.push({ question: turn.question, turn: turn.id });
-  }
-  return suggestions;
-}
-
-/** Midnight today, here. */
-function startOfDay(now: number): number {
-  const today = new Date(now);
-  return new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-}
-
-/** Whether a turn was asked today, here. */
-export function askedToday(iso: string, now = Date.now()): boolean {
-  return Date.parse(iso) >= startOfDay(now);
-}
-
-/** When a turn was asked, as its row says it: the time for today ("3:41 PM"), else the day ("Oct 14"), with its year when not this year's. */
-export function askedWhen(iso: string, now = Date.now()): string {
-  const time = Date.parse(iso);
-  if (Number.isNaN(time)) return '';
-  const date = new Date(time);
-  if (time >= startOfDay(now)) return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  const year = date.getFullYear() === new Date(now).getFullYear() ? {} : { year: 'numeric' as const };
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...year });
+  return [...turns].reverse().filter(turn => sameScope(turn.scope, scope)).map(turn => ({ question: turn.question, turn: turn.id }));
 }

@@ -3,7 +3,7 @@
 // the receipt an answer keeps.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, Expect } from '../../src/shared/protocol.js';
-import { ACCOUNT, asking as askingWith, fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { ACCOUNT, asking as askingWith, fail, flush, Held, latestTurn, ok, paneTurn, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -63,7 +63,7 @@ describe('the steps of the Ask on its way', () => {
     await flush();
     step({ type: 'stage', stage: 'writing' });
     expect(store.getState().ask?.asking).toBeNull();
-    expect(store.latestTurn()?.text).toBe('What did we agree?');
+    expect(latestTurn(store)?.text).toBe('What did we agree?');
   });
 
   it('cancelled, takes no step more, and Ask closes with what it named', async () => {
@@ -122,7 +122,7 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     vi.advanceTimersByTime(3_000);
     release(ok(answer()));
     await flush();
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     await flush();
     store.openFullPage();
     await flush();
@@ -199,7 +199,7 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     await flush();
     store.openNamed([note]);
     store.cancelAsk();
-    expect(store.latestTurn()?.text).toBe('First?');
+    expect(latestTurn(store)?.text).toBe('First?');
     expect(store.getState().sources?.named).toBeNull();
     expect(store.paneTarget()).toBeNull();
     second(ok(answer()));
@@ -215,7 +215,7 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     vi.advanceTimersByTime(3_000);
     release(ok({ ...answer(), receipt: { ...receipt, rows: [{ type: 'read', items: [decision] }] } }));
     await flush();
-    expect(store.latestTurn()?.text).toBe('What did we agree?');
+    expect(latestTurn(store)?.text).toBe('What did we agree?');
     expect(store.getState().sources?.named).toBeNull();
     expect(store.getState().sources?.evidence).toBeNull();
     expect(store.paneTarget()).toBeNull();
@@ -235,9 +235,9 @@ describe('the receipt above an answer', () => {
     const quick = await asking('Quick?');
     quick.release(ok(answer()));
     await flush();
-    expect(quick.store.latestTurn()?.receipt).toBeUndefined();
+    expect(latestTurn(quick.store)?.receipt).toBeUndefined();
     // The answer itself came with it, but only the Ask that brought it reads it: the timeline keeps none.
-    expect(quick.store.latestTurn()?.answer).not.toHaveProperty('receipt');
+    expect(latestTurn(quick.store)?.answer).not.toHaveProperty('receipt');
 
     const slow = held.hold('ask.run');
     void quick.store.ask('Slow?');
@@ -245,7 +245,7 @@ describe('the receipt above an answer', () => {
     vi.advanceTimersByTime(3_000);
     slow(ok(answer()));
     await flush();
-    expect(quick.store.latestTurn()?.receipt).toEqual(receipt);
+    expect(latestTurn(quick.store)?.receipt).toEqual(receipt);
   });
 
   it('times the wait by the page\'s clock: an Authority that researched under three seconds still keeps the receipt of a longer wait', async () => {
@@ -253,7 +253,7 @@ describe('the receipt above an answer', () => {
     vi.advanceTimersByTime(3_400);
     release(ok({ ...answer(), receipt: { ...receipt, elapsed_ms: 1_800 } }));
     await flush();
-    expect(store.latestTurn()).toMatchObject({ receipt: { elapsed_ms: 1_800 }, took: 3_400 });
+    expect(latestTurn(store)).toMatchObject({ receipt: { elapsed_ms: 1_800 }, took: 3_400 });
   });
 
   it('an older Authority sends none, and the answer shows as it always did', async () => {
@@ -261,7 +261,7 @@ describe('the receipt above an answer', () => {
     vi.advanceTimersByTime(10_000);
     release(ok(answer(false)));
     await flush();
-    expect(store.latestTurn()).toMatchObject({ question: 'What did we agree?' });
-    expect(store.latestTurn()?.receipt).toBeUndefined();
+    expect(latestTurn(store)).toMatchObject({ question: 'What did we agree?' });
+    expect(latestTurn(store)?.receipt).toBeUndefined();
   });
 });

@@ -304,7 +304,7 @@ button.account-row:hover { background: var(--raise); }
 /* An old answer opened: as it was, dimmed, under its question; what changed since is lit in the signal. */
 .opened { display: flex; flex-direction: column; gap: 10px; padding: 6px 0 4px 36px; }
 .agentic-answer.dimmed { color: var(--muted); }
-.agentic-answer .changed > span:first-child, .claim.changed > span:first-child, .answer-bullets li.changed > span > span:first-child, .since-items li.changed > span > span:first-child {
+.agentic-answer .changed > span:first-child, .claim.changed > span:first-child, .answer-bullets li.changed > span > span:first-child {
   border-radius: 4px; color: var(--text); background: var(--signal-soft); -webkit-box-decoration-break: clone; box-decoration-break: clone;
 }
 .answer-table tr.changed td { color: var(--text); background: var(--signal-soft); }

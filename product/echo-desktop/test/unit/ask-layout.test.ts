@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerBlock } from '../../src/shared/protocol.js';
 import { layoutAnswer } from '../../src/host/test-authority.js';
 import { answerView } from '../../src/host/views.js';
-import { asking as askingWith, byTestId, elements, flush, Held, ok, plainHooks, rpcFor, storeLifecycle, text, type Node } from './harness.js';
+import { asking as askingWith, byTestId, elements, flush, Held, ok, paneTurn, plainHooks, rpcFor, storeLifecycle, text, type Node } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -241,7 +241,7 @@ describe('Copy answer', () => {
 
   it('copies the answer as Markdown, its sources numbered and named as the page shows them', async () => {
     const { store } = await answered(therm());
-    expect(await store.copyAnswer()).toBe(true);
+    expect(await store.copyAnswer(paneTurn(store))).toBe(true);
     const [markdown] = copied();
     expect(markdown).toMatch(/^No, the reduced test scope was rejected\. \[2\] /u);
     expect(markdown).toContain('\n### Decisions\n');
@@ -253,7 +253,7 @@ describe('Copy answer', () => {
     const base = therm(false);
     const long = 'x'.repeat(11_990);
     const { store } = await answered({ ...base, text: long, parts: [{ ...base.parts[0]!, statements: [{ text: long, citation_indexes: [0], private: false }] }] });
-    expect(await store.copyAnswer()).toBe(true);
+    expect(await store.copyAnswer(paneTurn(store))).toBe(true);
     expect(copied()).toEqual([long]);
   });
 });

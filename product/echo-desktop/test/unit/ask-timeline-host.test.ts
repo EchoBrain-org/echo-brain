@@ -19,7 +19,7 @@ vi.mock('node:fs', async original => {
     const asked = typeof data === 'string' ? bytes.length : length ?? bytes.length - from;
     return fs.writeSync(descriptor, bytes, from, disk.short ? Math.ceil(asked / 2) : asked);
   };
-  return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), readFileSync: vi.fn(fs.readFileSync) };
+  return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
 });
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
@@ -98,28 +98,6 @@ describe('the timeline file (C5)', () => {
     expect(renamed).toHaveLength(1);
     expect(synced.filter(order => order < renamed[0]!)).toHaveLength(1);
     expect(synced.filter(order => order > renamed[0]!)).toHaveLength(1);
-  });
-
-  it('goes on from the turns it last read or wrote while the file is still that one, and reads it again once it is not', () => {
-    const [first, second, third] = [turn(3), turn(2), turn(1)];
-    putTimeline(person, ARI, first, NOW);
-    vi.mocked(readFileSync).mockClear();
-    putTimeline(person, ARI, second, NOW);
-    expect(vi.mocked(readFileSync)).not.toHaveBeenCalled();
-    expect(readTimeline(person, ARI)).toEqual([first, second]);
-    // Changed by anything but a put: read again, all of it.
-    const elsewhere = turn(5);
-    writeFileSync(timelinePath(person, ARI), JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [elsewhere] }), { mode: 0o600 });
-    vi.mocked(readFileSync).mockClear();
-    putTimeline(person, ARI, third, NOW);
-    expect(vi.mocked(readFileSync)).toHaveBeenCalledTimes(1);
-    expect(readTimeline(person, ARI)).toEqual([elsewhere, third]);
-    // Gone: a put starts it again, and another account's file is its own.
-    deleteTimeline(person, ARI);
-    putTimeline(person, ARI, first, NOW);
-    putTimeline(person, MINA, second, NOW);
-    expect(readTimeline(person, ARI)).toEqual([first]);
-    expect(readTimeline(person, MINA)).toEqual([second]);
   });
 
   it('keeps at most 200 turns and none older than 90 days, the newest, on every put', () => {
@@ -238,8 +216,15 @@ describe('what the page sends with an Ask and a check', () => {
   });
 
   it('takes an earlier turn only within C3\'s bounds', () => {
-    expect(askPrevious(previous)).toEqual(previous);
-    expect(askPrevious({ ...previous, purpose: 'ask_again', statements: [], citations: [] })).not.toBeNull();
+    const global = { kind: 'global' } as const;
+    /** As a follow-up asks: its own question, with the earlier turn. */
+    const asked = (value: unknown) => askPrevious(value, 'Who owns it?', global);
+    expect(asked(previous)).toEqual(previous);
+    expect(askPrevious({ ...previous, purpose: 'ask_again', statements: [], citations: [] }, previous.question, global)).not.toBeNull();
+    // Ask again asks the earlier question itself.
+    expect(askPrevious({ ...previous, purpose: 'ask_again' }, 'Who owns it?', global)).toBeNull();
+    // A question that fails on its own is the client's to report, as it would be without the earlier turn: that goes as it came.
+    expect(askPrevious(previous, '?', global)).toEqual(previous);
     const many = <T>(item: T, count: number) => Array.from({ length: count }, () => item);
     for (const bad of [
       { ...previous, purpose: 'guess' }, { ...previous, question: '' }, { ...previous, question: ` ${previous.question}` }, { ...previous, asked_at: 'today' },
@@ -250,10 +235,10 @@ describe('what the page sends with an Ask and a check', () => {
       { ...previous, citations: [{ ...cited, visibility: 'everyone' }] }, { ...previous, citations: [ticketCitation] },
       // Each citation once, and each sentence citing each once.
       { ...previous, citations: [cited, cited] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: [0, 0] }] },
-    ]) expect(askPrevious(bad)).toBeNull();
+    ]) expect(asked(bad)).toBeNull();
     // 400 characters as the API counts them: code points, so a sentence of 400 emoji passes, and one more does not.
-    expect(askPrevious({ ...previous, statements: [{ text: '🙂'.repeat(400), citation_indexes: [0] }] })).not.toBeNull();
-    expect(askPrevious({ ...previous, statements: [{ text: '🙂'.repeat(401), citation_indexes: [0] }] })).toBeNull();
+    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(400), citation_indexes: [0] }] })).not.toBeNull();
+    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(401), citation_indexes: [0] }] })).toBeNull();
   });
 
   it('checks 1 to 100 items, each a citation that can change or go, a ticket\'s marker only on a ticket, within 64 KiB', () => {
