@@ -262,11 +262,11 @@ Runs a versioned request against approved-record impact runs, the open items the
 `,
   "project-activity": `usage: echo-brain person project-activity
 
-Reads when something new last arrived in each of your active projects from someone else, with no content: a meeting approved into it, a note or document filed into it, or a follow-up of its meetings sent, handed on or set to a new state. Each counts only when you can read it, and your own never counts. Prints echo-person-project-activity-v1 as its last line: one item per project, latest_at a UTC time or null when nothing arrived. An Authority without it fails with code not_supported.
+Reads when something new last arrived in each of your active projects from someone else, with no content: a meeting approved into it, a note or document filed into it, or a follow-up of its meetings sent, handed on or set to a new state. Each counts only when you can read it, and your own never counts. Prints echo-person-project-activity-v1 as its last line: one item per project, latest_at a UTC time or null when nothing arrived.
 `,
   changes: `usage: echo-brain person changes
 
-Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review), and how many seconds to wait before checking again. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line. An Authority without the check fails with code not_supported.
+Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review), and how many seconds to wait before checking again. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line.
 `,
   evidence: `usage: echo-brain person evidence <search|open> [options]
 

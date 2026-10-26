@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateProjectPageRequestV1 } from '@echo-brain/organization-api';
+import { validateProjectPageRequestV2 } from '@echo-brain/organization-api';
 import {
   decodeProjectCursorV1, encodeProjectCursorV1, projectSearchTermsV1,
   type ProjectCursorScopeV1,
@@ -18,7 +18,7 @@ describe('project untrusted keyset cursors', () => {
     for (const name of ['"'.repeat(200), '\\'.repeat(200), 'é'.repeat(100), '🧠'.repeat(50)]) {
       const encoded = encodeProjectCursorV1(scope, [name, member]);
       expect(encoded.length).toBeLessThanOrEqual(512);
-      expect(validateProjectPageRequestV1({ cursor: encoded }).cursor).toBe(encoded);
+      expect(validateProjectPageRequestV2({ cursor: encoded }).cursor).toBe(encoded);
       expect(decodeProjectCursorV1(encoded, scope)).toEqual([name, member]);
       expect(Buffer.from(encoded, 'base64url').subarray(33).toString('utf8')).toBe(`${name}\0${member}`);
     }
@@ -61,14 +61,14 @@ describe('project untrusted keyset cursors', () => {
   });
 
   it('carries only public time/id/score ordering coordinates for projects, feeds and search', () => {
-    for (const operation of ['project_list', 'feed', 'search'] as const) {
+    for (const operation of ['project_list_v2', 'feed_v2', 'search_v2'] as const) {
       const scoped = { ...scope, operation };
-      const key = operation === 'project_list' ? `prj_${id}` : `ctx_${'a'.repeat(64)}`;
-      const position = operation === 'search' ? [4, time, key] as const : [time, key] as const;
+      const key = operation === 'project_list_v2' ? `prj_${id}` : `ctx_${'a'.repeat(64)}`;
+      const position = operation === 'search_v2' ? [4, time, key] as const : [time, key] as const;
       expect(decodeProjectCursorV1(encodeProjectCursorV1(scoped, position), scoped)).toEqual(position);
       expect(() => encodeProjectCursorV1(scoped, ['2026-02-30T00:00:00.000Z', key])).toThrow();
     }
-    expect(() => encodeProjectCursorV1({ ...scope, operation: 'search' }, [-1, time, `ctx_${'a'.repeat(64)}`])).toThrow();
+    expect(() => encodeProjectCursorV1({ ...scope, operation: 'search_v2' }, [-1, time, `ctx_${'a'.repeat(64)}`])).toThrow();
   });
 
   it('preserves the existing lexical normalization and unique term semantics', () => {

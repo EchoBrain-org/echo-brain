@@ -906,7 +906,8 @@ describe("Slack runtime bundle with organization setup", () => {
 
   it("mounts the identity, browser and setup routes", async () => {
     const mounted = open();
-    expect(mounted.opened.application.routes).toHaveLength(12);
+    expect(mounted.opened.application.routes).toHaveLength(11);
+    expect(mounted.opened.application.routes.some((route) => route.path === "/v2/person/tools")).toBe(false);
     expect(mounted.opened.application.routes.filter((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toHaveLength(4);
     mounted.opened.close();
   });

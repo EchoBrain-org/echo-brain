@@ -51,10 +51,10 @@ describe('person project activity client (Ask timeline v1, C2)', () => {
       .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'invalid_response' });
   });
 
-  it('reports an Authority without the route as not_supported, never not_found, and keeps other failures', async () => {
-    const older = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
-    await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: older }).projectActivity('bearer'))
-      .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'not_supported', status: 404 });
+  it('keeps the code the Authority sent, a 404 included, since every Authority serves the read (ADR-0048)', async () => {
+    const missing = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
+    await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: missing }).projectActivity('bearer'))
+      .rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'not_found', status: 404 });
     const signedOut = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'unauthorized', message: 'request failed' } }, 401));
     await expect(new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch: signedOut }).projectActivity('bearer'))
       .rejects.toMatchObject({ code: 'unauthorized', status: 401 });
@@ -70,12 +70,12 @@ describe('person project activity client (Ask timeline v1, C2)', () => {
     expect((fetch.mock.calls[0]![1]!.headers as Record<string, string>).authorization).toBe(`Bearer ${'A'.repeat(43)}`);
   });
 
-  it('fails the project-activity command with code not_supported on 404, as other commands report their codes', async () => {
+  it('fails the project-activity command with the code the Authority sent, as other commands report their codes', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
     const { output, run } = cli(sessionHome(), fetch);
     expect(await run(['project-activity'])).toBe(1);
     expect(output.stdout).toBe('');
-    expect(lastLine(output.stderr)).toEqual({ ok: false, action: 'project-activity', error: 'This Authority has no project activity', code: 'not_supported', status: 404 });
+    expect(lastLine(output.stderr)).toMatchObject({ ok: false, action: 'project-activity', code: 'not_found', status: 404 });
   });
 
   it('takes no options and needs a signed-in session before any request', async () => {
@@ -97,7 +97,7 @@ describe('person project activity client (Ask timeline v1, C2)', () => {
     expect(await run(['project-activity', '--help'])).toBe(0);
     expect(output.stdout).toContain('usage: echo-brain person project-activity');
     expect(output.stdout).toContain('echo-person-project-activity-v1');
-    expect(output.stdout).toContain('not_supported');
+    expect(output.stdout).not.toContain('not_supported');
     expect(await run(['--help'])).toBe(0);
     expect(output.stdout).toContain('project-activity  When each of your projects last had something new from someone else, with no content.');
     expect(noNetwork).not.toHaveBeenCalled();

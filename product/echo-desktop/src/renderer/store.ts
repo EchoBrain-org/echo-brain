@@ -6045,9 +6045,7 @@ async function readItems(account: Expect, query: ItemsQuery, cursor: string | nu
   : Promise<{ ok: true; pages: { cursor: string | null; items: readonly OpenItemView[] }[]; last: OpenItemsView } | { ok: false; failure: Failure }> {
   const pages: { cursor: string | null; items: readonly OpenItemView[] }[] = [];
   for (let next = cursor, rows = 0; ;) {
-    // On an older Authority (no change check), what you are involved in is what you sent or own.
-    const scope = query.scope === 'involved' && freshness.olderAuthority() ? 'mine' : query.scope;
-    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope,
+    const result = await rpc('runs', { expect: account, request: { schema_version: 1, operation: 'items', scope: query.scope,
       ...(query.id === undefined ? {} : { id: query.id }), ...(query.states ? { states: query.states } : {}), ...(next === null ? {} : { cursor: next }),
       ...(query.read ? { read: query.read } : {}), ...(query.changed_since === undefined ? {} : { changed_since: query.changed_since }) } });
     if (!result.ok) {

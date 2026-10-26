@@ -49,8 +49,8 @@ function fixture(options: { readonly membership?: (id: string) => Membership | u
   const uploadChunks = (title: string, texts: readonly string[], audience: "team" | "only_me" | "project" = "team") => {
     const bytes = Buffer.from(texts.join("\n"));
     const metadata = { request_id: randomUUID(), filename: `${title}.md`, title, content_length: bytes.length, sha256: sha256Digest(bytes) };
-    if (audience === "project") documents.uploadV2("owner", { ...metadata, schema_version: 2, kind: "echo-person-document-upload-v2", audience: { kind: "projects", project_ids: [PROJECT_ALPHA] }, association_project_ids: [PROJECT_ALPHA] }, bytes);
-    else documents.upload("owner", { ...metadata, schema_version: 1, kind: "echo-person-document-upload-v1", audience: { kind: audience }, project_id: PROJECT_ALPHA }, bytes);
+    documents.uploadV2("owner", { ...metadata, schema_version: 2, kind: "echo-person-document-upload-v2",
+      audience: audience === "project" ? { kind: "projects", project_ids: [PROJECT_ALPHA] } : { kind: audience }, association_project_ids: [PROJECT_ALPHA] }, bytes);
     const claim = repository.claimExtraction(); if (claim === undefined) throw new Error("missing extraction claim");
     expect(repository.completeExtraction(claim, {
       status: "ready", sourceSha256: claim.source_sha256, extractorVersion: "fixture-1",

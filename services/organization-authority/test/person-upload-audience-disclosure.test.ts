@@ -5,8 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { canonicalJson, sha256Digest } from "@echo-brain/federation-protocol";
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import {
-  validatePersonDocumentMetadataV1, validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV1,
-  validatePersonDocumentSearchResultV2, validatePersonDocumentStatusV2, validatePersonUpdateStatusResultV3,
+  validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV2, validatePersonDocumentStatusV2, validatePersonUpdateStatusResultV3,
   type PersonUploadAudienceV3,
 } from "@echo-brain/organization-api";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
@@ -14,7 +13,7 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
-import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
+import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
 
 /**
  * ADR-0023: a released upload names only the reader's current projects, and
@@ -59,15 +58,15 @@ function fixture() {
     schema_version: 2, kind: "echo-person-document-upload-v2", request_id: randomUUID(), filename: "interface.md", title: "Interface",
     content_length: bytes.byteLength, sha256: sha256Digest(bytes), association_project_ids: project_ids, audience: { kind: "projects", project_ids },
   }, bytes);
-  const uploadV1 = (token: string) => documents.upload(token, {
-    schema_version: 1, kind: "echo-person-document-upload-v1", request_id: randomUUID(), filename: "team.md", title: "Team",
-    content_length: bytes.byteLength, sha256: sha256Digest(bytes), audience: { kind: "team" }, project_id: null,
+  /** A team document the retired V1 upload stored (ADR-0048). */
+  const storedV1 = (token: string) => insertStoredDocumentV1(database, token === "member" ? MEMBER : OWNER, {
+    filename: "team.md", title: "Team", audience: { kind: "team" }, project_id: null,
   }, bytes);
   const submitV3 = (token: string, project_ids: readonly string[]) => updates.submitUploadV3(token, {
     schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: "Interface note",
     text: "shared interface note", association_project_ids: project_ids, audience: { kind: "projects", project_ids },
   });
-  return { database, documents, updates, uploadV2, uploadV1, submitV3 };
+  return { database, documents, updates, uploadV2, storedV1, submitV3 };
 }
 
 /** The serialized release, so a project ID cannot hide in any field. */
@@ -133,7 +132,7 @@ describe("a document's request ID is released only to its uploader", () => {
   it.each([
     { reader: "member", uploader: "owner" },
     { reader: "owner", uploader: "member" },
-  ])("withholds the $uploader's request ID from the $reader on V2 and V1 reads", ({ reader, uploader }) => {
+  ])("withholds the $uploader's request ID from the $reader for V2 uploads and stored V1 documents", ({ reader, uploader }) => {
     const f = fixture();
     const modern = f.uploadV2(uploader, [SHARED]);
     const metadata = f.documents.readV2(reader, modern.document_id);
@@ -143,18 +142,24 @@ describe("a document's request ID is released only to its uploader", () => {
     expect(validatePersonDocumentSearchResultV2(searchV2).documents.map(item => item.request_id)).toEqual([null]);
     for (const value of [metadata, searchV2]) expect(released(value)).not.toContain(modern.request_id);
 
-    const legacy = f.uploadV1(uploader);
-    const legacyMetadata = f.documents.read(reader, legacy.document_id);
-    expect(validatePersonDocumentMetadataV1(legacyMetadata).request_id).toBeNull();
-    expect(f.documents.original(reader, legacy.document_id).metadata.request_id).toBeNull();
-    const searchV1 = f.documents.search(reader, { schema_version: 1, kind: "echo-person-document-search-v1", project_id: null, query: "", limit: 20, cursor: null });
-    expect(validatePersonDocumentSearchResultV1(searchV1).documents.map(item => item.request_id)).toEqual([null]);
-    for (const value of [legacyMetadata, searchV1]) expect(released(value)).not.toContain(legacy.request_id);
+    // V2 reads serve a document the retired V1 upload stored (ADR-0048) under the same rule.
+    const legacy = f.storedV1(uploader);
+    const legacyMetadata = f.documents.readV2(reader, legacy.document_id);
+    expect(validatePersonDocumentMetadataV2(legacyMetadata).request_id).toBeNull();
+    expect(f.documents.originalV2(reader, legacy.document_id).metadata.request_id).toBeNull();
+    const searchAll = f.documents.searchV2(reader, { schema_version: 2, kind: "echo-person-document-search-v2", project_id: null, query: "", limit: 20, cursor: null });
+    expect(validatePersonDocumentSearchResultV2(searchAll).documents.map(item => item.request_id)).toEqual([null, null]);
+    expect(searchAll.documents.map(item => item.document_id).sort()).toEqual([modern.document_id, legacy.document_id].sort());
+    for (const value of [legacyMetadata, searchAll]) expect(released(value)).not.toContain(legacy.request_id);
+    expect(released(searchAll)).not.toContain(modern.request_id);
 
     expect(f.documents.readV2(uploader, modern.document_id).request_id).toBe(modern.request_id);
-    expect(f.documents.read(uploader, legacy.document_id).request_id).toBe(legacy.request_id);
+    expect(f.documents.readV2(uploader, legacy.document_id).request_id).toBe(legacy.request_id);
     expect(validatePersonDocumentStatusV2(f.documents.statusV2(uploader, modern.request_id))).toMatchObject({
       request_id: modern.request_id, audience: { kind: "project", project_id: SHARED },
+    });
+    expect(validatePersonDocumentStatusV2(f.documents.statusV2(uploader, legacy.request_id))).toMatchObject({
+      request_id: legacy.request_id, audience: { kind: "team" }, association_project_ids: [],
     });
   });
 });

@@ -1,6 +1,5 @@
 import { asRecord, assertExactKeys, assertId, assertPatternString, fail } from "@echo-brain/organization-api/validation";
 
-export const ORGANIZATION_API_PERSON_TOOLS_PATH = '/v2/person/tools';
 export const ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH = '/v2/person/external-identities/slack/disconnect';
 
 /** Disconnect always targets the authenticated person, never a supplied identity. */

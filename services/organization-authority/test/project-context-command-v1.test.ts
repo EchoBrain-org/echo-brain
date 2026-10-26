@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validatePersonUpdateSubmitV2, type PersonUpdateSubmitV2 } from '@echo-brain/organization-api';
+import { validatePersonUpdateSubmitV3, type PersonUpdateSubmitV3 } from '@echo-brain/organization-api';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 import { projectCommandIdentityV1 } from '../src/application/project-context-command-v1.js';
 
@@ -10,17 +10,17 @@ const actor: AuthorityPersonMembershipBinding = {
   organization_id: `org_${id}`, principal_id: `prn_${id}`,
   membership_id: `mem_${id}`, membership_type: 'employee',
 };
-const upload = validatePersonUpdateSubmitV2({
-  schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: id,
+const upload = validatePersonUpdateSubmitV3({
+  schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: id,
   title: 'Launch notes', text: '  Original café notes.\n\n',
-  audience: { kind: 'only_me' }, project_id: project,
+  audience: { kind: 'only_me' }, association_project_ids: [project],
 });
-const identity = (request: PersonUpdateSubmitV2, member = actor) =>
-  projectCommandIdentityV1(member, { operation: 'upload_submit', request });
+const identity = (request: PersonUpdateSubmitV3, member = actor) =>
+  projectCommandIdentityV1(member, { operation: 'upload_submit_v3', request });
 
 describe('PC-00 immutable command identity (no persistence or authorization implementation)', () => {
   it('replays the same accepted bytes independent of JSON property order', () => {
-    const reordered = Object.fromEntries(Object.entries(upload).reverse()) as unknown as PersonUpdateSubmitV2;
+    const reordered = Object.fromEntries(Object.entries(upload).reverse()) as unknown as PersonUpdateSubmitV3;
     expect(identity(reordered)).toEqual(identity(upload));
     expect(upload.text).toBe('  Original café notes.\n\n');
   });
@@ -29,13 +29,13 @@ describe('PC-00 immutable command identity (no persistence or authorization impl
     { title: 'Other title' },
     { text: upload.text.trim() },
     { text: '  Original cafe\u0301 notes.\n\n' },
-    { project_id: otherProject },
-    { project_id: null },
+    { association_project_ids: [otherProject] },
+    { association_project_ids: [] },
     { audience: { kind: 'team' } },
     { audience: { kind: 'project', project_id: project } },
     { audience: { kind: 'project', project_id: otherProject } },
   ])('binds each changed original/audience/association coordinate: %j', (change) => {
-    const changed = identity(validatePersonUpdateSubmitV2({ ...upload, ...change }));
+    const changed = identity(validatePersonUpdateSubmitV3({ ...upload, ...change }));
     const original = identity(upload);
     expect({ ...changed, command_sha256: null }).toEqual({ ...original, command_sha256: null });
     expect(changed.command_sha256).not.toBe(original.command_sha256);
@@ -109,7 +109,7 @@ describe('PC-00 immutable command identity (no persistence or authorization impl
   });
 
   it('rejects forged fields before deriving an apparently valid replay identity', () => {
-    expect(() => identity({ ...upload, authorization_revision: 'caller-selected' } as PersonUpdateSubmitV2)).toThrow();
+    expect(() => identity({ ...upload, authorization_revision: 'caller-selected' } as PersonUpdateSubmitV3)).toThrow();
     expect(() => projectCommandIdentityV1(actor, { operation: 'create', request: upload } as never)).toThrow();
     expect(Object.keys(identity(upload)).sort()).toEqual(['command_sha256', 'membership_id', 'organization_id', 'request_id']);
   });

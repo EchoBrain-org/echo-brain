@@ -86,7 +86,7 @@ it('uses default API composition and real Person session checks through CLI, inc
     const status = await cli(['updates', 'status-v3', '--request-id', requestId]);
     expect(status.code).toBe(0); expect(JSON.parse(status.stdout)).toMatchObject({ context_id: receipt.context_id, metadata: 'pending' });
     const logout = await cli(['logout']); expect(logout.code).toBe(0);
-    const denied = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/projects/${project}`, { headers: { authorization: `Bearer ${session.access_token}` } });
+    const denied = await fetch(`http://127.0.0.1:${runtime.address.port}/v2/person/projects/${project}`, { headers: { authorization: `Bearer ${session.access_token}` } });
     expect(denied.status).toBe(401);
     expect(await denied.json()).toEqual({ error: { code: 'unauthorized', message: 'request failed' } });
   } finally {

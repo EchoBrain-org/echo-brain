@@ -757,12 +757,12 @@ export class PersonClient {
     return this.withReadSession((authority, token) => authority.readResearchEval(token, runId, signal));
   }
 
-  /** What moved in this person's own view, one fingerprint per area (ADR-0036); `not_supported` from an older Authority. */
+  /** What moved in this person's own view, one fingerprint per area (ADR-0036). */
   async changes(signal?: AbortSignal): Promise<PersonChangesV1> {
     return this.withReadSession((authority, token) => authority.changes(token, signal));
   }
 
-  /** When each of this person's active projects last had news from someone else (Ask timeline v1, C2); `not_supported` from an older Authority. */
+  /** When each of this person's active projects last had news from someone else (Ask timeline v1, C2). */
   async projectActivity(signal?: AbortSignal): Promise<PersonProjectActivityV1> {
     return this.withReadSession((authority, token) => authority.projectActivity(token, signal));
   }

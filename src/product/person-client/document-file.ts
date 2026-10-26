@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import { closeSync, constants, createReadStream, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { canonicalJson } from '@echo-brain/federation-protocol';
-import { PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonUpdateRequestId, type PersonDocumentUploadMetadataV1, type PersonDocumentUploadMetadataV2, type PersonDocumentStatusV2, type PersonUploadAudienceV3, type ProjectIdV1 } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, validatePersonDocumentUploadMetadataV2, validatePersonUpdateRequestId, type PersonDocumentUploadMetadataV2, type PersonDocumentStatusV2, type PersonUploadAudienceV3, type ProjectIdV1 } from '@echo-brain/organization-api';
 import { personSessionStorePaths } from './session-store.js';
 
 export interface DocumentFileUploadV2 {
@@ -61,7 +61,7 @@ function copyAndHash(source: number, destination?: number): { content_length: nu
 }
 
 export interface DocumentSnapshot {
-  readonly metadata: PersonDocumentUploadMetadataV1 | PersonDocumentUploadMetadataV2;
+  readonly metadata: PersonDocumentUploadMetadataV2;
   readonly reused: boolean;
   open(): ReturnType<typeof createReadStream>;
   remove(): void;
@@ -75,16 +75,15 @@ function snapshotAccount(homeDirectory: string, accountBinding: string): string 
   privateDirectory(account);
   return account;
 }
-function snapshotManifest(directory: string, requestId: string): PersonDocumentUploadMetadataV1 | PersonDocumentUploadMetadataV2 {
+/** A V1 snapshot an older client left has no route to resend it (ADR-0048): it fails here, so it lists as unreadable and can be abandoned. */
+function snapshotManifest(directory: string, requestId: string): PersonDocumentUploadMetadataV2 {
   privateDirectory(directory);
   const path = join(directory, 'metadata.json');
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 || (stat.mode & 0o077) !== 0 ||
       (process.getuid !== undefined && stat.uid !== process.getuid())) throw new DocumentFileError('invalid_file', 'Document snapshot metadata is invalid.');
   const saved = JSON.parse(readFileSync(path, 'utf8')) as { metadata: unknown };
-  const metadata = (saved.metadata as { schema_version?: unknown })?.schema_version === 2
-    ? validatePersonDocumentUploadMetadataV2(saved.metadata)
-    : validatePersonDocumentUploadMetadataV1(saved.metadata);
+  const metadata = validatePersonDocumentUploadMetadataV2(saved.metadata);
   if (metadata.request_id !== requestId) throw new DocumentFileError('invalid_file', 'Document snapshot metadata is inconsistent.');
   return metadata;
 }
@@ -152,8 +151,14 @@ export function prepareDocumentSnapshot(homeDirectory: string, accountBinding: s
       if (temporary !== undefined) rmSync(temporary, { recursive: true, force: true });
     }
   }
-  const result = snapshot(directory, input.request_id, reused);
-  const coordinatesChanged = result.metadata.schema_version !== 2 || canonicalJson(result.metadata.association_project_ids) !== canonicalJson(input.association_project_ids);
+  let result: DocumentSnapshot;
+  try { result = snapshot(directory, input.request_id, reused); }
+  catch (error) {
+    if (error instanceof DocumentFileError || !reused) throw error;
+    // What is retained under this request ID cannot be resent, such as a V1 snapshot an older client left (ADR-0048).
+    throw new DocumentFileError('snapshot_conflict', 'This request ID has a retained upload that cannot be resent. Abandon it with documents abandon and its request ID, or use a new request ID.');
+  }
+  const coordinatesChanged = canonicalJson(result.metadata.association_project_ids) !== canonicalJson(input.association_project_ids);
   if (result.metadata.filename !== filename || result.metadata.title !== input.title || canonicalJson(result.metadata.audience) !== canonicalJson(input.audience) || coordinatesChanged) {
     throw new DocumentFileError('snapshot_conflict', 'This request ID has different retained upload coordinates. Use documents retry with its request ID to resend the exact original.');
   }
@@ -254,7 +259,7 @@ export function reconcileDocumentSnapshot(homeDirectory: string, accountBinding:
     if (!existsSync(directory)) return;
     const metadata = snapshotManifest(directory, requestId);
     for (const key of ['request_id', 'sha256', 'content_length', 'filename', 'title'] as const) if (metadata[key] !== receipt[key]) return;
-    if (metadata.schema_version !== receipt.schema_version || canonicalJson(reconciliationAudience(metadata.audience)) !== canonicalJson(reconciliationAudience(receipt.audience))) return;
+    if (canonicalJson(reconciliationAudience(metadata.audience)) !== canonicalJson(reconciliationAudience(receipt.audience))) return;
   }
   abandonDocumentSnapshot(homeDirectory, accountBinding, requestId);
 }

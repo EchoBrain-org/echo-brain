@@ -97,7 +97,7 @@ beforeEach(() => {
   rpc.mockImplementation(rpcFor(held, {
     'ask.run': params => ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is open.', [0]]])),
     'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
-    'projects.activity': () => (activity ? activity() : fail('not_supported')),
+    'projects.activity': () => (activity ? activity() : ok({ items: [{ project_id: apollo.project_id, latest_at: null }] })),
     'list.page': () => ok({ items: feed, next_cursor: null, meetings_held: false }),
     'ask.record': () => fail('not_found'),
   }, () => ({ active: [apollo], archived: [] })));
@@ -961,12 +961,25 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
     expect(calls('projects.activity')).toHaveLength(1);
   });
 
-  it('shows no dots when the activity read fails, and reads it again at the next check', async () => {
+  it('keeps the dots when an activity read fails, and reads again at the next check you would expect it from', async () => {
+    let answer: () => unknown = () => ok({ items: [{ project_id: apollo.project_id, latest_at: at(DAY) }] });
+    activity = () => answer();
     const store = await startStore();
     await flush();
-    (await import('../../src/renderer/freshness.js')).woke();
+    const freshness = await import('../../src/renderer/freshness.js');
+    // Mina adds a note an hour later; a wake's check reads it.
+    vi.setSystemTime(NOW.getTime() + HOUR);
+    answer = () => ok({ items: [{ project_id: apollo.project_id, latest_at: at(-HOUR + 60_000) }] });
+    freshness.woke();
     await flush();
-    expect(calls('projects.activity')).toHaveLength(2);
-    expect(store.getState().news.size).toBe(0);
+    expect([...store.getState().news]).toEqual([apollo.project_id]);
+    // The next read fails, a 404 as any other (ADR-0048): the dot stays, and the next wake reads again.
+    answer = () => fail('not_found');
+    freshness.woke();
+    await flush();
+    expect([...store.getState().news]).toEqual([apollo.project_id]);
+    freshness.woke();
+    await flush();
+    expect(calls('projects.activity')).toHaveLength(4);
   });
 });

@@ -47,7 +47,7 @@ function fixture() {
   const repository = new SqlitePersonDocumentRepositoryV1(database, () => new Date(tick += 1000).toISOString());
   const documents = createPersonDocumentApplicationV1({ repository, authenticate: () => authorization(OWNER) });
   const bytes = Buffer.from("The launch window is October.");
-  documents.upload("owner", { schema_version: 1, kind: "echo-person-document-upload-v1", request_id: randomUUID(), filename: "Atlas plan.md", title: "Atlas plan", content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: "team" }, project_id: PROJECT_ALPHA }, bytes);
+  documents.uploadV2("owner", { schema_version: 2, kind: "echo-person-document-upload-v2", request_id: randomUUID(), filename: "Atlas plan.md", title: "Atlas plan", content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: "team" }, association_project_ids: [PROJECT_ALPHA] }, bytes);
   const claim = repository.claimExtraction(); if (claim === undefined) throw new Error("missing extraction claim");
   repository.completeExtraction(claim, { status: "ready", sourceSha256: claim.source_sha256, extractorVersion: "fixture-1", chunks: [{ anchor_kind: "paragraph", anchor_start: 1, text: "The launch window is October." }], message: null });
 

@@ -1,7 +1,7 @@
 // One refresh rule (desktop refresh and notifications v1, section 2): when a
 // change check runs (R2), what each moved area reads again (R3), what coming
-// back reads again on each page (R4), the hidden window (R6), the cover (R7),
-// an older Authority (R8) and desktop.log (R9).
+// back reads again on each page (R4), the hidden window (R6), the cover (R7)
+// and desktop.log (R9).
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList } from '../../src/renderer/store.js';
 import type { Account, ProjectSummary } from '../../src/shared/protocol.js';
@@ -348,6 +348,17 @@ describe('what coming back reads again, on each page (R4)', () => {
     await flush();
     expect(reads()).toEqual(before.map(count => count + 1));
   });
+
+  it('a check that fails on a return reads the sidebar instead', async () => {
+    const store = await startStore();
+    authority.changes = 'fails';
+    authority.active = [project(9, 29, { name: 'New' }), apollo];
+    await show(store);
+    await flush();
+    expect(store.getState().projects.items.map(row => row.name)).toEqual(['New', 'Apollo']);
+    // No notification: without a check, nothing says what moved.
+    expect(noticeTexts()).toEqual([]);
+  });
 });
 
 describe('a hidden window (R6) and the cover (R7)', () => {
@@ -470,47 +481,6 @@ describe('the sidebar, and projects you were added to (P2-3)', () => {
     authority.active = [...authority.active, last];
     authority.archived = [];
     await nextCheck();
-    expect(noticeTexts()).toEqual([]);
-  });
-});
-
-describe('an older Authority (R8)', () => {
-  it('logs once that it has no change check, reads the sidebar on each return, and checks no more on navigation', async () => {
-    authority.changes = 'not_supported';
-    const store = await startStore();
-    expect(calls('log.changes').map(([, params]) => params)).toEqual([{ unsupported: true }]);
-    const before = lists('active');
-    await show(store);
-    await flush();
-    expect(lists('active')).toBe(before + 1);
-    await vi.advanceTimersByTimeAsync(10_000);
-    await store.openMine();
-    await show(store);
-    await flush();
-    expect(checks()).toBe(1);
-    expect(lists('active')).toBe(before + 2);
-    expect(calls('log.changes')).toHaveLength(1);
-  });
-
-  it('Follow-ups (yours) lists what you sent or own on an older Authority, and what you are involved in otherwise', async () => {
-    authority.changes = 'not_supported';
-    authority.items = [followUp(1), sent(2, MINA)];
-    const store = await startStore();
-    await store.openYourFollowUps();
-    await flush();
-    expect((store.followUpShown() as FollowUpList).items.map(item => item.item_id)).toEqual([followUp(1).item_id, sent(2, MINA).item_id]);
-    expect(calls('runs').filter(([, params]) => params.request.operation === 'items' && (params.request.states as string[] | undefined)?.join() === 'unsent,open')
-      .map(([, params]) => params.request.scope)).toEqual(['mine']);
-  });
-
-  it('a check that fails on a return reads the sidebar instead', async () => {
-    const store = await startStore();
-    authority.changes = 'fails';
-    authority.active = [project(9, 29, { name: 'New' }), apollo];
-    await show(store);
-    await flush();
-    expect(store.getState().projects.items.map(row => row.name)).toEqual(['New', 'Apollo']);
-    // No notification: without a check, nothing says what moved.
     expect(noticeTexts()).toEqual([]);
   });
 });

@@ -10,16 +10,18 @@ import { PersonAuthorityClient } from '../../src/product/person-client/authority
 import { signedInHome } from './signed-in-home.js';
 import {
   validatePersonUpdateSubmitV1, validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validateProjectContextBrowseV1,
-  validateProjectContextFeedV1, validateProjectContextSearchV1, validateProjectCreateV1, validateProjectMemberSetV1,
+  validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectCreateV1, validateProjectMemberSetV1,
   type PersonUpdateSubmitV3, type ProjectIdV1,
 } from '@echo-brain/organization-api';
 
-interface Operation {
+/** A fixture row; one with no CLI command (the V2 feed and context read, the V3 note read) has no argv. */
+interface FixtureRow {
   id: string;
-  argv: string[];
+  argv?: string[];
   http: { method: string; path: string; status: number; body?: Record<string, unknown>; response: Record<string, unknown> };
 }
-const fixtures = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/operations.json', import.meta.url), 'utf8')) as { operations: Operation[] };
+type Operation = FixtureRow & { argv: string[] };
+const fixtures = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/operations.json', import.meta.url), 'utf8')) as { operations: FixtureRow[] };
 const failures = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/invalid.json', import.meta.url), 'utf8')) as {
   cases: { id: string; validator: string; value: unknown }[];
   errors: { id: string; http_status: number; http: unknown; cli: { action: string; [key: string]: unknown } }[];
@@ -31,42 +33,16 @@ const invalidValidators: Readonly<Record<string, (value: unknown) => unknown>> =
   'project-member-set': validateProjectMemberSetV1,
   'project-browse': validateProjectContextBrowseV1,
   'project-search': validateProjectContextSearchV1,
-  'project-feed': validateProjectContextFeedV1,
+  'project-feed-v2': validateProjectContextFeedV2,
 };
 const visibility = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/visibility.json', import.meta.url), 'utf8')) as {
   submits: { id: string; cli: string[]; body: Record<string, unknown> }[];
 };
 const projectId = 'prj_11111111-1111-4111-8111-111111111111';
 const otherProject = 'prj_44444444-4444-4444-8444-444444444444';
-// operations.json keeps these rows for the server HTTP test and the desktop seeds; the CLI retired their commands.
-const RETIRED = new Set(['projects-list', 'projects-read', 'projects-feed', 'projects-search', 'projects-read-context', 'updates-submit-v2', 'updates-status-v2', 'updates-read-v2']);
-const summaryV2 = { schema_version: 2, kind: 'echo-project-summary-v2', project_id: projectId, name: 'Apollo', created_at: '2026-09-21T22:01:00.000Z', role: 'lead', status: 'active' };
-const contextItemV2 = { context_id: `ctx_${'a'.repeat(64)}`, received_at: '2026-09-21T22:01:00.000Z', title: 'Apollo update', excerpt: 'We agreed to ship.', audience: { kind: 'project', project_id: projectId } };
-const noteRequestId = '00000000-0000-4000-8000-000000000006';
-const noteV3 = { request_id: noteRequestId, context_id: `ctx_${'a'.repeat(64)}`, received_at: '2026-09-21T22:01:00.000Z',
-  association_project_ids: [projectId], audience: { kind: 'project', project_id: projectId } };
-/** The kept commands that replace the retired rows. */
-const current: Operation[] = [
-  { id: 'projects-list-v2', argv: ['projects', 'list-v2', '--limit', '10', '--cursor', 'eyJsYXN0Ijoicm93In0'],
-    http: { method: 'GET', path: '/v2/person/projects?limit=10&status=active&cursor=eyJsYXN0Ijoicm93In0', status: 200,
-      response: { schema_version: 2, kind: 'echo-project-list-v2', items: [summaryV2], next_cursor: null } } },
-  { id: 'projects-read-v2', argv: ['projects', 'read-v2', '--project-id', projectId],
-    http: { method: 'GET', path: `/v2/person/projects/${projectId}`, status: 200, response: summaryV2 } },
-  { id: 'projects-search-v2', argv: ['projects', 'search-v2', '--project-id', projectId, '--query', 'ship', '--limit', '10'],
-    http: { method: 'POST', path: '/v2/person/projects/context/search', status: 200, body: { project_id: projectId, query: 'ship', limit: 10 },
-      response: { schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id: projectId, items: [contextItemV2], next_cursor: null } } },
-  { id: 'updates-submit-v3', argv: ['updates', 'submit-v3', '--request-id', noteRequestId, '--title', 'Apollo update', '--file', '/private/snapshot.txt',
-    '--association-project-ids-json', JSON.stringify([projectId]), '--audience', 'project', '--audience-project-id', projectId],
-    http: { method: 'POST', path: '/v3/person/updates', status: 202,
-      body: { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: noteRequestId, title: 'Apollo update', text: 'We agreed to ship.\n',
-        association_project_ids: [projectId], audience: { kind: 'project', project_id: projectId } },
-      response: { schema_version: 3, kind: 'echo-person-update-receipt-v3', ...noteV3, state: 'received' } } },
-  { id: 'updates-status-v3', argv: ['updates', 'status-v3', '--request-id', noteRequestId],
-    http: { method: 'GET', path: `/v3/person/updates/${noteRequestId}`, status: 200,
-      response: { schema_version: 3, kind: 'echo-person-update-status-v3', ...noteV3, status: 'stored', metadata: 'pending' } } },
-];
-const cliOperations = [...fixtures.operations.filter(item => !RETIRED.has(item.id)), ...current];
+const cliOperations = fixtures.operations.filter((item): item is Operation => item.argv !== undefined);
 const operation = (id: string) => cliOperations.find(item => item.id === id)!;
+const summaryV2 = (operation('projects-list-v2').http.response.items as Record<string, unknown>[])[0]!;
 const upload = operation('updates-submit-v3');
 const homes: string[] = [];
 const now = '2026-09-21T22:01:00.000Z';

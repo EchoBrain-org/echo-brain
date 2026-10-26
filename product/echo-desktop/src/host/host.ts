@@ -441,7 +441,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
         stdout => projectPageView(lastJson(stdout)));
     }
     case 'changes.read': {
-      // The person client prints the change check as its last line; an Authority without the route answers `not_supported`.
+      // The person client prints the change check as its last line.
       const { expect } = params as Params<'changes.read'>;
       return forAccount(method, expect, ['changes'], stdout => {
         try { return validatePersonChangesV1(lastJson(stdout)); } catch { throw new ViewError(); }

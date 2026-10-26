@@ -5,10 +5,10 @@ PC-01 through PC-06, not recordings of a live server and not a CLI stub that
 may claim success before the corresponding route exists.
 
 `operations.json` contains one accepted request/response pair for every
-project and V2 original-context operation. `invalid.json` contains inputs that
+project and original-context operation. `invalid.json` contains inputs that
 the public codecs must reject before any mutation. An `operations.json` row
-whose command the CLI has retired stays, for the server HTTP test and the
-desktop test Authority, until its route is removed; the CLI test skips it. The
+with no `argv` has no CLI command: the server HTTP test and the desktop test
+Authority use it, and the CLI test skips it. The
 `invalid.json` error rows and `visibility.json` cases name only kept commands. Success is written by the
 CLI as the exact response JSON on stdout followed by one newline; it has no
 extra `{ "ok": true }` envelope, matching the existing Person update commands.
@@ -36,9 +36,9 @@ encoding implementation.
 
 | CLI argv after `person` | Method and path | Request body | Success |
 | --- | --- | --- | --- |
-| `projects list` (retired) | `GET /v1/person/projects?limit={limit}&cursor={cursor}` | none | `200` project list |
+| `projects list-v2` | `GET /v2/person/projects?limit={limit}&status={status}&cursor={cursor}` | none | `200` V2 project list |
 | `projects create` | `POST /v1/person/projects` | project create | `201` immutable create receipt |
-| `projects read` (retired) | `GET /v1/person/projects/{project_id}` | none | `200` project summary |
+| `projects read-v2` | `GET /v2/person/projects/{project_id}` | none | `200` V2 project summary |
 | `projects members` | `POST /v1/person/projects/members` | project browse | `200` members page |
 | `projects directory` | `POST /v1/person/projects/directory` | directory search | `200` directory page |
 | `directory` | `POST /v1/person/directory` | organization directory search | `200` organization directory page |
@@ -46,19 +46,20 @@ encoding implementation.
 | `projects member-remove` | `POST /v1/person/projects/members/remove` | member-remove | `200` immutable mutation receipt |
 | `projects associate` | `POST /v1/person/projects/context/associate` | association | `200` immutable mutation receipt |
 | `projects dissociate` | `POST /v1/person/projects/context/dissociate` | dissociation | `200` immutable mutation receipt |
-| `projects feed` (retired) | `POST /v1/person/projects/context/feed` | project browse | `200` project feed |
-| `projects search` (retired) | `POST /v1/person/projects/context/search` | project search | `200` project search page |
-| `projects read-context` (retired) | `GET /v1/person/projects/{project_id}/context/{context_id}` | none | `200` project context read |
-| `updates submit` (retired) | `POST /v2/person/updates` | V2 submit | `202` V2 receipt |
-| `updates status` (retired) | `GET /v2/person/updates/{request_id}` | none | `200` V2 status |
+| none | `POST /v2/person/projects/context/feed` | project browse | `200` V2 project feed |
+| `projects search-v2` | `POST /v2/person/projects/context/search` | project search | `200` V2 project search page |
+| none | `GET /v2/person/projects/{project_id}/context/{context_id}` | none | `200` V2 project context read |
+| `updates submit-v3` | `POST /v3/person/updates` | V3 submit | `202` V3 receipt |
+| `updates status-v3` | `GET /v3/person/updates/{request_id}` | none | `200` V3 status |
 | `updates search` | `POST /v2/person/updates/search` | V2 search | `200` V2 search result |
-| `updates read` (retired) | `GET /v2/person/updates/content/{context_id}` | none | `200` V2 original read |
+| none | `GET /v3/person/updates/content/{context_id}` | none | `200` V3 original read |
 
-The CLI retired the commands marked retired on 2026-09-30. `projects list-v2`,
-`read-v2` and `search-v2` replace the project reads, `updates submit-v3` and
-`status-v3` replace the V2 note write and status, `person list --project`
-browses a project and `person open --ref` reads one item. The CLI test covers
-the kept commands with its own rows.
+The CLI retired the V1 project reads and the V2 note commands on 2026-09-30,
+and the Authority retired their routes on 2026-10-25
+([ADR-0048](../../../docs/decisions/ADR-0048-retire-older-person-routes.md)).
+`updates search` stays: it is the only search of notes stored as V2.
+`person list --project` browses a project and `person open --ref` reads one
+item, so the feed, the context read and the V3 note read have no CLI command.
 
 `projects directory` requires a lead grant on that project. `directory` (fixture
 `person-directory`) lists the same active-member names for any active member of

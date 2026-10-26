@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type Database from 'better-sqlite3';
-import type { PersonUpdateSubmitV2 } from '@echo-brain/organization-api';
+import type { PersonUpdateSubmitV2, ProjectIdV1 } from '@echo-brain/organization-api';
 import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../src/adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../src/adapters/persistence/sqlite/project-upload-enrichment-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createPersonUpdateProcessingV1 } from '../src/composition/person-update-processing-v1.js';
-import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredNoteV2, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) if (database.open) database.close(); });
@@ -36,16 +36,18 @@ function fixture() {
   });
   const worker = () => createPersonUpdateProcessingV1(generation, work);
   const run = () => worker().runOnce(new AbortController().signal);
-  const submit = (audience: PersonUpdateSubmitV2['audience'] = { kind: 'team' }) => application.submitUpload('owner', {
-    schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(3),
-    title: 'Customer note', text: 'The customer prefers calls.', project_id: project.project_id, audience,
-  });
+  // A note stored as V2 before its submit was retired (ADR-0048), whose enrichment work is still pending.
+  const submit = (audience: PersonUpdateSubmitV2['audience'] = { kind: 'team' }) => insertStoredNoteV2(database, OWNER, {
+    request_id: requestId(3), title: 'Customer note', text: 'The customer prefers calls.', project_id: project.project_id as ProjectIdV1, audience,
+  }, now);
+  /** The original as a project reader reads it: the V2 project context read serves stored V2 notes. */
+  const original = (token: string, contextId: string) => application.readContextV2(token, project.project_id, contextId);
   const removeUploader = () => application.removeMember('member', {
     schema_version: 1, kind: 'echo-project-member-remove-v1', request_id: requestId(4),
     project_id: project.project_id, membership_id: OWNER.membership_id,
   });
   return {
-    database, application, policy, generate, project, worker, run, submit, removeUploader,
+    database, application, policy, generate, project, worker, run, submit, original, removeUploader,
     later: () => { now = new Date(Date.parse(now) + 301_000).toISOString(); },
   };
 }
@@ -63,7 +65,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     await f.run();
     expect(f.generate).not.toHaveBeenCalled();
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'unavailable', search_hints: '' });
-    expect(f.application.readUpload('member', receipt.context_id).text).toBe('The customer prefers calls.');
+    expect(f.original('member', receipt.context_id).text).toBe('The customer prefers calls.');
   });
 
   it('discards model hints after organization revocation and preserves another member’s team-original access', async () => {
@@ -75,7 +77,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     });
     await f.run();
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'unavailable', search_hints: '' });
-    expect(f.application.readUpload('member', receipt.context_id).text).toBe('The customer prefers calls.');
+    expect(f.original('member', receipt.context_id).text).toBe('The customer prefers calls.');
     expect(f.application.searchUploads('member', { query: 'telephone' }).results).toEqual([]);
     expect(f.application.searchUploads('member', { query: 'customer' }).results).toHaveLength(1);
   });
@@ -89,7 +91,8 @@ describe('V2 enrichment lifecycle and revocation', () => {
     });
     await f.run();
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'ready', search_hints: 'telephone' });
-    expect(f.application.readUpload('owner', receipt.context_id)).toMatchObject({ audience: { kind: 'team' } });
+    // The uploader left the project; the team note is still theirs to find.
+    expect(f.application.searchUploads('owner', { query: 'customer' }).results).toMatchObject([{ context_id: receipt.context_id, audience: { kind: 'team' } }]);
     expect(f.application.searchUploads('member', { query: 'telephone' }).results).toHaveLength(1);
   });
 
@@ -103,7 +106,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     });
     await expect(f.worker().runOnce(aborted.signal)).rejects.toThrow('fixture shutdown');
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'processing', search_hints: '' });
-    expect(f.application.readUpload('member', receipt.context_id).text).toBe('The customer prefers calls.');
+    expect(f.original('member', receipt.context_id).text).toBe('The customer prefers calls.');
     await f.run(); // Refused during the lease.
     expect(f.generate).toHaveBeenCalledTimes(1);
     f.later();
@@ -124,7 +127,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     expect(workState(f.database, receipt.context_id)).toEqual({ state: 'unavailable', search_hints: '', attempts: 5 });
     f.later(); await f.run();
     expect(f.generate).toHaveBeenCalledTimes(5);
-    expect(f.application.readUpload('member', receipt.context_id).text).toBe('The customer prefers calls.');
+    expect(f.original('member', receipt.context_id).text).toBe('The customer prefers calls.');
     expect(f.application.searchUploads('member', { query: 'customer' }).results).toHaveLength(1);
   });
 
@@ -149,7 +152,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     f.generate.mockResolvedValue({ search_hints: 'telephone', audience: { kind: 'team' }, text: 'rewritten' });
     await f.run();
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'pending', search_hints: '' });
-    expect(f.application.readUpload('owner', receipt.context_id)).toMatchObject({ text: 'The customer prefers calls.', audience: { kind: 'only_me' } });
-    expect(() => f.application.readUpload('member', receipt.context_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(f.original('owner', receipt.context_id)).toMatchObject({ text: 'The customer prefers calls.', audience: { kind: 'only_me' } });
+    expect(() => f.original('member', receipt.context_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
   });
 });

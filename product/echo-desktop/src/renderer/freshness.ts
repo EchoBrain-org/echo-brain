@@ -22,8 +22,6 @@ export type ScreenArea = Exclude<PersonChangesAreaV1, 'projects'>;
 
 /** After a failed check the wait doubles, up to five minutes. */
 const BACKOFF_MAX_MS = 5 * 60_000;
-/** An Authority without the change check: its follow-ups are scanned every five minutes instead (R8). */
-const FALLBACK_MS = 5 * 60_000;
 /** Opening pages asks at most once in this long (R2). */
 const NAVIGATION_MS = 10_000;
 /** The follow-ups that left your open ones that one check reads by their ids, side by side. */
@@ -51,7 +49,7 @@ export interface Surfaces {
    * it shows none yet, and says so while it reads); null when a page could not be read.
    */
   readProjects(first: boolean): Promise<ReadonlyMap<string, ProjectSummary> | null>;
-  /** The sidebar's own quiet read of the pages it shows: on a return without a change check to say whether projects moved. */
+  /** The sidebar's own quiet read of the pages it shows: on a return whose check failed, so nothing says whether projects moved. */
   refreshSidebar(): Promise<void>;
   /** Every page of your follow-ups in some states (changed since a time), rows only; null when a page could not be read. */
   readRows(account: Expect, query: { states: readonly OpenItemView['state'][]; changed_since?: string }): Promise<OpenItemView[] | null>;
@@ -75,20 +73,12 @@ export interface Surfaces {
 
 /** Why a check ran. */
 type Trigger = 'start' | 'timer' | 'came-back' | 'navigation' | 'wake';
-/**
- * How a check went: read and acted on, failed, or there is no change check here (`older`, R8); and, read, the screen areas
- * that moved.
- */
-interface Checked { outcome: 'ok' | 'failed' | 'older'; moved: readonly ScreenArea[] }
+/** How a check went: read and acted on, or failed; and, read, the screen areas that moved. */
+interface Checked { outcome: 'ok' | 'failed'; moved: readonly ScreenArea[] }
 
 /** One account's loop, from sign-in (or start) to sign-out or a switch. */
 interface Loop {
   readonly account: Expect;
-  /**
-   * The Authority answered `not_supported`: it has no change check, nor `involved` or `changed_since`, which ship with it.
-   * Until the next start, follow-ups are scanned (what you sent or own), and the Yours list reads what you sent or own.
-   */
-  older: boolean;
   /** Each area's fingerprint as last acted on. An area not here is not learned yet: the next check reacts to it, learning. */
   areas: Partial<Record<PersonChangesAreaV1, string>>;
   /** The read of every project you belong to made at sign-in, for the first check to learn from. */
@@ -123,8 +113,6 @@ interface Loop {
 
 let surfaces!: Surfaces;
 let loop: Loop | null = null;
-/** `changes unsupported` is logged once a run of the app. */
-let unsupportedLogged = false;
 
 export function configure(given: Surfaces): void { surfaces = given; }
 
@@ -153,7 +141,7 @@ function latest(...times: readonly (string | null | undefined)[]): string | null
  */
 export function start(account: Expect): void {
   stop();
-  loop = { account, older: false, areas: {}, projects: surfaces.readProjects(true), memberships: null, followed: null, pending: new Map(),
+  loop = { account, areas: {}, projects: surfaces.readProjects(true), memberships: null, followed: null, pending: new Map(),
     seenUpTo: null, boundary: new Set(), told: { keys: [], rows: new Map(), projects: new Map() }, created: new Set(), pace: 60_000, failures: 0,
     timer: null, running: null, wakePending: false, began: Number.NEGATIVE_INFINITY };
   void check('start');
@@ -165,14 +153,10 @@ export function stop(): void {
   loop = null;
 }
 
-/** This account's Authority has no change check, nor `involved` or `changed_since` (R8): lists read what you sent or own. */
-export function olderAuthority(): boolean { return loop?.older === true; }
-
 /**
  * A check: the change check's fingerprints, and a reaction to each area that moved or is not learned yet. One runs at a
  * time; another trigger meanwhile joins it, except a wake also queues one fresh check. Its moved screen areas are read
  * again (but a return reads them with the page).
- * On an older Authority (R8), only the timer and a wake scan your follow-ups.
  */
 function check(trigger: Trigger): Promise<Checked | null> {
   const run = loop;
@@ -181,7 +165,6 @@ function check(trigger: Trigger): Promise<Checked | null> {
     if (trigger === 'wake') run.wakePending = true;
     return run.running;
   }
-  if (run.older && trigger !== 'timer' && trigger !== 'wake') return Promise.resolve({ outcome: 'older', moved: [] });
   const running = once(run, trigger).then(checked => {
     if (trigger !== 'came-back' && loop === run && checked.moved.length > 0) surfaces.owe({ back: false, areas: checked.moved });
     return checked;
@@ -198,27 +181,20 @@ function check(trigger: Trigger): Promise<Checked | null> {
 
 /**
  * The next check: at the server's pace; after failures later, doubling up to five minutes, but never sooner than the pace
- * the server last set; every five minutes on an older Authority.
+ * the server last set.
  */
 function schedule(run: Loop): void {
   if (run.timer) clearTimeout(run.timer);
-  const delay = run.older ? FALLBACK_MS : run.failures === 0 ? run.pace : Math.max(run.pace, Math.min(BACKOFF_MAX_MS, run.pace * 2 ** run.failures));
+  const delay = run.failures === 0 ? run.pace : Math.max(run.pace, Math.min(BACKOFF_MAX_MS, run.pace * 2 ** run.failures));
   run.timer = setTimeout(() => { run.timer = null; if (loop === run) void check('timer'); }, delay);
 }
 
 async function once(run: Loop, trigger: Trigger): Promise<Checked> {
   run.began = Date.now();
   if (run.timer) { clearTimeout(run.timer); run.timer = null; }
-  if (run.older) { await scan(run); return { outcome: 'older', moved: [] }; }
   const result = await ask<PersonChangesV1>(() => rpc('changes.read', { expect: run.account }));
   if (loop !== run) return { outcome: 'failed', moved: [] };
   if (!result.ok) {
-    if (result.failure.code === 'not_supported') {
-      run.older = true;
-      if (!unsupportedLogged) { unsupportedLogged = true; void ask(() => rpc('log.changes', { unsupported: true })); }
-      await scan(run);
-      return { outcome: 'older', moved: [] };
-    }
     if (ACCOUNT_GONE.includes(result.failure.code)) surfaces.accountLost(result.failure);
     run.failures += 1;
     return { outcome: 'failed', moved: [] };
@@ -248,21 +224,15 @@ async function once(run: Loop, trigger: Trigger): Promise<Checked> {
   return { outcome: 'ok', moved: news.filter((area): area is ScreenArea => area !== 'projects') };
 }
 
-/** An older Authority's scan, every five minutes and on a wake: what you sent or own, read rows only, and one notification. */
-async function scan(run: Loop): Promise<void> {
-  const events = await followUpsMoved(run);
-  if (loop === run && events) tell(run, events, []);
-}
-
 // ---- triggers ---------------------------------------------------------------------
 
 /**
  * ECHO came back: the window on screen and in front again, on either platform
  * (from another app, the tray, minimized, or covered by other windows). The
  * account is read again and a check runs side by side; then the page on screen
- * is read again quietly, with what the check found moved, once. Without a
- * change check to say whether projects moved, the sidebar is read again too
- * (R4, R8).
+ * is read again quietly, with what the check found moved, once. When the
+ * check failed, so nothing says whether projects moved, the sidebar is read
+ * again too (R4).
  */
 export async function cameBack(): Promise<void> {
   const [, checked] = await Promise.all([surfaces.status(), check('came-back')]);
@@ -277,7 +247,7 @@ export function woke(): void { void check('wake'); }
 /** A page was opened: a check, at most once in ten seconds (R2, R5). */
 export function navigated(): void {
   const run = loop;
-  if (!run || run.older || run.running || Date.now() - run.began < NAVIGATION_MS) return;
+  if (!run || run.running || Date.now() - run.began < NAVIGATION_MS) return;
   void check('navigation');
 }
 
@@ -404,14 +374,13 @@ function learnSeen(run: Loop, rows: readonly OpenItemView[]): void {
  * failed is read at the next check. One closed since that you never saw open
  * is told too: sent and closed between two checks. The first read only
  * learns, from your open ones and those closed since their newest change.
- * On an older Authority, none closed are read. Null when a read did not
- * finish: nothing is learned from it.
+ * Null when a read did not finish: nothing is learned from it.
  */
 async function followUpsMoved(run: Loop): Promise<FollowUpEvent[] | null> {
   const account = run.account;
   const before = run.followed;
-  const closedSince = (since: string | null) => (run.older ? Promise.resolve([])
-    : surfaces.readRows(account, { states: CLOSED, changed_since: new Date(since ?? SINCE_EVER).toISOString() }));
+  const closedSince = (since: string | null) =>
+    surfaces.readRows(account, { states: CLOSED, changed_since: new Date(since ?? SINCE_EVER).toISOString() });
   const [open, closedNow] = await Promise.all([surfaces.readRows(account, { states: ['open'] }), before === null ? [] : closedSince(run.seenUpTo)]);
   if (loop !== run || open === null || closedNow === null) return null;
   const now = new Map(open.map(row => [row.item_id, row]));

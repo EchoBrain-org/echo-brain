@@ -4,9 +4,10 @@ Status: implementation candidate; exact release acceptance is separate. This fea
 
 The [upload projects and sharing candidate](upload-projects-and-sharing.md)
 extends admission to several projects with a separate sharing page, V2 document
-reads and a V9 storage baseline. The V1 contract described here remains available
-for legacy originals; its singleton association behavior does not apply to new
-V2 uploads.
+reads and a V9 storage baseline. The V1 routes described here are retired
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). Documents
+uploaded as V1 stay readable through the V2 routes and keep their single
+project link; that singleton behavior does not apply to V2 uploads.
 
 ## User behavior
 
@@ -24,7 +25,7 @@ Only me, organization (`team`) and project audiences remain independent of proje
 
 Accepted shared documents remain in Authority custody. A contributor's departure does not cancel pending `team` or `project` extraction, delete shared originals or remove derived context. New authorized project members can read associated historical material; removed members cannot. Private `only_me` processing retains its contributor-tenure eligibility and association does not change that policy.
 
-After losing project access, the uploader's still-active original membership may recover a minimal `echo-person-document-saved-v1` receipt. It contains schema/kind, request ID, document ID, receipt time and saved state, without title, filename, audience, project IDs or bytes. Status and an exact upload replay can return that proof without restoring content access.
+After losing project access, the uploader's still-active original membership may recover a minimal `echo-person-document-saved-v2` receipt. It contains schema/kind, request ID, document ID, receipt time and saved state, without title, filename, audience, project IDs or bytes. `status-v2` and an exact V2 upload replay can return that proof without restoring content access, for a document stored as V1 too.
 
 Since V8, the Authority baseline separates immutable metadata, original BLOBs, extracted chunks, work state, associations, receipts and audits. Lists and searches never load original BLOBs. Original admission, quota accounting, receipt and initial extraction work commit together. The retained-item count caps remain shared across notes and documents: **100 originals per membership**, **1,000 per organization**. Document bytes have separate caps of **250 MiB per membership** and **25 GiB per organization**. Filling the document byte budget does not prevent small editor notes; the shared item count still applies. A rejected document returns `quota_exceeded` (HTTP 409); legacy note count-cap errors retain their existing `rate_limited` contract. These are retained-corpus limits, not rolling rate limits; this version has no deletion or quota-reset command.
 
@@ -38,7 +39,7 @@ Shared metadata is split across `authority_sources_v1` (organization-scoped iden
 
 The worker automatically extracts supported text and populates authorized document search. Its source policy is `on_request`: it does not automatically infer decisions/actions, send source text to a decision model or create approval cards. This version does not provide a new request-driven analysis endpoint. The existing meeting workflow retains its explicit automatic analysis policy, and original/Ask read paths remain distinct.
 
-Malformed retained editor notes receive an immutable, content-free failed-admission disposition, so one invalid row cannot block later notes. The worker emits bounded stage/error codes without source text or raw exception messages, backs off when idle, and wakes for new document uploads. Notes admitted while idle can wait up to five seconds for this internal step; their direct reads are already available. Admission replay is separate from processing completion. A worker can resume an accepted revision after interruption without creating a second source. Derived output references the exact original revision and extractor version; richer future extraction must create a new representation instead of replacing evidence. The existing note-editor `/v2/person/updates` contract remains compatible: accepted notes also enter the shared Person source through server pull without a model, while their existing read indexes and optional search-hint enrichment remain available. As of 2026-09-26 the client-less `/v1/person/updates` route and its search-hint worker are retired. V1 notes already retained stay in custody, enter the shared Person source the same way, and remain citable by Ask.
+Malformed retained editor notes receive an immutable, content-free failed-admission disposition, so one invalid row cannot block later notes. The worker emits bounded stage/error codes without source text or raw exception messages, backs off when idle, and wakes for new document uploads. Notes admitted while idle can wait up to five seconds for this internal step; their direct reads are already available. Admission replay is separate from processing completion. A worker can resume an accepted revision after interruption without creating a second source. Derived output references the exact original revision and extractor version; richer future extraction must create a new representation instead of replacing evidence. Notes stored under the note-editor `/v2/person/updates` contract also enter the shared Person source through server pull without a model, while their existing read indexes and optional search-hint enrichment remain available; only its search route is still served ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). As of 2026-09-26 the client-less `/v1/person/updates` route and its search-hint worker are retired. V1 notes already retained stay in custody, enter the shared Person source the same way, and remain citable by Ask.
 
 ## Extraction and transfer limits
 
@@ -68,11 +69,13 @@ The CLI uses `echo-brain person documents`:
 paged, under current access
 ([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). The V1
 `upload`, `status`, `read`, `search` and `download` commands and `read-v2` were
-retired from the CLI on 2026-09-30; their routes stay for older clients until a
-later server release. `retry` still resends a V1 snapshot that an older client
-retained.
+retired from the CLI on 2026-09-30, and every `/v1/person/documents` route
+from the Authority on 2026-10-25
+([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). Documents
+uploaded as V1 are read through the V2 routes, and `associate` and
+`dissociate` use the V2 routes too.
 
-Unknown upload outcomes retain the bounded account-scoped immutable request snapshot. Matching full or minimal saved receipts reconcile it. A snapshot an older client kept from a V1 upload is settled by `retry`, `abandon` or a minimal saved receipt; a full `status-v2` receipt reports its document but does not settle it. Abandoning local recovery cannot cancel a server save; retain the request ID and check `status-v2` or `search-v2` before starting a new upload. A definitive first-attempt rejection fails that queue item and continues to the next; an earlier uncertain attempt remains recoverable. Known input/quota/snapshot rejections remain distinct from an unknown mutation outcome.
+Unknown upload outcomes retain the bounded account-scoped immutable request snapshot. Matching full or minimal saved receipts reconcile it. A snapshot an older client kept from a V1 upload cannot be resent: `pending` lists it as unreadable, and `abandon` removes it. Abandoning local recovery cannot cancel a server save; retain the request ID and check `status-v2` or `search-v2` before starting a new upload. A definitive first-attempt rejection fails that queue item and continues to the next; an earlier uncertain attempt remains recoverable. Known input/quota/snapshot rejections remain distinct from an unknown mutation outcome.
 
 While it runs, the desktop app offers **Check status**, **Try again** and **Start over** for an unconfirmed upload, where Start over abandons this computer's kept copy of the file, and **Try again** or **Dismiss** for an unconfirmed link change. It keeps that record in memory only, so after a quit or crash it does not offer them again; `pending` and `retry` above still reach the kept upload copies. See the desktop app's [known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
 
