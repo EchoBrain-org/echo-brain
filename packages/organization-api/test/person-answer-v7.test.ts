@@ -1,13 +1,11 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_ANSWER_PATH_V6,
-  personAnswerCitationKeyV7,
+  personAnswerCitationKeyV8,
   personFollowUpRefV1,
   validatePersonAnswerCitationV6,
-  validatePersonAnswerCitationV7,
-  validatePersonAnswerResponseV6,
-  validatePersonAnswerResponseV7,
+  validatePersonAnswerCitationV8,
+  validatePersonAnswerResponseV8,
   validatePersonFollowUpCitationV1,
   validatePersonFollowUpEvidenceV1,
   validatePersonFollowUpRefV1,
@@ -22,7 +20,7 @@ const cited = { citation: followUp, kind: 'follow_up' as const, label: 'THERM-48
 const record = `sha256:${'a'.repeat(64)}` as const;
 const meeting = { citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'organization-member-readable-person-v2' as const }, kind: 'decision' as const, label: 'Ship fan curve v2', visibility: 'team' as const, ref: `meeting:${record}` as const };
 const response = (citations: readonly unknown[] = [cited]) => ({
-  schema_version: 7 as const, kind: 'echo-clean-person-answer-v7' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations,
+  schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations,
   parts: [{ question: 'What are my open tasks?', status: 'answered' as const, statements: [{ text: 'Mara owns the fan curve follow-up.', citation_indexes: [0], private: false }] }],
 });
 const evidence = {
@@ -32,12 +30,10 @@ const evidence = {
   expected: 'Reflect the v2 fan curve',
 };
 
-describe('Follow-up answer V7 (ADR-0040)', () => {
-  it('serves on its own route and keeps V6 closed to follow-ups', () => {
-    expect(PERSON_ANSWER_PATH_V6).toBe('/v6/person/ask');
-    expect(validatePersonAnswerResponseV7(response()).citations).toEqual([cited]);
-    expect(validatePersonAnswerCitationV7(cited)).toEqual(cited);
-    expect(() => validatePersonAnswerResponseV6({ ...response(), schema_version: 6, kind: 'echo-clean-person-answer-v6' })).toThrow();
+describe('Follow-up citations in the Ask answer (ADR-0040)', () => {
+  it('cites a follow-up in an answer, never on an impact card or at the evidence desk', () => {
+    expect(validatePersonAnswerResponseV8(response()).citations).toEqual([cited]);
+    expect(validatePersonAnswerCitationV8(cited)).toEqual(cited);
     // Stored impact cards and open items' live parts validate V6 citations: neither ever names a follow-up.
     expect(() => validatePersonAnswerCitationV6(cited)).toThrow('Ask response citation kind is invalid');
     // The model-free evidence doors stay V4.
@@ -45,32 +41,32 @@ describe('Follow-up answer V7 (ADR-0040)', () => {
       items: [{ id: 'desk_follow_up', kind: 'follow_up', citation: followUp, label: 'Follow-up', visibility: 'team', receipt_sha256: record }] })).toThrow();
   });
 
-  it('accepts every V6 citation unchanged', () => {
+  it('cites a follow-up beside a meeting and a page', () => {
     const page = { citation: { kind: 'page' as const, tool_id: 'knowledge', external_scope_id: 'site-1', page_id: 'p1', section_id: 's1', version: '3', permalink: 'https://knowledge.example.test/wiki/p1', text_sha256: canonicalSha256('x') }, kind: 'page' as const, label: 'Plan', visibility: 'only_me' as const };
-    const both = response([meeting, page]);
-    const statements = [{ text: 'The meeting decided it and the plan agrees.', citation_indexes: [0, 1], private: true }];
-    const accepted = validatePersonAnswerResponseV7({ ...both, parts: [{ ...both.parts[0]!, statements }] });
-    expect(accepted.citations).toEqual([meeting, page]);
+    const all = response([meeting, page, cited]);
+    const statements = [{ text: 'The meeting decided it, the plan agrees, and Mara owns the follow-up.', citation_indexes: [0, 1, 2], private: true }];
+    const accepted = validatePersonAnswerResponseV8({ ...all, parts: [{ ...all.parts[0]!, statements }] });
+    expect(accepted.citations).toEqual([meeting, page, cited]);
   });
 
   it('requires the follow-up ref on a follow-up and only there', () => {
     const { ref: _ref, ...withoutRef } = cited;
-    expect(() => validatePersonAnswerResponseV7(response([withoutRef]))).toThrow('Follow-up citation ref is missing');
+    expect(() => validatePersonAnswerResponseV8(response([withoutRef]))).toThrow('Follow-up citation ref is missing');
     for (const value of [
       { ...cited, ref: `follow_up:itm_${'0'.repeat(8)}` },
       { ...cited, ref: `meeting:${record}` },
       { ...meeting, ref },
       { ...cited, kind: 'action' },
       { ...meeting, kind: 'follow_up' },
-    ]) expect(() => validatePersonAnswerResponseV7(response([value]))).toThrow();
-    expect(() => validatePersonAnswerResponseV7(response([cited, { ...cited, label: 'Again' }]))).toThrow('duplicate citations');
+    ]) expect(() => validatePersonAnswerResponseV8(response([value]))).toThrow();
+    expect(() => validatePersonAnswerResponseV8(response([cited, { ...cited, label: 'Again' }]))).toThrow('duplicate citations');
   });
 
   it('marks a sentence private exactly when a cited follow-up is', () => {
     const owned = { ...cited, visibility: 'only_me' as const };
-    expect(() => validatePersonAnswerResponseV7(response([owned]))).toThrow('private is inconsistent');
+    expect(() => validatePersonAnswerResponseV8(response([owned]))).toThrow('private is inconsistent');
     const answer = response([owned]);
-    expect(validatePersonAnswerResponseV7({ ...answer, parts: [{ ...answer.parts[0]!, statements: [{ ...answer.parts[0]!.statements[0]!, private: true }] }] }).citations[0]).toEqual(owned);
+    expect(validatePersonAnswerResponseV8({ ...answer, parts: [{ ...answer.parts[0]!, statements: [{ ...answer.parts[0]!.statements[0]!, private: true }] }] }).citations[0]).toEqual(owned);
   });
 });
 
@@ -79,14 +75,14 @@ describe('the Ask response citation key', () => {
     const page = { kind: 'page' as const, tool_id: 'confluence', external_scope_id: 'site-one', page_id: '1', section_id: 's1', version: '3', permalink: 'https://knowledge.example.test/wiki/pages/1', text_sha256: `sha256:${'a'.repeat(64)}` as const };
     const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'cloud-one', ticket_id: '10046', permalink: 'https://tickets.example.test/browse/THERM-46', text_sha256: `sha256:${'b'.repeat(64)}` as const };
     // A page's sections and versions are separate citations; a ticket's row and opened body are one.
-    expect(personAnswerCitationKeyV7(page)).not.toBe(personAnswerCitationKeyV7({ ...page, section_id: 's2' }));
-    expect(personAnswerCitationKeyV7(page)).not.toBe(personAnswerCitationKeyV7({ ...page, version: '4' }));
-    expect(personAnswerCitationKeyV7(ticket)).toBe(personAnswerCitationKeyV7({ ...ticket, text_sha256: `sha256:${'c'.repeat(64)}` }));
-    expect(personAnswerCitationKeyV7(followUp)).toBe(`follow_up:${itemId}`);
+    expect(personAnswerCitationKeyV8(page)).not.toBe(personAnswerCitationKeyV8({ ...page, section_id: 's2' }));
+    expect(personAnswerCitationKeyV8(page)).not.toBe(personAnswerCitationKeyV8({ ...page, version: '4' }));
+    expect(personAnswerCitationKeyV8(ticket)).toBe(personAnswerCitationKeyV8({ ...ticket, text_sha256: `sha256:${'c'.repeat(64)}` }));
+    expect(personAnswerCitationKeyV8(followUp)).toBe(`follow_up:${itemId}`);
     const citation = (value: typeof page | typeof ticket) => ({ citation: value, kind: value.kind, label: 'x', visibility: 'only_me' as const });
-    const response = (citations: readonly unknown[]) => ({ schema_version: 7, kind: 'echo-clean-person-answer-v7', scope: { kind: 'global' }, outcome: 'answered', citations,
+    const response = (citations: readonly unknown[]) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered', citations,
       parts: [{ question: 'q', status: 'answered', statements: [{ text: 'x', citation_indexes: citations.map((_, index) => index), private: true }] }] });
-    expect(() => validatePersonAnswerResponseV7(response([citation(ticket), citation({ ...ticket, text_sha256: `sha256:${'c'.repeat(64)}` })]))).toThrow(/duplicate citations/u);
+    expect(() => validatePersonAnswerResponseV8(response([citation(ticket), citation({ ...ticket, text_sha256: `sha256:${'c'.repeat(64)}` })]))).toThrow(/duplicate citations/u);
   });
 });
 

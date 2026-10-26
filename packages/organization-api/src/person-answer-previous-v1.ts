@@ -7,8 +7,7 @@ import type { PersonAnswerCitationV8 } from './person-answer-v8.js';
  * question, when it was asked, and the sentences of its answer the asker can
  * still read, with the citations that answer carried. It is the asker's own
  * context, like the question: the Authority neither verifies nor stores it,
- * and it is never evidence. Every older route refuses a request that carries
- * it (`invalid_request`), and a client that sends it asks `/v7` only.
+ * and it is never evidence.
  *
  * - `follow_up`: before research, one resolver call works out what the
  *   question refers to. The answer then answers the full question it

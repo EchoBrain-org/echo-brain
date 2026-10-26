@@ -1,4 +1,5 @@
-import type { PersonAnswerCitationV4, PersonAnswerResponseV4 } from './person-answer-v4.js';
+import type { PersonAnswerScopeV3 } from './person-answer-v3.js';
+import type { PersonAnswerCitationV4, PersonAnswerPartV4, PersonAnswerStatementV4 } from './person-answer-v4.js';
 import type { PersonAnswerChoiceV1, PersonAnswerSinceV1 } from './person-answer-previous-v1.js';
 import type { PersonAnswerEvidenceCitationV7, PersonAnswerOpenRefV7, PersonEvidenceKindV4 } from './person-answer-v7.js';
 import { validateProjectIdV1 } from './project-context-v1.js';
@@ -6,13 +7,17 @@ import type { PersonProjectCitationV1, PersonToolCitationV1, PersonWorkspaceCita
 import { assertToolId, fail } from './validation.js';
 
 /**
- * V8 adds workspace and tool-container citations (research tool contract
- * v1): the asker's projects, the people in their organization, their tools,
- * and the Jira projects and Confluence spaces of the tools they connected.
- * The V3 request shape is unchanged. A matched response on this path carries
- * `PERSON_ANSWER_ROUTE_HEADER_V5` with the value `7`.
+ * The Ask route, with the V8 answer: the only one, since the routes before it (`/v3` to `/v6`, the V4 to V7 answers)
+ * were retired. V8 added workspace and tool-container citations (research tool contract v1): the asker's projects, the
+ * people in their organization, their tools, and the Jira projects and Confluence spaces of the tools they connected.
+ * Its request is the V3 request.
  */
 export const PERSON_ANSWER_PATH_V7 = '/v7/person/ask';
+/**
+ * Present, with the value `7`, on every response the `/v7` route gives, provider and application errors included, so a
+ * client tells the route's own 404 from an Authority that has no `/v7`.
+ */
+export const PERSON_ANSWER_ROUTE_HEADER_V5 = 'x-echo-person-ask-route';
 export type PersonEvidenceKindV5 = PersonEvidenceKindV4 | 'project' | 'person' | 'tool' | 'tool_container';
 export type PersonAnswerEvidenceCitationV8 = PersonAnswerEvidenceCitationV7 | PersonWorkspaceCitationV1;
 /**
@@ -32,17 +37,21 @@ export interface PersonAnswerCitationV8 extends Omit<PersonAnswerCitationV4, 'ci
    */
   readonly key?: string;
 }
-/** Every outcome a V8 answer may carry; `clarify` is only the V8 answer's (ADR-0047). */
+/** Every outcome a V8 answer may carry. */
 export const PERSON_ANSWER_OUTCOMES_V8 = Object.freeze(['answered', 'partial', 'not_found', 'clarify'] as const);
-export interface PersonAnswerResponseV8 extends Omit<PersonAnswerResponseV4, 'schema_version' | 'kind' | 'citations' | 'outcome'> {
+export interface PersonAnswerResponseV8 {
   readonly schema_version: 8;
   readonly kind: 'echo-clean-person-answer-v8';
+  readonly scope: PersonAnswerScopeV3;
   /**
    * `clarify` answers only a follow-up that could mean more than one thing (ADR-0047): it carries `choices`, the
    * question asked, and no part or citation.
    */
-  readonly outcome: PersonAnswerResponseV4['outcome'] | 'clarify';
+  readonly outcome: (typeof PERSON_ANSWER_OUTCOMES_V8)[number];
   readonly citations: readonly PersonAnswerCitationV8[];
+  readonly direct?: PersonAnswerStatementV4;
+  readonly parts: readonly PersonAnswerPartV4[];
+  readonly notice?: string;
   /** Only on an answer to a request that carried `previous` (ADR-0047): the full question this answer answers. */
   readonly question?: string;
   /** Only on an Ask again answer that compared with the earlier one (ADR-0047): what is different since. */

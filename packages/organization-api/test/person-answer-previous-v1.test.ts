@@ -8,10 +8,6 @@ import {
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
   PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
   validatePersonAnswerRequestV3,
-  validatePersonAnswerResponseV4,
-  validatePersonAnswerResponseV5,
-  validatePersonAnswerResponseV6,
-  validatePersonAnswerResponseV7,
   validatePersonAnswerResponseV8,
 } from '../src/index.js';
 
@@ -149,31 +145,19 @@ describe('what an answer to the previous turn carries (ADR-0047)', () => {
       answered({ choices: clarified().choices }),
     ]) expect(() => validatePersonAnswerResponseV8(value)).toThrow();
   });
-
-  it('keeps every answer before V8 closed to the previous turn', () => {
-    const v7 = (extra: Record<string, unknown>) => ({ ...answered(), schema_version: 7, kind: 'echo-clean-person-answer-v7', citations: [decision],
-      parts: [{ question: 'Q', status: 'answered', statements: [{ text: 'Held.', citation_indexes: [0], private: false }] }], ...extra });
-    const { question: _question, ...plain } = v7({});
-    expect(validatePersonAnswerResponseV7(plain).outcome).toBe('answered');
-    expect(() => validatePersonAnswerResponseV7(v7({}))).toThrow();
-    expect(() => validatePersonAnswerResponseV7({ ...clarified(), schema_version: 7, kind: 'echo-clean-person-answer-v7' })).toThrow();
-  });
 });
 
 describe('removed from the contract (ADR-0047 C4)', () => {
-  const at = (version: number) => ({
-    schema_version: version, kind: `echo-clean-person-answer-v${version}`, scope: { kind: 'global' }, outcome: 'not_found', citations: [],
+  const notFound = () => ({
+    schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'not_found', citations: [],
     parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Not found.' }],
   });
-  const validators = [validatePersonAnswerResponseV4, validatePersonAnswerResponseV5, validatePersonAnswerResponseV6, validatePersonAnswerResponseV7, validatePersonAnswerResponseV8];
 
-  it('refuses an assumption and the off_scope outcome on every answer version, which only the retired A1 pipeline produced', () => {
-    validators.forEach((validate, index) => {
-      expect(validate(at(index + 4)).outcome).toBe('not_found');
-      expect(() => validate({ ...at(index + 4), assumption: 'You meant the DVT gate.' })).toThrow('Ask response has an unexpected shape');
-      expect(() => validate({ ...at(index + 4), outcome: 'off_scope' })).toThrow('Ask response is invalid');
-      // `notice` and `gap` stay.
-      expect(validate({ ...at(index + 4), notice: 'Research stopped early.' }).notice).toBe('Research stopped early.');
-    });
+  it('refuses an assumption and the off_scope outcome, which only the retired A1 pipeline produced', () => {
+    expect(validatePersonAnswerResponseV8(notFound()).outcome).toBe('not_found');
+    expect(() => validatePersonAnswerResponseV8({ ...notFound(), assumption: 'You meant the DVT gate.' })).toThrow('Ask response has an unexpected shape');
+    expect(() => validatePersonAnswerResponseV8({ ...notFound(), outcome: 'off_scope' })).toThrow('Ask response is invalid');
+    // `notice` and `gap` stay.
+    expect(validatePersonAnswerResponseV8({ ...notFound(), notice: 'Research stopped early.' }).notice).toBe('Research stopped early.');
   });
 });

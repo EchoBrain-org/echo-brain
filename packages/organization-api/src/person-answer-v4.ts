@@ -1,9 +1,7 @@
 import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 } from './person-diagnostics-v1.js';
 import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validatePersonPageCitationV1 } from './person-page-citation-v1.js';
-import type { PersonAnswerCitationV5, PersonAnswerResponseV5 } from './person-answer-v5.js';
-import type { PersonAnswerCitationV6, PersonAnswerResponseV6 } from './person-answer-v6.js';
-import type { PersonAnswerCitationV7, PersonAnswerEvidenceCitationV7, PersonAnswerResponseV7 } from './person-answer-v7.js';
+import type { PersonAnswerCitationV6 } from './person-answer-v6.js';
 import {
   PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
   type PersonEvidenceKindV5,
@@ -46,8 +44,10 @@ import {
 
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
 export const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
-/** The ordinary Agentic Ask route, with the V4 answer. ADR-0022 retired the V1 and V2 Asks. */
-export const PERSON_ANSWER_PATH_V3 = '/v3/person/ask';
+/**
+ * The evidence desk and the capability read (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the
+ * Ask routes before it, `/v3` to `/v6` with the V4 to V7 answers, were retired.
+ */
 export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
 export const PERSON_EVIDENCE_OPEN_PATH_V1 = '/v3/person/evidence/open';
 export const PERSON_CAPABILITIES_PATH_V1 = '/v3/person/capabilities';
@@ -90,10 +90,7 @@ export interface PersonAnswerRequestV3 {
   readonly mine?: true;
   /** A capture prepared by this actor for this ordinary Ask. */
   readonly capture_id?: PersonDiagnosticCaptureIdV1;
-  /**
-   * The asker's previous turn (ADR-0047): only `/v7` takes it, and every older route refuses a request that carries it.
-   * The asker's own context, never evidence, and never stored.
-   */
+  /** The asker's previous turn (ADR-0047): the asker's own context, never evidence, and never stored. */
   readonly previous?: PersonAnswerPreviousV1;
 }
 
@@ -112,10 +109,11 @@ export interface PersonAnswerPartV4 {
   readonly statements: readonly PersonAnswerStatementV4[];
   readonly gap?: string;
   readonly records?: readonly PersonAnswerEvidenceFallbackV4[];
-  /** V8 only, and only for an Ask that asked for it (answer layout v1, ADR-0045): how its statements read. */
+  /** Only for an Ask that asked for it (answer layout v1, ADR-0045): how its statements read. */
   readonly layout?: readonly PersonAnswerBlockV1[];
 }
 
+/** An answer citation's projection: what later citations (V6 to V8) extend. */
 export interface PersonAnswerCitationV4 {
   readonly citation: PersonAnswerEvidenceCitationV4;
   readonly kind: PersonEvidenceKindV1;
@@ -123,17 +121,6 @@ export interface PersonAnswerCitationV4 {
   readonly visibility: PersonEvidenceVisibilityV1;
   /** Opens the cited item with person open (ADR-0024). */
   readonly ref?: PersonItemRefV1;
-}
-
-export interface PersonAnswerResponseV4 {
-  readonly schema_version: 4;
-  readonly kind: 'echo-clean-person-answer-v4';
-  readonly scope: PersonAnswerScopeV3;
-  readonly outcome: 'answered' | 'partial' | 'not_found';
-  readonly citations: readonly PersonAnswerCitationV4[];
-  readonly direct?: PersonAnswerStatementV4;
-  readonly parts: readonly PersonAnswerPartV4[];
-  readonly notice?: string;
 }
 
 export interface PersonEvidenceSearchRequestV1 {
@@ -199,20 +186,24 @@ function scope(value: unknown): PersonAnswerScopeV3 {
   return validatePersonAnswerScopeV3(value, 'Ask response scope');
 }
 
-/** The Ask answer versions these validators serve; each admits every citation kind of the one before it. */
-type AnswerVersion = 4 | 5 | 6 | 7 | 8;
+/**
+ * The citations these validators serve, each admitting every kind of the one before it: 4, the evidence desk's (records
+ * and passages); 6, the impact card's (with tickets and pages); 8, the Ask answer's (with follow-ups, the workspace and
+ * tool containers).
+ */
+type CitationVersion = 4 | 6 | 8;
 
 /** A workspace item or tool container: the V8 answer's own kinds (research tool contract v1). */
 function workspaceKind(value: unknown): boolean {
   return (PERSON_WORKSPACE_CITATION_KINDS_V1 as readonly unknown[]).includes(value);
 }
 
-function evidenceCitation(value: unknown, version: AnswerVersion = 4): PersonAnswerEvidenceCitationV8 {
+function evidenceCitation(value: unknown, version: CitationVersion = 4): PersonAnswerEvidenceCitationV8 {
   const input = object(value, 'Ask citation');
-  if (version >= 5 && input.kind === 'ticket') return validatePersonTicketCitationV1(input);
+  if (version >= 6 && input.kind === 'ticket') return validatePersonTicketCitationV1(input);
   if (version >= 6 && input.kind === 'page') return validatePersonPageCitationV1(input);
-  if (version >= 7 && input.kind === 'follow_up') return validatePersonFollowUpCitationV1(input);
-  if (version >= 8 && workspaceKind(input.kind)) return validatePersonWorkspaceCitationV1(input);
+  if (version === 8 && input.kind === 'follow_up') return validatePersonFollowUpCitationV1(input);
+  if (version === 8 && workspaceKind(input.kind)) return validatePersonWorkspaceCitationV1(input);
   return citation(input);
 }
 
@@ -237,15 +228,9 @@ function citation(value: unknown): PersonAnswerCitationV3 {
 /**
  * The identity an Ask response checks for duplicate citations: a response cites each key once. A page's section and
  * version are part of it; a ticket's or a follow-up's released text is not, so a listed ticket's row and its opened body
- * are one citation. A renderer that numbers citations uses this key so it never builds a response this refuses.
- */
-export function personAnswerCitationKeyV7(value: PersonAnswerEvidenceCitationV7): string {
-  return citationKey(value);
-}
-
-/**
- * `personAnswerCitationKeyV7` for the V8 answer: a project, a person and a tool by their ids, and a tool container by
- * its tool, scope, kind and container id, never by its label or key.
+ * are one citation. A project, a person and a tool are keyed by their ids, and a tool container by its tool, scope, kind
+ * and container id, never by its label or key. A renderer that numbers citations uses this key so it never builds a
+ * response this refuses.
  */
 export function personAnswerCitationKeyV8(value: PersonAnswerEvidenceCitationV8): string {
   return citationKey(value);
@@ -265,11 +250,9 @@ function citationKey(value: PersonAnswerEvidenceCitationV8): string {
     : `source_revision:${value.source_id}:${value.revision_id}:${value.representation_sha256}:${value.anchor_sha256}`;
 }
 
-function evidenceKind(value: unknown, label: string, version: AnswerVersion = 4): asserts value is PersonEvidenceKindV5 {
-  if (version >= 8 && workspaceKind(value)) return;
-  if (version >= 7 && value === 'follow_up') return;
-  if (version >= 6 && value === 'page') return;
-  if (version >= 5 && value === 'ticket') return;
+function evidenceKind(value: unknown, label: string, version: CitationVersion = 4): asserts value is PersonEvidenceKindV5 {
+  if (version === 8 && (workspaceKind(value) || value === 'follow_up')) return;
+  if (version >= 6 && (value === 'page' || value === 'ticket')) return;
   if (!['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'].includes(value as string)) fail(`${label} is invalid`);
 }
 
@@ -277,7 +260,7 @@ function visibility(value: unknown, label: string): asserts value is PersonEvide
   if (!['only_me', 'team', 'project', 'projects', 'approver_only'].includes(value as string)) fail(`${label} is invalid`);
 }
 
-function statement(value: unknown, citations: readonly (PersonAnswerCitationV5 | PersonAnswerCitationV6 | PersonAnswerCitationV7 | PersonAnswerCitationV8)[], label: string, fallback = false): PersonAnswerStatementV4 {
+function statement(value: unknown, citations: readonly PersonAnswerCitationV8[], label: string, fallback = false): PersonAnswerStatementV4 {
   const input = object(value, label);
   assertExactKeys(input, ['text', 'citation_indexes', 'private'], label);
   if (fallback) evidenceText(input.text, `${label} text`, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
@@ -309,9 +292,9 @@ function citationRefConsistent(cited: PersonAnswerEvidenceCitationV8, ref: Perso
   return false;
 }
 
-function answerCitation(value: unknown, version: AnswerVersion = 4): PersonAnswerCitationV8 {
+function answerCitation(value: unknown, version: 6 | 8): PersonAnswerCitationV8 {
   const input = object(value, 'Ask response citation');
-  assertExactKeys(input, ['citation', 'kind', 'label', 'visibility', ...(Object.hasOwn(input, 'ref') ? ['ref'] : []), ...(version >= 8 && Object.hasOwn(input, 'key') ? ['key'] : [])], 'Ask response citation');
+  assertExactKeys(input, ['citation', 'kind', 'label', 'visibility', ...(Object.hasOwn(input, 'ref') ? ['ref'] : []), ...(version === 8 && Object.hasOwn(input, 'key') ? ['key'] : [])], 'Ask response citation');
   evidenceKind(input.kind, 'Ask response citation kind', version);
   text(input.label, 'Ask response citation label', PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
   visibility(input.visibility, 'Ask response citation visibility');
@@ -321,8 +304,8 @@ function answerCitation(value: unknown, version: AnswerVersion = 4): PersonAnswe
   if ((cited.kind === 'follow_up') !== (input.kind === 'follow_up')) fail('Follow-up citation kind is inconsistent');
   for (const kind of PERSON_WORKSPACE_CITATION_KINDS_V1) if ((cited.kind === kind) !== (input.kind === kind)) fail('Workspace citation kind is inconsistent');
   const ref: PersonAnswerOpenRefV8 | undefined = !Object.hasOwn(input, 'ref') ? undefined
-    : version >= 7 && typeof input.ref === 'string' && input.ref.startsWith('follow_up:') ? validatePersonFollowUpRefV1(input.ref, 'Ask response citation ref')
-      : version >= 8 && typeof input.ref === 'string' && (input.ref.startsWith('project:') || input.ref.startsWith('tool:')) ? validatePersonWorkspaceRefV1(input.ref, 'Ask response citation ref')
+    : version === 8 && typeof input.ref === 'string' && input.ref.startsWith('follow_up:') ? validatePersonFollowUpRefV1(input.ref, 'Ask response citation ref')
+      : version === 8 && typeof input.ref === 'string' && (input.ref.startsWith('project:') || input.ref.startsWith('tool:')) ? validatePersonWorkspaceRefV1(input.ref, 'Ask response citation ref')
         : validatePersonItemRefV1(input.ref, 'Ask response citation ref');
   // A follow-up always opens its item page.
   if (cited.kind === 'follow_up' && ref === undefined) fail('Follow-up citation ref is missing');
@@ -339,9 +322,9 @@ function answerCitation(value: unknown, version: AnswerVersion = 4): PersonAnswe
   });
 }
 
-function part(value: unknown, citations: readonly (PersonAnswerCitationV5 | PersonAnswerCitationV6 | PersonAnswerCitationV7 | PersonAnswerCitationV8)[], version: AnswerVersion): PersonAnswerPartV4 {
+function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerPartV4 {
   const input = object(value, 'Ask response part');
-  assertExactKeys(input, ['question', 'status', 'statements', ...(Object.hasOwn(input, 'gap') ? ['gap'] : []), ...(Object.hasOwn(input, 'records') ? ['records'] : []), ...(version >= 8 && Object.hasOwn(input, 'layout') ? ['layout'] : [])], 'Ask response part');
+  assertExactKeys(input, ['question', 'status', 'statements', ...(Object.hasOwn(input, 'gap') ? ['gap'] : []), ...(Object.hasOwn(input, 'records') ? ['records'] : []), ...(Object.hasOwn(input, 'layout') ? ['layout'] : [])], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
   if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4) fail('Ask response part is invalid');
   if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
@@ -463,37 +446,32 @@ function answerSince(value: unknown, citations: readonly PersonAnswerCitationV8[
   return Object.freeze({ statements: Object.freeze(boundedList(input.statements, 'Ask response since', PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1).map(item => statement(item, citations, 'Ask response since statement'))) });
 }
 
-/** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items too. */
+/** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items: never a follow-up or a workspace item. */
 export function validatePersonAnswerCitationV6(value: unknown): PersonAnswerCitationV6 { return answerCitation(value, 6) as PersonAnswerCitationV6; }
-/** One V7 response citation: a V6 citation, or a follow-up with its follow-up ref (ADR-0040). */
-export function validatePersonAnswerCitationV7(value: unknown): PersonAnswerCitationV7 { return answerCitation(value, 7) as PersonAnswerCitationV7; }
 /**
- * One V8 response citation (research tool contract v1): a V7 citation, a project or a tool with the ref that opens it,
- * a person, or a tool container with its key when it has one.
+ * One V8 response citation (research tool contract v1): an approved record, a passage, a ticket, a page, a follow-up with
+ * its follow-up ref (ADR-0040), a project or a tool with the ref that opens it, a person, or a tool container with its key
+ * when it has one.
  */
 export function validatePersonAnswerCitationV8(value: unknown): PersonAnswerCitationV8 { return answerCitation(value, 8); }
-export function validatePersonAnswerResponseV4(value: unknown): PersonAnswerResponseV4 { return answerResponse(value, 4) as PersonAnswerResponseV4; }
-export function validatePersonAnswerResponseV5(value: unknown): PersonAnswerResponseV5 { return answerResponse(value, 5) as PersonAnswerResponseV5; }
-export function validatePersonAnswerResponseV6(value: unknown): PersonAnswerResponseV6 { return answerResponse(value, 6) as PersonAnswerResponseV6; }
-export function validatePersonAnswerResponseV7(value: unknown): PersonAnswerResponseV7 { return answerResponse(value, 7) as PersonAnswerResponseV7; }
-export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResponseV8 { return answerResponse(value, 8) as PersonAnswerResponseV8; }
-function answerResponse(value: unknown, version: AnswerVersion) {
+/** The Ask answer, `/v7`'s (research tool contract v1): the only one, since the V4 to V7 answers were retired with their routes. */
+export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResponseV8 {
   const input = object(value, 'Ask response');
-  // Only a V8 answer to a request that carried the previous turn (ADR-0047) names its question, says what is different
+  // Only an answer to a request that carried the previous turn (ADR-0047) names its question, says what is different
   // since, or offers choices.
-  const previous = version >= 8 ? ['question', 'since', 'choices'].filter(key => Object.hasOwn(input, key)) : [];
+  const previous = ['question', 'since', 'choices'].filter(key => Object.hasOwn(input, key));
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous], 'Ask response');
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
-  const clarify = version >= 8 && input.outcome === 'clarify';
-  if (input.schema_version !== version || input.kind !== `echo-clean-person-answer-v${version}` || !((PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) && (clarify || input.outcome !== 'clarify')) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
+  const clarify = input.outcome === 'clarify';
+  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
-  const citations = input.citations.map(item => answerCitation(item, version));
+  const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();
   for (const item of citations) { const key = citationKey(item.citation); if (citationKeys.has(key)) fail('Ask response contains duplicate citations'); citationKeys.add(key); }
   const result = {
-    schema_version: version, kind: `echo-clean-person-answer-v${version}`, scope: scope(input.scope), outcome: input.outcome as PersonAnswerResponseV8['outcome'], citations: Object.freeze(citations),
+    schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: scope(input.scope), outcome: input.outcome as PersonAnswerResponseV8['outcome'], citations: Object.freeze(citations),
     ...(Object.hasOwn(input, 'direct') ? { direct: statement(input.direct, citations, 'Ask response direct') } : {}),
-    parts: Object.freeze(input.parts.map((item) => part(item, citations, version))),
+    parts: Object.freeze(input.parts.map((item) => part(item, citations))),
     ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}),
     ...(previous.includes('question') ? { question: fullQuestion(input.question, 'Ask response question') } : {}),
     ...(previous.includes('since') ? { since: answerSince(input.since, citations) } : {}),
@@ -513,7 +491,7 @@ function answerResponse(value: unknown, version: AnswerVersion) {
   // `since` answers an Ask again, which names its question; an answer that cites nothing cannot say what is different.
   if (previous.includes('since') && (!previous.includes('question') || result.citations.length === 0)) fail('Ask response since is inconsistent');
   if (canonicalJsonBytes(result).byteLength > PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) fail('Ask response exceeds JSON byte bound');
-  return Object.freeze(result);
+  return Object.freeze(result) as PersonAnswerResponseV8;
 }
 
 export function validatePersonEvidenceSearchRequestV1(value: unknown): PersonEvidenceSearchRequestV1 {

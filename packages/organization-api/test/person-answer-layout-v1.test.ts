@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1,
   validatePersonAnswerLayoutV1,
-  validatePersonAnswerResponseV7,
   validatePersonAnswerResponseV8,
   validatePersonAskAnswerLayoutHeaderV1,
 } from '../src/index.js';
@@ -53,8 +52,7 @@ describe('Answer layout v1 (ADR-0045)', () => {
     expect(validatePersonAnswerResponseV8({ ...plain, parts: [withoutLayout] }).parts[0]).not.toHaveProperty('layout');
   });
 
-  it('keeps V7 closed to layout, and refuses one on a part with no statements', () => {
-    expect(() => validatePersonAnswerResponseV7({ ...response(), schema_version: 7, kind: 'echo-clean-person-answer-v7', citations: [] })).toThrow();
+  it('refuses a layout on a part with no statements', () => {
     expect(() => validatePersonAnswerResponseV8({ ...response({ status: 'not_found', statements: [], gap: 'None.' }), outcome: 'not_found', citations: [] })).toThrow();
   });
 
