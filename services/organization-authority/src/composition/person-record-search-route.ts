@@ -355,7 +355,10 @@ export interface PersonReadableDecisionProjectsV1 {
 
 /** The records filed in one of a person's projects, as the project activity read takes them (Ask timeline v1, C2). */
 export interface PersonProjectRecordsV1 {
-  /** When the newest record filed in the project that this person reads now and did not approve arrived (its receipt time), else null. */
+  /**
+   * When the newest record filed in the project that this person reads now and did not approve arrived (its receipt time),
+   * else null. Only the project's newest 500 filed records are looked at: one older than them never counts.
+   */
   readonly meeting_at: string | null;
   /**
    * The newest records filed in the project, at most the lookup's `limit`, newest first: a lookup of what is filed where, not a
@@ -371,8 +374,9 @@ export interface PersonProjectRecordActivityV1 {
    * position, and when the newest of them that this person reads and that is not theirs arrived. A record is theirs when it is
    * in `own` (the records their published decisions name, skipped with no record read) or when its signed record names them its
    * approver (as while the decision's receipt is not written yet). The exact Layer 1 check reads candidates only until that
-   * record is found. Nothing is audited. `projects` is this person's own grants, read inside the caller's own read
-   * transaction, as `readableDecisionProjects` takes them.
+   * record is found, and never past the project's newest 500 filed records: a project whose newest 500 are all this person's
+   * own, or all unreadable to them, has no meeting time, however many older records it holds. Nothing is audited. `projects`
+   * is this person's own grants, read inside the caller's own read transaction, as `readableDecisionProjects` takes them.
    */
   projectRecordActivity(input: {
     readonly access_token: string;
@@ -758,6 +762,8 @@ const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
 /** The most records one project lookup returns, and the candidates it reads per page. */
 const PROJECT_RECORDS_MAX = 500;
 const PROJECT_RECORDS_PAGE = 100;
+/** The newest filed records project activity looks through for a meeting from someone else (Ask timeline v1, C2). */
+const PROJECT_ACTIVITY_SCAN_MAX = 500;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 type MeetingCollectionState = {
@@ -1672,9 +1678,13 @@ export function createPersonRecordSearchRouteV1(
         if (!held.has(projectId)) continue;
         const filed: Sha256Digest[] = [];
         let meeting_at: string | null = null;
-        // A page at a time, until the newest `limit` are listed and the newest that is not the reader's own is found, or none is left.
-        for (let before = Number.MAX_SAFE_INTEGER; ;) {
-          const page = filedIn.all(projectId, before, PROJECT_RECORDS_PAGE) as readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[];
+        // A page at a time, until the newest `limit` are listed and the newest that is not the reader's own is found, none is
+        // left, or the newest PROJECT_ACTIVITY_SCAN_MAX (and at least `limit`) were looked through.
+        const bound = Math.max(PROJECT_ACTIVITY_SCAN_MAX, input.limit);
+        for (let before = Number.MAX_SAFE_INTEGER, scanned = 0; ;) {
+          const size = Math.min(PROJECT_RECORDS_PAGE, bound - scanned);
+          const page = filedIn.all(projectId, before, size) as readonly { readonly record_position: number; readonly record_sha256: Sha256Digest }[];
+          scanned += page.length;
           for (const candidate of page) {
             if (filed.length < input.limit) filed.push(candidate.record_sha256);
             if (meeting_at !== null || input.own.has(candidate.record_sha256)) continue;
@@ -1685,7 +1695,7 @@ export function createPersonRecordSearchRouteV1(
             if (approver !== undefined && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id) continue;
             meeting_at = receiptTime(receipt.get(row.position, row.record_sha256));
           }
-          if ((meeting_at !== null && filed.length === input.limit) || page.length < PROJECT_RECORDS_PAGE) break;
+          if ((meeting_at !== null && filed.length === input.limit) || page.length < size || scanned >= bound) break;
           before = page.at(-1)!.record_position;
         }
         result.set(projectId, Object.freeze({ meeting_at, filed: Object.freeze(filed) }));

@@ -406,6 +406,10 @@ is private, outside the repository.
 - A note filed into a project long after it was written keeps its original
   date on the project page, so its "New" tag may not show even though it lit
   the dot.
+- Project activity looks only at each project's newest 500 filed meeting
+  records: an older record, or a follow-up of one, never lights the dot. A
+  project whose newest 500 records are all the person's own approvals (or
+  all records they cannot read) has no meeting time, however many it holds.
 - The timeline lives on one device. A second Mac starts empty.
 
 ## Build tracks

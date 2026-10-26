@@ -349,6 +349,42 @@ describe('SQLite open items v1', () => {
     expect(f.items.forRecords(records, { states: ['unsent'], limit: 0 })).toEqual([]);
   });
 
+  it('finds the items someone else moved, newest move first by the latest such move, a page at a time (Ask timeline v1, C2)', async () => {
+    const f = await finishedRunsFixture([['46', '47', '48'], ['49']]);
+    const org = f.owner.organization_id;
+    const records = f.finished.map(run => run.record_sha256!);
+    const [first, second, third] = f.items.forRun(f.finished[0]!.run_id);
+    const [other] = f.items.forRun(f.finished[1]!.run_id);
+    const update = (set: string, itemId: string, ...args: unknown[]) => f.db.prepare(`UPDATE authority_impact_items_v1 SET ${set} WHERE item_id=?`).run(...args, itemId);
+    const sent = (itemId: string, at: string) => update("state='open', sent_at=?, send_command_id='cmd', send_included=1", itemId, at);
+    // Ari sent the first decision's three items at 09:00 and the other's at 09:30. Mina closed the first at 10:00; Rafael took
+    // the second at 11:00; Mina's close of the third is stored in a form the store never writes; Ari closed the other at 12:00.
+    for (const item of [first!, second!, third!]) sent(item.item_id, '2026-10-08T09:00:00.000Z');
+    sent(other!.item_id, '2026-10-08T09:30:00.000Z');
+    update("state='done', state_set_by=?, state_set_at='2026-10-08T10:00:00.000Z'", first!.item_id, f.mina);
+    update("owner_membership_id=?, owner_match='reassigned', owner_set_by=?, owner_set_at='2026-10-08T11:00:00.000Z'", second!.item_id, f.rafael, f.rafael);
+    update("state='done', state_set_by=?, state_set_at='2026-10-08 13:00:00'", third!.item_id, f.mina);
+    update("state='done', state_set_by=?, state_set_at='2026-10-08T12:00:00.000Z'", other!.item_id, ARI);
+    const moved = (membership: string, options: Parameters<typeof f.items.movedByOthers>[3] = { limit: 10 }, of: typeof records = records) =>
+      f.items.movedByOthers(org, membership, of, options).map(entry => [entry.row.item_id, entry.moved_at]);
+    // To Ari, his own sends and close are no move; Mina's close stored in another form is none either.
+    expect(moved(ARI)).toEqual([[second!.item_id, '2026-10-08T11:00:00.000Z'], [first!.item_id, '2026-10-08T10:00:00.000Z']]);
+    // To Mina, Ari's sends and close are moves, and her own are not: a tie goes by item id.
+    const tied = [first!.item_id, third!.item_id].sort().map(id => [id, '2026-10-08T09:00:00.000Z']);
+    const mina = [[other!.item_id, '2026-10-08T12:00:00.000Z'], [second!.item_id, '2026-10-08T11:00:00.000Z'], ...tied];
+    expect(moved(f.mina)).toEqual(mina);
+    // A page at a time: each after the last entry of the one before.
+    const page = moved(f.mina, { limit: 3 });
+    expect(page).toEqual(mina.slice(0, 3));
+    expect(moved(f.mina, { limit: 3, after: { moved_at: page[2]![1]!, item_id: page[2]![0]! } })).toEqual(mina.slice(3));
+    // Only the records asked for, of the organization asked for; and the row is the store's own.
+    expect(moved(f.mina, { limit: 10 }, [records[0]!])).toEqual(mina.slice(1));
+    expect(f.items.movedByOthers(org, f.mina, records, { limit: 1 })[0]!.row).toEqual(f.items.read(other!.item_id));
+    expect(f.items.movedByOthers('org_other', f.mina, records, { limit: 10 })).toEqual([]);
+    expect(f.items.movedByOthers(org, f.mina, [], { limit: 10 })).toEqual([]);
+    expect(f.items.movedByOthers(org, f.mina, records, { limit: 0 })).toEqual([]);
+  });
+
   it('pages every item of the organization oldest first, and none of another (ADR-0040)', async () => {
     const f = await finishedRunsFixture([['46', '47'], ['48', '49']]);
     const org = f.owner.organization_id;
