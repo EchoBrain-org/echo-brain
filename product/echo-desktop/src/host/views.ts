@@ -131,6 +131,9 @@ function listItem(row: PersonListRowV1): ListItem {
   return row.kind === 'meeting' && row.meeting_date !== undefined ? { ...base, meeting_date: row.meeting_date } : base;
 }
 
+/** A list's scope as the API names it. */
+const LIST_SCOPE = { 'only-me': 'only_me', project: 'project' } as const;
+
 /**
  * One page of a list, only for the scope asked for. Nothing of its header
  * (who you are, your tools, your projects) crosses, and a row names your
@@ -139,7 +142,7 @@ function listItem(row: PersonListRowV1): ListItem {
 export function listView(raw: unknown, scope: ListScope): ListPage {
   const page = validated(validatePersonListResponseV1, unwrap(raw));
   const echoed = page.scope.kind === 'project' ? page.scope.project_id : undefined;
-  if (page.scope.kind !== scope.kind || echoed !== (scope.kind === 'project' ? scope.project_id : undefined)) throw new ViewError();
+  if (page.scope.kind !== LIST_SCOPE[scope.kind] || echoed !== (scope.kind === 'project' ? scope.project_id : undefined)) throw new ViewError();
   return { items: page.items.map(listItem), next_cursor: page.next_cursor, meetings_held: page.notice === 'meetings_unavailable' };
 }
 

@@ -19,9 +19,10 @@ const ICONS = { imported_meeting: Calendar, note: Note, document: Page, meeting:
  * added. A project's own page leaves the projects out, says on a meeting's row
  * how many of its follow-ups are not closed ("4 follow-ups"), and marks a row
  * that arrived since your previous visit "New" for this visit (ADR-0047).
+ * Only me leaves out who can read it (`mark`): every row there is only yours.
  */
-export function ItemRow({ item, testid, projects, badge, fresh = false, onOpen }: {
-  item: ListItem; testid: string; projects: boolean; badge?: string | null | undefined; fresh?: boolean; onOpen: () => void;
+export function ItemRow({ item, testid, projects, mark = true, badge, fresh = false, onOpen }: {
+  item: ListItem; testid: string; projects: boolean; mark?: boolean; badge?: string | null | undefined; fresh?: boolean; onOpen: () => void;
 }) {
   const Icon = ICONS[item.ref.kind];
   return (
@@ -36,7 +37,7 @@ export function ItemRow({ item, testid, projects, badge, fresh = false, onOpen }
       {fresh && <span class="new-tag" data-testid="item-new">New</span>}
       {projects && item.projects.length > 0 && <span class="projects" data-testid="item-projects">{item.projects.join(', ')}</span>}
       {badge && <span class="open-count" data-testid="item-follow-ups">{badge}</span>}
-      <Mark visibility={item.visibility} />
+      {mark && <Mark visibility={item.visibility} />}
       <span class="meta">{when(item.added_at)}</span>
     </button>
   );

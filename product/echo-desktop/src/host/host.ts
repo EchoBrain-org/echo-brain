@@ -361,10 +361,10 @@ function audienceArgs(audience: Audience | undefined, projectIds: unknown): stri
   }
 }
 
-/** A list's scope: what you added, or one project. Never all you may read: the app lists only these. Null for anything else. */
+/** A list's scope: what only you can read, or one project. Never all you may read: the app lists only these. Null for anything else. */
 function listScopeArgs(scope: ListScope | undefined): string[] | null {
   if (scope === null || typeof scope !== 'object') return null;
-  if (scope.kind === 'mine') return ['--mine'];
+  if (scope.kind === 'only-me') return ['--only-me'];
   return scope.kind === 'project' && valid(validateProjectIdV1, scope.project_id) ? [option('project', scope.project_id)] : null;
 }
 
@@ -451,7 +451,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, scope, cursor } = params as Params<'list.page'>;
       const where = listScopeArgs(scope);
       if (where === null || !cursorOk(cursor)) return code('invalid_request');
-      const asked: ListScope = scope.kind === 'mine' ? { kind: 'mine' } : { kind: 'project', project_id: scope.project_id };
+      const asked: ListScope = scope.kind === 'only-me' ? { kind: 'only-me' } : { kind: 'project', project_id: scope.project_id };
       return forAccount(method, expect, ['list', ...where, ...(cursor ? [option('cursor', cursor)] : [])], stdout => listView(lastJson(stdout), asked));
     }
     case 'open.ref': {

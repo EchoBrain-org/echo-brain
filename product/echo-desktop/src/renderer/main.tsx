@@ -10,8 +10,8 @@ import { FollowUp, FollowUps } from './screens/follow-ups.js';
 import { Home } from './screens/home.js';
 import { ChangeLine, changeShownInPlace } from './screens/change.js';
 import { Back, EchoMark, Saved, SidebarIcon, Warning } from './screens/icons.js';
-import { Mine } from './screens/mine.js';
 import { NewProject } from './screens/new-project.js';
+import { OnlyMe } from './screens/only-me.js';
 import { Organization } from './screens/organization.js';
 import { People } from './screens/people.js';
 import { MembersButton, Project } from './screens/project.js';
@@ -23,9 +23,9 @@ import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
   acceptDrop, accountCommand, askProgress, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
-  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openMine, openNotified, pageCovered, paneTarget, projectSettingsModal, readUpdate, refreshStatus, retryStart,
-  sheetShown, shownItem, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged, useStore,
-  WARNINGS, windowState, windowTakesDrop, type State,
+  hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openNotified, openOnlyMe, pageCovered, paneTarget, projectSettingsModal, readUpdate, refreshStatus,
+  retryStart, sheetShown, shownItem, signinPhase, toastOpensOnlyMe, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged,
+  useStore, WARNINGS, windowState, type State,
 } from './store.js';
 import { woke } from './freshness.js';
 
@@ -77,7 +77,7 @@ function back(): void {
   if (settings?.write) { if (settings.write.status !== 'sending') dismissProjectSetting(); return; }
   if (settings && (settings.tools || settings.rename !== null || settings.confirm)) return cancelProjectSettingsAction();
   if (!state.status?.signed_in) return closeSigninForm();
-  // Escape closes the Projects list first, and only the list.
+  // Escape closes Capture's place list first, and only the list.
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
   if (state.ask) return closeAsk();
   const view = followUpShown(state);
@@ -159,13 +159,13 @@ function App() {
   // The Follow-ups page (yours) is a page whose list is the first view: only views over it count as over the page.
   const over = (followUpsShown(state)?.views.length ?? 0) - (state.route.page === 'follow-ups' ? 1 : 0);
   const organization = state.route.page === 'organization' ? state.organization : null;
-  const mine = state.route.page === 'mine';
+  const onlyMe = state.route.page === 'only-me';
   const tools = state.route.page === 'tools' ? state.tools : null;
-  // Another app is in front: cover what a project, Mine, People & invites, an
-  // answer or an original shows until ECHO is back. The sidebar's project rows
-  // stay, so a file dragged from Finder can still be dropped on one.
+  // Another app is in front: cover what a project, Only me, People & invites,
+  // an answer or an original shows until ECHO is back. The sidebar's project
+  // rows stay, so a file dragged from Finder can still be dropped on one.
   const covered = pageCovered(state);
-  const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : decision ? 'Decision'
+  const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : onlyMe ? 'Only me' : decision ? 'Decision'
     : state.route.page === 'follow-ups' ? 'Follow-ups' : null;
   // A follow-ups view names itself: Follow-ups, the meeting or the project; an item; a decision.
   const viewName = view?.kind === 'list' ? view.title ?? 'Follow-ups'
@@ -200,12 +200,12 @@ function App() {
           : organization ? <Organization state={state} page={organization} />
           : tools ? <Tools state={state} page={tools} />
           : decision ? <Decision state={state} decision={decision} />
-          : mine ? <Mine state={state} /> : <Home state={state} />}
+          : onlyMe ? <OnlyMe state={state} /> : <Home state={state} />}
       </main>
-      {/* Always there, so a screen reader announces each toast as it appears. A save only Mine shows opens it. */}
+      {/* Always there, so a screen reader announces each toast as it appears. A save in no project opens Only me. */}
       <div role="status">
-        {toasts && state.toast ? (toastOpensMine(state.toast) ? (
-          <button type="button" class={toastClass} data-testid="toast" onClick={() => void openMine()}><Saved /><span>{state.toast}</span></button>
+        {toasts && state.toast ? (toastOpensOnlyMe(state.toast) ? (
+          <button type="button" class={toastClass} data-testid="toast" onClick={() => void openOnlyMe()}><Saved /><span>{state.toast}</span></button>
         ) : (
           <div class={toastClass} data-testid="toast">{WARNINGS.has(state.toast) ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
         )) : toasts && progress && (
@@ -233,7 +233,7 @@ function App() {
 /**
  * One window: the sidebar (unless hidden), then the title bar and the page.
  * A file dropped anywhere but a project row goes to Capture: into the open
- * sheet, or a new capture for the project on screen. Mine takes none.
+ * sheet, or a new capture for the project on screen, or in no project.
  */
 function Shell({ state, title, backLabel, pane = false, trailing = null, children }: {
   state: State; title: string; backLabel: string | null; pane?: boolean; trailing?: ComponentChildren; children: ComponentChildren;
@@ -248,7 +248,7 @@ function Shell({ state, title, backLabel, pane = false, trailing = null, childre
     if (files.length === 1) void acceptDrop(files[0]!, capturing ? 'sheet' : 'window');
   };
   return (
-    <div class={`app shell${open ? ' with-sidebar' : ''}`} onDragOver={event => { if (canDrop(event) && windowTakesDrop(state)) event.preventDefault(); }}
+    <div class={`app shell${open ? ' with-sidebar' : ''}`} onDragOver={event => { if (canDrop(event)) event.preventDefault(); }}
       onDrop={onDrop}>
       {open && <Sidebar state={state} />}
       <div class={`main${pane ? ' with-pane' : ''}`}>

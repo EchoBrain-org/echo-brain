@@ -88,7 +88,6 @@ describe('what an empty bar suggests', () => {
   it('asks about any week in the bar\'s own words for its scope, and keeps a long meeting name within the limit', () => {
     expect(weekQuestion({ kind: 'global' }, null)).toBe('What did we decide this week?');
     expect(weekQuestion({ kind: 'project', project_id: apollo.project_id }, 'Apollo')).toBe('What changed in Apollo this week?');
-    expect(weekQuestion({ kind: 'mine' }, 'Mine')).toBe('What did I add this week?');
     const long = decidedIn('A'.repeat(300));
     expect(long.length).toBeLessThanOrEqual(MAX_QUESTION);
     expect(long).toMatch(/^What did we decide in A+…\?$/);

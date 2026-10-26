@@ -52,14 +52,14 @@ async function unconfirmedUpload(): Promise<void> {
   await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
 }
 
-test('capture after switching away from a project starts as Only me', async () => {
+test('capture after switching away from a project starts in no project', async () => {
   run = await launch();
   const { page, app } = run;
   await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:capture');
-  await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
+  await expect(page.getByTestId('capture-place')).toHaveText('No project');
   await expect(page.getByTestId('compose-body')).toBeFocused();
 });
 
@@ -209,8 +209,9 @@ test('Organization warns before it is saved, and the toast says it was shared', 
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
-  await page.getByTestId('readers-team').click();
-  await expect(page.getByTestId('readers-team')).toHaveAttribute('aria-checked', 'true');
+  await page.getByTestId('capture-place').click();
+  await page.getByTestId('place-team').click();
+  await expect(page.getByTestId('capture-place')).toHaveText('Organization');
   await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
   await expect(page.getByTestId('compose-readers')).toHaveClass(/warning/);
   await page.getByTestId('compose-body').fill('All hands notes');
@@ -228,7 +229,7 @@ test('saving to the project on screen adds to its feed and leaves the rest of th
   await page.getByTestId('scope-clear').click();
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await page.getByTestId('write-button').click();
-  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
+  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
   await page.getByTestId('compose-body').fill('Launch moved to Friday');
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo');

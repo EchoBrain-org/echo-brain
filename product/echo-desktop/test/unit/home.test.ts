@@ -450,17 +450,22 @@ describe('Home rows', () => {
     expect(Where({ state, projects: [] })).toBeNull();
   });
 
-  it('ends Home with one line: its link to Follow-ups, named for what waits on others, then when ECHO checked', async () => {
+  it('ends Home with one line: its link to Follow-ups, named for what waits on others, Only me, then when ECHO checked', async () => {
     const { Footer } = await import('../../src/renderer/screens/home.js');
     const foot = (open: Pick<HomeView, 'waiting' | 'last_checked_at'> | null) =>
       render(Footer({ state: { home: open && { open } } as unknown as Parameters<typeof Footer>[0]['state'] }));
-    const link = (tree: unknown) => elements(tree).filter(node => node.props['data-testid'] === 'your-follow-ups');
+    const link = (tree: unknown, id = 'your-follow-ups') => elements(tree).filter(node => node.props['data-testid'] === id);
     const twoAgo = new Date(Date.now() - 2 * 60_000).toISOString();
-    expect(text(foot({ waiting: 2, last_checked_at: twoAgo }))).toBe('2 waiting on others · ECHO checked 2 min ago');
+    expect(text(foot({ waiting: 2, last_checked_at: twoAgo }))).toBe('2 waiting on others · Only me · ECHO checked 2 min ago');
     expect(text(link(foot({ waiting: 2, last_checked_at: twoAgo })))).toBe('2 waiting on others');
     // Nothing waits on others, or Home not read yet: the link is still there, as Follow-ups.
     expect(text(link(foot({ waiting: 0, last_checked_at: twoAgo })))).toBe('Follow-ups');
-    expect(text(foot(null))).toBe('Follow-ups');
+    expect(text(foot(null))).toBe('Follow-ups · Only me');
+    // Only me has its lock and no count (ADR-0049).
+    const [onlyMe] = link(foot({ waiting: 2, last_checked_at: twoAgo }), 'home-only-me');
+    expect(onlyMe?.type).toBe('button');
+    expect(text(onlyMe)).toBe('Only me');
+    expect(elements(onlyMe).some(node => node.type === 'svg')).toBe(true);
   });
 
   it('polls only while something is in flight, and backs off after failed reads', async () => {

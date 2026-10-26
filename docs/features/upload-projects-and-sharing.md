@@ -5,16 +5,19 @@ Status: implementation candidate; exact release acceptance is separate.
 ## User flow
 
 In the desktop app, **Capture** is one sheet: a note or one attached file, then
-**Who can read** on one row: **Only me**, **Projects** or **Organization**.
-**Projects** opens a list of the person's projects, where one or several can be
-ticked; with it chosen, the members of the ticked projects can read the capture.
-Whatever is chosen, the capture is filed in the ticked projects or, with none
-ticked, in the project Capture was opened on. No project means the original is
-outside project context. Opened on a project page, Capture starts with that
-project ticked under **Projects**; opened with ⌘⇧E, it starts on **Only me**
-with no project. A line under the choices says who can read it, and **Save**
-submits it once. Escape or Close puts the draft away until Capture opens again;
-a save in flight cannot be dismissed.
+one row ([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)): the place
+button and the **Only me** lock. The place button opens a list of the person's
+projects, where one or several can be ticked, then **No project** and
+**Organization**. With projects ticked, the capture is filed in them and their
+members can read it; with the lock on, it is still filed in them but only the
+person can read it. **No project** means the original is outside project
+context, and only the person can read it: its lock shows on and cannot be
+turned off. **Organization** is everyone in the organization, filed in no
+project, with no lock. Opened on a project page, or by a file dropped on a
+project, Capture starts with that project, unlocked; opened anywhere else, or
+with ⌘⇧E, it starts on **No project**. A line under the row says who can read
+it, and **Save** submits it once. Escape or Close puts the draft away until Capture opens again; a save in
+flight cannot be dismissed.
 
 The desktop app's
 [known gaps](../product/2026-09-24-electron-desktop-known-gaps.md) list what it
@@ -44,8 +47,8 @@ Global Ask retrieves authorized context across scopes. Project Ask additionally
 requires current project membership and an explicit association with that
 project. It does not fall back to global context. Association changes do not
 change the immutable audience, and an association need not equal an audience
-project. Capture uses the ticked projects for both only when **Projects** is
-chosen under **Who can read**.
+project. Capture sends the ticked projects as the association whenever projects
+are chosen, and as the audience too unless the **Only me** lock is on.
 
 ## Admission and recovery
 

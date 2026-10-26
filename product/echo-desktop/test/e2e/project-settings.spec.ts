@@ -44,7 +44,7 @@ test('a lead renames then archives and restores a project while its existing fee
   await expect(page.getByTestId('archived-projects-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('archived-project-row')).toHaveCount(1);
   await page.getByTestId('sidebar-capture').click();
-  await page.getByTestId('readers-projects').click();
+  await page.getByTestId('capture-place').click();
   await expect(page.getByTestId('projects-row')).toHaveText(['Beacon']);
   await page.getByTestId('compose-close').click();
   await page.getByTestId('archived-project-row').click();

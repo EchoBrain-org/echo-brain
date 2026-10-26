@@ -33,7 +33,7 @@ test('a file dropped on a sidebar project, with another app in front, is capture
   await expect(page.getByTestId('concealed')).toBeVisible();
   await drop(page, page.getByTestId('sidebar-project').nth(1), onDisk('Brief.md'));
   await expect(page.getByTestId('compose-file')).toHaveText('Brief.md · 15 bytes');
-  await expect(page.getByRole('radio', { checked: true })).toHaveText('Beacon');
+  await expect(page.getByTestId('capture-place')).toHaveText('Beacon');
   // Ready for ⌘↩ once ECHO is in front.
   await expect(page.getByTestId('compose')).toBeFocused();
   await emit(app, 'echo-test:resume');
@@ -49,7 +49,7 @@ test('a file dropped on a sidebar project, with another app in front, is capture
   expect(log).not.toContain('echo-drop-');
 });
 
-test('Sidebar project rows take a drop while another app is in front, and a file dropped on the sheet keeps who can read it', async () => {
+test('Sidebar project rows take a drop while another app is in front, and a file dropped on the sheet keeps where it goes', async () => {
   run = await launch();
   const { page, app } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -57,26 +57,28 @@ test('Sidebar project rows take a drop while another app is in front, and a file
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await expect(page.getByTestId('concealed')).toBeVisible();
   await drop(page, page.getByTestId('sidebar-project').nth(0), onDisk('Pricing.txt'));
-  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
+  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
   await emit(app, 'echo-test:resume');
-  await page.getByTestId('readers-team').click();
+  // Apollo under the lock: filed there, only for you.
+  await page.getByTestId('capture-lock').click();
   await drop(page, page.getByTestId('compose'), onDisk('Terms.pdf', 'Payment in 30 days.'));
   await expect(page.getByTestId('compose-file')).toHaveText('Terms.pdf · 19 bytes');
-  await expect(page.getByTestId('readers-team')).toHaveAttribute('aria-checked', 'true');
-  await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
+  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
+  await expect(page.getByTestId('capture-lock')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('toast')).toHaveText('Shared with your organization · Extracting text');
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo · only you · Extracting text');
   expect(uploads()).toHaveLength(1);
-  expect(uploads()[0]!.body).toMatchObject({ title: 'Terms.pdf', audience: { kind: 'team' }, association_project_ids: [APOLLO] });
+  expect(uploads()[0]!.body).toMatchObject({ title: 'Terms.pdf', audience: { kind: 'only_me' }, association_project_ids: [APOLLO] });
 });
 
-test('a file dropped anywhere else on the window is captured for the page: Only me on Home, the project on screen in one', async () => {
+test('a file dropped anywhere else on the window is captured for the page: in no project on Home, the project on screen in one', async () => {
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await drop(page, page.getByTestId('title'), onDisk('Notes.md'));
   await expect(page.getByTestId('compose-file')).toHaveText('Notes.md · 15 bytes');
-  await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
+  await expect(page.getByTestId('capture-place')).toHaveText('No project');
   await page.keyboard.press('Escape');
 
   // Nothing was written in it: the next drop starts over, for the project on screen.
@@ -84,7 +86,7 @@ test('a file dropped anywhere else on the window is captured for the page: Only 
   await expect(page.getByTestId('feed-row').first()).toBeVisible();
   await drop(page, page.getByTestId('feed'), onDisk('Brief.md'));
   await expect(page.getByTestId('compose-file')).toHaveText('Brief.md · 15 bytes');
-  await expect(page.getByRole('radio', { checked: true })).toHaveText('Beacon');
+  await expect(page.getByTestId('capture-place')).toHaveText('Beacon');
   // Ready for ⌘↩.
   await expect(page.getByTestId('compose')).toBeFocused();
   await page.keyboard.press('ControlOrMeta+Enter');
@@ -113,7 +115,7 @@ test('a drop never changes a draft with words in it, or a save not yet settled',
   await drop(page, page.getByTestId('sidebar-project').nth(1), onDisk('Brief.md'));
   await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
   await expect(page.getByTestId('compose-notice')).toHaveText('The file was not attached. Save this note first.');
-  await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
+  await expect(page.getByTestId('capture-place')).toHaveText('No project');
   await expect(page.getByTestId('compose-file')).toHaveCount(0);
 
   await page.getByTestId('compose-send').click();
@@ -132,7 +134,7 @@ test('a drop main cannot vouch for is refused: a file made in the page, or a lin
   await drop(page, page.getByTestId('sidebar-project').nth(0), null);
   await expect(page.getByTestId('compose-notice')).toHaveText('Choose a TXT, Markdown, PDF or Word file up to 25 MB.');
   await expect(page.getByTestId('compose-file')).toHaveCount(0);
-  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
+  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
 
   const link = join(mkdtempSync(join(tmpdir(), 'echo-drop-')), 'Link.txt');
   folders.push(join(link, '..'));

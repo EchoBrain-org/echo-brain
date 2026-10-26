@@ -146,11 +146,11 @@ describe('your workspace and your tools\' containers open beside Ask (research t
     const read = held.hold('projects.read');
     store.openFullPage();
     await flush();
-    void store.openMine();
+    void store.openOnlyMe();
     await flush();
     read(ok(thermal));
     await flush();
-    expect(store.getState().route).toEqual({ page: 'mine' });
+    expect(store.getState().route).toEqual({ page: 'only-me' });
     expect(store.getState().toast).toBeNull();
   });
 

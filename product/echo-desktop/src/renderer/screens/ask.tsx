@@ -103,9 +103,8 @@ const CLOSED = { open: false, active: -1 };
 
 /**
  * The one bar on every page. ⊕ captures and Return asks, both in the bar's
- * scope; typing shows live matches in it. The chip names a project scope, or
- * Mine, which is only asked; its × widens to all context without moving the
- * page. Mine is not a place to capture: it has no ⊕.
+ * scope; typing shows live matches in it. The chip names a project scope; its
+ * × widens to all context without moving the page.
  *
  * Going to the empty bar (a click, or an arrow key) offers what to ask in its
  * scope; the caret only waiting there, as it does whenever the window comes
@@ -118,7 +117,7 @@ export function Bar({ state }: { state: State }) {
   const chip = chipName(state);
   const covered = pageCovered(state);
   const text = covered ? '' : state.barText;
-  const verb = state.ask || (chip !== null && state.barScope.kind === 'mine') ? 'Ask' : 'Search or ask';
+  const verb = state.ask ? 'Ask' : 'Search or ask';
   const name = `${verb} ${chip ?? 'ECHO'}`;
   const [suggesting, setSuggesting] = useState(CLOSED);
   const shown = suggesting.open && suggestionsShown(state) ? barSuggestions(state) : [];
@@ -149,9 +148,7 @@ export function Bar({ state }: { state: State }) {
       {matchesShown(state) && <Matches state={state} scopeName={chip} />}
       {shown.length > 0 && <Suggestions suggestions={shown} active={active} onPick={pick} />}
       <form class="bar" onSubmit={event => { event.preventDefault(); submitBar(); }}>
-        {state.route.page !== 'mine' && (
-          <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
-        )}
+        <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
         {chip && (
           <span class="chip" data-testid="scope-chip">
             <span>{chip}</span>
