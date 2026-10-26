@@ -110,14 +110,14 @@ describe('leaving a project', () => {
     held.hold('documents.upload')(fail('timeout', { mutation_outcome: 'unknown' }));
     await store.sendCompose();
     await flush();
-    expect(store.getState().compose).toMatchObject({ status: 'unknown', kept: true, readers: 'projects' });
+    expect(store.getState().compose).toMatchObject({ status: 'unknown', kept: true, place: 'projects' });
     const requestId = store.getState().compose!.requestId;
     store.closeCompose();
     store.toggleProjectSettings(apollo, 'sidebar');
     store.askProjectSetting('leave');
     store.confirmProjectSetting();
     await flush();
-    expect(store.getState().compose).toMatchObject({ status: 'unknown', kept: true, readers: 'projects', requestId, projects: [apollo] });
+    expect(store.getState().compose).toMatchObject({ status: 'unknown', kept: true, place: 'projects', requestId, projects: [apollo] });
   });
 
   it('reads Home again, so a Home load dropped on the way there is not left busy', async () => {

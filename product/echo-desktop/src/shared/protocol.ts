@@ -59,8 +59,8 @@ export interface ProjectSettingsReceipt {
 /** Who can read an item: only you, everyone in the organization, or one or more projects' members. */
 export type Visibility = 'only-me' | 'team' | 'project';
 
-/** What a list shows: what you added, or one project's items. The desktop never lists all you can read. */
-export type ListScope = { readonly kind: 'mine' } | { readonly kind: 'project'; readonly project_id: string };
+/** What a list shows: everything only you can read, filed in a project or not, or one project's items. The desktop never lists all you can read. */
+export type ListScope = { readonly kind: 'only-me' } | { readonly kind: 'project'; readonly project_id: string };
 
 /** One item, by kind and id: a note's context id, a document's id, or an approved meeting's record digest. */
 export interface ItemRef {
@@ -199,7 +199,10 @@ export interface Matches {
   readonly items: readonly Match[];
 }
 
-/** Ask is always explicitly scoped; there is no default. Mine is only what you added. */
+/**
+ * Ask is always explicitly scoped; there is no default. Mine (only what you added) is never asked from the desktop any
+ * more (ADR-0049): it stays for the turns kept on this computer that were asked in it.
+ */
 export type AskScope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'mine' };
 
 /** Immutable coordinates of one answer source; opaque to the renderer. */

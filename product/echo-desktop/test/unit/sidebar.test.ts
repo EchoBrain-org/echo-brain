@@ -73,9 +73,9 @@ describe('New project', () => {
     expect(plus?.props.title).toBe('New project');
     (plus?.props.onClick as () => void)();
     expect(openNewProject).toHaveBeenCalledExactlyOnceWith();
-    // The top block keeps Home, Capture, Mine and Follow-ups only.
+    // The top block keeps Home, Capture and Follow-ups only: Only me is a link on Home (ADR-0049).
     const rows = tree.filter(node => typeof node.props.class === 'string' && node.props.class.split(' ').includes('side-row'));
-    expect(rows.map(node => node.props['data-testid'])).toEqual(['sidebar-home', 'sidebar-capture', 'sidebar-mine', 'sidebar-follow-ups', 'sidebar-tools']);
+    expect(rows.map(node => node.props['data-testid'])).toEqual(['sidebar-home', 'sidebar-capture', 'sidebar-follow-ups', 'sidebar-tools']);
   });
 
   it('is not offered while signed out', async () => {
@@ -97,16 +97,19 @@ describe('your follow-ups (F9)', () => {
     };
   }
 
-  it('are in the sidebar under Mine, current on their own page, Home then not', async () => {
+  it('are in the sidebar under Capture, current on their own page, Home then not', async () => {
     const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
     const rows = (state: State) => elements(Sidebar({ state })).filter(node => typeof node.props['data-testid'] === 'string' && node.props['data-testid'].startsWith('sidebar-'));
     const shown = rows(await signedIn({ page: 'follow-ups' }));
     const order = shown.map(node => node.props['data-testid']);
-    expect(order.indexOf('sidebar-follow-ups')).toBe(order.indexOf('sidebar-mine') + 1);
+    expect(order.indexOf('sidebar-follow-ups')).toBe(order.indexOf('sidebar-capture') + 1);
     expect(shown.find(node => node.props['data-testid'] === 'sidebar-follow-ups')?.props['aria-current']).toBe('page');
     expect(shown.find(node => node.props['data-testid'] === 'sidebar-home')?.props['aria-current']).toBeUndefined();
     const home = rows(await signedIn({ page: 'home' }));
     expect(home.find(node => node.props['data-testid'] === 'sidebar-follow-ups')?.props['aria-current']).toBeUndefined();
+    // Only me is one of Home's own pages: Home stays current there.
+    const onlyMe = rows(await signedIn({ page: 'only-me' }));
+    expect(onlyMe.find(node => node.props['data-testid'] === 'sidebar-home')?.props['aria-current']).toBe('page');
   });
 });
 

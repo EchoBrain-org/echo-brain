@@ -3,11 +3,11 @@ import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol
 import { bytes } from '../format.js';
 import { message } from '../messages.js';
 import {
-  attachFile, checkCompose, chooseReaders, choosingProjects, closeCompose, closeProjects, keepUnresolved, loadProjects, newCompose, openProjects,
-  projectNames, removeFile, sendCompose, setComposeText, tickProject, type ComposeState, type Readers, type State,
+  attachFile, checkCompose, choosePlace, choosingProjects, closeCompose, closeProjects, keepUnresolved, loadProjects, newCompose, onlyYou, openProjects,
+  projectNames, removeFile, sendCompose, setComposeText, tickProject, toggleOnlyMe, type ComposeState, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Caret, Clip, Close } from './icons.js';
+import { Caret, Check, Clip, Close, Lock } from './icons.js';
 import { ProjectPicker } from './project-picker.js';
 
 const SAVE_HINT = navigator.userAgent.includes('Mac') ? '⌘↩' : 'Ctrl+↩';
@@ -29,17 +29,12 @@ export function trapTab(event: KeyboardEvent, sheet: HTMLElement | null): void {
 
 /** Who can read it, said before it is saved. Organization-wide cannot be narrowed later. */
 function readersLine(compose: ComposeState): string {
-  if (compose.readers === 'team') return 'Everyone in your org can read this.';
-  if (compose.readers === 'only-me') return 'Only you can read this.';
+  if (compose.place === 'team') return 'Everyone in your org can read this.';
   const [first, ...rest] = compose.projects;
-  if (!first) return 'Choose one or more projects.';
+  if (compose.place === 'projects' && !first) return 'Choose one or more projects.';
+  if (onlyYou(compose) || !first) return 'Only you can read this.';
   return rest.length === 0 ? `${first.name} members can read this.` : `Members of ${projectNames(compose.projects)} can read this.`;
 }
-
-/** Who can read, in order. */
-const CHOICES: readonly Readers[] = ['only-me', 'projects', 'team'];
-/** Arrow keys move through Who can read, and pick as they go. */
-const STEPS: Readonly<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
 /**
  * Every project a capture can be filed in: the one Capture was opened for
@@ -70,30 +65,30 @@ function keepPlaces(placed: Map<string, ProjectSummary>, choices: readonly Proje
 }
 
 /**
- * The Projects list, above Projects: one row per project to tick. Past eight
- * a field finds one, and More projects reads the sidebar list's next page.
+ * The place list, above the place button: one row per project to tick, then
+ * No project and Organization. Past eight projects a field finds one, and
+ * More projects reads the sidebar list's next page.
  */
-function ProjectList({ state, compose, projects, anchor }: {
+function PlaceList({ state, compose, projects, anchor }: {
   state: State; compose: ComposeState; projects: readonly ProjectSummary[]; anchor: { current: HTMLButtonElement | null };
 }) {
   const list = useRef<HTMLDivElement>(null);
 
-  // It opens over the note, lined up with Projects and inside the window, with the caret in it.
+  // It opens over the note, lined up with the place button and inside the window, with the caret in it.
   useLayoutEffect(() => {
     const element = list.current!;
     const button = anchor.current!;
     const room = (element.offsetParent as HTMLElement | null)?.clientWidth ?? element.offsetWidth;
     element.style.left = `${Math.max(0, Math.min(button.offsetLeft, room - element.offsetWidth))}px`;
     element.style.maxHeight = `${Math.max(160, Math.min(320, button.getBoundingClientRect().top - 16))}px`;
-    element.querySelector<HTMLElement>('input')?.focus();
+    element.querySelector<HTMLElement>('input, button')?.focus();
   }, []);
-  // A click anywhere else closes it. Projects itself opens and closes it, and
-  // Only me or Organization close it as they are chosen, keeping what is unticked.
-  const choices = () => anchor.current?.closest('[role="radiogroup"]') ?? null;
+  // A click anywhere else closes it. The place button itself opens and closes
+  // it, and No project or Organization close it as they are chosen.
   useEffect(() => {
     const outside = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!list.current?.contains(target) && !choices()?.contains(target)) closeProjects();
+      if (!list.current?.contains(target) && !anchor.current?.contains(target)) closeProjects();
     };
     document.addEventListener('pointerdown', outside, true);
     return () => document.removeEventListener('pointerdown', outside, true);
@@ -106,11 +101,11 @@ function ProjectList({ state, compose, projects, anchor }: {
 
   return (
     <div
-      class="project-list" id="projects-list" role="dialog" aria-label="Projects" data-testid="projects-list" ref={list} tabIndex={-1}
+      class="project-list" id="projects-list" role="dialog" aria-label="Where it goes" data-testid="projects-list" ref={list} tabIndex={-1}
       // Tab out of it closes it, as a click elsewhere does.
       onFocusOut={event => {
         const next = event.relatedTarget as Node | null;
-        if (next && !list.current?.contains(next) && !choices()?.contains(next)) closeProjects();
+        if (next && !list.current?.contains(next) && !anchor.current?.contains(next)) closeProjects();
       }}
     >
       <ProjectPicker
@@ -118,6 +113,14 @@ function ProjectList({ state, compose, projects, anchor }: {
         onTick={id => { const project = projects.find(candidate => candidate.project_id === id); if (project) tickProject(project); }}
         more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)}
       />
+      <div class="place-choices">
+        <button type="button" class="place-choice" data-testid="place-none" aria-pressed={compose.place === 'none'} onClick={() => choosePlace('none')}>
+          No project{compose.place === 'none' && <Check />}
+        </button>
+        <button type="button" class="place-choice" data-testid="place-team" aria-pressed={compose.place === 'team'} onClick={() => choosePlace('team')}>
+          Organization{compose.place === 'team' && <Check />}
+        </button>
+      </div>
       <div class="project-list-foot">
         <button type="button" class="plain-button small" data-testid="projects-done" onClick={closeProjects}>Done</button>
       </div>
@@ -126,17 +129,20 @@ function ProjectList({ state, compose, projects, anchor }: {
 }
 
 /**
- * Who can read: Only me, Projects or Organization, one row. Projects holds
- * the projects ticked in its list, and says which.
+ * Where it goes, one row (ADR-0049): the place button, naming the projects
+ * ticked ("THERM", "THERM +1"), No project or Organization, which opens the
+ * place list; then the Only me lock. On a project choice the lock is off
+ * until turned on; No project is always only you, so its lock shows on and
+ * cannot be turned off; Organization is everyone, and has none.
  */
-function WhoCanRead({ state, compose, locked }: { state: State; compose: ComposeState; locked: boolean }) {
-  const group = useRef<HTMLDivElement>(null);
+function Place({ state, compose, locked }: { state: State; compose: ComposeState; locked: boolean }) {
   const button = useRef<HTMLButtonElement>(null);
   const name = useRef<HTMLSpanElement>(null);
   const [placed] = useState(() => new Map<string, ProjectSummary>());
   const projects = keepPlaces(placed, projectChoices(compose, state.projects.items));
   const [first, ...rest] = compose.projects;
   const open = compose.picking !== null;
+  const label = compose.place === 'none' ? 'No project' : compose.place === 'team' ? 'Organization' : first ? first.name : 'Projects';
 
   // A name cut off, or several, are said in full in the tooltip.
   useLayoutEffect(() => {
@@ -144,53 +150,33 @@ function WhoCanRead({ state, compose, locked }: { state: State; compose: Compose
     if (cut || rest.length > 0) button.current!.title = compose.projects.map(project => project.name).join(', ');
     else button.current!.removeAttribute('title');
   });
-  // The list closed with the caret in it (Done, Escape): the caret goes back to Projects.
+  // The list closed with the caret in it (Done, Escape): the caret goes back to the place button.
   const wasOpen = useRef(open);
   useLayoutEffect(() => {
     if (wasOpen.current && !open && document.activeElement === document.body) button.current?.focus();
     wasOpen.current = open;
   }, [open]);
 
-  // One Tab stop: the chosen one.
-  const radio = (readers: Readers) => ({
-    type: 'button' as const, role: 'radio' as const, 'aria-checked': compose.readers === readers,
-    tabIndex: compose.readers === readers ? 0 : -1, disabled: locked,
-  });
   return (
-    <div class="readers">
-      <span class="label" id="readers-label">Who can read</span>
-      <div class="readers-row">
-        <div
-          role="radiogroup" aria-labelledby="readers-label" ref={group}
-          onKeyDown={event => {
-            const step = STEPS[event.key];
-            if (!step || event.metaKey || event.ctrlKey || event.altKey) return;
-            const radios = [...group.current!.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
-            const at = radios.indexOf(document.activeElement as HTMLButtonElement);
-            if (at < 0) return;
-            event.preventDefault();
-            const next = (at + step + radios.length) % radios.length;
-            radios[next]!.focus();
-            // Projects with none ticked is chosen with nothing to save: Enter or Space opens its list.
-            chooseReaders(CHOICES[next]!);
-          }}
-        >
-          <button {...radio('only-me')} class="reader-pill" data-testid="readers-only-me" onClick={() => chooseReaders('only-me')}>Only me</button>
-          <button {...radio('projects')} class="reader-pill projects" data-testid="readers-projects" ref={button}
-            aria-controls={open ? 'projects-list' : undefined} onClick={openProjects}>
-            <span class="name" ref={name}>{first ? first.name : 'Projects'}</span>
-            {rest.length > 0 && <span class="count"> +{rest.length}</span>}
-            <Caret />
-          </button>
-          <button {...radio('team')} class="reader-pill" data-testid="readers-team" onClick={() => chooseReaders('team')}>Organization</button>
-        </div>
-        {open && <ProjectList state={state} compose={compose} projects={projects} anchor={button} />}
-      </div>
+    <div class="place-row">
+      <button type="button" class="place-button" data-testid="capture-place" ref={button} aria-haspopup="dialog" aria-expanded={open}
+        aria-controls={open ? 'projects-list' : undefined} disabled={locked} onClick={openProjects}>
+        <span class="name" ref={name}>{label}</span>
+        {rest.length > 0 && <span class="count"> +{rest.length}</span>}
+        <Caret />
+      </button>
+      {compose.place !== 'team' && (
+        <button type="button" class="lock-toggle" data-testid="capture-lock" aria-pressed={onlyYou(compose)} disabled={locked || compose.place === 'none'}
+          onClick={toggleOnlyMe}>
+          <Lock />Only me
+        </button>
+      )}
+      {open && <PlaceList state={state} compose={compose} projects={projects} anchor={button} />}
     </div>
   );
 }
 
-/** Capture: a note or one file, who can read it, then Save. A note's first line is its title. */
+/** Capture: a note or one file, where it goes and who can read it, then Save. A note's first line is its title. */
 export function Compose({ state }: { state: State }) {
   const compose = state.compose!;
   const body = useRef<HTMLTextAreaElement>(null);
@@ -242,8 +228,8 @@ export function Compose({ state }: { state: State }) {
         </div>
         {compose.notice && <div class="notice-line" data-testid="compose-notice" aria-live="polite">{compose.notice}</div>}
         {/* A new capture places its projects afresh, its own first. */}
-        <WhoCanRead key={compose.seq} state={state} compose={compose} locked={locked} />
-        <div class={`readers-line${compose.readers === 'team' ? ' warning' : ''}`} data-testid="compose-readers" aria-live="polite">
+        <Place key={compose.seq} state={state} compose={compose} locked={locked} />
+        <div class={`readers-line${compose.place === 'team' ? ' warning' : ''}`} data-testid="compose-readers" aria-live="polite">
           {readersLine(compose)}
         </div>
         {unresolved ? (
@@ -261,7 +247,7 @@ export function Compose({ state }: { state: State }) {
                 {/* Saved when it is kept for yourself, sent when others get it. */}
                 <span class="error" data-testid="compose-error">
                   {compose.status === 'checking' ? 'Checking…'
-                    : compose.readers === 'only-me' ? 'This may not have been saved.' : 'This may not have been sent.'}
+                    : onlyYou(compose) ? 'This may not have been saved.' : 'This may not have been sent.'}
                 </span>
                 <div class="choices">
                   <button type="button" class="plain-button" data-testid="compose-check" disabled={busy} onClick={() => void checkCompose()}>Check status</button>

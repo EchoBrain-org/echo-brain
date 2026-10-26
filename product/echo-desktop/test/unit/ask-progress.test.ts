@@ -134,7 +134,7 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
 
     // The same meeting opened from a list lights nothing.
     store.closeReader();
-    await store.openMine();
+    await store.openOnlyMe();
     await store.openListItem({ ref: { kind: 'meeting', id: sha('2') } } as Parameters<typeof store.openListItem>[0]);
     await flush();
     expect(store.getState().reader?.ref).toEqual({ kind: 'meeting', id: sha('2') });
