@@ -726,8 +726,7 @@ export function AskView({ state }: { state: State }) {
     const view = scroller.current;
     if (view) atBottom.current = view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX;
   };
-  // Which Ask's line is open: the question on its way and its answer share its seq, so a line opened while Ask works
-  // stays open as its receipt, and the next question's line starts closed.
+  // Which Ask's line is open, by the question on its way's seq: the next question's line starts closed.
   const [openFor, setOpenFor] = useState<number | null>(null);
   const lineFor = (id: number): Line => ({ open: openFor === id, toggle: () => setOpenFor(openFor === id ? null : id) });
   const { asking, failed, clarify } = thread;
