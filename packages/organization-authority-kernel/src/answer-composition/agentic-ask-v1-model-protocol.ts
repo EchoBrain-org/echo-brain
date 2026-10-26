@@ -937,11 +937,15 @@ export const ANSWER_PROMPT = [
 
 /**
  * What a laid-out Ask's writer is told after ANSWER_PROMPT and its guidance (answer layout v1, ADR-0045): how to mark each
- * sentence's form and section, and the reply shape answerLayoutSchema holds. An Ask without layout never sees it.
+ * sentence's form and section, how to word an answer the app shows right under its question (never restating it, and a
+ * long identifier at most once), and the reply shape answerLayoutSchema holds. An Ask without layout never sees it. Its
+ * examples name nothing the wording evaluation asks about (tools/evals/ask-wording).
  */
 export const ANSWER_LAYOUT_PROMPT = [
   "Layout: the person's app sets the answer as a short document. Give it its shape with each sentence's \"form\" and \"section\":",
   "- The lead is the conclusion, in one or two sentences, first: \"form\": \"lead\". Leave \"form\" out for other prose.",
+  "- The app shows the answer right under the question, so never restate the question: the lead answers it at once. Call what the question already names \"it\" or a word or two (\"the follow-up\", \"the release\"), not its full title or identifier; name a follow-up by its title only when the question does not name it. Asked when \"Renew the vendor contract\" is due, the lead is \"It is due Nov 3.\", not \"The follow-up 'Renew the vendor contract' is due Nov 3.\"",
+  "- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.",
   "- \"section\" is a short heading, such as \"Decisions\" or \"Next steps\". Give sentences a section only when the answer covers two or more distinct topics; never the lead.",
   "- \"form\": \"bullet\" for parallel items, such as blockers, conditions or decisions.",
   "- For three or more items that share owner, date or status fields, declare one table for their section in \"tables\", with its columns, such as [\"Action\", \"Owner\", \"Due\", \"Status\"]. Give each item \"form\": \"row\", that section, and \"cells\": exactly one per column, in the columns' order, empty where the evidence does not give it; write a date as YYYY-MM-DD. A row's facts go in its cells: code writes its text from them, so its \"text\" may be empty.",

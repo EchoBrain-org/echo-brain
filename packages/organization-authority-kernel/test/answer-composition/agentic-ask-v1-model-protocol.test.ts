@@ -2,6 +2,8 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   AgenticAskOutputErrorV1,
+  ANSWER_LAYOUT_PROMPT,
+  ANSWER_PROMPT,
   ASK_STEP_PROMPT,
   answerLayoutSchema,
   answerLayoutSinceSchema,
@@ -9,6 +11,7 @@ import {
   answerSinceSchema,
   cleanId,
   createStepSchema,
+  FOLLOW_UPS_ANSWER_GUIDANCE,
   normalizeQuery,
   parseAnswer,
   parseStep,
@@ -394,6 +397,18 @@ describe("agentic Ask model protocol parity", () => {
     } }]);
     const plain = ((answerSchema.properties as Schema).sentences as Schema).items as Schema;
     expect([Object.keys(answerSchema.properties as Schema), Object.keys(plain.properties as Schema)]).toEqual([["lists", "sentences", "not_found"], ["text", "evidence"]]);
+  });
+
+  it("tells only a laid-out Ask's writer never to restate the question and to write a long identifier once, leaving the writer without layout byte for byte", () => {
+    const rules = ANSWER_LAYOUT_PROMPT.split("\n");
+    const lead = rules.findIndex(line => line.startsWith("- The lead is the conclusion"));
+    expect(rules[lead + 1]).toMatch(/^- The app shows the answer right under the question, so never restate the question: the lead answers it at once\. Call what the question already names "it" or a word or two \("the follow-up", "the release"\), not its full title or identifier; name a follow-up by its title only when the question does not name it\. /u);
+    expect(rules[lead + 2]).toBe("- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.");
+    // A request without the header is unchanged (ADR-0045): its writer's prompt, follow-up guidance and schema.
+    expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, answerSchema].map(value => canonicalSha256(value))).toEqual([
+      "sha256:b784a5eb2cb0a69c2ebdc6c33a8e8bdd3f7820575c59e16a0358fa014b9b4764", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
+      "sha256:f3ec552ec9273a23be69ec2c1596f3b5cf69107d4952962b24a1435e8bc47259",
+    ]);
   });
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
