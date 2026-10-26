@@ -115,6 +115,9 @@ jobs:
       - name: Verify the synthetic Ask evaluator
         if: matrix.leg == 'tail'
         run: npm run test:agentic-ask-eval
+      - name: Verify the follow-up resolution evaluator
+        if: matrix.leg == 'tail'
+        run: npm run test:ask-follow-up-eval
       - name: Verify the Authority core evaluation components
         if: matrix.leg == 'tail'
         run: npm run test:capacity

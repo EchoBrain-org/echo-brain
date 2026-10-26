@@ -58,7 +58,9 @@ interface Store {
   openFullPage(): void;
   followUpShown(): { kind: string; item_id?: string; item?: Json | null } | null;
   getState(): {
-    ask:{ asking: { progress: Progress } | null; shown: { answer: { sources: readonly Source[]; receipt?: Receipt }; receipt?: Receipt; took?: number } | null; failed: unknown } | null;
+    ask:{ asking: { progress: Progress } | null; took: Record<string, { receipt: Receipt; took: number }>; failed: unknown } | null;
+    /** The Ask timeline (ADR-0047): each answered turn, newest last, as the page keeps it. */
+    timeline: { turns: readonly { id: string; answer: { sources: readonly Source[] } }[] };
     sources: { records: Record<string, { loading: boolean; value?: { decisions: { items: { atom_id?: string; text: string }[] } } }>;
       evidence: { reads: Record<number, { loading: boolean; value?: { text: string } }> } | null;
       followUps: Record<string, { loading: boolean; value?: { item_id: string; state: string; owner: { membership_id: string; name: string }; expected: string | null } }> } | null;
@@ -255,10 +257,11 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(refused).not.toHaveBeenCalled();
 
       // --- The page with the answer: the rows it showed while the Authority wrote, folded into the receipt, its names opening the exact item. ---
-      const shown = store.getState().ask!.shown!;
+      const shown = store.getState().timeline.turns.at(-1)!;
+      const pageReceipt = store.getState().ask!.took[shown.id]?.receipt;
       expect(store.getState().ask!.asking).toBeNull();
-      expect(shown.receipt).toEqual(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).receipt);
-      const pageNamed = shown.receipt!.rows.flatMap(row => row.type === 'read' ? row.items! : []);
+      expect(pageReceipt).toEqual(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).receipt);
+      const pageNamed = pageReceipt!.rows.flatMap(row => row.type === 'read' ? row.items! : []);
       expect(pageNamed).toEqual(writing!.progress.rows[1]!.items);
 
       const decision = pageNamed.find(item => item.kind === 'record')!;
@@ -290,8 +293,8 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(final.result.schema_version).toBe(6);
       expect(final.receipt).toBeUndefined();
       expect(refused).not.toHaveBeenCalled();
-      const shown = store.getState().ask!.shown!;
-      expect(shown.receipt).toBeUndefined();
+      const shown = store.getState().timeline.turns.at(-1)!;
+      expect(store.getState().ask!.took[shown.id]).toBeUndefined();
       expect(shown.answer.sources.length).toBeGreaterThan(0);
     } finally { await f.close(); }
   });
@@ -347,12 +350,13 @@ describe('Ask progress from the Authority through the Person client to the deskt
       // --- The page: the follow-up opened beside Ask while it ran, without Open; the answer's source opens its item page. ---
       expect(whileAsking.row).toMatchObject({ item_id, state: 'open', expected: EXPECTED, owner: { membership_id: account.membership_id } });
       expect(whileAsking.offered).toBe(false);
-      const shown = store.getState().ask!.shown!;
+      const shown = store.getState().timeline.turns.at(-1)!;
       const source = { kind: 'follow_up', label: EXPECTED, item_id };
-      expect(shown.answer.sources).toContainEqual(source);
-      expect(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).sources).toContainEqual(source);
+      // Each source also keeps the citation the answer carried (`cited`), for the timeline's checks.
+      expect(shown.answer.sources).toContainEqual(expect.objectContaining(source));
+      expect(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).sources).toContainEqual(expect.objectContaining(source));
       expect(openerOf(source as Source)).toEqual({ pane: 'follow_up', page: { kind: 'follow_up', item_id } });
-      expect(progress.searchedWords(shown.receipt!.rows[0]!)).toBe(`Searched meetings, documents, Jira, Confluence and follow-ups · ${named.length} found`);
+      expect(progress.searchedWords(store.getState().ask!.took[shown.id]!.receipt.rows[0]!)).toBe(`Searched meetings, documents, Jira, Confluence and follow-ups · ${named.length} found`);
       // The audited answer names it, so the pane stays on it, and now offers Open: its item page, read again.
       expect(store.fullPageOffered()).toBe(true);
       store.openFullPage();
@@ -404,6 +408,10 @@ function quiet(method: string, account: Expect) {
     case 'search.run': return ok({ items: [] });
     case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60, areas: { projects: `sha256:${'1'.repeat(64)}`, follow_ups: `sha256:${'2'.repeat(64)}`, reviews: `sha256:${'3'.repeat(64)}` } });
     case 'runs': return { ok: false, failure: { code: 'unavailable', retryable: true } };
+    // The Ask timeline (ADR-0047): kept on this computer, empty at first; its checks and project dots need an Authority read this proof does not serve.
+    case 'timeline.read': return ok({ turns: [] });
+    case 'timeline.put': return ok({});
+    case 'ask.check': case 'projects.activity': return { ok: false, failure: { code: 'not_supported', retryable: false } };
   }
   throw new Error(`Unexpected request: ${method}`);
 }
