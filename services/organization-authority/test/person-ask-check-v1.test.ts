@@ -395,7 +395,7 @@ describe('Ask source check: cost', () => {
       projects: { personChangeView: traced(repository.personChangeView.bind(repository)) },
       records: { readableDecisionProjects: traced(f.records.readableDecisionProjects) },
       originals: { checkSourceRevisions: traced(f.originals.checkSourceRevisions.bind(f.originals)) },
-      items: { read: traced(f.items.read.bind(f.items)) },
+      items: { readMany: traced(f.items.readMany.bind(f.items)) },
       people: { people: traced(f.directory.people.bind(f.directory)), leadsAny: traced(f.directory.leadsAny.bind(f.directory)) },
       live,
     });

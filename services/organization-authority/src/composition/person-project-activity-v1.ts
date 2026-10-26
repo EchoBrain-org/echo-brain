@@ -14,8 +14,8 @@ import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open
 import type { SqlitePersonProjectActivityV1 } from '../adapters/persistence/sqlite/person-project-activity-v1.js';
 import type { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import type { PersonProjectActivityHttpApplicationV1 } from '../presentation/person-project-activity-http-application.js';
-import { assessOpenItemsV1, openItemViewerV1, type OpenItemDecisionsReaderV1, type OpenItemViewerV1 } from './person-open-items-v1.js';
-import { recordProjectAuthorizationOfGrantsV1, type RecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
+import { assessOpenItemsV1, openItemDecisionsReaderV1, openItemViewerV1, type OpenItemDecisionsReaderV1, type OpenItemViewerV1 } from './person-open-items-v1.js';
+import { recordProjectAuthorizationOfGrantsV1 } from './person-record-project-scope-v1.js';
 import type { PersonProjectRecordActivityV1, PersonReadableDecisionProjectsV1, PersonReadableDecisionV1 } from './person-record-search-route.js';
 
 /**
@@ -81,27 +81,6 @@ function movedByOthersAt(row: ImpactItemRowV1, membership: string): string | nul
 
 export function createPersonProjectActivityV1(options: CreatePersonProjectActivityV1Options): PersonProjectActivityHttpApplicationV1 {
   /**
-   * Which records the viewer reads, with their projects, from the grants read in the read's own transaction; each record is
-   * looked up once per read.
-   */
-  const decisionsOf = (access_token: string, projects: RecordProjectAuthorizationV1): OpenItemDecisionsReaderV1<Pick<PersonReadableDecisionV1, 'project_ids'>> => {
-    const known = new Map<Sha256Digest, Pick<PersonReadableDecisionV1, 'project_ids'> | null>();
-    return {
-      readableDecisions: ({ record_sha256s }) => {
-        const missing = [...new Set(record_sha256s)].filter(record => !known.has(record));
-        if (missing.length > 0) {
-          const found = options.records.readableDecisionProjects({ access_token, record_sha256s: missing, projects });
-          for (const record of missing) known.set(record, found.get(record) ?? null);
-        }
-        return new Map(record_sha256s.flatMap(record => {
-          const decision = known.get(record);
-          return decision === null || decision === undefined ? [] : [[record, decision] as const];
-        }));
-      },
-    };
-  };
-
-  /**
    * The newest move by someone else among the follow-ups of these records filed in this project, of the rows the open-items
    * policy shows the viewer together with their decision: an owner who cannot read the decision sees the row, never which
    * project it is filed in. The store returns only rows someone else moved, newest move first, a page at a time, and the
@@ -148,7 +127,8 @@ export function createPersonProjectActivityV1(options: CreatePersonProjectActivi
           access_token: input.access_token, projects, project_ids: ids, own: options.approvals.approvedRecords(authorization), limit: PROJECT_RECORDS_MAX,
         });
         const viewer = openItemViewerV1(input.access_token, authorization);
-        const decisions = decisionsOf(input.access_token, projects);
+        // Which records the viewer reads, from the grants read in the read's own transaction; each looked up once per read.
+        const decisions = openItemDecisionsReaderV1(options.records, input.access_token, () => projects);
         for (const { project_id } of active) {
           const records = filed.get(project_id);
           if (records === undefined) continue;

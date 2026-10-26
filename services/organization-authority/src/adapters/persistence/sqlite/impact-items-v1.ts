@@ -126,6 +126,13 @@ export class SqliteImpactItemsV1 {
     return found === undefined ? undefined : publicItem(found);
   }
 
+  /** Not fenced: the items of these ids that exist, by id, in one read. */
+  readMany(itemIds: readonly string[]): ReadonlyMap<string, ImpactItemRowV1> {
+    if (itemIds.length === 0) return new Map();
+    const found = this.database.prepare(`${selectItems} WHERE item.item_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(itemIds)])) as StoredItemV1[];
+    return new Map(found.map(item => [item.item_id, publicItem(item)]));
+  }
+
   forRun(runId: string): readonly ImpactItemRowV1[] {
     return (this.database.prepare(`${selectItems} WHERE item.run_id=? ${ORDER}`).all(runId) as StoredItemV1[]).map(publicItem);
   }
