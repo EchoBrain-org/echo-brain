@@ -128,7 +128,9 @@ test('a follow-up about the one ticket an answer named is answered at once, and 
   await ask(page, 'What is open on THERM-482?');
   await ask(page, 'who owns it?');
   await expect(page.getByTestId('question').last()).toHaveText('who owns it?');
-  await expect(page.getByTestId('turn').last().getByTestId('statement-text')).toHaveText('Dev owns THERM-482, since Oct 21.');
+  // As a list, so it waits while the last turn is still the earlier answer: a question shows as soon as it is asked, its turn
+  // only with its answer, and one string against an earlier answer's several sentences fails at once instead of waiting.
+  await expect(page.getByTestId('turn').last().getByTestId('statement-text')).toHaveText(['Dev owns THERM-482, since Oct 21.']);
   const [, followUp] = asks();
   expect(followUp).toMatchObject({ question: 'who owns it?', previous: { purpose: 'follow_up', question: 'What is open on THERM-482?' } });
   expect((followUp!.previous as { citations: { label: string }[] }).citations.map(citation => citation.label)).toEqual(['THERM-482 · Sensor drift']);
@@ -152,7 +154,7 @@ test('a follow-up that could mean two tickets asks which one, and a choice asks 
   await clarify.getByTestId('choice').nth(1).click();
   await expect(page.getByTestId('clarify')).toHaveCount(0);
   await expect(page.getByTestId('question').last()).toHaveText('Who owns THERM-490?');
-  await expect(page.getByTestId('turn').last().getByTestId('statement-text')).toHaveText('Dev owns THERM-490, since Oct 21.');
+  await expect(page.getByTestId('turn').last().getByTestId('statement-text')).toHaveText(['Dev owns THERM-490, since Oct 21.']);
   const [, which, chosen] = asks();
   expect(chosen).toMatchObject({ question: 'Who owns THERM-490?', previous: which!.previous });
 });
