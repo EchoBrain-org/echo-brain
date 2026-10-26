@@ -10,8 +10,9 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
-  allOmitted, answeredNow, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
+  allOmitted, answeredNow, askedAgain, askedSuggestions, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
 } from '../../src/renderer/timeline.js';
+import { askedWhen } from '../../src/renderer/format.js';
 import {
   ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, type Node,
 } from './harness.js';
@@ -175,10 +176,10 @@ describe('what a check asks, and what it says of a turn', () => {
     // Unreadable wins: a sentence citing both is left out.
     expect(markOf([1, 2], states)).toBe('omitted');
     expect(markOf([1], undefined)).toBeNull();
-    expect(turnChanged(one, states, [one])).toBe(true);
-    expect(turnChanged(one, { 0: 'same', 1: 'unknown', 2: 'same' }, [one])).toBe(false);
+    expect(turnChanged(one, states, askedAgain([one]))).toBe(true);
+    expect(turnChanged(one, { 0: 'same', 1: 'unknown', 2: 'same' }, askedAgain([one]))).toBe(false);
     // Asked again later: no tag.
-    expect(turnChanged(one, states, [one, turn('One?', HOUR, status(), { again_of: one.id })])).toBe(false);
+    expect(turnChanged(one, states, askedAgain([one, turn('One?', HOUR, status(), { again_of: one.id })]))).toBe(false);
     expect(allOmitted(one, { 0: 'unreadable', 1: 'unreadable', 2: 'unreadable' })).toBe(true);
     expect(allOmitted(one, states)).toBe(false);
   });

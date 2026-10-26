@@ -9,7 +9,7 @@ import {
   answerSentences, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownBlocks, statementGroups, tableDay,
   yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
 } from '../answer.js';
-import { identity, initial, marked, meetingTime, snippet, when } from '../format.js';
+import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { sourceKey } from '../openers.js';
@@ -25,7 +25,7 @@ import {
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
-  allOmitted, askedToday, askedWhen, markOf, shownInFull, showsOf, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
+  allOmitted, askedAgain, markOf, shownInFull, showsOf, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { Caret, Check, Chevron, Close, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticks, Up } from './icons.js';
 
@@ -593,15 +593,12 @@ function FullTurn({ state, turn, current, line }: { state: State; turn: ShownTur
 /**
  * An earlier turn, folded to one line (ADR-0047): its project's square (none
  * for all context or Mine), its full question, "Changed" when a source it
- * cited changed and no later turn asked it again, and when it was asked. The
- * line opens the answer as it was, dimmed: what changed lit, what you can no
- * longer read left out, then Ask again and what the check said.
+ * cited changed and no later turn asked it again (`again`, askedAgain's), and
+ * when it was asked. The line opens the answer as it was (OpenedTurn).
  */
-function FoldedTurn({ state, turn, opened }: { state: State; turn: TimelineTurn; opened: boolean }) {
+function FoldedTurn({ state, turn, opened, again }: { state: State; turn: TimelineTurn; opened: boolean; again: ReadonlySet<string> }) {
   const checks = checksOf(turn, state);
-  const changed = turnChanged(turn, checks, state.timeline.turns);
-  const view = turnView(turn, checks);
-  const omitted = allOmitted(turn, checks);
+  const changed = turnChanged(turn, checks, again);
   const square = turn.scope.kind === 'project'
     ? <span class="turn-square" style={identity(turn.scope.project_id)} aria-hidden="true">{initial(scopeName(turn.scope, state))}</span>
     : <span class="turn-square none" aria-hidden="true" />;
@@ -613,14 +610,25 @@ function FoldedTurn({ state, turn, opened }: { state: State; turn: TimelineTurn;
         {changed && <span class="changed-tag" data-testid="changed-tag">Changed</span>}
         <span class="when">{askedWhen(turn.asked_at)}</span>
       </button>
-      {opened && (
-        <div class="opened" data-testid="opened-turn">
-          {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
-          {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
-          {!omitted && <SourceList state={state} view={view} />}
-          <AgainRow state={state} turn={turn} view={view} />
-        </div>
-      )}
+      {opened && <OpenedTurn state={state} turn={turn} checks={checks} />}
+    </div>
+  );
+}
+
+/**
+ * An earlier turn opened from its line: its answer as it was, dimmed, what
+ * changed lit, what you can no longer read left out, then Ask again and what
+ * the check said.
+ */
+function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn; checks: TurnChecks | undefined }) {
+  const view = turnView(turn, checks);
+  const omitted = allOmitted(turn, checks);
+  return (
+    <div class="opened" data-testid="opened-turn">
+      {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
+      {!omitted && <AgenticAnswer state={state} view={view} dimmed />}
+      {!omitted && <SourceList state={state} view={view} />}
+      <AgainRow state={state} turn={turn} view={view} />
     </div>
   );
 }
@@ -696,14 +704,16 @@ export function AskView({ state }: { state: State }) {
   // Today's line goes above its first turn, or, with none yet, above the question on its way; only when earlier days have turns.
   const first = turns.findIndex(turn => askedToday(turn.asked_at, now));
   const today = first > 0 ? first : first === -1 && turns.length > 0 && (asking || clarify || failed) ? turns.length : -1;
+  const full = fullTurns(thread);
+  const again = askedAgain(turns);
   return (
     <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
       {turns.map((turn, index) => (
         <Fragment key={turn.id}>
           {index === today && <Today />}
-          {shownInFull(turn, turns, fullTurns(thread))
+          {shownInFull(turn, turns, full)
             ? <FullTurn state={state} turn={{ ...turn, ...thread.took[turn.id] }} current={thread.asked.includes(turn.id)} line={lineFor(thread.took[turn.id]?.seq ?? -1)} />
-            : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} />}
+            : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} again={again} />}
         </Fragment>
       ))}
       {today === turns.length && <Today />}

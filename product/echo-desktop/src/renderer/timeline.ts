@@ -142,9 +142,9 @@ export function turnGroups(sources: readonly AnswerSource[], checks: TurnChecks 
   return checks === undefined ? groups : groups.filter(group => !group.indexes.every(at => checks[at] === 'unreadable'));
 }
 
-/** Whether a later turn asked this one again: then it shows no Changed tag. */
-export function askedAgain(turn: TimelineTurn, turns: readonly TimelineTurn[]): boolean {
-  return turns.some(later => later.again_of === turn.id);
+/** The turns a later turn asked again, by id: they show no Changed tag. */
+export function askedAgain(turns: readonly TimelineTurn[]): ReadonlySet<string> {
+  return new Set(turns.flatMap(turn => (turn.again_of === undefined ? [] : [turn.again_of])));
 }
 
 /** Every sentence a turn shows: its answer's, and Ask again's "since" list. */
@@ -165,19 +165,21 @@ function sentences(turn: TimelineTurn): AnswerStatement[] {
 export type TurnNote = 'changed' | 'same' | null;
 
 export function turnNote(turn: TimelineTurn, checks: TurnChecks | undefined): TurnNote {
+  if (checks === undefined) return null;
   const shown = sentences(turn).filter(statement => markOf(statement.citation_indexes, checks) !== 'omitted');
   if (shown.some(statement => markOf(statement.citation_indexes, checks) === 'changed')) return 'changed';
   const cited = shown.flatMap(statement => statement.citation_indexes);
-  return checks !== undefined && cited.length > 0 && cited.every(at => checks[at] === 'same') ? 'same' : null;
+  return cited.length > 0 && cited.every(at => checks[at] === 'same') ? 'same' : null;
 }
 
-/** A turn's Changed tag: a source one of the sentences it shows cites changed, and no later turn asked it again. */
-export function turnChanged(turn: TimelineTurn, checks: TurnChecks | undefined, turns: readonly TimelineTurn[]): boolean {
-  return !askedAgain(turn, turns) && turnNote(turn, checks) === 'changed';
+/** A turn's Changed tag: a source one of the sentences it shows cites changed, and no later turn asked it again (`again`, askedAgain's). */
+export function turnChanged(turn: TimelineTurn, checks: TurnChecks | undefined, again: ReadonlySet<string>): boolean {
+  return !again.has(turn.id) && turnNote(turn, checks) === 'changed';
 }
 
 /** Whether every sentence of a turn is left out: then an opened turn shows only Ask again. */
 export function allOmitted(turn: TimelineTurn, checks: TurnChecks | undefined): boolean {
+  if (checks === undefined) return false;
   const all = sentences(turn);
   return all.length > 0 && all.every(statement => markOf(statement.citation_indexes, checks) === 'omitted');
 }
@@ -303,25 +305,4 @@ export function askedSuggestions(turns: readonly TimelineTurn[], scope: AskScope
     suggestions.push({ question: turn.question, turn: turn.id });
   }
   return suggestions;
-}
-
-/** Midnight today, here. */
-function startOfDay(now: number): number {
-  const today = new Date(now);
-  return new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-}
-
-/** Whether a turn was asked today, here. */
-export function askedToday(iso: string, now = Date.now()): boolean {
-  return Date.parse(iso) >= startOfDay(now);
-}
-
-/** When a turn was asked, as its row says it: the time for today ("3:41 PM"), else the day ("Oct 14"), with its year when not this year's. */
-export function askedWhen(iso: string, now = Date.now()): string {
-  const time = Date.parse(iso);
-  if (Number.isNaN(time)) return '';
-  const date = new Date(time);
-  if (time >= startOfDay(now)) return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  const year = date.getFullYear() === new Date(now).getFullYear() ? {} : { year: 'numeric' as const };
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...year });
 }
