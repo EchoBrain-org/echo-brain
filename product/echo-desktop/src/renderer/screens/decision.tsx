@@ -4,7 +4,7 @@ import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol
 import { dateTime } from '../format.js';
 import { dueWords } from '../needs.js';
 import {
-  allLocked, decide, destinationFrom, keptItems, keptPrivate, loadProjects, lockDecisionRoute, lockDecisionRoutes, retryImpact, routedProjects,
+  allKeptPrivate, decide, destinationFrom, keptItems, keptPrivate, loadProjects, lockDecisionRoute, lockDecisionRoutes, retryImpact, routedProjects,
   setDecisionOwner, setDecisionRoute, setDecisionRoutes, sharedDestination, tickDecisionRoute, tickDecisionRoutes, type DecisionState, type Destination,
   type State,
 } from '../store.js';
@@ -74,8 +74,8 @@ function shownOf(destination: Destination): Shown {
 
 /**
  * The All items control: the one destination every kept item has, or Not kept when none is. Mixed is its own: the lock
- * pressed only when every kept item is for you alone (a project ticked then keeps them so), a project every kept item has
- * ticked, and one only some have part-ticked.
+ * pressed only when every kept item is filed in a project for you alone (a project ticked then keeps them so; plain Only me
+ * is a place, not the lock), a project every kept item has ticked, and one only some have part-ticked.
  */
 function allShown(decision: DecisionState): Shown {
   const kept = keptItems(decision).map(item => decision.routes[item.signal_id]!);
@@ -83,7 +83,7 @@ function allShown(decision: DecisionState): Shown {
   if (kept.length === 0 || shared !== null) return shownOf(kept.length === 0 ? null : shared);
   const every = (id: string) => kept.every(destination => destination.projects.includes(id));
   const named = [...new Set(kept.flatMap(destination => destination.projects))];
-  return { dropped: false, onlyMe: allLocked(decision), ticked: named.filter(every), partly: named.filter(id => !every(id)) };
+  return { dropped: false, onlyMe: allKeptPrivate(decision), ticked: named.filter(every), partly: named.filter(id => !every(id)) };
 }
 
 /** "2 decisions · 1 action": what the proposal holds. */

@@ -621,22 +621,23 @@ describe('Home decisions and impact checks', () => {
     expect(routes()).toEqual({ 'dec-1': to(therm), 'act-1': store.ONLY_ME });
     store.lockDecisionRoutes();
     expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': store.ONLY_ME });
-    // While the All items lock shows pressed (every kept item is for you alone), a project ticked keeps every kept item so,
-    // Only me included; the one every item has comes off each.
-    expect(store.allLocked(store.getState().decision!)).toBe(true);
+    // Mixed, plain Only me beside an item kept for you alone in THERM: the All items lock is not pressed, and a project ticked
+    // keeps each item's own lock, so the Only me item is shared; the one every item has comes off each.
+    expect(store.allKeptPrivate(store.getState().decision!)).toBe(false);
     store.tickDecisionRoutes(echo);
-    expect(routes()).toEqual({ 'dec-1': mine(therm, echo), 'act-1': mine(echo) });
+    expect(routes()).toEqual({ 'dec-1': mine(therm, echo), 'act-1': to(echo) });
     store.tickDecisionRoutes(echo);
     expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': store.ONLY_ME });
-    // So does every item at Only me; with an item shared, the lock is not pressed and each item keeps its own.
+    // Every item at Only me: a project ticked from All items shares them, as from one item's chip.
     store.setDecisionRoutes(store.ONLY_ME);
+    expect(store.allKeptPrivate(store.getState().decision!)).toBe(false);
     store.tickDecisionRoutes(therm);
-    expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': mine(therm) });
-    store.setDecisionRoutes(store.ONLY_ME);
-    store.setDecisionRoute('dec-1', to(therm));
-    expect(store.allLocked(store.getState().decision!)).toBe(false);
+    expect(routes()).toEqual({ 'dec-1': to(therm), 'act-1': to(therm) });
+    // Every item kept for you alone in a project: the lock is pressed, and a project ticked keeps them so.
+    store.setDecisionRoutes(mine(therm));
+    expect(store.allKeptPrivate(store.getState().decision!)).toBe(true);
     store.tickDecisionRoutes(echo);
-    expect(routes()).toEqual({ 'dec-1': to(therm, echo), 'act-1': to(echo) });
+    expect(routes()).toEqual({ 'dec-1': mine(therm, echo), 'act-1': mine(therm, echo) });
     // The same projects shared and kept for you alone are two destinations.
     store.setDecisionRoute('dec-1', mine(therm));
     store.setDecisionRoute('act-1', to(therm));

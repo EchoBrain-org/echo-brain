@@ -5745,26 +5745,28 @@ export function setDecisionRoutes(destination: Destination): void {
   const routes = { ...decision.routes, ...Object.fromEntries(targets.map(item => [item.signal_id, value])) };
   if (withinProjects(routes)) editChoices({ routes });
 }
-/** Whether the All items lock shows pressed: something is kept, and every kept item is for you alone (Only me or filed so). */
-export function allLocked(decision: DecisionState): boolean {
+/**
+ * Whether every kept item is filed in a project for you alone (something is kept): the only time the All items lock shows
+ * pressed beside other choices. Plain Only me is a place, as on one item's chip, so it does not count.
+ */
+export function allKeptPrivate(decision: DecisionState): boolean {
   const kept = keptItems(decision);
-  return kept.length > 0 && kept.every(item => decision.routes[item.signal_id]!.private);
+  return kept.length > 0 && kept.every(item => keptPrivate(decision.routes[item.signal_id]!));
 }
 /**
- * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects:
- * one every kept item has comes off each, leaving an item with no other Only me; any other goes on each. While the All items
- * lock shows pressed every kept item stays for you alone, so none is filed shared under it; otherwise each keeps its own lock.
+ * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects
+ * and its own lock: one every kept item has comes off each, leaving an item with no other Only me; any other goes on each. So
+ * a project ticked from Only me is shared, as from one item's chip, and items kept for you alone stay so.
  */
 export function tickDecisionRoutes(projectId: string): void {
   const decision = state.decision;
   if (!decision) return;
   const kept = keptItems(decision);
   const off = kept.length > 0 && kept.every(item => decision.routes[item.signal_id]!.projects.includes(projectId));
-  const locked = allLocked(decision);
   const routes = { ...decision.routes, ...Object.fromEntries((kept.length > 0 ? kept : routedItems(decision)).map(item => {
     const now = decision.routes[item.signal_id] ?? null;
     const others = (now?.projects ?? []).filter(id => id !== projectId);
-    return [item.signal_id, destinationOf(off ? others : [...others, projectId], locked || keptPrivate(now))];
+    return [item.signal_id, destinationOf(off ? others : [...others, projectId], keptPrivate(now))];
   })) };
   if (withinProjects(routes)) editChoices({ routes });
 }

@@ -270,6 +270,36 @@ test('keeps an item for you alone in its project with the Only me lock, sends it
   await expect(final.nth(1).getByTestId('route-lock')).toHaveCount(0);
 });
 
+test('All items shows the lock pressed only when every kept item is kept for you alone in a project, and a tick from Only me shares', async () => {
+  run = await launch('granola');
+  const { page } = run;
+  await addMeeting(page);
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  const chips = card.getByTestId('route-chip');
+  const menu = card.getByTestId('route-menu');
+  // The decision kept for Ari alone in Thermostat redesign; both actions at plain Only me.
+  await chips.nth(0).click();
+  await menu.getByRole('button', { name: 'Only me', exact: true }).click();
+  await page.keyboard.press('Escape');
+  for (const index of [1, 2]) {
+    await chips.nth(index).click();
+    await menu.getByRole('checkbox', { name: 'Thermostat redesign' }).uncheck();
+    await page.keyboard.press('Escape');
+  }
+  await expect(chips).toHaveText(['Thermostat redesign', 'Only me', 'Only me']);
+  // Plain Only me is a place, not the lock: All items does not show it pressed, and Supplier review ticked there is shared
+  // for the actions while the decision stays kept for Ari alone.
+  await card.getByTestId('route-all').click();
+  await expect(menu.getByRole('button', { name: 'Only me', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await menu.getByRole('checkbox', { name: 'Supplier review' }).click();
+  await page.keyboard.press('Escape');
+  await expect(chips).toHaveText(['Thermostat redesign +1', 'Supplier review', 'Supplier review']);
+  await expect(chips.nth(0).getByTestId('route-lock')).toBeVisible();
+  await expect(card.getByTestId('route-lock')).toHaveCount(1);
+  await expect(card.getByTestId('route-summary')).toHaveText('1 to Thermostat redesign +1, only me · 2 to Supplier review');
+});
+
 test('All items while kept items differ: nothing chosen, a project some have part-ticked, and a tick keeps what else each has', async () => {
   run = await launch('granola');
   const { page } = run;
