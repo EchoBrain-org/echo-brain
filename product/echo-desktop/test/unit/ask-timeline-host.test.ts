@@ -19,7 +19,7 @@ vi.mock('node:fs', async original => {
     const asked = typeof data === 'string' ? bytes.length : length ?? bytes.length - from;
     return fs.writeSync(descriptor, bytes, from, disk.short ? Math.ceil(asked / 2) : asked);
   };
-  return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
+  return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync), readFileSync: vi.fn(fs.readFileSync) };
 });
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
@@ -98,6 +98,28 @@ describe('the timeline file (C5)', () => {
     expect(renamed).toHaveLength(1);
     expect(synced.filter(order => order < renamed[0]!)).toHaveLength(1);
     expect(synced.filter(order => order > renamed[0]!)).toHaveLength(1);
+  });
+
+  it('goes on from the turns it last read or wrote while the file is still that one, and reads it again once it is not', () => {
+    const [first, second, third] = [turn(3), turn(2), turn(1)];
+    putTimeline(person, ARI, first, NOW);
+    vi.mocked(readFileSync).mockClear();
+    putTimeline(person, ARI, second, NOW);
+    expect(vi.mocked(readFileSync)).not.toHaveBeenCalled();
+    expect(readTimeline(person, ARI)).toEqual([first, second]);
+    // Changed by anything but a put: read again, all of it.
+    const elsewhere = turn(5);
+    writeFileSync(timelinePath(person, ARI), JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [elsewhere] }), { mode: 0o600 });
+    vi.mocked(readFileSync).mockClear();
+    putTimeline(person, ARI, third, NOW);
+    expect(vi.mocked(readFileSync)).toHaveBeenCalledTimes(1);
+    expect(readTimeline(person, ARI)).toEqual([elsewhere, third]);
+    // Gone: a put starts it again, and another account's file is its own.
+    deleteTimeline(person, ARI);
+    putTimeline(person, ARI, first, NOW);
+    putTimeline(person, MINA, second, NOW);
+    expect(readTimeline(person, ARI)).toEqual([first]);
+    expect(readTimeline(person, MINA)).toEqual([second]);
   });
 
   it('keeps at most 200 turns and none older than 90 days, the newest, on every put', () => {
