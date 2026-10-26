@@ -547,7 +547,7 @@ function CopyAnswer({ turn }: { turn: TimelineTurn }) {
  * "Nothing changed since Oct 20". No check, no line; with every sentence left
  * out, only Ask again shows.
  */
-function AgainRow({ state, turn, view }: { state: State; turn: TimelineTurn; view: TurnView }) {
+function AgainRow({ state, turn, view, children }: { state: State; turn: TimelineTurn; view: TurnView; children?: ComponentChildren }) {
   const when = askedWhen(turn.asked_at);
   const shown = !allOmitted(turn, view.checks) && checkedTurn(view.checks);
   const changed = shown && [...answerSentences(turn.answer).map(([, statement]) => statement), ...(turn.since ?? [])]
@@ -560,6 +560,7 @@ function AgainRow({ state, turn, view }: { state: State; turn: TimelineTurn; vie
           {changed ? `Highlighted parts changed since ${when}` : `Nothing changed since ${when}`}
         </span>
       )}
+      {children}
     </div>
   );
 }
@@ -595,8 +596,9 @@ function FullTurn({ state, turn, current, line }: { state: State; turn: ShownTur
         </div>
       )}
       {!omitted && <SourceList state={state} view={view} />}
-      {!current && <AgainRow state={state} turn={turn} view={view} />}
-      {!omitted && <div class="actions"><CopyAnswer turn={turn} /></div>}
+      {/* One asked before this Ask says what changed, with Ask again; Copy answer joins that row. */}
+      {current ? <div class="actions"><CopyAnswer turn={turn} /></div>
+        : <AgainRow state={state} turn={turn} view={view}>{!omitted && <CopyAnswer turn={turn} />}</AgainRow>}
     </div>
   );
 }
