@@ -190,11 +190,13 @@ describe('the timeline file (C5)', () => {
   });
 
   it('takes only a turn as a put writes it: a page that sends anything else is refused', () => {
-    const good = turn(0, { since: [], again_of: randomUUID(), markers: { 0: sha('b') } });
+    const good = turn(0, { since: [], again_of: randomUUID(), markers: { 0: sha('b') }, unreadable: [0] });
     expect(timelineTurn(good)).toEqual(good);
     for (const bad of [
       { ...good, id: 'turn-1' }, { ...good, asked_at: 'yesterday' }, { ...good, scope: { kind: 'project', project_id: 'Apollo' } },
       { ...good, again_of: 'turn-0' }, { ...good, markers: { 0: 'v1' } }, { ...good, markers: { first: sha('b') } },
+      // What a check found unreadable: distinct places among the answer's own sources.
+      { ...good, unreadable: [0, 0] }, { ...good, unreadable: [good.answer.sources.length] }, { ...good, unreadable: [-1] }, { ...good, unreadable: ['0'] },
       { ...good, answer: { ...good.answer, outcome: 'clarify' } }, { ...good, answer: { ...good.answer, sources: [{ kind: 'ticket', label: 'T' }] } },
       { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: undefined } }] } },
       { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: { ...ticketCitation, kind: 7 } } }] } },

@@ -18,7 +18,7 @@ import {
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
-export const TIMELINE_FOLDER = 'ask-timeline-v1';
+const TIMELINE_FOLDER = 'ask-timeline-v1';
 const KIND = 'echo-desktop-ask-timeline-v1';
 /** More than 200 turns of the largest answers: anything bigger is not a file a put wrote. */
 const MAX_FILE_BYTES = MAX_TIMELINE_TURNS * MAX_TIMELINE_PUT_BYTES;
@@ -221,6 +221,12 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
   if (value.since !== undefined && !statements(value.since)) return null;
   if (value.again_of !== undefined && !(string(value.again_of) && ID.test(value.again_of))) return null;
   if (value.markers !== undefined && !(record(value.markers) && Object.entries(value.markers).every(([at, marker]) => /^\d{1,3}$/.test(at) && string(marker) && SHA256.test(marker)))) {
+    return null;
+  }
+  // The sources a check found unreadable: distinct places among the answer's own sources.
+  const sources = (value.answer as TimelineAnswer).sources.length;
+  if (value.unreadable !== undefined && !(indexes(value.unreadable, 256) && new Set(value.unreadable).size === value.unreadable.length
+      && value.unreadable.every(at => at < sources))) {
     return null;
   }
   return value as unknown as TimelineTurn;

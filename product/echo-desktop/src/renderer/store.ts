@@ -15,13 +15,14 @@ import { askText, searchQuery } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, MAX_SOURCES, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  answeredNow, askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, previousOf, sameScope, shownInFull, showsOf,
+  answeredNow, askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, knownStates, previousOf, sameScope, shownInFull, showsOf, unreadableAfter,
   turnGroups, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
 import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
+import { askedWhen } from './format.js';
 import * as freshness from './freshness.js';
 import { meetingMessage, message } from './messages.js';
 import { ACTIVE_STATES, CLOSED_STATES, firstName, reopenSends, sentWords } from './needs.js';
@@ -43,7 +44,7 @@ export interface AskQuestion {
  * again, as a follow-up carries the turn it continues, built once what that
  * turn cited is known now. Try again asks a failed question the same way.
  */
-export interface AskHow {
+interface AskHow {
   previous?: AskPrevious | null;
   againOf?: string;
 }
@@ -104,7 +105,7 @@ export interface AskState {
  * sources said. It outlives Ask, and is read again at sign-in and when the
  * account changes.
  */
-export interface TimelineState {
+interface TimelineState {
   turns: readonly TimelineTurn[];
   /**
    * What checks said of turns' sources, by turn, each with when it went: good for five minutes. One older is read as none
@@ -3527,13 +3528,27 @@ export function turnOf(id: string | null | undefined, current: State = state): T
 }
 
 /** What a check said of a turn's sources in the last five minutes, if one did: an older one is as none (C5). */
-export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
+function freshChecksOf(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
   return freshStates(current.timeline.checks[turn.id], Date.now());
 }
 
-/** What the page shows of the last check on a turn: nothing on one asked in this Ask, which is current. */
+/**
+ * What is known of a turn's sources (C5): what a check said in the last five
+ * minutes, and the sources a check found unreadable, which stay so until one
+ * finds them readable again however long ago it was.
+ */
+export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
+  // The turn as the timeline keeps it now: one held across a check may predate what that check found unreadable.
+  return knownStates(freshChecksOf(turn, current), (turnOf(turn.id, current) ?? turn).unreadable);
+}
+
+/**
+ * What the page shows of what is known of a turn's sources: on one asked in
+ * this Ask, which is current, only what a check found unreadable, never a
+ * Changed tag or note.
+ */
 export function shownChecks(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
-  return current.ask?.asked.includes(turn.id) ? undefined : checksOf(turn, current);
+  return current.ask?.asked.includes(turn.id) ? knownStates(undefined, turn.unreadable) : checksOf(turn, current);
 }
 
 /**
@@ -3613,7 +3628,7 @@ function keepTurn(turn: TimelineTurn): void {
  */
 function checkTimeline(opened?: TimelineTurn): Promise<void> {
   const newest = Date.now() - newestCheckedAt < CHECK_FRESH_MS ? [] : state.timeline.turns.slice(-CHECK_TURNS).reverse();
-  const first = opened !== undefined && (newest.includes(opened) || (checksOf(opened) === undefined && !checking.has(opened.id))) ? [opened] : [];
+  const first = opened !== undefined && (newest.includes(opened) || (freshChecksOf(opened) === undefined && !checking.has(opened.id))) ? [opened] : [];
   return checkTurns([...first, ...newest.filter(turn => turn !== opened)], newest.length > 0);
 }
 
@@ -3623,7 +3638,7 @@ function checkTimeline(opened?: TimelineTurn): Promise<void> {
  * now; one on its way is waited for instead.
  */
 function checkTurn(turn: TimelineTurn): Promise<void> {
-  return checking.get(turn.id) ?? (checksOf(turn) === undefined ? checkTurns([turn]) : Promise.resolve());
+  return checking.get(turn.id) ?? (freshChecksOf(turn) === undefined ? checkTurns([turn]) : Promise.resolve());
 }
 
 /**
@@ -3653,9 +3668,10 @@ function checkTurns(turns: readonly TimelineTurn[], newest = false): Promise<voi
     const found = checkedOf(plan, result?.value.items ?? []);
     if (newest) newestCheckedAt = at;
     const before = state.timeline.checks;
-    keepChecks({ ...before, ...Object.fromEntries(Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at)
-      .map(([id, states]) => [id, { at, states }])) });
+    const latest = Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
+    keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
     keepBaselines(found.markers);
+    keepUnreadable(latest);
   };
   const run = check();
   for (const id of plan.turns) checking.set(id, run);
@@ -3672,8 +3688,24 @@ function checkTurns(turns: readonly TimelineTurn[], newest = false): Promise<voi
  */
 async function knownSources(turn: TimelineTurn): Promise<TurnChecks | null> {
   const recent = Date.now() - Date.parse(turn.asked_at) < CHECK_FRESH_MS;
-  if (checksOf(turn) === undefined && !recent) await checkTurn(turn);
+  if (freshChecksOf(turn) === undefined && !recent) await checkTurn(turn);
   return checksOf(turn) ?? (recent ? answeredNow(turn) : null);
+}
+
+/**
+ * Each turn keeps, in the account's file, the sources this check found
+ * unreadable, and lets go of those it found readable again: what cites them
+ * stays hidden past the five minutes a check is good for, and after a restart.
+ */
+function keepUnreadable(checked: readonly (readonly [string, TurnChecks])[]): void {
+  for (const [id, states] of checked) {
+    const turn = turnOf(id);
+    if (!turn) continue;
+    const next = unreadableAfter(turn.unreadable, states);
+    if (next.join() === (turn.unreadable ?? []).join()) continue;
+    const { unreadable: _kept, ...rest } = turn;
+    keepTurn(next.length > 0 ? { ...rest, unreadable: next } : rest);
+  }
 }
 
 /** Tickets with no marker yet keep the one a check read: what the next check compares them with. */
@@ -3877,7 +3909,7 @@ export function toggleTurn(id: string): void {
  * is checked with the newest turns', first, when nothing in the last five
  * minutes said. Suggestions show only while Ask is closed.
  */
-export function openTurn(id: string): void {
+function openTurn(id: string): void {
   const turn = turnOf(id);
   if (!turn || !expect()) return;
   emptyBar();
@@ -3916,8 +3948,11 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   const checks = shownChecks(turn);
   const groups = turnGroups(answer.sources, checks);
   const shows = showsOf(checks);
-  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows);
-  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : checks === undefined ? answer.text : answerText(answer, shows);
+  // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
+  const earlier = turn.again_of === undefined ? undefined : turnOf(turn.again_of)?.asked_at;
+  const since = turn.since === undefined ? undefined : { statements: turn.since, when: earlier === undefined ? 'then' : askedWhen(earlier) };
+  const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows, since);
+  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : checks === undefined && since === undefined ? answer.text : answerText(answer, shows, since);
   return text !== '' && (await rpc('clipboard.writeText', { text })).ok;
 }
 

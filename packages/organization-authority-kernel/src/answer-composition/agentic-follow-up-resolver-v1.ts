@@ -169,7 +169,7 @@ export function parseFollowUpResolutionV1(value: unknown, sources: number): Agen
   return Object.freeze({ resolution, choices: Object.freeze(choices) });
 }
 
-export interface AgenticFollowUpResolverInputV1 {
+interface AgenticFollowUpResolverInputV1 {
   /** The request's model gate: access check, call and time budget, fingerprints, one repair. */
   readonly gate: AgenticModelGateV1;
   readonly previous: PersonAnswerPreviousV1;

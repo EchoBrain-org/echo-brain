@@ -66,7 +66,7 @@ export interface CreatePersonAskCheckV1Options {
 export interface PersonAskCheckLiveFailureV1 { readonly kind: 'person_ask_check_live_read'; readonly reason: 'tickets' | 'pages' | 'page_bodies'; readonly code: string }
 
 /** The live budget (Ask timeline v1, C1): per tool two metadata calls of 50 ids, per request ten page bodies and 15 seconds. */
-export const PERSON_ASK_CHECK_LIVE_BUDGET_V1 = Object.freeze({ ids_per_tool: 100, page_bodies: 10, deadline_ms: 15_000 });
+const PERSON_ASK_CHECK_LIVE_BUDGET_V1 = Object.freeze({ ids_per_tool: 100, page_bodies: 10, deadline_ms: 15_000 });
 
 const SAME: PersonAskCheckItemV1 = Object.freeze({ state: 'same' });
 const CHANGED: PersonAskCheckItemV1 = Object.freeze({ state: 'changed' });

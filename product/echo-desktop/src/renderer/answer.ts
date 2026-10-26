@@ -263,6 +263,17 @@ export function partShows(part: AnswerPart, shows: Shows): boolean {
 }
 
 /**
+ * Ask again's "Since" list (ADR-0047) as Copy answer writes it, with the day
+ * the earlier answer was asked as the page names it ("Oct 14"): "Nothing
+ * changed since" for an empty list, and nothing for one whose every item
+ * cites what a check left out, as on the page.
+ */
+export interface CopiedSince {
+  readonly statements: readonly AnswerStatement[];
+  readonly when: string;
+}
+
+/**
  * Copy answer's Markdown (ADR-0045): the answer as the page shows it, each
  * claim followed by its sources' numbers as the page shows them ("[1][3]"),
  * and the sources, numbered and named (`names`, one per number). The page's
@@ -273,13 +284,17 @@ export function partShows(part: AnswerPart, shows: Shows): boolean {
  * question heads what it says when there are several. What research did not
  * cover is not written: the page no longer shows it (ADR-0047).
  */
-export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows): string {
+export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows, since?: CopiedSince): string {
   const numbers = (citations: readonly number[]) => statementGroups(citations, groups).map(group => `[${group + 1}]`).join('');
   /** Text, then the numbers of what it cites: they stay on their claim. */
   const cited = (text: string, citations: readonly number[]) => [markdownText(text), numbers(citations)].filter(Boolean).join(' ');
   const claim = (statement: AnswerStatement) => cited(statement.text, statement.citation_indexes);
   const shown = (statements: readonly AnswerStatement[]) => statements.filter(statement => shows(statement.citation_indexes));
   const blocks: string[] = [];
+  // Ask again's "Since" (ADR-0047), first as on the page, each item with its numbers.
+  const listed = since === undefined ? [] : shown(since.statements);
+  if (since?.statements.length === 0) blocks.push(`Nothing changed since ${markdownText(since.when)}`);
+  else if (since !== undefined && listed.length > 0) blocks.push(`**Since ${markdownText(since.when)}**`, listed.map(statement => `- ${claim(statement)}`).join('\n'));
   if (answer.direct && shows(answer.direct.citation_indexes)) blocks.push(claim(answer.direct));
   for (const part of answer.parts) {
     // A part with nothing to show is not written, nor headed.
@@ -314,9 +329,11 @@ export function answerMarkdown(answer: Answer, names: readonly string[], groups:
  * (its sentences one a line, each part's question first when there are
  * several), without what a check left out.
  */
-export function answerText(answer: Answer, shows: Shows): string {
+export function answerText(answer: Answer, shows: Shows, since?: CopiedSince): string {
   const said = (statements: readonly AnswerStatement[]) => statements.filter(statement => shows(statement.citation_indexes)).map(statement => statement.text);
-  return [...said(answer.direct ? [answer.direct] : []), ...answer.parts.filter(part => partShows(part, shows))
+  const listed = since === undefined ? [] : said(since.statements);
+  const changes = since === undefined ? [] : since.statements.length === 0 ? [`Nothing changed since ${since.when}`] : listed.length > 0 ? [`Since ${since.when}`, ...listed] : [];
+  return [...changes, ...said(answer.direct ? [answer.direct] : []), ...answer.parts.filter(part => partShows(part, shows))
     .flatMap(part => [answer.parts.length > 1 ? part.question : '', ...said(part.statements), ...said(part.records ?? [])])]
     .filter(line => line !== '').join('\n');
 }

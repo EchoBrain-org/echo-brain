@@ -26,7 +26,7 @@ export const AGENTIC_ASK_MAX_NEEDS_PER_PART_V1 = 6;
 /** One paragraph; the V4 part bound is ten statements (RFC-0003). */
 export const AGENTIC_ASK_MAX_SENTENCES_V1 = 10;
 /** What is different since the earlier answer, when Ask is asked again (ADR-0047). */
-export const AGENTIC_ASK_MAX_SINCE_V1 = PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1;
+const AGENTIC_ASK_MAX_SINCE_V1 = PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1;
 export const AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 = 12;
 const QUESTION_CHARS = 400;
 const NEED_CHARS = 200;
@@ -617,16 +617,20 @@ export function parseAnswer(value: unknown, options: { readonly layout?: boolean
 }
 
 /**
- * An Ask again's `since` (ADR-0047): its first 6 sentences with text, each read as a writer's sentence is, its list ids
- * kept beside its first 12 item ids.
+ * An Ask again's `since` (ADR-0047): its first 6 sentences, each read as a writer's sentence is, its list ids kept beside
+ * its first 12 item ids. A list with an entry that is not a sentence with text is a comparison the reply cannot stand
+ * behind: it reads as none, never as the empty list that says nothing changed.
  */
-function sinceOf(given: readonly unknown[]): readonly Pick<AnswerSentence, "text" | "evidence">[] {
+function sinceOf(given: readonly unknown[]): readonly Pick<AnswerSentence, "text" | "evidence">[] | undefined {
   const since: Pick<AnswerSentence, "text" | "evidence">[] = [];
   for (const [index, raw] of given.entries()) {
     const entry = object(raw);
     const text = entry === null ? "" : stripEvidenceIds(cleanModelLine(entry.text, SENTENCE_CHARS), true);
-    if (text.length > 0) since.push(Object.freeze({ text, evidence: cleanIds(entry!.evidence, true, false) }));
-    else observeCoreModelCorrectionV1("model_entry_dropped");
+    if (text.length === 0) {
+      observeCoreModelCorrectionV1("model_entry_dropped");
+      return undefined;
+    }
+    since.push(Object.freeze({ text, evidence: cleanIds(entry!.evidence, true, false) }));
     if (since.length === AGENTIC_ASK_MAX_SINCE_V1) {
       if (index + 1 < given.length) observeCoreModelCorrectionV1("model_items_capped", given.length - index - 1);
       break;

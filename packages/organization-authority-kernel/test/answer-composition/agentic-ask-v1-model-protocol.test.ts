@@ -294,8 +294,8 @@ describe("agentic Ask model protocol parity", () => {
     }
   });
 
-  it("reads an Ask again's since only when asked: its first 6 sentences with text, as a writer's sentence is read (ADR-0047)", () => {
-    const since = [{ text: " The owner changed (E2). ", evidence: ["e2", "L1"] }, { text: "", evidence: ["E1"] },
+  it("reads an Ask again's since only when asked: its first 6 sentences, as a writer's sentence is read (ADR-0047)", () => {
+    const since = [{ text: " The owner changed (E2). ", evidence: ["e2", "L1"] },
       ...Array.from({ length: 7 }, (_, index) => ({ text: `Change ${index}.`, evidence: ["E1"] }))];
     const reply = { lists: [], sentences: [{ text: "Dev owns it.", evidence: ["E1"] }], since, not_found: [] };
     expect(parseAnswer(reply)).not.toHaveProperty("since");
@@ -303,6 +303,10 @@ describe("agentic Ask model protocol parity", () => {
       { text: "The owner changed.", evidence: ["E2", "L1"] }, ...Array.from({ length: 5 }, (_, index) => ({ text: `Change ${index}.`, evidence: ["E1"] })),
     ]);
     expect(parseAnswer({ ...reply, since: [] }, { since: true }).since).toEqual([]);
+    // An entry with no text, or no entry at all, is a comparison the reply cannot stand behind: none, never "nothing changed".
+    for (const broken of [[{ text: "", evidence: ["E1"] }], [{ text: "   ", evidence: [] }], ["The owner changed."], [since[0], { text: "", evidence: ["E1"] }]]) {
+      expect(parseAnswer({ ...reply, since: broken }, { since: true })).not.toHaveProperty("since");
+    }
     // A reply with no list of it has none; it is not sent back for that.
     expect(parseAnswer({ ...reply, since: "nothing" }, { since: true })).not.toHaveProperty("since");
     expect(answerSinceSchema).toMatchObject({ required: ["lists", "sentences", "not_found", "since"], properties: { since: { maxItems: 6 } } });

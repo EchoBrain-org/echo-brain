@@ -271,7 +271,7 @@ export type AnswerSource = (
 };
 
 /** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can change or go. */
-export const CHECK_KINDS: readonly PersonAskCheckCitationKindV1[] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
+const CHECK_KINDS: readonly PersonAskCheckCitationKindV1[] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
 /** A checkable source's evidence citation, as the answer cited it. */
 export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: PersonAskCheckCitationKindV1 }>;
 
@@ -408,6 +408,11 @@ export interface TimelineTurn {
   readonly again_of?: string;
   /** Ticket baseline markers by source index: what a check compares a ticket with. */
   readonly markers?: Readonly<Record<string, string>>;
+  /**
+   * The sources, by index, a check found unreadable: what cites them stays hidden, however long ago that check was, until
+   * a check finds them readable again (C5). A check that cannot tell (`unknown`) changes nothing.
+   */
+  readonly unreadable?: readonly number[];
 }
 
 /** The most turns a timeline keeps, and for how long: older ones go on every put. */

@@ -30,6 +30,32 @@ export function freshStates(check: TurnCheck | undefined, now: number): TurnChec
   return check !== undefined && now - check.at < CHECK_FRESH_MS ? check.states : undefined;
 }
 
+/**
+ * What is known of a turn's sources for what the page shows and a follow-up carries: what a check said in the last five
+ * minutes, over the sources a check found unreadable (`turn.unreadable`). Those stay unreadable, however long ago that
+ * check was, until one finds them readable again (C5): a check going stale never shows what it hid.
+ */
+export function knownStates(fresh: TurnChecks | undefined, unreadable: readonly number[] | undefined): TurnChecks | undefined {
+  if (unreadable === undefined || unreadable.length === 0) return fresh;
+  const known: Record<number, AskCheckState> = { ...fresh };
+  for (const at of unreadable) if (known[at] !== 'same' && known[at] !== 'changed') known[at] = 'unreadable';
+  return known;
+}
+
+/**
+ * The sources a turn keeps as unreadable after a check that said `states` of
+ * them: those it found unreadable join, those it found readable (the same or
+ * changed) leave, and those it could not tell of stay as they were.
+ */
+export function unreadableAfter(kept: readonly number[] | undefined, states: TurnChecks): number[] {
+  const next = new Set(kept ?? []);
+  for (const [at, said] of Object.entries(states)) {
+    if (said === 'unreadable') next.add(Number(at));
+    else if (said === 'same' || said === 'changed') next.delete(Number(at));
+  }
+  return [...next].sort((left, right) => left - right);
+}
+
 /** The checks still good at `now`: one five minutes old goes, so nothing it said shows any more. */
 export function freshChecks(checks: Readonly<Record<string, TurnCheck>>, now: number): Record<string, TurnCheck> {
   return Object.fromEntries(Object.entries(checks).filter(([, check]) => freshStates(check, now) !== undefined));
@@ -41,7 +67,7 @@ export function freshChecks(checks: Readonly<Record<string, TurnCheck>>, now: nu
  * and each citing nothing a check asks about. A turn none of whose sources
  * fit is not one of them.
  */
-export interface CheckPlan {
+interface CheckPlan {
   readonly items: readonly AskCheckItem[];
   readonly places: readonly { readonly turn: string; readonly sources: readonly number[] }[];
   readonly turns: readonly string[];
@@ -162,7 +188,7 @@ function sentences(turn: TimelineTurn): AnswerStatement[] {
  * leave an old answer saying nothing: it never looks current unless the check
  * says so.
  */
-export type TurnNote = 'changed' | 'same' | null;
+type TurnNote = 'changed' | 'same' | null;
 
 export function turnNote(turn: TimelineTurn, checks: TurnChecks | undefined): TurnNote {
   if (checks === undefined) return null;
