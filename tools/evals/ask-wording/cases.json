@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "kind": "echo-ask-wording-eval-cases-v1",
+  "description": "Pre-registered Ask answer wording cases (README.md). Synthetic engineering content. Research is scripted: one search that returns the case's items, then finish citing them all; only the writer is the product's model.",
+  "today": "2026-10-26",
+  "time_zone": "America/Los_Angeles",
+  "asker": "Noor Haddad",
+  "cases": [
+    {
+      "id": "follow-up-owner-quoted-title",
+      "group": "names_long_id",
+      "question": "Who owns the follow-up \"Approve release clean-v1-20261026-ask-timeline-aa79d90 and choose who can read it.\"?",
+      "long_ids": ["clean-v1-20261026-ask-timeline-aa79d90"],
+      "research": { "query": "clean-v1-20261026-ask-timeline-aa79d90", "need": "owner of the follow-up" },
+      "items": [
+        {
+          "kind": "follow_up", "on": "record", "title": "Approve release clean-v1-20261026-ask-timeline-aa79d90 and choose who can read it.",
+          "owner": "Noor Haddad", "status": "open", "created_at": "2026-10-26T15:10:00.000Z", "sent_at": "2026-10-26T15:12:00.000Z",
+          "expected": "Approve the release and set who can read it",
+          "decision": { "title": "Staging release review", "first_line": "Approve release clean-v1-20261026-ask-timeline-aa79d90 once its canary passes." }
+        },
+        {
+          "kind": "decision", "label": "Staging release review", "occurred_at": "2026-10-26",
+          "text": "Approved: release clean-v1-20261026-ask-timeline-aa79d90 goes to staging once its canary passes. Noor Haddad approves it and chooses who can read it."
+        }
+      ],
+      "expect": { "facts": [["you", "Noor Haddad"]], "cites": ["follow_up"] }
+    },
+    {
+      "id": "release-decision-named-id",
+      "group": "names_long_id",
+      "question": "What did the release review decide for clean-v1-20261022-ask-layout-56461ff?",
+      "long_ids": ["clean-v1-20261022-ask-layout-56461ff"],
+      "research": { "query": "clean-v1-20261022-ask-layout-56461ff", "need": "release review decision" },
+      "items": [
+        {
+          "kind": "decision", "label": "Release review: clean-v1-20261022-ask-layout-56461ff", "occurred_at": "2026-10-22",
+          "text": "The release review decided that clean-v1-20261022-ask-layout-56461ff may go to staging after the desktop layout check passes, and waits one day there before production."
+        }
+      ],
+      "expect": { "facts": [["staging"], ["layout check"]], "cites": ["decision"] }
+    },
+    {
+      "id": "follow-up-due-quoted-title",
+      "group": "names_long_id",
+      "question": "When is the follow-up \"Publish the release notes for clean-v1-20261020-meeting-routing-b62b11b to the team space\" due?",
+      "long_ids": ["clean-v1-20261020-meeting-routing-b62b11b"],
+      "research": { "query": "clean-v1-20261020-meeting-routing-b62b11b release notes", "need": "due date of the follow-up" },
+      "items": [
+        {
+          "kind": "follow_up", "on": "page", "title": "Publish the release notes for clean-v1-20261020-meeting-routing-b62b11b to the team space",
+          "owner": "Dev Okafor", "status": "open", "due_at": "2026-10-30", "created_at": "2026-10-21T17:00:00.000Z", "sent_at": "2026-10-21T17:02:00.000Z",
+          "check": { "verdict": "still_open", "checked_at": "2026-10-25T16:00:00.000Z" },
+          "decision": { "title": "Meeting routing release review", "first_line": "Publish the release notes before the Friday demo." }
+        }
+      ],
+      "expect": { "facts": [["Oct 30", "October 30", "2026-10-30"]], "cites": ["follow_up"] }
+    },
+    {
+      "id": "ticket-status-key-and-title",
+      "group": "names_long_id",
+      "question": "What is the status of THERM-482 \"Thermal fixture fails at 45 °C during the 72-hour soak\"?",
+      "long_ids": [],
+      "research": { "query": "THERM-482", "need": "current status of THERM-482" },
+      "items": [
+        {
+          "kind": "ticket", "key": "THERM-482", "title": "Thermal fixture fails at 45 °C during the 72-hour soak", "status": "In Progress", "owner": "Dev Okafor",
+          "text": "THERM-482: Thermal fixture fails at 45 °C during the 72-hour soak.\nStatus: In Progress. Owner: Dev Okafor.\nThe redesigned fixture is in review; the soak restarts once it is installed."
+        }
+      ],
+      "expect": { "facts": [["in progress"]], "cites": ["ticket"] }
+    },
+    {
+      "id": "decision-approver-quoted-title",
+      "group": "names_long_id",
+      "question": "Who approved the decision \"Ship fan curve v2 before DVT and hold PVT until the soak passes\"?",
+      "long_ids": [],
+      "research": { "query": "fan curve v2", "need": "who approved the decision" },
+      "items": [
+        {
+          "kind": "decision", "label": "THERM DVT recovery sync", "occurred_at": "2026-10-14",
+          "text": "Decision: Ship fan curve v2 before DVT and hold PVT until the soak passes.\nApproved by Lena Brandt on 2026-10-14. Participants: Lena Brandt, Dev Okafor, Ines Moreau."
+        }
+      ],
+      "expect": { "facts": [["Lena Brandt"]], "cites": ["decision"] }
+    },
+    {
+      "id": "rollback-named-id",
+      "group": "names_long_id",
+      "question": "What does the rollout plan for clean-v1-20261026-ask-timeline-aa79d90 say to do if the canary fails?",
+      "long_ids": ["clean-v1-20261026-ask-timeline-aa79d90", "clean-v1-20261019-research-v8-0c1d2e3"],
+      "research": { "query": "clean-v1-20261026-ask-timeline-aa79d90 rollback", "need": "what to do if the canary fails" },
+      "items": [
+        {
+          "kind": "decision", "label": "Staging rollout review", "occurred_at": "2026-10-26",
+          "text": "For clean-v1-20261026-ask-timeline-aa79d90, the rollout review decided: if the canary fails, restore clean-v1-20261019-research-v8-0c1d2e3 from the release feed within 30 minutes and post in #release."
+        }
+      ],
+      "expect": { "facts": [["clean-v1-20261019-research-v8-0c1d2e3"], ["30 minutes"]], "cites": ["decision"] }
+    },
+    {
+      "id": "review-decision-plain",
+      "group": "plain",
+      "question": "What did the Pilot Delta review decide about the launch gate?",
+      "long_ids": [],
+      "research": { "query": "Pilot Delta launch gate", "need": "Pilot Delta review decision on the launch gate" },
+      "items": [
+        {
+          "kind": "decision", "label": "Pilot Delta review", "occurred_at": "2026-10-21",
+          "text": "The approved Pilot Delta review decided to hold the launch gate until fixture verification is complete."
+        }
+      ],
+      "expect": { "facts": [["hold", "held", "holds", "holding"], ["fixture verification"]], "cites": ["decision"] }
+    },
+    {
+      "id": "owner-plain",
+      "group": "plain",
+      "question": "Who owns the fixture redesign?",
+      "long_ids": [],
+      "research": { "query": "fixture redesign", "need": "owner of the fixture redesign" },
+      "items": [
+        {
+          "kind": "ticket", "key": "THERM-490", "title": "Fixture redesign for the new heater block", "status": "In Review", "owner": "Dev Okafor",
+          "text": "THERM-490: Fixture redesign for the new heater block.\nStatus: In Review. Owner: Dev Okafor. Due: 2026-10-29."
+        }
+      ],
+      "expect": { "facts": [["Dev Okafor"]], "cites": ["ticket"] }
+    },
+    {
+      "id": "blocker-plain",
+      "group": "plain",
+      "question": "What is blocking the DVT gate?",
+      "long_ids": [],
+      "research": { "query": "DVT gate blocker", "need": "what blocks the DVT gate" },
+      "items": [
+        {
+          "kind": "ticket", "key": "THERM-482", "title": "Thermal fixture fails at 45 °C during the 72-hour soak", "status": "In Progress", "owner": "Dev Okafor",
+          "text": "THERM-482: Thermal fixture fails at 45 °C during the 72-hour soak.\nStatus: In Progress. Owner: Dev Okafor.\nThis blocks the DVT gate: the 72-hour soak cannot finish until the fixture holds 45 °C."
+        }
+      ],
+      "expect": { "facts": [["THERM-482"], ["soak"]], "cites": ["ticket"] }
+    },
+    {
+      "id": "which-release-plain",
+      "group": "plain",
+      "question": "Which release did last Tuesday's review approve for staging?",
+      "long_ids": ["clean-v1-20261020-meeting-routing-b62b11b"],
+      "research": { "query": "staging release review", "need": "release approved for staging on 2026-10-20" },
+      "items": [
+        {
+          "kind": "decision", "label": "Staging release review", "occurred_at": "2026-10-20",
+          "text": "The staging release review approved clean-v1-20261020-meeting-routing-b62b11b for staging, pending the restricted-meeting check."
+        }
+      ],
+      "expect": { "facts": [["clean-v1-20261020-meeting-routing-b62b11b"]], "cites": ["decision"] }
+    }
+  ]
+}
