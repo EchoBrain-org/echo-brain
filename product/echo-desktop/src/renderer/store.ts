@@ -80,8 +80,12 @@ export interface AskState {
   latest: string | null;
   /** The turns asked since Ask was opened, oldest first. */
   asked: readonly string[];
-  /** The earlier turn opened from its line, if any: a follow-up continues it. */
+  /**
+   * The earlier turn opened from its line, if any: a follow-up continues it, until one asked since it was opened is answered
+   * (`openedAt`, how many were asked then), which the next follow-up continues instead.
+   */
   opened: string | null;
+  openedAt: number;
   /** The turn a suggestion opened Ask at, brought into view once. */
   focus: string | null;
   asking: AskAsking | null;
@@ -3600,7 +3604,7 @@ async function baseline(turn: TimelineTurn): Promise<void> {
 
 /** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet. */
 function newAsk(opened: string | null = null, focus: string | null = null): AskState {
-  return { seq: ++seq, latest: state.timeline.turns.at(-1)?.id ?? null, asked: [], opened, focus, asking: null, clarify: null, failed: null, took: {} };
+  return { seq: ++seq, latest: state.timeline.turns.at(-1)?.id ?? null, asked: [], opened, openedAt: 0, focus, asking: null, clarify: null, failed: null, took: {} };
 }
 
 /** The turns Ask shows in full besides the latest: the latest when it opened, and those asked since. */
@@ -3627,7 +3631,9 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const text = question.trim();
   const open = state.ask;
   if (!account || text === '' || open?.asking) return;
-  const followed = open && how === undefined && !previousRefused ? followedTurn(state.timeline.turns, open.opened, Date.now()) : null;
+  // The turn opened, until a question asked since it was opened is answered: then the conversation goes on from the latest.
+  const continued = open && open.asked.length === open.openedAt ? open.opened : null;
+  const followed = open && how === undefined && !previousRefused ? followedTurn(state.timeline.turns, continued, Date.now()) : null;
   const asked: AskHow = how ?? { previous: followed ? previousOf(followed, 'follow_up', checksOf(followed), askText(text), scope) : null };
   const view = open ?? newAsk();
   const mine = ++seq;
@@ -3755,7 +3761,7 @@ export function toggleTurn(id: string): void {
   const view = state.ask;
   if (!view || !turnOf(id)) return;
   const opened = view.opened === id ? null : id;
-  set({ ask: { ...view, opened, focus: null } });
+  set({ ask: { ...view, opened, openedAt: view.asked.length, focus: null } });
   const sources = state.sources;
   if (sources && opened === null && sources.turn === id) {
     set({ sources: { ...sources, turn: state.timeline.turns.at(-1)?.id ?? null, open: null, focus: null, evidence: null } });
@@ -3775,7 +3781,7 @@ export function openTurn(id: string): void {
   const open = state.ask;
   const view = open ?? newAsk();
   const full = shownInFull(turn, state.timeline.turns, fullTurns(view));
-  set({ ask: { ...view, opened: full ? view.opened : id, focus: id } });
+  set({ ask: { ...view, ...(full ? {} : { opened: id, openedAt: view.asked.length }), focus: id } });
   if (!open) {
     startSources(null, id);
     void checkTimeline();

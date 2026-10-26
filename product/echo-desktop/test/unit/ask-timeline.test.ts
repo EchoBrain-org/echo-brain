@@ -401,11 +401,15 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     store.toggleTurn(old.id);
     await store.ask('and that one?');
     expect(calls('ask.run')[2]!.previous).toMatchObject({ purpose: 'follow_up', question: 'Old?', asked_at: old.asked_at });
+    // Once a question about it is answered, the conversation goes on from that answer, though the turn stays open.
+    await store.ask('and when is it due?');
+    expect(calls('ask.run')[3]!.previous).toMatchObject({ purpose: 'follow_up', question: 'and that one?' });
+    expect(store.getState().ask?.opened).toBe(old.id);
     // The latest asked over an hour ago, nothing opened: asked on its own.
     store.toggleTurn(old.id);
     vi.setSystemTime(NOW.getTime() + 2 * HOUR);
     await store.ask('Something new?');
-    expect(calls('ask.run')[3]).not.toHaveProperty('previous');
+    expect(calls('ask.run')[4]).not.toHaveProperty('previous');
   });
 
   it('asks which one, keeps nothing, and asks the chosen full question with the same earlier turn', async () => {
