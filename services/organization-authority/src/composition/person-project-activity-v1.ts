@@ -9,7 +9,7 @@ import {
 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import type { ImpactItemRowV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
+import type { SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
 import type { SqlitePersonProjectActivityV1 } from '../adapters/persistence/sqlite/person-project-activity-v1.js';
 import type { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
@@ -30,8 +30,8 @@ import type { PersonProjectRecordActivityV1, PersonReadableDecisionProjectsV1, P
  * - a meeting record filed into it that the caller reads (the exact Layer 1 check) and did not approve (its receipt time);
  * - a follow-up of the project's newest 500 records (the records its follow-ups list reads) that someone else sent, or whose
  *   owner or state someone else set last (`sent_at`, `owner_set_at`, `state_set_at`), of the rows the open-items policy shows
- *   the caller with their decision. The store returns only rows someone else moved, newest move first, a page at a time; the
- *   policy pass reads a page only while no row it showed is at least as new as the rest.
+ *   the caller with their decision. The store returns only rows someone else moved, with when, newest move first, a page at a
+ *   time, so the first row the policy pass shows is the newest.
  * Only a project's newest 500 filed records count: its meetings past them, and their follow-ups, never light it.
  * Live Jira and Confluence edits never count, and no global position, counter or revision goes into it: it moves only with
  * activity the caller can see (ADR-0012, ADR-0036).
@@ -54,54 +54,29 @@ export interface CreatePersonProjectActivityV1Options {
 }
 
 const PROJECTS_MAX = PERSON_PROJECT_ACTIVITY_LIMITS_V1.items;
-/** A project's follow-ups list reads its newest 500 records (the record lookup's own bound). */
-const PROJECT_RECORDS_MAX = 500;
 /** The follow-ups someone else moved, read a page at a time, newest move first. */
 const MOVES_PAGE = 50;
-const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-
-/** A stored time in the canonical form the items store writes, else none. */
-function canonicalTime(value: string | null): string | null {
-  return value !== null && CANONICAL_TIME.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value ? value : null;
-}
-
-/**
- * When someone other than this member last moved the item: set its owner, set its state, or sent it. Only the approver sends
- * (`openItemSendAccessV1`), and the row keeps no sender of its own. A check (`checked_*`) is not a move. Null when only this
- * member moved it, or nobody.
- */
-function movedByOthersAt(row: ImpactItemRowV1, membership: string): string | null {
-  let latest: string | null = null;
-  for (const [by, at] of [[row.owner_set_by, row.owner_set_at], [row.state_set_by, row.state_set_at], [row.approver.membership_id, row.sent_at]] as const) {
-    const time = by === null || by === membership ? null : canonicalTime(at);
-    if (time !== null && (latest === null || time > latest)) latest = time;
-  }
-  return latest;
-}
 
 export function createPersonProjectActivityV1(options: CreatePersonProjectActivityV1Options): PersonProjectActivityHttpApplicationV1 {
   /**
    * The newest move by someone else among the follow-ups of these records filed in this project, of the rows the open-items
    * policy shows the viewer together with their decision: an owner who cannot read the decision sees the row, never which
-   * project it is filed in. The store returns only rows someone else moved, newest move first, a page at a time, and the
-   * policy pass takes a page while no row it showed is at least as new as the page's last: a later page moved no later.
-   * Usually the first page decides; a page whose rows the viewer cannot see moves on to the next.
+   * project it is filed in. The store returns only rows someone else moved, each with when it last did (`moved_at`), newest
+   * move first, a page at a time, so the first row the policy shows is the newest. Usually the first page has one; a page
+   * whose rows the viewer cannot see moves on to the next.
    */
   const followUpsAt = (viewer: OpenItemViewerV1, projectId: ProjectIdV1, records: readonly Sha256Digest[], decisions: OpenItemDecisionsReaderV1<Pick<PersonReadableDecisionV1, 'project_ids'>>): string | null => {
     if (records.length === 0) return null;
-    let latest: string | null = null;
     for (let after: { readonly moved_at: string; readonly item_id: string } | undefined; ;) {
       const page = options.items.movedByOthers(viewer.organization, viewer.membership, records, { limit: MOVES_PAGE, ...(after === undefined ? {} : { after }) });
       const last = page.at(-1);
-      if (last === undefined) return latest;
+      if (last === undefined) return null;
       const context = assessOpenItemsV1({ records: decisions, people: options.people }, viewer, page.map(entry => entry.row));
-      for (const { row, access } of context.assessed) {
-        if (!access.see_row || !access.see_decision || context.decisions.get(row.record_sha256)?.project_ids.includes(projectId) !== true) continue;
-        // The store's time bounds this one: it is the same, unless a stored time is not a real instant.
-        const at = movedByOthersAt(row, viewer.membership);
-        if (at !== null && (latest === null || at > latest)) latest = at;
-      }
-      if (page.length < MOVES_PAGE || (latest !== null && latest >= last.moved_at)) return latest;
+      const shown = new Set(context.assessed.flatMap(({ row, access }) =>
+        access.see_row && access.see_decision && context.decisions.get(row.record_sha256)?.project_ids.includes(projectId) === true ? [row.item_id] : []));
+      const newest = page.find(entry => shown.has(entry.row.item_id));
+      if (newest !== undefined) return newest.moved_at;
+      if (page.length < MOVES_PAGE) return null;
       after = { moved_at: last.moved_at, item_id: last.row.item_id };
     }
   };
@@ -124,7 +99,7 @@ export function createPersonProjectActivityV1(options: CreatePersonProjectActivi
         // The record checks read the grants just read here: a capture of their own would need a transaction of its own.
         const projects = recordProjectAuthorizationOfGrantsV1(view.grants);
         const filed = options.records.projectRecordActivity({
-          access_token: input.access_token, projects, project_ids: ids, own: options.approvals.approvedRecords(authorization), limit: PROJECT_RECORDS_MAX,
+          access_token: input.access_token, projects, project_ids: ids, own: options.approvals.approvedRecords(authorization),
         });
         const viewer = openItemViewerV1(input.access_token, authorization);
         // Which records the viewer reads, from the grants read in the read's own transaction; each looked up once per read.
