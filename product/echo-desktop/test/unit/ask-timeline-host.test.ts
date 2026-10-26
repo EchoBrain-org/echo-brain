@@ -4,10 +4,23 @@
 // account change deleting the last one's), and the checks of what the page
 // sends with an Ask and a source check before the client sees it.
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/** A disk that, while `short` is on, takes at most half of what each write gives it, as a write may. Everything else is the real one. */
+const { disk } = vi.hoisted(() => ({ disk: { short: false } }));
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>();
+  const writeSync = (descriptor: number, data: string | NodeJS.ArrayBufferView, offset?: number, length?: number) => {
+    const bytes = typeof data === 'string' ? Buffer.from(data) : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    const from = typeof data === 'string' ? 0 : offset ?? 0;
+    const asked = typeof data === 'string' ? bytes.length : length ?? bytes.length - from;
+    return fs.writeSync(descriptor, bytes, from, disk.short ? Math.ceil(asked / 2) : asked);
+  };
+  return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
+});
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
 import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
@@ -64,6 +77,27 @@ describe('the timeline file (C5)', () => {
     putTimeline(person, ARI, marked, NOW);
     expect(readTimeline(person, ARI)).toEqual([marked, second]);
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('writes every byte however little a write takes, and has the file and its new name on disk before a put returns', () => {
+    const [first, second] = [turn(2), turn(1)];
+    putTimeline(person, ARI, first, NOW);
+    vi.mocked(fsyncSync).mockClear();
+    vi.mocked(renameSync).mockClear();
+    disk.short = true;
+    try {
+      putTimeline(person, ARI, second, NOW);
+    } finally {
+      disk.short = false;
+    }
+    // The good file is never replaced by part of the next one.
+    expect(readTimeline(person, ARI)).toEqual([first, second]);
+    // Its bytes before it takes the name, and the folder's new entry after.
+    const renamed = vi.mocked(renameSync).mock.invocationCallOrder;
+    const synced = vi.mocked(fsyncSync).mock.invocationCallOrder;
+    expect(renamed).toHaveLength(1);
+    expect(synced.filter(order => order < renamed[0]!)).toHaveLength(1);
+    expect(synced.filter(order => order > renamed[0]!)).toHaveLength(1);
   });
 
   it('keeps at most 200 turns and none older than 90 days, the newest, on every put', () => {

@@ -78,21 +78,31 @@ export function pruneTurns(turns: readonly TimelineTurn[], now: number): Timelin
   return kept.slice(Math.max(0, kept.length - MAX_TIMELINE_TURNS));
 }
 
-/** Keeps `turn` in the account's file: in place of the turn with its id, or at the end; then prunes, and writes the file whole. */
+/**
+ * Keeps `turn` in the account's file: in place of the turn with its id, or at
+ * the end; then prunes, and writes the file whole, as the person session's
+ * store writes its own: every byte and then the new name on disk before it
+ * returns, so a crash leaves the old file or the new one, never part of one.
+ */
 export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn, now: number): void {
   const directory = folder(personDirectory, 'write');
   if (directory === null) throw new Error('The Ask timeline folder is not private');
   const turns = readTimeline(personDirectory, account);
   const at = turns.findIndex(kept => kept.id === turn.id);
   if (at >= 0) turns[at] = turn; else turns.push(turn);
-  const text = JSON.stringify({ schema_version: 1, kind: KIND, turns: pruneTurns(turns, now) });
+  const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns: pruneTurns(turns, now) }), 'utf8');
   const path = timelinePath(personDirectory, account);
   const temporary = join(directory, `.${randomBytes(12).toString('hex')}.tmp`);
   // Created here, owner-only, never through a link: then its bytes on disk before it takes the name.
   const descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
   try {
     try {
-      writeSync(descriptor, text);
+      // A write may take only part of what it is given: written on from where it stopped, until every byte is.
+      for (let written = 0; written < bytes.length;) {
+        const took = writeSync(descriptor, bytes, written, bytes.length - written);
+        if (took <= 0) throw new Error('The Ask timeline could not be written');
+        written += took;
+      }
       fsyncSync(descriptor);
     } finally {
       closeSync(descriptor);
@@ -101,6 +111,18 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
   } catch (error) {
     rmSync(temporary, { force: true });
     throw error;
+  }
+  // The folder's new entry on disk too.
+  syncFolder(directory);
+}
+
+/** A folder's entries on disk: a file renamed into it stays renamed after a crash. */
+function syncFolder(path: string): void {
+  const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
   }
 }
 
