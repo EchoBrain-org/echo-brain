@@ -288,7 +288,7 @@ describe('Ask on the timeline', () => {
     // The ten newest, newest first, three sources each.
     expect((asked!.items as unknown[]).length).toBe(30);
     expect((asked!.items as { asked_at: string }[])[0]!.asked_at).toBe(turns[10]!.asked_at);
-    expect(Object.keys(store.getState().timeline.checks!.turns)).toHaveLength(10);
+    expect(Object.keys(store.getState().timeline.checks)).toHaveLength(10);
     // A ticket a check read for the first time keeps its marker as its baseline.
     expect(kept().find(each => each.id === turns[5]!.id)?.markers).toEqual({ 0: sha('m1') });
     const thread = await view();
@@ -391,6 +391,48 @@ describe('Ask on the timeline', () => {
     // A source no check asks about (a person) is never known to be the same.
     const named = turn('Who owns it?', DAY, answerOf('Who owns it?', [ticket('THERM-482', '20482'), mara], [['Mara owns THERM-482.', [0, 1]]]));
     expect(turnNote(named, { 0: 'same' })).toBeNull();
+  });
+
+  it('shows nothing a check said once it is five minutes old, and a check that fails then leaves nothing of the last one', async () => {
+    const [one, two] = [turn('One?', 2 * DAY, status()), turn('Two?', DAY, status())];
+    seed(one, two);
+    let failing = false;
+    checks = items => (failing ? fail('unavailable', { retryable: true }) : ok({ items: items.map(item => ({
+      state: item.citation.kind === 'page' ? 'changed' : item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) }));
+    const store = await startStore();
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    const thread = await view();
+    const marks = () => byTestId(byTestId(thread(store), 'opened-turn')[0], 'statement').map(node => node.props['data-mark'] ?? null);
+    expect(byTestId(thread(store), 'changed-tag')).toHaveLength(1);
+    expect(marks()).toEqual([null, 'changed']);
+    // Five minutes on, Ask still open: no tag, no line, and nothing left out.
+    vi.setSystemTime(NOW.getTime() + 5 * 60_000);
+    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
+    expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'again-note')).toEqual([]);
+    expect(marks()).toEqual([null, null, null]);
+    expect(store.checksOf(one)).toBeUndefined();
+    // Ask opened again: its check fails, and what the last one said goes with it.
+    store.closeAsk();
+    failing = true;
+    store.pickSuggestion({ question: 'One?', turn: one.id });
+    await flush();
+    expect(calls('ask.check')).toHaveLength(2);
+    expect(store.getState().timeline.checks).toEqual({});
+    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
+  });
+
+  it('clears what a check said when it goes stale, so the page stops showing it then', async () => {
+    seed(turn('One?', 2 * DAY, status()), turn('Two?', DAY, status()));
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : 'same' })) });
+    const store = await startStore();
+    await store.ask('What changed?');
+    await flush();
+    expect(Object.keys(store.getState().timeline.checks)).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    expect(Object.keys(store.getState().timeline.checks)).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.getState().timeline.checks).toEqual({});
   });
 
   it('fails quietly: no tags, and an Authority without the check is not asked again until the next sign-in', async () => {

@@ -19,6 +19,22 @@ export const CHECK_FRESH_MS = 5 * 60_000;
 /** What a check said of one turn's sources, by their place among its answer's sources. */
 export type TurnChecks = Readonly<Record<number, AskCheckState>>;
 
+/** What a check said of one turn's sources, and when it went, by this computer's clock. */
+export interface TurnCheck {
+  readonly at: number;
+  readonly states: TurnChecks;
+}
+
+/** What a check said of a turn's sources while it is good: five minutes from when it went, and nothing after (C5). */
+export function freshStates(check: TurnCheck | undefined, now: number): TurnChecks | undefined {
+  return check !== undefined && now - check.at < CHECK_FRESH_MS ? check.states : undefined;
+}
+
+/** The checks still good at `now`: one five minutes old goes, so nothing it said shows any more. */
+export function freshChecks(checks: Readonly<Record<string, TurnCheck>>, now: number): Record<string, TurnCheck> {
+  return Object.fromEntries(Object.entries(checks).filter(([, check]) => freshStates(check, now) !== undefined));
+}
+
 /** One check: its items, and for each, the turn whose sources it stands for and their places there. */
 export interface CheckPlan {
   readonly items: readonly AskCheckItem[];

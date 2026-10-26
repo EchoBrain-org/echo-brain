@@ -15,7 +15,8 @@ import { askText, searchQuery } from '../shared/query.js';
 import { answerMarkdown, answerSentences, documentName, MAX_SOURCES, sourceGroups, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, previousOf, sameScope, shownInFull, turnGroups, type Suggestion, type TurnChecks,
+  askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, previousOf, sameScope, shownInFull, turnGroups,
+  type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
@@ -98,14 +99,17 @@ export interface AskState {
 
 /**
  * The Ask timeline (ADR-0047): this account's questions and answers on this
- * computer, oldest first, as the host keeps them; and what the last check of
- * the newest turns' sources said. It outlives Ask, and is read again at
- * sign-in and when the account changes.
+ * computer, oldest first, as the host keeps them; and what checks of their
+ * sources said. It outlives Ask, and is read again at sign-in and when the
+ * account changes.
  */
 export interface TimelineState {
   turns: readonly TimelineTurn[];
-  /** The last check (by this computer's clock, for five minutes), by turn; null before one answered. */
-  checks: { at: number; turns: Readonly<Record<string, TurnChecks>> } | null;
+  /**
+   * What checks said of turns' sources, by turn, each with when it went: good for five minutes. One older is read as none
+   * (`checksOf`), and goes once it is (`keepChecks`).
+   */
+  checks: Readonly<Record<string, TurnCheck>>;
 }
 
 /** A turn as the page shows it: as kept, with what its Ask looked through when this Ask asked it. */
@@ -604,7 +608,7 @@ function rememberedSidebar(): boolean {
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false },
   archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
-  barScope: { kind: 'global' }, barText: '', matches: null, ask: null, timeline: { turns: [], checks: null }, sources: null, compose: null, toast: null, toastShown: 0,
+  barScope: { kind: 'global' }, barText: '', matches: null, ask: null, timeline: { turns: [], checks: {} }, sources: null, compose: null, toast: null, toastShown: 0,
   concealed: false, signin: { phase: 'idle', form: false }, signInDue: null, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, tools: null,
   employeeWrite: null, home: null, decision: null, followUps: null, impactLine: null, projectLine: null, projectReads: null, news: new Set(), visit: null,
   update: { state: 'none' }, updateFailure: null,
@@ -3492,6 +3496,10 @@ export function scopeName(scope: AskScope, current: State = state): string {
 let timelineSeq = 0;
 /** Which check is the latest: a reply for an earlier one is dropped. */
 let checkSeq = 0;
+/** When the newest turns were last checked, as the check went (this computer's clock): Ask opening checks them again five minutes on. */
+let newestCheckedAt = Number.NEGATIVE_INFINITY;
+/** Clears what checks said once the first of them is no longer good. */
+let checksExpire: ReturnType<typeof setTimeout> | null = null;
 /** The Authority has no check (`not_supported`): no Changed tags, and it is not asked again until the next sign-in. */
 let checksUnsupported = false;
 /** An Ask that carried `previous` was refused (`invalid_request`): this window asks without it from now on (C5). */
@@ -3502,9 +3510,9 @@ export function turnOf(id: string | null | undefined, current: State = state): T
   return id == null ? undefined : current.timeline.turns.find(turn => turn.id === id);
 }
 
-/** What the last check said of a turn's sources, when it said anything. */
+/** What a check said of a turn's sources in the last five minutes, if one did: an older one is as none (C5). */
 export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks | undefined {
-  return current.timeline.checks?.turns[turn.id];
+  return freshStates(current.timeline.checks[turn.id], Date.now());
 }
 
 /** What the page shows of the last check on a turn: nothing on one asked in this Ask, which is current. */
@@ -3536,14 +3544,36 @@ async function loadTimeline(): Promise<void> {
   }
   const read = result.value.turns;
   const kept = state.timeline.turns.filter(turn => !read.some(other => other.id === turn.id));
-  set({ timeline: { turns: [...read, ...kept].slice(-MAX_TIMELINE_TURNS), checks: null } });
+  forgetChecks();
+  set({ timeline: { turns: [...read, ...kept].slice(-MAX_TIMELINE_TURNS), checks: {} } });
 }
 
 /** Nothing of the account's timeline stays on screen or in memory: signed out, or another account. Its file is the host's. */
 function forgetTimeline(): void {
   timelineSeq += 1;
   checkSeq += 1;
-  if (state.timeline.turns.length > 0 || state.timeline.checks !== null) set({ timeline: { turns: [], checks: null } });
+  forgetChecks();
+  if (state.timeline.turns.length > 0 || Object.keys(state.timeline.checks).length > 0) set({ timeline: { turns: [], checks: {} } });
+}
+
+/** No check of the newest turns is good any more, and none is waited on to go stale: the next Ask checks afresh. */
+function forgetChecks(): void {
+  newestCheckedAt = Number.NEGATIVE_INFINITY;
+  if (checksExpire) { clearTimeout(checksExpire); checksExpire = null; }
+}
+
+/**
+ * What checks said, as the page may show it: only what is still good. The
+ * first to go stale is cleared then, so the page stops showing it then, with
+ * no tag, no line and nothing left out (C5).
+ */
+function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
+  if (checksExpire) { clearTimeout(checksExpire); checksExpire = null; }
+  const now = Date.now();
+  const kept = freshChecks(checks, now);
+  set({ timeline: { ...state.timeline, checks: kept } });
+  const next = Math.min(...Object.values(kept).map(check => check.at + CHECK_FRESH_MS));
+  if (Number.isFinite(next)) checksExpire = setTimeout(() => { checksExpire = null; keepChecks(state.timeline.checks); }, next - now);
 }
 
 /**
@@ -3562,26 +3592,31 @@ function keepTurn(turn: TimelineTurn): void {
 
 /**
  * Ask opened: what changed of what the newest ten turns cited, in one check
- * (C5), unless the last one is under five minutes old. It fails quietly, with
- * no tags. A ticket a check reads for the first time keeps the marker it read
- * as its baseline.
+ * (C5), unless the last one went under five minutes ago. What it says of each
+ * turn is good for five minutes from when it went. It fails quietly, with no
+ * tags: what an earlier check said that is no longer good goes with it. A
+ * ticket a check reads for the first time keeps the marker it read as its
+ * baseline.
  */
 async function checkTimeline(): Promise<void> {
   const account = expect();
-  const { turns, checks } = state.timeline;
-  if (!account || checksUnsupported || turns.length === 0 || (checks !== null && Date.now() - checks.at < CHECK_FRESH_MS)) return;
+  const { turns } = state.timeline;
+  if (!account || checksUnsupported || turns.length === 0 || Date.now() - newestCheckedAt < CHECK_FRESH_MS) return;
   const plan = checkPlan(turns.slice(-CHECK_TURNS).reverse());
   if (plan.items.length === 0) return;
   const mine = ++checkSeq;
+  const at = Date.now();
   const result = await rpc('ask.check', { expect: account, items: [...plan.items] });
   if (mine !== checkSeq || !sameAccount(account)) return;
   if (!result.ok) {
     if (result.failure.code === 'not_supported') checksUnsupported = true;
     else if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
+    keepChecks(state.timeline.checks);
     return;
   }
   const found = checkedOf(plan, result.value.items);
-  set({ timeline: { ...state.timeline, checks: { at: Date.now(), turns: found.turns } } });
+  newestCheckedAt = at;
+  keepChecks({ ...state.timeline.checks, ...Object.fromEntries(Object.entries(found.turns).map(([id, states]) => [id, { at, states }])) });
   keepBaselines(found.markers);
 }
 
