@@ -993,6 +993,27 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
     expect(seenKeys()).toEqual([of(ACCOUNT)]);
   });
 
+  it('reads what arrived only when the change check reached the Authority: one that cannot reach it sends nothing more', async () => {
+    let reachable = false;
+    activity = () => ok({ items: [{ project_id: apollo.project_id, latest_at: at(DAY) }] });
+    rpc.mockImplementation(rpcFor(held, {
+      'changes.read': () => (reachable ? ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60,
+        areas: { projects: `sha256:${'1'.repeat(64)}`, follow_ups: `sha256:${'2'.repeat(64)}`, reviews: `sha256:${'3'.repeat(64)}` } }) : fail('unavailable', { retryable: true })),
+      'projects.activity': () => activity!(),
+      'ask.check': () => fail('unavailable', { retryable: true }),
+      'list.page': () => ok({ items: feed, next_cursor: null, meetings_held: false }),
+    }, () => ({ active: [apollo], archived: [] })));
+    await startStore();
+    await flush();
+    expect(calls('projects.activity')).toHaveLength(0);
+    const freshness = await import('../../src/renderer/freshness.js');
+    reachable = true;
+    vi.setSystemTime(NOW.getTime() + 60_000);
+    freshness.woke();
+    await flush();
+    expect(calls('projects.activity')).toHaveLength(1);
+  });
+
   it('shows no dots, and asks no more, when the Authority has no activity read', async () => {
     const store = await startStore();
     await flush();

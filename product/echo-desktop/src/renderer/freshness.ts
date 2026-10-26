@@ -209,8 +209,6 @@ function schedule(run: Loop): void {
 async function once(run: Loop, trigger: Trigger): Promise<Checked> {
   run.began = Date.now();
   if (run.timer) { clearTimeout(run.timer); run.timer = null; }
-  // A check also reads what arrived in your projects (ADR-0047): it starts with the check, which never waits on it.
-  void surfaces.readActivity(trigger === 'start' || trigger === 'came-back' || trigger === 'wake').catch(() => undefined);
   if (run.older) { await scan(run); return { outcome: 'older', moved: [] }; }
   const result = await ask<PersonChangesV1>(() => rpc('changes.read', { expect: run.account }));
   if (loop !== run) return { outcome: 'failed', moved: [] };
@@ -226,6 +224,9 @@ async function once(run: Loop, trigger: Trigger): Promise<Checked> {
     return { outcome: 'failed', moved: [] };
   }
   run.failures = 0;
+  // A check that reached the Authority also reads what arrived in your projects (ADR-0047), never waiting on it; one
+  // that could not reach it does not try, so nothing else goes out (or asks to refresh the session) while it cannot.
+  void surfaces.readActivity(trigger === 'start' || trigger === 'came-back' || trigger === 'wake').catch(() => undefined);
   run.pace = result.value.check_again_after_seconds * 1000;
   const fresh = result.value.areas;
   const known = run.areas;
