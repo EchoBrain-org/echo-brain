@@ -96,6 +96,7 @@ describe('approval decision projection', () => {
   it.each<[string, (routes: Mutable[]) => Mutable[]]>([
     ['the private route made plain', routes => routes.map(({ private: _kept, ...route }) => route)],
     ['the private route made private: false', routes => routes.map(route => ({ ...route, private: false }))],
+    ['the private route made private: "true"', routes => routes.map(route => route.signal_id === 'act-2' ? route : { ...route, private: 'true' })],
     ['a plain route made private', routes => routes.map(route => route.signal_id === 'act-2' ? { ...route, private: true } : route)],
   ])('refuses a private record whose witness routes differ: %s', async (_label, change) => {
     const f = await approvalCoreFixture();
@@ -306,6 +307,27 @@ describe('approval decision projection', () => {
     ]);
     expect(new Set(groups.map(group => group.approval_id)).size).toBe(3);
     expect(groups.map(group => Object.keys(group).sort().join())).toEqual(['approval_id,private,project_ids,signal_ids', 'approval_id,project_ids,signal_ids', 'approval_id,project_ids,signal_ids']);
+  });
+  it('refuses a route that says private other than as true beside a project, rather than read it as shared', () => {
+    const B = 'prj_00000000-0000-4000-8000-0000000000b1', approval_id = `apr_${'c'.repeat(64)}`;
+    for (const route of [{ signal_id: 'd1', project_ids: [B], private: false }, { signal_id: 'd1', project_ids: [B], private: 'true' },
+      { signal_id: 'd1', project_ids: [], private: true }, { signal_id: 'd1', project_ids: null, private: true }]) {
+      expect(() => approvalDecisionGroupsV1({ approval_id, routes: [route as never] })).toThrow('private only as true, beside a project');
+    }
+  });
+  it.each([[false], ['true'], [null]])('publishes nothing from a stored route that says private: %j, which the Authority tables do not check', async (flag) => {
+    const f = await approvalCoreFixture();
+    f.core.decide('desktop', f.approve({ routes: f.routes([f.projectA]) }), () => f.session);
+    f.db.exec('DROP TRIGGER authority_approval_decision_immutable_v1');
+    const body = JSON.parse(f.db.prepare('SELECT body_json FROM authority_approval_decisions_v1 WHERE approval_id=?').pluck().get(f.approvalId) as string) as { request: { routes: Mutable[] } };
+    body.request.routes[0]!.private = flag;
+    f.db.prepare('UPDATE authority_approval_decisions_v1 SET body_json=? WHERE approval_id=?').run(canonicalJson(body as unknown as JsonValue), f.approvalId);
+    // The witness carries the flag as stored, so the append projector would refuse it as well.
+    const input = source(f);
+    expect(approvalDecisionWitnessV1(input.decision, validateApprovedDecisionSnapshotV2(input.approved_snapshot)).decision.routes[0]).toEqual(body.request.routes[0]);
+    expect(() => buildApprovalDecisionRecordsV1(input)).toThrow('private only as true, beside a project');
+    await expect(f.core.processing.appendFinalizedApprovalsToV4(signal())).rejects.toThrow('private only as true, beside a project');
+    expect(f.recordCount()).toBe(0);
   });
   it('buildApprovalDecisionRecordsV1 refuses a reject, a missing transcript source, another snapshot, routes of another brief and a decision that keeps nothing', async () => {
     const f = await approvalCoreFixture();

@@ -42,14 +42,15 @@ export interface ApprovalDecisionWitnessV1 {
 
 /**
  * Pure. sequence = authority_approval_decisions_v1.sequence, body = the parsed body_json, proposal_snapshot = the validated
- * frozen snapshot whose digest is body.request.snapshot_sha256 (the projector checks it).
+ * frozen snapshot whose digest is body.request.snapshot_sha256 (the projector checks it). A route's `private` is copied as
+ * stored, whatever its value, so the projector refuses any but `true` instead of reading it as shared.
  */
 export function approvalDecisionWitnessV1(decision: { readonly sequence: number; readonly body: ApprovalDecisionBodyV1 },
   proposal_snapshot: ApprovedDecisionSnapshotV2): ApprovalDecisionWitnessV1 {
   const { body, sequence } = decision, r = body.request;
   const request: ApprovalDecisionRequestV1 = Object.freeze({ approval_id: r.approval_id, command_id: r.command_id, snapshot_sha256: r.snapshot_sha256, action: r.action,
     routes: Object.freeze(r.routes.map(route => Object.freeze({ signal_id: route.signal_id, project_ids: route.project_ids === null ? null : Object.freeze([...route.project_ids]),
-      ...(route.private === true ? { private: true as const } : {}) }))),
+      ...(Object.hasOwn(route, 'private') ? { private: route.private } : {}) }))),
     owners: Object.freeze(r.owners.map(o => Object.freeze({ signal_id: o.signal_id, owner: o.owner }))) });
   const evidence: ApprovalDecisionEvidenceWitnessV1 = Object.freeze({ surface: body.surface, organization_id: body.actor.organization_id, principal_id: body.actor.principal_id,
     membership_id: body.actor.membership_id, kind: body.evidence.kind, sha256: body.evidence.sha256 });
@@ -71,11 +72,16 @@ export interface ApprovalDecisionGroupV1 {
 }
 /**
  * Pure: the kept routes grouped by whether they are kept private and their exact project set, ordered by each group's first
- * item in the routes' (brief) order. The same projects shared and kept private are two groups, and two records.
+ * item in the routes' (brief) order. The same projects shared and kept private are two groups, and two records. Throws on a
+ * route that says `private` other than as `true` beside a project: the Authority's tables do not check it, and read any other
+ * way it would publish the item to the whole project.
  */
 export function approvalDecisionGroupsV1(request: { readonly approval_id: string; readonly routes: readonly ApprovalRouteV1[] }): readonly ApprovalDecisionGroupV1[] {
   const groups = new Map<string, { readonly project_ids: readonly string[]; readonly private: boolean; readonly signal_ids: string[] }>();
   for (const route of request.routes) {
+    if (Object.hasOwn(route, 'private') && (route.private !== true || route.project_ids === null || route.project_ids.length === 0)) {
+      throw new Error('Approval decision route keeps an item private only as true, beside a project');
+    }
     if (route.project_ids === null) continue;
     const kept = route.private === true;
     const key = canonicalJson({ private: kept, project_ids: [...route.project_ids] } as JsonValue);
