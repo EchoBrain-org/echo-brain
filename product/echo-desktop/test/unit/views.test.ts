@@ -6,6 +6,7 @@ import {
 } from '../../src/host/views.js';
 import { createHash } from 'node:crypto';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
+import { checkOf } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
 import { layoutAnswer } from '../../src/host/test-authority.js';
 
@@ -30,10 +31,10 @@ const AT = '2026-09-21T22:01:00.000Z';
 
 /**
  * An answer's sources as the page reads them: without the citation each keeps
- * as the response carried it (`cited`) and a checkable one's evidence citation
- * (`check`), the opaque values a follow-up and a check send back (ADR-0047).
+ * as the response carried it (`cited`), the opaque value a follow-up sends back
+ * and whose evidence citation a check asks about (ADR-0047).
  */
-const visible = (sources: readonly Record<string, unknown>[]) => sources.map(({ cited: _cited, check: _check, ...rest }) => rest);
+const visible = (sources: readonly Record<string, unknown>[]) => sources.map(({ cited: _cited, ...rest }) => rest);
 
 describe('view models copy only what the renderer may see', () => {
   it.each(['confluence', 'notion', 'knowledge-base'])('preserves %s page identity without provider coordinates', tool_id => {
@@ -859,9 +860,10 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     const cited = [named, ticket, followUp, page, note, project, person, tool, container];
     const answer = answerView({ ok: true, result: v8(cited) }, scope);
     answer.sources.forEach((source, at) => expect(source.cited).toEqual(cited[at]));
-    // A record's item, a ticket, a follow-up, a page and an original's passage can change or go: what a check asks about.
-    expect(answer.sources.map(source => source.check)).toEqual([record, ticket.citation, followUp.citation, page.citation, passage('a'),
+    // A record's item, a ticket, a follow-up, a page and an original's passage can change or go: what a check asks about, kept once.
+    expect(answer.sources.map(checkOf)).toEqual([record, ticket.citation, followUp.citation, page.citation, passage('a'),
       undefined, undefined, undefined, undefined]);
+    for (const source of answer.sources) expect(source).not.toHaveProperty('check');
     // A progress row's items keep neither: only an answer's sources are checked or carried back.
     expect(JSON.stringify(askStepView({ ok: true, progress: { type: 'read', items: cited } }))).not.toMatch(/"cited"|"check"/u);
   });

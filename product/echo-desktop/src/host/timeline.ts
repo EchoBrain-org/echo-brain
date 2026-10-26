@@ -12,7 +12,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  CHECK_KINDS, MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type Answer, type AnswerSource, type AnswerStatement, type AskScope, type Expect,
+  MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type AskScope, type Expect, type TimelineAnswer,
   type TimelineTurn,
 } from '../shared/protocol.js';
 
@@ -157,7 +157,6 @@ const time = (value: unknown): value is string => string(value, 64) && !Number.i
 const STATUSES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found', 'records_only']);
 const OUTCOMES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found']);
 const BLOCKS: ReadonlySet<unknown> = new Set(['lead', 'heading', 'paragraph', 'bullets', 'table']);
-const CHECKABLE: ReadonlySet<unknown> = new Set(CHECK_KINDS);
 
 function scope(value: unknown): value is AskScope {
   if (!record(value)) return false;
@@ -173,13 +172,13 @@ const statements = (value: unknown, maximum = 64): value is AnswerStatement[] =>
 
 /**
  * A source, by what the page reads of its kind to show and open it: anything
- * else would break the page that shows it. What it cited, and what a check
- * asks about, are kept as the answer had them.
+ * else would break the page that shows it. What it cited is kept as the
+ * answer had it, with the evidence citation whose kind says whether a check
+ * asks about it.
  */
 function source(value: unknown): value is AnswerSource {
   if (!record(value) || !string(value.label, 2_000)) return false;
-  if (value.check !== undefined && !(record(value.check) && CHECKABLE.has(value.check.kind))) return false;
-  if (value.cited !== undefined && !record(value.cited)) return false;
+  if (value.cited !== undefined && !(record(value.cited) && record(value.cited.citation) && string(value.cited.citation.kind))) return false;
   if (value.private !== undefined && value.private !== true) return false;
   switch (value.kind) {
     case 'record': return string(value.atom_id) && record(value.record) && string(value.record.record_sha256) && string(value.record.policy_id);
@@ -204,13 +203,11 @@ function layout(value: unknown, count: number): boolean {
         && Array.isArray(block.rows) && block.rows.every(row => record(row) && Array.isArray(row.cells) && row.cells.every(cell => string(cell)) && indexes(row.citation_indexes))));
 }
 
-function answer(value: unknown): value is Answer {
+/** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). */
+function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !string(value.text, 200_000) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
   if (!Array.isArray(value.sources) || value.sources.length > 256 || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
-  if (value.question !== undefined && !string(value.question)) return false;
-  if (value.since !== undefined && !statements(value.since)) return false;
-  if (value.receipt !== undefined && !(record(value.receipt) && Array.isArray(value.receipt.rows))) return false;
   return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.records === undefined || statements(part.records))
     && (part.layout === undefined || layout(part.layout, (part.statements as unknown[]).length)));

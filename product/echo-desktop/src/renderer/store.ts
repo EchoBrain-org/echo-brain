@@ -3807,14 +3807,17 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
     startSources();
     return;
   }
+  // Kept as the page reads it back (TimelineAnswer): the full question and Ask again's "since" once, on the turn; what it looked
+  // through only while this Ask shows it; and no choices, which only "Which one?" has.
+  const { receipt, question: full, since, choices: _choices, ...kept } = answer;
   const turn: TimelineTurn = {
-    id: crypto.randomUUID(), asked_at: new Date(started).toISOString(), text, question: answer.question ?? text, scope, answer,
-    ...(answer.since === undefined ? {} : { since: answer.since }), ...(againOf === undefined ? {} : { again_of: againOf }),
+    id: crypto.randomUUID(), asked_at: new Date(started).toISOString(), text, question: full ?? text, scope, answer: kept,
+    ...(since === undefined ? {} : { since }), ...(againOf === undefined ? {} : { again_of: againOf }),
   };
   keepTurn(turn);
   // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
   const took = Date.now() - started;
-  const shown = answer.receipt !== undefined && took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt: answer.receipt, took, seq: mine } } : current.took;
+  const shown = receipt !== undefined && took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took, seq: mine } } : current.took;
   set({ ask: { ...current, asking: null, asked: [...current.asked, turn.id], took: shown } });
   startSources(answerNames(answer), turn.id);
   void baseline(turn);

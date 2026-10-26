@@ -4,9 +4,9 @@
 // empty bar suggests from it. Pure, for the store and its tests; the store
 // keeps the state and makes the calls.
 import type {
-  AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, TimelineTurn,
+  AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
-import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
+import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerSentences, MAX_SOURCES, sourceGroups, type SourceGroup } from './answer.js';
 
@@ -53,9 +53,12 @@ export interface Checked {
   readonly markers: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
-/** The answer's sources a check can ask about, numbered as the page numbers them: the first 32. */
-function checkable(turn: TimelineTurn): { source: AnswerSource; at: number }[] {
-  return turn.answer.sources.slice(0, MAX_SOURCES).flatMap((source, at) => source.check === undefined ? [] : [{ source, at }]);
+/** The answer's sources a check can ask about, numbered as the page numbers them: the first 32, each with what a check asks of it. */
+function checkable(turn: TimelineTurn): { source: AnswerSource; at: number; citation: CheckCitation }[] {
+  return turn.answer.sources.slice(0, MAX_SOURCES).flatMap((source, at) => {
+    const citation = checkOf(source);
+    return citation === undefined ? [] : [{ source, at, citation }];
+  });
 }
 
 /**
@@ -76,12 +79,12 @@ export function checkPlan(turns: readonly TimelineTurn[], only: (source: AnswerS
     const asked = checkable(turn).filter(({ source }) => only(source));
     if (asked.length === 0) { spoken.push(turn.id); continue; }
     const seen = new Map<string, number>();
-    for (const { source, at } of full ? [] : asked) {
-      const key = JSON.stringify(source.check);
+    for (const { source, at, citation } of full ? [] : asked) {
+      const key = JSON.stringify(citation);
       const same = seen.get(key);
       if (same !== undefined) { places[same]!.sources.push(at); continue; }
       const marker = source.kind === 'ticket' ? turn.markers?.[String(at)] : undefined;
-      const item: AskCheckItem = { asked_at: turn.asked_at, citation: source.check!, ...(marker === undefined ? {} : { marker }) };
+      const item: AskCheckItem = { asked_at: turn.asked_at, citation, ...(marker === undefined ? {} : { marker }) };
       const size = new TextEncoder().encode(JSON.stringify(item)).length + 1;
       if (items.length === MAX_CHECK_ITEMS || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) { full = true; break; }
       bytes += size;
@@ -217,7 +220,7 @@ function bodyBytes(question: string, scope: AskScope, previous: AskPrevious): nu
  * the last five minutes, as good as a check.
  */
 export function answeredNow(turn: TimelineTurn): TurnChecks {
-  return Object.fromEntries(turn.answer.sources.flatMap((source, at) => (source.check === undefined ? [] : [[at, 'same' as const]])));
+  return Object.fromEntries(turn.answer.sources.flatMap((source, at) => (checkOf(source) === undefined ? [] : [[at, 'same' as const]])));
 }
 
 /**
@@ -234,7 +237,7 @@ export function answeredNow(turn: TimelineTurn): TurnChecks {
  */
 export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
   const sources = turn.answer.sources;
-  const read = (at: number) => sources[at]?.check === undefined || known?.[at] === 'same' || known?.[at] === 'changed';
+  const read = (at: number) => sources[at] === undefined || checkOf(sources[at]) === undefined || known?.[at] === 'same' || known?.[at] === 'changed';
   const readable = known === null ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
     .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== '' && statement.citation_indexes.every(read));
   const build = (chosen: readonly AnswerStatement[]): AskPrevious => {

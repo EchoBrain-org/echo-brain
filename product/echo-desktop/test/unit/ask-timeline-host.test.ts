@@ -40,7 +40,7 @@ function turn(daysAgo = 0, extra: Partial<TimelineTurn> = {}): TimelineTurn {
     id: randomUUID(), asked_at: new Date(NOW - daysAgo * DAY).toISOString(), text: 'what is open?', question: 'What is open on THERM?', scope: { kind: 'global' },
     answer: {
       text: 'THERM-482 is open.', scope: { kind: 'global' }, outcome: 'answered',
-      sources: [{ kind: 'ticket', tool_id: 'jira', label: 'THERM-482 · Sensor drift', permalink: ticketCitation.permalink, private: true, cited, check: ticketCitation }],
+      sources: [{ kind: 'ticket', tool_id: 'jira', label: 'THERM-482 · Sensor drift', permalink: ticketCitation.permalink, private: true, cited }],
       parts: [{ question: 'What is open on THERM?', status: 'answered', statements: [{ text: 'THERM-482 is open.', citation_indexes: [0], private: true }] }],
     },
     ...extra,
@@ -196,7 +196,8 @@ describe('the timeline file (C5)', () => {
       { ...good, id: 'turn-1' }, { ...good, asked_at: 'yesterday' }, { ...good, scope: { kind: 'project', project_id: 'Apollo' } },
       { ...good, again_of: 'turn-0' }, { ...good, markers: { 0: 'v1' } }, { ...good, markers: { first: sha('b') } },
       { ...good, answer: { ...good.answer, outcome: 'clarify' } }, { ...good, answer: { ...good.answer, sources: [{ kind: 'ticket', label: 'T' }] } },
-      { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], check: { kind: 'person' } }] } },
+      { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: undefined } }] } },
+      { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: { ...ticketCitation, kind: 7 } } }] } },
       { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0], layout: [{ kind: 'lead', statements: [3] }] }] } },
     ]) expect(timelineTurn(bad)).toBeNull();
   });

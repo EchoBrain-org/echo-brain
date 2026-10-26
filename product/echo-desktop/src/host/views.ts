@@ -4,7 +4,7 @@
 // printed through the same validator, and copies explicitly only the fields
 // the renderer needs, so nothing else the client prints can reach it.
 import type {
-  Account, Answer, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, CheckCitation, ConnectedTools,
+  Account, Answer, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskCheckResult, AskRead, AskScope, AskSearched, AskStep, Audience, ConnectedTools,
   CreatedProject, DocumentSummary, Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, MemberPage, Opened,
   ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
@@ -19,7 +19,7 @@ import {
   type PersonAnswerCitationV8, type PersonAskProgressResultLineV3, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
 } from '@echo-brain/organization-api';
-import { CHECK_KINDS, externalSourcePermalink } from '../shared/protocol.js';
+import { externalSourcePermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
 
@@ -372,18 +372,16 @@ export function answerOf(result: PersonAskProgressResultLineV3['result'], receip
 
 /** Who alone may read an item cited as private: you, or the approver. */
 const PRIVATE_VISIBILITY: ReadonlySet<string> = new Set(['only_me', 'approver_only']);
-const CHECKABLE: ReadonlySet<string> = new Set(CHECK_KINDS);
 
 /**
  * An answer's cited item, and whether only you can read it: a table row that
  * cites it shows the lock (ADR-0045). It keeps the citation as the response
- * carried it, for a later follow-up's `previous`, and a source that can change
- * or go keeps its evidence citation, for a later check (ADR-0047).
+ * carried it, for a later follow-up's `previous` and, when it can change or
+ * go, a later check (ADR-0047).
  */
 function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
   const source = { ...answerSource(citation), cited: citation };
-  const checked = CHECKABLE.has(citation.citation.kind) ? { ...source, check: citation.citation as CheckCitation } : source;
-  return PRIVATE_VISIBILITY.has(citation.visibility) ? { ...checked, private: true } : checked;
+  return PRIVATE_VISIBILITY.has(citation.visibility) ? { ...source, private: true } : source;
 }
 
 const MARKER = /^sha256:[0-9a-f]{64}$/;

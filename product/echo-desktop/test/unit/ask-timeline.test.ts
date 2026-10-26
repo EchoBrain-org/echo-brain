@@ -7,7 +7,7 @@
 // Authority refuses it; and the sidebar's dots with a project's New rows.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
-import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
+import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS } from '../../src/shared/protocol.js';
 import {
   allOmitted, answeredNow, askedSuggestions, askedWhen, checkedOf, checkPlan, followedTurn, markOf, previousOf, shownInFull, turnChanged, turnGroups, turnNote,
@@ -33,20 +33,20 @@ const SIDEBAR = 'echo.sidebarOpen';
 function ticket(key: string, id: string, permalink = `https://example.atlassian.net/browse/${key}`): AnswerSource {
   const citation = { kind: 'ticket', tool_id: 'jira', external_scope_id: 'cloud-1', ticket_id: id, permalink, text_sha256: sha(key) } as const;
   const cited: PersonAnswerCitationV8 = { citation, kind: 'ticket', label: `${key} · Sensor drift`, visibility: 'only_me' };
-  return { kind: 'ticket', tool_id: 'jira', label: `${key} · Sensor drift`, permalink, private: true, cited, check: citation };
+  return { kind: 'ticket', tool_id: 'jira', label: `${key} · Sensor drift`, permalink, private: true, cited };
 }
 /** A Confluence page an answer cites, the team's to read. */
 function page(id: string): AnswerSource {
   const citation = { kind: 'page', tool_id: 'confluence', external_scope_id: 'cloud-1', page_id: id, section_id: 'summary', version: '3',
     permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: sha(id) } as const;
   const cited: PersonAnswerCitationV8 = { citation, kind: 'page', label: 'DVT plan', visibility: 'team' };
-  return { kind: 'page', tool_id: 'confluence', label: 'DVT plan', permalink: citation.permalink, cited, check: citation };
+  return { kind: 'page', tool_id: 'confluence', label: 'DVT plan', permalink: citation.permalink, cited };
 }
 /** A follow-up an answer cites. */
 function followUp(id: string): AnswerSource {
   const citation = { kind: 'follow_up', item_id: id } as const;
   const cited: PersonAnswerCitationV8 = { citation, kind: 'follow_up', label: 'Confirm the trace', visibility: 'team', ref: `follow_up:${id}` as `follow_up:itm_${string}` };
-  return { kind: 'follow_up', label: 'Confirm the trace', item_id: id, cited, check: citation };
+  return { kind: 'follow_up', label: 'Confirm the trace', item_id: id, cited };
 }
 /** A person, whom no check asks about. */
 const mara: AnswerSource = { kind: 'person', label: 'Mara Lind', membership_id: 'mem_0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e',
@@ -504,13 +504,43 @@ describe('Ask on the timeline', () => {
     expect(copied[1]).toBe(long);
   });
 
+  it('keeps of a turn only what the page reads back: its full question and "since" once, no receipt, and each source\'s citation once', async () => {
+    const receipt: AskReceipt = { looked_through: 1, elapsed_ms: 4_000, rows: [{ type: 'read', items: [ticket('THERM-482', '20482')] }] };
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.run': params => {
+        const answer = answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is in progress.', [0]]]);
+        return ok({ ...answer, receipt, question: 'What is open on THERM?', since: [said('THERM-482 moved to In Progress.', [0], answer.sources)] });
+      },
+      'ask.check': params => ok({ items: (params.items as unknown[]).map(() => ({ state: 'same' })) }),
+    }, () => ({ active: [apollo], archived: [] })));
+    const one = turn('What is open on THERM?', 2 * DAY, status());
+    seed(one);
+    const store = await startStore();
+    store.pickSuggestion({ question: one.question, turn: one.id });
+    await flush();
+    store.askAgain(one.id);
+    await flush();
+    const again = kept().at(-1)!;
+    expect(again).toMatchObject({ again_of: one.id, question: 'What is open on THERM?', since: [{ text: 'THERM-482 moved to In Progress.' }] });
+    for (const key of ['receipt', 'question', 'since', 'choices']) expect(again.answer).not.toHaveProperty(key);
+    expect(again.answer.sources[0]).not.toHaveProperty('check');
+    expect(again.answer.sources[0]!.cited).toEqual(ticket('THERM-482', '20482').cited);
+    // What a check asks about comes from the citation the answer cited it by.
+    store.closeAsk();
+    vi.setSystemTime(NOW.getTime() + 6 * 60_000);
+    await store.ask('Anything new?');
+    await flush();
+    const opening = calls('ask.check').find(call => (call.items as { asked_at: string }[]).some(item => item.asked_at === again.asked_at))!;
+    expect((opening.items as { citation: unknown }[])[0]!.citation).toEqual(ticket('THERM-482', '20482').cited!.citation);
+  });
+
   it('reads a new answer\'s tickets once, for the baseline a later check compares with', async () => {
     checks = items => ok({ items: items.map(() => ({ state: 'same', marker: sha('base') })) });
     const store = await startStore();
     await store.ask('What is open?');
     await flush();
     const [baseline] = calls('ask.check');
-    expect(baseline!.items).toEqual([{ asked_at: store.latestTurn()!.asked_at, citation: ticket('THERM-482', '20482').check }]);
+    expect(baseline!.items).toEqual([{ asked_at: store.latestTurn()!.asked_at, citation: ticket('THERM-482', '20482').cited!.citation }]);
     expect(kept()[0]!.markers).toEqual({ 0: sha('base') });
   });
 });

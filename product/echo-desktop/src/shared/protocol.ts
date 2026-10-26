@@ -263,21 +263,26 @@ export type AnswerSource = (
   /**
    * The citation exactly as the answer's response carried it, only on an
    * answer's sources: opaque here. A follow-up or Ask again sends the earlier
-   * answer's citations back with it (`previous`, ADR-0047).
+   * answer's citations back with it (`previous`, ADR-0047), and a check asks
+   * about the evidence citation of one that can change or go (`checkOf`).
    */
   readonly cited?: PersonAnswerCitationV8;
-  /**
-   * A source that can change or go (a record's item, an original's passage, a
-   * follow-up, a ticket or a page): its evidence citation, exactly as the
-   * answer cited it, which `ask.check` asks about (ADR-0047). Opaque here.
-   */
-  readonly check?: CheckCitation;
 };
 
 /** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can change or go. */
 export const CHECK_KINDS: readonly CheckCitation['kind'][] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
 /** A checkable source's evidence citation, as the answer cited it. */
 export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: 'approved_record' | 'source_revision' | 'follow_up' | 'ticket' | 'page' }>;
+
+/**
+ * What `ask.check` asks about a source (ADR-0047): its evidence citation,
+ * exactly as the answer cited it, when it can change or go (a record's item,
+ * an original's passage, a follow-up, a ticket or a page). Opaque here.
+ */
+export function checkOf(source: AnswerSource): CheckCitation | undefined {
+  const citation = source.cited?.citation;
+  return citation !== undefined && (CHECK_KINDS as readonly string[]).includes(citation.kind) ? citation as CheckCitation : undefined;
+}
 
 /**
  * What Ask is doing now (ADR-0039), from what ECHO ran: a step's searches,
@@ -373,6 +378,14 @@ export interface Answer {
 }
 
 /**
+ * An answer as the timeline keeps it: what the page reads back of a turn.
+ * What only the Ask that brought it reads (what it looked through, "Which
+ * one?"'s choices) and what the turn keeps itself (the full question, Ask
+ * again's "since") are not kept twice.
+ */
+export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'choices'>;
+
+/**
  * One question and its answer on the Ask timeline (ADR-0047), as the host keeps
  * it in the account's file on this device. Never sent to the Authority.
  */
@@ -386,8 +399,11 @@ export interface TimelineTurn {
   /** The full question the answer answers: shown when folded, and what Ask again asks. */
   readonly question: string;
   readonly scope: AskScope;
-  /** As the host built it; each checkable source keeps its raw evidence citation (`check`). */
-  readonly answer: Answer;
+  /**
+   * As the host built it, less what the turn keeps itself or only its Ask read (`TimelineAnswer`); each source keeps the
+   * citation it was cited by (`cited`), whose evidence citation a check asks about when it can change or go (`checkOf`).
+   */
+  readonly answer: TimelineAnswer;
   /** Ask again's "Since" list: what is different now, each cited; empty when nothing material changed. */
   readonly since?: readonly AnswerStatement[];
   /** The turn this one asked again. */
