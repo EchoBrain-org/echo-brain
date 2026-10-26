@@ -42,6 +42,16 @@ describe("agentic Ask audit", () => {
     expect(() => store.forRequest({ ...requestContext, request_id: 'legacy' }).append({ ...native, generations: native.generations.map(({ engine: _engine, model: _model, ...entry }) => entry) })).toThrow('audit entry is invalid');
   });
 
+  it("records a follow-up that asked which one as clarify, its resolver an answer generation, and never off_scope (ADR-0047)", () => {
+    const database = openedDatabase(), store = new SqlitePersonAgenticAskAuditV1(database);
+    const clarify = { ...entry, outcome: "clarify" as const, receipt_digests: [], rounds: 0, model_calls: 1, citation_count: 0,
+      generations: [{ role: "answer" as const, finish_reason: "stop", usage: null }], finish_reason_counts: { stop: 1 } };
+    store.forRequest(requestContext).append(clarify);
+    const row = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2").get() as { body_json: string };
+    expect(JSON.parse(row.body_json)).toMatchObject({ outcome: "clarify", rounds: 0, model_calls: 1, citation_count: 0, generations: clarify.generations });
+    expect(() => store.forRequest({ ...requestContext, request_id: "off_scope" }).append({ ...entry, outcome: "off_scope" as never })).toThrow("Agentic Ask audit entry is invalid");
+  });
+
   it("writes a content-free success terminal witness to the existing immutable table", () => {
     const database = openedDatabase();
     const context = { ...requestContext };

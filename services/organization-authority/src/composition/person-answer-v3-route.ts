@@ -152,6 +152,8 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
 export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOptions): PersonAnswerV3HttpApplication {
   return Object.freeze({
     async ask(input: Parameters<PersonAnswerV3HttpApplication["ask"]>[0]): Promise<PersonAnswerResponseV4> {
+      // The asker's previous turn rides only on the V8 Ask (ADR-0047); the HTTP boundary refuses it here.
+      if (input.request.previous !== undefined) throw new AuthorityOperationError("invalid_request", "Ask previous is only on /v7");
       return runPersonAskV1(options, input, async ({ authorization, context, capture, signal }) => {
         const desk = deskFor(options, input.access_token, input.request);
         capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));

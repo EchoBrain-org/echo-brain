@@ -1,4 +1,4 @@
-import type { PersonDiagnosticCaptureIdV1, PersonDiagnosticsRequestV1, PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
+import type { PersonAnswerPreviousV1, PersonDiagnosticCaptureIdV1, PersonDiagnosticsRequestV1, PersonDiagnosticsResultsV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentIdV1, validatePersonDocumentSearchV2, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
 import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
@@ -730,10 +730,14 @@ export class PersonClient {
    * from `/v7` the asker's projects, people, tools and tool containers
    * (research tool contract v1). It falls back from `/v7` to `/v6`, to `/v5`,
    * and then to `/v4`, only when an older Authority has no such route. A
-   * capture also reads on `/v5`, never on `/v4`.
+   * capture also reads on `/v5`, never on `/v4`. An Ask that carries the
+   * asker's previous turn (ADR-0047) asks `/v7` alone and never falls back:
+   * an Authority that predates it refuses the turn with `invalid_request`.
    */
-  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5> {
+  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
+    previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5> {
     validateAskInput(question, scope);
+    if (previous !== undefined) return this.withReadSession((authority, token) => authority.askV7(token, question, scope, signal, captureId, previous));
     return this.withReadSession((authority, token) => newestLiveAskRoute<PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5>([
       () => authority.askV7(token, question, scope, signal, captureId),
       () => authority.askV6(token, question, scope, signal, captureId),
@@ -757,9 +761,13 @@ export class PersonClient {
    * names its account (`expected`, both parts, as the desktop does) is never
    * asked for as another: a session another sign-in installed first is
    * refused before anything is sent, so no step of that account reaches it.
+   *
+   * An Ask that carries the asker's previous turn (ADR-0047) streams on `/v7`
+   * alone and never falls back.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {}): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {},
+    previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     const stored = await this.accessSession();
     if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
@@ -778,8 +786,8 @@ export class PersonClient {
       onProgress(event);
     };
     // `/v7` streams progress V3 (research tool contract v1); an Authority without it streams V2 on `/v6` (ADR-0040), one without
-    // that streams V1 on `/v5`, and one without that answers `/v4` with no progress.
-    const answer = await newestLiveAskRoute<PersonLiveAnswerV3>([
+    // that streams V1 on `/v5`, and one without that answers `/v4` with no progress. The previous turn goes to `/v7` alone.
+    const answer = previous !== undefined ? await authority.askV7WithProgress(token, question, scope, signal, forward, previous) : await newestLiveAskRoute<PersonLiveAnswerV3>([
       () => authority.askV7WithProgress(token, question, scope, signal, forward),
       () => authority.askV6WithProgress(token, question, scope, signal, forward),
       () => authority.askV5WithProgress(token, question, scope, signal, forward),

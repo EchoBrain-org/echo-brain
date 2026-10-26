@@ -1,5 +1,5 @@
 import { AuthorityOperationError } from "../../domain/errors.js";
-import { canonicalJsonBytes, canonicalSha256 } from "@echo-brain/federation-protocol";
+import { canonicalJsonBytes } from "@echo-brain/federation-protocol";
 import {
   isPersonWorkspaceCitationV1,
   PERSON_ANSWER_RESPONSE_MAX_BYTES_V4,
@@ -18,8 +18,11 @@ import {
   AGENTIC_ASK_MAX_SENTENCES_V1,
   AgenticAskOutputErrorV1,
   ANSWER_LAYOUT_PROMPT,
+  ANSWER_SINCE_PROMPT,
   answerLayoutSchema,
+  answerLayoutSinceSchema,
   answerSchema,
+  answerSinceSchema,
   cleanId,
   cleanLine,
   parseAnswer,
@@ -27,7 +30,7 @@ import {
   type Answer,
   type AnswerSentence,
 } from "../agentic-ask-v1-model-protocol.js";
-import { compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
+import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
 import { citationOfAgenticEvidenceItemV1, citationOfAgenticEvidenceItemV8, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_WRITER_LISTS_MAX_V1,
@@ -95,6 +98,9 @@ const MAX_STATEMENTS = AGENTIC_ASK_MAX_SENTENCES_V1;
 const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
 /** A laid-out Ask's writer (ADR-0045) marks each sentence's form and section, and a row's cells: a longer reply. */
 const LAYOUT_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_000 });
+/** An Ask again's writer (ADR-0047) also says what is different since: room for its sentences beside the answer. */
+const SINCE_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_000 });
+const LAYOUT_SINCE_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_500 });
 
 type Entry = AgenticEvidenceBundleItemV1;
 /** A statement's shape before its citations are known: a list's rows name the items they cite. */
@@ -114,6 +120,15 @@ export interface AskRenderedV1 {
   readonly writer_evidence: readonly string[];
 }
 
+/**
+ * The earlier answer an Ask again compares with (ADR-0047): the day it was asked, in the request's time zone, and its
+ * sentences, each with the labels of the sources it cited. The asker's own context, never evidence.
+ */
+export interface AskEarlierAnswerV1 {
+  readonly asked_on: string;
+  readonly statements: readonly { readonly text: string; readonly sources: readonly string[] }[];
+}
+
 export interface CreateAskRendererV1Options {
   /** 4 (V1 core), 5 (V2), 6 (V3 and the research core), 7 (V4: follow-ups, ADR-0040) or 8 (V5: the workspace and tool containers). */
   readonly response_version: 4 | 5 | 6 | 7 | 8;
@@ -129,6 +144,13 @@ export interface CreateAskRendererV1Options {
   readonly desk_scope: AgenticEvidenceBundleV1["gathered_for"]["scope"];
   /** V8 only: the part carries its layout (answer layout v1, ADR-0045), because the client asked for it. */
   readonly layout?: boolean;
+  /**
+   * V8 only, for an Ask that carried its previous turn (ADR-0047): the full question the answer answers, which the
+   * response names. Without it the response names none.
+   */
+  readonly answers?: string;
+  /** V8 only, for an Ask again (ADR-0047): the earlier answer; the writer also says what is different since, and the response carries it. */
+  readonly earlier?: AskEarlierAnswerV1;
 }
 
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }
@@ -188,6 +210,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
   const responseVersion = options.response_version;
   const tickets = responseVersion >= 5;
   const laidOut = responseVersion === 8 && options.layout === true;
+  const earlier = responseVersion === 8 ? options.earlier : undefined;
   return Object.freeze({
     async render(input: AgenticRenderInputV1<AskRendererInputV1>) {
       const { bundle } = input;
@@ -240,7 +263,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         })),
       ];
       const answerContext = {
-        question: askedQuestion, ...options.context, scope: options.scope, source_catalog: options.source_catalog,
+        // An Ask again's writer reads the earlier answer beside the question (ADR-0047); no other writer's input changes.
+        question: askedQuestion, ...(earlier === undefined ? {} : { earlier }), ...options.context, scope: options.scope, source_catalog: options.source_catalog,
         // Planner need text is intentionally excluded. Lists carry their filters (ADR-0041); this describes what
         // research read, not whether an arbitrary fact exists.
         research: {
@@ -248,9 +272,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           notices: [...bundle.coverage.notices], omitted_evidence_items: bundle.items.filter(entry => entry.item.text !== undefined).length,
         },
       };
-      // A laid-out Ask's writer is also told how to mark forms (ADR-0045), and has a longer reply's room; no other writer's prompt changes.
-      const writerPrompt = laidOut ? `${options.answer_prompt}\n\n${ANSWER_LAYOUT_PROMPT}` : options.answer_prompt;
-      const promptBudget = laidOut ? input.prompt_budget(writerPrompt, LAYOUT_WRITER_CALL.output_tokens) : input.prompt_budget(options.answer_prompt);
+      // A laid-out Ask's writer is also told how to mark forms (ADR-0045), and an Ask again's what to say is different since
+      // (ADR-0047); each has a longer reply's room. No other writer's prompt changes.
+      const writerPrompt = [options.answer_prompt, ...(laidOut ? [ANSWER_LAYOUT_PROMPT] : []), ...(earlier === undefined ? [] : [ANSWER_SINCE_PROMPT])].join("\n\n");
+      const writerCall = earlier === undefined ? (laidOut ? LAYOUT_WRITER_CALL : WRITER_CALL) : laidOut ? LAYOUT_SINCE_WRITER_CALL : SINCE_WRITER_CALL;
+      const writerSchema = earlier === undefined ? (laidOut ? answerLayoutSchema : answerSchema) : laidOut ? answerLayoutSinceSchema : answerSinceSchema;
+      const promptBudget = writerCall.output_tokens === undefined ? input.prompt_budget(writerPrompt) : input.prompt_budget(writerPrompt, writerCall.output_tokens);
       const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
       // Lists' rows take at most half the room; a smaller window shows fewer members of each, never fewer lists.
       // The largest per-list cap that fits (binary search), so no list loses rows that would have fit.
@@ -301,20 +328,20 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return stats.calls === callsBefore + 1 && stats.calls < bundle.budget.max_model_calls && input.remaining() >= AGENTIC_ASK_MIN_ANSWER_MS_V1;
       };
       const parse = (value: unknown): Answer => {
-        const parsed = withMembers(parseAnswer(value, { layout: laidOut }));
+        const parsed = withMembers(parseAnswer(value, { layout: laidOut, ...(earlier === undefined ? {} : { since: true }) }));
         last.answer = parsed;
         if (parsed.sentences.some(restsOnRows) && repairable()) throw new AgenticAskOutputErrorV1(ROWS_REASON);
         return parsed;
       };
 
       const writerRuns = evidence.length > 0 || writerLists.some(list => list.count > 0);
-      const written = !writerRuns ? null : await callRendererModelV1(input, laidOut ? LAYOUT_WRITER_CALL : WRITER_CALL, writerPrompt, {
+      const written = !writerRuns ? null : await callRendererModelV1(input, writerCall, writerPrompt, {
         ...answerContext,
         lists: writerLists,
         // Working hypotheses are not user requirements or evidence. The
         // writer assesses the original question against released text.
         evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
-      }, laidOut ? answerLayoutSchema : answerSchema, parse);
+      }, writerSchema, parse);
       // A reply sent back only for a sentence resting on rows is still the writer's answer; code leaves that sentence out.
       const answer = written === null ? null : written.value ?? last.answer;
       if (written?.value === null) observeCoreModelCorrectionV1("writer_fallback");
@@ -333,10 +360,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       };
       const question = partQuestion(askedQuestion);
       /**
-       * The response `reply` (the writer's answer, or null) gives, laid out (ADR-0045) or not, and the items its citations
-       * cite, in order. Each call reads the reply afresh; only the first counts the writer's corrections (`count`).
+       * The response `reply` (the writer's answer, or null) gives, laid out (ADR-0045) or not, with an Ask again's `since`
+       * (ADR-0047) or without it, and the items its citations cite, in order. Each call reads the reply afresh; only the
+       * first counts the writer's corrections (`count`).
        */
-      const respond = (reply: Answer | null, laid: boolean, count: boolean) => {
+      const respond = (reply: Answer | null, laid: boolean, count: boolean, withSince: boolean) => {
         const correct = (correction: CoreRuntimeModelCorrectionV1, times?: number) => { if (count) observeCoreModelCorrectionV1(correction, times); };
         const used: Entry[] = [];
         const usedKeys = new Map<string, number>();
@@ -519,6 +547,31 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const shape = shapes[index]!;
           return { citation_indexes: value.citation_indexes, shape: shape.kind !== "list" ? shape : { ...shape, rows: shape.rows.map(row => ({ cells: row.cells, citation_indexes: indexesOf(row.shorts) })) } };
         })), draft.statements, used.length);
+        // ---- an Ask again's since (ADR-0047): what is different now, after everything the answer cites ----
+        // Only beside an answer with evidence: one with none cannot say what changed. Each sentence stands on text the writer
+        // read (W1), as the writer's own sentences do, and repeats are dropped. A list the writer gave whose every sentence
+        // was left out says nothing, never that nothing changed; one that cannot fit the citation bound whole is left out
+        // whole, since cut short it would say less changed than did.
+        const sinceOf = (given: NonNullable<Answer["since"]>): Statement[] | undefined => {
+          const keys = new Set<string>();
+          const drafts = given.flatMap(sentence => {
+            const read = sentence.evidence.filter(short => textGiven.has(short));
+            if (read.length === 0) { correct("writer_uncited_sentence_dropped"); return []; }
+            const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
+            if (unknown > 0) correct("writer_unknown_id_dropped", unknown);
+            const shorts = [...read, ...sentence.evidence.flatMap(rowsOf)];
+            const key = JSON.stringify([sentence.text, [...new Set(shorts.map(keyOf))].sort()]);
+            if (keys.has(key)) { correct("writer_repeat_dropped"); return []; }
+            keys.add(key);
+            const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
+            return [{ text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts }];
+          });
+          if (given.length > 0 && drafts.length === 0) return undefined;
+          const fresh = new Set(drafts.flatMap(value => value.shorts.map(keyOf)).filter(key => !usedKeys.has(key)));
+          if (usedKeys.size + fresh.size > MAX_CITATIONS) return undefined;
+          return drafts.map(value => statementOf(value.text, value.shorts));
+        };
+        const since = !withSince || reply?.since === undefined || !anyEvidence ? undefined : sinceOf(reply.since);
         const result = Object.freeze({
           schema_version: responseVersion, kind: responseVersion === 8 ? "echo-clean-person-answer-v8" : responseVersion === 7 ? "echo-clean-person-answer-v7" : responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk_scope, outcome,
           parts: Object.freeze([Object.freeze({
@@ -530,15 +583,22 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           })]),
           citations: Object.freeze(anyEvidence ? used.map(entry => (responseVersion === 8 ? citationOfAgenticEvidenceItemV8 : citationOfAgenticEvidenceItemV1)(entry.item, options.context.time_zone ?? 'UTC')) : []),
           ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
+          // Only an answer to a request that carried its previous turn names its question and says what is different since (ADR-0047).
+          ...(options.answers === undefined || responseVersion !== 8 ? {} : { question: options.answers }),
+          ...(since === undefined ? {} : { since: Object.freeze({ statements: Object.freeze(since.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }) }),
         });
         return { result, used, laid_out: layout !== undefined };
       };
-      const laidOutResponse = laidOut ? respond(answer, true, true) : undefined;
+      const withinBound = (value: unknown) => canonicalJsonBytes(value).byteLength <= PERSON_ANSWER_RESPONSE_MAX_BYTES_V4;
+      const laidOutResponse = laidOut ? respond(answer, true, true, true) : undefined;
+      // An Ask again's laid-out answer that cannot fit with its `since` keeps its layout without it (ADR-0047).
+      const laidOutLean = laidOutResponse?.laid_out === true && !withinBound(laidOutResponse.result) && "since" in laidOutResponse.result ? respond(answer, true, false, false) : undefined;
       // A laid-out answer is released only with its layout and within its byte bound. Otherwise the same claims are released
       // without layout, in the order and numbering an answer without layout has (ADR-0045): a row is still its cells' claim,
-      // and what cannot fit the bound is dropped from the end and said to be missing.
-      const { result, used } = laidOutResponse?.laid_out === true && canonicalJsonBytes(laidOutResponse.result).byteLength <= PERSON_ANSWER_RESPONSE_MAX_BYTES_V4
-        ? laidOutResponse : respond(answer, false, laidOutResponse === undefined);
+      // and what cannot fit the bound is dropped from the end and said to be missing, an Ask again's `since` first.
+      const { result, used } = laidOutResponse?.laid_out === true && withinBound(laidOutResponse.result) ? laidOutResponse
+        : laidOutLean?.laid_out === true && withinBound(laidOutLean.result) ? laidOutLean
+          : respond(answer, false, laidOutResponse === undefined, true);
       const validated: AskResponse = responseVersion === 8 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV8) : responseVersion === 7 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV7) : responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
       return Object.freeze({
         result: Object.freeze({ response: validated, writer_evidence: writerEvidence }),
@@ -546,10 +606,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // whole statements or records from the end, so the citations released
         // are always the first ones of `used`.
         cited: Object.freeze(used.slice(0, validated.citations.length).map(entry => entry.short)),
-        outcome: validated.outcome,
+        // The writer never asks which one: only a follow-up's resolver does (ADR-0047).
+        outcome: validated.outcome as PersonAnswerResponseV4["outcome"],
         fallbacks: written?.value === null ? 1 : 0,
-        // Ask's answer is its direct statement and parts.
-        answer_sha256: canonicalSha256({ direct: validated.direct ?? null, parts: validated.parts }),
+        // Ask's answer is its direct statement and parts, and an answer to a request that carried its previous turn names
+        // its question and what is different since (ADR-0047).
+        answer_sha256: agenticAskAnswerSha256V1(validated),
       });
     },
   });

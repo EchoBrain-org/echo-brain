@@ -17,10 +17,26 @@ import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, ty
 import { validatePersonItemRefV1, type PersonItemRefV1 } from './person-list-v1.js';
 import { validatePersonAnswerLayoutV1, type PersonAnswerBlockV1 } from './person-answer-layout-v1.js';
 import {
+  PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
+  PERSON_ANSWER_CHOICES_MAX_V1,
+  PERSON_ANSWER_CHOICES_MIN_V1,
+  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
+  PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
+  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1,
+  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
+  PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
+  type PersonAnswerChoiceV1,
+  type PersonAnswerPreviousStatementV1,
+  type PersonAnswerPreviousV1,
+  type PersonAnswerSinceV1,
+} from './person-answer-previous-v1.js';
+import {
   asEnumerableRecord as object,
   assertDigest,
   assertEvidenceText as evidenceText,
   assertExactKeys,
+  assertTimestamp,
+  boundedLine,
   fail,
   MAX_ORGANIZATION_API_BODY_BYTES,
   utf8ByteLength,
@@ -72,6 +88,11 @@ export interface PersonAnswerRequestV3 {
   readonly mine?: true;
   /** A capture prepared by this actor for this ordinary Ask. */
   readonly capture_id?: PersonDiagnosticCaptureIdV1;
+  /**
+   * The asker's previous turn (ADR-0047): only `/v7` takes it, and every older route refuses a request that carries it.
+   * The asker's own context, never evidence, and never stored.
+   */
+  readonly previous?: PersonAnswerPreviousV1;
 }
 
 export interface PersonAnswerStatementV4 {
@@ -106,11 +127,10 @@ export interface PersonAnswerResponseV4 {
   readonly schema_version: 4;
   readonly kind: 'echo-clean-person-answer-v4';
   readonly scope: PersonAnswerScopeV3;
-  readonly outcome: 'answered' | 'partial' | 'not_found' | 'off_scope';
+  readonly outcome: 'answered' | 'partial' | 'not_found';
   readonly citations: readonly PersonAnswerCitationV4[];
   readonly direct?: PersonAnswerStatementV4;
   readonly parts: readonly PersonAnswerPartV4[];
-  readonly assumption?: string;
   readonly notice?: string;
 }
 
@@ -372,10 +392,79 @@ function boundedRequest<T>(result: T, label: string): T {
 
 export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerRequestV3 {
   const input = object(value, 'Ask request');
-  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'mine') ? ['mine'] : []), ...(Object.hasOwn(input, 'capture_id') ? ['capture_id'] : [])], 'Ask request');
+  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'mine') ? ['mine'] : []), ...(Object.hasOwn(input, 'capture_id') ? ['capture_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
   if (Object.hasOwn(input, 'mine') && (input.mine !== true || Object.hasOwn(input, 'project_id'))) fail('Ask request scope is invalid');
-  return boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}), ...(Object.hasOwn(input, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(input.capture_id) } : {}) }, 'Ask request');
+  return boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}), ...(Object.hasOwn(input, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(input.capture_id) } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: previousTurn(input.previous) } : {}) }, 'Ask request');
+}
+
+/** A question an Ask request or answer carries beside its own: it passes the question rules, refused here as this contract's own failure. */
+function fullQuestion(value: unknown, label: string): string {
+  try { return validatePersonQueryText(value); } catch { return fail(`${label} is invalid`); }
+}
+
+/** Distinct whole indexes below `bound`, at most `maximum` of them. */
+function citationIndexes(value: unknown, label: string, bound: number, maximum: number): readonly number[] {
+  if (!Array.isArray(value) || value.length > maximum) fail(`${label} is invalid`);
+  const indexes = (value as unknown[]).map((index) => {
+    if (!Number.isSafeInteger(index) || (index as number) < 0 || (index as number) >= bound) fail(`${label} is invalid`);
+    return index as number;
+  });
+  if (new Set(indexes).size !== indexes.length) fail(`${label} contains duplicates`);
+  return Object.freeze(indexes);
+}
+
+/**
+ * The asker's previous turn (ADR-0047): its purpose, full question and time, 0 to 8 of its answer's sentences of at
+ * most 400 characters, and 0 to 12 of its citations, each once, as that answer carried them, which each sentence cites
+ * by index (at most 4). The whole request keeps its 16 KiB bound.
+ */
+function previousTurn(value: unknown): PersonAnswerPreviousV1 {
+  const input = object(value, 'Ask previous');
+  assertExactKeys(input, ['purpose', 'question', 'asked_at', 'statements', 'citations'], 'Ask previous');
+  if (input.purpose !== 'follow_up' && input.purpose !== 'ask_again') fail('Ask previous purpose is invalid');
+  const question = fullQuestion(input.question, 'Ask previous question');
+  assertTimestamp(input.asked_at, 'Ask previous asked_at');
+  if (!Array.isArray(input.citations) || input.citations.length > PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1) fail('Ask previous citations is invalid');
+  const citations = Object.freeze(input.citations.map(item => answerCitation(item, 8)));
+  const keys = new Set(citations.map(item => citationKey(item.citation)));
+  if (keys.size !== citations.length) fail('Ask previous contains duplicate citations');
+  if (!Array.isArray(input.statements) || input.statements.length > PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1) fail('Ask previous statements is invalid');
+  const statements = Object.freeze(input.statements.map((raw): PersonAnswerPreviousStatementV1 => {
+    const item = object(raw, 'Ask previous statement');
+    assertExactKeys(item, ['text', 'citation_indexes'], 'Ask previous statement');
+    // An answer's sentence as it was released: trimmed NFC text, line breaks allowed.
+    text(item.text, 'Ask previous statement text', 4 * PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1, true);
+    if ([...item.text as string].length > PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CHARS_V1) fail('Ask previous statement text is invalid');
+    return Object.freeze({
+      text: item.text as string,
+      citation_indexes: citationIndexes(item.citation_indexes, 'Ask previous statement citation_indexes', citations.length, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1),
+    });
+  }));
+  return Object.freeze({ purpose: input.purpose, question, asked_at: input.asked_at as string, statements, citations });
+}
+
+/** A clarify answer's choices (ADR-0047): 2 to 4, each a label of at most 60 characters and a full question, each different. */
+function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
+  if (!Array.isArray(value) || value.length < PERSON_ANSWER_CHOICES_MIN_V1 || value.length > PERSON_ANSWER_CHOICES_MAX_V1) fail('Ask response choices is invalid');
+  const choices = Object.freeze((value as unknown[]).map((raw) => {
+    const input = object(raw, 'Ask response choice');
+    assertExactKeys(input, ['label', 'question'], 'Ask response choice');
+    return Object.freeze({
+      label: boundedLine(input.label, 'Ask response choice label', PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1),
+      question: fullQuestion(input.question, 'Ask response choice question'),
+    });
+  }));
+  if (new Set(choices.map(choice => choice.question)).size !== choices.length || new Set(choices.map(choice => choice.label)).size !== choices.length) fail('Ask response choices contains duplicates');
+  return choices;
+}
+
+/** What is different since the earlier answer (ADR-0047): 0 to 6 statements, each citing the answer's citations. */
+function answerSince(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerSinceV1 {
+  const input = object(value, 'Ask response since');
+  assertExactKeys(input, ['statements'], 'Ask response since');
+  if (!Array.isArray(input.statements) || input.statements.length > PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1) fail('Ask response since is invalid');
+  return Object.freeze({ statements: Object.freeze(input.statements.map(item => statement(item, citations, 'Ask response since statement'))) });
 }
 
 /** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items too. */
@@ -394,18 +483,25 @@ export function validatePersonAnswerResponseV7(value: unknown): PersonAnswerResp
 export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResponseV8 { return answerResponse(value, 8) as PersonAnswerResponseV8; }
 function answerResponse(value: unknown, version: AnswerVersion) {
   const input = object(value, 'Ask response');
-  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'assumption') ? ['assumption'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : [])], 'Ask response');
-  if (input.schema_version !== version || input.kind !== `echo-clean-person-answer-v${version}` || !['answered', 'partial', 'not_found', 'off_scope'].includes(input.outcome as string) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || input.parts.length < 1 || input.parts.length > 5) fail('Ask response is invalid');
-  if (Object.hasOwn(input, 'assumption')) text(input.assumption, 'Ask response assumption', 2 * 1024, true);
+  // Only a V8 answer to a request that carried the previous turn (ADR-0047) names its question, says what is different
+  // since, or offers choices.
+  const previous = version >= 8 ? ['question', 'since', 'choices'].filter(key => Object.hasOwn(input, key)) : [];
+  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous], 'Ask response');
+  // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
+  const clarify = version >= 8 && input.outcome === 'clarify';
+  if (input.schema_version !== version || input.kind !== `echo-clean-person-answer-v${version}` || !(clarify || ['answered', 'partial', 'not_found'].includes(input.outcome as string)) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
   const citations = input.citations.map(item => answerCitation(item, version));
   const citationKeys = new Set<string>();
   for (const item of citations) { const key = citationKey(item.citation); if (citationKeys.has(key)) fail('Ask response contains duplicate citations'); citationKeys.add(key); }
   const result = {
-    schema_version: version, kind: `echo-clean-person-answer-v${version}`, scope: scope(input.scope), outcome: input.outcome as PersonAnswerResponseV4['outcome'], citations: Object.freeze(citations),
+    schema_version: version, kind: `echo-clean-person-answer-v${version}`, scope: scope(input.scope), outcome: input.outcome as PersonAnswerResponseV8['outcome'], citations: Object.freeze(citations),
     ...(Object.hasOwn(input, 'direct') ? { direct: statement(input.direct, citations, 'Ask response direct') } : {}),
     parts: Object.freeze(input.parts.map((item) => part(item, citations, version))),
-    ...(Object.hasOwn(input, 'assumption') ? { assumption: input.assumption as string } : {}), ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}),
+    ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}),
+    ...(previous.includes('question') ? { question: fullQuestion(input.question, 'Ask response question') } : {}),
+    ...(previous.includes('since') ? { since: answerSince(input.since, citations) } : {}),
+    ...(previous.includes('choices') ? { choices: answerChoices(input.choices) } : {}),
   };
   for (const item of result.parts) {
     if (item.status === 'answered' && (item.statements.length === 0 || item.gap !== undefined || item.records !== undefined)) fail('Answered part is inconsistent');
@@ -415,7 +511,11 @@ function answerResponse(value: unknown, version: AnswerVersion) {
   }
   if (result.outcome === 'answered' && result.parts.some((item) => item.status === 'partial' || item.status === 'not_found')) fail('Answered outcome is inconsistent');
   if (result.outcome === 'partial' && !result.parts.some((item) => item.status === 'partial' || item.status === 'not_found' || item.status === 'records_only')) fail('Partial outcome is inconsistent');
-  if ((result.outcome === 'not_found' || result.outcome === 'off_scope') && (result.direct !== undefined || result.citations.length !== 0 || result.parts.some((item) => item.status !== 'not_found' || item.statements.length !== 0 || item.records !== undefined))) fail('No-evidence outcome is inconsistent');
+  if (result.outcome === 'not_found' && (result.direct !== undefined || result.citations.length !== 0 || result.parts.some((item) => item.status !== 'not_found' || item.statements.length !== 0 || item.records !== undefined))) fail('No-evidence outcome is inconsistent');
+  // Choices come only with clarify, which answers a follow-up: it names the question asked, and says nothing else.
+  if (clarify !== previous.includes('choices') || (clarify && (result.citations.length !== 0 || result.direct !== undefined || result.notice !== undefined || !previous.includes('question') || previous.includes('since')))) fail('Clarify outcome is inconsistent');
+  // `since` answers an Ask again, which names its question; an answer that cites nothing cannot say what is different.
+  if (previous.includes('since') && (!previous.includes('question') || result.citations.length === 0)) fail('Ask response since is inconsistent');
   if (canonicalJsonBytes(result).byteLength > PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) fail('Ask response exceeds JSON byte bound');
   return Object.freeze(result);
 }

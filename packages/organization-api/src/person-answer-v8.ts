@@ -1,4 +1,5 @@
 import type { PersonAnswerCitationV4, PersonAnswerResponseV4 } from './person-answer-v4.js';
+import type { PersonAnswerChoiceV1, PersonAnswerSinceV1 } from './person-answer-previous-v1.js';
 import type { PersonAnswerEvidenceCitationV7, PersonAnswerOpenRefV7, PersonEvidenceKindV4 } from './person-answer-v7.js';
 import { validateProjectIdV1 } from './project-context-v1.js';
 import type { PersonProjectCitationV1, PersonToolCitationV1, PersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
@@ -31,10 +32,21 @@ export interface PersonAnswerCitationV8 extends Omit<PersonAnswerCitationV4, 'ci
    */
   readonly key?: string;
 }
-export interface PersonAnswerResponseV8 extends Omit<PersonAnswerResponseV4, 'schema_version' | 'kind' | 'citations'> {
+export interface PersonAnswerResponseV8 extends Omit<PersonAnswerResponseV4, 'schema_version' | 'kind' | 'citations' | 'outcome'> {
   readonly schema_version: 8;
   readonly kind: 'echo-clean-person-answer-v8';
+  /**
+   * `clarify` answers only a follow-up that could mean more than one thing (ADR-0047): it carries `choices`, the
+   * question asked, and no part or citation.
+   */
+  readonly outcome: PersonAnswerResponseV4['outcome'] | 'clarify';
   readonly citations: readonly PersonAnswerCitationV8[];
+  /** Only on an answer to a request that carried `previous` (ADR-0047): the full question this answer answers. */
+  readonly question?: string;
+  /** Only on an Ask again answer that compared with the earlier one (ADR-0047): what is different since. */
+  readonly since?: PersonAnswerSinceV1;
+  /** Only with outcome `clarify` (ADR-0047): one full question for each thing the follow-up could mean. */
+  readonly choices?: readonly PersonAnswerChoiceV1[];
 }
 
 /** A workspace ref, exactly: `project:` and a project id, or `tool:` and a tool id. */

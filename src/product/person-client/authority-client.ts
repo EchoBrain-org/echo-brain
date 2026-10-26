@@ -75,6 +75,7 @@ import {
   type PersonListResponseV1,
   type PersonOpenRequestV1,
   type PersonOpenResponseV1,
+  type PersonAnswerPreviousV1,
   type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import {
@@ -481,10 +482,11 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
 
 type AskScope = ProjectIdV1 | { readonly mine: true } | undefined;
 
-/** Every Ask route takes the same V3 request. */
-function askRequest(question: string, scope: AskScope, captureId: PersonDiagnosticCaptureIdV1 | undefined) {
+/** Every Ask route takes the same V3 request; only `/v7` is sent the asker's previous turn (ADR-0047). */
+function askRequest(question: string, scope: AskScope, captureId: PersonDiagnosticCaptureIdV1 | undefined, previous?: PersonAnswerPreviousV1) {
   return validatePersonAnswerRequestV3({ schema_version: 3, question,
-    ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }) });
+    ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }),
+    ...(previous === undefined ? {} : { previous }) });
 }
 
 /** Every Ask sends the client's clock and time zone and asks for answer layout v1 (ADR-0045), which an older Authority ignores. */
@@ -493,11 +495,17 @@ function askHeaders(): Readonly<Record<string, string>> {
     [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1 };
 }
 
-/** Every Ask answer must echo the requested scope. */
-function inAskScope<T extends { readonly scope: unknown }>(response: T, scope: AskScope): T {
+/**
+ * Every Ask answer must echo the requested scope, and only an answer to an Ask that sent the previous turn may name its
+ * question, say what is different since or ask which one (ADR-0047).
+ */
+function inAskScope<T extends { readonly scope: unknown }>(response: T, scope: AskScope, previous?: PersonAnswerPreviousV1): T {
   const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
   if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
+  }
+  if (previous === undefined && ['question', 'since', 'choices'].some(key => Object.hasOwn(response, key))) {
+    throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority answered a previous turn the Ask did not send');
   }
   return response;
 }
@@ -1471,10 +1479,10 @@ export class PersonAuthorityClient {
   /**
    * The V8 Ask (research tool contract v1): the V6 Ask's sources and
    * follow-ups, and the asker's projects, people, tools and tool containers,
-   * on the same V3 request.
+   * on the same V3 request. Only it is sent the asker's previous turn (ADR-0047).
    */
-  askV7(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV8> {
-    return this.ask(PERSON_ANSWER_PATH_V7, validatePersonAnswerResponseV8, accessToken, question, scope, signal, captureId);
+  askV7(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
+    return this.ask(PERSON_ANSWER_PATH_V7, validatePersonAnswerResponseV8, accessToken, question, scope, signal, captureId, previous);
   }
 
   /**
@@ -1508,41 +1516,43 @@ export class PersonAuthorityClient {
    * V7 Ask (the V8 answer, research tool contract v1) that streams its
    * progress in Ask progress V3, exactly as `askV6WithProgress` streams V2: a
    * step may name a project, a person, a tool or a tool container, and the
-   * answer comes with its V3 receipt.
+   * answer comes with its V3 receipt. Only it is sent the asker's previous
+   * turn (ADR-0047).
    */
   askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     return this.askWithProgress(PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, validatePersonAnswerResponseV8, createPersonAskProgressDecoderV3,
-      accessToken, question, scope, signal, onProgress);
+      accessToken, question, scope, signal, onProgress, previous);
   }
 
   /** One streamed live Ask route: its path, its progress version's header value and decoder, and its JSON answer. */
   private async askWithProgress(path: string, headerValue: string, validateJson: (value: unknown) => PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6,
     createDecoder: () => AskProgressDecoder,
     accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3): Promise<PersonLiveAnswerV3> {
-    const body = askRequest(question, scope, undefined);
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
+    const body = askRequest(question, scope, undefined, previous);
     const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
     const response = await this.post({ path, body, validate_request: validatePersonAnswerRequestV3, access_token: accessToken,
       headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: headerValue } }, deadline);
     if (!isAskProgressStream(response)) {
       const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
-      return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validateJson), scope) });
+      return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validateJson), scope, previous) });
     }
     const terminal = await readAskProgressStream(response, deadline, onProgress, createDecoder);
     if (terminal.type === 'error') {
       throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request', { routeMatched: true });
     }
-    return Object.freeze({ result: inAskScope(terminal.response, scope), receipt: terminal.receipt });
+    return Object.freeze({ result: inAskScope(terminal.response, scope, previous), receipt: terminal.receipt });
   }
 
   /** Every Ask route takes the same V3 request and must echo the requested scope. */
   private async ask<T extends { readonly scope: unknown }>(path: string, validate_response: (value: unknown) => T, accessToken: string,
-    question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined, captureId: PersonDiagnosticCaptureIdV1 | undefined): Promise<T> {
-    const response = await this.json({ path, body: askRequest(question, scope, captureId), headers: askHeaders(),
+    question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined, captureId: PersonDiagnosticCaptureIdV1 | undefined,
+    previous?: PersonAnswerPreviousV1): Promise<T> {
+    const response = await this.json({ path, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
       validate_request: validatePersonAnswerRequestV3, validate_response,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
-    return inAskScope(response, scope);
+    return inAskScope(response, scope, previous);
   }
 
   /** Prepares or reads an explicitly requested private capture on the ordinary product route. */

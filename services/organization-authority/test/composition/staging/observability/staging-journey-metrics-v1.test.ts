@@ -168,6 +168,14 @@ describe("journey EMF metrics v1", () => {
     ]));
   });
 
+  it("counts a follow-up that asked which one as its own terminal outcome, and has no off_scope (ADR-0047)", () => {
+    const outcome = (result: string) => formatJourneyTelemetryMetricsV1(journey({ diagnostic: detail({ phase: "research_run", purpose: "research_run", result: result as never, counts: { citation_count: 0 } }) }))
+      .filter(record => record.TerminalOutcome === 1);
+    expect(outcome("clarify")).toEqual([expect.objectContaining({ outcome: "clarify", stage: "research_run" })]);
+    // The closed vocabulary no longer has it, so no span can carry it.
+    expect(() => outcome("off_scope")).toThrow();
+  });
+
   it("carries a span's corrections of model output from its counter to the journey log and its metric", async () => {
     const lines: string[] = [];
     const transport = createJourneyTelemetryTransportV1(
