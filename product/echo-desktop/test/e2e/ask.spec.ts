@@ -39,15 +39,17 @@ test('global Ask reads Jira live and opens its ticket citation', async () => {
   expect(run.calls().filter(call => call.path.endsWith('/person/ask')).map(call => ({ path: call.path, body: call.body })))
     .toEqual([{ path: '/v7/person/ask', body: { schema_version: 3, question } }]);
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
-  await expect(page.getByTestId('private-mark')).toHaveCount(1);
-  // The sources start as one closed line, a ticket named by its key; it opens onto their rows (ADR-0045).
+  // No lock: ECHO reads the ticket with your own access (ADR-0049).
+  await expect(page.getByTestId('private-mark')).toHaveCount(0);
+  // The sources start as the one quiet line under the answer; it opens onto their rows (ADR-0045, ADR-0049).
   const sources = page.getByTestId('sources-toggle');
-  await expect(sources).toHaveText(/^1 source\s*ECHO-7$/);
+  await expect(sources).toHaveText(/^1 source$/);
   await expect(sources).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByTestId('source-row')).toHaveCount(0);
   await sources.click();
   await expect(sources).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
+  await expect(page.getByTestId('source-lock')).toHaveCount(0);
   await page.getByTestId('citation').click();
   const pane = page.getByTestId('source-pane');
   await expect(pane).toContainText('Ticket');
@@ -225,9 +227,9 @@ test('an approved record opens beside the answer: who approved it, who was there
   const { page, app } = run;
   await askFromHome(page, 'What did we agree?');
   await expect(page.getByTestId('answer')).toBeVisible();
-  // The record is read once, so its chip names the meeting, on the sources' line and, opened, on its row.
+  // The record is read once, so its row names the meeting once the sources' line opens.
   const chips = page.getByTestId('source-row');
-  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources\s*Tuesday sync · Apollo update$/);
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources$/);
   await page.getByTestId('sources-toggle').click();
   await expect(chips).toHaveText([/^1\s*Tuesday sync$/, /^2\s*Apollo update$/]);
   expect(recordReads().map(call => call.query)).toEqual([`?record_sha256=${RECORD}`]);
@@ -360,12 +362,13 @@ test('Copy answer copies the answer as Markdown and says so, and main takes no m
   const markdown = 'We agreed to ship Apollo with annual plans first. [1][2]\n\nSources\n\n1. Tuesday sync\n2. Apollo update';
   await askFromHome(page, 'What did we agree?');
   // Its sources numbered and named as the page shows them, once the meeting's record is read.
-  await expect(page.getByTestId('sources-toggle')).toHaveText(/Tuesday sync/);
+  await expect.poll(() => recordReads().length).toBe(1);
+  // On the line under the answer, it shows while the pointer is on the turn (ADR-0049).
   const copy = page.getByTestId('copy-answer');
   await copy.click();
   await expect(copy).toHaveText('Copied');
   expect(await copied()).toBe(markdown);
-  await expect(copy).toHaveText('Copy answer');
+  await expect(copy).toHaveText('Copy');
 
   // An answer is at most 12,000 characters; the broker refuses more.
   const write = (text: string) => page.evaluate(value =>
@@ -399,7 +402,7 @@ test('a laid-out answer reads as a document, and its table scrolls in its own bo
   // What research did not cover is not shown (ADR-0047).
   await expect(answer).not.toContainText('One of three THERM meetings in range');
   await expect(page.getByTestId('ask-view')).not.toContainText('Who proposed the reduced scope was not found');
-  await expect(page.getByTestId('sources-toggle')).toHaveText(/^6 sources\s*DVT failure review · Traceability · Gate reviews · TRACE-01 · HW-11 · DVT-R2$/);
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^6 sources$/);
 
   // A row's number opens only its ticket beside the answer and lights the row.
   await rows.nth(0).getByTestId('citation').click();
@@ -469,21 +472,25 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   await expect(pane.getByTestId('source-open')).toHaveCount(0);
   await expect(asking).toBeVisible();
 
-  // The answer: the line becomes one receipt above it, still open as the person left it, and the pane, still on the meeting, offers Open.
+  // The answer: the line goes, and the one line under the answer says how many sources and how long it took (ADR-0049). The pane,
+  // still on the meeting, offers Open.
   writeFileSync(join(run.home, 'release-ask'), '');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(asking).toHaveCount(0);
-  const receipt = page.getByTestId('ask-receipt');
+  const foot = page.getByTestId('sources-toggle');
   // Its time is the wait the page timed, never the fixture Authority's 48 s of research.
-  await expect(receipt).toHaveText(/^Looked through 4 items · \d+s$/);
-  await expect(receipt).not.toHaveText(/48s/);
-  await expect(receipt).toHaveAttribute('aria-expanded', 'true');
-  // Its rows, mounted with the answer, stay out of the thread's live region: a screen reader hears the answer, not the history again.
-  await expect(page.getByTestId('receipt-rows')).toHaveAttribute('aria-live', 'off');
+  await expect(foot).toHaveText(/^2 sources · \d+s$/);
+  await expect(foot).not.toHaveText(/48s/);
+  await expect(foot).toHaveAttribute('aria-expanded', 'false');
   await expect(pane).toContainText('Meeting · Approved record');
   await expect(pane.getByTestId('source-open')).toBeVisible();
 
-  // The receipt lists every search and read the Authority audited, each name opening beside the answer.
+  // Opened: its sources, then every search and read the Authority audited, each name opening beside the answer. The rows stay out of
+  // the thread's live region: a screen reader hears the answer, not the history again.
+  await foot.click();
+  await expect(page.getByTestId('source-row')).toHaveCount(2);
+  await expect(page.locator('.foot-trail-head')).toHaveText('Looked through 4 items');
+  await expect(page.getByTestId('receipt-rows')).toHaveAttribute('aria-live', 'off');
   const rows = page.getByTestId('receipt-rows').getByTestId('ask-step');
   await expect(rows).toHaveText(['Searched meetings, documents and Jira · 3 found', 'Read Tuesday sync ×2, Apollo update, ECHO-7 · Jira launch']);
   const named = page.getByTestId('receipt-rows').getByTestId('ask-step-name');
@@ -535,9 +542,10 @@ test('an answer that cites your project, a person, a tool and a Jira project ope
   writeFileSync(join(run.home, 'release-ask'), '');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(page.getByTestId('asking')).toHaveCount(0);
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^4 sources · \d+s$/);
   await page.getByTestId('sources-toggle').click();
   await expect(page.getByTestId('source-row')).toHaveText([/^1\s*Apollo$/, /^2\s*Mina Patel$/, /^3\s*Jira$/, /^4\s*Apollo delivery\s*Jira · APOLLO$/]);
-  await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 4 items · \d+s$/);
+  await expect(page.locator('.foot-trail-head')).toHaveText('Looked through 4 items');
   await page.getByTestId('source-row').nth(2).click();
   await expect(pane).toContainText('Tool');
   await expect(pane.getByTestId('pane-tool')).toContainText('Jira');
@@ -572,10 +580,12 @@ test('an Ask that only listed rows says it looked through every row, and its rec
   await openLine(page);
   await expect(progressSteps(page)).toHaveText(['Searched Jira · 30 found']);
 
-  // Nothing was read in full, and the receipt still counts all 30 rows it looked through, with no line about names.
+  // Nothing was read in full, and the line under the answer, opened, still counts all 30 rows it looked through, with no line about names.
   writeFileSync(join(run.home, 'release-ask'), '');
   await expect(page.getByTestId('answer')).toBeVisible();
-  await expect(page.getByTestId('ask-receipt')).toHaveText(/^Looked through 30 items · \d+s$/);
+  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources · \d+s$/);
+  await page.getByTestId('sources-toggle').click();
+  await expect(page.locator('.foot-trail-head')).toHaveText('Looked through 30 items');
   await expect(page.getByTestId('receipt-rows').getByTestId('ask-step')).toHaveText(['Searched Jira · 30 found']);
 });
 
@@ -685,7 +695,7 @@ test('an empty bar offers what to ask once you go to it: Up lights one, Return a
 });
 
 
-test('Ask uses the available page for scrolling and a wider answer aligned with its bar', async () => {
+test('Ask scrolls the whole page, and keeps its answer to a readable column aligned with its bar (ADR-0049)', async () => {
   run = await launch('ask-layout');
   const { page, app } = run;
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1911, 1074));
@@ -696,7 +706,8 @@ test('Ask uses the available page for scrolling and a wider answer aligned with 
     return { page: box('.page'), scroll: box('.ask'), answer: box('.turn'), bar: box('.bar') };
   });
   expect(Math.abs(geometry.scroll.right - geometry.page.right)).toBeLessThanOrEqual(1);
-  expect(geometry.answer.width).toBeGreaterThan(1000);
+  // 720px however wide the window: lines short enough to read.
+  expect(geometry.answer.width).toBe(720);
   expect(Math.abs(geometry.answer.left - geometry.bar.left)).toBeLessThanOrEqual(8);
   expect(Math.abs(geometry.answer.width - geometry.bar.width)).toBeLessThanOrEqual(16);
   await expect(page.getByTestId('sources-toggle')).toHaveAttribute('aria-expanded', 'false');

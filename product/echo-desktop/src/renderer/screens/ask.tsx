@@ -14,7 +14,7 @@ import { message } from '../messages.js';
 import { checkWords, ownerAndStatus } from '../needs.js';
 import { sourceKey } from '../openers.js';
 import {
-  announceAfter, announcement, duration, foundBefore, headline, liveRows, namedPlaces, placeLabel, PROGRESS_AFTER_MS, searchedWords, type AskProgress,
+  announceAfter, announcement, duration, foundBefore, headline, liveRows, lookedThrough, namedPlaces, placeLabel, PROGRESS_AFTER_MS, searchedWords, type AskProgress,
   type LiveRow, type NamedPlace,
 } from '../progress.js';
 import {
@@ -518,7 +518,7 @@ function SourceRows({ state, view }: { state: State; view: TurnView }) {
 function TrailRows({ state, receipt }: { state: State; receipt: AskReceipt }) {
   return (
     <div class="foot-trail">
-      <div class="foot-trail-head">Looked through {receipt.looked_through} {receipt.looked_through === 1 ? 'item' : 'items'}</div>
+      <div class="foot-trail-head">{lookedThrough(receipt)}</div>
       <ul class="ask-steps" data-testid="receipt-rows" aria-live="off">
         {receipt.rows.map((row, index) => row.type === 'searched' ? <SearchedStep key={index} state={state} row={row} earlier={foundBefore(receipt.rows, index)} />
           : <li key={index} class="ask-step done" data-testid="ask-step"><Mark done /><span class="words">Read <Names state={state} places={namedPlaces(row.items)} /></span></li>)}
@@ -547,7 +547,7 @@ function CopyAnswer({ turn }: { turn: TimelineTurn }) {
 /**
  * The one quiet line under an answer (ADR-0049): how many sources, and how
  * long it took when this Ask asked it ("3 sources · 20s"); with no sources,
- * what it looked through ("Looked through 68 · 41s"). It opens onto a row per
+ * what it looked through ("Looked through 68 items · 41s"). It opens onto a row per
  * source, then what it looked through. On the right, Ask again on a turn
  * asked before this Ask (`again`), and Copy answer (`copy`), which shows
  * while the pointer is on the turn or focus is in it.
@@ -556,7 +556,7 @@ function TurnFoot({ state, turn, view, took, again, copy }: {
   state: State; turn: TimelineTurn; view: TurnView; took: AskTook | undefined; again: boolean; copy: boolean;
 }) {
   const count = view.groups.length;
-  const what = count > 0 ? (count === 1 ? '1 source' : `${count} sources`) : took ? `Looked through ${took.receipt.looked_through}` : null;
+  const what = count > 0 ? (count === 1 ? '1 source' : `${count} sources`) : took ? lookedThrough(took.receipt) : null;
   const label = [what, took ? duration(took.took) : null].filter(Boolean).join(' · ');
   const listed = state.sources?.listed.includes(view.id) === true;
   if (label === '' && !again && !copy) return null;
