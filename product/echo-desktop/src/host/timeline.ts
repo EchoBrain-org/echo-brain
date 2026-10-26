@@ -4,16 +4,12 @@
 // turns past 90 days and all but the newest 200; it writes a private temporary
 // file and renames it over the old one, so a reader never meets half a file.
 // A file that cannot be read, or is not what a put writes, reads as empty and
-// is replaced by the next put. A put goes on from the turns it last read or
-// wrote while the file is still the one it met, rather than reading and
-// checking every turn again. Our own sign-out deletes the account's file;
+// is replaced by the next put. Our own sign-out deletes the account's file;
 // reading one account's timeline deletes any other account's, so an account
 // change leaves nothing of the last one here. Kept apart from host.ts so all
 // of it is tested on a real folder.
 import { createHash, randomBytes } from 'node:crypto';
-import {
-  chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync, type Stats,
-} from 'node:fs';
+import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type AskScope, type Expect, type TimelineAnswer,
@@ -26,26 +22,6 @@ const KIND = 'echo-desktop-ask-timeline-v1';
 /** More than 200 turns of the largest answers: anything bigger is not a file a put wrote. */
 const MAX_FILE_BYTES = MAX_TIMELINE_TURNS * MAX_TIMELINE_PUT_BYTES;
 const DAY_MS = 24 * 60 * 60_000;
-
-/**
- * The turns of the file a read or a put last met, and that file as it was
- * then (`stamp`): a put trusts them only while the file at that path is still
- * that one, and reads it again otherwise.
- */
-let known: { readonly path: string; readonly stamp: string; readonly turns: readonly TimelineTurn[] } | null = null;
-
-/** A file, as a put tells it is still the one it met: its inode, size and modification time. A rename keeps all three. */
-const stampOf = (found: Stats): string => `${found.ino}:${found.size}:${found.mtimeMs}`;
-
-/** The file at `path` now, as `stampOf` tells it; null when there is no file. */
-function stampAt(path: string): string | null {
-  try {
-    const found = lstatSync(path);
-    return found.isFile() ? stampOf(found) : null;
-  } catch {
-    return null;
-  }
-}
 
 /** Where an account's timeline is: `<person data dir>/ask-timeline-v1/<hex sha256 of "<authority> <membership_id>">.json`. */
 export function timelinePath(personDirectory: string, account: Expect): string {
@@ -76,12 +52,7 @@ function folder(personDirectory: string, use: 'read' | 'write' | 'delete'): stri
   }
 }
 
-/**
- * The account's turns, oldest first. A missing, unreadable or malformed file
- * is empty. Turns read whole are what the next put goes on from, with the
- * file as it was before it was read: one changed while it was read is read
- * again.
- */
+/** The account's turns, oldest first. A missing, unreadable or malformed file is empty. */
 export function readTimeline(personDirectory: string, account: Expect): TimelineTurn[] {
   if (folder(personDirectory, 'read') === null) return [];
   const path = timelinePath(personDirectory, account);
@@ -92,9 +63,7 @@ export function readTimeline(personDirectory: string, account: Expect): Timeline
     const file = value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
     if (Object.keys(file).sort().join() !== 'kind,schema_version,turns' || file.schema_version !== 1 || file.kind !== KIND || !Array.isArray(file.turns)) return [];
     const turns = file.turns.map(timelineTurn);
-    if (!turns.every((turn): turn is TimelineTurn => turn !== null) || new Set(turns.map(turn => turn.id)).size !== turns.length) return [];
-    known = { path, stamp: stampOf(found), turns };
-    return [...turns];
+    return turns.every((turn): turn is TimelineTurn => turn !== null) && new Set(turns.map(turn => turn.id)).size === turns.length ? turns : [];
   } catch {
     return [];
   }
@@ -118,16 +87,14 @@ export function pruneTurns(turns: readonly TimelineTurn[], now: number): Timelin
 export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn, now: number): void {
   const directory = folder(personDirectory, 'write');
   if (directory === null) throw new Error('The Ask timeline folder is not private');
-  const path = timelinePath(personDirectory, account);
-  const turns = known !== null && known.path === path && known.stamp === stampAt(path) ? [...known.turns] : readTimeline(personDirectory, account);
+  const turns = readTimeline(personDirectory, account);
   const at = turns.findIndex(kept => kept.id === turn.id);
   if (at >= 0) turns[at] = turn; else turns.push(turn);
-  const kept = pruneTurns(turns, now);
-  const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns: kept }), 'utf8');
+  const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns: pruneTurns(turns, now) }), 'utf8');
+  const path = timelinePath(personDirectory, account);
   const temporary = join(directory, `.${randomBytes(12).toString('hex')}.tmp`);
   // Created here, owner-only, never through a link: then its bytes on disk before it takes the name.
   const descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
-  let stamp: string;
   try {
     try {
       // A write may take only part of what it is given: written on from where it stopped, until every byte is.
@@ -137,8 +104,6 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
         written += took;
       }
       fsyncSync(descriptor);
-      // The file as written, before it takes the name: anything that changes it after is not this one.
-      stamp = stampOf(fstatSync(descriptor));
     } finally {
       closeSync(descriptor);
     }
@@ -149,7 +114,6 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
   }
   // The folder's new entry on disk too.
   syncFolder(directory);
-  known = { path, stamp, turns: kept };
 }
 
 /** A folder's entries on disk: a file renamed into it stays renamed after a crash. */
@@ -162,12 +126,10 @@ function syncFolder(path: string): void {
   }
 }
 
-/** Our own sign-out: the account's file goes, and what a put would go on from with it. */
+/** Our own sign-out: the account's file goes. */
 export function deleteTimeline(personDirectory: string, account: Expect): void {
   if (folder(personDirectory, 'delete') === null) return;
-  const path = timelinePath(personDirectory, account);
-  if (known?.path === path) known = null;
-  rmSync(path, { force: true });
+  rmSync(timelinePath(personDirectory, account), { force: true });
 }
 
 /** An account change: every other account's file goes, and anything a put left half done. */
@@ -175,7 +137,6 @@ export function deleteOtherTimelines(personDirectory: string, account: Expect): 
   const directory = folder(personDirectory, 'delete');
   if (directory === null) return;
   const own = timelinePath(personDirectory, account);
-  if (known !== null && known.path !== own) known = null;
   for (const name of readdirSync(directory)) {
     const path = join(directory, name);
     if (path !== own && (/^[0-9a-f]{64}\.json$/.test(name) || /^\.[0-9a-f]{24}\.tmp$/.test(name))) rmSync(path, { force: true });
