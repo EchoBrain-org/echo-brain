@@ -190,11 +190,11 @@ function loginAuthority(
   };
 }
 
-/** A valid agentic Ask (V4) response: one answered statement per citation, or not found. */
-function v4Answer(input: { readonly scope?: unknown; readonly text?: string; readonly citations?: readonly unknown[] } = {}) {
+/** A valid Ask (V8) response: one answered statement per citation, or not found. */
+function v8Answer(input: { readonly scope?: unknown; readonly text?: string; readonly citations?: readonly unknown[] } = {}) {
   const citations = input.citations ?? [];
   return {
-    schema_version: 4, kind: "echo-clean-person-answer-v4", scope: input.scope ?? { kind: "global" },
+    schema_version: 8, kind: "echo-clean-person-answer-v8", scope: input.scope ?? { kind: "global" },
     outcome: citations.length === 0 ? "not_found" : "answered",
     citations,
     parts: [citations.length === 0
@@ -226,21 +226,15 @@ const slackLinkResult = (n: number) => ({
   provider: "slack", provider_tenant_id: "T123ABC", provider_subject_id: "U123PERSON", channel_id: "D123ABC", linked_at: NOW, identity_link_created: true,
 });
 
-/** A valid V6 live-source answer with a Confluence page citation. */
-/** The same answer on /v6: a V7 answer may cite every V6 kind (ADR-0040). */
-function v7PageAnswer(input: { readonly scope?: unknown } = {}) {
-  return { ...v6PageAnswer(input), schema_version: 7, kind: 'echo-clean-person-answer-v7' };
-}
-
 const WORKSPACE_PROJECT = 'prj_00000000-0000-4000-8000-000000000020';
 /**
- * The same answer on /v7, which also cites its project and the project's Jira project with its key: a V8 answer may
- * cite every V7 kind and the workspace (research tool contract v1).
+ * The page answer, which also cites its project and the project's Jira project with its key: the V8 answer cites the
+ * workspace too (research tool contract v1).
  */
 function v8WorkspaceAnswer(input: { readonly scope?: unknown } = {}) {
-  const page = v6PageAnswer(input);
+  const page = v8PageAnswer(input);
   return {
-    ...page, schema_version: 8, kind: 'echo-clean-person-answer-v8',
+    ...page,
     citations: [...page.citations,
       { citation: { kind: 'project', project_id: WORKSPACE_PROJECT }, kind: 'project', label: 'EVT', visibility: 'project', ref: `project:${WORKSPACE_PROJECT}` },
       { citation: { kind: 'tool_container', tool_id: 'jira', external_scope_id: '11111111-2222-4333-8444-555555555555', container: 'jira_project', container_id: '10001',
@@ -249,9 +243,10 @@ function v8WorkspaceAnswer(input: { readonly scope?: unknown } = {}) {
   };
 }
 
-function v6PageAnswer(input: { readonly scope?: unknown } = {}) {
+/** A valid V8 answer with a Confluence page citation. */
+function v8PageAnswer(input: { readonly scope?: unknown } = {}) {
   return {
-    schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: input.scope ?? { kind: 'global' }, outcome: 'answered',
+    schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: input.scope ?? { kind: 'global' }, outcome: 'answered',
     citations: [{
       citation: { kind: 'page', tool_id: 'confluence', external_scope_id: '11111111-2222-4333-8444-555555555555', page_id: '12345', section_id: 'evt-readiness', version: '7',
         permalink: 'https://example.atlassian.net/wiki/spaces/ECHO/pages/12345/EVT-readiness', text_sha256: `sha256:${'a'.repeat(64)}` },
@@ -759,7 +754,7 @@ describe("Person client", () => {
       await installFixtureSession(home);
 
       const timeout = vi.spyOn(AbortSignal, "timeout");
-      const answer = { ...v4Answer({ text: "Use simple pricing.", citations: [RECORD_CITATION] }), schema_version: 8, kind: "echo-clean-person-answer-v8" };
+      const answer = v8Answer({ text: "Use simple pricing.", citations: [RECORD_CITATION] });
       const result = await runCli(
         ["ask", "--question", "What is our pricing decision?"],
         {
@@ -789,68 +784,58 @@ describe("Person client", () => {
     });
   });
 
-  // Plain ask and --live are one Ask: the newest route the Authority has, in every scope, Mine included.
+  // Ask is one route, /v7, in every scope, Mine included: an Authority without it fails with not_supported, and no other
+  // route is asked.
   it.each([
     { argv: [], body: {} },
-    { argv: ["--live"], body: {} },
     { argv: ["--mine"], body: { mine: true } },
-    { argv: ["--live", "--mine"], body: { mine: true } },
     { argv: ["--project", "prj_00000000-0000-4000-8000-000000000019"], body: { project_id: "prj_00000000-0000-4000-8000-000000000019" } },
-  ])("asks $argv on the newest route an older Authority has, as the last of /v7, /v6 and /v5", async ({ argv, body }) => {
+  ])("asks $argv on /v7 alone, and fails with not_supported on an Authority without it", async ({ argv, body }) => {
     await withHome(async home => {
       await installFixtureSession(home);
       const scope = "mine" in body ? { kind: "mine" } : "project_id" in body ? { kind: "project", project_id: body.project_id } : { kind: "global" };
-      const answer = v6PageAnswer({ scope });
-      const asked: unknown[] = [];
-      const result = await runCli(["ask", "--question", "What did we decide?", ...argv], {
-        home_directory: home, now: () => NOW,
-        fetch: async (input, init) => {
-          const path = new URL(String(input)).pathname;
-          asked.push([path, JSON.parse(String(init?.body)), new Headers(init?.headers).has("x-echo-ask-progress")]);
-          return path === "/v5/person/ask" ? json(answer) : json({ error: { code: "not_found", message: "route absent" } }, 404);
-        },
-      });
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: answer });
-      expect(asked).toEqual(["/v7", "/v6", "/v5"].map(route => [`${route}/person/ask`, { schema_version: 3, question: "What did we decide?", ...body }, false]));
+      const answer = v8PageAnswer({ scope });
+      for (const served of [true, false]) {
+        const asked: unknown[] = [];
+        const result = await runCli(["ask", "--question", "What did we decide?", ...argv], {
+          home_directory: home, now: () => NOW,
+          fetch: async (input, init) => {
+            asked.push([new URL(String(input)).pathname, JSON.parse(String(init?.body)), new Headers(init?.headers).has("x-echo-ask-progress")]);
+            return served ? json(answer) : json({ error: { code: "not_found", message: "route absent" } }, 404);
+          },
+        });
+        if (served) {
+          expect(result).toMatchObject({ code: 0, stderr: "" });
+          expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: answer });
+        } else {
+          expect(result.code).toBe(1);
+          expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, action: "ask", code: "not_supported", status: 404 });
+        }
+        expect(asked).toEqual([["/v7/person/ask", { schema_version: 3, question: "What did we decide?", ...body }, false]]);
+      }
     });
   });
 
-  it("keeps --tickets on the ticket route, /v4 with the V5 answer, with no fallback and no progress", async () => {
+  it.each([["--live"], ["--tickets"], ["--live", "--tickets"]])("refuses the retired Ask flags %j before transport", async (...flags) => {
     await withHome(async home => {
       await installFixtureSession(home);
-      const answer = { ...v4Answer({ scope: { kind: "mine" }, citations: [RECORD_CITATION] }), schema_version: 5, kind: "echo-clean-person-answer-v5" };
-      const paths: string[] = [];
-      const result = await runCli(["ask", "--question", "What did I decide?", "--tickets", "--mine"], {
-        home_directory: home, now: () => NOW,
-        fetch: async (input, init) => {
-          paths.push(new URL(String(input)).pathname);
-          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: "What did I decide?", mine: true });
-          expect(new Headers(init?.headers).has("x-echo-ask-progress")).toBe(false);
-          return json(answer);
-        },
+      let called = false;
+      const result = await runCli(["ask", "--question", "What did we decide?", ...flags], {
+        home_directory: home, now: () => NOW, fetch: async () => { called = true; throw new Error("must not call"); },
       });
-      expect(result).toMatchObject({ code: 0, stderr: "" });
-      expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: answer });
-      expect(paths).toEqual(["/v4/person/ask"]);
-      // A route the Authority lacks is its failure, never another route's answer.
-      const missing: string[] = [];
-      const absent = await runCli(["ask", "--question", "What did I decide?", "--tickets"], {
-        home_directory: home, now: () => NOW,
-        fetch: async input => { missing.push(new URL(String(input)).pathname); return json({ error: { code: "not_found", message: "route absent" } }, 404); },
-      });
-      expect(absent.code).toBe(1);
-      expect(JSON.parse(absent.stderr)).toMatchObject({ ok: false, action: "ask", code: "not_found", status: 404 });
-      expect(missing).toEqual(["/v4/person/ask"]);
+      expect(result.code).toBe(2);
+      expect(called).toBe(false);
+      expect(JSON.parse(result.stderr)).toEqual({ ok: false, error: `Unknown option '${flags[0]}'` });
     });
   });
+
   it("maps --project to a strict Ask coordinate and accepts immutable source evidence", async () => {
     await withHome(async home => {
       const projectId = "prj_00000000-0000-4000-8000-000000000019";
       const client = await signedInClient(home, async (input, init) => {
-          expect(new URL(String(input)).pathname).toBe("/v3/person/ask");
+          expect(new URL(String(input)).pathname).toBe("/v7/person/ask");
           expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: "What is in this project?", project_id: projectId });
-          return json(v4Answer({
+          return json(v8Answer({
             scope: { kind: "project", project_id: projectId },
             text: "The MRD is available.",
             citations: [{
@@ -859,47 +844,47 @@ describe("Person client", () => {
             }],
           }));
         });
-      await expect(client.ask("What is in this project?", projectId as `prj_${string}`)).resolves.toMatchObject({
+      await expect(client.askWithLiveSources("What is in this project?", projectId as `prj_${string}`)).resolves.toMatchObject({
         scope: { kind: "project", project_id: projectId },
         citations: [{ citation: { kind: "source_revision", label: "MRD" } }],
       });
     });
   });
-  it("never falls back to a retired Ask path when agentic Ask returns a canonical 404", async () => {
+  it("never asks a retired Ask path when /v7 answers a canonical 404", async () => {
     await withHome(async home => {
-      let legacyCalled = false;
+      const paths: string[] = [];
       const client = await signedInClient(home, async input => {
         const path = new URL(String(input)).pathname;
-        if (path === '/v3/person/ask') return json({ error: { code: 'not_found', message: 'removed while request was running' } }, 404);
-        if (path === '/v2/person/ask' || path === '/v3/person/capabilities') legacyCalled = true;
+        paths.push(path);
+        if (path === '/v7/person/ask') return json({ error: { code: 'not_found', message: 'removed while request was running' } }, 404);
         throw new Error(`unexpected path ${path}`);
       });
-      await expect(client.ask('What is current?')).rejects.toMatchObject({ code: 'not_found', status: 404 });
-      expect(legacyCalled).toBe(false);
+      await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code: 'not_supported', status: 404 });
+      expect(paths).toEqual(['/v7/person/ask']);
     });
   });
-  it("asks agentic Ask and validates its V4 response before returning it", async () => {
+  it("asks agentic Ask and validates its V8 response before returning it", async () => {
     await withHome(async home => {
       const digest = `sha256:${'a'.repeat(64)}`;
       const client = await signedInClient(home, async (input, init) => {
         const path = new URL(String(input)).pathname;
-        if (path !== '/v3/person/ask') throw new Error(`unexpected path ${path}`);
+        if (path !== '/v7/person/ask') throw new Error(`unexpected path ${path}`);
         expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'What changed?' });
         const headers = new Headers(init?.headers);
         expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
         expect(Math.abs(Date.now() - Date.parse(headers.get('x-echo-client-now')!))).toBeLessThan(5_000);
         expect(headers.get('x-echo-answer-layout')).toBe('1');
-        return json({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+        return json({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
           citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
           direct: { text: 'The launch date moved.', citation_indexes: [0], private: false },
           parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch date moved.', citation_indexes: [0], private: false }] }],
         });
       });
-      await expect(client.ask('What changed?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v4', direct: { citation_indexes: [0] } });
+      await expect(client.askWithLiveSources('What changed?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v8', direct: { citation_indexes: [0] } });
     });
   });
 
-  it('uses /v7 for --live, preserves the project scope, and validates page and workspace citations in the V8 answer', async () => {
+  it('uses /v7, preserves the project scope, and validates page and workspace citations in the V8 answer', async () => {
     await withHome(async home => {
       const projectId = 'prj_00000000-0000-4000-8000-000000000019' as `prj_${string}`;
       const client = await signedInClient(home, async (input, init) => {
@@ -918,32 +903,24 @@ describe("Person client", () => {
     });
   });
 
-  // An Authority without /v7 answers --live on its newest route, its answer validated as that route's: page citations in
-  // V7 and V6. A diagnostic capture rides on every route asked, and never on /v4.
-  it.each([
-    { routes: ['/v7', '/v6'], answer: v7PageAnswer(), capture: false },
-    { routes: ['/v7', '/v6', '/v5'], answer: v6PageAnswer(), capture: false },
-    { routes: ['/v7', '/v6', '/v5', '/v4'], answer: { ...v4Answer({ citations: [RECORD_CITATION] }), kind: 'echo-clean-person-answer-v5', schema_version: 5 }, capture: false },
-    { routes: ['/v7', '/v6'], answer: v7PageAnswer(), capture: true },
-    { routes: ['/v7', '/v6', '/v5'], answer: v6PageAnswer(), capture: true },
-    { routes: ['/v7', '/v6', '/v5'], answer: undefined, capture: true },
-  ])('answers --live from the last of $routes, with a capture: $capture', async ({ routes, answer, capture }) => {
+  // A diagnostic capture rides on the Ask: an Authority without /v7 fails it with not_supported, and nothing else is asked.
+  it.each([{ served: true }, { served: false }])('carries a capture on /v7 alone (served: $served)', async ({ served }) => {
     await withHome(async home => {
       const asked: unknown[] = [];
       const capture_id = 'cap_00000000-0000-4000-8000-000000000001';
+      const answer = v8PageAnswer();
       const client = await signedInClient(home, async (input, init) => {
-        const path = new URL(String(input)).pathname;
-        asked.push([path, JSON.parse(String(init?.body)).capture_id]);
-        return answer !== undefined && path === `${routes.at(-1)}/person/ask` ? json(answer) : json({ error: { code: 'not_found', message: 'route absent' } }, 404);
+        asked.push([new URL(String(input)).pathname, JSON.parse(String(init?.body)).capture_id]);
+        return served ? json(answer) : json({ error: { code: 'not_found', message: 'route absent' } }, 404);
       });
-      const ask = client.askWithLiveSources('What changed?', undefined, undefined, capture ? capture_id : undefined);
-      if (answer === undefined) await expect(ask).rejects.toMatchObject({ code: 'not_found', status: 404 });
-      else await expect(ask).resolves.toEqual(answer);
-      expect(asked).toEqual(routes.map(route => [`${route}/person/ask`, capture ? capture_id : undefined]));
+      const ask = client.askWithLiveSources('What changed?', undefined, undefined, capture_id);
+      if (served) await expect(ask).resolves.toEqual(answer);
+      else await expect(ask).rejects.toMatchObject({ code: 'not_supported', status: 404 });
+      expect(asked).toEqual([['/v7/person/ask', capture_id]]);
     });
   });
 
-  it('never falls back from --live on an Authority error', async () => {
+  it('passes an Authority error on as it is', async () => {
     await withHome(async home => {
       const paths: string[] = [];
       const client = await signedInClient(home, async input => {
@@ -956,51 +933,30 @@ describe("Person client", () => {
   });
 
   it.each([
-    // `own`: the route header with the refusing route's own number.
-    { name: 'a matched-route provider 404', marker: 'own', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
+    // The route header, with /v7's own number or another value: the route matched, so it is the route's own failure.
+    { name: 'a matched-route provider 404', marker: '7', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
     { name: 'an unknown route marker', marker: 'future', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
     { name: 'a malformed unmarked 404', marker: undefined, body: { unsupported: true }, code: 'invalid_response' },
     { name: 'an unmarked 404 with another error code', marker: undefined, body: { error: { code: 'unavailable', message: 'request failed' } }, code: 'unavailable' },
-  ])('does not replay live Ask on an older route after $name', async ({ marker, body, code }) => {
-    // On /v7, on /v6 once an Authority without /v7 sent the Ask there, and on /v5 once one without /v6 did.
-    const routes = ['/v7/person/ask', '/v6/person/ask', '/v5/person/ask'];
-    for (const refusing of routes) {
+    // Only a not_found 404 with no route header is an Authority without /v7.
+    { name: 'an unmarked not_found 404', marker: undefined, body: { error: { code: 'not_found', message: 'route absent' } }, code: 'not_supported' },
+  ])('reads $name from /v7 as $code, and asks nothing else', async ({ marker, body, code }) => {
+    for (const progress of [false, true]) {
       await withHome(async home => {
         const paths: string[] = [];
         const client = fixtureClient(home, async input => {
           const path = new URL(String(input)).pathname; paths.push(path);
           if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
-          if (path !== refusing) return json({ error: { code: 'not_found', message: 'route absent' } }, 404);
           const response = json(body, 404);
-          if (marker !== undefined) response.headers.set(PERSON_ANSWER_ROUTE_HEADER_V5, marker === 'own' ? refusing.slice(2, 3) : marker);
+          if (marker !== undefined) response.headers.set(PERSON_ANSWER_ROUTE_HEADER_V5, marker);
           return response;
         });
         await client.installSession('https://authority.example', ROTATED_SESSION);
-        await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code, status: 404 });
-        expect(paths).toEqual(['/v1/authority-descriptor', ...routes.slice(0, routes.indexOf(refusing) + 1)]);
+        const asked = progress ? client.askWithLiveProgress('What is current?', undefined, undefined, () => undefined) : client.askWithLiveSources('What is current?');
+        await expect(asked).rejects.toMatchObject({ code, status: 404 });
+        expect(paths).toEqual(['/v1/authority-descriptor', '/v7/person/ask']);
       });
     }
-  });
-
-  it('routes the CLI --live flag to /v7 and refuses it with --tickets before transport', async () => {
-    await withHome(async home => {
-      await installFixtureSession(home);
-      const result = await runCli(['ask', '--question', 'Are we ready for EVT?', '--live'], {
-        home_directory: home, now: () => NOW,
-        fetch: async (input) => {
-          const path = new URL(String(input)).pathname;
-          if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
-          expect(path).toBe('/v7/person/ask'); return json(v8WorkspaceAnswer());
-        },
-      });
-      expect(result.code).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, result: { kind: 'echo-clean-person-answer-v8', citations: [{ kind: 'page' }, { kind: 'project' }, { kind: 'tool_container', key: 'EVT' }] } });
-      let called = false;
-      const rejected = await runCli(['ask', '--question', 'Are we ready for EVT?', '--live', '--tickets'], {
-        home_directory: home, now: () => NOW, fetch: async () => { called = true; throw new Error('must not call'); },
-      });
-      expect(rejected.code).toBe(1); expect(called).toBe(false); expect(JSON.parse(rejected.stderr)).toMatchObject({ ok: false, action: 'ask' });
-    });
   });
 
   it("reads an Ask source citation through the bounded proof endpoint", async () => {
@@ -1038,16 +994,16 @@ describe("Person client", () => {
     await withHome(async home => {
       const projectId = "prj_00000000-0000-4000-8000-000000000019" as `prj_${string}`;
       const client = await signedInClient(home, async (input) => {
-        if (new URL(String(input)).pathname === "/v3/person/ask") return json(v4Answer());
+        if (new URL(String(input)).pathname === "/v7/person/ask") return json(v8Answer());
         return json({ schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" }, citation: { ...SOURCE_CITATION, label: "MRD" }, text: "MRD" });
       });
-      await expect(client.ask("What is current?", projectId)).rejects.toMatchObject({ code: "invalid_response" });
+      await expect(client.askWithLiveSources("What is current?", projectId)).rejects.toMatchObject({ code: "invalid_response" });
       await expect(client.askSourceEvidence({ schema_version: 1, scope: { kind: "project", project_id: projectId }, citation: SOURCE_CITATION })).rejects.toMatchObject({ code: "invalid_response" });
     });
   });
 
   it.each([
-    ["an Ask answer", (client: PersonClient) => client.ask("What is current?"), v4Answer({ text: "Prior account answer.", citations: [RECORD_CITATION] })],
+    ["an Ask answer", (client: PersonClient) => client.askWithLiveSources("What is current?"), v8Answer({ text: "Prior account answer.", citations: [RECORD_CITATION] })],
     ["an Ask source proof", (client: PersonClient) => client.askSourceEvidence({ schema_version: 1, scope: { kind: "global" }, citation: SOURCE_CITATION }), {
       schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" },
       citation: { ...SOURCE_CITATION, label: "Prior account source" }, text: "Prior account proof.",
@@ -1073,15 +1029,15 @@ describe("Person client", () => {
       let asks = 0;
       const client = await signedInClient(home, async () => {
         asks += 1;
-        return json(v4Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
+        return json(v8Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
       });
       const question = (count: number) =>
         Array.from({ length: count }, (_, index) => `term${index}`).join(" ");
 
-      await expect(client.ask(question(32))).resolves.toMatchObject({
+      await expect(client.askWithLiveSources(question(32))).resolves.toMatchObject({
         parts: [{ statements: [{ text: "Bounded answer." }] }],
       });
-      await expect(client.ask(question(33))).rejects.toMatchObject({ code: "query_term_count" });
+      await expect(client.askWithLiveSources(question(33))).rejects.toMatchObject({ code: "query_term_count" });
       expect(asks).toBe(1);
     });
   });
@@ -1089,10 +1045,10 @@ describe("Person client", () => {
   it.each(["ask", "search"])("rejects retired global metadata in a %s response", async (mode) => {
     await withHome(async (home) => {
       const client = await signedInClient(home, async () => json({ ...(mode === "ask"
-        ? v4Answer()
+        ? v8Answer()
         : { schema_version: 2, kind: "echo-clean-person-record-search-v2", items: [] }),
       generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } }));
-      await expect(mode === "ask" ? client.ask("pricing") : client.records(undefined, "pricing")).rejects.toThrow(
+      await expect(mode === "ask" ? client.askWithLiveSources("pricing") : client.records(undefined, "pricing")).rejects.toThrow(
         mode === "ask" ? "malformed response" : "response is invalid",
       );
     });
@@ -1103,12 +1059,12 @@ describe("Person client", () => {
       let asks = 0;
       const client = await signedInClient(home, async () => {
         asks += 1;
-        return json(v4Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
+        return json(v8Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
       });
 
-      await expect(client.ask(" pricing")).rejects.toMatchObject({ code: "query_whitespace" });
+      await expect(client.askWithLiveSources(" pricing")).rejects.toMatchObject({ code: "query_whitespace" });
       expect(asks).toBe(0);
-      await expect(client.ask("pricing")).rejects.toThrow(
+      await expect(client.askWithLiveSources("pricing")).rejects.toThrow(
           "malformed response",
       );
       expect(asks).toBe(1);
@@ -1221,20 +1177,20 @@ describe("Person client", () => {
         expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
-        if (path === "/v3/person/ask") return json(v4Answer());
+        if (path === "/v7/person/ask") return json(v8Answer());
         expect(path).toBe("/v4/person/tools");
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
         return json({ schema_version: 4, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });
       });
       expect((await client.tools()).tools).toEqual([]);
       expect(await client.records(1)).toMatchObject({ records: [] });
-      const firstAnswer = await client.ask("What is approved?");
-      expect(firstAnswer).toMatchObject({ kind: 'echo-clean-person-answer-v4', outcome: 'not_found' });
+      const firstAnswer = await client.askWithLiveSources("What is approved?");
+      expect(firstAnswer).toMatchObject({ kind: 'echo-clean-person-answer-v8', outcome: 'not_found' });
       tools = [{ tool_id: "calendar", display_name: "Calendar", availability: "enabled", personal_status: "linked", external_scope_id: "calendar-workspace", external_subject_id: "calendar-user", organization_setup: "connected" }];
       expect((await client.tools()).tools[0]).toMatchObject({ personal_status: "linked", organization_setup: "connected" });
       expect(await client.records(1)).toMatchObject({ records: [] });
-      const secondAnswer = await client.ask("What is approved?");
-      expect(secondAnswer).toMatchObject({ kind: 'echo-clean-person-answer-v4', outcome: 'not_found' });
+      const secondAnswer = await client.askWithLiveSources("What is approved?");
+      expect(secondAnswer).toMatchObject({ kind: 'echo-clean-person-answer-v8', outcome: 'not_found' });
       tools = "failure";
       await expect(client.tools()).rejects.toThrow();
       expect(calls).not.toContain("/v2/integration-links/slack/challenges");

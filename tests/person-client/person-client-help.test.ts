@@ -28,7 +28,7 @@ describe("Person client help", () => {
     [["tools", "status", "--help"], "--tool jira --attempt-id <value>"],
     [["tools", "cancel", "--help"], "--tool jira --attempt-id <value>"],
     [["tools", "disconnect", "--help"], "--tool jira"],
-    [["ask", "--help"], "--tickets"],
+    [["ask", "--help"], "An Authority without /v7 fails with code not_supported."],
     [["tools", "--help"], "echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings|submit> --tool <tool>"],
     [["tools", "submit", "--help"], "--tool hand-in --meeting-title <value> [--notes-file <value>] [--transcript-file <value>] [--started-at <value>] [--date <value>] [--echo-project <value>] --retain"],
     [["tools", "setup", "--help"], "--tool slack [--reconnect] [--existing-app <value>] [--no-wait]"],
@@ -38,9 +38,9 @@ describe("Person client help", () => {
     [["records", "--help"], "[--limit <1-100>] [--query <text>]"],
     [["status", "--help"], "echo-brain person status"],
     [["logout", "--help"], "echo-brain person logout"],
-    [["ask", "--help"], "echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --progress"],
-    // Every Ask asks the newest route; the flag that once chose it is kept so scripts keep working.
-    [["ask", "--help"], "--live, which once chose this route, is still accepted and changes nothing"],
+    [["ask", "--help"], "echo-brain person ask --question <text> [--project <project-id> | --mine] [--progress"],
+    // Every Ask asks /v7, the only Ask route.
+    [["ask", "--help"], "Ask asks POST /v7/person/ask"],
     // A follow-up's ref is not one person open reads: its item page is the runs item read.
     [["ask", "--help"], `except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}'`],
     [["open", "--help"], "usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]"],

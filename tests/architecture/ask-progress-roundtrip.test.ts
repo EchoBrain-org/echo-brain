@@ -16,16 +16,12 @@ import { CONFLUENCE_TEXT, JIRA_TEXT } from '../../services/organization-authorit
 
 // Ask progress and internal links v1 (ADR-0039), end to end, where the root
 // build is: the real Authority runtime streams a scripted research run; the
-// real Person client runs `ask --live --progress` against it exactly as the
-// desktop host runs it; the host's own line reader turns the printed lines
-// into page notices; and the desktop's store takes them, then the answer, and
-// opens what Ask named. A change on any of the three sides meets the others.
-// The client asks /v7 first (the V8 answer, research tool contract v1); here
-// each Authority is one from before /v7, which answers it with a 404 without
-// the route header. So the client streams the V7 answer on /v6 (progress V2,
-// ADR-0040), whose Ask may cite a follow-up. For an Authority without /v6
-// either it falls back to /v5, which answers in JSON: its progress V1 stream
-// was retired on 2026-10-19.
+// real Person client runs `ask --progress` against it exactly as the desktop
+// host runs it; the host's own line reader turns the printed lines into page
+// notices; and the desktop's store takes them, then the answer, and opens what
+// Ask named. A change on any of the three sides meets the others. The client
+// asks /v7, Ask's one route: the V8 answer (research tool contract v1),
+// streamed as progress V3, whose Ask may cite a follow-up (ADR-0040).
 //
 // The desktop's modules are loaded by path, as approval-proposal-roundtrip
 // loads the Authority's: the root typecheck never reads the app (its DOM and
@@ -100,8 +96,7 @@ afterEach(() => {
  * client command the host would, through the host's own views and line
  * reader, and every step the reader posts goes to the page's store.
  */
-/** `route`: the newest Ask route the Authority has; one before /v7 answers it with a 404. */
-async function app(options: { readonly route?: '/v6' | '/v5' } = {}) {
+async function app() {
   const f = await allSourceAskFixture(roots, { notes: NOTE });
   const [{ runCli, lastJson }, ask, views, { askText }, progress, { openerOf }] = await Promise.all([
     desktop<{ runCli(cli: unknown, argv: readonly string[], dependencies: Json, onLine?: (line: string) => void): Promise<CliRun>; lastJson(text: string): unknown }>('host/cli.ts'),
@@ -124,10 +119,6 @@ async function app(options: { readonly route?: '/v6' | '/v5' } = {}) {
     const url = new URL(String(input));
     expect(url.origin).toBe(AUTHORITY);
     if (url.pathname.endsWith('/person/ask')) asked.push(url.pathname);
-    // An Authority from before /v7, and from before /v6 for the /v5 proof, has no such route: a 404 without the route header.
-    if (url.pathname === '/v7/person/ask' || (options.route === '/v5' && url.pathname === '/v6/person/ask')) {
-      return new Response(JSON.stringify({ error: { code: 'not_found', message: 'request failed' } }), { status: 404, headers: { 'content-type': 'application/json; charset=utf-8' } });
-    }
     return fetch(`${f.origin}${url.pathname}${url.search}`, init);
   };
   const client = { home_directory: home, fetch: loopback };
@@ -188,11 +179,12 @@ function stepsOf(lines: readonly string[]): PersonAskProgressStepEventV3[] {
   return lines.map(line => validatePersonAskProgressLineV3(JSON.parse(line)).progress);
 }
 
-/** The catalog's sources, as a step on /v6 names them (ADR-0040). */
-const SEARCHED = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'pages', tool_id: 'confluence' }, { kind: 'follow_ups' }];
+/** The catalog's sources, as a step on /v7 names them (ADR-0040, research tool contract v1). */
+const SEARCHED = [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }, { kind: 'pages', tool_id: 'confluence' }, { kind: 'follow_ups' },
+  { kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }];
 
 describe('Ask progress from the Authority through the Person client to the desktop page', () => {
-  it('streams each step to the page while the Authority works on /v6, then folds into the audited receipt, and opens what it named', async () => {
+  it('streams each step to the page while the Authority works on /v7, then folds into the audited receipt, and opens what it named', async () => {
     const { f, store, views, lines, refused, runs, audits, asked } = await app();
     try {
       // The desktop's atom ids are the Authority's own.
@@ -212,11 +204,11 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(runs).toHaveLength(1);
       expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
 
-      // --- The client: every step, in order, then the one final line, from the newest route this Authority has. ---
-      expect(asked).toEqual(['/v7/person/ask', '/v6/person/ask']);
+      // --- The client: every step, in order, then the one final line, from /v7 alone. ---
+      expect(asked).toEqual(['/v7/person/ask']);
       const steps = stepsOf(lines.slice(0, -1));
       const final = validatePersonAskProgressResultLineV3(JSON.parse(lines.at(-1)!));
-      expect(final.result.schema_version).toBe(7);
+      expect(final.result.schema_version).toBe(8);
       expect(final.receipt).toBeDefined();
       const receipt = final.receipt!;
       // Everything up to the writer's stage reached the page while the Authority was still writing.
@@ -245,7 +237,8 @@ describe('Ask progress from the Authority through the Person client to the deskt
       // The receipt names exactly what was named while it ran, rebuilt after the final check; the answer cites only named items.
       expect(receipt.rows.flatMap(row => row.type === 'read' ? row.items : []).map(commitment)).toEqual(named.map(commitment));
       expect(receipt.rows.filter(row => row.type === 'searched')).toEqual(searched);
-      expect(receipt.looked_through).toBe(named.length);
+      // It looked through every item research was shown, as a row or in full (ADR-0043): at least what it named.
+      expect(receipt.looked_through).toBeGreaterThanOrEqual(named.length);
       for (const citation of final.result.citations) expect(named.map(commitment)).toContain(commitment(citation));
       // The request's one audit record lists what was named, as citation commitments in naming order, never labels.
       const [audit, ...others] = audits();
@@ -280,26 +273,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
     } finally { await f.close(); }
   });
 
-  it('falls back to /v5 for an Authority without /v6, whose JSON answer the page shows with no progress or receipt', async () => {
-    const { f, store, lines, refused, runs, asked } = await app({ route: '/v5' });
-    try {
-      await store.ask(QUESTION, { kind: 'global' });
-      expect(runs).toHaveLength(1);
-      expect(runs[0]).toMatchObject({ exit: 0, stderr: '', overflow: false });
-      expect(asked).toEqual(['/v7/person/ask', '/v6/person/ask', '/v5/person/ask']);
-      // /v5 no longer streams: the client prints only its final line, the V6 answer with no receipt.
-      expect(lines).toHaveLength(1);
-      const final = validatePersonAskProgressResultLineV3(JSON.parse(lines[0]!));
-      expect(final.result.schema_version).toBe(6);
-      expect(final.receipt).toBeUndefined();
-      expect(refused).not.toHaveBeenCalled();
-      const shown = store.getState().timeline.turns.at(-1)!;
-      expect(store.getState().ask!.took[shown.id]).toBeUndefined();
-      expect(shown.answer.sources.length).toBeGreaterThan(0);
-    } finally { await f.close(); }
-  });
-
-  it('cites and names a follow-up on /v6, opens it beside the running Ask with its owner and status, and after the answer opens its item page (ADR-0040)', async () => {
+  it('cites and names a follow-up on /v7, opens it beside the running Ask with its owner and status, and after the answer opens its item page (ADR-0040)', async () => {
     const { f, store, views, progress, openerOf, account, lines, refused, runs, audits } = await app();
     const EXPECTED = 'Send the Launchscope checklist to the pilot group';
     const DECIDED = 'Launchscope rolls out to the pilot group first.';
@@ -326,7 +300,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       // --- The Authority and the client: the follow-up was searched, named once its check passed, cited, and audited. ---
       const steps = stepsOf(lines.slice(0, -1));
       const final = validatePersonAskProgressResultLineV3(JSON.parse(lines.at(-1)!));
-      expect(final.result.schema_version).toBe(7);
+      expect(final.result.schema_version).toBe(8);
       const followUp = expect.objectContaining({ citation: { kind: 'follow_up', item_id }, kind: 'follow_up', label: EXPECTED, ref: `follow_up:${item_id}` });
       const searched = steps.filter(step => step.type === 'searched');
       expect(searched).toEqual([{ type: 'searched', sources: SEARCHED, found: expect.any(Number) }]);
@@ -356,7 +330,7 @@ describe('Ask progress from the Authority through the Person client to the deskt
       expect(shown.answer.sources).toContainEqual(expect.objectContaining(source));
       expect(views.answerView(JSON.parse(lines.at(-1)!), { kind: 'global' }).sources).toContainEqual(expect.objectContaining(source));
       expect(openerOf(source as Source)).toEqual({ pane: 'follow_up', page: { kind: 'follow_up', item_id } });
-      expect(progress.searchedWords(store.getState().ask!.took[shown.id]!.receipt.rows[0]!)).toBe(`Searched meetings, documents, Jira, Confluence and follow-ups · ${named.length} found`);
+      expect(progress.searchedWords(store.getState().ask!.took[shown.id]!.receipt.rows[0]!)).toBe(`Searched meetings, documents, Jira, Confluence, follow-ups, projects, people and tools · ${named.length} found`);
       // The audited answer names it, so the pane stays on it, and now offers Open: its item page, read again.
       expect(store.fullPageOffered()).toBe(true);
       store.openFullPage();

@@ -16,9 +16,8 @@ import { PersonClient } from '../../src/product/person-client/client.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 
-// The asker's previous turn on `person ask` (ADR-0047): sent to /v7 alone, streamed or not, never falling back to an
-// older route; validated before anything is sent; and an answer to an Ask without it never names a question, says what
-// changed since or asks which one.
+// The asker's previous turn on `person ask` (ADR-0047): sent to /v7, the one Ask route, streamed or not; validated before
+// anything is sent; and an answer to an Ask without it never names a question, says what changed since or asks which one.
 
 const ORIGIN = 'https://authority.example.test';
 const NOW = '2026-10-25T17:00:00.000Z';
@@ -86,13 +85,13 @@ describe('the previous turn on the Person client (ADR-0047)', () => {
     expect(bodyOf(init)).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
   });
 
-  it('asks /v7 alone in JSON too, and never falls back: an Authority without the route, or one that refuses the turn, fails the Ask', async () => {
+  it('asks /v7 alone in JSON too: an Authority without the route, or one that refuses the turn, fails the Ask', async () => {
     const answer = answered({ question: RESOLVED });
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer, 200, V7_HEADERS));
     await expect(client(fetch).askWithLiveSources(QUESTION, undefined, undefined, undefined, PREVIOUS)).resolves.toEqual(answer);
     expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
     expect(bodyOf(fetch.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
-    for (const [reply, code, status] of [[noRoute(), 'not_found', 404], [json({ error: { code: 'invalid_request', message: 'request failed' } }, 400, V7_HEADERS), 'invalid_request', 400]] as const) {
+    for (const [reply, code, status] of [[noRoute(), 'not_supported', 404], [json({ error: { code: 'invalid_request', message: 'request failed' } }, 400, V7_HEADERS), 'invalid_request', 400]] as const) {
       for (const ask of [
         (fetch: typeof globalThis.fetch) => client(fetch).askWithLiveSources(QUESTION, undefined, undefined, undefined, PREVIOUS),
         (fetch: typeof globalThis.fetch) => client(fetch).askWithLiveProgress(QUESTION, undefined, undefined, () => undefined, {}, PREVIOUS),
@@ -119,7 +118,7 @@ describe('person ask --previous (ADR-0047)', () => {
     const answer = answered({ question: RESOLVED });
     const streamed = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: { looked_through: 1, elapsed_ms: 2_000, rows: [] } }]));
     const progress = cli(streamed);
-    expect(await progress.run(['ask', `--question=${QUESTION}`, '--live', '--progress', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(0);
+    expect(await progress.run(['ask', `--question=${QUESTION}`, '--progress', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(0);
     expect(validatePersonAskProgressResultLineV3(lines(progress.output.stdout).at(-1))).toMatchObject({ result: { question: RESOLVED } });
     expect(bodyOf(streamed.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
     const plain = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer, 200, V7_HEADERS));
@@ -139,13 +138,10 @@ describe('person ask --previous (ADR-0047)', () => {
       expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_request', error: expect.stringMatching(/^Ask previous (JSON )?is invalid/u) });
       expect(fetch).not.toHaveBeenCalled();
     }
-    // Its question's own errors stay its own, and the ticket route never takes the turn.
+    // Its question's own errors stay its own.
     const bad = cli(vi.fn<typeof globalThis.fetch>());
     expect(await bad.run(['ask', '--question= padded ', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(2);
     expect(lines(bad.output.stderr).at(-1)).not.toHaveProperty('code');
-    const tickets = cli(vi.fn<typeof globalThis.fetch>());
-    expect(await tickets.run(['ask', `--question=${QUESTION}`, '--tickets', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(2);
-    expect(lines(tickets.output.stderr).at(-1)).toEqual({ ok: false, error: '--previous and --tickets cannot be combined with `echo-brain person ask`' });
   });
 
   it('reports an Authority that refuses the turn as invalid_request', async () => {
