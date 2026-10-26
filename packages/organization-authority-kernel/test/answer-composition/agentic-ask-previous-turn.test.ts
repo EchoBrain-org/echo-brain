@@ -272,6 +272,9 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
     expect((await nothing.ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN })).since).toEqual({ statements: [] });
     const uncited = again({ ...answer, since: [{ text: "Unsupported.", evidence: ["E9"] }] });
     expect(await uncited.ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN })).not.toHaveProperty("since");
+    // An entry with no text is a comparison the reply cannot stand behind, not one that found nothing.
+    const blank = again({ ...answer, since: [{ text: "", evidence: ["E1"] }] });
+    expect(await blank.ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN })).not.toHaveProperty("since");
     const unasked = again(answer);
     expect(await unasked.ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN })).not.toHaveProperty("since");
     const notFound = again({ lists: [], sentences: [], since: [{ text: "The owner changed.", evidence: ["E1"] }], not_found: ["the owner of the THERM-482 fix"] });
