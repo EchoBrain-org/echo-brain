@@ -18,7 +18,7 @@ import type { SqlitePersonOriginalContextRetrievalV1 } from '../adapters/persist
 import type { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import type { PersonPageCheckV1, PersonSourceCheckV1, PersonTicketCheckV1 } from '../application/ports/person-source-check-v1.js';
 import type { PersonAskCheckHttpApplicationV1 } from '../presentation/person-ask-check-http-application.js';
-import { assessOpenItemsV1, errorCodeV1, observeEventV1, openItemViewerV1 } from './person-open-items-v1.js';
+import { assessOpenItemsV1, errorCodeV1, observeEventV1, openItemDecisionsReaderV1, openItemViewerV1 } from './person-open-items-v1.js';
 import { recordProjectAuthorizationOfGrantsV1, type RecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
 import type { PersonReadableDecisionProjectsV1 } from './person-record-search-route.js';
 
@@ -53,7 +53,7 @@ export interface CreatePersonAskCheckV1Options {
   readonly projects: Pick<SqliteProjectContextRepositoryV1, 'personChangeView'>;
   readonly records: PersonReadableDecisionProjectsV1;
   readonly originals: Pick<SqlitePersonOriginalContextRetrievalV1, 'checkSourceRevisions'>;
-  readonly items: Pick<SqliteImpactItemsV1, 'read'>;
+  readonly items: Pick<SqliteImpactItemsV1, 'readMany'>;
   readonly people: Pick<SqliteOpenItemPeopleV1, 'people' | 'leadsAny'>;
   /** Each connected tool's own check, one per tool and kind; none when no live connector is configured. */
   readonly live?: readonly PersonSourceCheckV1[];
@@ -113,12 +113,9 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
   function readDatabase(access_token: string, items: readonly PersonAskCheckRequestItemV1[], answers: (PersonAskCheckItemV1 | undefined)[]): void {
     const authorization = options.sessions.authenticateAccess({ access_token });
     let grants: RecordProjectAuthorizationV1 | undefined;
-    // The record check reads the grants read in this transaction: a capture of its own would need a transaction of its own.
-    const records = {
-      readableDecisions: (lookup: { readonly access_token: string; readonly record_sha256s: readonly Sha256Digest[] }) => options.records.readableDecisionProjects({
-        ...lookup, projects: grants ??= recordProjectAuthorizationOfGrantsV1(options.projects.personChangeView(authorization).grants),
-      }),
-    };
+    // The record checks read the grants read in this transaction (a capture of its own would need a transaction of its own),
+    // and each record once: a cited record and a cited follow-up's record are one lookup.
+    const records = openItemDecisionsReaderV1(options.records, access_token, () => (grants ??= recordProjectAuthorizationOfGrantsV1(options.projects.personChangeView(authorization).grants)));
     const decisions = entriesOf(items, 'approved_record');
     if (decisions.length > 0) {
       const readable = records.readableDecisions({ access_token, record_sha256s: [...new Set(decisions.map(({ citation }) => citation.record_sha256))] });
@@ -131,8 +128,8 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
     }
     const followUps = entriesOf(items, 'follow_up');
     if (followUps.length > 0) {
-      const found = [...new Set(followUps.map(({ citation }) => citation.item_id))].flatMap(id => options.items.read(id) ?? []);
-      const seen = new Map(assessOpenItemsV1({ records, people: options.people }, openItemViewerV1(access_token, authorization), found).assessed
+      const found = options.items.readMany(followUps.map(({ citation }) => citation.item_id));
+      const seen = new Map(assessOpenItemsV1({ records, people: options.people }, openItemViewerV1(access_token, authorization), [...found.values()]).assessed
         .filter(entry => entry.access.see_row).map(entry => [entry.row.item_id, entry.row] as const));
       for (const { index, item, citation } of followUps) {
         const row = seen.get(citation.item_id);
@@ -166,10 +163,7 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
       if (tickets.size + pages.size > 0) {
         const deadline = new AbortController();
         const signal = input.signal === undefined ? deadline.signal : AbortSignal.any([input.signal, deadline.signal]);
-        let open = true;
         let timedOut = false;
-        // A read settles its sources only until the deadline closes the check; anything later stays unknown.
-        const settle = (index: number, answer: PersonAskCheckItemV1): void => { if (open) answers[index] = answer; };
         // A cancelled request is not an outage, and reports nothing.
         const failed = (reason: PersonAskCheckLiveFailureV1['reason'], error: unknown): void => {
           if (input.signal?.aborted !== true) report(reason, timedOut ? 'deadline' : errorCodeV1(error));
@@ -183,8 +177,8 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
             const marker = markers.get(citation.ticket_id);
             // Without a marker of its own, the asker takes the ticket's current one as its baseline. A ticket read with no marker
             // to compare is readable, but nothing is known of it.
-            settle(index, marker === undefined ? UNREADABLE : marker === null ? UNKNOWN
-              : Object.freeze({ state: item.marker === undefined || item.marker === marker ? 'same' : 'changed', marker }));
+            answers[index] = marker === undefined ? UNREADABLE : marker === null ? UNKNOWN
+              : Object.freeze({ state: item.marker === undefined || item.marker === marker ? 'same' : 'changed', marker });
           }
         };
         const readPages = async (check: PersonPageCheckV1, entries: readonly Entry<PersonPageCitationV1>[]): Promise<void> => {
@@ -195,9 +189,9 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
             const { index, citation } = entry;
             if (!ids.has(citation.page_id)) continue;
             const version = versions.get(citation.page_id);
-            if (version === undefined) settle(index, UNREADABLE);
-            else if (version === citation.version) settle(index, SAME);
-            else if (citation.text_sha256 === EMPTY_TEXT_SHA256) settle(index, CHANGED);
+            if (version === undefined) answers[index] = UNREADABLE;
+            else if (version === citation.version) answers[index] = SAME;
+            else if (citation.text_sha256 === EMPTY_TEXT_SHA256) answers[index] = CHANGED;
             else compared.push(entry);
           }
           // The request's page bodies go to the first pages that need one; the others stay unknown.
@@ -213,7 +207,7 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
             if (!read.has(citation.page_id)) continue;
             const digests = sections.get(citation.page_id);
             // Section numbers move when an edit above adds or removes one: the cited text anywhere on the page is unchanged.
-            settle(index, digests === undefined ? UNREADABLE : digests === null ? UNKNOWN : digests.includes(citation.text_sha256) ? SAME : CHANGED);
+            answers[index] = digests === undefined ? UNREADABLE : digests === null ? UNKNOWN : digests.includes(citation.text_sha256) ? SAME : CHANGED;
           }
         };
         const reads = [
@@ -223,10 +217,11 @@ export function createPersonAskCheckV1(options: CreatePersonAskCheckV1Options): 
         // The deadline counts from the start of the request, the database read included.
         const timer = setTimeout(() => { timedOut = true; deadline.abort(new AuthorityOperationError('unavailable', 'The Ask source check ran out of time')); },
           Math.max(0, deadlineMs - (performance.now() - started)));
+        // The response is built as soon as this race ends (every read done, the deadline or a cancel): a read that answers later
+        // answers nothing, and its sources stay unknown.
         try {
           await Promise.race([Promise.all(reads), aborted(signal)]);
         } finally {
-          open = false;
           clearTimeout(timer);
           // Whatever is still reading stops.
           deadline.abort();

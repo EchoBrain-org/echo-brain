@@ -11,13 +11,13 @@
  * explicitly supplies --run and --credential-file. The bundle reads the
  * credential file; this runner only checks that it is a private file.
  */
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAgenticFollowUpOnceV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
+import { assertExplicitRun, boundedInteger, json, readFlags, sha256, usage } from "../shared/runner.mjs";
 import { CASES_FILE, GROUPS, gradeTrial, loadCases, summarizeRules } from "./grade.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -29,15 +29,6 @@ const MAX_TOTAL_MODEL_CALLS = ALL_CASES * MAX_TRIALS * 2;
 const MIN_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 85_000;
 
-const sha256 = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
-const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
-
-function usage(value) {
-  if (value === null || typeof value !== "object") return null;
-  const integer = (entry) => typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0 ? entry : null;
-  return Object.freeze({ input_tokens: integer(value.input_tokens), output_tokens: integer(value.output_tokens), total_tokens: integer(value.total_tokens) });
-}
-
 /** What a failure may keep: its class and status, never its message, payload or credential. */
 function safeError(error) {
   const detail = error !== null && typeof error === "object" && !Array.isArray(error) ? error : null;
@@ -48,11 +39,6 @@ function safeError(error) {
     http_status: Number.isSafeInteger(diagnostic?.http_status) ? diagnostic.http_status : null,
     finish_reason: typeof diagnostic?.finish_reason === "string" ? diagnostic.finish_reason : null,
   });
-}
-
-function boundedInteger(value, label, minimum, maximum) {
-  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error(`${label} must be an integer from ${minimum} to ${maximum}`);
-  return value;
 }
 
 export function help() {
@@ -90,26 +76,14 @@ function outputDirectory(value) {
 
 export function parseArgs(argv) {
   const options = { run: false, credentialFile: null, out: null, caseIds: null, trials: MAX_TRIALS, timeoutMs: 60_000 };
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
-    if (flag === "--help") return { help: true };
-    if (flag === "--run") { options.run = true; continue; }
-    const value = argv[index + 1];
-    if (value === undefined || value.startsWith("--")) throw new Error(`missing value for ${flag}`);
-    index += 1;
-    if (flag === "--credential-file") options.credentialFile = value;
-    else if (flag === "--out") options.out = value;
-    else if (flag === "--cases") options.caseIds = value.split(",").map((part) => part.trim()).filter(Boolean);
-    else if (flag === "--trials") options.trials = Number(value);
-    else if (flag === "--timeout-ms") options.timeoutMs = Number(value);
-    else throw new Error(`unknown option ${flag}`);
-  }
-  if (!options.run) throw new Error("this evaluator makes no network request unless --run is explicit");
-  if (typeof options.credentialFile !== "string" || !isAbsolute(options.credentialFile)) throw new Error("--credential-file must be an absolute private file path");
-  // stat verifies that the supplied path exists without reading its contents.
-  const credentialStat = statSync(options.credentialFile);
-  if (!credentialStat.isFile()) throw new Error("--credential-file must name a file");
-  if ((credentialStat.mode & 0o077) !== 0) throw new Error("--credential-file must not be readable by group or other users");
+  if (readFlags(argv, options, {
+    "--credential-file": (value) => { options.credentialFile = value; },
+    "--out": (value) => { options.out = value; },
+    "--cases": (value) => { options.caseIds = value.split(",").map((part) => part.trim()).filter(Boolean); },
+    "--trials": (value) => { options.trials = Number(value); },
+    "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
+  })) return { help: true };
+  assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, MAX_TRIALS);
   options.timeoutMs = boundedInteger(options.timeoutMs, "--timeout-ms", MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
   const known = new Set(loadCases().cases.map((entry) => entry.id));
@@ -123,6 +97,7 @@ function codeIdentity() {
   const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim();
   const files = [
     "tools/evals/ask-follow-up/run.mjs",
+    "tools/evals/shared/runner.mjs",
     "tools/evals/ask-follow-up/grade.mjs",
     "tools/evals/ask-follow-up/cases.json",
     "packages/organization-authority-kernel/dist/answer-composition/agentic-follow-up-resolver-v1.js",

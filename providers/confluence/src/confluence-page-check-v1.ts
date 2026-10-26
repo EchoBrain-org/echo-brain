@@ -3,7 +3,9 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { inBatchesOfFourV1 as parallel } from '@echo-brain/provider-runtime/person-provider-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
 import { normalizeConfluencePageDocumentV1 } from './confluence-page-text-v1.js';
-import { CONFLUENCE_ID as ID, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString } from './confluence-validation-v1.js';
+import {
+  CONFLUENCE_ID as ID, confluenceArray, confluenceAtlasDocumentV1, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString, confluenceVersionNumberV1,
+} from './confluence-validation-v1.js';
 
 /**
  * The Ask source check's page reads (Ask timeline v1, C1; ADR-0047): versions by id, then the bodies of the few pages whose
@@ -14,12 +16,6 @@ const READABLE_STATUSES = Object.freeze(['current', 'archived']);
 const VERSIONS_BATCH = 50;
 const VERSIONS_MAX_IDS = 100;
 const SECTIONS_MAX_PAGES = 10;
-
-function version(page: Record<string, unknown>): string {
-  const number = confluenceRecord(page.version).number;
-  if (!Number.isSafeInteger(number) || (number as number) < 1) confluenceFailure('invalid_output');
-  return String(number);
-}
 
 /**
  * Each readable page's current version by its id, for distinct valid page ids. `GET /pages` applies the asker's current
@@ -39,7 +35,7 @@ export async function readConfluencePageVersionsV1(transport: ConfluenceCloudTra
       const page = confluenceRecord(raw);
       const id = confluenceString(page.id, 20, ID);
       if (!expected.has(id) || found.has(id) || !READABLE_STATUSES.includes(confluenceString(page.status, 32))) confluenceFailure('invalid_output');
-      found.set(id, version(page));
+      found.set(id, confluenceVersionNumberV1(confluenceRecord(page.version)));
     }
     const links = response._links === undefined ? {} : confluenceRecord(response._links);
     if (rows.length < batch.length && confluenceNextCursorV1(links.next, input.cloud_id, '/api/v2/pages', 8192) !== undefined) confluenceFailure('unavailable');
@@ -66,11 +62,9 @@ export async function readConfluencePageSectionsV1(transport: ConfluenceCloudTra
     input.signal?.throwIfAborted();
     const page = confluenceRecord(raw);
     if (confluenceString(page.id, 20, ID) !== id) confluenceFailure('invalid_output');
-    const representation = confluenceRecord(confluenceRecord(page.body).atlas_doc_format);
-    if (representation.representation !== undefined && representation.representation !== 'atlas_doc_format') confluenceFailure('invalid_output');
-    if (typeof representation.value !== 'string') confluenceFailure('invalid_output');
+    const document = confluenceAtlasDocumentV1(page.body);
     let sections: readonly string[] | undefined;
-    try { sections = normalizeConfluencePageDocumentV1(representation.value).sections; } catch { sections = undefined; }
+    try { sections = normalizeConfluencePageDocumentV1(document).sections; } catch { sections = undefined; }
     found.set(id, sections === undefined ? null : Object.freeze(sections.filter(text => text.trim() !== '').map(text => sha256Digest(text))));
   });
   return found;

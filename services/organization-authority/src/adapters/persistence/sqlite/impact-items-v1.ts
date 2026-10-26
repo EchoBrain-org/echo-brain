@@ -99,6 +99,9 @@ function limitOf(limit: number): number {
  * it returns or changes a row.
  */
 export class SqliteImpactItemsV1 {
+  /** `movedByOthers`' statements, for a first page and for a later one, each prepared once. */
+  private readonly movedStatements = new Map<boolean, Database.Statement>();
+
   constructor(private readonly database: Database.Database, private readonly now: () => Date = () => new Date()) {
     if (!isCurrentAuthorityState(database)) {
       throw new Error(`Open items require Authority V${AUTHORITY_BASELINE_SCHEMA_VERSION} state with foreign keys enabled`);
@@ -124,6 +127,13 @@ export class SqliteImpactItemsV1 {
   read(itemId: string): ImpactItemRowV1 | undefined {
     const found = this.database.prepare(`${selectItems} WHERE item.item_id=?`).get(itemId) as StoredItemV1 | undefined;
     return found === undefined ? undefined : publicItem(found);
+  }
+
+  /** Not fenced: the items of these ids that exist, by id, in one read. */
+  readMany(itemIds: readonly string[]): ReadonlyMap<string, ImpactItemRowV1> {
+    if (itemIds.length === 0) return new Map();
+    const found = this.database.prepare(`${selectItems} WHERE item.item_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(itemIds)])) as StoredItemV1[];
+    return new Map(found.map(item => [item.item_id, publicItem(item)]));
   }
 
   forRun(runId: string): readonly ImpactItemRowV1[] {
@@ -154,15 +164,21 @@ export class SqliteImpactItemsV1 {
     options: { readonly limit: number; readonly after?: { readonly moved_at: string; readonly item_id: string } }): readonly { readonly row: ImpactItemRowV1; readonly moved_at: string }[] {
     const limit = limitOf(options.limit);
     if (recordSha256s.length === 0 || limit === 0) return [];
-    // One time a move by someone else set, or '' (before every time) when this member set it, nobody did, or it is not canonical.
-    const by = (who: string, at: string) => `CASE WHEN item.${who} != @membership AND item.${at} GLOB '${CANONICAL_TIME_GLOB}' THEN item.${at} ELSE '' END`;
-    const rows = this.database.prepare(`SELECT * FROM (
-        SELECT ${ITEM_COLUMNS},
-          nullif(max(${by('owner_set_by', 'owner_set_at')}, ${by('state_set_by', 'state_set_at')}, ${by('approver_membership_id', 'sent_at')}), '') AS moved_at
-        FROM authority_impact_items_v1 AS item
-        WHERE +item.organization_id = @organization AND item.record_sha256 IN (SELECT value FROM json_each(@records)))
-      WHERE moved_at IS NOT NULL ${options.after === undefined ? '' : 'AND (moved_at < @after_at OR (moved_at = @after_at AND item_id > @after_id))'}
-      ORDER BY moved_at DESC, item_id LIMIT @limit`).all({
+    const later = options.after !== undefined;
+    let statement = this.movedStatements.get(later);
+    if (statement === undefined) {
+      // One time a move by someone else set, or '' (before every time) when this member set it, nobody did, or it is not canonical.
+      const by = (who: string, at: string) => `CASE WHEN item.${who} != @membership AND item.${at} GLOB '${CANONICAL_TIME_GLOB}' THEN item.${at} ELSE '' END`;
+      statement = this.database.prepare(`SELECT * FROM (
+          SELECT ${ITEM_COLUMNS},
+            nullif(max(${by('owner_set_by', 'owner_set_at')}, ${by('state_set_by', 'state_set_at')}, ${by('approver_membership_id', 'sent_at')}), '') AS moved_at
+          FROM authority_impact_items_v1 AS item
+          WHERE +item.organization_id = @organization AND item.record_sha256 IN (SELECT value FROM json_each(@records)))
+        WHERE moved_at IS NOT NULL ${later ? 'AND (moved_at < @after_at OR (moved_at = @after_at AND item_id > @after_id))' : ''}
+        ORDER BY moved_at DESC, item_id LIMIT @limit`);
+      this.movedStatements.set(later, statement);
+    }
+    const rows = statement.all({
       organization: organizationId, membership: membershipId, records: JSON.stringify([...new Set(recordSha256s)]), limit,
       ...(options.after === undefined ? {} : { after_at: options.after.moved_at, after_id: options.after.item_id }),
     }) as (StoredItemV1 & { readonly moved_at: string })[];

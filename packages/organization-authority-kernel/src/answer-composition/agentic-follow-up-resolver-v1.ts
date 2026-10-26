@@ -13,7 +13,7 @@ import {
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { evidenceDayV1 } from "../shared/temporal-query-v1.js";
-import { AgenticAskOutputErrorV1, cleanLine, cleanModelLine } from "./agentic-ask-v1-model-protocol.js";
+import { AgenticAskOutputErrorV1, cleanLine, cleanModelLine, respelled } from "./agentic-ask-v1-model-protocol.js";
 import type { AgenticBriefStartingItemV1 } from "./agentic-brief-v1.js";
 import {
   AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
@@ -146,7 +146,7 @@ export function parseFollowUpResolutionV1(value: unknown, sources: number): Agen
   const named = typeof body.resolution === "string" ? body.resolution.trim().toLowerCase() : "";
   const resolution = RESOLUTIONS.find(known => known === named);
   if (resolution === undefined) throw new AgenticAskOutputErrorV1("\"resolution\" must be \"same\", \"resolved\" or \"clarify\"");
-  if (resolution !== body.resolution) observeCoreModelCorrectionV1("model_enum_respelled");
+  respelled(body.resolution, resolution);
   const offered: readonly unknown[] = Array.isArray(body.choices) ? body.choices : [];
   if (resolution !== "clarify" && offered.length > 0) {
     throw new AgenticAskOutputErrorV1(`"${resolution}" offers no choices: when more than one thing could fit, the resolution is "clarify"`);
@@ -188,6 +188,11 @@ export interface AgenticFollowUpResolverInputV1 {
   readonly signal: AbortSignal;
 }
 
+/** The day the previous turn was asked in this time zone, or its UTC day when the zone names none, as the resolver and an Ask again's writer read it. */
+export function agenticPreviousAskedOnV1(previous: Pick<PersonAnswerPreviousV1, "asked_at">, timeZone: string): string {
+  return evidenceDayV1(previous.asked_at, timeZone) ?? previous.asked_at.slice(0, 10);
+}
+
 /** What the resolver is shown: today, the previous turn with its sentences and sources numbered from 1, then the new question. */
 function resolverInput(input: Pick<AgenticFollowUpResolverInputV1, "previous" | "question" | "today" | "time_zone">) {
   const { previous } = input;
@@ -195,7 +200,7 @@ function resolverInput(input: Pick<AgenticFollowUpResolverInputV1, "previous" | 
     today: input.today,
     previous: {
       question: previous.question,
-      asked_on: evidenceDayV1(previous.asked_at, input.time_zone) ?? previous.asked_at.slice(0, 10),
+      asked_on: agenticPreviousAskedOnV1(previous, input.time_zone),
       statements: previous.statements.map((statement, index) => ({ n: index + 1, text: statement.text, sources: statement.citation_indexes.map(at => at + 1) })),
       sources: previous.citations.map((citation, index) => ({ n: index + 1, kind: citation.kind, label: citation.label, ...(citation.key === undefined ? {} : { key: citation.key }) })),
     },

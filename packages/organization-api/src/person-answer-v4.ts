@@ -5,7 +5,7 @@ import type { PersonAnswerCitationV5, PersonAnswerResponseV5 } from './person-an
 import type { PersonAnswerCitationV6, PersonAnswerResponseV6 } from './person-answer-v6.js';
 import type { PersonAnswerCitationV7, PersonAnswerEvidenceCitationV7, PersonAnswerResponseV7 } from './person-answer-v7.js';
 import {
-  validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
+  PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
   type PersonEvidenceKindV5,
 } from './person-answer-v8.js';
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
@@ -37,8 +37,10 @@ import {
   assertExactKeys,
   assertTimestamp,
   boundedLine,
+  boundedList,
   fail,
   MAX_ORGANIZATION_API_BODY_BYTES,
+  oneOf,
   utf8ByteLength,
 } from './validation.js';
 
@@ -281,14 +283,10 @@ function statement(value: unknown, citations: readonly (PersonAnswerCitationV5 |
   if (fallback) evidenceText(input.text, `${label} text`, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
   else text(input.text, `${label} text`, 4 * 1024, true);
   if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || input.citation_indexes.length > 40 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
-  const indexes = input.citation_indexes.map((index) => {
-    if (!Number.isSafeInteger(index) || index < 0 || index >= citations.length) fail(`${label} citation_indexes is invalid`);
-    return index;
-  });
-  if (new Set(indexes).size !== indexes.length) fail(`${label} citation_indexes contains duplicates`);
+  const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length, 40);
   const expectedPrivate = indexes.some((index) => ['only_me', 'approver_only'].includes(citations[index]!.visibility));
   if (input.private !== expectedPrivate) fail(`${label} private is inconsistent with cited visibility`);
-  return Object.freeze({ text: input.text as string, citation_indexes: Object.freeze(indexes), private: input.private });
+  return Object.freeze({ text: input.text as string, citation_indexes: indexes, private: input.private });
 }
 
 /**
@@ -408,8 +406,7 @@ function fullQuestion(value: unknown, label: string): string {
 
 /** Distinct whole indexes below `bound`, at most `maximum` of them. */
 function citationIndexes(value: unknown, label: string, bound: number, maximum: number): readonly number[] {
-  if (!Array.isArray(value) || value.length > maximum) fail(`${label} is invalid`);
-  const indexes = (value as unknown[]).map((index) => {
+  const indexes = boundedList(value, label, maximum).map((index) => {
     if (!Number.isSafeInteger(index) || (index as number) < 0 || (index as number) >= bound) fail(`${label} is invalid`);
     return index as number;
   });
@@ -425,15 +422,13 @@ function citationIndexes(value: unknown, label: string, bound: number, maximum: 
 function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const input = object(value, 'Ask previous');
   assertExactKeys(input, ['purpose', 'question', 'asked_at', 'statements', 'citations'], 'Ask previous');
-  if (input.purpose !== 'follow_up' && input.purpose !== 'ask_again') fail('Ask previous purpose is invalid');
+  const purpose = oneOf(input.purpose, ['follow_up', 'ask_again'], 'Ask previous purpose');
   const question = fullQuestion(input.question, 'Ask previous question');
   assertTimestamp(input.asked_at, 'Ask previous asked_at');
-  if (!Array.isArray(input.citations) || input.citations.length > PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1) fail('Ask previous citations is invalid');
-  const citations = Object.freeze(input.citations.map(item => answerCitation(item, 8)));
+  const citations = Object.freeze(boundedList(input.citations, 'Ask previous citations', PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1).map(item => answerCitation(item, 8)));
   const keys = new Set(citations.map(item => citationKey(item.citation)));
   if (keys.size !== citations.length) fail('Ask previous contains duplicate citations');
-  if (!Array.isArray(input.statements) || input.statements.length > PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1) fail('Ask previous statements is invalid');
-  const statements = Object.freeze(input.statements.map((raw): PersonAnswerPreviousStatementV1 => {
+  const statements = Object.freeze(boundedList(input.statements, 'Ask previous statements', PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1).map((raw): PersonAnswerPreviousStatementV1 => {
     const item = object(raw, 'Ask previous statement');
     assertExactKeys(item, ['text', 'citation_indexes'], 'Ask previous statement');
     // An answer's sentence as it was released: trimmed NFC text, line breaks allowed.
@@ -444,13 +439,12 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
       citation_indexes: citationIndexes(item.citation_indexes, 'Ask previous statement citation_indexes', citations.length, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1),
     });
   }));
-  return Object.freeze({ purpose: input.purpose, question, asked_at: input.asked_at as string, statements, citations });
+  return Object.freeze({ purpose, question, asked_at: input.asked_at as string, statements, citations });
 }
 
 /** A clarify answer's choices (ADR-0047): 2 to 4, each a label of at most 60 characters and a full question, each different. */
 function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
-  if (!Array.isArray(value) || value.length < PERSON_ANSWER_CHOICES_MIN_V1 || value.length > PERSON_ANSWER_CHOICES_MAX_V1) fail('Ask response choices is invalid');
-  const choices = Object.freeze((value as unknown[]).map((raw) => {
+  const choices = Object.freeze(boundedList(value, 'Ask response choices', PERSON_ANSWER_CHOICES_MAX_V1, PERSON_ANSWER_CHOICES_MIN_V1).map((raw) => {
     const input = object(raw, 'Ask response choice');
     assertExactKeys(input, ['label', 'question'], 'Ask response choice');
     return Object.freeze({
@@ -466,8 +460,7 @@ function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
 function answerSince(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerSinceV1 {
   const input = object(value, 'Ask response since');
   assertExactKeys(input, ['statements'], 'Ask response since');
-  if (!Array.isArray(input.statements) || input.statements.length > PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1) fail('Ask response since is invalid');
-  return Object.freeze({ statements: Object.freeze(input.statements.map(item => statement(item, citations, 'Ask response since statement'))) });
+  return Object.freeze({ statements: Object.freeze(boundedList(input.statements, 'Ask response since', PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1).map(item => statement(item, citations, 'Ask response since statement'))) });
 }
 
 /** One V6 response citation, as the impact card (person-impact-card-v1.ts) cites items too. */
@@ -492,7 +485,7 @@ function answerResponse(value: unknown, version: AnswerVersion) {
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous], 'Ask response');
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = version >= 8 && input.outcome === 'clarify';
-  if (input.schema_version !== version || input.kind !== `echo-clean-person-answer-v${version}` || !(clarify || ['answered', 'partial', 'not_found'].includes(input.outcome as string)) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
+  if (input.schema_version !== version || input.kind !== `echo-clean-person-answer-v${version}` || !((PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) && (clarify || input.outcome !== 'clarify')) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
   const citations = input.citations.map(item => answerCitation(item, version));
   const citationKeys = new Set<string>();

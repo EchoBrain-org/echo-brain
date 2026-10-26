@@ -9,7 +9,10 @@ import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, Perso
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
 import { normalizeConfluencePageDocumentV1 } from './confluence-page-text-v1.js';
 import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
-import { CONFLUENCE_ID as ID, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString, copyConfluenceBindingV1 } from './confluence-validation-v1.js';
+import {
+  CONFLUENCE_ID as ID, confluenceArray, confluenceAtlasDocumentV1, confluenceFailure, confluenceNextCursorV1, confluenceRecord, confluenceString, confluenceVersionNumberV1,
+  copyConfluenceBindingV1,
+} from './confluence-validation-v1.js';
 
 const MAX_HANDLES = 512;
 /**
@@ -45,8 +48,7 @@ function quote(value: string): string { return `"${value.replace(/[\\"]/g, '\\$&
 function metadata(raw: unknown, body = false): Page {
   const record = confluenceRecord(raw);
   const version = confluenceRecord(record.version);
-  const number = version.number;
-  if (!Number.isSafeInteger(number) || (number as number) < 1) confluenceFailure('invalid_output');
+  const pageVersion = confluenceVersionNumberV1(version);
   const status = confluenceString(record.status, 32);
   if (!STATUSES.includes(status)) confluenceFailure('invalid_output');
   const occurred = version.createdAt ?? record.createdAt;
@@ -61,15 +63,9 @@ function metadata(raw: unknown, body = false): Page {
     if (typeof stamp !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(stamp) || !Number.isFinite(Date.parse(stamp))) confluenceFailure('invalid_output');
     dates[key] = new Date(stamp).toISOString();
   }
-  let document: string | undefined;
-  if (body) {
-    const representation = confluenceRecord(confluenceRecord(record.body).atlas_doc_format);
-    if (representation.representation !== undefined && representation.representation !== 'atlas_doc_format') confluenceFailure('invalid_output');
-    if (typeof representation.value !== 'string') confluenceFailure('invalid_output');
-    document = representation.value;
-  }
+  const document = body ? confluenceAtlasDocumentV1(record.body) : undefined;
   return Object.freeze({ dates: Object.freeze(dates), id: confluenceString(record.id, 20, ID), space_id: confluenceString(record.spaceId, 20, ID),
-    title: confluenceString(record.title, 1024), version: String(number), status,
+    title: confluenceString(record.title, 1024), version: pageVersion, status,
     ...(occurred_at === undefined ? {} : { occurred_at, date_kind: version.createdAt === undefined || version.createdAt === null ? 'created' as const : 'version_created' as const }), ...(document === undefined ? {} : { document }) });
 }
 function samePage(left: Page, right: Page): boolean {

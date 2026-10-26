@@ -575,8 +575,8 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
     try {
       const route = w.route();
       const projectsOf = (access_token: string) => createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(w.authority))(w.sessions.authenticateAccess({ access_token }));
-      const activity = (access_token: string, own: readonly string[] = [], limit = 500, project_ids: readonly string[] = [SHARED, UNJOINED, PROJ_X]) =>
-        Object.fromEntries(route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids, own: new Set(own), limit }));
+      const activity = (access_token: string, own: readonly string[] = [], project_ids: readonly string[] = [SHARED, UNJOINED, PROJ_X]) =>
+        Object.fromEntries(route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids, own: new Set(own) }));
       const arrival = (name: string) => w.record.prepare('SELECT receipt_issued_at FROM organization_record_log WHERE record_sha256 = ?').pluck().get(w.digest(name)) as string;
       const audits = w.authority.prepare('SELECT count(*) FROM authority_person_read_decision_audit_v2').pluck().get();
       // SHARED holds r4 (approved by EMP_A) and r3 (by OWNER); EMP_A left PROJ_X and never joined UNJOINED, so neither is listed.
@@ -585,8 +585,7 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
       // A record the reader's published decisions name is theirs, whatever its signed record says.
       expect(activity('owner', [w.digest('r4')])).toEqual({ [SHARED]: { meeting_at: null, filed: [w.digest('r4'), w.digest('r3')] } });
       expect(activity('emp_a', [w.digest('r3')])).toEqual({ [SHARED]: { meeting_at: null, filed: [w.digest('r4'), w.digest('r3')] } });
-      expect(activity('emp_a', [], 1)).toEqual({ [SHARED]: { meeting_at: arrival('r3'), filed: [w.digest('r4')] } });
-      expect(activity('owner', [], 500, [])).toEqual({});
+      expect(activity('owner', [], [])).toEqual({});
       // Current grants decide what is held.
       w.grant(UNJOINED, OWNER);
       expect(activity('owner')).toEqual({
@@ -595,10 +594,7 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
       });
       expect(activity('emp_c')).toEqual({});
       expect(w.authority.prepare('SELECT count(*) FROM authority_person_read_decision_audit_v2').pluck().get()).toBe(audits);
-      const invalid = expect.objectContaining({ code: 'invalid_request' });
-      expect(() => activity('owner', [], 0)).toThrow(invalid);
-      expect(() => activity('owner', [], 501)).toThrow(invalid);
-      expect(() => route.projectRecordActivity({ access_token: 'nobody', projects: projectsOf('owner'), project_ids: [SHARED], own: new Set(), limit: 500 }))
+      expect(() => route.projectRecordActivity({ access_token: 'nobody', projects: projectsOf('owner'), project_ids: [SHARED], own: new Set() }))
         .toThrow(expect.objectContaining({ code: 'unauthorized' }));
     } finally { w.close(); }
   });
@@ -611,7 +607,7 @@ describe('records route: what was filed in a person\'s projects (Ask timeline v1
       const route = w.route();
       const projectsOf = (access_token: string) => createRecordProjectAuthorizationV1(new SqliteProjectContextRepositoryV1(w.authority))(w.sessions.authenticateAccess({ access_token }));
       const activity = (access_token: string, own: readonly string[] = []) =>
-        route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids: [SHARED], own: new Set(own), limit: 500 }).get(SHARED);
+        route.projectRecordActivity({ access_token, projects: projectsOf(access_token), project_ids: [SHARED], own: new Set(own) }).get(SHARED);
       const newest = w.record.prepare('SELECT record_sha256 FROM organization_record_project_association_v1 WHERE project_id = ? ORDER BY record_position DESC LIMIT 500').pluck().all(SHARED) as string[];
       const arrival = (name: string) => w.record.prepare('SELECT receipt_issued_at FROM organization_record_log WHERE record_sha256 = ?').pluck().get(w.digest(name)) as string;
       // EMP_A's r4 is the 501st newest: OWNER's newest 500 are all his own, so the read stops there, with no meeting time.

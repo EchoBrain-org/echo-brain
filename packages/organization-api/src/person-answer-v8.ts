@@ -32,6 +32,8 @@ export interface PersonAnswerCitationV8 extends Omit<PersonAnswerCitationV4, 'ci
    */
   readonly key?: string;
 }
+/** Every outcome a V8 answer may carry; `clarify` is only the V8 answer's (ADR-0047). */
+export const PERSON_ANSWER_OUTCOMES_V8 = Object.freeze(['answered', 'partial', 'not_found', 'clarify'] as const);
 export interface PersonAnswerResponseV8 extends Omit<PersonAnswerResponseV4, 'schema_version' | 'kind' | 'citations' | 'outcome'> {
   readonly schema_version: 8;
   readonly kind: 'echo-clean-person-answer-v8';

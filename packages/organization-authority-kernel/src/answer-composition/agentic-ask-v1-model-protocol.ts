@@ -346,7 +346,7 @@ function cleanIds(value: unknown, lists = false, listsFirst = lists): readonly s
   return Object.freeze(kept);
 }
 /** Counted when a model wrote a closed value in another spelling, as an alias, or not at all. */
-function respelled<T>(value: unknown, known: T): T {
+export function respelled<T>(value: unknown, known: T): T {
   if (value !== known) observeCoreModelCorrectionV1("model_enum_respelled");
   return known;
 }

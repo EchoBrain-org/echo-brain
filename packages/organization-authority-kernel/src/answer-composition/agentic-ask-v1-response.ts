@@ -20,14 +20,15 @@ type AnswerItem = PersonAnswerStatementV4 | PersonAnswerEvidenceFallbackV4;
 type AskResponse = PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 | PersonAnswerResponseV7 | PersonAnswerResponseV8;
 type Part = { question: string; status: PersonAnswerResponseV4["parts"][number]["status"]; statements: PersonAnswerStatementV4[]; gap?: string; records?: PersonAnswerEvidenceFallbackV4[] };
 
-function overBound(candidate: AskResponse): boolean {
-  return canonicalJsonBytes(candidate).byteLength > PERSON_ANSWER_RESPONSE_MAX_BYTES_V4;
+/** Whether an Ask response fits its JSON byte bound. */
+export function agenticAskResponseFitsV1(response: unknown): boolean {
+  return canonicalJsonBytes(response).byteLength <= PERSON_ANSWER_RESPONSE_MAX_BYTES_V4;
 }
 
 /**
- * `candidate` with these parts and outcome, and only the citations they cite, renumbered in their order. A V8 answer to
- * a request that carried the previous turn keeps its question, and a clarify its choices (ADR-0047); `since` is never
- * kept, so dropping it first frees its citations.
+ * `candidate` with these parts and outcome, and only the citations they cite, renumbered in their order. Every other field
+ * is kept, except the two others that index the citations: a direct statement, and an Ask again's `since` (ADR-0047),
+ * whose citations dropping it frees.
  */
 function withParts(candidate: AskResponse, parts: readonly Part[], outcome: AskResponse["outcome"]): AskResponse {
   const usedIndexes = new Set(parts.flatMap(part => [...part.statements.flatMap(statement => statement.citation_indexes), ...(part.records?.flatMap(record => record.citation_indexes) ?? [])]));
@@ -37,10 +38,8 @@ function withParts(candidate: AskResponse, parts: readonly Part[], outcome: AskR
     remap.set(index, remap.size); return true;
   });
   const remapItem = <T extends AnswerItem>(item: T): T => Object.freeze({ ...item, citation_indexes: Object.freeze(item.citation_indexes.map(index => remap.get(index)).filter((index): index is number => index !== undefined)) }) as T;
-  const previous = candidate.schema_version !== 8 ? {} : {
-    ...(candidate.question === undefined ? {} : { question: candidate.question }), ...(candidate.choices === undefined ? {} : { choices: candidate.choices }),
-  };
-  return Object.freeze({ schema_version: candidate.schema_version, kind: candidate.kind, scope: candidate.scope, outcome, citations: Object.freeze(citations), parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(remapItem)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(remapItem)) }) }))), ...(candidate.notice === undefined ? {} : { notice: candidate.notice }), ...previous }) as AskResponse;
+  const { outcome: _outcome, citations: _citations, parts: _parts, direct: _direct, since: _since, ...kept } = candidate as AskResponse & Pick<PersonAnswerResponseV8, "since">;
+  return Object.freeze({ ...kept, outcome, citations: Object.freeze(citations), parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(remapItem)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(remapItem)) }) }))) }) as AskResponse;
 }
 
 /** Removes whole least-priority evidence records until the versioned packet fits. */
@@ -54,8 +53,8 @@ export function compactAndValidateAgenticAskResponseV1(result: AskResponse): Ask
   const copy = (value: AskResponse): Part[] => value.parts.map(part => ({ question: part.question, status: part.status, statements: [...part.statements], ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.records === undefined ? {} : { records: [...part.records] }) }));
   // An Ask again's `since` (ADR-0047) goes first, and whole: cut short, it would say less changed than did. The answer
   // itself is unchanged, so its outcome stands.
-  if (overBound(candidate) && candidate.schema_version === 8 && candidate.since !== undefined) candidate = withParts(candidate, copy(candidate), candidate.outcome);
-  while (overBound(candidate)) {
+  if (candidate.schema_version === 8 && candidate.since !== undefined && !agenticAskResponseFitsV1(candidate)) candidate = withParts(candidate, copy(candidate), candidate.outcome);
+  while (!agenticAskResponseFitsV1(candidate)) {
     const parts = copy(candidate);
     let removed = false;
     for (let index = parts.length - 1; index >= 0 && !removed; index -= 1) {

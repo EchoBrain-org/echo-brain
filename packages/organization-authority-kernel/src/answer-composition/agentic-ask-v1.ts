@@ -1,4 +1,4 @@
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
   PersonAskTimeContextV1, PersonAnswerResponseV5,
   PersonAnswerResponseV6,
@@ -17,7 +17,6 @@ import { DOCUMENTS_SOURCE_CAPABILITIES_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } fro
 import { evidenceDayV1 } from "../shared/temporal-query-v1.js";
 import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from "../shared/workspace-evidence-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1 } from "../shared/core-runtime-observation-v1.js";
-import { AuthorityOperationError } from "../domain/errors.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
@@ -42,7 +41,7 @@ import {
 } from "./agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1, type AgenticAskAuditPortV1, type AgenticAuditContextV1 } from "./agentic-release-v1.js";
 import { agenticAskAnswerSha256V1 } from "./agentic-ask-v1-response.js";
-import { agenticClarifyResponseV1, agenticFollowUpStartingV1, resolveAgenticFollowUpV1 } from "./agentic-follow-up-resolver-v1.js";
+import { agenticClarifyResponseV1, agenticFollowUpStartingV1, agenticPreviousAskedOnV1, resolveAgenticFollowUpV1 } from "./agentic-follow-up-resolver-v1.js";
 import type {
   AgenticAskAnswerWithReceiptV2, AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV2, AgenticAskProgressInputV3,
   AgenticAskProgressRequestV1, AgenticAskProgressSinkV2, AgenticAskProgressSinkV3,
@@ -192,7 +191,7 @@ const NO_RESEARCH: AgenticResearchProgressV1 = Object.freeze({
 /** The earlier answer an Ask again's writer compares with (ADR-0047): its day where the asker is, and its sentences with their sources' labels. */
 function earlierAnswer(previous: PersonAnswerPreviousV1, timeZone: string): AskEarlierAnswerV1 {
   return Object.freeze({
-    asked_on: evidenceDayV1(previous.asked_at, timeZone) ?? previous.asked_at.slice(0, 10),
+    asked_on: agenticPreviousAskedOnV1(previous, timeZone),
     statements: Object.freeze(previous.statements.map(statement => Object.freeze({
       text: statement.text, sources: Object.freeze(statement.citation_indexes.map(index => previous.citations[index]!.label)),
     }))),
@@ -422,6 +421,24 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           ...(progress === undefined ? {} : { named_citation_digests: progress.named_citation_digests() }),
         };
       };
+      /**
+       * How every output leaves the request: the shared release step, its summary, and the deadline stopped. An Ask also
+       * streams the access check and gets its receipt, rebuilt from the run's own record after every check passed, timed
+       * from the request's start, before its first attempt, when the run is one attempt of a request.
+       */
+      const release = async <Result>(outcome: PersonAnswerResponseV8["outcome"], citationCount: number, result: Result, answerSha256: Sha256Digest, fenceAfterAudit: boolean) => {
+        const asked = researchOnly ? undefined : progress;
+        asked?.stage("checking_access");
+        const released = await releaseAgenticResultV1({
+          ...auditContext(), desk, outcome, citation_count: citationCount, result, answer_sha256: answerSha256,
+          fence_after_audit: fenceAfterAudit, signal: activeSignal, assert_live: assertLive,
+          on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
+        });
+        annotateCoreRuntimeV1({ result: outcome, counts: { citation_count: citationCount } });
+        clearTimeout(deadlineTimer);
+        const receipt = asked?.receipt(input.progress_request?.elapsed() ?? now() - startedAt);
+        return { released, ...(receipt === undefined ? {} : { receipt }) };
+      };
 
       try {
         // ---- a follow-up (ADR-0047): what it refers to, before research; an Ask again researches the question as asked ----
@@ -436,16 +453,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
             // More than one thing could fit: no research runs, and the answer asks which one, released as every answer is.
             phase = "final";
             const clarified = agenticClarifyResponseV1(options.desk.scope, goal.question, resolution.choices);
-            progress?.stage("checking_access");
-            const response = await releaseAgenticResultV1({
-              ...auditContext(), desk, outcome: clarified.outcome, citation_count: 0, result: clarified, answer_sha256: agenticAskAnswerSha256V1(clarified),
-              fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive,
-              on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
-            });
-            annotateCoreRuntimeV1({ result: clarified.outcome, counts: { citation_count: 0 } });
-            clearTimeout(deadlineTimer);
-            const receipt = progress?.receipt(input.progress_request?.elapsed() ?? now() - startedAt);
-            return Object.freeze({ response, writer_evidence: Object.freeze([]), ...(receipt === undefined ? {} : { receipt }) });
+            const { released: response, ...receipt } = await release(clarified.outcome, 0, clarified, agenticAskAnswerSha256V1(clarified), tickets);
+            return Object.freeze({ response, writer_evidence: Object.freeze([]), ...receipt });
           }
           // Exactly one thing fits: research answers the full question that names it, starting from what it is about.
           if (resolution.resolution === "resolved") {
@@ -498,13 +507,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           }), value => ({ output_kind: 'rendered', selected_evidence: selectedEvidence, fallback_count: value.fallbacks, outcome: value.outcome, result: value.result }));
           writerFallbacks += output.fallbacks;
           annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
-          const released = await releaseAgenticResultV1({
-            ...auditContext(), desk, outcome: output.outcome, citation_count: output.cited.length, result: output.result, answer_sha256: output.answer_sha256,
-            fence_after_audit: true, signal: activeSignal, assert_live: assertLive,
-            on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
-          });
-          annotateCoreRuntimeV1({ result: output.outcome, counts: { citation_count: output.cited.length } });
-          clearTimeout(deadlineTimer);
+          const { released } = await release(output.outcome, output.cited.length, output.result, output.answer_sha256, true);
           ticketCitationCount = ticketsAmong(output.cited);
           return Object.freeze({ ...(render === undefined ? {} : { rendered: released }), research: researched, writer_evidence: Object.freeze([]) });
         }
@@ -538,20 +541,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         writerFallbacks += rendered.fallbacks;
         annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
         phase = "final";
-        progress?.stage("checking_access");
-        // V5 to V8 keep the access check after the audit write; V4 never had one.
-        const response = await releaseAgenticResultV1({
-          ...auditContext(), desk, outcome: rendered.outcome, citation_count: rendered.cited.length, result: rendered.result.response, answer_sha256: rendered.answer_sha256,
-          fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive,
-          on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
-        });
-        annotateCoreRuntimeV1({ result: rendered.outcome, counts: { citation_count: rendered.cited.length } });
-        clearTimeout(deadlineTimer);
+        // V5 to V8 keep the access check after the audit write; V4 never had one. Only a released answer has a receipt.
+        const { released: response, ...receipt } = await release(rendered.outcome, rendered.cited.length, rendered.result.response, rendered.answer_sha256, tickets);
         ticketCitationCount = response.citations.filter(value => value.citation.kind === "ticket").length;
-        // Only a released answer has a receipt, rebuilt from the run's own record after every check passed.
-        // Timed from the request's start, before its first attempt, when the run is one attempt of a request.
-        const receipt = progress?.receipt(input.progress_request?.elapsed() ?? now() - startedAt);
-        return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence, ...(receipt === undefined ? {} : { receipt }) });
+        return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence, ...receipt });
       } catch (error) {
         clearTimeout(deadlineTimer);
         const inheritedDeadline = input.signal?.aborted && input.signal.reason instanceof AgenticAskDeadlineErrorV1 ? input.signal.reason : undefined;
@@ -578,14 +571,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       }
   }, value => ({ trigger: input.trigger, output_kind: value.response !== undefined ? 'answer' : value.rendered !== undefined ? 'rendered' : 'research', result: value.response ?? value.rendered ?? value.research }));
   const signalOf = (signal: AbortSignal | undefined) => signal === undefined ? {} : { signal };
-  /** The asker's previous turn (ADR-0047): only the V8 Ask takes it. */
-  const previousOf = (previous: PersonAnswerPreviousV1 | undefined) => {
-    if (previous !== undefined && responseVersion !== 8) throw new AuthorityOperationError("invalid_request", "Ask previous is only for the V8 answer");
-    return previous;
-  };
   return Object.freeze({
     async answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1 }) {
-      return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) }, undefined, previousOf(input.previous))).response!;
+      // Only the V8 core's type takes the asker's previous turn (ADR-0047).
+      return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) }, undefined, input.previous)).response!;
     },
     /**
      * Ask with its progress sent to `on_progress` while it runs, and the receipt
@@ -595,7 +584,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
     async answerWithReceipt(input: AgenticAskProgressInputV2 | AgenticAskProgressInputV3): Promise<AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3> {
       if ((responseVersion !== 7 && responseVersion !== 8) || typeof input.on_progress !== "function") throw new AgenticAskOutputErrorV1("Ask progress is unavailable");
       const output = await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal), on_progress: input.on_progress,
-        ...(input.request === undefined ? {} : { progress_request: input.request }) }, undefined, previousOf((input as AgenticAskProgressInputV3).previous));
+        ...(input.request === undefined ? {} : { progress_request: input.request }) }, undefined, (input as AgenticAskProgressInputV3).previous);
       return Object.freeze({ response: output.response as PersonAnswerResponseV7 | PersonAnswerResponseV8, receipt: output.receipt! }) as AgenticAskAnswerWithReceiptV2 | AgenticAskAnswerWithReceiptV3;
     },
     /** Ask plus its research result and writer input, for the research evaluation. */
