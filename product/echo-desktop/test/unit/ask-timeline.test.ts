@@ -486,6 +486,28 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(calls('ask.run')[4]).not.toHaveProperty('previous');
   });
 
+  it('continues a turn chosen from the bar\'s suggestions, the latest included, which stays in full', async () => {
+    const [older, latest] = [turn('Older?', 3 * DAY, status()), turn('Latest?', 2 * DAY, status())];
+    seed(older, latest);
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
+    const store = await startStore();
+    store.pickSuggestion({ question: 'Latest?', turn: latest.id });
+    await flush();
+    expect(store.getState().ask?.opened).toBe(latest.id);
+    const thread = await view();
+    expect(byTestId(thread(store), 'timeline-question').map(text)).toEqual(['Older?']);
+    expect(byTestId(thread(store), 'question').map(text)).toEqual(['Latest?']);
+    // Asked two days ago, so only because it was chosen does the next question continue it.
+    await store.ask('who owns it?');
+    expect(calls('ask.run')[0]!.previous).toMatchObject({ purpose: 'follow_up', question: 'Latest?', asked_at: latest.asked_at });
+    // An earlier turn chosen the same way.
+    store.closeAsk();
+    store.pickSuggestion({ question: 'Older?', turn: older.id });
+    await flush();
+    await store.ask('and that one?');
+    expect(calls('ask.run')[1]!.previous).toMatchObject({ purpose: 'follow_up', question: 'Older?', asked_at: older.asked_at });
+  });
+
   it('asks which one, keeps nothing, and asks the chosen full question with the same earlier turn', async () => {
     const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
     rpc.mockImplementation(rpcFor(held, {

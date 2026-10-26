@@ -82,8 +82,9 @@ export interface AskState {
   /** The turns asked since Ask was opened, oldest first. */
   asked: readonly string[];
   /**
-   * The earlier turn opened from its line, if any: a follow-up continues it, until one asked since it was opened is answered
-   * (`openedAt`, how many were asked then), which the next follow-up continues instead.
+   * The earlier turn opened from its line or chosen from the bar's suggestions (the latest, in full, included), if any: a
+   * follow-up continues it, until one asked since it was opened is answered (`openedAt`, how many were asked then), which the
+   * next follow-up continues instead.
    */
   opened: string | null;
   openedAt: number;
@@ -3813,8 +3814,9 @@ export function toggleTurn(id: string): void {
 
 /**
  * A suggestion that is a question you asked: Ask opens at its turn, opened,
- * instead of asking it again (ADR-0047). A turn shown in full is only brought
- * into view.
+ * instead of asking it again (ADR-0047), and brought into view. A turn shown
+ * in full (the latest) stays so. Either way it is the turn the next question
+ * continues, however long ago it was asked.
  */
 export function openTurn(id: string): void {
   const turn = turnOf(id);
@@ -3822,8 +3824,7 @@ export function openTurn(id: string): void {
   emptyBar();
   const open = state.ask;
   const view = open ?? newAsk();
-  const full = shownInFull(turn, state.timeline.turns, fullTurns(view));
-  set({ ask: { ...view, ...(full ? {} : { opened: id, openedAt: view.asked.length }), focus: id } });
+  set({ ask: { ...view, opened: id, openedAt: view.asked.length, focus: id } });
   if (!open) {
     startSources(null, id);
     void checkTimeline();

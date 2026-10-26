@@ -169,7 +169,10 @@ export function shownInFull(turn: TimelineTurn, turns: readonly TimelineTurn[], 
   return turns.at(-1)?.id === turn.id || full.includes(turn.id);
 }
 
-/** The turn a follow-up continues: the earlier turn opened, or else the latest when it was asked in the last hour. */
+/**
+ * The turn a follow-up continues: the turn opened (from its line, or chosen from the bar's suggestions, the latest included),
+ * or else the latest when it was asked in the last hour.
+ */
 export function followedTurn(turns: readonly TimelineTurn[], opened: string | null, now: number): TimelineTurn | null {
   const open = opened === null ? undefined : turns.find(turn => turn.id === opened);
   if (open) return open;
