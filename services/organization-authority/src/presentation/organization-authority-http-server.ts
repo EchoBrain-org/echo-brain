@@ -500,6 +500,11 @@ async function personBody<Request>(request: IncomingMessage, validate: (value: u
 
 type PersonPostHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
+/** A Person read GET (the change check, ADR-0036; project activity, ADR-0047): no query, no body, no audit row. */
+interface PersonReadGetApplication {
+  read(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<unknown>;
+}
+
 /** Original-source reads validate the body before checking the bearer, then release synchronously. */
 function personSourcePost<Application, Request>(
   application: Application | undefined,
@@ -922,6 +927,10 @@ export function createOrganizationAuthorityHttpServer(
     [PERSON_LIST_PATH_V1, personCancellablePost(options.person_list, validatePersonListRequestV1, (application, input) => application.list(input))],
     [PERSON_OPEN_PATH_V1, personCancellablePost(options.person_list, validatePersonOpenRequestV1, (application, input) => application.open(input))],
   ]);
+  const personReadGets: ReadonlyMap<string, PersonReadGetApplication | undefined> = new Map<string, PersonReadGetApplication | undefined>([
+    [PERSON_CHANGES_ROUTE_V1, options.person_changes],
+    [PERSON_PROJECT_ACTIVITY_PATH_V1, options.person_project_activity],
+  ]);
   const handoffs = new Map<string, PendingLoopbackHandoff>();
   const oidcBeginWindows = new Map<string, OidcBeginClientWindow>();
   let activeHttp = 0;
@@ -1250,12 +1259,13 @@ export function createOrganizationAuthorityHttpServer(
         }));
         return;
       }
-      if (method === "GET" && url.pathname === PERSON_CHANGES_ROUTE_V1) {
-        if (options.person_changes === undefined) {
+      if (method === "GET" && personReadGets.has(url.pathname)) {
+        const personRead = personReadGets.get(url.pathname);
+        if (personRead === undefined) {
           fail(response, 503, "unavailable");
           return;
         }
-        // Authenticated first, as capabilities is; the check takes no query and no body.
+        // Authenticated first, as capabilities is; the read takes no query and no body.
         const access_token = accessToken(request.headers.authorization);
         options.sessions.authenticateAccess({ access_token });
         if (url.search !== "" || (await rawBody(request)).byteLength !== 0) {
@@ -1263,26 +1273,7 @@ export function createOrganizationAuthorityHttpServer(
         }
         const disconnect = disconnectSignal(request, response);
         try {
-          json(response, 200, await options.person_changes.read({ access_token, signal: disconnect.signal }));
-        } finally {
-          disconnect.dispose();
-        }
-        return;
-      }
-      if (method === "GET" && url.pathname === PERSON_PROJECT_ACTIVITY_PATH_V1) {
-        if (options.person_project_activity === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        // Authenticated first, as the change check is; the read takes no query and no body.
-        const access_token = accessToken(request.headers.authorization);
-        options.sessions.authenticateAccess({ access_token });
-        if (url.search !== "" || (await rawBody(request)).byteLength !== 0) {
-          throw new AuthorityOperationError("invalid_request", "request is invalid");
-        }
-        const disconnect = disconnectSignal(request, response);
-        try {
-          json(response, 200, await options.person_project_activity.read({ access_token, signal: disconnect.signal }));
+          json(response, 200, await personRead.read({ access_token, signal: disconnect.signal }));
         } finally {
           disconnect.dispose();
         }
