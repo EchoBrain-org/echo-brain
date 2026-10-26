@@ -3614,8 +3614,9 @@ export function fullTurns(view: AskState): readonly string[] {
  * it carries the earlier turn opened, or else the latest when it was asked in
  * the last hour (`previous`), unless `how` says how it is asked. Asked from a
  * page, it opens Ask, which checks what changed of the newest turns. An
- * Authority that refuses `previous` is asked once more without it, and this
- * window stops sending it. The answer is kept at the end of the timeline, in
+ * Authority that refuses `previous`, or has no `/v7` to send it to, is asked
+ * once more without it, and this window stops sending it. The answer is kept
+ * at the end of the timeline, in
  * full, and its tickets' markers are read as their baseline; "Which one?"
  * waits for a choice and is kept nowhere. While it works, the steps the host
  * reports show under it (ADR-0039); with no answer, they go, and so does any
@@ -3643,11 +3644,15 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const run = (previous: AskPrevious | null) => rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId, ...(previous ? { previous } : {}) });
   let previous = previousRefused ? null : asked.previous;
   let result = await run(previous);
-  // An Authority that predates `previous` refuses it: asked once more without it, and never again from this window (C5).
-  if (!result.ok && previous !== null && result.failure.code === 'invalid_request' && state.ask?.seq === mine) {
-    previousRefused = true;
+  // An Authority that predates `previous` refuses it (`invalid_request`): asked once more without it, and never again from this
+  // window (C5). One with no `/v7` at all answers `not_found`, as the client sends `previous` there alone: asked once more without
+  // it too, and not again once that answers.
+  const refused = !result.ok && previous !== null && state.ask?.seq === mine ? result.failure.code : null;
+  if (refused === 'invalid_request' || refused === 'not_found') {
+    if (refused === 'invalid_request') previousRefused = true;
     previous = null;
     result = await run(null);
+    if (result.ok && refused === 'not_found') previousRefused = true;
   }
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
   const current = state.ask;

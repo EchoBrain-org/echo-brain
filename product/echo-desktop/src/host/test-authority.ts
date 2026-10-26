@@ -350,7 +350,7 @@ export function timelineAnswer(question: string, scope: Record<string, unknown>,
       return { ...owns(full, tickets[0]!), question: full };
     }
     if (tickets.length > 1) {
-      return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'clarify', citations: [], parts: [],
+      return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'clarify', citations: [], parts: [], question,
         choices: tickets.slice(0, 4).map(ticket => ({ label: ticket.label, question: naming(question, ticketKey(ticket)) })) };
     }
     return { ...alone(question), question };

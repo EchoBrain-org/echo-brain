@@ -203,6 +203,14 @@ describe('the earlier turn an Ask carries (C3)', () => {
     expect(previous.statements.flatMap(statement => statement.citation_indexes).every(at => at < previous.citations.length)).toBe(true);
   });
 
+  it('sends each citation once, however many places of the answer cite it, and each sentence citing it once', () => {
+    const same = ticket('THERM-482', '20482');
+    const answer = answerOf('Twice?', [same, page('31010'), { ...same }], [['THERM-482 is open.', [0, 2]], ['The plan moved.', [1, 0]]]);
+    const previous = previousOf(turn('Twice?', HOUR, answer), 'follow_up', undefined, 'Who owns it?', { kind: 'global' });
+    expect(previous.citations).toEqual([same.cited, answer.sources[1]!.cited]);
+    expect(previous.statements.map(statement => statement.citation_indexes)).toEqual([[0], [1, 0]]);
+  });
+
   it('leaves sentences off the end until the whole Ask fits its 16 KiB', () => {
     const permalink = (at: number) => `https://example.atlassian.net/browse/${'L'.repeat(1_800)}${at}`;
     const sources = Array.from({ length: 12 }, (_, at) => ticket(`L-${at}`, String(3000 + at), permalink(at)));
@@ -442,6 +450,30 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     store.askAgain(store.latestTurn()!.id);
     await flush();
     expect(calls('ask.run').slice(3).map(call => 'previous' in call)).toEqual([false, false]);
+  });
+
+  it('asks again without the earlier turn when an Authority with no /v7 says not_found, and stops sending it once that answers', async () => {
+    let answers = true;
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.run': params => (params.previous ? fail('not_found') : answers ? ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Open.', [0]]]))
+        : fail('not_found')),
+    }, () => ({ active: [apollo], archived: [] })));
+    seed(turn('What is open?', 10 * 60_000, status()));
+    const store = await startStore();
+    await store.ask('First?');
+    // Not found without it either: something else is gone, so the failure shows, and the next follow-up still carries its turn.
+    answers = false;
+    await store.ask('who owns it?');
+    await flush();
+    expect(store.getState().ask?.failed?.failure.code).toBe('not_found');
+    answers = true;
+    await store.ask('and who leads it?');
+    await flush();
+    expect(calls('ask.run').slice(1).map(call => 'previous' in call)).toEqual([true, false, true, false]);
+    expect(store.latestTurn()?.text).toBe('and who leads it?');
+    // That one answered without it: the window sends none from now on.
+    await store.ask('and then?');
+    expect(calls('ask.run').slice(5).map(call => 'previous' in call)).toEqual([false]);
   });
 
   it('asks a turn again with it, keeps the new answer at the end with its "since", and the old one loses its tag', async () => {

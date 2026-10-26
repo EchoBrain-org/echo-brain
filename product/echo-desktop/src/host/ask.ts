@@ -40,18 +40,23 @@ const checks = (validate: (value: unknown) => unknown, value: unknown): boolean 
  * The earlier turn an Ask carries, as C3 bounds it, or null for anything else:
  * a purpose, the earlier full question (as askText would send it), when it was
  * asked, 0 to 8 sentences of at most 400 characters each citing at most 4 of
- * its 0 to 12 citations, and those citations as the API's own validator takes
- * them. The client checks it again, and an Authority checks the whole body.
+ * its 0 to 12 distinct citations, each once, and those citations as the API's
+ * own validator takes them. The client checks it again, and an Authority checks
+ * the whole body.
  */
 export function askPrevious(value: unknown): AskPrevious | null {
   if (!record(value) || Object.keys(value).sort().join() !== 'asked_at,citations,purpose,question,statements') return null;
   const { purpose, question, asked_at: askedAt, statements, citations } = value;
   if ((purpose !== 'follow_up' && purpose !== 'ask_again') || typeof question !== 'string' || question === '' || askText(question) !== question || !instant(askedAt)) return null;
   if (!Array.isArray(citations) || citations.length > PREVIOUS_LIMITS.citations || !citations.every(citation => checks(validatePersonAnswerCitationV8, citation))) return null;
+  // Each citation once.
+  if (new Set(citations.map(citation => JSON.stringify(citation))).size !== citations.length) return null;
   if (!Array.isArray(statements) || statements.length > PREVIOUS_LIMITS.statements) return null;
+  // Each sentence at most 400 characters as the API counts them (code points), citing each of its citations once.
   const said = statements.every(statement => record(statement) && Object.keys(statement).sort().join() === 'citation_indexes,text'
-    && typeof statement.text === 'string' && statement.text.trim() !== '' && statement.text.length <= PREVIOUS_LIMITS.statement_chars
+    && typeof statement.text === 'string' && statement.text.trim() !== '' && [...statement.text].length <= PREVIOUS_LIMITS.statement_chars
     && Array.isArray(statement.citation_indexes) && statement.citation_indexes.length <= PREVIOUS_LIMITS.statement_citations
+    && new Set(statement.citation_indexes).size === statement.citation_indexes.length
     && statement.citation_indexes.every(at => Number.isSafeInteger(at) && at >= 0 && at < citations.length));
   return said ? value as unknown as AskPrevious : null;
 }

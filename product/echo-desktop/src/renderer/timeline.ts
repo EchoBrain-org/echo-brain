@@ -147,7 +147,7 @@ export function followedTurn(turns: readonly TimelineTurn[], opened: string | nu
   return latest && now - Date.parse(latest.asked_at) <= FOLLOW_UP_MS ? latest : null;
 }
 
-/** `text` in at most `max` characters, as both a page and the API count them: cut with "…" when longer. */
+/** `text` in at most `max` characters, as both a page (UTF-16) and the API (code points) count them: cut with "…" when longer. */
 function within(text: string, max: number): string {
   if (text.length <= max) return text;
   let cut = '';
@@ -178,13 +178,22 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
   const readable = [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
     .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== '' && markOf(statement.citation_indexes, checks) !== 'omitted');
   const build = (chosen: readonly AnswerStatement[]): AskPrevious => {
-    const cited: number[] = [];
+    // Each citation once, by what it names (an answer may cite the same item at two places), and each sentence citing it once.
+    const keys: string[] = [];
+    const citations: NonNullable<AnswerSource['cited']>[] = [];
     const statements = chosen.map(statement => {
-      const places = statement.citation_indexes.filter(at => sources[at]?.cited !== undefined).slice(0, PREVIOUS_LIMITS.statement_citations);
-      for (const at of places) if (!cited.includes(at)) cited.push(at);
-      return { text: within(statement.text.trim(), PREVIOUS_LIMITS.statement_chars), citation_indexes: places.map(at => cited.indexOf(at)) };
+      const places: number[] = [];
+      for (const at of statement.citation_indexes) {
+        const cited = sources[at]?.cited;
+        if (cited === undefined) continue;
+        const key = JSON.stringify(cited);
+        if (!keys.includes(key)) { keys.push(key); citations.push(cited); }
+        const place = keys.indexOf(key);
+        if (!places.includes(place) && places.length < PREVIOUS_LIMITS.statement_citations) places.push(place);
+      }
+      return { text: within(statement.text.trim(), PREVIOUS_LIMITS.statement_chars), citation_indexes: places };
     });
-    return { purpose, question: askText(turn.question), asked_at: turn.asked_at, statements, citations: cited.map(at => sources[at]!.cited!) };
+    return { purpose, question: askText(turn.question), asked_at: turn.asked_at, statements, citations };
   };
   // At most eight sentences, and only as many as keep their citations within twelve.
   const chosen: AnswerStatement[] = [];

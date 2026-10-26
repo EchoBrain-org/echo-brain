@@ -164,7 +164,12 @@ describe('what the page sends with an Ask and a check', () => {
       { ...previous, statements: [{ text: 'Open.', citation_indexes: [1] }] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: [0, 0, 0, 0, 0] }] },
       { ...previous, statements: [{ text: 'Open.', citation_indexes: [0], private: true }] }, { ...previous, citations: many(cited, 13) },
       { ...previous, citations: [{ ...cited, visibility: 'everyone' }] }, { ...previous, citations: [ticketCitation] },
+      // Each citation once, and each sentence citing each once.
+      { ...previous, citations: [cited, cited] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: [0, 0] }] },
     ]) expect(askPrevious(bad)).toBeNull();
+    // 400 characters as the API counts them: code points, so a sentence of 400 emoji passes, and one more does not.
+    expect(askPrevious({ ...previous, statements: [{ text: '🙂'.repeat(400), citation_indexes: [0] }] })).not.toBeNull();
+    expect(askPrevious({ ...previous, statements: [{ text: '🙂'.repeat(401), citation_indexes: [0] }] })).toBeNull();
   });
 
   it('checks 1 to 100 items, each a citation that can change or go, a ticket\'s marker only on a ticket, within 64 KiB', () => {
