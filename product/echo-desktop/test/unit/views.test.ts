@@ -882,14 +882,14 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     for (const key of ['question', 'since', 'choices']) expect(plain).not.toHaveProperty(key);
   });
 
-  it('reads "Which one?": two to four choices, and no part; never an outcome nothing produces', () => {
+  it('reads "Which one?": two to four choices, and no part; never the off_scope outcome that left the contract', () => {
     const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
     const clarify = (fields: Record<string, unknown>) => validatedV8({ outcome: 'clarify', citations: [], parts: [], choices, ...fields });
     expect(answerOf(clarify({}), undefined, scope)).toEqual({ text: '', scope, sources: [], parts: [], outcome: 'clarify', choices });
     expect(() => answerOf(clarify({ choices: choices.slice(0, 1) }), undefined, scope)).toThrow(ViewError);
     expect(() => answerOf(clarify({ choices: undefined }), undefined, scope)).toThrow(ViewError);
     expect(() => answerOf(clarify({ choices: [...choices, { label: 'More' }] }), undefined, scope)).toThrow(ViewError);
-    // `off_scope` left the contract (C4): an answer that says it is not one the page reads.
+    // `off_scope` left the contract (C4; no current path produces it): an answer that says it is not one the page reads.
     expect(() => answerOf(validatedV8({ outcome: 'off_scope' }), undefined, scope)).toThrow(ViewError);
   });
 
