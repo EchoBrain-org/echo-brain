@@ -1,4 +1,4 @@
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
   PersonAskTimeContextV1, PersonAnswerResponseV5,
   PersonAnswerResponseV6,
@@ -422,6 +422,24 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           ...(progress === undefined ? {} : { named_citation_digests: progress.named_citation_digests() }),
         };
       };
+      /**
+       * How every output leaves the request: the shared release step, its summary, and the deadline stopped. An Ask also
+       * streams the access check and gets its receipt, rebuilt from the run's own record after every check passed, timed
+       * from the request's start, before its first attempt, when the run is one attempt of a request.
+       */
+      const release = async <Result>(outcome: PersonAnswerResponseV8["outcome"], citationCount: number, result: Result, answerSha256: Sha256Digest, fenceAfterAudit: boolean) => {
+        const asked = researchOnly ? undefined : progress;
+        asked?.stage("checking_access");
+        const released = await releaseAgenticResultV1({
+          ...auditContext(), desk, outcome, citation_count: citationCount, result, answer_sha256: answerSha256,
+          fence_after_audit: fenceAfterAudit, signal: activeSignal, assert_live: assertLive,
+          on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
+        });
+        annotateCoreRuntimeV1({ result: outcome, counts: { citation_count: citationCount } });
+        clearTimeout(deadlineTimer);
+        const receipt = asked?.receipt(input.progress_request?.elapsed() ?? now() - startedAt);
+        return { released, ...(receipt === undefined ? {} : { receipt }) };
+      };
 
       try {
         // ---- a follow-up (ADR-0047): what it refers to, before research; an Ask again researches the question as asked ----
@@ -436,16 +454,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
             // More than one thing could fit: no research runs, and the answer asks which one, released as every answer is.
             phase = "final";
             const clarified = agenticClarifyResponseV1(options.desk.scope, goal.question, resolution.choices);
-            progress?.stage("checking_access");
-            const response = await releaseAgenticResultV1({
-              ...auditContext(), desk, outcome: clarified.outcome, citation_count: 0, result: clarified, answer_sha256: agenticAskAnswerSha256V1(clarified),
-              fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive,
-              on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
-            });
-            annotateCoreRuntimeV1({ result: clarified.outcome, counts: { citation_count: 0 } });
-            clearTimeout(deadlineTimer);
-            const receipt = progress?.receipt(input.progress_request?.elapsed() ?? now() - startedAt);
-            return Object.freeze({ response, writer_evidence: Object.freeze([]), ...(receipt === undefined ? {} : { receipt }) });
+            const { released: response, ...receipt } = await release(clarified.outcome, 0, clarified, agenticAskAnswerSha256V1(clarified), tickets);
+            return Object.freeze({ response, writer_evidence: Object.freeze([]), ...receipt });
           }
           // Exactly one thing fits: research answers the full question that names it, starting from what it is about.
           if (resolution.resolution === "resolved") {
@@ -498,13 +508,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
           }), value => ({ output_kind: 'rendered', selected_evidence: selectedEvidence, fallback_count: value.fallbacks, outcome: value.outcome, result: value.result }));
           writerFallbacks += output.fallbacks;
           annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
-          const released = await releaseAgenticResultV1({
-            ...auditContext(), desk, outcome: output.outcome, citation_count: output.cited.length, result: output.result, answer_sha256: output.answer_sha256,
-            fence_after_audit: true, signal: activeSignal, assert_live: assertLive,
-            on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
-          });
-          annotateCoreRuntimeV1({ result: output.outcome, counts: { citation_count: output.cited.length } });
-          clearTimeout(deadlineTimer);
+          const { released } = await release(output.outcome, output.cited.length, output.result, output.answer_sha256, true);
           ticketCitationCount = ticketsAmong(output.cited);
           return Object.freeze({ ...(render === undefined ? {} : { rendered: released }), research: researched, writer_evidence: Object.freeze([]) });
         }
@@ -538,20 +542,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         writerFallbacks += rendered.fallbacks;
         annotateCoreRuntimeV1({ counts: { context_atom_count: selectedEvidence.length } });
         phase = "final";
-        progress?.stage("checking_access");
-        // V5 to V8 keep the access check after the audit write; V4 never had one.
-        const response = await releaseAgenticResultV1({
-          ...auditContext(), desk, outcome: rendered.outcome, citation_count: rendered.cited.length, result: rendered.result.response, answer_sha256: rendered.answer_sha256,
-          fence_after_audit: tickets, signal: activeSignal, assert_live: assertLive,
-          on_checked: at => { checkedAt = at; }, on_audited: () => { terminalAudited = true; },
-        });
-        annotateCoreRuntimeV1({ result: rendered.outcome, counts: { citation_count: rendered.cited.length } });
-        clearTimeout(deadlineTimer);
+        // V5 to V8 keep the access check after the audit write; V4 never had one. Only a released answer has a receipt.
+        const { released: response, ...receipt } = await release(rendered.outcome, rendered.cited.length, rendered.result.response, rendered.answer_sha256, tickets);
         ticketCitationCount = response.citations.filter(value => value.citation.kind === "ticket").length;
-        // Only a released answer has a receipt, rebuilt from the run's own record after every check passed.
-        // Timed from the request's start, before its first attempt, when the run is one attempt of a request.
-        const receipt = progress?.receipt(input.progress_request?.elapsed() ?? now() - startedAt);
-        return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence, ...(receipt === undefined ? {} : { receipt }) });
+        return Object.freeze({ response, research: researched, writer_evidence: rendered.result.writer_evidence, ...receipt });
       } catch (error) {
         clearTimeout(deadlineTimer);
         const inheritedDeadline = input.signal?.aborted && input.signal.reason instanceof AgenticAskDeadlineErrorV1 ? input.signal.reason : undefined;
