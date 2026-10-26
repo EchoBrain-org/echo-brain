@@ -57,7 +57,9 @@ test('ask inside a project is scoped to it until the chip is cleared', async () 
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await page.getByTestId('ask-field').fill('Anything else?');
   await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('answer')).toBeVisible();
+  // Ask opens on the timeline: the project's answer above, in full, and this one in all context below it.
+  await expect(page.getByTestId('question')).toHaveText(['What did we decide?', 'Anything else?']);
+  await expect(page.getByTestId('answer').last()).toBeVisible();
   const asks = run.calls().filter(call => /^\/v5\/person\/ask$/.test(call.path));
   expect(asks).toHaveLength(2);
   expect(asks.map(call => call.path)).toEqual(['/v5/person/ask', '/v5/person/ask']);

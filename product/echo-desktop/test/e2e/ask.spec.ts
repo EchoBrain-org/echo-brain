@@ -18,13 +18,14 @@ async function askFromHome(page: Page, question: string): Promise<void> {
   await page.getByTestId('ask-field').press('Enter');
 }
 
-/** A follow-up from the bar, answered. */
+/** A follow-up from the bar, answered: the newest turn in full. */
 async function followUp(page: Page, question: string): Promise<void> {
   await page.getByTestId('ask-field').fill(question);
   await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('question')).toHaveText(question);
+  const latest = page.getByTestId('turn').last();
+  await expect(latest.getByTestId('question')).toHaveText(question);
   await expect(page.getByTestId('asking')).toHaveCount(0);
-  await expect(page.getByTestId('answer')).toBeVisible();
+  await expect(latest.getByTestId('answer')).toBeVisible();
 }
 
 test('global Ask reads Jira live and opens its ticket citation', async () => {
@@ -84,7 +85,7 @@ for (const [tool, label] of [['notion', 'Notion'], ['knowledge-base', 'Knowledge
   });
 }
 
-test('follow-ups stack in a thread, newest at the bottom: earlier answers collapse, five at most, and Back leaves the thread', async () => {
+test('follow-ups stay in full while Ask is open, newest at the bottom; Back keeps the timeline, and the next Ask folds all but its latest', async () => {
   run = await launch();
   const { page } = run;
   await page.getByTestId('sidebar-project').nth(0).click();
@@ -93,29 +94,31 @@ test('follow-ups stack in a thread, newest at the bottom: earlier answers collap
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(page.getByTestId('title')).toHaveText('Ask');
   await expect(page.getByTestId('back')).toHaveText('Apollo');
-  for (let n = 2; n <= 7; n += 1) await followUp(page, `Question ${n}`);
+  for (let n = 2; n <= 4; n += 1) await followUp(page, `Question ${n}`);
 
-  const earlier = page.getByTestId('earlier-turn');
-  await expect(earlier.locator('.q')).toHaveText(['Question 2', 'Question 3', 'Question 4', 'Question 5', 'Question 6']);
-  await expect(page.getByTestId('question')).toHaveText('Question 7');
-  await expect(page.getByTestId('answer')).toBeInViewport();
-  // Only the current answer lists its sources, on one line.
-  await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
-  // Collapsed until clicked.
-  await expect(earlier.nth(4)).toHaveAttribute('aria-expanded', 'false');
-  await earlier.nth(4).click();
-  await expect(earlier.nth(4)).toHaveAttribute('aria-expanded', 'true');
-  await expect(earlier.nth(4)).toContainText('We agreed to ship Apollo with annual plans first.');
-  // Every follow-up asked the project, as the chip said.
+  // Every question asked since Ask opened is in full, each with its own sources on one line; nothing is folded.
+  await expect(page.getByTestId('question')).toHaveText(['Question 1', 'Question 2', 'Question 3', 'Question 4']);
+  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+  await expect(page.getByTestId('answer').last()).toBeInViewport();
+  await expect(page.getByTestId('sources-toggle')).toHaveText([/^2 sources/, /^2 sources/, /^2 sources/, /^2 sources/]);
+  // Every follow-up asked the project, as the chip said. An Authority from before `/v7` takes no earlier turn: the client sends none.
   const asks = run.calls().filter(call => call.path === '/v5/person/ask');
-  expect(asks.map(call => call.body?.project_id)).toEqual(Array(7).fill('prj_11111111-1111-4111-8111-111111111111'));
+  expect(asks.map(call => call.body?.project_id)).toEqual(Array(4).fill('prj_11111111-1111-4111-8111-111111111111'));
+  expect(asks.map(call => call.body && 'previous' in call.body)).toEqual([false, false, false, false]);
 
-  // Back leaves the thread; the next question starts a new one.
+  // Back closes Ask and keeps the timeline: the next question opens it on its latest turn, every earlier one a line.
   await page.getByTestId('back').click();
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
   await expect(page.getByTestId('title')).toHaveText('Apollo');
-  await followUp(page, 'Question 8');
-  await expect(earlier).toHaveCount(0);
+  await followUp(page, 'Question 5');
+  const rows = page.getByTestId('timeline-row');
+  await expect(rows.getByTestId('timeline-question')).toHaveText(['Question 1', 'Question 2', 'Question 3']);
+  await expect(page.getByTestId('question')).toHaveText(['Question 4', 'Question 5']);
+  // A line opens its answer as it was.
+  await expect(rows.nth(2)).toHaveAttribute('aria-expanded', 'false');
+  await rows.nth(2).click();
+  await expect(rows.nth(2)).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('opened-turn')).toContainText('We agreed to ship Apollo with annual plans first.');
 });
 
 test('a question asked over an open match goes Back to that match', async () => {
@@ -138,7 +141,6 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   run = await launch('ask-follow-ups');
   const { page } = run;
   const field = page.getByTestId('ask-field');
-  const earlier = page.getByTestId('earlier-turn');
   await askFromHome(page, 'First?');
   await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
 
@@ -146,7 +148,8 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await field.press('Enter');
   await expect(page.getByTestId('asking')).toContainText('Thinking…');
   await expect(page.getByTestId('ask-timer')).toHaveText(/^\d+s$/);
-  await expect(earlier.locator('.q')).toHaveText(['First?']);
+  // The answer it follows stays in full above it.
+  await expect(page.getByTestId('turn').getByTestId('question')).toHaveText(['First?']);
   // The pending state is rendered before its IPC request reaches the fixture.
   // Wait for that receipt before checking that a second follow-up is blocked.
   await expect.poll(questions).toEqual(['First?', 'Second?']);
@@ -156,11 +159,11 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await expect(field).toHaveValue('Third?');
   expect(questions()).toEqual(['First?', 'Second?']);
 
-  // Cancel: the first answer is current again, with its sources.
+  // Cancel: the first answer is the last again, with its sources.
   await page.getByTestId('ask-cancel').click();
   await expect(page.getByTestId('asking')).toHaveCount(0);
   await expect(page.getByTestId('question')).toHaveText('First?');
-  await expect(earlier).toHaveCount(0);
+  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
   await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
 
   // The third question fails: the first answer stays current, and Try again asks the third again.
@@ -169,11 +172,10 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await expect(page.getByTestId('ask-failed')).toContainText('Third?');
   await expect(page.getByTestId('question')).toHaveText('First?');
   await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
-  await expect(earlier).toHaveCount(0);
   await page.getByTestId('ask-retry').click();
-  await expect(page.getByTestId('question')).toHaveText('Third?');
-  await expect(page.getByTestId('statement-text')).toHaveText('We agreed to ship Apollo with annual plans first.');
-  await expect(earlier.locator('.q')).toHaveText(['First?']);
+  await expect(page.getByTestId('question')).toHaveText(['First?', 'Third?']);
+  await expect(page.getByTestId('statement-text')).toHaveText(['We agreed to ship Apollo with annual plans first.', 'We agreed to ship Apollo with annual plans first.']);
+  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
   await expect(page.getByTestId('ask-failed')).toHaveCount(0);
   expect(questions()).toEqual(['First?', 'Second?', 'Third?', 'Third?']);
 
@@ -184,7 +186,7 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   // One more round trip through main: the late reply reached the page before it.
   await page.evaluate(() => (window as unknown as { echo: { rpc(method: string, params: object): Promise<unknown> } }).echo.rpc('app.status', {}));
   await expect(page.getByTestId('ask-view')).not.toContainText('A late answer.');
-  await expect(page.getByTestId('question')).toHaveText('Third?');
+  await expect(page.getByTestId('question')).toHaveText(['First?', 'Third?']);
 });
 
 test('a project question that finds nothing says so and offers, never makes, one tap to ask across everything', async () => {
@@ -194,39 +196,28 @@ test('a project question that finds nothing says so and offers, never makes, one
   await page.getByTestId('sidebar-project').nth(0).click();
   await page.getByTestId('ask-field').fill('What did we agree on pricing?');
   await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('answer-gap')).toHaveText("I couldn't find this in the sources you can access.");
-  await expect(page.getByTestId('statement-text')).toHaveCount(0);
   await expect(page.getByTestId('project-empty')).toContainText('Nothing in Apollo matched.');
-  // What research did not find is the quiet note after the answer, and nothing is cited.
-  await expect(page.getByTestId('coverage-note')).toHaveText("I couldn't find this in the sources you can access.");
+  await expect(page.getByTestId('statement-text')).toHaveCount(0);
+  // The project's own line says so, and nothing is cited; what research did not find is not shown (ADR-0047).
+  await expect(page.getByTestId('ask-view')).not.toContainText("I couldn't find this in the sources you can access.");
+  await expect(page.getByTestId('answer-empty')).toHaveCount(0);
   await expect(page.getByTestId('sources-toggle')).toHaveCount(0);
   // Nothing widened on its own: one question, to the project.
   expect(asks()).toEqual([{ question: 'What did we agree on pricing?', project: 'prj_11111111-1111-4111-8111-111111111111' }]);
   await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
 
   await page.getByTestId('ask-everywhere').click();
-  await expect(page.getByTestId('question')).toHaveText('What did we agree on pricing?');
+  await expect(page.getByTestId('question')).toHaveText(['What did we agree on pricing?', 'What did we agree on pricing?']);
   await expect(page.getByTestId('statement-text')).toHaveText('We agreed to ship Apollo with annual plans first.');
-  await expect(page.getByTestId('project-empty')).toHaveCount(0);
   await expect(page.getByTestId('sources-toggle')).toHaveText(/^2 sources/);
-  // The project answer stays in the thread; the bar widened with the question.
-  await expect(page.getByTestId('earlier-turn').locator('.q')).toHaveText(['What did we agree on pricing?']);
+  // The project answer stays above it, saying what it said, with no second offer; the bar widened with the question.
+  await expect(page.getByTestId('project-empty')).toHaveText('Nothing in Apollo matched.');
+  await expect(page.getByTestId('ask-everywhere')).toHaveCount(0);
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   expect(asks()).toEqual([
     { question: 'What did we agree on pricing?', project: 'prj_11111111-1111-4111-8111-111111111111' },
     { question: 'What did we agree on pricing?', project: undefined },
   ]);
-});
-
-test('a project question about another subject offers no wider ask', async () => {
-  run = await launch('ask-project-empty');
-  const { page } = run;
-  await page.getByTestId('sidebar-project').nth(0).click();
-  await page.getByTestId('ask-field').fill('What is the weather in Lisbon?');
-  await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('answer-off-scope')).toHaveText('The accessible evidence may be about a different subject.');
-  await expect(page.getByTestId('project-empty')).toHaveCount(0);
-  await expect(page.getByTestId('ask-everywhere')).toHaveCount(0);
 });
 
 test('an approved record opens beside the answer: who approved it, who was there, who can read it, and what was approved', async () => {
@@ -405,8 +396,9 @@ test('a laid-out answer reads as a document, and its table scrolls in its own bo
   await expect(answer.locator('td.late')).toHaveCount(1);
   // With its year once 2026 is past.
   await expect(rows.nth(0).locator('td.late time')).toHaveText(/^Oct 14(, 2026)?$/);
-  await expect(page.getByTestId('coverage-note')).toHaveText(
-    'One of three THERM meetings in range was not read before the time limit. Who proposed the reduced scope was not found in the evidence read.');
+  // What research did not cover is not shown (ADR-0047).
+  await expect(answer).not.toContainText('One of three THERM meetings in range');
+  await expect(page.getByTestId('ask-view')).not.toContainText('Who proposed the reduced scope was not found');
   await expect(page.getByTestId('sources-toggle')).toHaveText(/^6 sources\s*DVT failure review · Traceability · Gate reviews · TRACE-01 · HW-11 · DVT-R2$/);
 
   // A row's number opens only its ticket beside the answer and lights the row.
@@ -554,12 +546,15 @@ test('an answer that cites your project, a person, a tool and a Jira project ope
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
   await expect(page.getByTestId('tools')).toBeVisible();
 
-  // Asked again, from Tools: a project's Open is the project, from its sidebar row, as the sidebar opens it.
+  // Asked again, from Tools: a project's Open is the project, from its sidebar row, as the sidebar opens it. Ask opens on the
+  // answer before, in full above the new one.
   await page.getByTestId('ask-field').fill('Who leads Apollo?');
   await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('answer')).toBeVisible();
-  await page.getByTestId('sources-toggle').click();
-  await page.getByTestId('source-row').nth(0).click();
+  const latest = page.getByTestId('turn').last();
+  await expect(latest.getByTestId('question')).toHaveText('Who leads Apollo?');
+  await expect(latest.getByTestId('answer')).toBeVisible();
+  await latest.getByTestId('sources-toggle').click();
+  await latest.getByTestId('source-row').nth(0).click();
   await expect(pane).toContainText('Project');
   await expect(pane.getByTestId('pane-project')).toHaveText('Apollo');
   await pane.getByTestId('source-open').click();
@@ -597,7 +592,7 @@ test('an opened line\'s new row follows a person at the bottom of Ask, and never
   rmSync(join(run.home, 'release-ask'));
   await page.getByTestId('ask-field').fill('And the pricing page?');
   await page.getByTestId('ask-field').press('Enter');
-  await page.getByTestId('earlier-turn').evaluate(element => { (element as HTMLElement).style.minHeight = '2000px'; });
+  await page.getByTestId('turn').first().evaluate(element => { (element as HTMLElement).style.minHeight = '2000px'; });
   const view = page.getByTestId('ask-view');
   const fromBottom = () => view.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
   await openLine(page);

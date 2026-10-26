@@ -262,8 +262,11 @@ test('a lead maps a Jira project on Tools, Save closes it, asks in that scope, a
   expect(removed.body?.jira_project).toBeNull(); expect(removed.body?.expected_revision).toMatch(/^[0-9a-f-]{36}$/);
   await page.getByTestId('ask-field').fill('What is the status of Apollo?');
   await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('answer')).toContainText('No accessible Jira ticket was found.');
-  await expect(page.getByTestId('sources-toggle')).toHaveCount(0);
+  // The answer before stays in full above it, where Ask opened; the new one finds nothing in Apollo, and cites nothing.
+  const latest = page.getByTestId('turn').last();
+  await expect(latest.getByTestId('project-empty')).toContainText('Nothing in Apollo matched.');
+  await expect(latest.getByTestId('sources-toggle')).toHaveCount(0);
+  await expect(page.getByTestId('turn')).toHaveCount(2);
 });
 
 test('a lead maps accessible Confluence spaces, loads another page, asks with a page citation, and stops reading them', async () => {
