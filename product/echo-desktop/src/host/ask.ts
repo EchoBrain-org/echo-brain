@@ -13,15 +13,13 @@ import { askStepView } from './views.js';
 /**
  * The client command for an Ask of `text` (already askText's), for the
  * account the page shows. Every Ask, Mine as much as global or project, asks
- * the newest route and its progress, pinned to that account: a client signed
- * in as another by then asks nothing and prints no step, so the page's
- * account check of each step is the client's own. An older Authority answers
- * on its newest route, and one that predates progress with none. A follow-up
- * or Ask again carries the earlier turn (`previous`, ADR-0047), already
- * checked by askPrevious; the client sends it only on `/v7`.
+ * `/v7` with its progress, pinned to that account: a client signed in as
+ * another by then asks nothing and prints no step, so the page's account
+ * check of each step is the client's own. A follow-up or Ask again carries
+ * the earlier turn (`previous`, ADR-0047), already checked by askPrevious.
  */
 export function askArgv(text: string, scope: AskScope, expect: Expect, previous?: AskPrevious): string[] {
-  return ['ask', `--question=${text}`, '--live', '--progress', `--expected-membership-id=${expect.membership_id}`, `--expected-authority=${expect.authority}`,
+  return ['ask', `--question=${text}`, '--progress', `--expected-membership-id=${expect.membership_id}`, `--expected-authority=${expect.authority}`,
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : scope.kind === 'mine' ? ['--mine'] : []),
     ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`])];
 }

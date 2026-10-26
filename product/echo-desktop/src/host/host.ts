@@ -627,7 +627,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     case 'ask.run': {
       const { expect, question, scope, cancel_id, previous: earlier } = params as Params<'ask.run'>;
       const text = askText(question);
-      // The earlier turn a follow-up or Ask again carries, checked as the client checks it (C3); one it would refuse is refused, and the page asks without it.
+      // The earlier turn a follow-up or Ask again carries, checked as the client checks it (C3): one it would refuse is refused here.
       const previous = earlier === undefined ? undefined : askPrevious(earlier, text, scope);
       if (text === '' || previous === null) return code('invalid_request');
       // An Ask's steps reach the page as they are printed (ask.ts).
@@ -653,7 +653,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return onDevice(expect, directory => { putTimeline(directory, expect, turn, Date.now()); return {}; });
     }
     case 'ask.check': {
-      // The person client prints the check as its last line; an Authority without the route answers `not_supported`.
+      // The person client prints the check as its last line.
       const { expect, items } = params as Params<'ask.check'>;
       const request = askCheckRequest(items);
       if (request === null) return code('invalid_request');

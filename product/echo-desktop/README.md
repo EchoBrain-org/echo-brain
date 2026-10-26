@@ -37,8 +37,8 @@ hidden while Ask works): the reader, where a meeting opens scrolled to the
 items the pane lit, lit too, a follow-up's item page, the project, or Tools. A
 person has no page to open. A follow-up's source row says only who owns it and
 its status ("Mara · Open"), and a Jira project's, Confluence space's or Slack
-channel's says its tool and key ("Jira · THERM"). An older Authority answers
-on its newest route, without what that route cannot cite
+channel's says its tool and key ("Jira · THERM"). Every Ask asks `/v7`, the
+V8 answer
 ([Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)).
 
 An answer the Authority lays out (answer layout v1, ADR-0045) reads as a short
@@ -66,8 +66,8 @@ project's square (none for all context or Mine), its full question,
 **Changed** when a source it cited changed, and when it was asked, with a quiet
 Today line above today's first turn. Back, Escape or any page closes Ask and
 keeps the timeline. Opening Ask checks what the newest ten turns cited in one
-content-free read (`person ask-check`): at most every five minutes, quiet when
-it fails, and never on an Authority without it. A turn opened from its line or
+content-free read (`person ask-check`): at most every five minutes, and quiet
+when it fails. A turn opened from its line or
 a suggestion is checked too when nothing in the last five minutes said what
 its sources are now, and what a check said shows for five minutes only. A line
 opens its answer as it was, dimmed: a sentence whose source changed is lit in
@@ -90,10 +90,7 @@ its answer just read what it cites.
 ECHO works out what "it" or "that ticket" means: when one thing fits it answers
 at once, and the turn's line later reads the full question ("Who owns
 THERM-482?"); when several fit, the turn says "Which one?" with a button each,
-which asks that one's full question. It never guesses. An Authority that
-predates follow-ups refuses the earlier turn: the question is asked once more
-without it, and once that is answered the window stops sending it until the
-next sign-in.
+which asks that one's full question. It never guesses.
 
 The refresh checks also read what arrived in your projects (`person
 project-activity`): the first check after sign-in, a return to ECHO and a wake
@@ -106,7 +103,7 @@ the dot, and its rows added since your previous visit say **New** for that
 visit. When you last opened each project is kept in the window's storage, per
 account under a hash of it, and goes when the timeline does: at our own
 sign-out, or when another account signs in here. A project seen for the first
-time has no dot, and an Authority without the read shows none.
+time has no dot, and a read that fails leaves the dots as they were.
 
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 

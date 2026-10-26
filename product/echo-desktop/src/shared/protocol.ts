@@ -748,15 +748,15 @@ export interface HostMethods {
     params: { expect: Expect; request_id: string; file_handle: string; title: string; audience: Audience; project_ids: readonly string[] };
     result: Receipt;
   };
-  /** `previous`: the earlier turn a follow-up or Ask again carries (C3); an Authority that predates it refuses it (`invalid_request`). */
+  /** `previous`: the earlier turn a follow-up or Ask again carries (C3). */
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
   /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */
   'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
-  /** What changed of the sources old answers cited (C1): content-free, in the items' order; `not_supported` before the route. */
+  /** What changed of the sources old answers cited (C1): content-free, in the items' order. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
-  /** Per project you are in, the newest arrival from someone else you can read (C2); `not_supported` before the route. */
+  /** Per project you are in, the newest arrival from someone else you can read (C2). */
   'projects.activity': { params: { expect: Expect }; result: { items: ProjectActivity[] } };
   /** Cancels an active Ask by its renderer-issued opaque id. */
   'ask.cancel': { params: { cancel_id: string }; result: null };

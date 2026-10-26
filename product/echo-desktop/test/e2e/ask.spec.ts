@@ -10,7 +10,7 @@ test.afterEach(async () => { await run?.close(); });
 const RECORD = `sha256:${'5'.repeat(64)}`;
 const recordReads = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v1/person/records');
 const evidenceReads = () => run.calls().filter(call => call.path === '/v2/person/ask/source');
-const questions = () => run.calls().filter(call => call.path === '/v5/person/ask').map(call => call.body?.question);
+const questions = () => run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.body?.question);
 
 async function askFromHome(page: Page, question: string): Promise<void> {
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -36,8 +36,8 @@ test('global Ask reads Jira live and opens its ticket citation', async () => {
   const opened = await captureOpenExternal(app);
   await askFromHome(page, question);
   await expect(page.getByTestId('answer')).toBeVisible();
-  expect(run.calls().filter(call => /^\/v5\/person\/ask$/.test(call.path)).map(call => ({ path: call.path, body: call.body })))
-    .toEqual([{ path: '/v5/person/ask', body: { schema_version: 3, question } }]);
+  expect(run.calls().filter(call => call.path.endsWith('/person/ask')).map(call => ({ path: call.path, body: call.body })))
+    .toEqual([{ path: '/v7/person/ask', body: { schema_version: 3, question } }]);
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
   await expect(page.getByTestId('private-mark')).toHaveCount(1);
   // The sources start as one closed line, a ticket named by its key; it opens onto their rows (ADR-0045).
@@ -101,10 +101,10 @@ test('follow-ups stay in full while Ask is open, newest at the bottom; Back keep
   await expect(page.getByTestId('timeline-row')).toHaveCount(0);
   await expect(page.getByTestId('answer').last()).toBeInViewport();
   await expect(page.getByTestId('sources-toggle')).toHaveText([/^2 sources/, /^2 sources/, /^2 sources/, /^2 sources/]);
-  // Every follow-up asked the project, as the chip said. An Authority from before `/v7` takes no earlier turn: the client sends none.
-  const asks = run.calls().filter(call => call.path === '/v5/person/ask');
+  // Every follow-up asked the project, as the chip said, and carried the turn it follows (ADR-0047); the first, asked from the page, none.
+  const asks = run.calls().filter(call => call.path === '/v7/person/ask');
   expect(asks.map(call => call.body?.project_id)).toEqual(Array(4).fill('prj_11111111-1111-4111-8111-111111111111'));
-  expect(asks.map(call => call.body && 'previous' in call.body)).toEqual([false, false, false, false]);
+  expect(asks.map(call => call.body && 'previous' in call.body)).toEqual([false, true, true, true]);
 
   // Back closes Ask and keeps the timeline: the next question opens it on its latest turn, every earlier one a line.
   await page.getByTestId('back').click();
@@ -192,7 +192,7 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
 test('a project question that finds nothing says so and offers, never makes, one tap to ask across everything', async () => {
   run = await launch('ask-project-empty');
   const { page } = run;
-  const asks = () => run.calls().filter(call => /^\/v5\/person\/ask$/.test(call.path)).map(call => ({ question: call.body?.question, project: call.body?.project_id }));
+  const asks = () => run.calls().filter(call => call.path === '/v7/person/ask').map(call => ({ question: call.body?.question, project: call.body?.project_id }));
   await page.getByTestId('sidebar-project').nth(0).click();
   await page.getByTestId('ask-field').fill('What did we agree on pricing?');
   await page.getByTestId('ask-field').press('Enter');
@@ -440,7 +440,7 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   // The first seconds look as Ask always did.
   await expect(asking).toContainText('Thinking…');
   await expect(page.getByTestId('ask-steps')).toHaveCount(0);
-  await expect.poll(() => run.calls().filter(call => call.path === '/v5/person/ask').map(call => call.progress)).toEqual(['1']);
+  await expect.poll(() => run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.progress)).toEqual(['3']);
 
   // Then the line names the step now, and nothing more until it is opened: a place is named once, and the other places counted.
   await expect(page.getByTestId('ask-stage')).toHaveText('Reading Tuesday sync and 2 more', { timeout: 10_000 });
@@ -507,9 +507,8 @@ test('an answer that cites your project, a person, a tool and a Jira project ope
   const permalink = 'https://example.atlassian.net/browse/APOLLO';
   const opened = await captureOpenExternal(app);
   await askFromHome(page, 'Who leads Apollo, and where is its Jira project?');
-  // The newest route this Authority has, streamed in progress V3: never /v6 or /v5.
+  // Ask's one route, streamed in progress V3.
   await expect.poll(() => run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.progress)).toEqual(['3']);
-  expect(run.calls().filter(call => call.path === '/v6/person/ask' || call.path === '/v5/person/ask')).toEqual([]);
   // Your projects, people and tools, and Jira's projects, are kinds of source it searched; each item it read is named by its label.
   await expect(page.getByTestId('ask-stage')).toHaveText('Reading Apollo and 3 more', { timeout: 10_000 });
   await openLine(page);

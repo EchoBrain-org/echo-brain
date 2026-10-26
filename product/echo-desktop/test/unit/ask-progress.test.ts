@@ -256,7 +256,7 @@ describe('the receipt above an answer', () => {
     expect(latestTurn(store)).toMatchObject({ receipt: { elapsed_ms: 1_800 }, took: 3_400 });
   });
 
-  it('an older Authority sends none, and the answer shows as it always did', async () => {
+  it('an Authority that answers without streaming sends none, and the answer shows without a receipt', async () => {
     const { store, release } = await asking();
     vi.advanceTimersByTime(10_000);
     release(ok(answer(false)));

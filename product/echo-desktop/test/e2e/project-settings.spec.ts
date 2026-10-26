@@ -247,7 +247,7 @@ test('a lead maps a Jira project on Tools, Save closes it, asks in that scope, a
   await page.getByTestId('ask-field').fill('What is the status of Apollo?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
-  expect(run.calls().filter(call => call.path === '/v5/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
+  expect(run.calls().filter(call => call.path === '/v7/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
   await page.getByTestId('sources-toggle').click();
   await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
   await page.getByTestId('back').click();
@@ -291,7 +291,7 @@ test('a lead maps accessible Confluence spaces, loads another page, asks with a 
   await page.getByTestId('ask-field').fill('Are we ready for EVT?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('statement-text')).toHaveText('The Confluence EVT readiness page is current.');
-  expect(run.calls().filter(call => call.path === '/v5/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
+  expect(run.calls().filter(call => call.path === '/v7/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
   await page.getByTestId('citation').click();
   const pane = page.getByTestId('source-pane');
   await expect(pane).toContainText('Confluence · Page');

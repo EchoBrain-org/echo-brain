@@ -155,7 +155,7 @@ async function authority(method: string, params: { project_id?: string; request?
     // A project's tools line: it reads nothing.
     case 'projects.jiraRead': case 'projects.confluenceRead': return ok({ project_id: params.project_id, revision: null, mapping: null });
     case 'app.setUnresolved': case 'notice.show': case 'log.changes': return ok(null);
-    // The Ask timeline has nothing in it, and this Authority predates project activity and the source check (ADR-0047).
+    // The Ask timeline has nothing in it, and this Authority serves neither project activity nor the source check (ADR-0047).
     case 'timeline.read': return ok({ turns: [] });
     case 'projects.activity': case 'ask.check': return fail('not_supported');
     // The change check: nothing moves unless a test says.

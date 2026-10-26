@@ -3,8 +3,8 @@
 // at sign-in; one check of the newest turns' sources when Ask opens, kept five
 // minutes, quiet when it fails, turned into Changed tags, lit sentences and
 // sentences left out; the earlier turn a follow-up or Ask again carries, and
-// how it is trimmed; "Which one?"; asking again without `previous` once an
-// Authority refuses it; and the sidebar's dots with a project's New rows.
+// how it is trimmed; "Which one?"; and the sidebar's dots with a project's New
+// rows.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
@@ -474,18 +474,22 @@ describe('Ask on the timeline', () => {
     expect(store.getState().timeline.checks).toEqual({});
   });
 
-  it('fails quietly: no tags, and an Authority without the check is not asked again until the next sign-in', async () => {
+  it('fails quietly, with no tags, and the next Ask opening checks again', async () => {
     seed(turn('One?', 2 * DAY, status()), turn('Two?', DAY, status()));
     const store = await startStore();
     await store.ask('What changed?');
     await flush();
     const thread = await view();
     expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
+    // The check of the newest turns, as Ask opened.
+    const newest = () => calls('ask.check').filter(call => (call.items as unknown[]).length > 1);
+    expect(newest()).toHaveLength(1);
     store.closeAsk();
     vi.setSystemTime(NOW.getTime() + 10 * 60_000);
     await store.ask('Still?');
     await flush();
-    expect(calls('ask.check')).toHaveLength(1);
+    expect(newest()).toHaveLength(2);
+    expect(byTestId(thread(store), 'changed-tag')).toEqual([]);
   });
 
   it('copies an old answer as the page shows it: nothing a check left out, its sources numbered as the page numbers them', async () => {
@@ -703,79 +707,22 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(latestTurn(store)).toMatchObject({ text: 'Who owns THERM-482?', question: 'Who owns THERM-482?' });
   });
 
-  it('asks again once without the earlier turn when the Authority refuses it, and from then on sends none', async () => {
+  // Every Authority takes the earlier turn (C3): a refused Ask fails as it is, and is never asked again without it.
+  it.each(['invalid_request', 'not_supported'])('shows an Ask refused with its earlier turn (%s) as failed, and the next follow-up carries a turn again', async code => {
     rpc.mockImplementation(rpcFor(held, {
-      'ask.run': params => (params.previous ? fail('invalid_request') : ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Open.', [0]]]))),
+      'ask.run': params => (params.question === 'Bad?' ? fail(code) : ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Open.', [0]]]))),
     }, () => ({ active: [apollo], archived: [] })));
     seed(turn('What is open?', 10 * 60_000, status()));
     const store = await startStore();
     await store.ask('First?');
-    await store.ask('who owns it?');
-    await flush();
-    expect(calls('ask.run').slice(1).map(call => 'previous' in call)).toEqual([true, false]);
-    expect(store.getState().ask?.failed).toBeNull();
-    expect(latestTurn(store)?.text).toBe('who owns it?');
-    await store.ask('and then?');
-    store.askAgain(latestTurn(store)!.id);
-    await flush();
-    expect(calls('ask.run').slice(3).map(call => 'previous' in call)).toEqual([false, false]);
-  });
-
-  it('stops sending the earlier turn only once a question refused with it is answered without it, and sends it again after the next sign-in', async () => {
-    let refusing = true;
-    let app: AppStatus = { signed_in: true, account: ACCOUNT, client_version: 'test' };
-    rpc.mockImplementation(rpcFor(held, {
-      'app.status': () => ok(app),
-      'ask.run': params => (params.question === 'Bad?' || (params.previous && refusing) ? fail('invalid_request')
-        : ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Open.', [0]]]))),
-    }, () => ({ active: [apollo], archived: [] })));
-    seed(turn('What is open?', 10 * 60_000, status()));
-    const store = await startStore();
-    await store.ask('First?');
-    // Refused with it and without it: the question itself was refused, so the next follow-up still carries its turn.
     await store.ask('Bad?');
-    expect(store.getState().ask?.failed?.failure.code).toBe('invalid_request');
+    await flush();
+    expect(calls('ask.run').slice(1).map(call => 'previous' in call)).toEqual([true]);
+    expect(store.getState().ask?.failed).toMatchObject({ question: 'Bad?', failure: { code } });
     await store.ask('who owns it?');
-    expect(calls('ask.run').slice(1).map(call => 'previous' in call)).toEqual([true, false, true, false]);
+    await flush();
+    expect(calls('ask.run').slice(2).map(call => 'previous' in call)).toEqual([true]);
     expect(latestTurn(store)?.text).toBe('who owns it?');
-    // That one was answered without it: none from now on.
-    await store.ask('and then?');
-    expect(calls('ask.run').slice(5).map(call => 'previous' in call)).toEqual([false]);
-    // Until the next sign-in, which may be to an Authority that takes it.
-    refusing = false;
-    store.closeAsk();
-    app = { signed_in: false, account: null, client_version: 'test' };
-    await store.refreshStatus();
-    app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
-    await store.refreshStatus();
-    await flush();
-    await store.ask('Again?');
-    await store.ask('and who leads it?');
-    expect(calls('ask.run').slice(6).map(call => 'previous' in call)).toEqual([false, true]);
-  });
-
-  it('asks again without the earlier turn when an Authority with no /v7 says not_found, and stops sending it once that answers', async () => {
-    let answers = true;
-    rpc.mockImplementation(rpcFor(held, {
-      'ask.run': params => (params.previous ? fail('not_found') : answers ? ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Open.', [0]]]))
-        : fail('not_found')),
-    }, () => ({ active: [apollo], archived: [] })));
-    seed(turn('What is open?', 10 * 60_000, status()));
-    const store = await startStore();
-    await store.ask('First?');
-    // Not found without it either: something else is gone, so the failure shows, and the next follow-up still carries its turn.
-    answers = false;
-    await store.ask('who owns it?');
-    await flush();
-    expect(store.getState().ask?.failed?.failure.code).toBe('not_found');
-    answers = true;
-    await store.ask('and who leads it?');
-    await flush();
-    expect(calls('ask.run').slice(1).map(call => 'previous' in call)).toEqual([true, false, true, false]);
-    expect(latestTurn(store)?.text).toBe('and who leads it?');
-    // That one answered without it: the window sends none from now on.
-    await store.ask('and then?');
-    expect(calls('ask.run').slice(5).map(call => 'previous' in call)).toEqual([false]);
   });
 
   it('asks a turn again with it, keeps the new answer at the end with its "since", and the old one loses its tag', async () => {
@@ -916,12 +863,12 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
     expect(seenKeys()).toEqual([of(ACCOUNT)]);
   });
 
-  it('shows no dots, and asks no more, when the Authority has no activity read', async () => {
+  it('shows no dots when the activity read fails, and reads it again at the next check', async () => {
     const store = await startStore();
     await flush();
     (await import('../../src/renderer/freshness.js')).woke();
     await flush();
-    expect(calls('projects.activity')).toHaveLength(1);
+    expect(calls('projects.activity')).toHaveLength(2);
     expect(store.getState().news.size).toBe(0);
   });
 });

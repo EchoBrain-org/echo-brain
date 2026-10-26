@@ -1500,8 +1500,6 @@ const SEEN_PREFIX = 'echo.projectSeen.';
 let seenKey: string | null = null;
 /** The newest arrival in each project from someone else, as the last activity read said. */
 let arrivals: ReadonlyMap<string, string | null> = new Map();
-/** The Authority has no activity read (`not_supported`): no dots, and it is not asked again until the next sign-in. */
-let activityUnsupported = false;
 /** When the activity read last went out: a timer's or a page's check reads it again only after `ACTIVITY_EVERY_MS`. */
 let activityReadAt = 0;
 /** Which activity read is the latest: no check waits on one, so a reply that lands after a later one went is dropped. */
@@ -1527,7 +1525,6 @@ export function accountHash(account: Expect): string {
  */
 function rememberSeen(account: Expect): void {
   seenKey = `${SEEN_PREFIX}${accountHash(account)}`;
-  activityUnsupported = false;
   activityReadAt = 0;
   arrivals = new Map();
   let kept: unknown = null;
@@ -1583,20 +1580,18 @@ function visitProject(projectId: string): Pick<State, 'visit' | 'news'> {
  * from someone else you can read. A project with an arrival since you last
  * opened it has a dot. One seen for the first time is seen now, with none;
  * the one on screen is being seen. Times of projects you are no longer in go.
- * Quiet: a read that fails leaves the dots; an Authority without the read has
- * none.
+ * Quiet: a read that fails leaves the dots.
  */
 async function readActivity(due: boolean): Promise<void> {
   const account = expect();
-  if (!account || activityUnsupported || seen === null) return;
+  if (!account || seen === null) return;
   if (!due && Date.now() - activityReadAt < ACTIVITY_EVERY_MS) return;
   activityReadAt = Date.now();
   const mine = ++activitySeq;
   const result = await rpc('projects.activity', { expect: account });
   if (mine !== activitySeq || !sameAccount(account) || seen === null) return;
   if (!result.ok) {
-    if (result.failure.code === 'not_supported') { activityUnsupported = true; set({ news: new Set() }); }
-    else if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
+    if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
     return;
   }
   const open = state.route.page === 'project' && !state.concealed ? state.route.project.project_id : null;
@@ -3525,13 +3520,6 @@ const checking = new Map<string, Promise<void>>();
 let newestCheckedAt = Number.NEGATIVE_INFINITY;
 /** Clears what checks said once the first of them is no longer good. */
 let checksExpire: ReturnType<typeof setTimeout> | null = null;
-/** The Authority has no check (`not_supported`): no Changed tags, and it is not asked again until the next sign-in. */
-let checksUnsupported = false;
-/**
- * An Ask that carried `previous` was refused (`invalid_request`, or `not_found` from an Authority with no `/v7`) and then
- * answered without it: this window asks without it from now on (C5), until the next sign-in.
- */
-let previousRefused = false;
 
 /** A turn of the timeline, by its id. */
 export function turnOf(id: string | null | undefined, current: State = state): TimelineTurn | undefined {
@@ -3552,15 +3540,12 @@ export function shownChecks(turn: TimelineTurn, current: State = state): TurnChe
  * The account's timeline, read at sign-in and when the account changes, with
  * nothing of the last check. A read that fails is made once more, unless the
  * account is gone; one that fails again leaves it as it was. A turn kept
- * meanwhile (an Ask answered first) stays, after those read. What this window
- * learned of the last Authority (no check, no `previous`) is learned again.
+ * meanwhile (an Ask answered first) stays, after those read.
  */
 async function loadTimeline(): Promise<void> {
   const account = expect();
   if (!account) return;
   const mine = ++timelineSeq;
-  checksUnsupported = false;
-  previousRefused = false;
   let result = await rpc('timeline.read', { expect: account });
   if (mine !== timelineSeq || !sameAccount(account)) return;
   if (!result.ok && !ACCOUNT_GONE.includes(result.failure.code)) {
@@ -3642,19 +3627,18 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
 }
 
 /**
- * One check of `turns`' sources (C5), the one most wanted first, unless the
- * Authority has none. What it says of each turn it speaks for is good for
- * five minutes from when it went, and stands over what an earlier check said
- * of that turn, never over what a later one did; a turn citing nothing a
- * check asks about is spoken for without asking. It fails quietly, with no
- * tags: what an earlier check said that is no longer good goes with it. A
- * ticket it reads for the first time keeps the marker it read as its
- * baseline. `newest`: Ask opening's check of the newest turns, made again
- * five minutes after it went.
+ * One check of `turns`' sources (C5), the one most wanted first. What it says
+ * of each turn it speaks for is good for five minutes from when it went, and
+ * stands over what an earlier check said of that turn, never over what a
+ * later one did; a turn citing nothing a check asks about is spoken for
+ * without asking. It fails quietly, with no tags: what an earlier check said
+ * that is no longer good goes with it. A ticket it reads for the first time
+ * keeps the marker it read as its baseline. `newest`: Ask opening's check of
+ * the newest turns, made again five minutes after it went.
  */
 function checkTurns(turns: readonly TimelineTurn[], newest = false): Promise<void> {
   const account = expect();
-  if (!account || checksUnsupported || turns.length === 0) return Promise.resolve();
+  if (!account || turns.length === 0) return Promise.resolve();
   const plan = checkPlan(turns);
   const mine = checkSeq;
   const at = Date.now();
@@ -3662,8 +3646,7 @@ function checkTurns(turns: readonly TimelineTurn[], newest = false): Promise<voi
     const result = plan.items.length === 0 ? null : await rpc('ask.check', { expect: account, items: [...plan.items] });
     if (mine !== checkSeq || !sameAccount(account)) return;
     if (result && !result.ok) {
-      if (result.failure.code === 'not_supported') checksUnsupported = true;
-      else if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
+      if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
       keepChecks(state.timeline.checks);
       return;
     }
@@ -3705,15 +3688,11 @@ function keepBaselines(markers: Readonly<Record<string, Readonly<Record<string, 
 /** A new answer's tickets: one check, for their markers now, the baseline a later check compares with (C5). Quiet. */
 async function baseline(turn: TimelineTurn): Promise<void> {
   const account = expect();
-  if (!account || checksUnsupported) return;
+  if (!account) return;
   const plan = checkPlan([turn], source => source.kind === 'ticket');
   if (plan.items.length === 0) return;
   const result = await rpc('ask.check', { expect: account, items: [...plan.items] });
-  if (!sameAccount(account)) return;
-  if (!result.ok) {
-    if (result.failure.code === 'not_supported') checksUnsupported = true;
-    return;
-  }
+  if (!sameAccount(account) || !result.ok) return;
   keepBaselines(checkedOf(plan, result.value.items).markers);
 }
 
@@ -3736,13 +3715,11 @@ export function fullTurns(view: AskState): readonly string[] {
  * once what they cite is known now: a check of the last five minutes, waited
  * for or made while the question shows on its way; none when no check can
  * say (C5). Asked from a page, it opens Ask, which checks what changed of the
- * newest turns. An Authority that refuses `previous`, or has no `/v7` to send
- * it to, is asked once more without it; once that answers, this window stops
- * sending it until the next sign-in. The answer is kept at the end of the
- * timeline, in full, and its tickets' markers are read as their baseline;
- * "Which one?" waits for a choice and is kept nowhere. While it works, the
- * steps the host reports show under it (ADR-0039); with no answer, they go,
- * and so does any item they opened in the pane.
+ * newest turns. The answer is kept at the end of the timeline, in full, and
+ * its tickets' markers are read as their baseline; "Which one?" waits for a
+ * choice and is kept nowhere. While it works, the steps the host reports show
+ * under it (ADR-0039); with no answer, they go, and so does any item they
+ * opened in the pane.
  */
 export async function ask(question: string, scope: AskScope = state.barScope, how?: AskHow): Promise<void> {
   const account = expect();
@@ -3753,7 +3730,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const continued = open && open.asked.length === open.openedAt ? open.opened : null;
   const againOf = how?.againOf;
   // The turn it carries, unless `how` brings it built: the one it asks again, or the one a follow-up continues.
-  const from = previousRefused || how?.previous !== undefined ? null : againOf !== undefined ? turnOf(againOf) ?? null
+  const from = how?.previous !== undefined ? null : againOf !== undefined ? turnOf(againOf) ?? null
     : open && how === undefined ? followedTurn(state.timeline.turns, continued, Date.now()) : null;
   const view = open ?? newAsk();
   const mine = ++seq;
@@ -3767,7 +3744,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
     sources: freshSources(null), toast: null,
   });
   if (!open) void checkTimeline();
-  let previous = previousRefused ? null : how?.previous ?? null;
+  let previous = how?.previous ?? null;
   if (from) {
     const known = await knownSources(from);
     if (state.ask?.seq !== mine || !sameAccount(account)) {
@@ -3776,17 +3753,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
     }
     previous = previousOf(from, againOf === undefined ? 'follow_up' : 'ask_again', known, askText(text), scope);
   }
-  const run = (previous: AskPrevious | null) => rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId, ...(previous ? { previous } : {}) });
-  let result = await run(previous);
-  // An Authority that predates `previous` refuses it (`invalid_request`); one with no `/v7` at all answers `not_found`, as the
-  // client sends `previous` there alone. Either way it is asked once more without it, and once that answers, never again from
-  // this window until the next sign-in (C5). Refused without it too, it was the question that was refused, not `previous`.
-  const refused = !result.ok && previous !== null && state.ask?.seq === mine ? result.failure.code : null;
-  if (refused === 'invalid_request' || refused === 'not_found') {
-    previous = null;
-    result = await run(null);
-    if (result.ok) previousRefused = true;
-  }
+  const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId, ...(previous ? { previous } : {}) });
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
   const current = state.ask;
   if (current?.seq !== mine) return; // cancelled, or Ask was left

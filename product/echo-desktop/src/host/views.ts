@@ -301,23 +301,21 @@ export function isRecordRef(value: unknown): value is RecordRef {
 }
 
 /**
- * A versioned Agentic Ask answer: its statements, each with the exact
- * sources that support it, in the answer's order, and a streamed answer's
- * receipt, built by the Authority from what passed its final check. It is
- * the last line `person ask --live --progress` printed, in every scope: the
- * answer of the newest route the Authority has, V8 on `/v7` down to V5 on
- * `/v4`, with the receipt of its version when the Authority streamed it
- * (ADR-0039, ADR-0040, research tool contract v1). A V8 answer to an Ask
- * that carried `previous` (ADR-0047) also says the full question it answers,
- * Ask again's "since" (its citations among the answer's), or, asking which
- * one (`clarify`), the choices and no part. Its notice and its parts' gaps
- * stay out of its plain reading: the page shows neither.
+ * An Agentic Ask answer (V8): its statements, each with the exact sources
+ * that support it, in the answer's order, and a streamed answer's receipt,
+ * built by the Authority from what passed its final check. It is the last
+ * line `person ask --progress` printed, in every scope: the answer on `/v7`,
+ * with its receipt when the Authority streamed it (ADR-0039, ADR-0040,
+ * research tool contract v1). An answer to an Ask that carried `previous`
+ * (ADR-0047) also says the full question it answers, Ask again's "since" (its
+ * citations among the answer's), or, asking which one (`clarify`), the
+ * choices and no part. Its notice and its parts' gaps stay out of its plain
+ * reading: the page shows neither.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
   const { direct, parts, outcome } = result;
-  const added = result.schema_version === 8 ? result : undefined;
-  const sources = (result.citations as readonly PersonAnswerCitationV8[]).map(citedSource);
+  const sources = result.citations.map(citedSource);
   // One part answers the question itself, so its question is not repeated.
   const single = parts.length === 1;
   const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
@@ -325,9 +323,9 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
     .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
   return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
     ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) } }),
-    ...(added?.question === undefined ? {} : { question: added.question }),
-    ...(added?.since === undefined ? {} : { since: added.since.statements }),
-    ...(added?.choices === undefined ? {} : { choices: added.choices }) };
+    ...(result.question === undefined ? {} : { question: result.question }),
+    ...(result.since === undefined ? {} : { since: result.since.statements }),
+    ...(result.choices === undefined ? {} : { choices: result.choices }) };
 }
 
 /** Who alone may read an item cited as private: you, or the approver. */
@@ -371,12 +369,11 @@ function askRow(row: PersonAskReceiptRowV3): AskSearched | AskRead {
 }
 
 /**
- * One line `person ask --live --progress` printed before its answer: a step
- * of the Ask, as the contract has it (ADR-0039; V2, ADR-0040; V3, research
- * tool contract v1, which a V1 or V2 step is too). Only the stage, a search's
- * source kinds and count, and the items just read cross, each item as an
- * answer's citation does, a follow-up, a project, a person, a tool or a
- * tool's container included. Anything else is refused.
+ * One line `person ask --progress` printed before its answer: a step of the
+ * Ask, as progress V3 has it (ADR-0039, ADR-0040, research tool contract v1).
+ * Only the stage, a search's source kinds and count, and the items just read
+ * cross, each item as an answer's citation does, a follow-up, a project, a
+ * person, a tool or a tool's container included. Anything else is refused.
  */
 export function askStepView(raw: unknown): AskStep {
   const step = validated(validatePersonAskProgressLineV3, raw).progress;

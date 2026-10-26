@@ -1,8 +1,7 @@
 // The Ask timeline (ADR-0047), in the real app with the fixture Authority:
 // kept on this computer through navigation, earlier turns folded to lines
 // that open as they were, what changed lit, Ask again with "Since", follow-ups
-// resolved or asked "Which one?", an Authority that refuses the earlier turn
-// asked again without it, and a project's dot with its New rows.
+// resolved or asked "Which one?", and a project's dot with its New rows.
 import { expect, test, type Page } from '@playwright/test';
 import { readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,11 +10,8 @@ import { emit, launch, type Launched } from './launch.js';
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
 
-/**
- * The Ask requests the person client sent to the route that answers them, with what each carried: `/v7` for the timeline's
- * Authority, `/v5` for one from before `/v7` and `/v6` (the client asks those first, and they answer 404).
- */
-const asks = (route: '/v5' | '/v7' = '/v7') => run.calls().filter(call => call.path === `${route}/person/ask`).map(call => call.body ?? {});
+/** The Ask requests the person client sent to `/v7`, Ask's one route, with what each carried. */
+const asks = () => run.calls().filter(call => call.path === '/v7/person/ask').map(call => call.body ?? {});
 
 /** A question from the bar, answered: with Ask open it continues the conversation; from a page it opens Ask. */
 async function ask(page: Page, question: string): Promise<void> {
@@ -59,7 +55,7 @@ test('the timeline stays through navigation, on this computer only, and the bar 
   await expect(page.getByTestId('opened-turn')).toContainText('We agreed to ship Apollo with annual plans first.');
   await expect(page.getByTestId('opened-turn').getByTestId('ask-again')).toBeVisible();
   // Every question went alone: none carried an earlier turn from a page.
-  expect(asks('/v5').map(body => 'previous' in body)).toEqual([false, false, false]);
+  expect(asks().map(body => 'previous' in body)).toEqual([false, false, false]);
   // Kept in one owner-only file for the account, beside the session.
   const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
   const files = readdirSync(folder);
@@ -75,7 +71,7 @@ test('the timeline stays through navigation, on this computer only, and the bar 
   await expect(page.locator('[data-testid="suggestion"][data-asked="true"]')).toHaveText(['Who approved it?', 'What did we agree?']);
   await page.locator('[data-testid="suggestion"]', { hasText: 'What did we agree?' }).click();
   await expect(page.getByTestId('opened-turn')).toContainText('We agreed to ship Apollo with annual plans first.');
-  expect(asks('/v5')).toHaveLength(3);
+  expect(asks()).toHaveLength(3);
 });
 
 test('a line tagged Changed opens with what changed lit and what you can no longer read left out', async () => {
@@ -159,19 +155,6 @@ test('a follow-up that could mean two tickets asks which one, and a choice asks 
   await expect(page.getByTestId('turn').last().getByTestId('statement-text')).toHaveText('Dev owns THERM-490, since Oct 21.');
   const [, which, chosen] = asks();
   expect(chosen).toMatchObject({ question: 'Who owns THERM-490?', previous: which!.previous });
-});
-
-test('an Authority that refuses the earlier turn is asked once more without it, and the window stops sending it', async () => {
-  run = await launch('ask-timeline-refuses');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await ask(page, 'What is open on THERM-482?');
-  await ask(page, 'who owns it?');
-  await expect(page.getByTestId('ask-failed')).toHaveCount(0);
-  await expect(page.getByTestId('turn').last().getByTestId('statement-text')).toHaveText(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.',
-    'Confirm the trace is still open.']);
-  await ask(page, 'and then?');
-  expect(asks().map(body => 'previous' in body)).toEqual([false, true, false, false]);
 });
 
 test('a project with something new from someone else has a dot until you open it, and its new row says New for that visit', async () => {

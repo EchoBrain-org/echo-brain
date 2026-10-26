@@ -12,7 +12,7 @@ import { documentName, externalSourceProvider, groupKey } from './answer.js';
 export interface AskProgress {
   /** When the question was asked, by the page's clock. */
   readonly started: number;
-  /** The stage now; null until the first step comes (an Authority that predates progress sends none). */
+  /** The stage now; null until the first step comes (an answer that does not stream sends none). */
   readonly stage: AskStage | null;
   /** Items about to be read whose names have not come yet. */
   readonly pending: number;

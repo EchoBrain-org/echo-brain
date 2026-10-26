@@ -97,7 +97,7 @@ export const fileOf = (account: Expect) => `${account.authority} ${account.membe
 /**
  * An rpc for the store: held replies first, then the test's own handlers,
  * then what every page needs to open quietly. Anything else is a test error.
- * Its Authority predates the source check and project activity (`not_supported`).
+ * Its Authority serves neither the source check nor project activity (`not_supported`): no tags, no dots.
  */
 export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () => { active: ProjectSummary[]; archived: ProjectSummary[] }) {
   Object.assign(moved, { projects: 0, follow_ups: 0, reviews: 0 });
