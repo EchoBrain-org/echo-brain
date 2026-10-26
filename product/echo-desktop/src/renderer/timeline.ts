@@ -191,7 +191,8 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
         const place = keys.indexOf(key);
         if (!places.includes(place) && places.length < PREVIOUS_LIMITS.statement_citations) places.push(place);
       }
-      return { text: within(statement.text.trim(), PREVIOUS_LIMITS.statement_chars), citation_indexes: places };
+      // Trimmed and NFC, as C3 takes a sentence; cut with "…" past 400 characters.
+      return { text: within(statement.text.trim(), PREVIOUS_LIMITS.statement_chars).normalize('NFC'), citation_indexes: places };
     });
     return { purpose, question: askText(turn.question), asked_at: turn.asked_at, statements, citations };
   };
