@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { Answer, AnswerSource } from '../../src/shared/protocol.js';
 import {
-  answerMarkdown, answerSentences, documentName, externalSourceProvider, lateForYou, passageBlocks, sourceGroups, statementGroups, tableDay,
+  answerMarkdown, answerSentences, documentName, externalSourceProvider, lateForYou, MAX_SOURCES, passageBlocks, sourceGroups, statementGroups, tableDay,
 } from '../../src/renderer/answer.js';
 import { layoutAnswer } from '../../src/host/test-authority.js';
 import { answerView } from '../../src/host/views.js';
 
 const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
+/** Copy answer's Markdown of an answer no check left anything out of: its first 32 sources numbered as the page numbers them. */
+const markdown = (answer: Answer, names: readonly string[]) => answerMarkdown(answer, names, sourceGroups(answer.sources.slice(0, MAX_SOURCES)), () => true);
 const original = (source: string, anchor: string, label = 'SCOUT-Hardware-Review-v0.1.md'): AnswerSource => ({
   kind: 'original', label,
   ref: { source_id: `source:${source.repeat(64)}`, revision_id: 'rev-1', source_sha256: digest('2'), representation_sha256: digest('3'), anchor_sha256: digest(anchor) },
@@ -158,7 +160,7 @@ describe('a table\'s dates read as dates, and only your late row is marked', () 
 
 describe('Copy answer writes Markdown (ADR-0045)', () => {
   it('writes a laid-out answer as it reads: the lead, headings, bullets, a table, each claim with its sources\' numbers, then the sources', () => {
-    expect(answerMarkdown(therm(), THERM_NAMES)).toBe([
+    expect(markdown(therm(), THERM_NAMES)).toBe([
       'No, the reduced test scope was rejected. [2] DVT-R2 retests TC-D-03 and TC-D-01, plus the regression subset QA approves. [2]',
       '',
       '### Decisions',
@@ -191,7 +193,7 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
     const answer = plain([['We ship annual plans first.', [0, 2]], ['Monthly plans follow.', [1]]], {
       direct: { text: 'Yes.', citation_indexes: [2], private: false },
     });
-    expect(answerMarkdown(answer, ['Launch plan', 'Pricing', 'Board'])).toBe(
+    expect(markdown(answer, ['Launch plan', 'Pricing', 'Board'])).toBe(
       'Yes. [3]\n\nWe ship annual plans first. [1][3]\n\nMonthly plans follow. [2]\n\nSources\n\n1. Launch plan\n2. Pricing\n3. Board');
   });
 
@@ -200,7 +202,7 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
       { question: 'What did we agree?', status: 'answered', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }] },
       { question: 'Who approved it?', status: 'not_found', statements: [], gap: 'This was not found.' },
     ] };
-    expect(answerMarkdown(answer, ['Launch plan'])).toBe(
+    expect(markdown(answer, ['Launch plan'])).toBe(
       '## What did we agree?\n\nAnnual first. [1]\n\nSources\n\n1. Launch plan');
   });
 
@@ -210,7 +212,7 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
       { kind: 'paragraph', statements: [0] },
       { kind: 'table', statements: [1], columns: ['Name', 'Path'], caption: 'Two paths', rows: [{ cells: ['A | B', 'C:\\temp'], citation_indexes: [1] }] },
     ] }] };
-    expect(answerMarkdown(answer, ['One', 'Two', 'Three'])).toBe(
+    expect(markdown(answer, ['One', 'Two', 'Three'])).toBe(
       '\\- dash first [1]\n\nTwo paths\n\n| Name | Path |\n| --- | --- |\n| A \\| B [2] | C:\\\\temp |\n\nSources\n\n1. One\n2. Two\n3. Three');
   });
 });
@@ -263,7 +265,7 @@ describe('Copy answer\'s Markdown keeps the text as it was written', () => {
 
   it('keeps a sentence of several lines on one line, its punctuation as text, and its numbers on its claim', () => {
     const answer = plain([[PROBE, [0]], ['1. step', [1]], ['Doc *one*', [2]]]);
-    expect(answerMarkdown(answer, ['Doc *one*', '[draft] plan_v2', '# notes'])).toBe([
+    expect(markdown(answer, ['Doc *one*', '[draft] plan_v2', '# notes'])).toBe([
       'Second \\| with pipe and a newline - not a list [1]', '', '1\\. step [2]', '', 'Doc \\*one\\* [3]', '', 'Sources', '',
       '1. Doc \\*one\\*', '2. \\[draft\\] plan\\_v2', '3. \\# notes',
     ].join('\n'));
@@ -277,7 +279,7 @@ describe('Copy answer\'s Markdown keeps the text as it was written', () => {
       { kind: 'bullets', statements: [1, 2] },
       { kind: 'table', statements: [3], columns: ['Name', 'Note_1'], caption: '+ two > one', rows: [{ cells: ['Doc *one* <b>', '1. step'], citation_indexes: [1] }] },
     ] }] };
-    expect(answerMarkdown(answer, ['One', 'Two', 'Three'])).toBe([
+    expect(markdown(answer, ['One', 'Two', 'Three'])).toBe([
       'Second \\| with pipe and a newline - not a list [1]', '',
       '### Steps \\`now\\`', '',
       '- 1\\. step [2]', '- \\- item \\<b\\> [3]', '',

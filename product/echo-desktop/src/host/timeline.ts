@@ -8,6 +8,7 @@
 // reading one account's timeline deletes any other account's, so an account
 // change leaves nothing of the last one here. Kept apart from host.ts so all
 // of it is tested on a real folder.
+import { validateProjectIdV1 } from '@echo-brain/organization-api';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
@@ -151,7 +152,7 @@ const string = (value: unknown, maximum = 20_000): value is string => typeof val
 const index = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const indexes = (value: unknown, maximum = 64): value is number[] => Array.isArray(value) && value.length <= maximum && value.every(index);
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const PROJECT = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const projectId = (value: unknown): boolean => { try { validateProjectIdV1(value); return true; } catch { return false; } };
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const time = (value: unknown): value is string => string(value, 64) && !Number.isNaN(Date.parse(value));
 const STATUSES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found', 'records_only']);
@@ -161,7 +162,7 @@ const BLOCKS: ReadonlySet<unknown> = new Set(['lead', 'heading', 'paragraph', 'b
 function scope(value: unknown): value is AskScope {
   if (!record(value)) return false;
   const keys = Object.keys(value).sort().join();
-  return value.kind === 'project' ? keys === 'kind,project_id' && string(value.project_id) && PROJECT.test(value.project_id)
+  return value.kind === 'project' ? keys === 'kind,project_id' && projectId(value.project_id)
     : (value.kind === 'global' || value.kind === 'mine') && keys === 'kind';
 }
 

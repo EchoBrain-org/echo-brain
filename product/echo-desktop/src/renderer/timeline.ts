@@ -11,7 +11,7 @@ import { askText } from '../shared/query.js';
 import { answerSentences, MAX_SOURCES, sourceGroups, type Shows, type SourceGroup } from './answer.js';
 
 /** A follow-up continues the latest turn while it was asked this recently, and Ask is open. */
-export const FOLLOW_UP_MS = 60 * 60_000;
+const FOLLOW_UP_MS = 60 * 60_000;
 /** Opening Ask checks the sources of this many of the newest turns, and a check is good for five minutes. */
 export const CHECK_TURNS = 10;
 export const CHECK_FRESH_MS = 5 * 60_000;
@@ -293,16 +293,7 @@ export function sameScope(a: AskScope, b: AskScope): boolean {
   return a.kind === b.kind && (a.kind !== 'project' || (b.kind === 'project' && a.project_id === b.project_id));
 }
 
-/** The questions you asked in `scope`, newest first, each once (the newest turn of it), each reopening its turn. */
+/** The questions you asked in `scope`, newest first, each reopening its turn: the bar's suggestions take each once, the newest. */
 export function askedSuggestions(turns: readonly TimelineTurn[], scope: AskScope): Suggestion[] {
-  const seen = new Set<string>();
-  const suggestions: Suggestion[] = [];
-  for (const turn of [...turns].reverse()) {
-    if (!sameScope(turn.scope, scope)) continue;
-    const key = turn.question.replace(/\s+/gu, ' ').trim().toLowerCase();
-    if (key === '' || seen.has(key)) continue;
-    seen.add(key);
-    suggestions.push({ question: turn.question, turn: turn.id });
-  }
-  return suggestions;
+  return [...turns].reverse().filter(turn => sameScope(turn.scope, scope)).map(turn => ({ question: turn.question, turn: turn.id }));
 }

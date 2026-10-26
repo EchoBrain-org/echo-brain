@@ -21,7 +21,7 @@ import {
   activeTurn, askAgain, askEverywhere, barSuggestions, cancelAsk, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleSourceList, toggleTurn, turnOf, widenScope, UNTITLED,
-  type AskClarify, type PaneTarget, type Read, type RecordSectionKey, type ShownTurn, type State,
+  type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
@@ -559,18 +559,18 @@ function againAt(state: State, turn: TimelineTurn): string | null {
 
 /**
  * A turn in full: the latest, or one asked since Ask was opened. The question
- * as the asker typed it, what it looked through when this Ask asked it, Ask
- * again's "since", the answer, the project's own line when nothing in it
- * matched, the sources, and Copy answer. One asked before this Ask also says
- * what changed since, with Ask again (`current` false).
+ * as the asker typed it, what it looked through when this Ask asked it
+ * (`took`), Ask again's "since", the answer, the project's own line when
+ * nothing in it matched, the sources, and Copy answer. One asked before this
+ * Ask also says what changed since, with Ask again (`current` false).
  */
-function FullTurn({ state, turn, current, line }: { state: State; turn: ShownTurn; current: boolean; line: Line }) {
+function FullTurn({ state, turn, took, current, line }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; line: Line }) {
   const view = turnView(turn, shownChecks(turn, state));
   const omitted = allOmitted(turn, view.checks);
   return (
     <div class="turn" data-testid="turn" data-turn={turn.id}>
       <div class="question selectable" data-testid="question">{turn.text}</div>
-      {turn.receipt && <Receipt state={state} receipt={turn.receipt} took={turn.took ?? 0} line={line} />}
+      {took && <Receipt state={state} receipt={took.receipt} took={took.took} line={line} />}
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {!omitted && <AgenticAnswer state={state} view={view} empty={!foundNothingInProject(turn)} />}
       {foundNothingInProject(turn) && (
@@ -712,7 +712,7 @@ export function AskView({ state }: { state: State }) {
         <Fragment key={turn.id}>
           {index === today && <Today />}
           {shownInFull(turn, turns, full)
-            ? <FullTurn state={state} turn={{ ...turn, ...thread.took[turn.id] }} current={thread.asked.includes(turn.id)} line={lineFor(thread.took[turn.id]?.seq ?? -1)} />
+            ? <FullTurn state={state} turn={turn} took={thread.took[turn.id]} current={thread.asked.includes(turn.id)} line={lineFor(thread.took[turn.id]?.seq ?? -1)} />
             : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} again={again} />}
         </Fragment>
       ))}

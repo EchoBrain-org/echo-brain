@@ -4,7 +4,7 @@
 // and its source row says "owner · status", with no kind label.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, Expect, OpenItemView } from '../../src/shared/protocol.js';
-import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, plainHooks, project, rpcFor, storeLifecycle, text } from './harness.js';
+import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, ok, paneTurn, plainHooks, project, rpcFor, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -95,7 +95,7 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     // Read in the background once the answer came, for the row's qualifier.
     expect(store.getState().sources?.followUps[ITEM]).toMatchObject({ loading: false, value: { item_id: ITEM } });
     // The sources start closed (ADR-0045): their line opens them.
-    store.toggleSourceList();
+    store.toggleSourceList(paneTurn(store));
     const [source] = byTestId(thread(), 'source-row');
     expect(text(source)).toBe(`1Ship the launch checklist${words}`);
     expect(text(source)).not.toMatch(/follow-up/iu);
@@ -108,9 +108,9 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     const { store, release, pane, thread } = await asking();
     release(ok({ ...answer, receipt: undefined }));
     await flush();
-    store.toggleSourceList();
+    store.toggleSourceList(paneTurn(store));
     expect(text(byTestId(thread(), 'source-row'))).toBe('1Ship the launch checklistPick owner · Not sent');
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     await flush();
     expect(text(byTestId(pane(), 'pane-follow-up-meta'))).toBe('Pick owner · Not sent');
   });
@@ -121,10 +121,10 @@ describe('a follow-up opens beside Ask (ADR-0040)', () => {
     const { store, release, pane, thread } = await asking();
     release(ok({ ...answer, receipt: undefined }));
     await flush();
-    store.toggleSourceList();
+    store.toggleSourceList(paneTurn(store));
     // A row whose follow-up was not read says nothing more than its title.
     expect(text(byTestId(thread(), 'source-row'))).toBe('1Ship the launch checklist');
-    store.chooseSource(0);
+    store.chooseSource(0, null, paneTurn(store));
     await flush();
     expect(byTestId(pane(), 'source-error')).toHaveLength(1);
     expect(byTestId(pane(), 'pane-follow-up')).toEqual([]);

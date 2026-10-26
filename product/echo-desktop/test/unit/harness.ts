@@ -5,6 +5,7 @@
 import type { VNode } from 'preact';
 import { afterEach, beforeEach, vi } from 'vitest';
 import type { AnswerSource, AskStep, Expect, OpenItemsView, ProjectSummary, TimelineTurn } from '../../src/shared/protocol.js';
+import type { AskTook, State } from '../../src/renderer/store.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
 export const fail = (code: string, extra: Record<string, unknown> = {}) => ({ ok: false, failure: { code, retryable: false, ...extra } });
@@ -138,6 +139,18 @@ export async function startStore() {
   await store.refreshStatus();
   await flush();
   return store;
+}
+
+/** The latest turn, as the page shows it: with what its Ask looked through, when this Ask asked it. Null with none. */
+export function latestTurn(store: { getState(): State }): (TimelineTurn & Partial<AskTook>) | null {
+  const { timeline, ask } = store.getState();
+  const turn = timeline.turns.at(-1);
+  return turn ? { ...turn, ...ask?.took[turn.id] } : null;
+}
+
+/** The turn whose sources the pane's numbers are: the one a source's number or the sources' line names on the page. */
+export function paneTurn(store: { getState(): State }): string | null {
+  return store.getState().sources?.turn ?? null;
 }
 
 /**

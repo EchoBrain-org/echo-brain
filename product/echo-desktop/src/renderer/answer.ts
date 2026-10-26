@@ -266,16 +266,14 @@ export function partShows(part: AnswerPart, shows: Shows): boolean {
  * Copy answer's Markdown (ADR-0045): the answer as the page shows it, each
  * claim followed by its sources' numbers as the page shows them ("[1][3]"),
  * and the sources, numbered and named (`names`, one per number). The page's
- * `groups` number them, by default every one of the first 32; `shows` says
- * which sentences and rows it shows, so what a check left out is not written,
- * nor a part, block or heading left with nothing to show (ADR-0047). A
- * laid-out part keeps its lead, headings, bullets and tables; any other is a
- * paragraph per sentence. A part's question heads what it says when there are
- * several. What research did not cover is not written: the page no longer
- * shows it (ADR-0047).
+ * `groups` number them; `shows` says which sentences and rows it shows, so
+ * what a check left out is not written, nor a part, block or heading left
+ * with nothing to show (ADR-0047). A laid-out part keeps its lead, headings,
+ * bullets and tables; any other is a paragraph per sentence. A part's
+ * question heads what it says when there are several. What research did not
+ * cover is not written: the page no longer shows it (ADR-0047).
  */
-export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[] = sourceGroups(answer.sources.slice(0, MAX_SOURCES)),
-  shows: Shows = () => true): string {
+export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows): string {
   const numbers = (citations: readonly number[]) => statementGroups(citations, groups).map(group => `[${group + 1}]`).join('');
   /** Text, then the numbers of what it cites: they stay on their claim. */
   const cited = (text: string, citations: readonly number[]) => [markdownText(text), numbers(citations)].filter(Boolean).join(' ');

@@ -113,9 +113,6 @@ export interface TimelineState {
   checks: Readonly<Record<string, TurnCheck>>;
 }
 
-/** A turn as the page shows it: as kept, with what its Ask looked through when this Ask asked it. */
-export type ShownTurn = TimelineTurn & Partial<AskTook>;
-
 /** A read the source pane waits on, has, or could not make. */
 export type Read<T> =
   | { readonly loading: true }
@@ -3551,12 +3548,6 @@ export function shownChecks(turn: TimelineTurn, current: State = state): TurnChe
   return current.ask?.asked.includes(turn.id) ? undefined : checksOf(turn, current);
 }
 
-/** The latest turn, as the page shows it: with what its Ask looked through, when this Ask asked it. Null with none. */
-export function latestTurn(current: State = state): ShownTurn | null {
-  const turn = current.timeline.turns.at(-1);
-  return turn ? { ...turn, ...current.ask?.took[turn.id] } : null;
-}
-
 /**
  * The account's timeline, read at sign-in and when the account changes, with
  * nothing of the last check. A read that fails is made once more, unless the
@@ -3697,9 +3688,9 @@ function checkTurns(turns: readonly TimelineTurn[], newest = false): Promise<voi
  * so it carries none of its sentences.
  */
 async function knownSources(turn: TimelineTurn): Promise<TurnChecks | null> {
-  const recent = () => Date.now() - Date.parse(turn.asked_at) < CHECK_FRESH_MS;
-  if (checksOf(turn) === undefined && !recent()) await checkTurn(turn);
-  return checksOf(turn) ?? (recent() ? answeredNow(turn) : null);
+  const recent = Date.now() - Date.parse(turn.asked_at) < CHECK_FRESH_MS;
+  if (checksOf(turn) === undefined && !recent) await checkTurn(turn);
+  return checksOf(turn) ?? (recent ? answeredNow(turn) : null);
 }
 
 /** Tickets with no marker yet keep the one a check read: what the next check compares them with. */
@@ -3727,8 +3718,8 @@ async function baseline(turn: TimelineTurn): Promise<void> {
 }
 
 /** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet. */
-function newAsk(opened: string | null = null, focus: string | null = null): AskState {
-  return { seq: ++seq, latest: state.timeline.turns.at(-1)?.id ?? null, asked: [], opened, openedAt: 0, focus, asking: null, clarify: null, failed: null, took: {} };
+function newAsk(): AskState {
+  return { seq: ++seq, latest: state.timeline.turns.at(-1)?.id ?? null, asked: [], opened: null, openedAt: 0, focus: null, asking: null, clarify: null, failed: null, took: {} };
 }
 
 /** The turns Ask shows in full besides the latest: the latest when it opened, and those asked since. */
@@ -3853,12 +3844,12 @@ export function foundNothingInProject(turn: TimelineTurn): boolean {
 }
 
 /**
- * Ask across everything you can see: a turn's question again (the latest's
- * when none is named), in all accessible context, as a question of its own.
- * The bar widens with it, as its × would, so the chip goes and follow-ups ask
- * there too. The project answer stays on the timeline.
+ * Ask across everything you can see: a turn's question again, in all
+ * accessible context, as a question of its own. The bar widens with it, as
+ * its × would, so the chip goes and follow-ups ask there too. The project
+ * answer stays on the timeline.
  */
-export function askEverywhere(id: string | null = state.timeline.turns.at(-1)?.id ?? null): void {
+export function askEverywhere(id: string): void {
   const turn = turnOf(id);
   if (!turn || state.ask?.asking || !foundNothingInProject(turn)) return;
   widenScope();
@@ -3917,22 +3908,15 @@ export function toggleTurn(id: string): void {
  * in full (the latest) stays so. Either way it is the turn the next question
  * continues, however long ago it was asked, and what changed of its sources
  * is checked with the newest turns', first, when nothing in the last five
- * minutes said.
+ * minutes said. Suggestions show only while Ask is closed.
  */
 export function openTurn(id: string): void {
   const turn = turnOf(id);
-  if (!turn || !expect() || state.ask?.asking) return;
+  if (!turn || !expect()) return;
   emptyBar();
-  const open = state.ask;
-  const view = open ?? newAsk();
-  set({ ask: { ...view, opened: id, openedAt: view.asked.length, focus: id } });
-  if (!open) {
-    startSources(null, id);
-    void checkTimeline(turn);
-  } else {
-    void checkTurn(turn);
-    if (state.sources) void readRecords(state.sources.gen);
-  }
+  set({ ask: { ...newAsk(), opened: id, focus: id } });
+  startSources(null, id);
+  void checkTimeline(turn);
   syncSearch();
 }
 
@@ -3953,13 +3937,12 @@ export function cancelAsk(): void {
 }
 
 /**
- * Copy answer: a turn's answer (the one the pane's numbers are of, when none
- * is named) as Markdown (ADR-0045), as the page shows it: without what the
- * check it shows left out, its sources numbered and named as the page shows
- * them (ADR-0047). Onto the clipboard; its plain text when the Markdown is
- * longer than Copy answer takes. Says whether it got there.
+ * Copy answer: a turn's answer as Markdown (ADR-0045), as the page shows it:
+ * without what the check it shows left out, its sources numbered and named
+ * as the page shows them (ADR-0047). Onto the clipboard; its plain text when
+ * the Markdown is longer than Copy answer takes. Says whether it got there.
  */
-export async function copyAnswer(id: string | null = state.sources?.turn ?? null): Promise<boolean> {
+export async function copyAnswer(id: string | null): Promise<boolean> {
   const turn = turnOf(id);
   if (turn === undefined) return false;
   const { answer } = turn;
@@ -4236,12 +4219,11 @@ function readPane(gen: number, source: AnswerSource): void {
 }
 
 /**
- * A source's number or row, in a turn (the one the pane's numbers are of,
- * when none is named): the pane opens beside the answer on that source, read
- * unless it already was. The source list keeps its explicit open/closed
- * choice. A sentence's or a row's number also names it.
+ * A source's number or row, in a turn: the pane opens beside the answer on
+ * that source, read unless it already was. The source list keeps its explicit
+ * open/closed choice. A sentence's or a row's number also names it.
  */
-export function chooseSource(group: number, focus: string | null = null, turn: string | null = state.sources?.turn ?? null): void {
+export function chooseSource(group: number, focus: string | null, turn: string | null): void {
   const sources = state.sources;
   const shown = turnOf(turn);
   const chosen = shown ? turnGroups(shown.answer.sources, shownChecks(shown))[group] : undefined;
@@ -4251,8 +4233,8 @@ export function chooseSource(group: number, focus: string | null = null, turn: s
   readPane(sources.gen, source);
 }
 
-/** A turn's sources' line (the one the pane's numbers are of, when none is named): opens or closes its rows. The pane stays as it is. */
-export function toggleSourceList(turn: string | null = state.sources?.turn ?? null): void {
+/** A turn's sources' line: opens or closes its rows. The pane stays as it is. */
+export function toggleSourceList(turn: string | null): void {
   const sources = state.sources;
   if (!sources || turn === null) return;
   set({ sources: { ...sources, listed: sources.listed.includes(turn) ? sources.listed.filter(id => id !== turn) : [...sources.listed, turn] } });
