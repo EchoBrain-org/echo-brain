@@ -70,6 +70,8 @@
     "test:agentic-ask-eval": "npm run build:workspaces && node --test tools/evals/agentic-ask/test/*.test.mjs",
     "eval:ask-follow-up": "node tools/evals/ask-follow-up/run.mjs",
     "test:ask-follow-up-eval": "npm run build:workspaces && node --test tools/evals/ask-follow-up/test/*.test.mjs",
+    "eval:ask-wording": "node tools/evals/ask-wording/run.mjs",
+    "test:ask-wording-eval": "npm run build:workspaces && node --test tools/evals/ask-wording/test/*.test.mjs",
     "eval:research-loop": "node tools/evals/research-loop/cli.mjs",
     "test:research-loop-eval": "node --test tools/evals/research-loop/test/*.test.mjs",
     "capacity:checkpoint": "npm run build:workspaces && node tools/evals/authority-core/core-checkpoint.mjs",
