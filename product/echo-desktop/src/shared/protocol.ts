@@ -1,6 +1,7 @@
 import type {
-  PersonAnswerBlockV1, PersonAnswerCitationV8, PersonAnswerEvidenceCitationV8, PersonAnswerTableRowV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
-  PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
+  PersonAnswerBlockV1, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEvidenceCitationV8, PersonAnswerPreviousV1, PersonAnswerTableRowV1,
+  PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
+  PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
@@ -270,9 +271,9 @@ export type AnswerSource = (
 };
 
 /** The kinds of evidence a check asks about (Ask source check, C1): what an old answer cited that can change or go. */
-export const CHECK_KINDS: readonly CheckCitation['kind'][] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
+export const CHECK_KINDS: readonly PersonAskCheckCitationKindV1[] = ['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'];
 /** A checkable source's evidence citation, as the answer cited it. */
-export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: 'approved_record' | 'source_revision' | 'follow_up' | 'ticket' | 'page' }>;
+export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly kind: PersonAskCheckCitationKindV1 }>;
 
 /**
  * What `ask.check` asks about a source (ADR-0047): its evidence citation,
@@ -352,10 +353,7 @@ export interface AnswerPart {
 }
 
 /** One thing a follow-up could be about, as Ask offers it to choose (ADR-0047): a short label, and the full question it asks. */
-export interface AskChoice {
-  readonly label: string;
-  readonly question: string;
-}
+export type AskChoice = PersonAnswerChoiceV1;
 
 /** An Agentic Ask answer. `text` is its plain reading, for Copy answer when its Markdown is too long. */
 export interface Answer {
@@ -423,18 +421,11 @@ export const TIMELINE_DAYS = 90;
 export const MAX_TIMELINE_PUT_BYTES = 256 * 1024;
 
 /** What a check says of one cited source (C1): unchanged, changed, no longer readable by you, or not known now. */
-export type AskCheckState = 'same' | 'changed' | 'unreadable' | 'unknown';
+export type AskCheckState = PersonAskCheckStateV1;
 /** One source to check: when the turn that cited it was asked, its evidence citation, and a ticket's baseline marker. */
-export interface AskCheckItem {
-  readonly asked_at: string;
-  readonly citation: CheckCitation;
-  readonly marker?: string;
-}
+export type AskCheckItem = PersonAskCheckRequestItemV1;
 /** What the check said of one item, in the request's order: a readable ticket's current marker too. */
-export interface AskCheckResult {
-  readonly state: AskCheckState;
-  readonly marker?: string;
-}
+export type AskCheckResult = PersonAskCheckItemV1;
 /** The most items one check asks about, and its body's bound (C1). */
 export const MAX_CHECK_ITEMS = 100;
 export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
@@ -444,25 +435,13 @@ export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
  * never evidence, never stored. `follow_up` resolves what "it" means from it;
  * `ask_again` has the writer say what is different since `asked_at`.
  */
-export interface AskPrevious {
-  readonly purpose: 'follow_up' | 'ask_again';
-  /** The earlier turn's full question, within the question bound. */
-  readonly question: string;
-  readonly asked_at: string;
-  /** 0 to 8 sentences of the earlier answer the asker can still read, each at most 400 characters. */
-  readonly statements: readonly { readonly text: string; readonly citation_indexes: readonly number[] }[];
-  /** 0 to 12 of the earlier answer's citations, as its response carried them; statements index into these (at most 4 each). */
-  readonly citations: readonly PersonAnswerCitationV8[];
-}
+export type AskPrevious = PersonAnswerPreviousV1;
 /** C3's bounds on `previous`, and the Ask request body's own, which it shares. */
 export const PREVIOUS_LIMITS = { statements: 8, statement_chars: 400, citations: 12, statement_citations: 4 } as const;
 export const MAX_ASK_BODY_BYTES = 16 * 1024;
 
 /** The newest thing that arrived in one of your projects from someone else that you can read, or null (C2). */
-export interface ProjectActivity {
-  readonly project_id: string;
-  readonly latest_at: string | null;
-}
+export type ProjectActivity = PersonProjectActivityItemV1;
 
 export interface SourceEvidence {
   readonly label: string;
