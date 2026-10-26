@@ -2,7 +2,7 @@ import { performance } from "node:perf_hooks";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PersonItemPositionV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
+import type { PersonItemPositionV1, PersonListStoreScopeV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import {
@@ -14,6 +14,7 @@ import { SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decis
 
 const GLOBAL: PersonAskScopeV2 = { kind: "global" };
 const MINE: PersonAskScopeV2 = { kind: "mine" };
+const ONLY_ME: PersonListStoreScopeV1 = { kind: "only_me" };
 const inProject = (project_id: string): PersonAskScopeV2 => ({ kind: "project", project_id });
 const ROW_KEYS = ["added_at", "association_project_ids", "id", "kind", "meeting_date", "title", "visibility"];
 
@@ -27,7 +28,7 @@ async function world(options: Parameters<typeof meetingWorld>[0] = {}) {
 }
 
 /** collect(limit) → commit(all) until a short page, as the list route drives one source. */
-function walk(route: PersonRecordSearchRouteV1, token: ReaderToken, scope: PersonAskScopeV2, limit = 26, start: PersonItemPositionV1 | null = null): PersonStoreMeetingRowV1[] {
+function walk(route: PersonRecordSearchRouteV1, token: ReaderToken, scope: PersonListStoreScopeV1, limit = 26, start: PersonItemPositionV1 | null = null): PersonStoreMeetingRowV1[] {
   const rows: PersonStoreMeetingRowV1[] = [];
   let after = start;
   for (let page = 0; page < 50; page += 1) {
@@ -61,7 +62,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(byName("r1")).toMatchObject({ title: "Weekly sync", visibility: "team", association_project_ids: [], meeting_date: "2026-08-31" });
     expect(walk(route, "owner", GLOBAL).find((row) => row.id === w.digest("r2"))).toMatchObject({ visibility: "approver_only", meeting_date: "2026-09-02" });
 
-    const everything = [...empA, ...walk(route, "owner", GLOBAL), ...walk(route, "emp_b", MINE), ...walk(route, "emp_a", inProject(SHARED))];
+    const everything = [...empA, ...walk(route, "owner", GLOBAL), ...walk(route, "emp_b", MINE), ...walk(route, "owner", ONLY_ME), ...walk(route, "emp_a", inProject(SHARED))];
     for (const row of everything) expect(Object.keys(row).every((key) => ROW_KEYS.includes(key))).toBe(true);
     const serialized = JSON.stringify(everything);
     for (const hidden of [UNJOINED, PROJ_X, PROJECT_NAMES[UNJOINED], PROJECT_NAMES[PROJ_X], "position", "envelope", "apr_", "audit", "prn_", "mem_", "audience", "count", SIGNED_APPROVAL_PRIVATE_MARKER, "source-apr"]) {
@@ -93,6 +94,42 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     w.leave(SHARED, OWNER);
     expect(ids(walk(route, "owner", MINE))).toEqual([w.digest("r2")]);
     expect(ids(walk(route, "owner", GLOBAL))).not.toContain(w.digest("r3"));
+  });
+
+  it("narrows only_me to the records kept for the reader alone, and holds it only for such a record (ADR-0049)", async () => {
+    const w = await world({ extra: [{ name: "b_only", approval_id: "apr_b_only", projects: [], final_approver: EMP_B, issued_at: T(9) }] });
+    const route = w.route();
+    // r3 is the owner's approval filed for SHARED, r1 everyone's, and r4 EMP_A's own for SHARED: none is kept for one reader.
+    expect(ids(walk(route, "owner", ONLY_ME))).toEqual([w.digest("r2")]);
+    expect(ids(walk(route, "emp_b", ONLY_ME))).toEqual([w.digest("b_only")]);
+    expect(walk(route, "emp_a", ONLY_ME)).toEqual([]);
+    expect(walk(route, "emp_c", ONLY_ME)).toEqual([]);
+    for (const token of ["owner", "emp_a", "emp_b", "emp_c"] as const) {
+      const global = walk(route, token, GLOBAL);
+      for (const row of walk(route, token, ONLY_ME)) {
+        expect(row.visibility).toBe("approver_only");
+        expect(global).toContainEqual(row);
+      }
+    }
+    // The policy alone decides it, so it needs no approver projectors.
+    expect(ids(walk(w.route({ record_approver: undefined }), "owner", ONLY_ME))).toEqual([w.digest("r2")]);
+
+    // A team approval waits for every reader, but holds nobody's only_me.
+    await w.approve({ name: "r10", approval_id: "apr_r10", projects: "team", final_approver: EMP_B, issued_at: T(10) });
+    expect(route.collectMeetings({ access_token: "owner", scope: GLOBAL, after: null, limit: 26 })).toEqual({ status: "held" });
+    expect(ids(walk(route, "owner", ONLY_ME))).toEqual([w.digest("r2")]);
+    // Another member's Only me approval holds that member's only_me, never the owner's.
+    await w.approve({ name: "r11", approval_id: "apr_r11", projects: [], final_approver: EMP_A, issued_at: T(11) });
+    expect(ids(walk(route, "owner", ONLY_ME))).toEqual([w.digest("r2")]);
+    expect(route.collectMeetings({ access_token: "emp_a", scope: ONLY_ME, after: null, limit: 26 })).toEqual({ status: "held" });
+    // The owner's own approval for a project holds the owner's mine, not only_me.
+    await w.approve({ name: "r12", approval_id: "apr_r12", projects: [SHARED], final_approver: OWNER, issued_at: T(12) });
+    expect(route.collectMeetings({ access_token: "owner", scope: MINE, after: null, limit: 26 })).toEqual({ status: "held" });
+    expect(ids(walk(route, "owner", ONLY_ME))).toEqual([w.digest("r2")]);
+    w.rebuild();
+    expect(ids(walk(route, "emp_a", ONLY_ME))).toEqual([w.digest("r11")]);
+    expect(ids(walk(route, "owner", ONLY_ME))).toEqual([w.digest("r2")]);
+    expect(ids(walk(route, "owner", MINE))).toEqual([w.digest("r12"), w.digest("r3"), w.digest("r2")]);
   });
 
   it("pages through the same-time tie with limits 1, 2 and 26 without gaps or duplicates", async () => {

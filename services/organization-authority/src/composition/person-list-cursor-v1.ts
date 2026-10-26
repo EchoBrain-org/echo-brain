@@ -1,5 +1,5 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { PERSON_LIST_PAGE_SIZE_V1, type PersonAnswerScopeV3, type PersonItemRefV1 } from "@echo-brain/organization-api";
+import { PERSON_LIST_PAGE_SIZE_V1, type PersonItemRefV1, type PersonListScopeV1 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { frameCursorV1, unframeCursorV1 } from "../adapters/persistence/sqlite/project-context-cursor-v1.js";
 import { isCanonicalUtcMillisTimestampV1 } from "../application/canonical-utc-timestamp-v1.js";
@@ -35,7 +35,7 @@ export type PersonOpenPositionV1 =
   | Readonly<{ kind: "imported_meeting"; offset: number }>;
 
 export interface PersonListCursorBindingV1 {
-  readonly scope: PersonAnswerScopeV3;
+  readonly scope: PersonListScopeV1;
   readonly organization_id: string;
   readonly membership_id: string;
 }
