@@ -98,8 +98,19 @@ test('the place and the lock are one row: Tab reaches each, Enter opens the list
   await oneRow(page);
   await page.getByTestId('compose-body').fill('Kickoff moved to Monday');
 
-  // From the note, Tab lands on the place; the lock of no project is not a stop.
+  // From the note, Tab lands on the place, in a group named for what it chooses; then on the lock, which says it cannot be turned off
+  // with no project, and both are described by who can read it.
   await page.keyboard.press('Tab');
+  await expect(place(page)).toBeFocused();
+  await expect(page.getByRole('group', { name: 'Where it goes' })).toBeVisible();
+  await expect(place(page)).toHaveAccessibleDescription('Only you can read this.');
+  await page.keyboard.press('Tab');
+  await expect(lock(page)).toBeFocused();
+  await expect(lock(page)).toHaveAttribute('aria-disabled', 'true');
+  await expect(lock(page)).toHaveAccessibleDescription('Only you can read this.');
+  await page.keyboard.press('Space');
+  await expect(lock(page)).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Shift+Tab');
   await expect(place(page)).toBeFocused();
   await expect(place(page)).toHaveAttribute('aria-expanded', 'false');
   await page.keyboard.press('Enter');
@@ -107,13 +118,13 @@ test('the place and the lock are one row: Tab reaches each, Enter opens the list
   await expect(place(page)).toHaveAttribute('aria-expanded', 'true');
   await expect(list(page).getByTestId('projects-row')).toHaveText(['Apollo', 'Beacon']);
   // Opening the list changes nothing yet: No project is still the place.
-  await expect(list(page).getByTestId('place-none')).toHaveAttribute('aria-pressed', 'true');
-  await expect(list(page).getByTestId('place-team')).toHaveAttribute('aria-pressed', 'false');
+  await expect(list(page).getByTestId('place-none')).toHaveAttribute('aria-checked', 'true');
+  await expect(list(page).getByTestId('place-team')).toHaveAttribute('aria-checked', 'false');
   await expect(tick(page, 'Apollo')).toBeFocused();
   await page.keyboard.press('Space');
   await expect(tick(page, 'Apollo')).toBeChecked();
   await expect(place(page)).toHaveText('Apollo');
-  await expect(list(page).getByTestId('place-none')).toHaveAttribute('aria-pressed', 'false');
+  await expect(list(page).getByTestId('place-none')).toHaveAttribute('aria-checked', 'false');
   await expect(page.getByTestId('compose-readers')).toHaveText('Apollo members can read this.');
 
   // Escape closes only the list, and the caret goes back to the place.
@@ -204,7 +215,7 @@ test('No project or Organization from the list closes it, unticks every project,
   await expect(lock(page)).toHaveCount(0);
   await place(page).click();
   await expect(list(page).getByRole('checkbox', { checked: true })).toHaveCount(0);
-  await expect(list(page).getByTestId('place-team')).toHaveAttribute('aria-pressed', 'true');
+  await expect(list(page).getByTestId('place-team')).toHaveAttribute('aria-checked', 'true');
 
   await list(page).getByTestId('place-none').click();
   await expect(list(page)).toHaveCount(0);

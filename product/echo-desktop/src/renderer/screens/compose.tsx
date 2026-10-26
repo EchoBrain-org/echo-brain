@@ -113,11 +113,12 @@ function PlaceList({ state, compose, projects, anchor }: {
         onTick={id => { const project = projects.find(candidate => candidate.project_id === id); if (project) tickProject(project); }}
         more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)}
       />
-      <div class="place-choices">
-        <button type="button" class="place-choice" data-testid="place-none" aria-pressed={compose.place === 'none'} onClick={() => choosePlace('none')}>
+      {/* Either takes the place of every project: a choice of one, not a toggle. */}
+      <div class="place-choices" role="radiogroup" aria-label="Not in a project">
+        <button type="button" class="place-choice" data-testid="place-none" role="radio" aria-checked={compose.place === 'none'} onClick={() => choosePlace('none')}>
           No project{compose.place === 'none' && <Check />}
         </button>
-        <button type="button" class="place-choice" data-testid="place-team" aria-pressed={compose.place === 'team'} onClick={() => choosePlace('team')}>
+        <button type="button" class="place-choice" data-testid="place-team" role="radio" aria-checked={compose.place === 'team'} onClick={() => choosePlace('team')}>
           Organization{compose.place === 'team' && <Check />}
         </button>
       </div>
@@ -157,21 +158,23 @@ function Place({ state, compose, locked }: { state: State; compose: ComposeState
     wasOpen.current = open;
   }, [open]);
 
+  // Both controls say who can read it, from the line under them. No project's lock stays a Tab stop that says so, though it
+  // cannot be turned off. The list comes right after the place button, so Shift+Tab out of it goes back there.
   return (
-    <div class="place-row">
+    <div class="place-row" role="group" aria-label="Where it goes">
       <button type="button" class="place-button" data-testid="capture-place" ref={button} aria-haspopup="dialog" aria-expanded={open}
-        aria-controls={open ? 'projects-list' : undefined} disabled={locked} onClick={openProjects}>
+        aria-controls={open ? 'projects-list' : undefined} aria-describedby="capture-readers" disabled={locked} onClick={openProjects}>
         <span class="name" ref={name}>{label}</span>
         {rest.length > 0 && <span class="count"> +{rest.length}</span>}
         <Caret />
       </button>
+      {open && <PlaceList state={state} compose={compose} projects={projects} anchor={button} />}
       {compose.place !== 'team' && (
-        <button type="button" class="lock-toggle" data-testid="capture-lock" aria-pressed={onlyYou(compose)} disabled={locked || compose.place === 'none'}
-          onClick={toggleOnlyMe}>
+        <button type="button" class="lock-toggle" data-testid="capture-lock" aria-pressed={onlyYou(compose)} aria-describedby="capture-readers"
+          aria-disabled={compose.place === 'none' ? 'true' : undefined} disabled={locked} onClick={toggleOnlyMe}>
           <Lock />Only me
         </button>
       )}
-      {open && <PlaceList state={state} compose={compose} projects={projects} anchor={button} />}
     </div>
   );
 }
@@ -229,7 +232,7 @@ export function Compose({ state }: { state: State }) {
         {compose.notice && <div class="notice-line" data-testid="compose-notice" aria-live="polite">{compose.notice}</div>}
         {/* A new capture places its projects afresh, its own first. */}
         <Place key={compose.seq} state={state} compose={compose} locked={locked} />
-        <div class={`readers-line${compose.place === 'team' ? ' warning' : ''}`} data-testid="compose-readers" aria-live="polite">
+        <div class={`readers-line${compose.place === 'team' ? ' warning' : ''}`} id="capture-readers" data-testid="compose-readers" aria-live="polite">
           {readersLine(compose)}
         </div>
         {unresolved ? (

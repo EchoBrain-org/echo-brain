@@ -27,7 +27,10 @@ excludes live external sources. It is
 a narrowing of global scope, never another view: a teammate's item is excluded
 even when the person can read it. "My" in a question is only a search hint; it
 does not select Mine. Its citations carry a `ref`, which `person open` reads
-under global scope.
+under global scope. The desktop no longer offers Mine
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)): Home links to
+**Only me**, every item only the person can read, filed in a project or not
+(`person list --only-me`), and Ask from Home covers it. The CLI keeps `--mine`.
 
 The separate Find saved context entry is removed. File browsing is not a
 prerequisite for asking. Owner administration is **People & invites**, under
@@ -46,22 +49,26 @@ Invalid input remains editable. A second submission must not silently replace
 a running request. The desktop keeps every question and answer in a
 device-only timeline that says when an old answer's sources changed, and a
 question can follow from the answer before it
-([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
+([ADR-0047](../decisions/ADR-0047-ask-timeline.md)). Ask shows the thread of
+its place: from Home every question, from a project only that project's
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)).
 
 In the desktop app, Escape steps back one level: a sheet, then Capture, then
-the answer with the source beside it, then the reader, then the project, Mine
-or People & invites, then Home. The reader names where its Back goes. Back from
-an item or an answer returns to the place the project page or Mine was
+the answer with the source beside it, then the reader, then the project, Only
+me or People & invites, then Home. The reader names where its Back goes. Back from
+an item or an answer returns to the place the project page or Only me was
 scrolled to. Escape or Close puts an unsent note or attached file away until
 Capture opens again, and a save in flight cannot be dismissed. See the desktop
 app's [known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
 
 Capture, and a file dropped on the window, a project row or the Capture sheet,
-use one sheet: a note or one file, the projects it is filed in, and **Who can
-read** (**Only me**, **Projects** or **Organization**). Opened on a project
-page, or by a file dropped on a project's row, it starts with that project
-ticked under **Projects**. **Save** commits
-the original and its project links once. See
+use one sheet: a note or one file, where it goes (one or more projects, **No
+project** or **Organization**) and an **Only me** lock that keeps a project's
+item to the person while it stays filed there
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)). Opened on a project
+page, or by a file dropped on a project's row, it starts on that project,
+unlocked; elsewhere on No project, which is always only the person. **Save**
+commits the original and its project links once. See
 [Upload projects and sharing](upload-projects-and-sharing.md) for the full contract.
 
 ## Evidence and permission boundaries
@@ -164,7 +171,7 @@ evidence still requires current access when opened.
 This version shipped as `POST /v2/person/ask` (request schema 2, response
 schema 3), beside the approved-record-only `/v1/person/ask`. Both were retired
 by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md). Every Ask, the
-CLI's and the desktop's in every scope, Mine included, asks
+CLI's in every scope, Mine included, and the desktop's, asks
 `POST /v7/person/ask`, the only Ask route since
 [ADR-0047](../decisions/ADR-0047-ask-timeline.md) retired the ones before it,
 and the scope rules here apply to it. The CLI accepts
@@ -184,7 +191,8 @@ lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
 [Confluence spaces](project-settings-v1.md#confluence-space-mapping), and its
 workspace is that project, its roster and the containers its lead mapped. Mine
 and unmapped projects exclude live tools, and Mine excludes follow-ups and the
-workspace. The desktop shows every question's progress, Mine's too.
+workspace. The desktop shows every question's progress, and no longer asks in
+Mine (ADR-0049).
 Permission failures never fall back, and the receipt counts every item
 research looked through
 ([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)).
