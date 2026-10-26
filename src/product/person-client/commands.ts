@@ -50,8 +50,6 @@ export interface PersonClientCliDependencies {
 }
 
 const OPTIONS = {
-  tickets: { type: "boolean" },
-  live: { type: "boolean" },
   progress: { type: "boolean" },
   "document-id": { type: "string" },
   audience: { type: "string" },
@@ -139,7 +137,7 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "mine", "tickets", "live", "progress", "expected-membership-id", "expected-authority", "previous"],
+    accepts: ["question", "project", "mine", "progress", "expected-membership-id", "expected-authority", "previous"],
     requires: ["question"],
   },
   list: { accepts: ["project", "mine", "cursor"] },
@@ -227,15 +225,15 @@ Run \`echo-brain person tools <verb> --help\` for each tool's options.
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--tickets | --progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
 
 Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
-Ask uses the newest Ask route, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools, follow-ups and the workspace. An older Authority answers on its newest route: without /v7 it cites no projects, people, tools or tool containers, and without /v6 no follow-ups. --live, which once chose this route, is still accepted and changes nothing; it is refused beside --tickets. --tickets retains the prior ticket-capable response for compatibility, and never streams progress.
+Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools, follow-ups and the workspace. An Authority without /v7 fails with code not_supported.
 
 --progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 
---previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with at most 8 sentences of at most 400 characters each and at most 12 of that answer's citations, as it carried them. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. The newest route alone takes it, never --tickets; an Authority that predates it refuses it with invalid_request, and so does this client when it is not valid.
+--previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with at most 8 sentences of at most 400 characters each and at most 12 of that answer's citations, as it carried them. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request.
 `,
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
@@ -975,20 +973,13 @@ export async function runPersonClientCli(
     if ((action === "ask" || action === "list") && values.project !== undefined && values.mine === true) {
       throw new Error(`--project and --mine cannot be combined with \`echo-brain person ${action}\``);
     }
-    // The ticket route never streams progress (ADR-0039).
-    if (action === "ask" && values.progress === true && values.tickets === true) {
-      throw new Error("--tickets and --progress cannot be combined with `echo-brain person ask`");
-    }
     // Only the streamed Ask checks a pinned account: on any other, a pin would be silently ignored.
     if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
       throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
     }
-    // The previous turn (ADR-0047) goes to the newest route alone, which the ticket route is not. It is validated with the
-    // whole request, its 16 KiB bound included, before any network or session use.
-    if (action === "ask" && values.previous !== undefined) {
-      if (values.tickets === true) throw new Error("--previous and --tickets cannot be combined with `echo-brain person ask`");
-      askPrevious = askPreviousOf(values);
-    }
+    // The previous turn (ADR-0047) is validated with the whole request, its 16 KiB bound included, before any network or
+    // session use.
+    if (action === "ask" && values.previous !== undefined) askPrevious = askPreviousOf(values);
     // List and open requests are complete and validated before any network or session use.
     if (action === "list") {
       listRequest = validatePersonListRequestV1({
@@ -1245,25 +1236,19 @@ export async function runPersonClientCli(
         break;
       case "ask": {
         validatePersonQueryText(values.question);
-        if (values.tickets === true && values.live === true) throw new Error('Choose --tickets or --live');
         const question = requiredText(values, "question");
         const scope = values.project !== undefined
           ? validateProjectIdV1(requiredText(values, "project"))
           : values.mine === true ? { mine: true } as const : undefined;
         if (values.progress === true) {
-          // One line per step event as it arrives; the last line is today's, with the receipt when the Authority streamed.
-          // Progress V3 lines: a `/v7` step may name a project, a person, a tool or a tool container, and a `/v6` or `/v5` step is a V3 step too.
+          // One line per step event as it arrives; the last line is the answer's, with the receipt when the Authority streamed.
+          // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
             progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), expectedAccount(values), askPrevious);
           print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, ...(answer.receipt === undefined ? {} : { receipt: answer.receipt }) }));
           break;
         }
-        // The newest route, with or without its old flag --live; --tickets keeps the ticket route.
-        print(stdout, {
-          ok: true,
-          result: values.tickets === true ? await client.askWithTickets(question, scope, dependencies.abort_signal)
-            : await client.askWithLiveSources(question, scope, dependencies.abort_signal, undefined, askPrevious),
-        });
+        print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, undefined, askPrevious) });
         break;
       }
       case "list":

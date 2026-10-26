@@ -6,19 +6,11 @@ import { PERSON_ASK_CHECK_LIMITS_V1, PERSON_ASK_CHECK_PATH_V1, validatePersonAsk
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
-  PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
-  createPersonAskProgressDecoderV1, createPersonAskProgressDecoderV2, createPersonAskProgressDecoderV3,
-  type PersonAskProgressEventV1, type PersonAskProgressEventV2, type PersonAskProgressEventV3, type PersonAskProgressStepEventV1, type PersonAskProgressStepEventV2,
-  type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV1, type PersonAskProgressTerminalEventV2, type PersonAskProgressTerminalEventV3,
-  type PersonAskReceiptV1, type PersonAskReceiptV2, type PersonAskReceiptV3,
+  PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
+  createPersonAskProgressDecoderV3, type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV3, type PersonAskReceiptV3,
 } from '@echo-brain/organization-api';
 import {
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
-  PERSON_ANSWER_PATH_V3,
-  PERSON_ANSWER_PATH_V4,
-  PERSON_ANSWER_PATH_V5,
-  PERSON_ANSWER_PATH_V6,
   PERSON_ANSWER_PATH_V7,
   PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
@@ -50,10 +42,6 @@ import {
   validatePersonOpenRequestV1,
   validatePersonOpenResponseV1,
   validatePersonAnswerRequestV3,
-  validatePersonAnswerResponseV4,
-  validatePersonAnswerResponseV5,
-  validatePersonAnswerResponseV6,
-  validatePersonAnswerResponseV7,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceSearchRequestV1,
   validatePersonEvidenceOpenRequestV1,
@@ -61,10 +49,6 @@ import {
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
   type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
-  type PersonAnswerResponseV4 as OrganizationPersonAnswerV4,
-  type PersonAnswerResponseV5 as OrganizationPersonAnswerV5,
-  type PersonAnswerResponseV6 as OrganizationPersonAnswerV6,
-  type PersonAnswerResponseV7 as OrganizationPersonAnswerV7,
   type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
   type PersonEvidenceSearchRequestV1,
   type PersonEvidenceOpenRequestV1,
@@ -175,16 +159,11 @@ export interface PersonRecordSearchItemV1 {
 
 /** An Ask citation of an approved record or a source passage. */
 export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
-/** The ordinary Ask's response, on `/v3` (ADR-0022). */
-export type PersonAnswerV4 = OrganizationPersonAnswerV4;
-/** Explicit ticket-capable Ask; the ordinary Ask response remains strict V4. */
-export type PersonAnswerV5 = OrganizationPersonAnswerV5;
-export type PersonAnswerV6 = OrganizationPersonAnswerV6;
-/** The live Ask on `/v6`, which may cite follow-ups (ADR-0040). */
-export type PersonAnswerV7 = OrganizationPersonAnswerV7;
-/** The live Ask on `/v7`, which may also cite projects, people, tools and tool containers (research tool contract v1). */
+/**
+ * The Ask's answer, on `/v7`: it may cite live tickets and pages, follow-ups (ADR-0040), and projects, people, tools and
+ * tool containers (research tool contract v1).
+ */
 export type PersonAnswerV8 = OrganizationPersonAnswerV8;
-export type PersonAnswer = PersonAnswerV4;
 export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
 export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
 export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
@@ -192,45 +171,25 @@ export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonListV1 = PersonListResponseV1;
 export type PersonOpenV1 = PersonOpenResponseV1;
 
-/** A live Ask's answer; `receipt` is present only when the Authority streamed its progress (ADR-0039). */
-export interface PersonLiveAnswerV1 {
-  readonly result: PersonAnswerV6 | PersonAnswerV5;
-  readonly receipt?: PersonAskReceiptV1;
-}
-/** Receives each stage, searched or read event of a streamed Ask as it arrives, synchronously and in order. */
-export type PersonAskProgressSinkV1 = (event: PersonAskProgressStepEventV1) => void;
 /**
- * A live Ask's answer from a client that prefers `/v6` (ADR-0040): the V7
- * answer with a V2 receipt when `/v6` streamed, the V6 answer with a V1
- * receipt when only `/v5` did, and no receipt from JSON or the `/v4` fallback.
- */
-export interface PersonLiveAnswerV2 {
-  readonly result: PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5;
-  readonly receipt?: PersonAskReceiptV2;
-}
-/** Receives each step of a streamed Ask in progress V2, whose reads may name follow-ups; a `/v5` stream's V1 steps are V2 steps too. */
-export type PersonAskProgressSinkV2 = (event: PersonAskProgressStepEventV2) => void;
-/**
- * A live Ask's answer from a client that prefers `/v7` (research tool contract
- * v1): the V8 answer with a V3 receipt when `/v7` streamed, the V7 answer with
- * a V2 receipt when only `/v6` did, the V6 answer with a V1 receipt when only
- * `/v5` did, and no receipt from JSON or the `/v4` fallback.
+ * A streamed Ask's answer (ADR-0039): the V8 answer, with its V3 receipt when
+ * the Authority streamed, and no receipt when it answered in JSON.
  */
 export interface PersonLiveAnswerV3 {
-  readonly result: PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6 | PersonAnswerV5;
+  readonly result: PersonAnswerV8;
   readonly receipt?: PersonAskReceiptV3;
 }
 /**
- * Receives each step of a streamed Ask in progress V3, whose reads may name
- * projects, people, tools and tool containers; a `/v6` or `/v5` stream's
- * steps are V3 steps too.
+ * Receives each step of a streamed Ask in progress V3, as it arrives,
+ * synchronously and in order: its reads may name follow-ups, projects, people,
+ * tools and tool containers.
  */
 export type PersonAskProgressSinkV3 = (event: PersonAskProgressStepEventV3) => void;
 
 export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
   readonly unsent: boolean;
-  /** A matched live Ask route must never be mistaken for an older server. */
+  /** The Ask route answered it, with its route header: never an Authority without the route. */
   readonly routeMatched: boolean;
 
   constructor(
@@ -415,20 +374,16 @@ function lostAskStream(): PersonAuthorityClientError {
   return new PersonAuthorityClientError("transport_failed", null, "Person Authority request failed");
 }
 
-/** A progress version's decoder: V1 for `/v5`, V2 for `/v6`, V3 for `/v7`. Each version's steps are the next one's too. */
-type AskProgressDecoder = { push(text: string): readonly (PersonAskProgressEventV1 | PersonAskProgressEventV2 | PersonAskProgressEventV3)[]; end(): void };
-
 /**
- * Reads a streamed Ask (ADR-0039) to its end with its version's shared decoder, hands
+ * Reads a streamed Ask (ADR-0039) to its end with the progress V3 decoder, hands
  * each step event to `onProgress` as it arrives, and returns the one terminal
  * event. Fails closed: a malformed frame or event, invalid UTF-8, or an end
  * without exactly one terminal event is `invalid_response`, and a stream past
  * its byte bound is `response_too_large`. Either failure cancels the body, so
  * the Authority sees the disconnect and stops the Ask.
  */
-async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3,
-  createDecoder: () => AskProgressDecoder): Promise<PersonAskProgressTerminalEventV1 | PersonAskProgressTerminalEventV2 | PersonAskProgressTerminalEventV3> {
-  // Only the V5, V6 and V7 routes stream, and each marks the stream as its own, so an in-band 404 is never a missing route.
+async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3): Promise<PersonAskProgressTerminalEventV3> {
+  // Only `/v7` streams, and it marks the stream as its own, so an in-band 404 is never a missing route.
   if (response.status !== 200 || response.body === null || !response.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)) {
     throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
   }
@@ -437,8 +392,8 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
   const cancel = () => { reader.cancel().catch(() => undefined); };
   signal.addEventListener("abort", cancel, { once: true });
   const utf8 = new TextDecoder("utf-8", { fatal: true });
-  const frames = createDecoder();
-  const decode = (chunk: Uint8Array | undefined): readonly (PersonAskProgressEventV1 | PersonAskProgressEventV2 | PersonAskProgressEventV3)[] => {
+  const frames = createPersonAskProgressDecoderV3();
+  const decode = (chunk: Uint8Array | undefined) => {
     try {
       if (chunk !== undefined) return frames.push(utf8.decode(chunk, { stream: true }));
       const events = frames.push(utf8.decode());
@@ -449,7 +404,7 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
       throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
     }
   };
-  let terminal: PersonAskProgressTerminalEventV1 | PersonAskProgressTerminalEventV2 | PersonAskProgressTerminalEventV3 | undefined;
+  let terminal: PersonAskProgressTerminalEventV3 | undefined;
   let size = 0;
   try {
     // Nothing is handed on once the request is cancelled, even from bytes already received.
@@ -482,14 +437,14 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
 
 type AskScope = ProjectIdV1 | { readonly mine: true } | undefined;
 
-/** Every Ask route takes the same V3 request; only `/v7` is sent the asker's previous turn (ADR-0047). */
+/** The Ask's V3 request, which may carry the asker's previous turn (ADR-0047). */
 function askRequest(question: string, scope: AskScope, captureId: PersonDiagnosticCaptureIdV1 | undefined, previous?: PersonAnswerPreviousV1) {
   return validatePersonAnswerRequestV3({ schema_version: 3, question,
     ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }),
     ...(previous === undefined ? {} : { previous }) });
 }
 
-/** Every Ask sends the client's clock and time zone and asks for answer layout v1 (ADR-0045), which an older Authority ignores. */
+/** Every Ask sends the client's clock and time zone and asks for answer layout v1 (ADR-0045). */
 function askHeaders(): Readonly<Record<string, string>> {
   return { [PERSON_ASK_CLIENT_NOW_HEADER_V1]: new Date().toISOString(), [PERSON_ASK_TIME_ZONE_HEADER_V1]: Intl.DateTimeFormat().resolvedOptions().timeZone,
     [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1 };
@@ -1454,101 +1409,60 @@ export class PersonAuthorityClient {
     }
   }
 
-  /** Agentic Ask; global by default, a supplied project ID is a strict project-only scope, and mine is only what the asker added. */
-  askV3(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV4> {
-    return this.ask(PERSON_ANSWER_PATH_V3, validatePersonAnswerResponseV4, accessToken, question, scope, signal, captureId);
-  }
-
-  askV4(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV5> {
-    return this.ask(PERSON_ANSWER_PATH_V4, validatePersonAnswerResponseV5, accessToken, question, scope, signal, captureId);
-  }
-
-  askV5(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV6> {
-    return this.ask(PERSON_ANSWER_PATH_V5, validatePersonAnswerResponseV6, accessToken, question, scope, signal, captureId);
-  }
-
-  /** The V7 Ask (ADR-0040): the V5 Ask's sources and follow-ups, on the same V3 request. */
-  askV6(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1): Promise<PersonAnswerV7> {
-    return this.ask(PERSON_ANSWER_PATH_V6, validatePersonAnswerResponseV7, accessToken, question, scope, signal, captureId);
-  }
-
   /**
-   * The V8 Ask (research tool contract v1): the V6 Ask's sources and
-   * follow-ups, and the asker's projects, people, tools and tool containers,
-   * on the same V3 request. Only it is sent the asker's previous turn (ADR-0047).
+   * Ask (`/v7`, the V8 answer, research tool contract v1): global by default, a supplied project ID is a strict
+   * project-only scope, and mine is only what the asker added. The answer may cite live tickets and pages, follow-ups,
+   * and the asker's projects, people, tools and tool containers, and must echo the requested scope. The request may
+   * carry the asker's previous turn (ADR-0047).
    */
   askV7(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
-    return this.ask(PERSON_ANSWER_PATH_V7, validatePersonAnswerResponseV8, accessToken, question, scope, signal, captureId, previous);
+    return this.askRoute((async () => {
+      const response = await this.json({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
+        validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV8,
+        access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
+      return inAskScope(response, scope, previous);
+    })());
   }
 
   /**
-   * V5 Ask that streams its progress (ADR-0039). Each step event reaches
-   * `onProgress` as it arrives; the answer comes back with the receipt the
-   * Authority built after its final check. An Authority that predates the
-   * stream answers with today's JSON, returned without a receipt, and an error
-   * inside the stream is the error its JSON response would have been. The ask
+   * `askV7` streamed in Ask progress V3 (ADR-0039): each step event reaches
+   * `onProgress` as it arrives, and the answer comes back with the receipt the
+   * Authority built after its final check. An Authority that does not stream
+   * answers with the JSON answer, returned without a receipt, and an error
+   * inside the stream is the error its JSON response would have had. The ask
    * timeout and the caller's signal bound the whole stream.
-   */
-  askV5WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV1): Promise<PersonLiveAnswerV1> {
-    // The V1 decoder hands on only V1 steps, and only a V6 answer with its V1 receipt.
-    return this.askWithProgress(PERSON_ANSWER_PATH_V5, PERSON_ASK_PROGRESS_HEADER_VALUE_V1, validatePersonAnswerResponseV6, createPersonAskProgressDecoderV1,
-      accessToken, question, scope, signal, onProgress as PersonAskProgressSinkV3) as Promise<PersonLiveAnswerV1>;
-  }
-
-  /**
-   * V6 Ask (the V7 answer, ADR-0040) that streams its progress in Ask
-   * progress V2, exactly as `askV5WithProgress` streams V1: a step may name
-   * a follow-up, and the answer comes with its V2 receipt.
-   */
-  askV6WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV2): Promise<PersonLiveAnswerV2> {
-    // The V2 decoder hands on only V2 steps, and only a V7 answer with its V2 receipt.
-    return this.askWithProgress(PERSON_ANSWER_PATH_V6, PERSON_ASK_PROGRESS_HEADER_VALUE_V2, validatePersonAnswerResponseV7, createPersonAskProgressDecoderV2,
-      accessToken, question, scope, signal, onProgress as PersonAskProgressSinkV3) as Promise<PersonLiveAnswerV2>;
-  }
-
-  /**
-   * V7 Ask (the V8 answer, research tool contract v1) that streams its
-   * progress in Ask progress V3, exactly as `askV6WithProgress` streams V2: a
-   * step may name a project, a person, a tool or a tool container, and the
-   * answer comes with its V3 receipt. Only it is sent the asker's previous
-   * turn (ADR-0047).
    */
   askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
-    return this.askWithProgress(PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, validatePersonAnswerResponseV8, createPersonAskProgressDecoderV3,
-      accessToken, question, scope, signal, onProgress, previous);
+    return this.askRoute((async () => {
+      const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
+      const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, undefined, previous), validate_request: validatePersonAnswerRequestV3,
+        access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
+      if (!isAskProgressStream(response)) {
+        const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
+        return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validatePersonAnswerResponseV8), scope, previous) });
+      }
+      const terminal = await readAskProgressStream(response, deadline, onProgress);
+      if (terminal.type === 'error') {
+        throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request', { routeMatched: true });
+      }
+      return Object.freeze({ result: inAskScope(terminal.response, scope, previous), receipt: terminal.receipt });
+    })());
   }
 
-  /** One streamed live Ask route: its path, its progress version's header value and decoder, and its JSON answer. */
-  private async askWithProgress(path: string, headerValue: string, validateJson: (value: unknown) => PersonAnswerV8 | PersonAnswerV7 | PersonAnswerV6,
-    createDecoder: () => AskProgressDecoder,
-    accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
-    const body = askRequest(question, scope, undefined, previous);
-    const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
-    const response = await this.post({ path, body, validate_request: validatePersonAnswerRequestV3, access_token: accessToken,
-      headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: headerValue } }, deadline);
-    if (!isAskProgressStream(response)) {
-      const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
-      return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validateJson), scope, previous) });
+  /**
+   * An Ask on `/v7`, which answers every request it matches with its route header: a `not_found` 404 without it is an
+   * Authority with no `/v7`, `not_supported` here, never `not_found`. Any other failure is the Authority's own.
+   */
+  private async askRoute<T>(read: Promise<T>): Promise<T> {
+    try {
+      return await read;
+    } catch (error) {
+      if (error instanceof PersonAuthorityClientError && error.status === 404 && error.code === "not_found" && !error.routeMatched) {
+        throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no /v7 Ask");
+      }
+      throw error;
     }
-    const terminal = await readAskProgressStream(response, deadline, onProgress, createDecoder);
-    if (terminal.type === 'error') {
-      throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request', { routeMatched: true });
-    }
-    return Object.freeze({ result: inAskScope(terminal.response, scope, previous), receipt: terminal.receipt });
-  }
-
-  /** Every Ask route takes the same V3 request and must echo the requested scope. */
-  private async ask<T extends { readonly scope: unknown }>(path: string, validate_response: (value: unknown) => T, accessToken: string,
-    question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined, captureId: PersonDiagnosticCaptureIdV1 | undefined,
-    previous?: PersonAnswerPreviousV1): Promise<T> {
-    const response = await this.json({ path, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
-      validate_request: validatePersonAnswerRequestV3, validate_response,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
-    return inAskScope(response, scope, previous);
   }
 
   /** Prepares or reads an explicitly requested private capture on the ordinary product route. */
