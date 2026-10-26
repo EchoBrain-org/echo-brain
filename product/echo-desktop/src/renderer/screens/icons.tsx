@@ -101,15 +101,6 @@ export const Home = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" fill="none" /></svg>
 );
 
-/** ECHO's mark: a signal and what comes back from it. Its centre takes the signal colour. */
-export const EchoMark = () => (
-  <svg class="echo-mark" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle class="core" cx="8" cy="8" r="2.3" /><circle cx="8" cy="8" r="4.9" fill="none" stroke="currentColor" stroke-width="1.3" opacity="0.6" /><circle cx="8" cy="8" r="7.2" fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.28" /></svg>
-);
-/** An empty Home: the same rings, quiet, with nothing at their centre waiting. */
-export const EchoRings = () => (
-  <svg class="echo-rings" width="96" height="96" viewBox="0 0 96 96" aria-hidden="true"><circle cx="48" cy="48" r="46" fill="none" stroke="currentColor" stroke-width="1" opacity="0.14" /><circle cx="48" cy="48" r="34" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.26" /><circle cx="48" cy="48" r="22" fill="none" stroke="currentColor" stroke-width="1.4" opacity="0.45" /><circle cx="48" cy="48" r="6" fill="currentColor" /></svg>
-);
-
 /**
  * What a Home row asks of you, as a shape beside its verb, so the kinds tell
  * apart by more than colour: a decision (diamond) to approve, follow-ups to

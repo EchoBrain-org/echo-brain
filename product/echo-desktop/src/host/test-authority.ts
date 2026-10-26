@@ -411,7 +411,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const pasted: { meeting_id: string; title: string; lines: readonly [string, string]; meeting_at: string | null; all_day: boolean; project_ids: string[] }[] = [];
   // The checks of its other records, one per further destination: they find nothing, but in granola-routes each finds the
   // actions sent there, and in granola-extra-failed each fails until Try again.
-  let extraRuns: { run_id: string; record: { approval_id: string; project_ids: string[] }; record_sha256: string; state: 'pending' | 'running' | 'done' | 'failed';
+  let extraRuns: { run_id: string; record: { approval_id: string; project_ids: string[]; private?: true }; record_sha256: string; state: 'pending' | 'running' | 'done' | 'failed';
     error_code: string | null; retried: boolean }[] = [];
   // The people a meeting's impact check names, to pick as owners.
   if (mode.startsWith('granola')) desktop.people.push(...[MINA, RAFAEL, OKAFOR].map(person => ({ membership_id: person.membership_id, display_name: person.name })));
@@ -1020,13 +1020,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    */
   const writeExtraFound = () => {
     if (mode !== 'granola-routes') return;
-    const routes = Array.isArray(granolaReview?.routes) ? granolaReview.routes as { signal_id: string; project_ids: string[] | null }[] : [];
+    const routes = Array.isArray(granolaReview?.routes) ? granolaReview.routes as { signal_id: string; project_ids: string[] | null; private?: true }[] : [];
     extraRuns.forEach((extra, at) => {
       if (extra.state !== 'done' || openItems.some(item => item.run_id === extra.run_id)) return;
       const decision = { approval_id: extra.record.approval_id, record_sha256: extra.record_sha256, title: 'Pilot planning', first_line: 'Launch the pilot next week.',
         approved_at: '2026-10-07T10:00:00.000Z', project_ids: [...extra.record.project_ids] };
-      const sent = MEETING_ACTIONS.filter(action =>
-        JSON.stringify(routes.find(route => route.signal_id === action.signal_id)?.project_ids) === JSON.stringify(extra.record.project_ids));
+      const sent = MEETING_ACTIONS.filter(action => {
+        const route = routes.find(entry => entry.signal_id === action.signal_id);
+        return route !== undefined && destinationKey(route) === destinationKey(extra.record);
+      });
       openItems.push(...sent.map((action, index): OpenItem => ({
         item_id: `itm_00000000-0000-4000-8000-0000000005${at}${index}`, run_id: extra.run_id, kind: 'action', decision, readable: true, live: {}, opens: false,
         relation: 'needs_updating', expected: action.text, approver: ARI, owner: { ...ARI, match: 'approver' }, state: 'unsent', created_at: '2026-10-07T10:05:00.000Z',
@@ -1034,20 +1036,29 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       })));
     });
   };
-  /**
-   * The records an approval wrote: one per destination group of its routes, ordered by each group's first item, each under
-   * its own approval id. The first is Pilot planning's record (PILOT_RECORD); its check is PILOT_RUN.
-   */
-  function recordsOf(decided: Record<string, unknown> | undefined): { approval_id: string; project_ids: string[] }[] {
-    const routes = decided?.action === 'approve' && Array.isArray(decided.routes) ? decided.routes as { signal_id: string; project_ids: string[] | null }[] : [];
-    const groups = new Map<string, string[]>();
-    for (const route of routes) if (route.project_ids !== null && !groups.has(JSON.stringify(route.project_ids))) groups.set(JSON.stringify(route.project_ids), route.project_ids);
-    return [...groups.values()].map(project_ids => ({ approval_id: 'apr_' + sha(`route:${JSON.stringify(project_ids)}`).slice(7), project_ids }));
+  /** A destination group's key: its projects, and whether they are kept for Ari alone (the route says `private: true`). */
+  function destinationKey(destination: { readonly project_ids: readonly string[] | null; readonly private?: true }): string {
+    return JSON.stringify([destination.private === true, destination.project_ids]);
   }
-  /** Pilot planning, approved by Ari: in the projects it was approved into, where its record opens. */
-  const pilotMeeting = (projectIds: string[]): Meeting => ({
+  /**
+   * The records an approval wrote: one per destination group of its routes (projects, kept private or not), ordered by each
+   * group's first item, each under its own approval id. The first is Pilot planning's record (PILOT_RECORD); its check is PILOT_RUN.
+   */
+  function recordsOf(decided: Record<string, unknown> | undefined): { approval_id: string; project_ids: string[]; private?: true }[] {
+    const routes = decided?.action === 'approve' && Array.isArray(decided.routes) ? decided.routes as { signal_id: string; project_ids: string[] | null; private?: true }[] : [];
+    const groups = new Map<string, { project_ids: string[]; private?: true }>();
+    for (const route of routes) {
+      if (route.project_ids !== null && !groups.has(destinationKey(route))) {
+        groups.set(destinationKey(route), { project_ids: route.project_ids, ...(route.private === true ? { private: true as const } : {}) });
+      }
+    }
+    // A private group's id hashes `private` in, as the Authority's does, so it is never the id of the same projects shared.
+    return [...groups.values()].map(group => ({ approval_id: 'apr_' + sha(`route:${JSON.stringify(group.project_ids)}${group.private === true ? ':private' : ''}`).slice(7), ...group }));
+  }
+  /** Pilot planning, approved by Ari: in the projects it was approved into, where its record opens; for Ari alone when kept private there. */
+  const pilotMeeting = (projectIds: string[], kept = false): Meeting => ({
     record_sha256: PILOT_RECORD, title: 'Pilot planning', added_at: '2026-10-07T10:00:00.000Z', meeting_date: '2026-10-06',
-    visibility: projectIds.length > 0 ? 'project' : 'only_me', project_ids: projectIds, approver: session.membership_id,
+    visibility: projectIds.length > 0 && !kept ? 'project' : 'only_me', project_ids: projectIds, approver: session.membership_id,
     started_at: '2026-10-06T16:00:00.000Z', timezone: 'Europe/London', participants: ['Ari', 'Mina Patel', 'Rafael Moreno'], approved_by: 'Ari',
     atoms: [{ kind: 'decision', text: 'Launch the pilot next week.' }, { kind: 'action', text: 'Send the revised quote', owner: 'Rafael Moreno' },
       { kind: 'action', text: 'Confirm the trace', owner: 'Mina Patel' }],
@@ -1279,8 +1290,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const decidedOn = granolaApproved ? mode === 'granola-decided-in-slack' ? 'slack' : 'desktop' : null;
       // Decided: where each item went, and the records those routes wrote, one per destination.
       const records = granolaApproved ? recordsOf(granolaReview) : [];
-      const routed = new Map((granolaApproved && Array.isArray(granolaReview?.routes) ? granolaReview.routes as { signal_id: string; project_ids: string[] | null }[] : [])
-        .map(route => [route.signal_id, route.project_ids]));
+      const routed = new Map((granolaApproved && Array.isArray(granolaReview?.routes) ? granolaReview.routes as { signal_id: string; project_ids: string[] | null; private?: true }[] : [])
+        .map(route => [route.signal_id, route]));
       const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning',
         project_ids: [...new Set(records.flatMap(record => record.project_ids))].sort(),
         status: granolaApproved ? 'approved' : 'pending', decided_on: decidedOn,
@@ -1313,8 +1324,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           const confirmed = new Map((Array.isArray(granolaReview?.owners) ? granolaReview.owners as { signal_id: string; owner: string }[] : []).map(entry => [entry.signal_id, entry.owner]));
           const items = PILOT_ITEMS.map(item => {
             const proposed = MEETING_ACTIONS.find(action => action.signal_id === item.signal_id)?.owner ?? null;
+            const route = routed.get(item.signal_id);
             return granolaApproved
-              ? { ...item, quotes: [...item.quotes], owner: item.kind === 'action' ? confirmed.get(item.signal_id) ?? null : null, owner_editable: false, project_ids: routed.get(item.signal_id) ?? null }
+              ? { ...item, quotes: [...item.quotes], owner: item.kind === 'action' ? confirmed.get(item.signal_id) ?? null : null, owner_editable: false,
+                project_ids: route?.project_ids ?? null, ...(route?.private === true ? { private: true as const } : {}) }
               : { ...item, quotes: [...item.quotes], owner: proposed, owner_editable: proposed !== null, project_ids: [THERMOSTAT] };
           });
           const names = new Map([[THERMOSTAT, 'Thermostat redesign'], [SUPPLIER, 'Supplier review']]);
@@ -1334,8 +1347,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           }
           // The approved meeting's first record: in the projects it was sent to, where it opens; in granola-routes each other record too.
           if (body?.action === 'approve' && !meetings.some(meeting => meeting.record_sha256 === PILOT_RECORD)) {
-            meetings.push(pilotMeeting(recordsOf(body)[0]?.project_ids ?? []));
-            if (mode === 'granola-routes') meetings.push(...extraRuns.map(extra => ({ ...pilotMeeting(extra.record.project_ids), record_sha256: extra.record_sha256 })));
+            const first = recordsOf(body)[0];
+            meetings.push(pilotMeeting(first?.project_ids ?? [], first?.private === true));
+            if (mode === 'granola-routes') meetings.push(...extraRuns.map(extra => ({ ...pilotMeeting(extra.record.project_ids, extra.record.private === true), record_sha256: extra.record_sha256 })));
           }
           return json(mode === 'granola-decided-in-slack' ? { status: 'approved', decided_on: 'slack' } : { status: 'publishing', decided_on: 'desktop' });
       }

@@ -73,7 +73,8 @@ Adopt option 3, as specified in
   keeps each item's source reference but none of its quotes, since a quote can
   speak of other items; Only me keeps them), with
   a derived record approval id, so the record log keeps one record per approval
-  id. Audience equals association per record (ADR-0017), unchanged. Every
+  id. Audience equals association per record (ADR-0017), unchanged, except for
+  items kept for the reviewer alone inside projects (ADR-0049). Every
   group is validated before the first append, and the receipts of all groups
   are written in one Authority transaction.
 - **No transcript sharing.** Nothing shares a transcript, so the whole

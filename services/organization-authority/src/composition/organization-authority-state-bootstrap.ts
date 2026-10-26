@@ -17,10 +17,10 @@ import {
   organizationControlBaselineSha256V4,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  applyOrganizationRecordLogBaselineV5,
+  applyOrganizationRecordLogBaselineV6,
   openOrganizationRecordDatabase,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5,
-  organizationRecordLogBaselineSha256V5,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V6,
+  organizationRecordLogBaselineSha256V6,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   READABLE_SEARCH_CONTENT_BASELINE_V2,
@@ -355,8 +355,8 @@ export function bootstrapOrganizationAuthorityState(
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5,
-        schema_sha256: organizationRecordLogBaselineSha256V5(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V6,
+        schema_sha256: organizationRecordLogBaselineSha256V6(),
       },
       "retrieval-facts": {
         database_schema_version:
@@ -381,7 +381,7 @@ export function bootstrapOrganizationAuthorityState(
     top_level_appliers: {
       authority: { apply: applyAuthorityBaseline },
       "control-plane": { apply: applyOrganizationControlBaselineV4 },
-      "record-log": { apply: applyOrganizationRecordLogBaselineV5 },
+      "record-log": { apply: applyOrganizationRecordLogBaselineV6 },
     },
     open_writable_database: (path, role) => {
       if (role === "authority") return openAuthorityDatabase(path);

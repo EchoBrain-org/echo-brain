@@ -345,6 +345,16 @@ describe('Slack approval presenter V1', () => {
     f.db.prepare('INSERT INTO authority_approval_decisions_v1 VALUES (?,?)').run(id, 'approve');
     await f.presenter.reconcile(signal());
     expect(f.cards.at(-1)!.text).toBe('Approved in Slack\nSent to: THERM · THERM + ECHO · Only you');
+    // The same projects kept for the reviewer alone are a destination of their own, and read as only you.
+    const k = fixture();
+    k.projects = [{ project_id: 'prj_a', name: 'THERM' }, { project_id: 'prj_b', name: 'ECHO' }];
+    const kept = k.stage('apr_kept', { status: 'approved', decided_on: 'desktop', project_ids: ['prj_a', 'prj_b'], routes: [
+      { signal_id: 'd1', project_ids: ['prj_a'], private: true }, { signal_id: 'd2', project_ids: ['prj_a'] }, { signal_id: 'a1', project_ids: ['prj_a', 'prj_b'], private: true },
+      { signal_id: 'a2', project_ids: [] }, { signal_id: 'a3', project_ids: ['prj_a'], private: true }] });
+    k.db.prepare('INSERT INTO authority_approval_presentations_v1 VALUES (?,\'slack\',?,\'D1\',\'posted\',NULL,NULL,\'1.1\',\'hash\',\'open\',0,NULL,?,?)').run(kept, JSON.stringify(target), '2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z');
+    k.db.prepare('INSERT INTO authority_approval_decisions_v1 VALUES (?,?)').run(kept, 'approve');
+    await k.presenter.reconcile(signal());
+    expect(k.cards.at(-1)!.text).toBe('Approved in the ECHO desktop\nSent to: THERM, only you · THERM · THERM + ECHO, only you · Only you');
     const g = fixture();
     const rejected = g.stage('apr_rejected', { status: 'rejected', decided_on: 'desktop', routes: [] });
     g.db.prepare('INSERT INTO authority_approval_presentations_v1 VALUES (?,\'slack\',?,\'D1\',\'posted\',NULL,NULL,\'1.1\',\'hash\',\'open\',0,NULL,?,?)').run(rejected, JSON.stringify(target), '2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z');

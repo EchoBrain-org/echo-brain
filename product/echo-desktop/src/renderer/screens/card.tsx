@@ -64,15 +64,22 @@ export function Face({ name, keyed = name }: { name: string; keyed?: string }) {
   return <span class="face" style={identity(keyed)} aria-hidden="true">{initials(name)}</span>;
 }
 
-/** What was said in the meeting, one line per speaker, with the time the meeting tool gave it. */
+/**
+ * What was said in the meeting, one line per speaker: the time and speaker the meeting tool gave above the words, so the
+ * words keep the panel's whole width. Notes with neither are the words alone.
+ */
 function Said({ quotes }: { quotes: readonly string[] }) {
   return (
     <div class="said selectable">
       {quotes.flatMap(quote => saidLines(quote)).map((line, index) => (
         <div class="said-line" key={index}>
-          <span class="said-time">{line.time ?? ''}</span>
-          <span class="said-who">{line.speaker ?? ''}</span>
-          <span class="said-text">{line.speaker === null ? `…${line.text}` : line.text}</span>
+          {(line.time !== null || line.speaker !== null) && (
+            <div class="said-meta">
+              {line.time !== null && <span class="said-time">{line.time}</span>}
+              {line.speaker !== null && <span class="said-who">{line.speaker}</span>}
+            </div>
+          )}
+          <div class="said-text">{line.speaker === null ? `…${line.text}` : line.text}</div>
         </div>
       ))}
     </div>
@@ -82,9 +89,11 @@ function Said({ quotes }: { quotes: readonly string[] }) {
 /** A decision that is not decided says so: proposed, or unresolved. */
 const STATUS: Readonly<Record<string, string>> = { proposed: 'Proposed', unresolved: 'Unresolved' };
 
-/** One decision or action: its words, a tag for a status other than decided, and the meeting's words behind one button. */
-export function SignalRow({ signal, number, children }: { signal: CardSignal; number?: number; children?: ComponentChildren }) {
-  const [open, setOpen] = useState(false);
+/**
+ * One decision or action: its words and a tag for a status other than decided; `under` them what is chosen for it (where
+ * it goes), so its controls never narrow its words; beside them only what is short (a due date, where it went).
+ */
+export function SignalRow({ signal, number, under, children }: { signal: CardSignal; number?: number; under?: ComponentChildren; children?: ComponentChildren }) {
   const status = signal.status && signal.status !== 'decided' ? STATUS[signal.status] ?? signal.status : null;
   return (
     <div class="card-row" data-testid="card-signal">
@@ -95,17 +104,28 @@ export function SignalRow({ signal, number, children }: { signal: CardSignal; nu
           {status && <span class="card-tag">{status}</span>}
           {signal.subject && <span class="card-subject">{signal.subject}</span>}
         </div>
-        {open && signal.quotes.length > 0 && <Said quotes={signal.quotes} />}
+        {under}
       </div>
       {children}
-      {signal.quotes.length > 0 && (
-        <button type="button" class={`card-toggle${open ? ' open' : ''}`} aria-expanded={open} onClick={() => setOpen(!open)}
-          aria-label={`In the meeting: ${signal.text.length > 80 ? `${signal.text.slice(0, 79)}…` : signal.text}`}>
-          In the meeting<Chevron />
-        </button>
-      )}
     </div>
   );
+}
+
+/**
+ * See the notes: one button in the card's head, in place of one per item, for the meeting's words behind what it holds.
+ * The words open under the head (NotesPanel).
+ */
+export function NotesButton({ open, onToggle }: { open: boolean; onToggle(): void }) {
+  return (
+    <button type="button" class="notes-toggle" data-testid="card-notes-toggle" aria-expanded={open} aria-controls={open ? 'card-notes' : undefined} onClick={onToggle}>
+      {open ? 'Hide the notes' : 'See the notes'}
+    </button>
+  );
+}
+
+/** The meeting's words behind the card's items, each quote once, at the card's full width. */
+export function NotesPanel({ quotes }: { quotes: readonly string[] }) {
+  return <section id="card-notes" class="card-notes" aria-label="The notes" data-testid="card-notes"><Said quotes={quotes} /></section>;
 }
 
 /** The reasons given in the meeting, behind one line. */
@@ -114,7 +134,7 @@ export function Reasons({ reasons }: { reasons: readonly Pick<CardSignal, 'text'
   if (reasons.length === 0) return null;
   return (
     <section class="card-section" aria-label="Why">
-      <button type="button" class={`card-toggle wide${open ? ' open' : ''}`} aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button type="button" class={`card-toggle${open ? ' open' : ''}`} aria-expanded={open} onClick={() => setOpen(!open)}>
         <Chevron />Why · {reasons.length === 1 ? '1 reason' : `${reasons.length} reasons`} from the meeting
       </button>
       {open && <ul class="card-reasons selectable">{reasons.map((reason, index) => <li key={index}>{reason.text}</li>)}</ul>}

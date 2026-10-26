@@ -51,9 +51,9 @@ test('a project created elsewhere reaches the sidebar when the window shows, wit
   // The review reads its suggestions fresh even though the sidebar's first list was empty.
   await expect(card.getByTestId('route-chip')).toHaveText(['Thermostat redesign', 'Thermostat redesign', 'Thermostat redesign']);
   await card.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
-  await routeAll(card, 'Only me');
+  await routeAll(card, 'No project');
   await card.getByTestId('route-chip').nth(2).click();
-  await card.getByTestId('route-menu').getByRole('button', { name: 'Don\'t keep', exact: true }).click();
+  await card.getByTestId('route-menu').getByRole('radio', { name: 'Don\'t keep', exact: true }).click();
   const before = lists();
   writeFileSync(join(run.home, 'project-created'), '');
   await emit(app, 'echo-test:shown');
@@ -62,7 +62,7 @@ test('a project created elsewhere reaches the sidebar when the window shows, wit
   // The full read that tells which projects Ari was added to, which also fills the sidebar.
   await expect.poll(lists).toBe(before + 1);
   await expect(card.getByLabel('Owner for: Send the revised quote')).toHaveValue('Rafael M.');
-  await expect(card.getByTestId('route-chip')).toHaveText(['Only me', 'Only me', 'Not kept']);
+  await expect(card.getByTestId('route-chip')).toHaveText(['No project', 'No project', 'Don\'t keep']);
   expect(run.calls().filter(call => call.method === 'POST' && call.path === '/v1/person/projects')).toHaveLength(0);
   expect(run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(0);
 });

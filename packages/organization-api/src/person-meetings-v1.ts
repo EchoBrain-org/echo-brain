@@ -42,10 +42,13 @@ export type PersonMeetingOperationV2 =
   | { readonly operation: 'cancel_import'; readonly source_key: string; readonly meeting_id: string }
   | { readonly operation: 'review_open'; readonly approval_id: string }
   | { readonly operation: 'review'; readonly approval_id: string; readonly command_id: string; readonly snapshot_sha256: string; readonly action: 'approve' | 'reject'; readonly routes: readonly PersonMeetingRouteV2[]; readonly owners: readonly { readonly signal_id: string; readonly owner: string }[] };
-/** Where one decision or action goes: null = not kept, [] = Only me, otherwise 1..20 project ids, sorted and unique. */
-export interface PersonMeetingRouteV2 { readonly signal_id: string; readonly project_ids: readonly string[] | null }
-/** One published record of an approved meeting: its own approval id and its destination ([] = Only me). */
-export interface PersonMeetingRecordV2 { readonly approval_id: string; readonly project_ids: readonly string[] }
+/**
+ * Where one decision or action goes: null = not kept, [] = Only me, otherwise 1..20 project ids, sorted and unique.
+ * `private: true` files it in those projects for the reviewer alone (ADR-0049); it needs a project and is sent only when true.
+ */
+export interface PersonMeetingRouteV2 { readonly signal_id: string; readonly project_ids: readonly string[] | null; readonly private?: true }
+/** One published record of an approved meeting: its own approval id and its destination ([] = Only me; `private` as its route). */
+export interface PersonMeetingRecordV2 { readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true }
 /** One decision or action of a review, in brief order (decisions first), with where it goes. */
 export interface PersonMeetingReviewItemV2 {
   readonly signal_id: string; readonly kind: 'decision' | 'action'; readonly text: string; readonly subject: string | null;
@@ -59,6 +62,8 @@ export interface PersonMeetingReviewItemV2 {
   readonly owner: string | null; readonly owner_editable: boolean;
   /** Pending: the suggestion the reviewer can read now ([] = Only me). Decided: the chosen destination (null = not kept). */
   readonly project_ids: readonly string[] | null;
+  /** Decided only: filed in `project_ids` for the reviewer alone. Present only when true. */
+  readonly private?: true;
 }
 export interface PersonMeetingReviewReasonV2 { readonly signal_id: string; readonly text: string; readonly supports: readonly string[]; readonly quotes: readonly string[] }
 export type PersonMeetingRequestV2 = PersonMeetingOperationV2 & { readonly schema_version: 2; readonly tool_id: string };
@@ -195,15 +200,20 @@ function projectIds(value: unknown): asserts value is readonly string[] {
   let previous: string | undefined;
   for (const id of value) { validateProjectIdV1(id); if (previous !== undefined && previous >= id) fail(label); previous = id; }
 }
+/** A destination kept for the reviewer alone inside its projects says `private: true`, only then, and only with a project. */
+function privateDestination(row: Record<string, unknown>, message: string): void {
+  if (Object.hasOwn(row, 'private') && (row.private !== true || !Array.isArray(row.project_ids) || row.project_ids.length === 0)) fail(message);
+}
 function routes(value: unknown): asserts value is readonly PersonMeetingRouteV2[] {
   if (!Array.isArray(value) || value.length > ROUTES_MAX) fail(label);
   const seen = new Set<string>();
   for (const entry of value) {
     const route = asEnumerableRecord(entry, label);
-    assertExactKeys(route, ['signal_id', 'project_ids'], label);
+    assertExactKeys(route, ['signal_id', 'project_ids', ...(Object.hasOwn(route, 'private') ? ['private'] : [])], label);
     if (typeof route.signal_id !== 'string' || !SIGNAL.test(route.signal_id) || seen.has(route.signal_id)) fail(label);
     seen.add(route.signal_id);
     if (route.project_ids !== null) projectIds(route.project_ids);
+    privateDestination(route, label);
   }
 }
 function ownerChoices(input: unknown): asserts input is readonly { readonly signal_id: string; readonly owner: string }[] {
@@ -252,7 +262,11 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
     review_open: ['review','snapshot_sha256','participants','items','reasons','suggested_projects','records'], review: ['status','decided_on'] };
   assertExactKeys(row, keys[operation], 'Personal meeting response');
   if (utf8ByteLength(JSON.stringify(row)) > 120_000) fail('Personal meeting response exceeds its bound');
-  const object = (value: unknown, keys: readonly string[]) => { const item = asEnumerableRecord(value, 'Meeting response item'); assertExactKeys(item, keys, 'Meeting response item'); return item; };
+  const object = (value: unknown, keys: readonly string[], optional: readonly string[] = []) => {
+    const item = asEnumerableRecord(value, 'Meeting response item');
+    assertExactKeys(item, [...keys, ...optional.filter(key => Object.hasOwn(item, key))], 'Meeting response item');
+    return item;
+  };
   const array = (value: unknown, limit: number): unknown[] => { if (!Array.isArray(value) || value.length > limit) fail('Invalid meeting collection'); return value; };
   const nullableText = (value: unknown) => { if (value !== null) text(value, 512); };
   const project = (value: unknown) => validateProjectIdV1(value);
@@ -263,9 +277,9 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
   const records = (value: unknown) => {
     const seen = new Set<unknown>();
     for (const entry of array(value, ROUTES_MAX)) {
-      const record = object(entry, ['approval_id','project_ids']);
+      const record = object(entry, ['approval_id','project_ids'], ['private']);
       if (typeof record.approval_id !== 'string' || !/^apr_[0-9a-f]{64}$/.test(record.approval_id) || seen.has(record.approval_id)) fail('Invalid meeting review record');
-      seen.add(record.approval_id); projectIds(record.project_ids);
+      seen.add(record.approval_id); projectIds(record.project_ids); privateDestination(record, 'Invalid meeting review record');
     }
   };
   const review = (value: unknown) => {
@@ -297,7 +311,7 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
     for (const name of array(row.participants, 500)) words(name, 1024);
     const items = new Set<unknown>();
     for (const value of array(row.items, ROUTES_MAX)) {
-      const item = object(value, ['signal_id','kind','text','subject','status','due_at','quotes','owner','owner_editable','project_ids']);
+      const item = object(value, ['signal_id','kind','text','subject','status','due_at','quotes','owner','owner_editable','project_ids'], ['private']);
       signal(item.signal_id); if (items.has(item.signal_id)) fail('Invalid meeting review signal'); items.add(item.signal_id);
       words(item.text); if (item.subject !== null) words(item.subject); quotes(item.quotes);
       if (item.kind === 'decision' ? !['proposed','decided','unresolved'].includes(item.status as string) || item.due_at !== null
@@ -308,6 +322,7 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
         || item.owner.trim() !== item.owner || /[\p{Cc}\p{Cf}]/u.test(item.owner))) fail('Invalid meeting review owner');
       if (typeof item.owner_editable !== 'boolean' || (item.owner_editable && item.owner === null)) fail('Invalid meeting review owner');
       if (item.project_ids !== null) projectIds(item.project_ids);
+      privateDestination(item, 'Invalid meeting review item');
     }
     for (const value of array(row.reasons, ROUTES_MAX)) {
       const item = object(value, ['signal_id','text','supports','quotes']); signal(item.signal_id); words(item.text); quotes(item.quotes);

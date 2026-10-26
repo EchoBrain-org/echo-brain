@@ -436,7 +436,9 @@ export class OrganizationRecordAppenderV4 {
    * These are append-atomic immutable facts about a whole approved record,
    * rather than a cache of the people who may read it.  The protocol verifier
    * has already bound this resolution reference into the canonical envelope;
-   * we only accept the deliberately narrow V1 extension here.
+   * we only accept the deliberately narrow V1 extension here, and a record its
+   * approver alone reads filed in projects (ADR-0049): association rows only,
+   * which narrow where it shows and never who reads it.
    */
   private insertApprovedRecordAudienceFacts(
     envelope: V4RecordEnvelopeView,
@@ -486,15 +488,27 @@ export class OrganizationRecordAppenderV4 {
           reference.audit_entry_sha256, reference.provider_action_sha256,
           reference.authorization_proof_sha256,
         );
-        this.database.prepare(
-          `INSERT INTO organization_record_project_association_v1 (
-             record_position, record_sha256, project_id
-           ) VALUES (?, ?, ?)`,
-        ).run(recordPosition, envelope.record_sha256, project_id);
+        this.insertAssociation(recordPosition, envelope.record_sha256, project_id);
       }
-    } else if (audienceProjectIds.length !== 0 || associationProjectIds.length !== 0) {
+    } else if (
+      audienceProjectIds.length !== 0 ||
+      (associationProjectIds.length !== 0 && binding.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID)
+    ) {
       throw new Error("non-project record approval cannot select projects");
+    } else {
+      // Filed in projects with no audience fact, so the projects add no reader.
+      for (const project_id of associationProjectIds) {
+        this.insertAssociation(recordPosition, envelope.record_sha256, project_id);
+      }
     }
+  }
+
+  private insertAssociation(recordPosition: number, recordSha256: Sha256Digest, projectId: string): void {
+    this.database.prepare(
+      `INSERT INTO organization_record_project_association_v1 (
+         record_position, record_sha256, project_id
+       ) VALUES (?, ?, ?)`,
+    ).run(recordPosition, recordSha256, projectId);
   }
 
   private async withReceipt(

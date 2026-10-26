@@ -194,9 +194,15 @@ and its negative disclosure tests are listed under
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
 Both original and approved-record citations bind the exact released evidence.
 Project scope additionally checks current membership and actual association
-without widening audience. Revalidate all evidence supplied to the answerer,
-including uncited sources, before response release. A revision or representation
-reference is provenance, not continuing permission to read it.
+without widening audience. An item its owner keeps for themself may still be
+filed in projects ([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)):
+a note or document with an `only_me` audience, or an approved meeting record
+under the restricted reviewer policy with no project audience; it is admitted
+to its owner alone and then narrowed by association like any other item, so no
+other member of the project lists, finds or cites it. Revalidate all evidence
+supplied to the answerer, including uncited sources, before response release. A
+revision or representation reference is provenance, not continuing permission
+to read it.
 
 ADR-0017 once extended this boundary to the meeting transcripts an approver
 explicitly released.

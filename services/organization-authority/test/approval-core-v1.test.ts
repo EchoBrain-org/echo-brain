@@ -128,6 +128,9 @@ describe('approval core: decide', () => {
       { ...base, action: 'reject' }, { ...base, action: 'reject', routes: [], owners: [{ signal_id: 'act-1', owner: 'A' }] }, null, 'approve',
       { ...base, owners: [{ signal_id: 'act-1', owner: 'A' }, { signal_id: 'act-1', owner: 'B' }] }, { ...base, owners: [{ signal_id: 'act-1', owner: ' padded ' }] },
       { ...base, owners: [{ signal_id: 'act-1', owner: 'x'.repeat(121) }] },
+      // Kept private only inside a project, and said only as `true`.
+      { ...base, routes: f.routes([]).map(route => ({ ...route, private: true })) }, { ...base, routes: f.routes(id => id === 'act-1' ? null : []).map(route => ({ ...route, private: true })) },
+      { ...base, routes: f.routes([f.projectA]).map(route => ({ ...route, private: false })) }, { ...base, routes: f.routes([f.projectA]).map(route => ({ ...route, private: 'true' })) },
     ]) {
       expect(() => f.core.decide('desktop', bad as never, never)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
     }
@@ -296,6 +299,32 @@ describe('approval core: decide', () => {
     const g = await approvalCoreFixture();
     expect(g.core.decide('desktop', g.reject(), () => g.session)).toEqual({ kind: 'decided', status: 'rejected', surface: 'desktop' });
     expect(g.wakes()).toBe(1);
+  });
+  it('keeps an item for the reviewer alone inside its projects: the same project checks, and the route stored verbatim', async () => {
+    const f = await approvalCoreFixture();
+    const routes = f.routes(id => ({ 'decision-1': [f.projectA], 'act-1': [f.projectA], 'act-2': [] })[id] ?? null)
+      .map(route => route.signal_id === 'decision-1' ? { ...route, private: true as const } : route);
+    // A private route names projects like any other: one the reviewer is not in refuses the decision, in the core and in the database.
+    const outside = routes.map(route => route.signal_id === 'decision-1' ? { ...route, project_ids: [f.projectC] } : route);
+    expect(() => f.core.decide('desktop', f.approve({ routes: outside }), () => f.session)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    const unchecked = await f.create({}, { projects: () => {} });
+    expect(() => unchecked.decide('desktop', f.approve({ routes: outside }), () => f.session)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    expect(f.decisionCount()).toBe(0);
+    expect(f.core.decide('desktop', f.approve({ routes }), () => f.session).kind).toBe('decided');
+    const stored = JSON.parse(f.db.prepare('SELECT body_json FROM authority_approval_decisions_v1').pluck().get() as string).request.routes;
+    expect(stored).toEqual(routes);
+    expect(stored.map((route: object) => Object.keys(route).sort().join())).toEqual(['private,project_ids,signal_id', 'project_ids,signal_id', 'project_ids,signal_id']);
+    expect(f.core.proposal(f.approvalId)).toMatchObject({ status: 'publishing', project_ids: [f.projectA], routes });
+  });
+  it('validates a request without private routes to the bytes it always had', () => {
+    const A = 'prj_00000000-0000-4000-8000-0000000000a1', B = 'prj_00000000-0000-4000-8000-0000000000b1';
+    const routes = [{ signal_id: 'd1', project_ids: [B] }, { signal_id: 'd2', project_ids: null }, { signal_id: 'd3', project_ids: [] }, { signal_id: 'a1', project_ids: [A, B] },
+      { signal_id: 'a2', project_ids: [B] }, { signal_id: 'a3', project_ids: [] }];
+    const request = validateApprovalDecisionRequestV1('desktop', { approval_id: `apr_${'c'.repeat(64)}`, command_id: 'desk-1', snapshot_sha256: canonicalSha256('snapshot'), action: 'approve',
+      routes, owners: [{ signal_id: 'a1', owner: 'Ana' }] });
+    // Pinned before private routes existed (ADR-0049): the decision body and its provider action digest are unchanged.
+    expect(canonicalSha256(request)).toBe('sha256:1db70cb3dff887ddaa0679b34281dcc6cf7273bbfec656792a07b672181c14a9');
+    expect(canonicalJson(request.routes)).toBe(canonicalJson(routes));
   });
   it('validateApprovalDecisionRequestV1 accepts exactly what decide accepts', async () => {
     const f = await approvalCoreFixture();

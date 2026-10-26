@@ -6,19 +6,19 @@ import {
 import type Database from "better-sqlite3";
 import { ORGANIZATION_RECORD_LOG_DATABASE } from "./database-definition.js";
 
-export const ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5 = 5;
+export const ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V6 = 6;
 
-export function organizationRecordLogBaselineSqlV5(): string {
-  return readFileSync(new URL("../../baselines/organization-record-log-baseline-v5.sql", import.meta.url), "utf8");
+export function organizationRecordLogBaselineSqlV6(): string {
+  return readFileSync(new URL("../../baselines/organization-record-log-baseline-v6.sql", import.meta.url), "utf8");
 }
 
-export function organizationRecordLogBaselineSha256V5(): Sha256Digest {
-  return sha256Digest(organizationRecordLogBaselineSqlV5());
+export function organizationRecordLogBaselineSha256V6(): Sha256Digest {
+  return sha256Digest(organizationRecordLogBaselineSqlV6());
 }
 
-/** Fresh V5 lineage only.  Existing state is intentionally never relabelled. */
-export function applyOrganizationRecordLogBaselineV5(database: Database.Database): void {
-  const sql = organizationRecordLogBaselineSqlV5();
+/** Fresh V6 lineage only.  Existing state is intentionally never relabelled. */
+export function applyOrganizationRecordLogBaselineV6(database: Database.Database): void {
+  const sql = organizationRecordLogBaselineSqlV6();
   database.exec("BEGIN IMMEDIATE");
   try {
     if (database.pragma("user_version", { simple: true }) !== 0 ||
@@ -28,7 +28,7 @@ export function applyOrganizationRecordLogBaselineV5(database: Database.Database
     }
     database.exec(sql);
     database.pragma(`application_id = ${ORGANIZATION_RECORD_LOG_DATABASE.application_id}`);
-    database.pragma(`user_version = ${ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5}`);
+    database.pragma(`user_version = ${ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V6}`);
     database.exec("COMMIT");
   } catch (error) {
     try { database.exec("ROLLBACK"); } catch {}

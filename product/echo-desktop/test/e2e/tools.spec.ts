@@ -147,17 +147,29 @@ test('a meeting added through Granola reaches Home as a decision to approve, eac
   await expect(card).toContainText('1 decision · 2 actions');
   await expect(card.getByTestId('card-signal').filter({ hasText: 'Confirm the trace' })).toContainText('Due Oct 10');
   await expect(card.getByRole('region', { name: 'In the meeting · 3' })).toContainText('Rafael Moreno');
-  await card.getByRole('button', { name: 'In the meeting: Launch the pilot next week.' }).click();
-  await expect(card.locator('.said-line').filter({ hasText: 'Mina Patel' })).toContainText('Agreed. The freeze lifts on Friday.');
+  // The meeting's words are behind one button in the head, not one per item, and open at the card's full width.
+  await expect(card.getByRole('button', { name: /^In the meeting:/ })).toHaveCount(0);
+  await card.getByTestId('card-notes-toggle').click();
+  await expect(card.getByTestId('card-notes-toggle')).toHaveText('Hide the notes');
+  await expect(card.getByTestId('card-notes').locator('.said-line').filter({ hasText: 'Agreed. The freeze lifts on Friday.' })).toContainText('Mina Patel');
+  await card.getByTestId('card-notes-toggle').click();
+  await expect(card.getByTestId('card-notes')).toHaveCount(0);
   await expect(card.getByRole('button', { name: 'Why · 1 reason from the meeting' })).toBeVisible();
   await expect(card.getByTestId('route-chip')).toHaveText(['Thermostat redesign', 'Thermostat redesign', 'Thermostat redesign']);
+  await expect(card.getByTestId('route-readers')).toHaveText(['Project members can read it', 'Project members can read it', 'Project members can read it']);
   await expect(card.getByTestId('route-all')).toHaveText('Thermostat redesign');
   await expect(card.getByTestId('route-summary')).toHaveText('3 to Thermostat redesign');
   // Nothing on the card shares the transcript, and no one picks a single audience for the whole meeting.
   await expect(card.getByText(/transcript/i)).toHaveCount(0);
   await expect(card.getByText('Seen by')).toHaveCount(0);
-  await routeAll(card, 'Only me');
-  await expect(card.getByTestId('route-chip')).toHaveText(['Only me', 'Only me', 'Only me']);
+  await routeAll(card, 'No project');
+  await expect(card.getByTestId('route-chip')).toHaveText(['No project', 'No project', 'No project']);
+  // In no project the lock stays on: only Ari reads them, and each says so.
+  for (let index = 0; index < 3; index += 1) {
+    await expect(card.getByTestId('route-lock').nth(index)).toHaveAttribute('aria-pressed', 'true');
+    await expect(card.getByTestId('route-lock').nth(index)).toHaveAttribute('aria-disabled', 'true');
+  }
+  await expect(card.getByTestId('route-readers')).toHaveText(['Only you can read it', 'Only you can read it', 'Only you can read it']);
   await page.screenshot({ path: testInfo.outputPath('decision-approve.png') });
   await card.getByTestId('decision-approve').click();
   await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
@@ -196,8 +208,11 @@ test('sends each item to its own destination: a record and a check per destinati
   // The first action stays with the suggestion, its owner edited; the second is not kept.
   await card.getByLabel('Owner for: Send the revised quote').fill('Rafael M.');
   await chips.nth(2).click();
-  await menu.getByRole('button', { name: 'Don\'t keep', exact: true }).click();
-  await expect(chips).toHaveText(['Thermostat redesign +1', 'Thermostat redesign', 'Not kept']);
+  await menu.getByRole('radio', { name: 'Don\'t keep', exact: true }).click();
+  await expect(chips).toHaveText(['Thermostat redesign +1', 'Thermostat redesign', 'Don\'t keep']);
+  // Not kept: no lock to choose, and no one reads it.
+  await expect(card.getByTestId('route-lock')).toHaveCount(2);
+  await expect(card.getByTestId('route-readers')).toHaveText(['Members of these projects can read it', 'Project members can read it']);
   await expect(card.getByLabel('Owner for: Confirm the trace')).toBeDisabled();
   await expect(card.getByTestId('route-all')).toHaveText('Mixed');
   await expect(card.getByTestId('route-summary')).toHaveText('1 to Thermostat redesign +1 · 1 to Thermostat redesign · 1 not kept');
@@ -222,6 +237,99 @@ test('sends each item to its own destination: a record and a check per destinati
   await page.screenshot({ path: testInfo.outputPath('decision-records.png') });
 });
 
+test('keeps an item for you alone in its project with the Only me lock, sends it as private, and says so once approved', async ({}, testInfo) => {
+  // granola-extra-failed: the check of each record but the first fails, so the approved meeting waits on Home with both.
+  run = await launch('granola-extra-failed');
+  const { page } = run;
+  await addMeeting(page);
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  const chips = card.getByTestId('route-chip');
+  const menu = card.getByTestId('route-menu');
+  const locks = card.getByTestId('route-lock');
+  // The Only me lock beside the decision's place: Thermostat redesign stays, and only Ari reads the decision there.
+  await expect(locks.nth(0)).toHaveAccessibleName('Only me: Launch the pilot next week.');
+  await expect(locks.nth(0)).toHaveAttribute('aria-pressed', 'false');
+  await locks.nth(0).click();
+  await expect(locks.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(card.getByTestId('route-readers').nth(0)).toHaveText('Only you can read it, filed in the project');
+  // The place menu holds places only, and the lock stays pressed while projects stay ticked.
+  await chips.nth(0).click();
+  await expect(menu.getByRole('checkbox', { name: 'Thermostat redesign' })).toBeChecked();
+  await expect(menu.getByRole('button', { name: 'Only me', exact: true })).toHaveCount(0);
+  await menu.getByRole('checkbox', { name: 'Supplier review' }).check();
+  await expect(locks.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(card.getByTestId('route-readers').nth(0)).toHaveText('Only you can read it, filed in these projects');
+  await menu.getByRole('checkbox', { name: 'Supplier review' }).uncheck();
+  await page.keyboard.press('Escape');
+  // The place says only where; the lock says who.
+  await expect(chips).toHaveText(['Thermostat redesign', 'Thermostat redesign', 'Thermostat redesign']);
+  await expect(chips.nth(0)).toHaveAccessibleName('Where it goes: Launch the pilot next week.: Thermostat redesign');
+  await expect(locks.nth(1)).toHaveAttribute('aria-pressed', 'false');
+  // One place, the locks apart: All items names it, and its lock says one of the three is Ari's alone.
+  await expect(card.getByTestId('route-all')).toHaveText('Thermostat redesign');
+  await expect(card.getByTestId('route-all-lock')).toHaveText('1 of 3');
+  await expect(card.getByTestId('route-all-lock')).toHaveAttribute('aria-pressed', 'mixed');
+  await expect(card.getByTestId('route-summary')).toHaveText('1 to Thermostat redesign, only me · 2 to Thermostat redesign');
+  await page.screenshot({ path: testInfo.outputPath('decision-only-me-lock.png') });
+  await card.getByTestId('decision-approve').click();
+  await expect.poll(() => run.calls().filter(call => call.body?.operation === 'review')).toHaveLength(1);
+  const therm = 'prj_11111111-1111-4111-8111-111111111111';
+  expect(run.calls().find(call => call.body?.operation === 'review')?.body?.routes).toEqual([
+    { signal_id: 'dec-1', project_ids: [therm], private: true }, { signal_id: 'act-1', project_ids: [therm] }, { signal_id: 'act-2', project_ids: [therm] }]);
+  // Approved: the item and its record say it was kept for Ari alone, beside the same project shared.
+  const row = page.getByTestId('need-row').filter({ hasText: 'the check did not finish' });
+  await expect(row).toHaveAttribute('data-kind', 'failed', { timeout: 30_000 });
+  await row.click();
+  const decision = page.getByTestId('decision');
+  await expect(decision.getByRole('region', { name: 'Impact · Thermostat redesign, only me' })).toBeVisible({ timeout: 30_000 });
+  await expect(decision.getByRole('region', { name: 'Impact · Thermostat redesign', exact: true })).toBeVisible();
+  const final = decision.getByTestId('route-final');
+  await expect(final).toHaveText(['Thermostat redesign', 'Thermostat redesign', 'Thermostat redesign']);
+  await expect(final.nth(0)).toHaveAttribute('title', 'Thermostat redesign, only me');
+  await expect(final.nth(0).getByTestId('route-final-lock')).toBeVisible();
+  await expect(final.nth(1).getByTestId('route-final-lock')).toHaveCount(0);
+});
+
+test('All items counts who reads the kept items on its lock, turns every filed item at once, and a tick from no project shares', async () => {
+  run = await launch('granola');
+  const { page } = run;
+  await addMeeting(page);
+  await page.getByTestId('need-row').click();
+  const card = page.getByTestId('decision');
+  const chips = card.getByTestId('route-chip');
+  const menu = card.getByTestId('route-menu');
+  const locks = card.getByTestId('route-lock');
+  const all = card.getByTestId('route-all-lock');
+  // The decision kept for Ari alone in Thermostat redesign; both actions in no project, where only Ari reads them too.
+  await locks.nth(0).click();
+  for (const index of [1, 2]) {
+    await chips.nth(index).click();
+    await menu.getByRole('radio', { name: /^No project\b/ }).click();
+    await expect(menu).toHaveCount(0);
+  }
+  await expect(chips).toHaveText(['Thermostat redesign', 'No project', 'No project']);
+  await expect(card.getByTestId('route-all')).toHaveText('Mixed');
+  await expect(all).toHaveAttribute('aria-pressed', 'true');
+  // Supplier review ticked from All items: shared for the actions, while the decision stays kept for Ari alone.
+  await card.getByTestId('route-all').click();
+  await expect(menu.getByRole('radio', { name: /^No project\b/ })).toHaveAttribute('aria-checked', 'false');
+  await menu.getByRole('checkbox', { name: 'Supplier review' }).click();
+  await page.keyboard.press('Escape');
+  await expect(chips).toHaveText(['Thermostat redesign +1', 'Supplier review', 'Supplier review']);
+  await expect(locks.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(locks.nth(1)).toHaveAttribute('aria-pressed', 'false');
+  await expect(all).toHaveText('1 of 3');
+  await expect(card.getByTestId('route-summary')).toHaveText('1 to Thermostat redesign +1, only me · 2 to Supplier review');
+  // The All items lock keeps every filed item for Ari alone, then shares them all again.
+  await all.click();
+  await expect(all).toHaveAttribute('aria-pressed', 'true');
+  await expect(card.getByTestId('route-summary')).toHaveText('1 to Thermostat redesign +1, only me · 2 to Supplier review, only me');
+  await all.click();
+  await expect(all).toHaveAttribute('aria-pressed', 'false');
+  await expect(card.getByTestId('route-summary')).toHaveText('1 to Thermostat redesign +1 · 2 to Supplier review');
+});
+
 test('All items while kept items differ: nothing chosen, a project some have part-ticked, and a tick keeps what else each has', async () => {
   run = await launch('granola');
   const { page } = run;
@@ -230,23 +338,24 @@ test('All items while kept items differ: nothing chosen, a project some have par
   const card = page.getByTestId('decision');
   const chips = card.getByTestId('route-chip');
   const menu = card.getByTestId('route-menu');
-  // The decision to Supplier review too, the second action Only me.
+  // The decision to Supplier review too, the second action in no project: its one project unticked.
   await chips.nth(0).click();
   await menu.getByRole('checkbox', { name: 'Supplier review' }).check();
   await page.keyboard.press('Escape');
   await chips.nth(2).click();
-  await menu.getByRole('button', { name: 'Only me', exact: true }).click();
-  await expect(chips).toHaveText(['Thermostat redesign +1', 'Thermostat redesign', 'Only me']);
+  await menu.getByRole('checkbox', { name: 'Thermostat redesign' }).uncheck();
+  await page.keyboard.press('Escape');
+  await expect(chips).toHaveText(['Thermostat redesign +1', 'Thermostat redesign', 'No project']);
   const all = card.getByTestId('route-all');
   const summary = card.getByTestId('route-summary');
-  await expect(summary).toHaveText('1 to Thermostat redesign +1 · 1 to Thermostat redesign · 1 to Only me');
-  // Mixed: every item is kept, so not the faint Not kept; neither Only me nor Don't keep is chosen, and each project on only some
-  // items is part-ticked.
+  await expect(summary).toHaveText('1 to Thermostat redesign +1 · 1 to Thermostat redesign · 1 to No project, only me');
+  // Mixed: every item is kept, so not the faint Don't keep; neither No project nor Don't keep is chosen, and each project on
+  // only some items is part-ticked.
   await expect(all).toHaveText('Mixed');
   await expect(all).not.toHaveClass(/dropped/);
   await all.click();
-  await expect(menu.getByRole('button', { name: 'Only me', exact: true })).toHaveAttribute('aria-pressed', 'false');
-  await expect(menu.getByRole('button', { name: 'Don\'t keep', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(menu.getByRole('radio', { name: /^No project\b/ })).toHaveAttribute('aria-checked', 'false');
+  await expect(menu.getByRole('radio', { name: 'Don\'t keep', exact: true })).toHaveAttribute('aria-checked', 'false');
   const therm = menu.getByRole('checkbox', { name: 'Thermostat redesign' });
   const supplier = menu.getByRole('checkbox', { name: 'Supplier review' });
   await expect(therm).toBeChecked({ indeterminate: true });

@@ -31,27 +31,28 @@ import {
   type V4RecordEnvelopeView
 } from "../src/log/record-log-v4-append.js";
 import { PersonRecordReaderV1 } from "../src/retrieve/person-record-reader-v1.js";
+import { derivedAtomIdentity } from "../src/application/atom-identity.js";
 import {
   RecordRetrievalSourceSnapshotPortV1,
   type RecordRetrievalSourceVerifiedEnvelopeV1,
 } from "../src/retrieve/record-retrieval-source-snapshot-v1.js";
 import {
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5,
-  applyOrganizationRecordLogBaselineV5,
-  organizationRecordLogBaselineSha256V5,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V6,
+  applyOrganizationRecordLogBaselineV6,
+  organizationRecordLogBaselineSha256V6,
 } from "../src/persistence/record-log-baseline.js";
 import { openOrganizationRecordDatabase } from "../src/persistence/open-organization-record-database.js";
 import { COORDINATES, RECORD_INPUT_CODECS, appendInput, authorizationWitness, database, humanAct, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
 
-describe("organization record log baseline V5", () => {
+describe("organization record log baseline V6", () => {
   it("creates fresh immutable project audience and association facts, and no transcript grant", () => {
     const db = openOrganizationRecordDatabase(":memory:");
     try {
-      applyOrganizationRecordLogBaselineV5(db);
+      applyOrganizationRecordLogBaselineV6(db);
       expect(db.pragma("user_version", { simple: true })).toBe(
-        ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V5,
+        ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V6,
       );
-      expect(organizationRecordLogBaselineSha256V5()).toMatch(
+      expect(organizationRecordLogBaselineSha256V6()).toMatch(
         /^sha256:[0-9a-f]{64}$/,
       );
       expect(
@@ -69,17 +70,17 @@ describe("organization record log baseline V5", () => {
     }
   });
 
-  it("never relabels occupied state as a V5 lineage", () => {
+  it("never relabels occupied state as a V6 lineage", () => {
     const occupied = openOrganizationRecordDatabase(":memory:");
     const current = openOrganizationRecordDatabase(":memory:");
     try {
       occupied.exec("CREATE TABLE occupied (id INTEGER PRIMARY KEY)");
       occupied.pragma("user_version = 1");
-      expect(() => applyOrganizationRecordLogBaselineV5(occupied)).toThrow(
+      expect(() => applyOrganizationRecordLogBaselineV6(occupied)).toThrow(
         "completely empty database",
       );
-      applyOrganizationRecordLogBaselineV5(current);
-      expect(() => applyOrganizationRecordLogBaselineV5(current)).toThrow(
+      applyOrganizationRecordLogBaselineV6(current);
+      expect(() => applyOrganizationRecordLogBaselineV6(current)).toThrow(
         "completely empty database",
       );
     } finally {
@@ -147,6 +148,90 @@ describe("V4 organization-record append", () => {
           project_ids: ["prj_alpha", ...Array.from({ length: 20 }, (_, index) => `prj_other_${index}`)],
         }),
       ).toHaveLength(1);
+    } finally { db.close(); }
+  });
+
+  it("files a record its approver alone reads in projects with association facts only (ADR-0049), and refuses one that names an audience or another policy", async () => {
+    const db = database();
+    try {
+      const approver = { principal_id: "principal-approver", membership_id: "membership-approver" };
+      const signal = "decision-private-0";
+      const restrictedContract = sha256Digest("restricted-policy-contract");
+      /** One approved record under `policy_id`, with these audience and association projects and one decision. */
+      const envelopeOf = (name: string, policy_id: string, audience: readonly string[], association: readonly string[]) => ({
+        record_sha256: sha256Digest(`${name}-record`),
+        body: {
+          schema_version: 4, kind: "echo-organization-record-envelope-v4", envelope_id: `envelope-${name}`, ...COORDINATES,
+          semantic_idempotency_key: sha256Digest(`${name}-semantic`), predecessor_position: null, predecessor_record_sha256: null,
+          human_act_resolution_ref: {
+            ...COORDINATES, approval_id: `approval-${name}`, action: "approve", policy_id, policy_contract_sha256: restrictedContract,
+            audience_project_ids: [...audience], association_project_ids: [...association],
+            audit_event_id: `audit-${name}`, audit_sequence: 1, audit_entry_sha256: sha256Digest(`audit-${name}`),
+            provider_action_kind: "test-private-action-v1", provider_action_schema_version: 1,
+            provider_action_sha256: sha256Digest(`action-${name}`), authorization_proof_sha256: sha256Digest(`proof-${name}`),
+          },
+          event: { kind: "approved", approved_snapshot: { approved_payload: { brief: { decisions: [{ id: signal, kind: "decision", text: "Keep the supplier reserve." }], actions: [], rationales: [] } } } },
+        },
+      }) as unknown as V4RecordEnvelopeView & JsonObject;
+      const projectors = (policy_id: typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID) => createRecordPolicyFactProjectorRegistryV1([{
+        id: "test-private-action-v1",
+        matches: () => true,
+        // The reviewer facts are written after the association rows, so the baseline binds those rows through the envelope.
+        project: ({ envelope, record_position }) => {
+          const ref = envelope.body.human_act_resolution_ref;
+          return {
+            policy_fact_outcome: { kind: "appended", policy_id },
+            facts: policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID ? [] : [{
+              ...COORDINATES, approval_id: ref.approval_id, action: "approve", policy_id, policy_contract_sha256: restrictedContract,
+              record_position, record_sha256: envelope.record_sha256, atom_order: 0, signal_id_sha256: sha256Digest(signal),
+              atom_id: derivedAtomIdentity(envelope.record_sha256, signal), item_kind: "decision", audit_event_id: ref.audit_event_id,
+              audit_sequence: ref.audit_sequence, audit_entry_sha256: ref.audit_entry_sha256, provider_action_sha256: ref.provider_action_sha256,
+              authorization_proof_sha256: ref.authorization_proof_sha256, reviewer_principal_id: approver.principal_id, reviewer_membership_id: approver.membership_id,
+            }],
+          } as never;
+        },
+        policyBinding: () => ({ policy_id, policy_contract_sha256: restrictedContract }),
+      }]);
+      const append = (envelope: V4RecordEnvelopeView & JsonObject, policy_id: Parameters<typeof projectors>[0] = RESTRICTED_REVIEWER_PERSON_POLICY_ID) =>
+        new OrganizationRecordAppenderV4(db, COORDINATES, projectors(policy_id)).append({
+          approval_id: envelope.body.human_act_resolution_ref.approval_id, action: "approve", semantic_idempotency_key: envelope.body.semantic_idempotency_key,
+          receipt_issued_at: "2026-08-21T12:02:00.000Z", authorization_witness: {},
+          envelope_factory: {
+            create: async (allocation) => ({ ...envelope, body: { ...envelope.body, ...allocation } }) as never,
+            verify: (value) => value as V4RecordEnvelopeView & JsonObject,
+          },
+          receipt_factory: {
+            createSeed: ({ envelope: receiptEnvelope, position, issued_at }) => ({ schema_version: 2, kind: "echo-organization-record-receipt-v2", ...COORDINATES, envelope_id: receiptEnvelope.body.envelope_id, semantic_idempotency_key: receiptEnvelope.body.semantic_idempotency_key, event_kind: "approved", record_position: position, record_sha256: receiptEnvelope.record_sha256, predecessor_record_sha256: receiptEnvelope.body.predecessor_record_sha256, record_head_position: position, record_head_sha256: receiptEnvelope.record_sha256, issued_at }),
+            sign: async ({ receipt_seed }) => ({ body: receipt_seed as JsonObject }), verify: ({ receipt }) => receipt as JsonObject,
+          },
+        });
+      const records = () => db.prepare("SELECT count(*) FROM organization_record_log").pluck().get();
+      // An approver-only record that names an audience project, or a member-readable one filed in a project, is refused whole.
+      await expect(append(envelopeOf("audience", RESTRICTED_REVIEWER_PERSON_POLICY_ID, ["prj_alpha"], ["prj_alpha"]))).rejects.toThrow("cannot select projects");
+      await expect(append(envelopeOf("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, [], ["prj_alpha"]), ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID)).rejects.toThrow("cannot select projects");
+      expect(records()).toBe(0);
+      const kept = await append(envelopeOf("private", RESTRICTED_REVIEWER_PERSON_POLICY_ID, [], ["prj_alpha", "prj_beta"]));
+      expect(db.prepare("SELECT project_id FROM organization_record_project_association_v1 WHERE record_position = 1 ORDER BY project_id").pluck().all()).toEqual(["prj_alpha", "prj_beta"]);
+      expect(db.prepare("SELECT count(*) FROM organization_record_project_members_readable_person_record_fact").pluck().get()).toBe(0);
+      expect(db.prepare("SELECT reviewer_principal_id FROM organization_record_restricted_reviewer_person_fact").pluck().all()).toEqual([approver.principal_id]);
+      // Its approver reads it in each project it is filed in; another member of those projects never does, in any scope.
+      const reader = new PersonRecordReaderV1(db);
+      const scoped = (who: { readonly principal_id: string; readonly membership_id: string }, project_id?: string) =>
+        reader.list({ ...COORDINATES, ...who, project_ids: ["prj_alpha", "prj_beta", "prj_gamma"], ...(project_id === undefined ? {} : { project_id }) }).map(row => row.record_sha256);
+      for (const project_id of [undefined, "prj_alpha", "prj_beta"]) expect(scoped(approver, project_id)).toEqual([kept.record_sha256]);
+      expect(scoped(approver, "prj_gamma")).toEqual([]);
+      for (const project_id of [undefined, "prj_alpha", "prj_beta"]) expect(scoped({ principal_id: "principal-member", membership_id: "membership-member" }, project_id)).toEqual([]);
+      // The baseline itself: a filed row needs the project its approver-only approval names, or a project audience.
+      const insert = (position: number, record_sha256: string, project_id: string) =>
+        db.prepare("INSERT INTO organization_record_project_association_v1 (record_position, record_sha256, project_id) VALUES (?, ?, ?)").run(position, record_sha256, project_id);
+      expect(() => insert(1, kept.record_sha256, "prj_gamma")).toThrow("project association is not bound to its approved project audience or approver");
+      // The snapshot carries the association on the approver's own atom, which keeps no audience.
+      const snapshot = new RecordRetrievalSourceSnapshotPortV1(db).snapshot({ ...COORDINATES, policy_projectors: projectors(RESTRICTED_REVIEWER_PERSON_POLICY_ID),
+        verify_envelope: (value) => value as RecordRetrievalSourceVerifiedEnvelopeV1 });
+      expect(snapshot.atoms).toMatchObject([{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID, reviewer_principal_id: approver.principal_id, audience_project_ids: [], association_project_ids: ["prj_alpha", "prj_beta"] }]);
+      // A member-readable record is never filed in a project it has no audience in.
+      const member = await append(envelopeOf("member-unfiled", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, [], []), ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID);
+      expect(() => insert(2, member.record_sha256, "prj_alpha")).toThrow("project association is not bound to its approved project audience or approver");
     } finally { db.close(); }
   });
 
