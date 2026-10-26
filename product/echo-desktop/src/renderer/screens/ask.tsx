@@ -588,7 +588,8 @@ function FullTurn({ state, turn, current, line }: { state: State; turn: ShownTur
       {foundNothingInProject(turn) && (
         <div class="project-empty" data-testid="project-empty">
           <span>Nothing in {scopeName(turn.scope, state)} matched.</span>
-          {!state.ask?.failed && (
+          {/* Offered on the latest turn only, as the next step; never under a question that failed. */}
+          {!state.ask?.failed && state.timeline.turns.at(-1)?.id === turn.id && (
             <button type="button" class="link-button" data-testid="ask-everywhere" onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
           )}
         </div>
