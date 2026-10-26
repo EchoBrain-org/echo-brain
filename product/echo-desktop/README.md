@@ -122,7 +122,8 @@ Home shows only what waits on you, under **Needs you**. Each row is one of:
   projects."). On the right sit **All items** (one chip for every kept item,
   "Mixed" when they differ, where a project only some have is part-ticked and
   a tick adds or removes that project on every kept item, each keeping its
-  others), a line saying where Approve sends them, one count per destination
+  others; while its lock shows pressed, every kept item stays for you alone),
+  a line saying where Approve sends them, one count per destination
   ("2 to Thermostat redesign · 1 to Thermostat redesign, only me · 1 not
   kept"), **Approve** (off while nothing
   is kept) and **Reject**, and who was in the meeting. No transcript is ever
