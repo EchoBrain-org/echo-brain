@@ -17,7 +17,8 @@ import {
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
 import {
-  ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, latestTurn, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, type Node,
+  ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles,
+  type Node,
 } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -1387,5 +1388,42 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     const store = await startStore();
     expect(store.returnToAsk()).toBe(false);
     expect(store.getState().ask).toBeNull();
+  });
+
+  it('reads a project the sidebar has not loaded by its id, and goes back to that project\'s Ask', async () => {
+    // Twelve projects: the sidebar shows the first page of ten, and the latest question was asked in the twelfth.
+    const many = numbered(12);
+    const later = many[11]!;
+    rpc.mockImplementation(rpcFor(held, { 'projects.read': params => ok(many.find(item => item.project_id === params.project_id)) }, () => ({ active: many, archived: [] })));
+    seed(turn('What is left?', DAY, status(), { scope: { kind: 'project', project_id: later.project_id } }));
+    const store = await startStore();
+    expect(store.getState().projects.items.map(item => item.project_id)).not.toContain(later.project_id);
+    expect(store.returnToAsk()).toBe(true);
+    await flush();
+    expect(calls('projects.read')).toEqual([expect.objectContaining({ project_id: later.project_id })]);
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: later.project_id } });
+    expect(store.getState().barScope).toEqual({ kind: 'project', project_id: later.project_id });
+    expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What is left?']);
+  });
+
+  it('goes to Home\'s thread for an unloaded project you no longer have, and says why when it cannot be read', async () => {
+    const many = numbered(12);
+    let reply = fail('not_found');
+    rpc.mockImplementation(rpcFor(held, { 'projects.read': () => reply }, () => ({ active: many, archived: [] })));
+    seed(turn('What was left?', DAY, status(), { scope: { kind: 'project', project_id: 'prj_99999999-1111-4111-8111-111111111111' } }));
+    const store = await startStore();
+    await store.openProject(many[0]!);
+    expect(store.returnToAsk()).toBe(true);
+    await flush();
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What was left?']);
+    // Any other failure opens nothing, and says why.
+    store.closeAsk();
+    await store.openProject(many[0]!);
+    reply = fail('unavailable', { retryable: true });
+    expect(store.returnToAsk()).toBe(true);
+    await flush();
+    expect(store.getState().ask).toBeNull();
+    expect(store.getState().toast).toBe('ECHO is unavailable right now. Try again.');
   });
 });

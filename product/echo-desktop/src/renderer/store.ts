@@ -3999,9 +3999,33 @@ function openTurn(id: string): void {
 export function returnToAsk(): boolean {
   const latest = state.timeline.turns.at(-1);
   if (!latest || !expect()) return false;
-  if (state.ask) return true;
-  const { scope } = latest;
-  const project = scope.kind === 'project' ? state.projects.items.find(item => item.project_id === scope.project_id && item.status === 'active') : undefined;
+  if (!state.ask) void openAskAt(latest);
+  return true;
+}
+
+/**
+ * Ask opened on the thread of `turn`'s place. A project the sidebar has not
+ * loaded (one on a later page) is read by its id first, as following the open
+ * project does; one you no longer have goes to Home's thread, and a read that
+ * fails otherwise says why and opens nothing. Asked meanwhile, or covered, it
+ * does nothing more.
+ */
+async function openAskAt(turn: TimelineTurn): Promise<void> {
+  const account = expect();
+  if (!account) return;
+  const { scope } = turn;
+  let project = scope.kind === 'project' ? state.projects.items.find(item => item.project_id === scope.project_id) : undefined;
+  if (scope.kind === 'project' && !project && state.projects.next !== null) {
+    const result = await rpc('projects.read', { expect: account, project_id: scope.project_id });
+    if (!sameAccount(account) || state.ask || state.concealed) return;
+    if (!result.ok && !PROJECT_GONE.includes(result.failure.code)) {
+      accountLost(result.failure);
+      set({ toast: message(result.failure) });
+      return;
+    }
+    project = result.ok ? result.value : undefined;
+  }
+  if (project?.status !== 'active') project = undefined;
   if (!sameScope(state.barScope, project ? scope : { kind: 'global' })) {
     if (!project) goHome();
     else if (state.route.page === 'project' && state.route.project.project_id === project.project_id) set({ barScope: scope });
@@ -4011,7 +4035,6 @@ export function returnToAsk(): boolean {
   startSources();
   void checkTimeline();
   syncSearch();
-  return true;
 }
 
 /**
