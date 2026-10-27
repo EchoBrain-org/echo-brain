@@ -186,13 +186,13 @@ function rootOnly(path: string): boolean {
 
 /** Why update.install will not run now, or null. A row that changed under the click wins over held work. */
 export function installRefusal(state: UpdateState, release: unknown, unresolved: boolean): Failure | null {
-  if (state.state === 'none' || state.state === 'installing' || release !== state.release) return { code: 'update_changed', retryable: false };
+  if (state.state === 'none' || state.state === 'off' || state.state === 'installing' || release !== state.release) return { code: 'update_changed', retryable: false };
   return unresolved ? { code: 'update_held', retryable: true } : null;
 }
 
-/** The row after an automatic check. An install in progress stays; a failure stays while its release is on offer. */
+/** The row after an automatic check. An install in progress stays, as does a row saying updates are off; a failure stays while its release is on offer. */
 export function checkedState(current: UpdateState, result: ClientUpdateResult): UpdateState {
-  if (current.state === 'installing') return current;
+  if (current.state === 'installing' || current.state === 'off') return current;
   if (current.state === 'failed' && result.status === 'current') return { state: 'none' };
   const release = result.status === 'available' ? result.available_release : result.status === 'running_release_mismatch' ? result.installed_release : null;
   if (typeof release !== 'string' || !RELEASE_ID.test(release)) return current;
@@ -423,14 +423,15 @@ export function createUpdater(deps: UpdaterDependencies): Updater {
         client.releaseInterruptedClientUpdate(root);
         const last = launchOutcome(root, deps.identity.release_id);
         if (last) show(last);
-        // Every launch offers its bootstrap: the core keeps the same trust and stops
-        // updates on another with already_configured. The pinned automatic choice stays.
+        // Every launch offers its bootstrap: the core keeps the same publisher, raises
+        // the floor a newer build carries, and refuses another publisher with
+        // already_configured, which shows Updates are off. The pinned automatic choice stays.
         const pinned = client.readClientUpdateConfig(root) as { automatic?: unknown } | undefined;
         client.configureClientUpdates(root, pinned ? { ...(deps.identity.update_bootstrap as Record<string, unknown>), automatic: pinned.automatic } : deps.identity.update_bootstrap, installation);
         return true;
       } catch (error) {
         log(`update off ${updateCode(error)}`);
-        show({ state: 'none' });
+        show({ state: 'off' });
         return false;
       }
     },

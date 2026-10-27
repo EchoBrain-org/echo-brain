@@ -103,6 +103,7 @@ describe('installUpdate', () => {
 
   it.each([
     { state: 'none' },
+    { state: 'off' },
     { state: 'installing', release: A },
     { state: 'failed', release: A, reason: 'location' },
   ] as const)('asks nothing of a row that is not a control: $state', async next => {

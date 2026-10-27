@@ -190,7 +190,7 @@ describe('what a check shows', () => {
     expect(checkedState({ state: 'none' }, onDisk(B))).toEqual({ state: 'restart', release: B });
   });
 
-  it('leaves the row as it is for every other status, and never replaces installing', () => {
+  it('leaves the row as it is for every other status, and never replaces installing or off', () => {
     const shown: UpdateState = { state: 'available', release: B };
     for (const status of ['current', 'not_due', 'not_configured', 'automatic_disabled', 'update_busy', 'invalid_signature', 'staged']) {
       expect(checkedState(shown, result(status, { available_release: C }))).toBe(shown);
@@ -199,6 +199,10 @@ describe('what a check shows', () => {
     const installing: UpdateState = { state: 'installing', release: B };
     expect(checkedState(installing, available(C))).toBe(installing);
     expect(checkedState(installing, result('current'))).toBe(installing);
+    // No check runs while updates are off; one that did would not offer a release.
+    const off: UpdateState = { state: 'off' };
+    expect(checkedState(off, available(C))).toBe(off);
+    expect(checkedState(off, onDisk(C))).toBe(off);
   });
 
   it('keeps a failure while its release is on offer, and drops it once the running release is current or newer files are on disk', () => {
@@ -221,6 +225,8 @@ it('install refuses a release the row no longer shows, holds one while work is u
   for (const [state, release, unresolved, refusal] of [
     // A row that changed under the click wins over held work.
     [shown, C, false, changed], [{ state: 'none' }, B, false, changed], [installing, B, false, changed], [installing, B, true, changed], [shown, 7, false, changed],
+    // Updates are off: nothing installs, whatever the click names.
+    [{ state: 'off' }, B, false, changed], [{ state: 'off' }, undefined, false, changed],
     [shown, B, true, { code: 'update_held', retryable: true }],
     // Install, restart or try again.
     [shown, B, false, null], [{ state: 'restart', release: B }, B, false, null], [{ state: 'failed', release: B, reason: 'location' }, B, false, null],
@@ -296,8 +302,8 @@ it('launch releases an interrupted run, then reads the outcome, then offers its 
   h.client.configureClientUpdates.mockImplementationOnce(() => { throw Object.assign(new Error('ECHO update: already_configured'), { code: 'already_configured' }); });
   expect(h.run.launch()).toBe(false);
   expect(h.log).toHaveBeenCalledWith('update off already_configured');
-  // A row the updater cannot act on is not shown.
-  expect(h.state()).toEqual({ state: 'none' });
+  // The row says Updates are off, in place of one the updater can no longer act on; the log keeps the code.
+  expect(h.state()).toEqual({ state: 'off' });
 });
 
 describe('checks', () => {
@@ -588,15 +594,26 @@ describe('with the real client updater core', () => {
     schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'staging', feed_url: FEED,
     public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'electron',
   });
+  /** The feed `privateKey` signs: `release` at `sequence`, with its Linux package `deb`. */
+  function feedOf(privateKey: KeyObject, sequence: number, release: string, deb = Buffer.from(`the ${release} package`)): Buffer {
+    const now = Date.now();
+    const payload = Buffer.from(JSON.stringify({
+      schema_version: 1, kind: 'echo-client-update-manifest-v1', channel: 'staging', sequence,
+      issued_at: new Date(now - 60_000).toISOString(), expires_at: new Date(now + 86_400_000).toISOString(),
+      release_id: release, release_sha256: sha256(release), source_sha: 'c'.repeat(40), product_version: '0.1.0',
+      artifacts: [{ ...LINUX, url: `https://updates.example.test/staging/artifacts/${release}.deb`, sha256: sha256(deb), bytes: deb.length }],
+    }));
+    return Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') }));
+  }
   /** A Linux seat whose updater folder the core makes. */
   function fresh() {
     const s = seat(LINUX);
     rmSync(s.updater, { recursive: true });
     return s;
   }
-  /** The app launched with the core this checkout built, carrying `bootstrap` in its identity. */
-  async function launched(s: ReturnType<typeof seat>, bootstrap: unknown, fetch?: typeof globalThis.fetch) {
-    writeJson(s.identity_path, identityOf(LINUX, A, { update_bootstrap: bootstrap }));
+  /** The app launched as `release` with the core this checkout built, carrying `bootstrap` in its identity. */
+  async function launched(s: ReturnType<typeof seat>, bootstrap: unknown, fetch?: typeof globalThis.fetch, release = A) {
+    writeJson(s.identity_path, identityOf(LINUX, release, { update_bootstrap: bootstrap }));
     const client = await import(pathToFileURL(resolve(import.meta.dirname, '../../../../src/product/person-client/dist/client-update.js')).href) as ClientUpdateModule;
     const h = harness({ seat: s, client, fetch, state: { state: 'none' } });
     return { ...h, on: h.run.launch() };
@@ -607,14 +624,7 @@ describe('with the real client updater core', () => {
     const { publicKey, privateKey } = generateKeyPairSync('ed25519');
     const config = configFor(publicKey);
     const deb = Buffer.from('the release B package');
-    const now = Date.now();
-    const payload = Buffer.from(JSON.stringify({
-      schema_version: 1, kind: 'echo-client-update-manifest-v1', channel: 'staging', sequence: 2,
-      issued_at: new Date(now - 60_000).toISOString(), expires_at: new Date(now + 86_400_000).toISOString(),
-      release_id: B, release_sha256: sha256(B), source_sha: 'c'.repeat(40), product_version: '0.1.0',
-      artifacts: [{ ...LINUX, url: 'https://updates.example.test/staging/artifacts/b.deb', sha256: sha256(deb), bytes: deb.length }],
-    }));
-    const envelope = Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') }));
+    const envelope = feedOf(privateKey, 2, B, deb);
     const fetcher = vi.fn(async (url: string | URL | Request) => new Response(new Uint8Array(String(url) === FEED ? envelope : deb)));
     const h = await launched(s, config, fetcher as typeof fetch);
     expect(h.on).toBe(true);
@@ -630,5 +640,50 @@ describe('with the real client updater core', () => {
     expect(readdirSync(s.updater).filter(name => name.startsWith('.'))).toEqual([]);
     writeJson(join(s.updater, 'outcome.json'), outcomeOf(B, 'cancelled', h.attempt()), 0o600);
     await expect.poll(() => h.state()).toEqual({ state: 'available', release: B });
+  });
+
+  it('raises the floor a newer build carries and keeps updates on, offering nothing from below it', async () => {
+    const s = fresh();
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const config = configFor(publicKey);
+    let feed = feedOf(privateKey, 19, B);
+    const fetcher = vi.fn(async () => new Response(new Uint8Array(feed)));
+    const older = await launched(s, config, fetcher as typeof fetch);
+    await older.run.check();
+    expect(older.state()).toEqual({ state: 'available', release: B });
+
+    // A newer build from the same publisher, ahead of the live feed: its bootstrap's floor is 20.
+    const h = await launched(s, { ...config, minimum_sequence: 20 }, fetcher as typeof fetch, C);
+    expect(h.on).toBe(true);
+    expect(JSON.parse(readFileSync(join(s.updater, 'floor.json'), 'utf8'))).toMatchObject({ schema_version: 1, minimum_sequence: 20 });
+    // config.json keeps its first floor: builds from before the floor could rise read it.
+    expect(h.client.readClientUpdateConfig(s.root)).toEqual(config);
+    expect(h.state()).toEqual({ state: 'none' });
+    // The last check's offer is not shown again, and once due the same feed offers nothing.
+    await h.run.check();
+    expect(h.log).toHaveBeenLastCalledWith('update check not_due');
+    /** Past the core's hourly gate: the app gives the core no clock of its own. */
+    const later = () => vi.setSystemTime(Date.now() + 61 * 60_000);
+    later();
+    await h.run.check();
+    expect(h.log).toHaveBeenLastCalledWith('update check stale_metadata');
+    expect(h.state()).toEqual({ state: 'none' });
+    // The next feed, at the floor, carries the release this build runs.
+    feed = feedOf(privateKey, 20, C);
+    later();
+    await h.run.check();
+    expect(h.log).toHaveBeenLastCalledWith('update check current');
+    expect(h.state()).toEqual({ state: 'none' });
+  });
+
+  it('says Updates are off for a build from another publisher, and keeps the pinned one', async () => {
+    const s = fresh();
+    const config = configFor(generateKeyPairSync('ed25519').publicKey);
+    expect((await launched(s, config)).on).toBe(true);
+    const h = await launched(s, configFor(generateKeyPairSync('ed25519').publicKey));
+    expect(h.on).toBe(false);
+    expect(h.state()).toEqual({ state: 'off' });
+    expect(h.log).toHaveBeenCalledWith('update off already_configured');
+    expect(h.client.readClientUpdateConfig(s.root)).toEqual(config);
   });
 });

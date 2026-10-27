@@ -298,6 +298,10 @@ button.account-row:hover { background: var(--raise); }
 .folded-turn { flex-shrink: 0; display: flex; flex-direction: column; }
 /* Lines sit close together; the line after an opened turn keeps the space between turns. */
 .ask > .folded-turn:not(.open) + .folded-turn { margin-top: calc(4px - var(--turn-gap)); }
+/* The line the earlier questions past the newest three fold into: aligned with the lines' squares, the lines close under it. */
+.ask > .earlier { gap: 10px; min-height: 32px; padding: 6px 10px; font-size: 13px; font-weight: 500; color: var(--faint); }
+.ask > .earlier svg { margin-inline: 2px; }
+.ask > .earlier + .folded-turn { margin-top: calc(4px - var(--turn-gap)); }
 .folded { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 8px 10px; border: 0; border-radius: 8px; text-align: left; background: transparent; }
 .folded:hover { background: var(--hover); }
 .folded .turn-square { width: 16px; height: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 9.5px; font-weight: 600; }

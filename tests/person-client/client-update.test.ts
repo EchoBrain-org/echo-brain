@@ -270,10 +270,95 @@ describe('signed cross-platform client updates', () => {
     configureClientUpdates(f.root, { ...f.config, automatic: false });
     expect((await runClientUpdate('automatic', f.dependencies)).status).toBe('automatic_disabled');
     expect(JSON.parse(readFileSync(join(f.root, 'updater/state.json'), 'utf8')).checkpoint).toEqual(before);
-    expect(() => configureClientUpdates(f.root, { ...f.config, minimum_sequence: 1 })).toThrow('already_configured');
+    // A lower floor is no error: the stored floor stays, and so does the state.
+    const state = readFileSync(join(f.root, 'updater/state.json'));
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 1 });
+    expect(readClientUpdateConfig(f.root)).toEqual(f.config);
+    expect(readFileSync(join(f.root, 'updater/state.json'))).toEqual(state);
+    expect(existsSync(join(f.root, 'updater/floor.json'))).toBe(false);
     expect(f.fetcher).toHaveBeenCalledOnce();
     expect((await runClientUpdate('apply', f.dependencies)).status).toBe('updated');
     expect(f.install).toHaveBeenCalledOnce();
+  });
+
+  it('raises the floor for a newer build in floor.json, leaving config.json and the state as they were', async () => {
+    const f = fixture();
+    expect((await runClientUpdate('check', f.dependencies)).status).toBe('available');
+    expect((await runClientUpdate('automatic', f.dependencies)).status).toBe('available');
+    expect((await runClientUpdate('status', f.dependencies)).status).toBe('available');
+    const files = () => ['config.json', 'state.json'].map(name => readFileSync(join(f.root, 'updater', name)));
+    const before = files();
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 });
+    expect(files()).toEqual(before);
+    expect(JSON.parse(readFileSync(join(f.root, 'updater/floor.json'), 'utf8'))).toEqual({ schema_version: 1, config_sha256: appState(f.root).config_sha256, minimum_sequence: 4 });
+    // Inside the hour, the cached offer from the feed at 3 is not shown again,
+    // and the saved status no longer names it.
+    expect(await runClientUpdate('automatic', f.dependencies)).toMatchObject({ status: 'not_due' });
+    expect(await runClientUpdate('status', f.dependencies)).toMatchObject({ status: 'not_checked', available_release: null, checked_at: null });
+    // Once due, the feed still at 3 offers nothing, and at 4 it is offered as usual.
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS })).toMatchObject({ status: 'stale_metadata' });
+    f.manifest.sequence = 4;
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + 2 * UPDATE_INTERVAL_MS })).toMatchObject({ status: 'available', available_release: f.manifest.release_id });
+    expect(await runClientUpdate('status', f.dependencies)).toMatchObject({ status: 'available', available_release: f.manifest.release_id });
+    expect(f.fetcher).toHaveBeenCalledTimes(3);
+    expect(f.install).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['public_key_spki', generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64')],
+    ['feed_url', 'https://updates.example.test/other/feed.json'],
+    ['channel', 'another'],
+    ['installation', 'electron'],
+  ])('refuses another %s as already_configured, even with a higher floor, and changes nothing', async (field, value) => {
+    const f = fixture();
+    await runClientUpdate('check', f.dependencies);
+    const files = () => ['config.json', 'state.json'].map(name => readFileSync(join(f.root, 'updater', name)));
+    const before = files();
+    expect(() => configureClientUpdates(f.root, { ...f.config, [field]: value, minimum_sequence: 4 })).toThrow('already_configured');
+    expect(files()).toEqual(before);
+    expect(existsSync(join(f.root, 'updater/floor.json'))).toBe(false);
+  });
+
+  it('keeps config.json and the state in the formats older builds read, through a raise and a check', async () => {
+    const f = fixture();
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 });
+    f.manifest.sequence = 4;
+    expect((await runClientUpdate('check', f.dependencies)).status).toBe('available');
+    // Today's keys, in today's order, with the floor first pinned.
+    const config = readFileSync(join(f.root, 'updater/config.json'), 'utf8');
+    expect(config).toBe(`${JSON.stringify(f.config)}\n`);
+    // Older builds stamp the state with the digest of config.json without automatic.
+    const { automatic: _automatic, ...trust } = JSON.parse(config);
+    expect(appState(f.root).config_sha256).toBe(updateDigest(JSON.stringify(trust)));
+  });
+
+  it('raises floor.json only higher, and refuses one with another stamp or malformed', async () => {
+    const f = fixture();
+    const path = join(f.root, 'updater/floor.json');
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 5 });
+    const raised = readFileSync(path);
+    for (const floor of [5, 4, 3, 1]) {
+      configureClientUpdates(f.root, { ...f.config, minimum_sequence: floor });
+      expect(readFileSync(path)).toEqual(raised);
+    }
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 6 });
+    const record = JSON.parse(readFileSync(path, 'utf8'));
+    expect(record).toMatchObject({ minimum_sequence: 6 });
+    const { automatic: _automatic, ...trust } = f.config;
+    for (const invalid of [
+      JSON.stringify({ ...record, config_sha256: updateDigest(JSON.stringify({ ...trust, channel: 'another' })) }),
+      JSON.stringify({ ...record, minimum_sequence: 0 }),
+      JSON.stringify({ ...record, extra: true }),
+      '{',
+    ]) {
+      writeFileSync(path, invalid);
+      await expect(runClientUpdate('check', f.dependencies)).rejects.toThrow('invalid_update_state');
+      // Nothing is written either, not even the automatic choice.
+      expect(() => configureClientUpdates(f.root, { ...f.config, automatic: false, minimum_sequence: 7 })).toThrow('invalid_update_state');
+      expect(readClientUpdateConfig(f.root)).toEqual(f.config);
+      expect(readFileSync(path, 'utf8')).toBe(invalid);
+    }
+    expect(f.fetcher).not.toHaveBeenCalled();
   });
 
   it('retains recovery evidence and the lock after an uncertain installer outcome, even through releaseInterruptedClientUpdate', async () => {
@@ -458,11 +543,27 @@ describe('client updates through an installation adapter', () => {
     expect(() => configureClientUpdates(f.root, f.config, f.installation)).toThrow('update_busy');
     expect(existsSync(path)).toBe(false);
     rmSync(join(f.root, 'updater/.lock'), { recursive: true });
-    // The app's pin: automatic may change, publisher trust may not.
+    // The app's pin: automatic may change, a lower floor keeps the stored one, publisher trust may not.
     configureClientUpdates(f.root, f.config, f.installation);
     configureClientUpdates(f.root, { ...f.config, automatic: false }, f.installation);
-    expect(() => configureClientUpdates(f.root, { ...f.config, minimum_sequence: 1 }, f.installation)).toThrow('already_configured');
+    configureClientUpdates(f.root, { ...f.config, automatic: false, minimum_sequence: 1 }, f.installation);
+    expect(() => configureClientUpdates(f.root, { ...f.config, channel: 'another' }, f.installation)).toThrow('already_configured');
     expect(readClientUpdateConfig(f.root)).toEqual({ ...f.config, automatic: false });
+  });
+
+  it('raises the floor through the adapter and stops offering a staged release from below it', async () => {
+    const f = appFixture();
+    expect((await runClientUpdate('apply', f.dependencies)).status).toBe('staged');
+    const state = readFileSync(join(f.root, 'updater/state.json'));
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 }, f.installation);
+    expect(readClientUpdateConfig(f.root)).toEqual(f.config);
+    expect(readFileSync(join(f.root, 'updater/state.json'))).toEqual(state);
+    expect(JSON.parse(readFileSync(join(f.root, 'updater/floor.json'), 'utf8'))).toMatchObject({ minimum_sequence: 4 });
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + 1 })).toMatchObject({ status: 'not_due' });
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS })).toMatchObject({ status: 'stale_metadata' });
+    f.manifest.sequence = 4;
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + 2 * UPDATE_INTERVAL_MS })).toMatchObject({ status: 'available', available_release: f.manifest.release_id });
+    expect(f.install).toHaveBeenCalledOnce();
   });
 
   it('reports installed files that select another release than the running app, without checking or installing', async () => {

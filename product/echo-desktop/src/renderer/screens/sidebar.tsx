@@ -4,10 +4,10 @@ import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
 import {
   goHome, installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openNewProject, openOrganization, openProject, openTools,
-  openYourFollowUps, settleWords, showAccountMenu, signInAgain, type State,
+  openYourFollowUps, returnToAsk, settleWords, showAccountMenu, signInAgain, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Capture, Chevron, Home as HomeIcon, People, Person, Plug, Plus, Ticks, Up } from './icons.js';
+import { Ask, Capture, Chevron, Home as HomeIcon, People, Person, Plug, Plus, Ticks, Up } from './icons.js';
 import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
@@ -40,21 +40,24 @@ const twoPart = (what: string, action: string) => <span class="label"><span clas
 
 /**
  * A new version (ADR-0035), signed in or out and under ECHO could not start, so
- * a broken release can install its fix. Nothing clickable says Update (Home's
- * word for open items), and it takes no drop. It stays one button so a keyboard
- * click keeps focus; Updating and the location line are aria-disabled.
+ * a broken release can install its fix; or Updates are off, when the updater
+ * should run but could not start (the log says why). Nothing clickable says
+ * Update (Home's word for open items), and it takes no drop. It stays one button
+ * so a keyboard click keeps focus; Updating, the location line and Updates are
+ * off are aria-disabled.
  */
 export function UpdateRow({ state }: { state: State }) {
   const { update, updateFailure: failure } = state;
   if (update.state === 'none') return null;
   const noDrop = (event: DragEvent) => event.stopPropagation();
   const location = update.state === 'failed' && update.reason === 'location';
-  const inert = update.state === 'installing' || location;
+  const inert = update.state === 'installing' || update.state === 'off' || location;
   return (
     <div class="sidebar-rows update-rows" role="status" onDragOver={noDrop} onDrop={noDrop}>
       <button type="button" class="side-row update-row" data-testid="sidebar-update" aria-disabled={inert ? 'true' : undefined}
         onClick={inert ? undefined : () => void installUpdate()}>
         {update.state === 'installing' ? <><span class="asking" aria-hidden="true"><i /><i /><i /></span><span class="label">Updating</span></>
+          : update.state === 'off' ? <><Up /><span class="label">Updates are off</span></>
           : location ? <><Up /><span class="label">Move ECHO to Applications to update</span></>
           : <><Up />{update.state === 'failed' ? twoPart('Couldn\'t update', 'Try again') : twoPart('New version', 'Restart')}</>}
       </button>
@@ -91,7 +94,8 @@ export function SignInDueRow({ state }: { state: State }) {
 }
 
 /**
- * Always beside the page: Home (Only me is a link there, ADR-0049), Capture,
+ * Always beside the page: Home (Only me is a link there, ADR-0049), Ask (back
+ * to where you left it, and current while it is open over any page), Capture,
  * Follow-ups (everything you sent, own or last handed on), your projects (one
  * click switches) under a Projects header whose "+" starts a new project,
  * People & invites for owners, Tools, a new version, the weekly sign-in once
@@ -102,11 +106,14 @@ export function SignInDueRow({ state }: { state: State }) {
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
   const { items, next, loading, failure } = state.projects;
-  const current = !state.concealed && state.route.page === 'project' ? state.route.project.project_id : null;
-  const tools = !state.concealed && state.route.page === 'tools';
-  const followUps = !state.concealed && state.route.page === 'follow-ups';
+  // Ask open over the page is the place you are: the page under it is not current.
+  const askOpen = !state.concealed && state.ask !== null;
+  const page = !state.concealed && !askOpen ? state.route.page : null;
+  const current = page === 'project' && state.route.page === 'project' ? state.route.project.project_id : null;
+  const tools = page === 'tools';
+  const followUps = page === 'follow-ups';
   // Home's own pages: a decision opened from it, and Only me.
-  const home = !state.concealed && (state.route.page === 'home' || state.route.page === 'decision' || state.route.page === 'only-me');
+  const home = page === 'home' || page === 'decision' || page === 'only-me';
   const needs = needsCount(state);
   const archived = state.archivedProjects;
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -119,6 +126,11 @@ export function Sidebar({ state }: { state: State }) {
           <button type="button" class={`side-row${home ? ' current' : ''}`} data-testid="sidebar-home" aria-current={home ? 'page' : undefined}
             onClick={goHome} onDragOver={noDrop} onDrop={noDrop}>
             <HomeIcon /><span class="label">Home</span>{needs > 0 && <span class="badge" data-testid="sidebar-badge">{needs}</span>}
+          </button>
+          {/* With nothing asked yet there is nothing to go back to: the cursor goes to the bar. */}
+          <button type="button" class={`side-row${askOpen ? ' current' : ''}`} data-testid="sidebar-ask" aria-current={askOpen ? 'page' : undefined}
+            onClick={() => { if (!returnToAsk()) document.getElementById('ask-field')?.focus(); }} onDragOver={noDrop} onDrop={noDrop}>
+            <Ask /><span class="label">Ask</span>
           </button>
           <button type="button" class="side-row" data-testid="sidebar-capture" onClick={() => openCompose()}>
             <Capture /><span class="label">Capture</span><span class="hint">{CAPTURE_HINT}</span>
@@ -172,8 +184,7 @@ export function Sidebar({ state }: { state: State }) {
         <div class="sidebar-rows organization-rows">
           <div class="side-header">Organization</div>
           <button type="button" data-testid="sidebar-organization" onClick={() => openOrganization()}
-            class={`side-row${!state.concealed && state.route.page === 'organization' ? ' current' : ''}`}
-            aria-current={!state.concealed && state.route.page === 'organization' ? 'page' : undefined}>
+            class={`side-row${page === 'organization' ? ' current' : ''}`} aria-current={page === 'organization' ? 'page' : undefined}>
             <People /><span class="label">People &amp; invites</span>
           </button>
         </div>

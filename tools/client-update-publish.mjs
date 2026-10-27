@@ -340,7 +340,8 @@ async function observePredecessor(host, config, d) {
   const identity = feedHeadIdentity(observed);
   const raw = await readPublicObject(host, 'feed.json', observed, UPDATE_METADATA_LIMIT, d);
   let verified;
-  try { verified = verifyUpdateEnvelope(raw, config, historicalEnvelopeTime(raw, d)); }
+  // The new floor binds clients and the new feed; the feed it replaces is older by design.
+  try { verified = verifyUpdateEnvelope(raw, { ...config, minimum_sequence: 1 }, historicalEnvelopeTime(raw, d)); }
   catch { fail('predecessor_feed_invalid'); }
   return { key: 'feed.json', sha256: digest(raw), bytes: raw.length, ...identity,
     sequence: verified.manifest.sequence, channel: verified.manifest.channel };
