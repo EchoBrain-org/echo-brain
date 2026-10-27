@@ -225,14 +225,15 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   let state = loadState(directory, config);
   // config.json keeps its first floor; a newer build may have raised it since.
   const floor = Math.max(config.minimum_sequence, raisedFloor(directory, config));
-  if (mode === 'status') return result(state?.result ?? 'not_checked', state);
+  // An offer saved from a feed below the floor is withdrawn: it is never
+  // offered again, and the saved status reads as no check.
+  const belowFloor = (saved: ClientUpdateState) => ['available', 'staged'].includes(saved.result) && (saved.checkpoint?.sequence ?? 0) < floor;
+  if (mode === 'status') return state && !belowFloor(state) ? result(state.result, state) : result('not_checked');
   if (mode === 'automatic' && !config.automatic) return result('automatic_disabled', state);
   const now = (dependencies.now ?? Date.now)();
   if (mode === 'automatic' && state && state.checked_at <= now && now - state.checked_at < UPDATE_INTERVAL_MS) {
-    // A staged release stays on offer until the app restarts into it, but
-    // never an offer from a feed below the floor.
-    const available = ['available', 'staged'].includes(state.result) && state.available_release !== null &&
-      state.available_release !== current && (state.checkpoint?.sequence ?? 0) >= floor;
+    // A staged release stays on offer until the app restarts into it.
+    const available = ['available', 'staged'].includes(state.result) && state.available_release !== null && state.available_release !== current && !belowFloor(state);
     return result(available ? 'available' : 'not_due', state);
   }
   if (!dependencies.installation && !installer && mode === 'apply') return result('adapter_unavailable', state);

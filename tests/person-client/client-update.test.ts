@@ -285,17 +285,21 @@ describe('signed cross-platform client updates', () => {
     const f = fixture();
     expect((await runClientUpdate('check', f.dependencies)).status).toBe('available');
     expect((await runClientUpdate('automatic', f.dependencies)).status).toBe('available');
+    expect((await runClientUpdate('status', f.dependencies)).status).toBe('available');
     const files = () => ['config.json', 'state.json'].map(name => readFileSync(join(f.root, 'updater', name)));
     const before = files();
     configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 });
     expect(files()).toEqual(before);
     expect(JSON.parse(readFileSync(join(f.root, 'updater/floor.json'), 'utf8'))).toEqual({ schema_version: 1, config_sha256: appState(f.root).config_sha256, minimum_sequence: 4 });
-    // Inside the hour, the cached offer from the feed at 3 is not shown again.
+    // Inside the hour, the cached offer from the feed at 3 is not shown again,
+    // and the saved status no longer names it.
     expect(await runClientUpdate('automatic', f.dependencies)).toMatchObject({ status: 'not_due' });
+    expect(await runClientUpdate('status', f.dependencies)).toMatchObject({ status: 'not_checked', available_release: null, checked_at: null });
     // Once due, the feed still at 3 offers nothing, and at 4 it is offered as usual.
     expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS })).toMatchObject({ status: 'stale_metadata' });
     f.manifest.sequence = 4;
     expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + 2 * UPDATE_INTERVAL_MS })).toMatchObject({ status: 'available', available_release: f.manifest.release_id });
+    expect(await runClientUpdate('status', f.dependencies)).toMatchObject({ status: 'available', available_release: f.manifest.release_id });
     expect(f.fetcher).toHaveBeenCalledTimes(3);
     expect(f.install).not.toHaveBeenCalled();
   });
