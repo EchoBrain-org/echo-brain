@@ -55,14 +55,6 @@
     "outcome": "partial",
     "audit_sha256": "sha256:3ac095cd2e9fa65f02f04a1258673a3b248dce378788521d9d4df3b2bdf1efcc"
   },
-  "small_scope_preload": {
-    "calls": 2,
-    "prompt_sha256": "sha256:ee4392170dd0815b21082ed3e3e38a51ad5eba6ef2e293476f881a905ff27fde",
-    "response_sha256": "sha256:aa9162d4ba214622adb3f3f55cabb4c2822f2d3d6d249b678800de6e227e28f8",
-    "model_inputs_sha256": "sha256:0214f3b8851f59197649066774bb593bdaca83d4c353b516c99f54b2eef1cfa9",
-    "outcome": "answered",
-    "audit_sha256": "sha256:ac665da953bfc6d92ae30a199b9fd1447527d8370d27d5f5cb34f8c7e3250883"
-  },
   "unusable_step_stop": {
     "calls": 2,
     "prompt_sha256": "sha256:bebba8dfdef7f0fdd3bbb14e2486829cdfcc85a61580664646852a0f12496740",
