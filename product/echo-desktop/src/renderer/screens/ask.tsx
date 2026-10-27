@@ -20,12 +20,13 @@ import {
 import {
   activeTurn, askAgain, askEverywhere, askThread, barSuggestions, cancelAsk, checksOf, chipName, shownChecks, chooseClarified, chooseSource, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, matchesShown, openCompose, openFullPage, openMatch, openExternalSource, openNamed, pageCovered, paneCitations, paneTarget, pickSuggestion,
-  retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleSourceList, toggleTurn, turnOf, widenScope, UNTITLED,
+  retryAsk, retryEvidence, retryRecord, scopeName, searchAgain, setBarText, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList, toggleTurn, turnOf, widenScope,
+  UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type RecordSectionKey, type State,
 } from '../store.js';
 import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
-  allOmitted, askedAgain, markOf, shownInFull, showsOf, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
+  allOmitted, askedAgain, behindEarlierLine, markOf, shownInFull, showsOf, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { Check, Chevron, Close, Copy, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticks, Up } from './icons.js';
 
@@ -617,16 +618,17 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
  * for all context), its full question, "Changed" when a source it cited
  * changed and no later turn asked it again (`again`, askedAgain's), and when
  * it was asked. The line opens the answer as it was (OpenedTurn), and is then
- * its heading.
+ * its heading. One behind the earlier questions' line is kept out of Ask's
+ * live region (`quiet`), so opening that line does not read them all out.
  */
-function FoldedTurn({ state, turn, opened, again }: { state: State; turn: TimelineTurn; opened: boolean; again: ReadonlySet<string> }) {
+function FoldedTurn({ state, turn, opened, again, quiet }: { state: State; turn: TimelineTurn; opened: boolean; again: ReadonlySet<string>; quiet: boolean }) {
   const checks = checksOf(turn, state);
   const changed = turnChanged(turn, checks, again);
   const square = turn.scope.kind === 'project'
     ? <span class="turn-square" style={identity(turn.scope.project_id)} aria-hidden="true">{initial(scopeName(turn.scope, state))}</span>
     : <span class="turn-square none" aria-hidden="true" />;
   return (
-    <div class={`folded-turn${opened ? ' open' : ''}`} data-turn={turn.id}>
+    <div class={`folded-turn${opened ? ' open' : ''}`} data-turn={turn.id} aria-live={quiet ? 'off' : undefined}>
       <button type="button" class="folded" data-testid="timeline-row" aria-expanded={opened} onClick={() => toggleTurn(turn.id)}>
         {square}
         <span class="q" data-testid="timeline-question">{turn.question}</span>
@@ -672,6 +674,18 @@ function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
   );
 }
 
+/**
+ * The one line the earlier questions past the newest three fold into, above
+ * them all: it says how many, and opens them in place or folds them again.
+ */
+function EarlierLine({ count, open }: { count: number; open: boolean }) {
+  return (
+    <button type="button" class="disclosure earlier" data-testid="earlier-toggle" aria-expanded={open} onClick={toggleEarlier}>
+      <Chevron /><span>{count} earlier {count === 1 ? 'question' : 'questions'}</span>
+    </button>
+  );
+}
+
 /** The quiet line above the first of today's turns, when earlier days have turns. */
 function Today() {
   return <div class="today" role="separator" data-testid="today"><span>Today</span></div>;
@@ -681,10 +695,11 @@ function Today() {
 const FOLLOW_PX = 40;
 
 /**
- * Ask, on the timeline (ADR-0047): every earlier turn as one line, the latest
- * and those asked since Ask was opened in full, then a question on its way,
- * "Which one?", or one that failed. Newest at the bottom, with a quiet Today
- * above the first of today's turns.
+ * Ask, on the timeline (ADR-0047): the newest three earlier turns as one line
+ * each under the line the older ones fold into, the latest and those asked
+ * since Ask was opened in full, then a question on its way, "Which one?", or
+ * one that failed. Newest at the bottom, with a quiet Today above the first of
+ * today's turns, folded away with it.
  */
 export function AskView({ state }: { state: State }) {
   const thread = state.ask!;
@@ -729,14 +744,16 @@ export function AskView({ state }: { state: State }) {
   const today = first > 0 ? first : first === -1 && turns.length > 0 && (asking || clarify || failed) ? turns.length : -1;
   const full = fullTurns(thread);
   const again = askedAgain(state.timeline.turns);
+  const behind = new Set(behindEarlierLine(turns, full));
   return (
     <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll}>
-      {turns.map((turn, index) => (
+      {behind.size > 0 && <EarlierLine count={behind.size} open={thread.earlier} />}
+      {turns.map((turn, index) => (thread.earlier || !behind.has(turn.id)) && (
         <Fragment key={turn.id}>
           {index === today && <Today />}
           {shownInFull(turn, turns, full)
             ? <FullTurn state={state} turn={turn} took={thread.took[turn.id]} current={thread.asked.includes(turn.id)} last={index === turns.length - 1} />
-            : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} again={again} />}
+            : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} again={again} quiet={behind.has(turn.id)} />}
         </Fragment>
       ))}
       {today === turns.length && <Today />}

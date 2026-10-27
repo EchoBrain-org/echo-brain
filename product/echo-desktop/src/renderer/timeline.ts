@@ -219,6 +219,18 @@ export function shownInFull(turn: TimelineTurn, turns: readonly TimelineTurn[], 
   return turns.at(-1)?.id === turn.id || full.includes(turn.id);
 }
 
+/** How many earlier questions Ask shows as lines before the older ones go behind one line. */
+const EARLIER_SHOWN = 3;
+
+/**
+ * The earlier questions behind Ask's one "N earlier questions" line: every
+ * turn shown as a line but the newest three, oldest first.
+ */
+export function behindEarlierLine(turns: readonly TimelineTurn[], full: readonly string[]): string[] {
+  const folded = turns.filter(turn => !shownInFull(turn, turns, full));
+  return folded.slice(0, Math.max(0, folded.length - EARLIER_SHOWN)).map(turn => turn.id);
+}
+
 /**
  * The turn a follow-up continues: the turn opened (from its line, or chosen from the bar's suggestions, the latest included),
  * or else the latest when it was asked in the last hour.

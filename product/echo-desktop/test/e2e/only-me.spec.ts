@@ -26,8 +26,8 @@ test('Home\'s footer opens Only me: what only you can read, filed or not, newest
   run = await launch('only-me');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  // Mine is gone: Home, Capture and Follow-ups, then your projects; Tools stays at the bottom.
-  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText(['Home', /Capture/, 'Follow-ups', 'Tools']);
+  // Mine is gone: Home, Ask, Capture and Follow-ups, then your projects; Tools stays at the bottom.
+  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText(['Home', 'Ask', /Capture/, 'Follow-ups', 'Tools']);
   // A quiet link after Follow-ups, with its lock and no count.
   await expect(page.getByTestId('needs-foot')).toContainText('Follow-ups · Only me');
   await expect(page.getByTestId('home-only-me')).toHaveText('Only me');
