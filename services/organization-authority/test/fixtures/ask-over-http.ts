@@ -107,9 +107,8 @@ export function askClient(defaults: { readonly path: string; readonly progress: 
  * for an Authority without the route.
  */
 export async function expectJsonAskFallbacks(ask: ReturnType<typeof askClient>, base: string,
-  route: { readonly header: string; readonly others: readonly string[]; readonly validate: (value: unknown) => unknown; readonly reset?: () => void }): Promise<void> {
+  route: { readonly header: string; readonly others: readonly string[]; readonly validate: (value: unknown) => unknown }): Promise<void> {
   for (const progress of route.others) {
-    route.reset?.();
     const response = await ask(base, { progress });
     expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
     route.validate(await response.json());

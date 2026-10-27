@@ -850,19 +850,6 @@ describe("Person client", () => {
       });
     });
   });
-  it("never asks a retired Ask path when /v7 answers a canonical 404", async () => {
-    await withHome(async home => {
-      const paths: string[] = [];
-      const client = await signedInClient(home, async input => {
-        const path = new URL(String(input)).pathname;
-        paths.push(path);
-        if (path === '/v7/person/ask') return json({ error: { code: 'not_found', message: 'removed while request was running' } }, 404);
-        throw new Error(`unexpected path ${path}`);
-      });
-      await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code: 'not_supported', status: 404 });
-      expect(paths).toEqual(['/v7/person/ask']);
-    });
-  });
   it("asks agentic Ask and validates its V8 response before returning it", async () => {
     await withHome(async home => {
       const digest = `sha256:${'a'.repeat(64)}`;

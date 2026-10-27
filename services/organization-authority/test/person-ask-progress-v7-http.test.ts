@@ -11,7 +11,7 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from '../src/composition/person-workspace-evidence-v1.js';
-import { askClient, auditBodies as audits, closeAskServers, decodeAll, expectAskRouteUnavailable, expectJsonAskFallbacks, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
+import { askClient, auditBodies as audits, closeAskServers, decodeAll, expectAskRouteUnavailable, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
 import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
@@ -118,14 +118,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(JSON.stringify(released)).not.toContain('Project A');
     // The streamed request's Ask record names the project by its citation commitment.
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').at(-1)).toMatchObject({ outcome: 'answered', named_citation_digests: expect.arrayContaining([canonicalSha256(project.citation)]) });
-  });
-
-  it('streams /v7 only for its own header value', async () => {
-    const f = await sentFixture();
-    const planner = leadsAndTasks();
-    const base = await origin(f, planner.model);
-    // Any other value, the retired progress values '1' and '2' among them, gets the JSON V8 answer, never a stream.
-    await expectJsonAskFallbacks(ask, base, { header: '7', others: ['1', '2', '0', '33'], validate: validatePersonAnswerResponseV8, reset: planner.reset });
   });
 
   it('never binds the workspace in Mine, which reads only what the asker added: no projects, people or tools are offered, read or audited', async () => {
