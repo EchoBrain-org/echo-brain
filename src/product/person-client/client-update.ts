@@ -62,7 +62,13 @@ export interface ClientUpdateDependencies {
    */
   handle_signals?: boolean;
 }
-function configDigest(config: ClientUpdateConfig): string {
+/** The pin: every config field but the person's `automatic` choice and the floor, which only rises. */
+function pinDigest(config: ClientUpdateConfig): string {
+  const { automatic: _automatic, minimum_sequence: _floor, ...pin } = config;
+  return updateDigest(JSON.stringify(pin));
+}
+/** Builds before the floor could rise stamped state with this digest, which also covers the floor. */
+function legacyDigest(config: ClientUpdateConfig): string {
   const { automatic: _automatic, ...trust } = config;
   return updateDigest(JSON.stringify(trust));
 }
@@ -87,7 +93,7 @@ function loadState(directory: string, config: ClientUpdateConfig): ClientUpdateS
   const v = updateObject(JSON.parse(readUpdateFile(path, UPDATE_METADATA_LIMIT).toString('utf8')), ['schema_version', 'config_sha256', 'checkpoint', 'checked_at', 'available_release', 'result']);
   if (v.schema_version !== 1 || typeof v.checked_at !== 'number' || !Number.isFinite(v.checked_at) ||
       typeof v.result !== 'string' || !(v.available_release === null || typeof v.available_release === 'string') ||
-      v.config_sha256 !== configDigest(config)) rejectUpdate('invalid_update_state');
+      (v.config_sha256 !== pinDigest(config) && v.config_sha256 !== legacyDigest(config))) rejectUpdate('invalid_update_state');
   if (v.checkpoint !== null) {
     const c = updateObject(v.checkpoint, ['sequence', 'manifest_sha256']);
     if (!Number.isSafeInteger(c.sequence) || Number(c.sequence) < 1 || typeof c.manifest_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(c.manifest_sha256)) rejectUpdate('invalid_update_state');
@@ -149,8 +155,17 @@ export function configureClientUpdates(root: string, raw: unknown, installation?
     const old = readClientUpdateConfig(root);
     // Reconfiguration must not reset the anti-rollback checkpoint or silently
     // replace publisher trust. A new publisher requires a separate bootstrap.
-    if (old && configDigest(old) !== configDigest(config)) rejectUpdate('already_configured');
-    writeUpdateJson(join(directory, 'config.json'), config);
+    if (old && pinDigest(old) !== pinDigest(config)) rejectUpdate('already_configured');
+    // The floor only rises. Raising it keeps the checkpoint, drops the last
+    // check's offer and makes the next check due at once. The state is saved
+    // first: its pin stamp loads under either config, so a raise interrupted
+    // before the config write is repeated by the next configure.
+    const floor = Math.max(old?.minimum_sequence ?? 0, config.minimum_sequence);
+    if (old && floor > old.minimum_sequence) {
+      const state = loadState(directory, old);
+      if (state) writeUpdateJson(join(directory, 'state.json'), { ...state, config_sha256: pinDigest(config), checked_at: 0, available_release: null, result: 'not_checked' });
+    }
+    writeUpdateJson(join(directory, 'config.json'), { ...config, minimum_sequence: floor });
   } finally { rmSync(lock, { recursive: true }); }
 }
 
@@ -236,7 +251,7 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
     const feed = Buffer.concat(metadata);
     const verified = verifyUpdateEnvelope(feed, config, now, state?.checkpoint ?? undefined);
     const manifest: ClientUpdateManifest = verified.manifest;
-    state = { schema_version: 1, config_sha256: configDigest(config), checkpoint: verified.checkpoint, checked_at: now, available_release: manifest.release_id, result: 'available' };
+    state = { schema_version: 1, config_sha256: pinDigest(config), checkpoint: verified.checkpoint, checked_at: now, available_release: manifest.release_id, result: 'available' };
     // Persist freshness even if the artifact is unavailable or installation fails.
     writeUpdateJson(join(directory, 'state.json'), state);
     const artifact = selectUpdateArtifact(manifest, platform);
@@ -282,7 +297,7 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   } catch (error) {
     const code = error instanceof ClientUpdateError ? error.code : 'update_failed';
     preserveRecovery = code === 'installation_outcome_unknown';
-    const failure: ClientUpdateState = { schema_version: 1, config_sha256: configDigest(config), checkpoint: state?.checkpoint ?? null, checked_at: now, available_release: state?.available_release ?? null, result: code };
+    const failure: ClientUpdateState = { schema_version: 1, config_sha256: pinDigest(config), checkpoint: state?.checkpoint ?? null, checked_at: now, available_release: state?.available_release ?? null, result: code };
     writeUpdateJson(join(directory, 'state.json'), failure);
     if (mode === 'automatic') return result(code, failure);
     throw new ClientUpdateError(code);

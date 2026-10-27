@@ -34,7 +34,7 @@ const operation = (bytes: number) => BASE_MS + Math.ceil(bytes * 1000 / (512 * 1
 const firstWindow = (sizes: number[]) => sizes.reduce((total, bytes, index) => total + 2 * operation(bytes) + BASE_MS + (index ? BASE_MS : 0), BASE_MS);
 const replacementWindow = (sizes: number[]) => sizes.reduce((total, bytes, index) =>
   total + 2 * operation(bytes) + BASE_MS + (index ? (index === sizes.length - 1 ? 11 : 3) * BASE_MS : 0), BASE_MS);
-function fixture(options: { expiresAt?: number; previousExpiresAt?: number; previousSequence?: number; sequence?: number; existingArtifact?: boolean; targets?: Artifact[]; sizes?: Partial<Record<Artifact, number>> } = {}) {
+function fixture(options: { expiresAt?: number; previousExpiresAt?: number; previousSequence?: number; sequence?: number; minimumSequence?: number; existingArtifact?: boolean; targets?: Artifact[]; sizes?: Partial<Record<Artifact, number>> } = {}) {
   const directory = mkdtempSync(join(realpathSync(tmpdir()), 'echo-publish-test-'));
   chmodSync(directory, 0o700); directories.push(directory);
   const prepared = join(directory, 'prepared');
@@ -51,7 +51,7 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
   const artifactKeys = artifacts.map(artifact => artifact.key);
   const artifactKey = artifactKeys[0];
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
-  const config = parseUpdateConfig({ schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'staging', feed_url: FEED, public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' });
+  const config = parseUpdateConfig({ schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'staging', feed_url: FEED, public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: options.minimumSequence ?? 1, automatic: true, installation: 'cli-kit' });
   const createdAt = Date.now();
   const manifest = parseUpdateManifest({ schema_version: 1, kind: 'echo-client-update-manifest-v1', channel: 'staging', sequence: options.sequence ?? 1, issued_at: new Date(createdAt - 10000).toISOString(), expires_at: new Date(options.expiresAt ?? createdAt + 86400000).toISOString(), release_id: 'clean-v1-fixture', release_sha256: 'b'.repeat(64), source_sha: SOURCE, product_version: '0.1.1', artifacts: artifacts.map(artifact => artifact.manifest) });
   const payload = Buffer.from(JSON.stringify(manifest));
@@ -441,6 +441,14 @@ describe('bounded conditional S3 feed replacement', () => {
     await exact.replacePlan();
     exact.state.now = Date.parse(exact.manifest.expires_at) - replacementWindow(exact.sizes);
     expect(await exact.replaceExecute()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
+  });
+
+  it('replaces an older feed for a bundle whose floor is above it', async () => {
+    const f = fixture({ previousSequence: 1, sequence: 2, minimumSequence: 2 });
+    expect(await f.replacePlan()).toMatchObject({ state: 'planned' });
+    expect(JSON.parse(readFileSync(f.receipt, 'utf8')).predecessor).toMatchObject({ sequence: 1, channel: 'staging' });
+    expect(await f.replaceExecute()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
+    expect(await f.replaceStatus()).toMatchObject({ state: 'succeeded', verified_objects: 5 });
   });
 
   it('rejects a same or lower sequence before creating a replacement receipt', async () => {

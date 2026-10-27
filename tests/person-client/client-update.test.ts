@@ -270,10 +270,89 @@ describe('signed cross-platform client updates', () => {
     configureClientUpdates(f.root, { ...f.config, automatic: false });
     expect((await runClientUpdate('automatic', f.dependencies)).status).toBe('automatic_disabled');
     expect(JSON.parse(readFileSync(join(f.root, 'updater/state.json'), 'utf8')).checkpoint).toEqual(before);
-    expect(() => configureClientUpdates(f.root, { ...f.config, minimum_sequence: 1 })).toThrow('already_configured');
+    // A lower floor is no error: the stored floor stays, and so does the state.
+    const state = readFileSync(join(f.root, 'updater/state.json'));
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 1 });
+    expect(readClientUpdateConfig(f.root)).toEqual(f.config);
+    expect(readFileSync(join(f.root, 'updater/state.json'))).toEqual(state);
     expect(f.fetcher).toHaveBeenCalledOnce();
     expect((await runClientUpdate('apply', f.dependencies)).status).toBe('updated');
     expect(f.install).toHaveBeenCalledOnce();
+  });
+
+  it('raises the floor for a newer build: keeps the checkpoint, drops the cached offer and checks again at once', async () => {
+    const f = fixture();
+    expect((await runClientUpdate('check', f.dependencies)).status).toBe('available');
+    const { checkpoint } = appState(f.root);
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 });
+    expect(readClientUpdateConfig(f.root)).toEqual({ ...f.config, minimum_sequence: 4 });
+    expect(appState(f.root)).toMatchObject({ checkpoint, checked_at: 0, available_release: null, result: 'not_checked' });
+    expect(await runClientUpdate('status', f.dependencies)).toMatchObject({ status: 'not_checked', available_release: null });
+    // Within the hour of the last check, the run still fetches: the feed at 3 offers nothing.
+    expect(await runClientUpdate('automatic', f.dependencies)).toMatchObject({ status: 'stale_metadata', available_release: null, checked_at: NOW });
+    expect(await runClientUpdate('automatic', f.dependencies)).toMatchObject({ status: 'not_due', available_release: null });
+    f.manifest.sequence = 4;
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS })).toMatchObject({ status: 'available', available_release: f.manifest.release_id });
+    expect(f.fetcher).toHaveBeenCalledTimes(3);
+    expect(f.install).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['public_key_spki', generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64')],
+    ['feed_url', 'https://updates.example.test/other/feed.json'],
+    ['channel', 'another'],
+    ['installation', 'electron'],
+  ])('refuses another %s as already_configured, even with a higher floor, and changes nothing', async (field, value) => {
+    const f = fixture();
+    await runClientUpdate('check', f.dependencies);
+    const files = () => ['config.json', 'state.json'].map(name => readFileSync(join(f.root, 'updater', name)));
+    const before = files();
+    expect(() => configureClientUpdates(f.root, { ...f.config, [field]: value, minimum_sequence: 4 })).toThrow('already_configured');
+    expect(files()).toEqual(before);
+  });
+
+  it('keeps loading state that earlier builds stamped, and raises the floor from it', async () => {
+    const f = fixture();
+    await runClientUpdate('check', f.dependencies);
+    // Those builds stamped the digest of every config field but automatic, the floor included.
+    const { automatic: _automatic, ...trust } = f.config;
+    const earlier = () => writeFileSync(join(f.root, 'updater/state.json'), `${JSON.stringify({ ...appState(f.root), config_sha256: updateDigest(JSON.stringify(trust)) })}\n`);
+    earlier();
+    expect(await runClientUpdate('status', f.dependencies)).toMatchObject({ status: 'available', available_release: f.manifest.release_id, checked_at: NOW });
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS })).toMatchObject({ status: 'available', checked_at: NOW + UPDATE_INTERVAL_MS });
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
+    earlier();
+    const { checkpoint } = appState(f.root);
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 });
+    expect(appState(f.root)).toMatchObject({ checkpoint, checked_at: 0, available_release: null, result: 'not_checked' });
+  });
+
+  it('refuses state with any other stamp, and a raise over it changes nothing', async () => {
+    const f = fixture();
+    await runClientUpdate('check', f.dependencies);
+    writeFileSync(join(f.root, 'updater/state.json'), `${JSON.stringify({ ...appState(f.root), config_sha256: 'c'.repeat(64) })}\n`);
+    const state = readFileSync(join(f.root, 'updater/state.json'));
+    await expect(runClientUpdate('status', f.dependencies)).rejects.toThrow('invalid_update_state');
+    expect(() => configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 })).toThrow('invalid_update_state');
+    expect(readClientUpdateConfig(f.root)).toEqual(f.config);
+    expect(readFileSync(join(f.root, 'updater/state.json'))).toEqual(state);
+  });
+
+  it('completes a raise interrupted between its state and config writes, and repeats it idempotently', async () => {
+    const f = fixture();
+    await runClientUpdate('check', f.dependencies);
+    const files = () => ['config.json', 'state.json'].map(name => readFileSync(join(f.root, 'updater', name)));
+    const older = readFileSync(join(f.root, 'updater/config.json'));
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 });
+    const raised = files();
+    // A crash after the state write leaves config.json at the old floor.
+    writeFileSync(join(f.root, 'updater/config.json'), older);
+    expect(readClientUpdateConfig(f.root)).toEqual(f.config);
+    expect(await runClientUpdate('status', f.dependencies)).toMatchObject({ status: 'not_checked', available_release: null });
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 });
+    expect(files()).toEqual(raised);
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 });
+    expect(files()).toEqual(raised);
   });
 
   it('retains recovery evidence and the lock after an uncertain installer outcome, even through releaseInterruptedClientUpdate', async () => {
@@ -458,11 +537,25 @@ describe('client updates through an installation adapter', () => {
     expect(() => configureClientUpdates(f.root, f.config, f.installation)).toThrow('update_busy');
     expect(existsSync(path)).toBe(false);
     rmSync(join(f.root, 'updater/.lock'), { recursive: true });
-    // The app's pin: automatic may change, publisher trust may not.
+    // The app's pin: automatic may change, a lower floor keeps the stored one, publisher trust may not.
     configureClientUpdates(f.root, f.config, f.installation);
     configureClientUpdates(f.root, { ...f.config, automatic: false }, f.installation);
-    expect(() => configureClientUpdates(f.root, { ...f.config, minimum_sequence: 1 }, f.installation)).toThrow('already_configured');
+    configureClientUpdates(f.root, { ...f.config, automatic: false, minimum_sequence: 1 }, f.installation);
+    expect(() => configureClientUpdates(f.root, { ...f.config, channel: 'another' }, f.installation)).toThrow('already_configured');
     expect(readClientUpdateConfig(f.root)).toEqual({ ...f.config, automatic: false });
+  });
+
+  it('raises the floor through the adapter and drops even a staged offer', async () => {
+    const f = appFixture();
+    expect((await runClientUpdate('apply', f.dependencies)).status).toBe('staged');
+    const { checkpoint } = appState(f.root);
+    configureClientUpdates(f.root, { ...f.config, minimum_sequence: 4 }, f.installation);
+    expect(readClientUpdateConfig(f.root)).toEqual({ ...f.config, minimum_sequence: 4 });
+    expect(appState(f.root)).toMatchObject({ checkpoint, checked_at: 0, available_release: null, result: 'not_checked' });
+    expect(await runClientUpdate('automatic', f.dependencies)).toMatchObject({ status: 'stale_metadata', available_release: null });
+    f.manifest.sequence = 4;
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS })).toMatchObject({ status: 'available', available_release: f.manifest.release_id });
+    expect(f.install).toHaveBeenCalledOnce();
   });
 
   it('reports installed files that select another release than the running app, without checking or installing', async () => {
