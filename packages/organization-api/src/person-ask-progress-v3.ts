@@ -1,8 +1,8 @@
+import { canonicalJson, canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import type { OrganizationApiErrorV1 } from './contracts.js';
 import type { PersonAnswerCitationV8, PersonAnswerResponseV8 } from './person-answer-v8.js';
 import { validatePersonAnswerCitationV8, validatePersonAnswerResponseV8 } from './person-answer-v4.js';
-import { askProgressCodec } from './person-ask-progress-codec.js';
-import { asEnumerableRecord as object, assertExactKeys, fail } from './validation.js';
+import { asEnumerableRecord as object, assertExactKeys, assertToolId, fail, validateOrganizationApiError } from './validation.js';
 
 /**
  * Ask progress V3 (ADR-0039, ADR-0042): while an Ask runs, `POST /v7/person/ask`
@@ -182,37 +182,170 @@ export interface PersonAskProgressResultLineV3 {
   readonly receipt?: PersonAskReceiptV3;
 }
 
-const V3 = askProgressCodec({
-  plain_sources: ['meetings', 'documents', 'follow_ups', 'projects', 'people', 'tools'],
-  tool_sources: ['tickets', 'pages', 'containers'],
-  item: validatePersonAnswerCitationV8,
-  answer: validatePersonAnswerResponseV8,
-  bounds: {
-    count: PERSON_ASK_PROGRESS_COUNT_MAX_V1, sources: PERSON_ASK_PROGRESS_SOURCES_MAX_V3, read_items: PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1,
-    named: PERSON_ASK_PROGRESS_NAMED_MAX_V1, receipt_rows: PERSON_ASK_RECEIPT_ROWS_MAX_V1, receipt_bytes: PERSON_ASK_RECEIPT_MAX_BYTES_V1,
-    receipt_elapsed_ms: PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1, event_bytes: PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1, line_chars: PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1,
-  },
-});
+const STAGES: readonly string[] = ['searching', 'reading', 'checking_access', 'writing'];
+const PLAIN_SOURCES: readonly string[] = ['meetings', 'documents', 'follow_ups', 'projects', 'people', 'tools'];
+const TOOL_SOURCES: readonly string[] = ['tickets', 'pages', 'containers'];
+const ERROR_STATUSES: readonly number[] = [400, 401, 404, 409, 429, 500, 502, 503];
+
+function count(value: unknown, label: string, minimum = 0): number {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > PERSON_ASK_PROGRESS_COUNT_MAX_V1) fail(`${label} is invalid`);
+  return value as number;
+}
+
+function source(value: unknown): PersonAskProgressSourceV3 {
+  const input = object(value, 'Ask progress source');
+  if (PLAIN_SOURCES.includes(input.kind as string)) {
+    assertExactKeys(input, ['kind'], 'Ask progress source');
+    return Object.freeze({ kind: input.kind as 'meetings' | 'documents' | 'follow_ups' | 'projects' | 'people' | 'tools' });
+  }
+  if (!TOOL_SOURCES.includes(input.kind as string)) fail('Ask progress source kind is invalid');
+  assertExactKeys(input, ['kind', 'tool_id'], 'Ask progress source');
+  assertToolId(input.tool_id, 'Ask progress source tool_id');
+  return Object.freeze({ kind: input.kind as 'tickets' | 'pages' | 'containers', tool_id: input.tool_id });
+}
+
+function searched(input: Record<string, unknown>, label: string): PersonAskProgressSearchedEventV3 {
+  assertExactKeys(input, ['type', 'sources', 'found'], label);
+  if (!Array.isArray(input.sources) || input.sources.length === 0 || input.sources.length > PERSON_ASK_PROGRESS_SOURCES_MAX_V3) fail(`${label} sources is invalid`);
+  const sources = input.sources.map(source);
+  if (new Set(sources.map(value => canonicalJson(value))).size !== sources.length) fail(`${label} sources contains duplicates`);
+  return Object.freeze({ type: 'searched', sources: Object.freeze(sources), found: count(input.found, `${label} found`) });
+}
+
+/** Items of one read event or receipt row; `seen` spans a whole receipt so an item is named once. */
+function read(input: Record<string, unknown>, label: string, maximum: number, seen: Set<string> = new Set()): PersonAskProgressReadEventV3 {
+  assertExactKeys(input, ['type', 'items'], label);
+  if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > maximum) fail(`${label} items is invalid`);
+  const items = input.items.map(item => validatePersonAnswerCitationV8(item));
+  for (const item of items) {
+    const key = canonicalJson(item.citation);
+    if (seen.has(key)) fail(`${label} names an item twice`);
+    seen.add(key);
+  }
+  return Object.freeze({ type: 'read', items: Object.freeze(items) });
+}
+
+function stepEvent(input: Record<string, unknown>): PersonAskProgressStepEventV3 {
+  if (input.type === 'stage') {
+    assertExactKeys(input, ['type', 'stage', ...(Object.hasOwn(input, 'pending') ? ['pending'] : [])], 'Ask progress stage');
+    if (!STAGES.includes(input.stage as string)) fail('Ask progress stage is invalid');
+    if (Object.hasOwn(input, 'pending') && input.stage !== 'reading') fail('Ask progress pending applies only to reading');
+    return Object.freeze({ type: 'stage', stage: input.stage as PersonAskProgressStageV1, ...(Object.hasOwn(input, 'pending') ? { pending: count(input.pending, 'Ask progress pending', 1) } : {}) });
+  }
+  if (input.type === 'searched') return searched(input, 'Ask progress searched');
+  if (input.type === 'read') return read(input, 'Ask progress read', PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1);
+  fail('Ask progress event type is invalid');
+}
+
+function bounded<T>(value: T, maximum: number, label: string): T {
+  if (canonicalJsonBytes(value).byteLength > maximum) fail(`${label} exceeds its JSON byte bound`);
+  return value;
+}
 
 /** A stage, searched or read event: what the run emits, and what a progress line carries. */
-export function validatePersonAskProgressStepEventV3(value: unknown): PersonAskProgressStepEventV3 { return V3.step(value) as PersonAskProgressStepEventV3; }
-export function validatePersonAskReceiptV3(value: unknown): PersonAskReceiptV3 { return V3.receipt(value) as PersonAskReceiptV3; }
+export function validatePersonAskProgressStepEventV3(value: unknown): PersonAskProgressStepEventV3 {
+  return bounded(stepEvent(object(value, 'Ask progress event')), PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1, 'Ask progress event');
+}
+
+export function validatePersonAskReceiptV3(value: unknown): PersonAskReceiptV3 {
+  const input = object(value, 'Ask receipt');
+  assertExactKeys(input, ['looked_through', 'elapsed_ms', 'rows'], 'Ask receipt');
+  const lookedThrough = count(input.looked_through, 'Ask receipt looked_through');
+  if (!Number.isSafeInteger(input.elapsed_ms) || (input.elapsed_ms as number) < 0 || (input.elapsed_ms as number) > PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1) fail('Ask receipt elapsed_ms is invalid');
+  if (!Array.isArray(input.rows) || input.rows.length > PERSON_ASK_RECEIPT_ROWS_MAX_V1) fail('Ask receipt rows is invalid');
+  const seen = new Set<string>();
+  const rows = input.rows.map((value: unknown): PersonAskReceiptRowV3 => {
+    const row = object(value, 'Ask receipt row');
+    if (row.type === 'searched') return searched(row, 'Ask receipt row');
+    if (row.type === 'read') return read(row, 'Ask receipt row', PERSON_ASK_PROGRESS_NAMED_MAX_V1, seen);
+    fail('Ask receipt row type is invalid');
+  });
+  for (let index = 1; index < rows.length; index += 1) if (rows[index]!.type === rows[index - 1]!.type) fail('Ask receipt rows are not merged');
+  if (seen.size > PERSON_ASK_PROGRESS_NAMED_MAX_V1) fail('Ask receipt names too many items');
+  if (lookedThrough < seen.size) fail('Ask receipt looked_through is less than the items it names');
+  return bounded(Object.freeze({ looked_through: lookedThrough, elapsed_ms: input.elapsed_ms as number, rows: Object.freeze(rows) }), PERSON_ASK_RECEIPT_MAX_BYTES_V1, 'Ask receipt');
+}
+
+/** Any one stream event, terminal events included. */
+function streamEvent(value: unknown): PersonAskProgressEventV3 {
+  const input = object(value, 'Ask progress event');
+  if (input.type === 'answer') {
+    assertExactKeys(input, ['type', 'response', 'receipt'], 'Ask progress answer');
+    return bounded(Object.freeze({ type: 'answer', response: validatePersonAnswerResponseV8(input.response), receipt: validatePersonAskReceiptV3(input.receipt) }), PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1, 'Ask progress answer');
+  }
+  if (input.type === 'error') {
+    assertExactKeys(input, ['type', 'status', 'error'], 'Ask progress error');
+    if (!ERROR_STATUSES.includes(input.status as number)) fail('Ask progress error status is invalid');
+    const { error } = validateOrganizationApiError({ error: input.error });
+    return Object.freeze({ type: 'error', status: input.status as PersonAskProgressErrorStatusV1, error: Object.freeze(error) });
+  }
+  return bounded(stepEvent(input), PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1, 'Ask progress event');
+}
+
 /** One event as its stream frame. `JSON.stringify` escapes newlines, so the frame is one data line. */
-export function formatPersonAskProgressEventV3(event: PersonAskProgressEventV3): string { return V3.format(event); }
+export function formatPersonAskProgressEventV3(event: PersonAskProgressEventV3): string {
+  return `data: ${JSON.stringify(streamEvent(event))}\n\n`;
+}
+
 export interface PersonAskProgressDecoderV3 {
   /** Feeds decoded stream text; returns the events it completed, in order. Throws on any malformed frame. */
   push(text: string): readonly PersonAskProgressEventV3[];
   /** The stream ended. Throws unless it ended just after its terminal event. */
   end(): void;
 }
+
 /**
  * Reads the stream exactly as framed above and fails closed: a line other
  * than a comment, one `data: ` line or a blank line, a second data line in
  * one event, an over-long line, an invalid event, or anything after the
  * terminal event throws.
  */
-export function createPersonAskProgressDecoderV3(): PersonAskProgressDecoderV3 { return V3.decoder() as PersonAskProgressDecoderV3; }
-export function validatePersonAskProgressLineV3(value: unknown): PersonAskProgressLineV3 { return V3.line(value) as PersonAskProgressLineV3; }
+export function createPersonAskProgressDecoderV3(): PersonAskProgressDecoderV3 {
+  let buffered = '';
+  let data: string | undefined;
+  let terminal = false;
+  const line = (text: string, events: PersonAskProgressEventV3[]) => {
+    if (text.includes('\r')) fail('Ask progress stream line is invalid');
+    if (text === '') {
+      if (data === undefined) return;
+      let parsed: unknown;
+      try { parsed = JSON.parse(data); } catch (error) { fail('Ask progress event is not JSON', error); }
+      data = undefined;
+      const event = streamEvent(parsed);
+      events.push(event);
+      if (event.type === 'answer' || event.type === 'error') terminal = true;
+      return;
+    }
+    if (terminal) fail('Ask progress stream continued after its result');
+    if (text.startsWith(':')) return;
+    if (!text.startsWith('data: ') || data !== undefined) fail('Ask progress stream line is invalid');
+    data = text.slice('data: '.length);
+  };
+  return Object.freeze({
+    push(text: string) {
+      const events: PersonAskProgressEventV3[] = [];
+      buffered += text;
+      let newline = buffered.indexOf('\n');
+      while (newline >= 0) {
+        line(buffered.slice(0, newline), events);
+        buffered = buffered.slice(newline + 1);
+        newline = buffered.indexOf('\n');
+      }
+      if (buffered.length > PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1) fail('Ask progress stream line exceeds its bound');
+      return Object.freeze(events);
+    },
+    end() {
+      if (buffered !== '' || data !== undefined || !terminal) fail('Ask progress stream ended without its result');
+    },
+  });
+}
+
+export function validatePersonAskProgressLineV3(value: unknown): PersonAskProgressLineV3 {
+  const input = object(value, 'Ask progress line');
+  assertExactKeys(input, ['ok', 'progress'], 'Ask progress line');
+  if (input.ok !== true) fail('Ask progress line is invalid');
+  return Object.freeze({ ok: true, progress: validatePersonAskProgressStepEventV3(input.progress) });
+}
 
 export function validatePersonAskProgressResultLineV3(value: unknown): PersonAskProgressResultLineV3 {
   const input = object(value, 'Ask result line');

@@ -4,7 +4,7 @@ import {
 } from "@echo-brain/organization-api";
 import {
   PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
-  formatPersonAskProgressEventV3, type PersonAskProgressErrorStatusV1, type PersonAskProgressEventV3,
+  type PersonAskProgressErrorStatusV1,
 } from "@echo-brain/organization-api";
 import { startPersonAskProgressStreamV1, type PersonAskProgressStreamV1 } from "./person-ask-progress-stream-v1.js";
 import {
@@ -561,20 +561,19 @@ const streamedFailureStatus = new WeakMap<ServerResponse, number>();
  */
 function personAskV7Post(application: PersonAnswerV7HttpApplication | undefined): PersonPostHandler {
   const plain = personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
-  const startStream = (response: ServerResponse) => startPersonAskProgressStreamV1(response, formatPersonAskProgressEventV3);
   return async (request, response) => {
     if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V3) { await plain(request, response); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
-    let stream: PersonAskProgressStreamV1<PersonAskProgressEventV3> | undefined;
+    let stream: PersonAskProgressStreamV1 | undefined;
     try {
       const requestBody = await personBody(request, validatePersonAnswerRequestV3);
       const answered = await application.askWithProgress({
         access_token, request: requestBody, ...askOptions(request), signal: disconnect.signal,
-        on_start: () => { stream ??= startStream(response); },
+        on_start: () => { stream ??= startPersonAskProgressStreamV1(response); },
         on_progress: event => { stream?.step(event); },
       });
-      stream ??= startStream(response);
+      stream ??= startPersonAskProgressStreamV1(response);
       stream.end({ type: "answer", response: answered.response, receipt: answered.receipt });
     } catch (error) {
       // Before the stream starts, the server's ordinary JSON error.

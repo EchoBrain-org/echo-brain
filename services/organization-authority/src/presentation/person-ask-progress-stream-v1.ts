@@ -3,6 +3,7 @@ import {
   PERSON_ASK_PROGRESS_CONTENT_TYPE_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
+  formatPersonAskProgressEventV3,
   type PersonAskProgressEventV3,
 } from '@echo-brain/organization-api';
 
@@ -12,22 +13,21 @@ import {
  * terminal event last. Headers go out at once, so a proxy sees the stream
  * start before research does. Nothing is written once the client has gone.
  */
-export interface PersonAskProgressStreamV1<Event> {
+export interface PersonAskProgressStreamV1 {
   /** A step event; one the contract refuses is dropped, never written. */
-  step(event: Event): void;
+  step(event: PersonAskProgressEventV3): void;
   /** The answer or an error, then the end of the response. Nothing follows it. */
-  end(event: Event): void;
+  end(event: PersonAskProgressEventV3): void;
   /** Ends the response with no terminal event: the client disconnected, so nothing more is written. */
   close(): void;
 }
 
 /**
- * Starts one stream with the framing, heartbeat and terminal rules Ask progress has kept since V1; `format` validates
- * each event, in Ask progress V3 for `/v7` (whose events may name follow-ups, workspace items and tool containers).
+ * Starts one stream with the framing, heartbeat and terminal rules Ask progress has kept since V1; each event is
+ * validated in Ask progress V3 for `/v7` (whose events may name follow-ups, workspace items and tool containers).
  * Status and headers set before this call (the route header) are kept.
  */
-export function startPersonAskProgressStreamV1<Event extends PersonAskProgressEventV3>(
-  response: ServerResponse, format: (event: Event) => string, options: { readonly heartbeat_ms?: number } = {}): PersonAskProgressStreamV1<Event> {
+export function startPersonAskProgressStreamV1(response: ServerResponse, options: { readonly heartbeat_ms?: number } = {}): PersonAskProgressStreamV1 {
   const heartbeatMs = options.heartbeat_ms ?? PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1;
   response.writeHead(200, { 'content-type': `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}; charset=utf-8`, 'cache-control': 'no-store' });
   response.flushHeaders();
@@ -43,21 +43,21 @@ export function startPersonAskProgressStreamV1<Event extends PersonAskProgressEv
   };
   arm();
   return Object.freeze({
-    step(event: Event) {
+    step(event: PersonAskProgressEventV3) {
       if (!open()) return;
       let frame: string;
-      try { frame = format(event); } catch { return; }
+      try { frame = formatPersonAskProgressEventV3(event); } catch { return; }
       response.write(frame);
       arm();
     },
-    end(event: Event) {
+    end(event: PersonAskProgressEventV3) {
       if (ended) return;
       // The heartbeat is cleared before the terminal event, so nothing can follow it.
       stop();
       if (response.destroyed || response.writableEnded) return;
       let frame: string;
-      try { frame = format(event); }
-      catch { frame = format({ type: 'error', status: 500, error: { code: 'internal', message: 'request failed' } } as Event); }
+      try { frame = formatPersonAskProgressEventV3(event); }
+      catch { frame = formatPersonAskProgressEventV3({ type: 'error', status: 500, error: { code: 'internal', message: 'request failed' } }); }
       response.end(frame);
     },
     close() {
