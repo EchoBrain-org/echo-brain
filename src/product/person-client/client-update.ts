@@ -224,7 +224,7 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   if (config.installation !== platform.installation) rejectUpdate('installation_mismatch');
   let state = loadState(directory, config);
   // config.json keeps its first floor; a newer build may have raised it since.
-  const floor = Math.max(config.minimum_sequence, raisedFloor(directory, config));
+  let floor = Math.max(config.minimum_sequence, raisedFloor(directory, config));
   // An offer saved from a feed below the floor is withdrawn: it is never
   // offered again, and the saved status reads as no check.
   const belowFloor = (saved: ClientUpdateState) => ['available', 'staged'].includes(saved.result) && (saved.checkpoint?.sequence ?? 0) < floor;
@@ -258,6 +258,8 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   try {
     // Re-read under the lock before advancing the trusted sequence.
     state = loadState(directory, config);
+    // The floor too: a configure may have raised it since the read above.
+    floor = Math.max(config.minimum_sequence, raisedFloor(directory, config));
     const fetcher = dependencies.fetch ?? fetch;
     const metadata: Buffer[] = [];
     await boundedDownload(config.feed_url, UPDATE_METADATA_LIMIT, fetcher, b => metadata.push(Buffer.from(b)), 5_000);
