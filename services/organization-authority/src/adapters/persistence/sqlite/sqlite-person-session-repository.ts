@@ -387,18 +387,6 @@ class Transaction implements PersonSessionWriteTransaction {
     return changed === 1 ? this.membership(membershipId) : undefined;
   }
 
-  oidcIdentityBinding(
-    issuer: string,
-    subject: string,
-  ): StoredOidcIdentityBinding | undefined {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM authority_oidc_identity_bindings WHERE issuer = ? AND subject = ?`,
-      )
-      .get(issuer, subject) as OidcBindingRow | undefined;
-    return row === undefined ? undefined : binding(row);
-  }
-
   activeOidcIdentityBinding(
     issuer: string,
     subject: string,

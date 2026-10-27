@@ -201,5 +201,5 @@ export function createApprovalPublisherV1(database: Database.Database, context: 
     if (failed && rethrowRows) throw first;
   }
   return Object.freeze({ recoverV4Appends: (signal: AbortSignal) => publish(signal, false),
-    appendFinalizedApprovalsToV4: (signal: AbortSignal) => publish(signal, true), async observeAndFinalizePendingApprovals() {} });
+    appendFinalizedApprovalsToV4: (signal: AbortSignal) => publish(signal, true) });
 }

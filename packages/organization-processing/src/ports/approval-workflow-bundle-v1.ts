@@ -17,7 +17,6 @@ export type ApprovalPresentationReconciliationResultV1 =
 /** The approval-only phases used by the shared admitted-processing lifecycle. */
 export interface ApprovalWorkflowProcessingV1 {
   recoverV4Appends(signal: AbortSignal): Promise<void>;
-  observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
   appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void>;
   /**
    * Reconciles at most a bounded amount of provider presentation work after

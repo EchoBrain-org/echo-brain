@@ -61,10 +61,6 @@ export interface ClaimedOidcLoginAttempt {
 export interface PersonSessionReadTransaction {
   metadata(): StoredAuthorityMetadata;
   membership(membershipId: string): StoredAuthorityMembership | undefined;
-  oidcIdentityBinding(
-    issuer: string,
-    subject: string,
-  ): StoredOidcIdentityBinding | undefined;
   /** Authentication-only lookup: never resolves a revoked historical tenure. */
   activeOidcIdentityBinding(
     issuer: string,
