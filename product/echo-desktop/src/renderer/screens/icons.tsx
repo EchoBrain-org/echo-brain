@@ -97,6 +97,10 @@ export const Refresh = () => (
 export const Plug = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3.5v4.5M15 3.5v4.5M6 8h12v3.5a6 6 0 0 1-12 0zM12 17.5v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
 );
+/** Ask, in the sidebar: a speech bubble. */
+export const Ask = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-11.7 7.1L4 20l1.3-4.1A8 8 0 1 1 20 11.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" fill="none" /></svg>
+);
 export const Home = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" fill="none" /></svg>
 );

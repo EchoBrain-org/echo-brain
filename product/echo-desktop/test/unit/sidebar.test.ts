@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { State } from '../../src/renderer/store.js';
 import type { UpdateState } from '../../src/shared/protocol.js';
-import { elements, text } from './harness.js';
+import { elements, project, text } from './harness.js';
 
-const { loadProjects, loadArchivedProjects, installUpdate, openNewProject } = vi.hoisted(() => ({
-  loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn(), openNewProject: vi.fn(),
+const { loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk } = vi.hoisted(() => ({
+  loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn(), openNewProject: vi.fn(), returnToAsk: vi.fn(),
 }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', async original => ({
@@ -13,7 +13,7 @@ vi.mock('preact/hooks', async original => ({
   useState: () => [true, vi.fn()],
 }));
 vi.mock('../../src/renderer/store.js', async original => ({
-  ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects, installUpdate, openNewProject,
+  ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk,
 }));
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -73,9 +73,9 @@ describe('New project', () => {
     expect(plus?.props.title).toBe('New project');
     (plus?.props.onClick as () => void)();
     expect(openNewProject).toHaveBeenCalledExactlyOnceWith();
-    // The top block keeps Home, Capture and Follow-ups only: Only me is a link on Home (ADR-0049).
+    // The top block keeps Home, Ask, Capture and Follow-ups only: Only me is a link on Home (ADR-0049).
     const rows = tree.filter(node => typeof node.props.class === 'string' && node.props.class.split(' ').includes('side-row'));
-    expect(rows.map(node => node.props['data-testid'])).toEqual(['sidebar-home', 'sidebar-capture', 'sidebar-follow-ups', 'sidebar-tools']);
+    expect(rows.map(node => node.props['data-testid'])).toEqual(['sidebar-home', 'sidebar-ask', 'sidebar-capture', 'sidebar-follow-ups', 'sidebar-tools']);
   });
 
   it('is not offered while signed out', async () => {
@@ -110,6 +110,52 @@ describe('your follow-ups (F9)', () => {
     // Only me is one of Home's own pages: Home stays current there.
     const onlyMe = rows(await signedIn({ page: 'only-me' }));
     expect(onlyMe.find(node => node.props['data-testid'] === 'sidebar-home')?.props['aria-current']).toBe('page');
+  });
+});
+
+describe('Ask', () => {
+  /** Signed in on `route`, with Ask open over it or not. */
+  async function on(route: State['route'], open: boolean): Promise<State> {
+    const { getState } = await import('../../src/renderer/store.js');
+    const ask = { seq: 1, latest: null, asked: [], opened: null, openedAt: 0, focus: null, earlier: false, forQuestion: false, asking: null, clarify: null, failed: null, took: {} };
+    return {
+      ...getState(), route, ask: open ? ask : null,
+      status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'owner' } },
+      home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
+    };
+  }
+
+  it('is under Home, current while Ask is open over any page and that page then not, and goes back to Ask or else to the bar', async () => {
+    const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
+    const current = (state: State) => elements(Sidebar({ state })).filter(node => node.props['aria-current'] === 'page').map(node => node.props['data-testid']);
+    const rows = elements(Sidebar({ state: await on({ page: 'home' }, false) })).map(node => node.props['data-testid']).filter(Boolean);
+    expect(rows.indexOf('sidebar-ask')).toBe(rows.indexOf('sidebar-home') + 1);
+    expect(current(await on({ page: 'home' }, false))).toEqual(['sidebar-home']);
+    expect(current(await on({ page: 'home' }, true))).toEqual(['sidebar-ask']);
+    expect(current(await on({ page: 'follow-ups' }, true))).toEqual(['sidebar-ask']);
+    expect(current(await on({ page: 'organization' }, true))).toEqual(['sidebar-ask']);
+    expect(current(await on({ page: 'tools' }, false))).toEqual(['sidebar-tools']);
+    expect(current(await on({ page: 'tools' }, true))).toEqual(['sidebar-ask']);
+    // A project's row, under Ask open over its page, is not current either.
+    const apollo = project(1, 30, { name: 'Apollo' });
+    const projectRow = async (open: boolean) => {
+      const state = { ...await on({ page: 'project', project: apollo }, open), projects: { items: [apollo], next: null, loading: false } };
+      return elements(Sidebar({ state })).find(node => node.props.project === apollo)?.props.current;
+    };
+    expect(await projectRow(false)).toBe(true);
+    expect(await projectRow(true)).toBe(false);
+    // Nothing asked yet: the cursor goes to the bar instead.
+    const focus = vi.fn();
+    vi.stubGlobal('document', { getElementById: vi.fn((id: string) => (id === 'ask-field' ? { focus } : null)) });
+    const row = elements(Sidebar({ state: await on({ page: 'home' }, false) })).find(node => node.props['data-testid'] === 'sidebar-ask');
+    returnToAsk.mockReturnValueOnce(true);
+    (row?.props.onClick as () => void)();
+    expect(focus).not.toHaveBeenCalled();
+    returnToAsk.mockReturnValueOnce(false);
+    (row?.props.onClick as () => void)();
+    expect(returnToAsk).toHaveBeenCalledTimes(2);
+    expect(focus).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
   });
 });
 

@@ -15,8 +15,8 @@ import { askText, searchQuery } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, MAX_SOURCES, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  answeredNow, askedSuggestions, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, knownStates, previousOf, sameScope, shownInFull, showsOf, threadOf,
-  unreadableAfter, visibleTurns, turnGroups, type Suggestion, type TurnCheck, type TurnChecks,
+  answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, knownStates, previousOf, sameScope,
+  shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
@@ -73,8 +73,9 @@ export interface AskTook {
 /**
  * Ask, open over the page, on the timeline (ADR-0047): the latest turn and
  * the turns asked since it opened show in full, every earlier one as a line
- * that opens it. Below them, the question on its way, "Which one?", or the
- * last question that could not be answered. Closing it keeps the timeline.
+ * that opens it, those past the newest three behind one line of their own.
+ * Below them, the question on its way, "Which one?", or the last question
+ * that could not be answered. Closing it keeps the timeline.
  */
 export interface AskState {
   /** The question on its way; a reply for any other is dropped. */
@@ -92,6 +93,13 @@ export interface AskState {
   openedAt: number;
   /** The turn a suggestion opened Ask at, brought into view once. */
   focus: string | null;
+  /**
+   * Whether the earlier questions past the newest three show: opened from their one line, by a suggestion of one of them, or
+   * by × moving Ask to a thread that puts the turn opened among them.
+   */
+  earlier: boolean;
+  /** Ask opened from a page for the question on its way: cancelling it, with nothing asked or opened since, closes Ask. */
+  forQuestion: boolean;
   asking: AskAsking | null;
   clarify: AskClarify | null;
   /** The last question that could not be answered, and how it was asked, for Try again. */
@@ -3505,8 +3513,12 @@ export function toggleEmployeeMenu(email: string): void {
 export function widenScope(): void {
   set({ barScope: { kind: 'global' } });
   syncSearch();
-  // Ask open moves to Home's thread: what changed of its newest turns is checked as opening Ask there would.
-  if (state.ask) void checkTimeline();
+  const view = state.ask;
+  if (!view) return;
+  // Ask open moves to Home's thread: a turn opened that it puts behind the earlier questions' line opens that line, so the
+  // turn a follow-up continues stays in sight; and what changed of its newest turns is checked as opening Ask there would.
+  if (!view.earlier && view.opened !== null && behindEarlierLine(askThread(), fullTurns(view)).includes(view.opened)) set({ ask: { ...view, earlier: true } });
+  void checkTimeline();
 }
 
 /** What a scope is called: all context, Mine, or the project by its name, as the sidebar has it. */
@@ -3767,9 +3779,12 @@ async function baseline(turn: TimelineTurn): Promise<void> {
   keepBaselines(checkedOf(plan, result.value.items).markers);
 }
 
-/** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet. */
+/** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet, the older earlier questions folded. */
 function newAsk(): AskState {
-  return { seq: ++seq, latest: threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null, asked: [], opened: null, openedAt: 0, focus: null, asking: null, clarify: null, failed: null, took: {} };
+  return {
+    seq: ++seq, latest: threadOf(state.timeline.turns, state.barScope).at(-1)?.id ?? null, asked: [], opened: null, openedAt: 0, focus: null, earlier: false,
+    forQuestion: false, asking: null, clarify: null, failed: null, took: {},
+  };
 }
 
 /** The turns Ask shows in full besides the latest: the latest when it opened, and those asked since. */
@@ -3803,7 +3818,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   // The turn it carries, unless `how` brings it built: the one it asks again, or the one a follow-up continues.
   const from = how?.previous !== undefined ? null : againOf !== undefined ? turnOf(againOf) ?? null
     : open && how === undefined ? followedTurn(threadOf(state.timeline.turns, scope), continued, Date.now()) : null;
-  const view = open ?? newAsk();
+  const view = open ?? { ...newAsk(), forQuestion: true };
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
   activeAskCancelId = cancelId;
@@ -3942,9 +3957,22 @@ export function toggleTurn(id: string): void {
 }
 
 /**
+ * The one line the earlier questions past the newest three fold into: it
+ * shows them in place, or folds them again. Folding them folds a question
+ * opened among them too, so a follow-up never continues a turn out of sight.
+ */
+export function toggleEarlier(): void {
+  const view = state.ask;
+  if (!view) return;
+  if (view.earlier && view.opened !== null && behindEarlierLine(askThread(), fullTurns(view)).includes(view.opened)) toggleTurn(view.opened);
+  set({ ask: { ...state.ask!, earlier: !view.earlier } });
+}
+
+/**
  * A suggestion that is a question you asked: Ask opens at its turn, opened,
- * instead of asking it again (ADR-0047), and brought into view. A turn shown
- * in full (the latest) stays so. Either way it is the turn the next question
+ * instead of asking it again (ADR-0047), and brought into view, the line of
+ * the earlier questions open when it is one of them. A turn shown in full
+ * (the latest) stays so. Either way it is the turn the next question
  * continues, however long ago it was asked, and what changed of its sources
  * is checked with the newest turns', first, when nothing in the last five
  * minutes said. Suggestions show only while Ask is closed.
@@ -3953,9 +3981,59 @@ function openTurn(id: string): void {
   const turn = turnOf(id);
   if (!turn || !expect()) return;
   emptyBar();
-  set({ ask: { ...newAsk(), opened: id, focus: id } });
+  const view = newAsk();
+  set({ ask: { ...view, opened: id, focus: id, earlier: behindEarlierLine(askThread(), fullTurns(view)).includes(id) } });
   startSources(null, id);
   void checkTimeline(turn);
+  syncSearch();
+}
+
+/**
+ * The sidebar's Ask: back to Ask where you left it, on the thread of your
+ * latest question (Home's, or its project's while that is one of your active
+ * projects), with its answer at the bottom. The page stays when its bar asks
+ * that thread already; on that project's own page a widened bar narrows back;
+ * otherwise Home or the project opens first. Open already, Ask stays as it is.
+ * False with nothing asked yet, for the bar to take the cursor instead.
+ */
+export function returnToAsk(): boolean {
+  const latest = state.timeline.turns.at(-1);
+  if (!latest || !expect()) return false;
+  if (!state.ask) void openAskAt(latest);
+  return true;
+}
+
+/**
+ * Ask opened on the thread of `turn`'s place. A project the sidebar has not
+ * loaded (one on a later page) is read by its id first, as following the open
+ * project does; one you no longer have goes to Home's thread, and a read that
+ * fails otherwise says why and opens nothing. Asked meanwhile, or covered, it
+ * does nothing more.
+ */
+async function openAskAt(turn: TimelineTurn): Promise<void> {
+  const account = expect();
+  if (!account) return;
+  const { scope } = turn;
+  let project = scope.kind === 'project' ? state.projects.items.find(item => item.project_id === scope.project_id) : undefined;
+  if (scope.kind === 'project' && !project && state.projects.next !== null) {
+    const result = await rpc('projects.read', { expect: account, project_id: scope.project_id });
+    if (!sameAccount(account) || state.ask || state.concealed) return;
+    if (!result.ok && !PROJECT_GONE.includes(result.failure.code)) {
+      accountLost(result.failure);
+      set({ toast: message(result.failure) });
+      return;
+    }
+    project = result.ok ? result.value : undefined;
+  }
+  if (project?.status !== 'active') project = undefined;
+  if (!sameScope(state.barScope, project ? scope : { kind: 'global' })) {
+    if (!project) goHome();
+    else if (state.route.page === 'project' && state.route.project.project_id === project.project_id) set({ barScope: scope });
+    else void openProject(project);
+  }
+  set({ ask: newAsk() });
+  startSources();
+  void checkTimeline();
   syncSearch();
 }
 
@@ -3970,7 +4048,7 @@ export function cancelAsk(): void {
   const cancelId = activeAskCancelId;
   activeAskCancelId = null;
   if (cancelId) void rpc('ask.cancel', { cancel_id: cancelId });
-  if (thread.asked.length === 0 && thread.opened === null && thread.focus === null) { closeAsk(); return; }
+  if (thread.forQuestion && thread.asked.length === 0 && thread.opened === null) { closeAsk(); return; }
   set({ ask: { ...thread, seq: ++seq, asking: null } });
   startSources();
 }
