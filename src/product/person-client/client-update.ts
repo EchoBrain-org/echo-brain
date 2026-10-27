@@ -62,15 +62,15 @@ export interface ClientUpdateDependencies {
    */
   handle_signals?: boolean;
 }
-/** The pin: every config field but the person's `automatic` choice and the floor, which only rises. */
+/** The stamp state.json and floor.json carry: config.json without the person's `automatic` choice. */
+function configDigest(config: ClientUpdateConfig): string {
+  const { automatic: _automatic, ...trust } = config;
+  return updateDigest(JSON.stringify(trust));
+}
+/** The pin: every config field but `automatic` and the floor, which only rises. */
 function pinDigest(config: ClientUpdateConfig): string {
   const { automatic: _automatic, minimum_sequence: _floor, ...pin } = config;
   return updateDigest(JSON.stringify(pin));
-}
-/** Builds before the floor could rise stamped state with this digest, which also covers the floor. */
-function legacyDigest(config: ClientUpdateConfig): string {
-  const { automatic: _automatic, ...trust } = config;
-  return updateDigest(JSON.stringify(trust));
 }
 export function detectUpdatePlatform(installation: ClientUpdateConfig['installation']): UpdatePlatform {
   let libc: string | null = null;
@@ -93,12 +93,24 @@ function loadState(directory: string, config: ClientUpdateConfig): ClientUpdateS
   const v = updateObject(JSON.parse(readUpdateFile(path, UPDATE_METADATA_LIMIT).toString('utf8')), ['schema_version', 'config_sha256', 'checkpoint', 'checked_at', 'available_release', 'result']);
   if (v.schema_version !== 1 || typeof v.checked_at !== 'number' || !Number.isFinite(v.checked_at) ||
       typeof v.result !== 'string' || !(v.available_release === null || typeof v.available_release === 'string') ||
-      (v.config_sha256 !== pinDigest(config) && v.config_sha256 !== legacyDigest(config))) rejectUpdate('invalid_update_state');
+      v.config_sha256 !== configDigest(config)) rejectUpdate('invalid_update_state');
   if (v.checkpoint !== null) {
     const c = updateObject(v.checkpoint, ['sequence', 'manifest_sha256']);
     if (!Number.isSafeInteger(c.sequence) || Number(c.sequence) < 1 || typeof c.manifest_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(c.manifest_sha256)) rejectUpdate('invalid_update_state');
   }
   return v as unknown as ClientUpdateState;
+}
+/** A newer build's floor, above the one config.json keeps for older builds, which never read this file. */
+function raisedFloor(directory: string, config: ClientUpdateConfig): number {
+  const path = join(directory, 'floor.json');
+  if (!existsSync(path)) return 0;
+  const bytes = readUpdateFile(path, UPDATE_METADATA_LIMIT);
+  let v: Record<string, unknown>;
+  try { v = updateObject(JSON.parse(bytes.toString('utf8')), ['schema_version', 'config_sha256', 'minimum_sequence']); }
+  catch { return rejectUpdate('invalid_update_state'); }
+  if (v.schema_version !== 1 || !Number.isSafeInteger(v.minimum_sequence) || Number(v.minimum_sequence) < 1 ||
+      v.config_sha256 !== configDigest(config)) rejectUpdate('invalid_update_state');
+  return v.minimum_sequence as number;
 }
 function installedRelease(root: string): string {
   const wrapper = readUpdateFile(join(root, 'bin', 'echo-brain'), 16 * 1024).toString('utf8');
@@ -156,16 +168,12 @@ export function configureClientUpdates(root: string, raw: unknown, installation?
     // Reconfiguration must not reset the anti-rollback checkpoint or silently
     // replace publisher trust. A new publisher requires a separate bootstrap.
     if (old && pinDigest(old) !== pinDigest(config)) rejectUpdate('already_configured');
-    // The floor only rises. Raising it keeps the checkpoint, drops the last
-    // check's offer and makes the next check due at once. The state is saved
-    // first: its pin stamp loads under either config, so a raise interrupted
-    // before the config write is repeated by the next configure.
-    const floor = Math.max(old?.minimum_sequence ?? 0, config.minimum_sequence);
-    if (old && floor > old.minimum_sequence) {
-      const state = loadState(directory, old);
-      if (state) writeUpdateJson(join(directory, 'state.json'), { ...state, config_sha256: pinDigest(config), checked_at: 0, available_release: null, result: 'not_checked' });
-    }
-    writeUpdateJson(join(directory, 'config.json'), { ...config, minimum_sequence: floor });
+    // The floor only rises. config.json keeps the floor it was first pinned
+    // with, so it and the state stay what older builds read. A higher floor
+    // goes to floor.json, read before and written after config.json.
+    const floor = old ? Math.max(old.minimum_sequence, raisedFloor(directory, old)) : config.minimum_sequence;
+    writeUpdateJson(join(directory, 'config.json'), old ? { ...config, minimum_sequence: old.minimum_sequence } : config);
+    if (old && config.minimum_sequence > floor) writeUpdateJson(join(directory, 'floor.json'), { schema_version: 1, config_sha256: configDigest(old), minimum_sequence: config.minimum_sequence });
   } finally { rmSync(lock, { recursive: true }); }
 }
 
@@ -215,12 +223,16 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   const directory = updateDirectory(root);
   if (config.installation !== platform.installation) rejectUpdate('installation_mismatch');
   let state = loadState(directory, config);
+  // config.json keeps its first floor; a newer build may have raised it since.
+  const floor = Math.max(config.minimum_sequence, raisedFloor(directory, config));
   if (mode === 'status') return result(state?.result ?? 'not_checked', state);
   if (mode === 'automatic' && !config.automatic) return result('automatic_disabled', state);
   const now = (dependencies.now ?? Date.now)();
   if (mode === 'automatic' && state && state.checked_at <= now && now - state.checked_at < UPDATE_INTERVAL_MS) {
-    // A staged release stays on offer until the app restarts into it.
-    const available = ['available', 'staged'].includes(state.result) && state.available_release !== null && state.available_release !== current;
+    // A staged release stays on offer until the app restarts into it, but
+    // never an offer from a feed below the floor.
+    const available = ['available', 'staged'].includes(state.result) && state.available_release !== null &&
+      state.available_release !== current && (state.checkpoint?.sequence ?? 0) >= floor;
     return result(available ? 'available' : 'not_due', state);
   }
   if (!dependencies.installation && !installer && mode === 'apply') return result('adapter_unavailable', state);
@@ -249,9 +261,9 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
     const metadata: Buffer[] = [];
     await boundedDownload(config.feed_url, UPDATE_METADATA_LIMIT, fetcher, b => metadata.push(Buffer.from(b)), 5_000);
     const feed = Buffer.concat(metadata);
-    const verified = verifyUpdateEnvelope(feed, config, now, state?.checkpoint ?? undefined);
+    const verified = verifyUpdateEnvelope(feed, { ...config, minimum_sequence: floor }, now, state?.checkpoint ?? undefined);
     const manifest: ClientUpdateManifest = verified.manifest;
-    state = { schema_version: 1, config_sha256: pinDigest(config), checkpoint: verified.checkpoint, checked_at: now, available_release: manifest.release_id, result: 'available' };
+    state = { schema_version: 1, config_sha256: configDigest(config), checkpoint: verified.checkpoint, checked_at: now, available_release: manifest.release_id, result: 'available' };
     // Persist freshness even if the artifact is unavailable or installation fails.
     writeUpdateJson(join(directory, 'state.json'), state);
     const artifact = selectUpdateArtifact(manifest, platform);
@@ -297,7 +309,7 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   } catch (error) {
     const code = error instanceof ClientUpdateError ? error.code : 'update_failed';
     preserveRecovery = code === 'installation_outcome_unknown';
-    const failure: ClientUpdateState = { schema_version: 1, config_sha256: pinDigest(config), checkpoint: state?.checkpoint ?? null, checked_at: now, available_release: state?.available_release ?? null, result: code };
+    const failure: ClientUpdateState = { schema_version: 1, config_sha256: configDigest(config), checkpoint: state?.checkpoint ?? null, checked_at: now, available_release: state?.available_release ?? null, result: code };
     writeUpdateJson(join(directory, 'state.json'), failure);
     if (mode === 'automatic') return result(code, failure);
     throw new ClientUpdateError(code);
