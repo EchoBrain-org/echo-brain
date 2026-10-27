@@ -71,7 +71,18 @@ representative acceptance is not proof that every enrolled seat updated.
    profile and exact Person-client tarball using the sections below. Keep the
    enrolled feed URL, channel and public key in the bootstrap configuration
    before any build: the Linux CLI kit embeds it, and both desktop packages
-   embed its `electron` copy. A first release sets up the hosting and signer
+   embed its `electron` copy. Set the bootstrap's `minimum_sequence` to the
+   live feed's sequence plus one, so a candidate installed before its feed is
+   published refuses the older live feed instead of offering that feed's
+   release as a new version
+   ([ADR-0050](../../docs/decisions/ADR-0050-update-floor-only-rises.md)).
+   Until the candidate's own feed is published, any replacement of the live
+   feed, including an expiry refresh or a rollback, is at or above that floor
+   and is offered to seats running the candidate. So publish the candidate's
+   feed before any other replacement of the live feed, or expect those seats
+   to be offered the live release.
+   Enrolled desktops accept the raise and keep updating; an enrolled CLI keeps
+   the configuration it has. A first release sets up the hosting and signer
    before this step. Build both CLI kits and both desktop packages from those
    release inputs: on a macOS arm64 machine, the macOS CLI kit and the
    `ECHO.app` ZIP; on a Linux x64 machine, the Linux CLI kit and the `.deb`
@@ -80,8 +91,9 @@ representative acceptance is not proof that every enrolled seat updated.
 4. Prepare the unsigned feed bundle using the existing
    [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed).
    `prepare` needs no final authorization and can use the candidate's canonical
-   record. Give it the same bootstrap configuration, advance the sequence, and
-   choose sufficient validity for approval and distribution.
+   record. Give it the same bootstrap configuration, advance the sequence to
+   at least the bootstrap's `minimum_sequence`, and choose sufficient validity
+   for approval and distribution.
    For replacement, bind the predecessor to the preserved most-recent succeeded
    publication/replacement receipt's `hashes.feed.json`, not a guessed value
    from the mutable endpoint. Ensure the existing hosting and signer are ready.

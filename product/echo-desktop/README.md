@@ -474,6 +474,10 @@ One row above your account in the sidebar shows where things stand:
 | Downloading, verifying, waiting for the password | **Updating** with the busy dots |
 | The install failed | **Couldn't update · Try again** |
 | A release is available, but the macOS app is translocated, in a folder it cannot write, or on another volume | **Move ECHO to Applications to update** |
+| The updater can't start, for example because this ECHO came from another update feed than the one it first used | **Updates are off** |
+
+**Updates are off** can't be clicked, and ECHO keeps working on its current
+version.
 
 Select **New version · Restart** to install. ECHO won't install while it still
 has unfinished work, just as it won't sign out then. It checks the update, quits

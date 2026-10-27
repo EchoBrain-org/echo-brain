@@ -622,6 +622,8 @@ export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok
 /** What the updater shows: one sidebar row, or nothing. */
 export type UpdateState =
   | { readonly state: 'none' }
+  /** This release should update itself, but its updater could not start: a quiet row says so, and installs nothing. */
+  | { readonly state: 'off' }
   | { readonly state: 'available' | 'installing' | 'restart'; readonly release: string }
   | { readonly state: 'failed'; readonly release: string; readonly reason: 'failed' | 'location' };
 

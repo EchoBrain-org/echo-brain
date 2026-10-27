@@ -85,6 +85,22 @@ test('outside Applications the row only says where ECHO must be', async () => {
   expect(await updateInstalls(run)).toEqual([]);
 });
 
+test('a release whose updater could not start says Updates are off, and a click installs nothing', async () => {
+  run = await launch();
+  const { page } = run;
+  const row = page.getByTestId('sidebar-update');
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await setUpdateState(run, { state: 'off' });
+  await expect(row).toHaveText('Updates are off');
+  await expect(row).toHaveAttribute('aria-disabled', 'true');
+  // Playwright refuses an unavailable control; a person can still press it.
+  await row.click({ force: true });
+  // Any install the click sent reaches main before this later change shows.
+  await setUpdateState(run, { state: 'none' });
+  await expect(row).toHaveCount(0);
+  expect(await updateInstalls(run)).toEqual([]);
+});
+
 test('the row shows under ECHO could not start, so a release whose host cannot start still installs its fix', async () => {
   run = await launch('host-crash');
   const { page } = run;

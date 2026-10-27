@@ -62,9 +62,15 @@ export interface ClientUpdateDependencies {
    */
   handle_signals?: boolean;
 }
+/** The stamp state.json and floor.json carry: config.json without the person's `automatic` choice. */
 function configDigest(config: ClientUpdateConfig): string {
   const { automatic: _automatic, ...trust } = config;
   return updateDigest(JSON.stringify(trust));
+}
+/** The pin: every config field but `automatic` and the floor, which only rises. */
+function pinDigest(config: ClientUpdateConfig): string {
+  const { automatic: _automatic, minimum_sequence: _floor, ...pin } = config;
+  return updateDigest(JSON.stringify(pin));
 }
 export function detectUpdatePlatform(installation: ClientUpdateConfig['installation']): UpdatePlatform {
   let libc: string | null = null;
@@ -93,6 +99,18 @@ function loadState(directory: string, config: ClientUpdateConfig): ClientUpdateS
     if (!Number.isSafeInteger(c.sequence) || Number(c.sequence) < 1 || typeof c.manifest_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(c.manifest_sha256)) rejectUpdate('invalid_update_state');
   }
   return v as unknown as ClientUpdateState;
+}
+/** A newer build's floor, above the one config.json keeps for older builds, which never read this file. */
+function raisedFloor(directory: string, config: ClientUpdateConfig): number {
+  const path = join(directory, 'floor.json');
+  if (!existsSync(path)) return 0;
+  const bytes = readUpdateFile(path, UPDATE_METADATA_LIMIT);
+  let v: Record<string, unknown>;
+  try { v = updateObject(JSON.parse(bytes.toString('utf8')), ['schema_version', 'config_sha256', 'minimum_sequence']); }
+  catch { return rejectUpdate('invalid_update_state'); }
+  if (v.schema_version !== 1 || !Number.isSafeInteger(v.minimum_sequence) || Number(v.minimum_sequence) < 1 ||
+      v.config_sha256 !== configDigest(config)) rejectUpdate('invalid_update_state');
+  return v.minimum_sequence as number;
 }
 function installedRelease(root: string): string {
   const wrapper = readUpdateFile(join(root, 'bin', 'echo-brain'), 16 * 1024).toString('utf8');
@@ -149,8 +167,13 @@ export function configureClientUpdates(root: string, raw: unknown, installation?
     const old = readClientUpdateConfig(root);
     // Reconfiguration must not reset the anti-rollback checkpoint or silently
     // replace publisher trust. A new publisher requires a separate bootstrap.
-    if (old && configDigest(old) !== configDigest(config)) rejectUpdate('already_configured');
-    writeUpdateJson(join(directory, 'config.json'), config);
+    if (old && pinDigest(old) !== pinDigest(config)) rejectUpdate('already_configured');
+    // The floor only rises. config.json keeps the floor it was first pinned
+    // with, so it and the state stay what older builds read. A higher floor
+    // goes to floor.json, read before and written after config.json.
+    const floor = old ? Math.max(old.minimum_sequence, raisedFloor(directory, old)) : config.minimum_sequence;
+    writeUpdateJson(join(directory, 'config.json'), old ? { ...config, minimum_sequence: old.minimum_sequence } : config);
+    if (old && config.minimum_sequence > floor) writeUpdateJson(join(directory, 'floor.json'), { schema_version: 1, config_sha256: configDigest(old), minimum_sequence: config.minimum_sequence });
   } finally { rmSync(lock, { recursive: true }); }
 }
 
@@ -200,12 +223,17 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   const directory = updateDirectory(root);
   if (config.installation !== platform.installation) rejectUpdate('installation_mismatch');
   let state = loadState(directory, config);
-  if (mode === 'status') return result(state?.result ?? 'not_checked', state);
+  // config.json keeps its first floor; a newer build may have raised it since.
+  let floor = Math.max(config.minimum_sequence, raisedFloor(directory, config));
+  // An offer saved from a feed below the floor is withdrawn: it is never
+  // offered again, and the saved status reads as no check.
+  const belowFloor = (saved: ClientUpdateState) => ['available', 'staged'].includes(saved.result) && (saved.checkpoint?.sequence ?? 0) < floor;
+  if (mode === 'status') return state && !belowFloor(state) ? result(state.result, state) : result('not_checked');
   if (mode === 'automatic' && !config.automatic) return result('automatic_disabled', state);
   const now = (dependencies.now ?? Date.now)();
   if (mode === 'automatic' && state && state.checked_at <= now && now - state.checked_at < UPDATE_INTERVAL_MS) {
     // A staged release stays on offer until the app restarts into it.
-    const available = ['available', 'staged'].includes(state.result) && state.available_release !== null && state.available_release !== current;
+    const available = ['available', 'staged'].includes(state.result) && state.available_release !== null && state.available_release !== current && !belowFloor(state);
     return result(available ? 'available' : 'not_due', state);
   }
   if (!dependencies.installation && !installer && mode === 'apply') return result('adapter_unavailable', state);
@@ -230,11 +258,13 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   try {
     // Re-read under the lock before advancing the trusted sequence.
     state = loadState(directory, config);
+    // The floor too: a configure may have raised it since the read above.
+    floor = Math.max(config.minimum_sequence, raisedFloor(directory, config));
     const fetcher = dependencies.fetch ?? fetch;
     const metadata: Buffer[] = [];
     await boundedDownload(config.feed_url, UPDATE_METADATA_LIMIT, fetcher, b => metadata.push(Buffer.from(b)), 5_000);
     const feed = Buffer.concat(metadata);
-    const verified = verifyUpdateEnvelope(feed, config, now, state?.checkpoint ?? undefined);
+    const verified = verifyUpdateEnvelope(feed, { ...config, minimum_sequence: floor }, now, state?.checkpoint ?? undefined);
     const manifest: ClientUpdateManifest = verified.manifest;
     state = { schema_version: 1, config_sha256: configDigest(config), checkpoint: verified.checkpoint, checked_at: now, available_release: manifest.release_id, result: 'available' };
     // Persist freshness even if the artifact is unavailable or installation fails.

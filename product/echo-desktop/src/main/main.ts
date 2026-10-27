@@ -792,6 +792,8 @@ async function startUpdates(): Promise<void> {
     });
   } catch (error) {
     log(`update off ${updateCode(error)}`);
+    // This release should update itself and cannot: the row says so.
+    setUpdate({ state: 'off' });
   }
 }
 

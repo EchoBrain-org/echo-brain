@@ -198,6 +198,7 @@ describe('the update row', () => {
   it.each([
     [{ state: 'installing', release: RELEASE }, 'Updating'],
     [{ state: 'failed', release: RELEASE, reason: 'location' }, 'Move ECHO to Applications to update'],
+    [{ state: 'off' }, 'Updates are off'],
   ] as const)('%o only says "%s"', async (update, words) => {
     const { tree, row } = await updateRow(update);
     // Still the one button, so a keyboard click keeps focus, but unavailable and inert.
