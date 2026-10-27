@@ -72,6 +72,7 @@ separately.
 | [ADR-0047](ADR-0047-ask-timeline.md) | Ask keeps a device-only timeline that says what changed, and answers follow-ups | proposed |
 | [ADR-0048](ADR-0048-retire-older-person-routes.md) | Retire the older Person routes and fallbacks kept only for compatibility | proposed |
 | [ADR-0049](ADR-0049-only-me-is-a-lock.md) | Only me is a lock on an item, Ask shows one thread per place, and Mine goes | proposed |
+| [ADR-0050](ADR-0050-update-floor-only-rises.md) | The update floor only rises, and the desktop says when updates are off | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

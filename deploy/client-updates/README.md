@@ -231,8 +231,10 @@ Use the separate replacement lane only after a new release has passed its own
 Authority canary, authenticated record and cited Ask checks, final release
 decision, and release-bound authorization. Reuse the enrolled client's existing
 bootstrap configuration, including its `feed_url`, channel, public key, and
-`installation: "cli-kit"`; the desktop packages carry the same configuration
-with `installation: "electron"`. Its signed sequence must be strictly greater
+`installation: "cli-kit"`; only its `minimum_sequence` may rise, as the
+[release rule](../release/README.md#prepare-the-transition-before-staging)
+sets it. The desktop packages carry the same configuration with
+`installation: "electron"`. Its signed sequence must be strictly greater
 than the currently published feed. The lane adds no signer-rotation,
 channel-change, rollback, deletion, or hosting-replacement command.
 
@@ -270,7 +272,11 @@ npm run client-update:publish -- replace-status \
 Planning verifies the predecessor's authenticated S3 metadata, public raw bytes,
 signature, pinned key, channel, sequence, VersionId, ETag, and the explicit
 predecessor SHA. It allows an expired predecessor only for this historical
-verification; the successor must still be fresh. Existing artifact keys are
+verification; the successor must still be fresh. It does not hold the
+predecessor to the new bundle's `minimum_sequence`, which binds clients and
+the new feed: a bundle whose floor is above the live feed still replaces it
+([ADR-0050](../../docs/decisions/ADR-0050-update-floor-only-rises.md)). The
+new feed must still be at least that floor. Existing artifact keys are
 reused only after their authenticated metadata and anonymous HTTPS bytes match
 the new signed digest exactly. New artifact keys remain conditional creates.
 
@@ -342,6 +348,18 @@ authenticated operator channel. Enrolling the app does not enroll the CLI, and
 the reverse. The Person session is unchanged. Check the tray's `Build <sha7>`
 (also on the Account menu's version line, `ECHO <version> · <sha7>`, since
 releases share a version) and an authenticated read after enrollment.
+
+An enrolled desktop whose updater should run but couldn't start shows
+**Updates are off** in the sidebar
+([ADR-0050](../../docs/decisions/ADR-0050-update-floor-only-rises.md)). The
+row can't be clicked, and ECHO keeps working on its current version.
+`desktop.log` names the code as `update off <code>`. It is in
+`~/Library/Application Support/ECHO/chromium/logs/` on macOS and
+`~/.config/ECHO/chromium/logs/` on Linux. `already_configured` means this
+build's feed, channel or key differs from the one ECHO pinned on its first
+run. `update_busy` means an install whose outcome is unknown kept the
+updater's lock. Moving a seat to another publisher remains a separately
+reviewed bootstrap change.
 
 ## Verify Mac and Linux client activation
 

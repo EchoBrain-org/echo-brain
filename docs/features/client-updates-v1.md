@@ -157,12 +157,21 @@ itself.
 
 The configuration and update state live under the installation's `updater/`
 directory, separate from Person sessions and upload retry material. A trusted
-reconfiguration may toggle `automatic` without resetting the freshness
-checkpoint. Changing the publisher, feed, channel, installation type or sequence
-floor requires a separately reviewed bootstrap; feed contents cannot change
-those settings. The Mac CLI and legacy Linux recovery remain opt-in.
-Configured Linux kits add no daemon or scheduler; automatic checks run only
-before Person commands. The existing configuration schema and freshness
+reconfiguration may toggle `automatic` or raise the sequence floor without
+resetting the freshness checkpoint. The floor only rises
+([ADR-0050](../decisions/ADR-0050-update-floor-only-rises.md)): a lower one
+keeps the stored floor. `config.json` keeps the floor it was first pinned with
+and a higher one goes to `updater/floor.json`, so a client from before that
+change still reads its configuration and state, ignoring the raised floor. A
+feed below the higher of the two fails with `stale_metadata`, and an offer
+saved from one is never shown again: `--status` then reports `not_checked`.
+Changing the publisher, feed, channel or installation type requires a
+separately reviewed bootstrap; feed contents cannot change those settings. A
+configuration that differs in any of them fails with `already_configured` and
+changes nothing, and the desktop app then shows **Updates are off**
+([Desktop app](#desktop-app)). The Mac CLI and legacy Linux recovery remain
+opt-in. Configured Linux kits add no daemon or scheduler; automatic checks run
+only before Person commands. The existing configuration schema and freshness
 checkpoint need no migration for check-only automatic behavior.
 
 ## Desktop app
@@ -211,11 +220,19 @@ verified feed bytes), the activation (`immediate` for the CLI, `restart` for
 the app), and the downloaded archive's file name and download timeout. The app
 adds none of the CLI's signal handlers, whose re-raise would end Electron
 without its normal quit. `configureClientUpdates` takes the adapter too, so
-on first run the app pins its identity's `update_bootstrap`. A later app with
-a different publisher, feed, channel or sequence floor cannot change that pin;
-updates then stop with `already_configured`. Per-user state lives in
-`<appData>/ECHO/desktop/updater/`, created `0700`, next to Chromium's
-`ECHO/chromium` and apart from the CLI root:
+on first run the app pins its identity's `update_bootstrap`, and every later
+launch offers it again. A later app from the same publisher with a higher
+sequence floor raises the floor and keeps updating, and a lower floor keeps
+the stored one ([ADR-0050](../decisions/ADR-0050-update-floor-only-rises.md)).
+A later app with a different publisher key, feed or channel cannot change the
+pin: its launch fails with `already_configured`. The sidebar then shows
+**Updates are off**, a row that can't be clicked. It shows whenever the
+updater should run in this release but couldn't start, for example also with
+`update_busy` while an install whose outcome is unknown keeps the updater's
+lock. desktop.log keeps only the code, as `update off <code>`. A build whose
+updater is off for a reason under **When it runs** shows no row. Per-user
+state lives in `<appData>/ECHO/desktop/updater/`, created `0700`, next to
+Chromium's `ECHO/chromium` and apart from the CLI root:
 `~/Library/Application Support/ECHO/desktop/updater` on macOS and
 `~/.config/ECHO/desktop/updater` on Linux.
 
@@ -401,6 +418,9 @@ A later approved release or expiry refresh uses the S3 lane's separate
 [replacement operation](../../deploy/client-updates/README.md#replace-an-existing-feed).
 It reuses the enrolled client's bootstrap configuration, so its feed origin,
 publisher key, channel, and installation type remain pinned at the client.
+Only the sequence floor may rise, as the
+[release rule](../../deploy/release/README.md#prepare-the-transition-before-staging)
+sets it; the replacement does not hold the live feed to the new floor.
 
 ## Verification and recovery
 
