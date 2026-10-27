@@ -9,7 +9,7 @@ import { PersonClient } from '../../src/product/person-client/client.js';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { signedInHome } from './signed-in-home.js';
 import {
-  validatePersonUpdateSubmitV1, validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validateProjectContextBrowseV1,
+  validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validateProjectContextBrowseV1,
   validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectCreateV1, validateProjectMemberSetV1,
   type PersonUpdateSubmitV3, type ProjectIdV1,
 } from '@echo-brain/organization-api';
@@ -27,7 +27,6 @@ const failures = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1
   errors: { id: string; http_status: number; http: unknown; cli: { action: string; [key: string]: unknown } }[];
 };
 const invalidValidators: Readonly<Record<string, (value: unknown) => unknown>> = {
-  'person-update-v1-submit': validatePersonUpdateSubmitV1,
   'person-update-v2-submit': validatePersonUpdateSubmitV2,
   'project-create': validateProjectCreateV1,
   'project-member-set': validateProjectMemberSetV1,
