@@ -446,7 +446,7 @@ function outsideToolOf(row: Pick<ImpactItemRowV1, 'pointer'>): string | undefine
  * pages, which an impact card's V6 citations name, never its containers.
  */
 export function taskLiveSourcesV1(sources: CreatePersonLiveAnswerRouteOptionsV1['live_sources']): NonNullable<CreatePersonLiveAnswerRouteOptionsV1['live_sources']> {
-  return (sources ?? []).filter(source => source.minimum_response_version <= 6);
+  return (sources ?? []).filter(source => source.descriptor.kind !== 'tool_container');
 }
 /**
  * The outside tools the viewer has connected, as `kind:tool_id`: each live source a desk binds (one of a known tool) whose tool

@@ -22,8 +22,6 @@ export const FOLLOW_UP_EVIDENCE_KIND_V1 = 'follow_up' as const;
 /** The source id and the selector the research model uses. */
 export const FOLLOW_UPS_SOURCE_ID_V1 = 'follow_ups' as const;
 export const FOLLOW_UPS_SELECTOR_V1 = 'follow_ups' as const;
-/** The first Ask response version whose citations admit a follow-up; trigger research (V6) never reads them. */
-export const FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 = 7 as const;
 /** A status group a follow-ups list takes. */
 export type FollowUpListStatusV1 = 'open' | 'done';
 /**

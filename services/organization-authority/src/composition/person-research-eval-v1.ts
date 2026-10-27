@@ -10,7 +10,6 @@ import {
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { SWEEP_RENDERER_V1, type SweepTriggerInputV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/sweep-renderer-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { PersonAskScopeV2 } from '../application/ports/person-original-context-retrieval-v1.js';
 import { askerOf, personAskRequestContextV1, scopeOf } from './person-answer-v3-route.js';
 import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
@@ -87,7 +86,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
   const now = options.now ?? (() => Date.now());
   // A question runs as `/v7` serves it: the V8 Ask, whose desk binds follow-ups, the workspace and tool containers
   // (research tool contract v1). A task reads what task research reads.
-  const questionSources = (options.live_sources ?? []).filter(source => source.minimum_response_version <= WORKSPACE_MINIMUM_RESPONSE_VERSION_V1);
+  const questionSources = options.live_sources ?? [];
   const taskSources = taskLiveSourcesV1(options.live_sources);
   const runs = new Map<string, Run>();
   const purge = () => {
@@ -137,7 +136,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
           const scoped = { ...definition.brief(event, scope), budget: brief.budget };
           const question = brief.goal.kind === 'question';
           const desk = await bindPersonLiveEvidenceDeskV1(options, question ? questionSources : taskSources,
-            { access_token: input.access_token, scope, signal, ...(question ? { response_version: WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } : {}) }, context);
+            { access_token: input.access_token, scope, signal, ask: question }, context);
           run.revalidate = readSignal => desk.revalidate({ ...(readSignal === undefined ? {} : { signal: readSignal }) });
           const asker = askerOf(options, authorization);
           // Runs exactly as served.

@@ -27,7 +27,7 @@ it('registers two page connectors through one lifecycle, catalog, HTTP and Ask p
   const calls = ['handbook', 'runbooks'].map(source_id => ({ source_id, source: vi.fn(async () => undefined), tools: vi.fn(async () => []), close: vi.fn() }));
   const live_connectors: PersonLiveConnectorDefinitionV1[] = calls.map(call => ({
     descriptor: { source_id: call.source_id, selector: call.source_id, kind: 'page', tool_id: call.source_id, description: `Live ${call.source_id} pages`, metadata_only_list: true },
-    scopes: ['global', 'project'], minimum_response_version: 6,
+    scopes: ['global', 'project'],
     open: authentication => ({ application: { source: call.source }, tools: call.tools, close: call.close,
       connection_http: { routes: [{ route_id: call.source_id, method: 'POST', path: `/v1/person/tools/${call.source_id}/probe` }],
         async accept(request) {
@@ -151,7 +151,7 @@ it('closes already opened connectors if a later registered connector fails to st
   const close = vi.fn();
   const definition = (source_id: string): Omit<PersonLiveConnectorDefinitionV1, 'open'> => ({
     descriptor: { source_id, selector: source_id, kind: 'page', description: 'Live pages', metadata_only_list: true },
-    scopes: ['global'], minimum_response_version: 6,
+    scopes: ['global'],
   });
   await expect(startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors: [
     { ...definition('first'), open: () => ({ application: { source: async () => undefined }, close }) },

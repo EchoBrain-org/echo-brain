@@ -33,8 +33,6 @@ export type PersonContextLiveRuntimeFactoryV1<C extends PersonLiveEvidenceCitati
 export interface PersonLiveConnectorDefinitionV1 {
   readonly descriptor: PersonLiveSourceDescriptorV2;
   readonly scopes: readonly ('global' | 'project')[];
-  /** 8: a tool container, which only the V8 answer can cite (research tool contract v1). */
-  readonly minimum_response_version: 5 | 6 | 8;
   /** A connector whose containers name their mapped ECHO projects reads `project_names`; any other ignores it. */
   open(authentication: Parameters<PersonContextLiveRuntimeFactoryV1<PersonLiveEvidenceCitationV1>>[0], authorize_project: PersonContextProjectAuthorizationV1, project_names?: PersonContextProjectNamesV1): OpenedPersonLiveConnectorV1;
 }

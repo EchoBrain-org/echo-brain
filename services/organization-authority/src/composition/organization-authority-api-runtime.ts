@@ -285,7 +285,7 @@ export async function startOrganizationAuthorityApiRuntime(
       liveConnectors.push({ definition, runtime: definition.open(sessions, authorizeLiveProject, projectNames) });
     }
     const liveSources: readonly PersonLiveConnectorSourceV1[] = liveConnectors.map(({ definition, runtime }) => ({
-      descriptor: definition.descriptor, scopes: definition.scopes, minimum_response_version: definition.minimum_response_version,
+      descriptor: definition.descriptor, scopes: definition.scopes,
       application: runtime.application, ...(runtime.tools === undefined ? {} : { tools: runtime.tools.bind(runtime) }),
     }));
     personHttp = dependencies.person_http_runtime_factory?.(sessions, { database, record: recordDatabase,

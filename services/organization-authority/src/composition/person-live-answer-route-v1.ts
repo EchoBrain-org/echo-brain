@@ -4,8 +4,6 @@ import {
 import type { PersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import { FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
-import { WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 } from '@echo-brain/organization-authority-kernel/shared/workspace-evidence-v1';
 import type { PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { samePersonV1 } from '../application/person-release-authorization-v1.js';
 import type { PersonAnswerHttpInputV1, PersonAnswerV7HttpApplication } from '../presentation/person-live-answer-http-application.js';
@@ -49,10 +47,10 @@ export async function bindPersonLiveEvidenceDeskV1(
   input: {
     readonly access_token: string; readonly scope: ReturnType<typeof scopeOf>; readonly signal?: AbortSignal;
     /**
-     * The answer the desk serves: the V8 Ask's binds follow-ups (from V7) and the workspace (from V8). Trigger research,
-     * open items and the evidence doors never pass one.
+     * The desk serves an Ask, whose answer can cite follow-ups and the workspace, so it binds them. Trigger research, open
+     * items and the evidence doors never set it.
      */
-    readonly response_version?: number;
+    readonly ask?: boolean;
     /**
      * What the desk's ECHO records and originals never offer (an impact run's sibling records and its meeting's own
      * source). Only trigger research passes it, and it binds neither follow-ups nor the workspace.
@@ -100,7 +98,7 @@ function followUpsFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
   const sources = options.follow_ups;
   const { scope } = input;
   // A desk with exclusions binds none: a follow-up could name an excluded record.
-  if (sources === undefined || (input.response_version ?? 0) < FOLLOW_UPS_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine' || input.exclude !== undefined) return undefined;
+  if (sources === undefined || input.ask !== true || scope.kind === 'mine' || input.exclude !== undefined) return undefined;
   const authenticate = () => options.sessions.authenticateAccess({ access_token: input.access_token });
   const asker = authenticate();
   if (!samePersonV1(asker, context)) throw new AuthorityOperationError('stale_access_state', 'Follow-ups belong to another person');
@@ -116,7 +114,7 @@ function followUpsFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
 function workspaceFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Parameters<typeof bindPersonLiveEvidenceDeskV1>[2], context: PersonLiveRequestContextV1) {
   const sources = options.workspace;
   const { scope } = input;
-  if (sources === undefined || (input.response_version ?? 0) < WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 || scope.kind === 'mine' || input.exclude !== undefined) return undefined;
+  if (sources === undefined || input.ask !== true || scope.kind === 'mine' || input.exclude !== undefined) return undefined;
   const authenticate = () => options.sessions.authenticateAccess({ access_token: input.access_token });
   const asker = authenticate();
   if (!samePersonV1(asker, context)) throw new AuthorityOperationError('stale_access_state', 'The workspace belongs to another person');
@@ -128,8 +126,6 @@ function workspaceFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
  * streamed. The routes of the V5 to V7 answers, `/v4` to `/v6`, were retired.
  */
 export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRouteOptionsV1): PersonAnswerV7HttpApplication {
-  const response_version = WORKSPACE_MINIMUM_RESPONSE_VERSION_V1;
-  const compatible = (options.live_sources ?? []).filter(source => source.minimum_response_version <= response_version);
   type Input = PersonAnswerHttpInputV1;
   type Progress = { readonly on_start: () => void; readonly on_progress: AgenticAskProgressSinkV3 };
   /** A streamed Ask (ADR-0039) also reports when it starts and what it does; every other request is unchanged. */
@@ -144,7 +140,7 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     input.signal?.throwIfAborted();
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
     return runPersonAskV1(options, input, async ({ authorization, context, capture, signal }) => {
-      const desk = await bindPersonLiveEvidenceDeskV1(options, compatible, { access_token: input.access_token, scope, response_version, signal }, context);
+      const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
       capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
       // An Ask that asked for answer layout v1 has its part laid out (ADR-0045).
