@@ -625,6 +625,35 @@ test('an opened line\'s new row follows a person at the bottom of Ask, and never
   await expect.poll(fromBottom).toBeLessThan(2);
 });
 
+test('an Ask on its way never lets the window scroll past the app, however far up its thread a person scrolled', async () => {
+  run = await launch('ask-progress', { 'release-ask': '' });
+  const { page } = run;
+  // A thread long enough to scroll, each question answered at once.
+  await askFromHome(page, 'What did we agree?');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  for (const question of ['Who approved it?', 'What is left in Apollo?', 'What changed this week?', 'Who owns the trace?', 'What is due Friday?']) {
+    await followUp(page, question);
+  }
+  // Then one that waits, and the person scrolls up to read while it does.
+  rmSync(join(run.home, 'release-ask'));
+  await page.getByTestId('ask-field').fill('And what about the pilot?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('ask-stage')).toHaveText('Thinking…');
+  const view = page.getByTestId('ask-view');
+  await view.evaluate(element => { element.scrollTop = 0; });
+  expect(await page.getByTestId('asking').evaluate(element => element.getBoundingClientRect().top - innerHeight)).toBeGreaterThan(0);
+
+  // The stage a screen reader hears is laid out again at the end of the thread, far below what the view shows.
+  await expect(page.getByTestId('ask-stage')).toHaveText('Reading Tuesday sync and 2 more', { timeout: 10_000 });
+  await expect(page.getByTestId('ask-announcement')).toHaveText('Reading');
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await view.evaluate(element => element.scrollTop)).toBe(0);
+  // Nothing in the app reaches past the window, so a scroll that runs off the end of the thread has nothing to move.
+  const heights = await page.evaluate(() => ({ app: document.querySelector('.app')!.scrollHeight, page: document.scrollingElement!.scrollHeight, window: innerHeight }));
+  expect(heights.app).toBe(heights.window);
+  expect(heights.page).toBe(heights.window);
+});
+
 test('a quick Ask shows nothing more, and its source opens the cited decision lit in its meeting, then the meeting\'s page', async () => {
   run = await launch('ask-progress-quick');
   const { page } = run;
@@ -652,6 +681,28 @@ test('a quick Ask shows nothing more, and its source opens the cited decision li
   await expect(reader.locator('.record-item.on')).toHaveCount(1);
   await expect(reader.locator('.record-item.on')).toHaveText(/^Cited: Ship Apollo with annual plans first\./);
   expect(opens()).toEqual([`meeting:${RECORD}`]);
+});
+
+test('a meeting\'s page with its cited decision far below the window never lets the window scroll past the app', async () => {
+  run = await launch('ask-progress-quick');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  await page.getByTestId('sources-toggle').click();
+  await page.getByTestId('source-row').nth(0).click();
+  await page.getByTestId('source-pane').getByTestId('source-open').click();
+  const reader = page.getByTestId('reader');
+  await expect(reader.locator('.record-item.on')).toHaveText(/^Cited: Ship Apollo with annual plans first\./);
+  // A long meeting, read from its top: what comes before the cited decision is far taller than the window.
+  await reader.evaluate(element => {
+    element.querySelector<HTMLElement>('.reader-head')!.style.minHeight = '2000px';
+    element.scrollTop = 0;
+  });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await reader.locator('.record-item.on').evaluate(item => item.getBoundingClientRect().top - innerHeight)).toBeGreaterThan(0);
+  // What a screen reader hears on it stays in the page, so nothing in the app reaches past the window.
+  const heights = await page.evaluate(() => ({ app: document.querySelector('.app')!.scrollHeight, page: document.scrollingElement!.scrollHeight, window: innerHeight }));
+  expect(heights.app).toBe(heights.window);
+  expect(heights.page).toBe(heights.window);
 });
 
 test('an empty bar offers what to ask once you go to it: Up lights one, Return asks it, Escape only closes them, and typing hides them', async () => {

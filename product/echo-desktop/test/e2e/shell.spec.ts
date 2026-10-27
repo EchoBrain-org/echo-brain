@@ -76,6 +76,28 @@ test('the sidebar is on by default, and the toggle only hides it', async () => {
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
 });
 
+test('the window never scrolls the app, not even to show something laid out past its edge', async () => {
+  run = await launch();
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  // Something in the panel reaches far below the window, as a line Ask kept for a screen reader once did.
+  await page.evaluate(() => {
+    const below = Object.assign(document.createElement('div'), { id: 'below' });
+    below.style.cssText = 'position: absolute; top: 2000px; width: 1px; height: 1px;';
+    document.querySelector('.main')!.append(below);
+  });
+  // A person's wheel, a script, and a scroll to bring it into view all leave the app where it is.
+  await page.mouse.move(400, 300);
+  await page.mouse.wheel(0, 1_000);
+  await page.evaluate(() => {
+    document.scrollingElement!.scrollTop = 500;
+    document.body.scrollTop = 500;
+    document.getElementById('below')!.scrollIntoView();
+  });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await page.evaluate(() => document.querySelector('.app')!.getBoundingClientRect().top)).toBe(0);
+});
+
 test('while another app is in front the page is covered, and the project rows stay for a drop', async () => {
   run = await launch();
   const { page, app } = run;
