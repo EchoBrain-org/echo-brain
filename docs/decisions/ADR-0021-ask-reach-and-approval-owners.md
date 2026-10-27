@@ -142,3 +142,9 @@ project the approver lost and writes nothing"). Owners from proposal to
 searchable record are covered by its "approval core: owners" tests,
 `approval-decision-projection-v1.test.ts`, and `approval-publisher-v1.test.ts`,
 which checks the owner text in the search snapshot.
+
+## Later decisions
+
+On 2026-10-24 [ADR-0046](ADR-0046-private-meetings-and-item-routing.md)
+removed transcript sharing, and with it Ask's reach over shared transcripts
+and the direct transcript read.

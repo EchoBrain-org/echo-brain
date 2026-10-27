@@ -87,11 +87,10 @@ and its own provider folder. Generic processing and
 record tests retain independent fixture implementations and signed protocol
 helpers without importing a provider or application workspace.
 
-The Person client consumes generic v4 tool status; v3 remains for older
-clients. Slack owns its commands and retained v2 disconnect decoder. The v2
-HTTP contract remains provider-owned for installed clients; v3 and v4 admit up
-to 32 independently identified tools without imposing a provider's identity
-grammar.
+The Person client consumes generic v4 tool status. The v3 tool-status route
+and Slack's v2 route are retired (ADR-0048). Slack owns its commands and keeps
+its v2 shape for its disconnect reply and the v4 list. v4 admits up to 32
+independently identified tools without imposing a provider's identity grammar.
 
 `product/source-boundary.v1.json` declares bootstrap modules, provider folders,
 source assemblies and retired roots. The legacy machine runtime remains absent.

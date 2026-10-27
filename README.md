@@ -109,6 +109,8 @@ Choose the smallest check that covers the change while iterating:
 | Editing the core evaluation harness | `npm run test:capacity` | Contract and verifier tests in `tools/evals/authority-core` |
 | Editing the research-loop evaluator | `npm run test:research-loop-eval` | `node --test` suites in `tools/evals/research-loop` |
 | Editing the synthetic Ask evaluator | `npm run test:agentic-ask-eval` | `node --test` suites in `tools/evals/agentic-ask` |
+| Editing the follow-up resolution evaluator | `npm run test:ask-follow-up-eval` | `node --test` suites in `tools/evals/ask-follow-up` |
+| Editing the Ask wording evaluator | `npm run test:ask-wording-eval` | `node --test` suites in `tools/evals/ask-wording` |
 | Editing the desktop app | `cd product/echo-desktop && npm run typecheck && npm test` | Desktop typecheck, unit and Electron end-to-end tests (see `product/echo-desktop/README.md`) |
 | Measuring one runtime round | `npm run capacity:checkpoint` | Deterministic, provider-independent functional checkpoint; about one minute, not an org-capacity result |
 
@@ -124,8 +126,9 @@ documentation checks, TypeScript checking, linting, and the complete root
 Vitest suite. It does not run the desktop app's tests or the `node --test`
 evaluator suites; when a change touches them, also run their commands from
 the table above or the [test map](tests/README.md).
-CI also runs both core evaluation commands above, the research-loop and synthetic
-Ask evaluator tests, and the desktop app in its own job. Locally the root suite uses at most
+CI also runs both core evaluation commands above, the research-loop, synthetic
+Ask, follow-up resolution and Ask wording evaluator tests, and the desktop app
+in its own job. Locally the root suite uses at most
 two isolated test workers (CI's Vitest leg uses three); mutable Git and
 packaging fixtures use temporary checkouts.
 

@@ -8,8 +8,8 @@ component_ids:
   - CMP-PERSON-CLIENT
   - CMP-PERMISSIONS
 created_at: 2026-10-25
-reviewed_at: 2026-10-25
-reviewed_ref: 8cc3ffffe517ba5e67fc96890d40ae8eef39304d
+reviewed_at: 2026-10-27
+reviewed_ref: aa79d90c81dbcf8f0147ecb66bfbbe4edbf2c2ff
 status: proposed
 supersedes: []
 superseded_by: []
@@ -123,12 +123,15 @@ Retire them, and keep what reads stored data.
   longer available, until it updates itself. Shipped on its own, this change
   would be safe clients first, because the Authority it builds on already
   serves the `/v2` document routes. This gap was accepted on 2026-10-25 in
-  place of keeping the V1 association routes for one more release.
+  place of keeping the V1 association routes for one more release. A client
+  that has not updated also gets that 404 when it resends a V1 upload snapshot
+  left from before 2026-09-23.
 - **Data:** no migration. No table, column or stored row changes.
 - **Rollback:** revert the change. Nothing stored changed, so the older routes
   return as they were.
 - **Evidence:**
-  - The server tests answer every retired path with 404:
+  - The server tests answer every retired path with 404, except V1 document
+    dissociate, which no test sends:
     `organization-authority-api-runtime.test.ts`,
     `project-context-http.test.ts`, `person-documents-http-v1.test.ts` and
     `slack-person-identity-link-http-v1.test.ts`.

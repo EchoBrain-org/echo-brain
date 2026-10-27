@@ -87,8 +87,8 @@ Option B, with the `found` fix in every version.
   counts and the names account for what was looked through. V1 and V2
   receipts now reach the desktop only from an Authority older than it.
 - **Clients.** The validators are unchanged: exact keys, and `looked_through`
-  at least the items named. `person ask --live --progress` prints the receipt
-  as validated.
+  at least the items named. `person ask --progress` prints the receipt as
+  validated.
 
 What follows:
 
@@ -114,3 +114,8 @@ previews, never an open's neighbours; a preload research is never shown; and
 a preload item it is not shown. The desktop's end-to-end proof is
 `product/echo-desktop/test/e2e/ask.spec.ts`: a `/v7` Ask that only listed
 rows shows "Looked through 30 items" and opens onto its one search.
+
+On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) retired progress V1 and V2,
+and `9863883` removed the V2 receipt check above: the kernel test now checks
+the V3 receipt only. The preload tests went with the small-scope preload,
+which `ec92b9b` removed on 2026-10-19.

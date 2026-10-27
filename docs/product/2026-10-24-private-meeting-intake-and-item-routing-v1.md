@@ -4,6 +4,11 @@ Status: direction agreed in conversation on 2026-10-24. The founder asked for
 the whole change built end to end, in parallel, and will validate the result;
 the written-spec review is waived. Rulings made while writing are listed at the
 end. Decision record: [ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md).
+Shipped in #360 (915761c), with ruling 22's quote fix in #362 (8cc3fff).
+Shipped is not deployed or qualified.
+[Quieter Ask and Only me v1](2026-10-26-quieter-ask-and-only-me-v1.md) (#369)
+later added items kept private inside a project, and replaced section 2.5's
+destination chip with a place button and an Only me lock.
 
 ## Goal
 

@@ -19,9 +19,9 @@ paths below are relative to its `organization-control-plane/` folder:
 | Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack `auth.test` checks of an install and the DM-code person link |
 | Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
 | `security/file-secret-store` | The private secret store for the organization's Slack app credential bundle: client ID/secret, signing secret, and Nango connection ID ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)) |
-| Slack provider `slack-approval-integration-v1` | The control database opener, visibility policy and tool connection contracts, and the Slack identity-link lookups used by the Slack approval plug-in: `resolveCurrentSlackDmApprovalReviewerTargetV1` and the card-target pick, recheck and click match built on it |
+| Slack provider `slack-approval-integration-v1` | What the Slack approval plug-in uses: the control database opener (`openOrganizationControlDatabase`), the active Slack connection read (`readActiveSlackConnectionV1`), and the Slack identity-link lookups that pick, recheck and click-match an approval card's target (`resolveSlackDmApprovalTargetV1`, `isCurrentSlackDmApprovalTargetV1`, `matchSlackApprovalClickActorV1`) |
 | `organization-control-database-v1` | Opening the control database and applying the current V4 baseline |
-| `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy identifiers and contract digests |
+| `record-visibility-policy-contracts-v1` | The restricted reviewer (Only me) policy identifier, consequence text and contract digests, and the Person approval policy and digest types |
 
 ## Current behaviors
 
@@ -254,7 +254,7 @@ plane stores no approval state: control-plane baseline V4 removed the pending
 contracts, signed and denied action receipts, and terminal evidence, together
 with the Slack-bound policy resolutions. The Slack connection, the bot token
 source, connection health and the identity-link lookup
-(`resolveCurrentSlackDmApprovalReviewerTargetV1`) serve the plug-in
+(`resolveSlackDmApprovalTargetV1`) serve the plug-in
 ([unified meeting approval](../product/2026-10-07-unified-meeting-approval-v1.md),
 sections 3 and 5). The Slack provider also owns the identity reads that pick,
 recheck and click-match a card's target, and the ephemeral `response_url`

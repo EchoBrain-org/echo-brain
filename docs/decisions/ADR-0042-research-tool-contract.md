@@ -393,3 +393,7 @@ On 2026-10-19 the founder approved moving the desktop's Mine Ask and plain
 `person ask` to `/v7` too, with its fallbacks; `--live` then changes nothing.
 Mine still binds no workspace or container
 ([Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)).
+
+On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) made `/v7` the only Ask
+route, with no fallback. `person ask` now refuses `--live` as an unknown
+option.

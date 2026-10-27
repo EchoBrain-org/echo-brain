@@ -512,3 +512,11 @@ answers, falling back on an older Authority), which streams its progress. Mine
 reads there only what the asker added, as above, and no live tool, follow-up
 or workspace
 ([Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)).
+
+On 2026-10-24 [ADR-0046](ADR-0046-private-meetings-and-item-routing.md)
+removed transcript sharing and, with it, the `transcript:` open kind. On
+2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) removed the older-Authority
+fallbacks: Ask goes to `/v7` alone. On 2026-10-26
+[ADR-0049](ADR-0049-only-me-is-a-lock.md) removed Mine from the desktop: its
+page, sidebar row and Ask scope. The Authority and the CLI keep `--mine`. The
+person list also gained a list-only Only me scope.

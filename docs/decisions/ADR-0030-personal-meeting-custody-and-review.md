@@ -124,3 +124,11 @@ ECHO Person grant. Production adapter and fixture proofs cover closed parsing,
 changed revisions, custody fences, deduplication, durable approval, and imported
 read access. Full local regression and live deployment qualification are tracked
 in the sprint brief. No live folder watch has been enabled by this decision.
+
+## Later decisions
+
+On 2026-10-24 [ADR-0046](ADR-0046-private-meetings-and-item-routing.md)
+reversed the project read of unapproved notes above: a suggested project only
+pre-ticks destinations and grants nothing, and unapproved imported notes are
+readable by their importer alone. It also removed transcript sharing at
+approval.

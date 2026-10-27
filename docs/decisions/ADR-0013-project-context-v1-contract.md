@@ -184,3 +184,9 @@ The founder confirmed staging is disposable with no live users. Fresh exact V8
 state may be selected through the existing operator lane for qualification; a
 retained-data migration is not a staging prerequisite. Startup still must never
 reset implicitly, and an implementation PR is not a live release decision.
+
+## Later decisions
+
+On 2026-10-25 [ADR-0048](ADR-0048-retire-older-person-routes.md) retired the
+V1 project reads and the `/v2/person/updates` routes other than search;
+stored notes stay readable.

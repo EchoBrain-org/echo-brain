@@ -468,9 +468,8 @@ build number, and every business or person identifier are never dimensions.
 
 | Metric | Value and population rule | Dimensions |
 | --- | --- | --- |
-| `StageStarted`, `StageSucceeded`, `StageFailed`, `StageSkipped` | `1` for the corresponding canonical stage event | `workflow`, `stage` |
+| `StageStarted`, `StageSucceeded`, `StageFailed` | `1` for the corresponding canonical stage event | `workflow`, `stage` |
 | `StageClosedLatencyMs` | `elapsed_ms` for succeeded or failed measured machine stages; recovery and shared references are excluded | `workflow`, `stage` |
-| `StageRetryAttempt` | `1` for a measured execution start with `accounting.retry_of_attempt`; skipped, recovered and historical ordinal observations are excluded | `workflow`, `stage` |
 | `TerminalOutcome` | `1` for a succeeded stage with a bounded stage outcome, or a terminal `research_run` result | `workflow`, `stage`, `outcome` |
 | `StageFailure` | `1` for a failed stage | `workflow`, `stage`, `failure_class` |
 | `AskRetrievalFailure` | `1` for a failed `research_loop` (historical `ask_retrieval` remains supported) | none |
@@ -479,7 +478,7 @@ build number, and every business or person identifier are never dimensions.
 | `LlmInputTokens`, `LlmOutputTokens`, `LlmTotalTokens`, `LlmCachedInputTokens`, `LlmReasoningTokens` | the respective non-null provider-reported value only | `stage`, `provider`, `model` |
 | `LlmTotalTokensAvailable` | `1` only when that attempt has a non-null total-token value | `stage`, `provider`, `model` |
 | `RetrievalPlannedQueries`, `RetrievalQueryHits`, `RetrievalReleasedAtoms`, `RetrievalContextAtoms`, `RetrievalCitations` | the respective non-null counter once per `research_run`; historical journey events retain their original projection | `workflow`, `stage` |
-| `ApprovalHumanWaitMs` | retained historical `queue_age_ms` from card staging to verified action | `workflow`, `stage` |
+| `ApprovalHumanWaitMs` | historical values only; no longer emitted (it was `queue_age_ms` from card staging to verified action) | `workflow`, `stage` |
 | `ModelCorrections` | the count of one named correction of model output on a span's terminal event ([counting code's corrections](#count-codes-corrections-of-model-output)) | `correction` |
 | `JourneyTelemetryAlive`, `WorkerCycleCompleted` | `1` for liveness output and a completed worker cycle, respectively | none |
 

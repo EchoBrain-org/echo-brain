@@ -1,7 +1,11 @@
 # Ask progress: the quiet line v1
 
 Date: 2026-10-19. Status: approved by the founder for build on 2026-10-19,
-after a mockup that compared the shipped live rows with this design.
+after a mockup that compared the shipped live rows with this design, and
+shipped in #338 (40ba71c).
+[Quieter Ask v1](2026-10-26-quieter-ask-and-only-me-v1.md) (#368) later moved
+the receipt into each answer's footer line ("3 sources · 20s ›") and removed
+`Receipt`.
 
 This changes only "While Ask works" and "When the answer arrives" in
 [Ask progress and internal links v1](2026-10-16-ask-progress-and-internal-links-v1.md).

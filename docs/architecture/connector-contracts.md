@@ -211,8 +211,7 @@ Granola supplies verified account/workspace, folder enumeration, a paged
 own meetings or one folder, over the last 7 days; a project named with it is
 only a suggestion. Imported notes are labeled unapproved and readable by their
 importer alone; nothing shares a transcript. The `hand-in` source takes a
-meeting pasted from any tool through the same custody. This is separate from
-the dormant general capture routes.
+meeting pasted from any tool through the same custody.
 
 Granola network cost is explicit. A watch pass lists its window (one call per
 200 meetings, at most 200) and reads in detail only a meeting that is new or

@@ -120,3 +120,8 @@ evidence and limitations belong in the PR and feature documentation. The native
 navigation/draft reversibility work is integrated against these Ask and people
 contracts, with focused proofs for Back destinations and safe sheet closure.
 This feature does not add Undo of completed uploads or approvals.
+
+## Later decisions
+
+On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) added Ask history, kept on
+the device only, and follow-ups that carry the previous turn.

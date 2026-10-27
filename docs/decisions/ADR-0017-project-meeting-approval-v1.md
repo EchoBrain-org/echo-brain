@@ -131,3 +131,12 @@ The rehearsal can therefore verify the same custody, extraction, approval and
 gated transcript read. Historical V1 envelope bytes and frozen cards remain
 recoverable under their original contracts. Meetings lacking the exact retained
 source fail closed before new V2 card delivery.
+
+## Later decisions
+
+On 2026-10-24 [ADR-0046](ADR-0046-private-meetings-and-item-routing.md)
+removed transcript sharing: approval releases no transcript, and the grant
+table and the transcript read (`POST /v1/person/meeting-transcripts/read`)
+are gone. On 2026-10-26 [ADR-0049](ADR-0049-only-me-is-a-lock.md) lets a
+record its approver alone reads carry project associations without a project
+audience.

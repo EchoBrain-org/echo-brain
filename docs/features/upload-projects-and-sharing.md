@@ -83,7 +83,9 @@ New editor uploads use `/v3/person/updates`; new file uploads use
 `/v2/person/documents`. `association_project_ids` is a canonical array of zero to
 20 project IDs. The new `projects` audience contains a canonical `project_ids`
 array of one to 20 IDs. Existing only-me, organization and single-project
-audiences retain their meaning. Legacy request versions remain supported.
+audiences retain their meaning. Stored notes and documents from earlier
+request versions stay readable; the V2 note write and every V1 document route
+are retired ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)).
 
 The CLI exposes `person updates submit-v3|status-v3|search-v3` and
 `person documents upload-v2|status-v2|search-v2|download-v2`, and
