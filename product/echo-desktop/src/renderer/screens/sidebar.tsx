@@ -40,21 +40,24 @@ const twoPart = (what: string, action: string) => <span class="label"><span clas
 
 /**
  * A new version (ADR-0035), signed in or out and under ECHO could not start, so
- * a broken release can install its fix. Nothing clickable says Update (Home's
- * word for open items), and it takes no drop. It stays one button so a keyboard
- * click keeps focus; Updating and the location line are aria-disabled.
+ * a broken release can install its fix; or Updates are off, when the updater
+ * should run but could not start (the log says why). Nothing clickable says
+ * Update (Home's word for open items), and it takes no drop. It stays one button
+ * so a keyboard click keeps focus; Updating, the location line and Updates are
+ * off are aria-disabled.
  */
 export function UpdateRow({ state }: { state: State }) {
   const { update, updateFailure: failure } = state;
   if (update.state === 'none') return null;
   const noDrop = (event: DragEvent) => event.stopPropagation();
   const location = update.state === 'failed' && update.reason === 'location';
-  const inert = update.state === 'installing' || location;
+  const inert = update.state === 'installing' || update.state === 'off' || location;
   return (
     <div class="sidebar-rows update-rows" role="status" onDragOver={noDrop} onDrop={noDrop}>
       <button type="button" class="side-row update-row" data-testid="sidebar-update" aria-disabled={inert ? 'true' : undefined}
         onClick={inert ? undefined : () => void installUpdate()}>
         {update.state === 'installing' ? <><span class="asking" aria-hidden="true"><i /><i /><i /></span><span class="label">Updating</span></>
+          : update.state === 'off' ? <><Up /><span class="label">Updates are off</span></>
           : location ? <><Up /><span class="label">Move ECHO to Applications to update</span></>
           : <><Up />{update.state === 'failed' ? twoPart('Couldn\'t update', 'Try again') : twoPart('New version', 'Restart')}</>}
       </button>

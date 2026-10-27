@@ -1211,7 +1211,7 @@ export async function readUpdate(): Promise<void> {
 /** New version · Restart, and Try again: main installs the release on the row, then ECHO restarts. */
 export async function installUpdate(): Promise<void> {
   const update = state.update;
-  if (update.state === 'none' || update.state === 'installing' || (update.state === 'failed' && update.reason === 'location')) return;
+  if (update.state === 'none' || update.state === 'off' || update.state === 'installing' || (update.state === 'failed' && update.reason === 'location')) return;
   // Held as sign out is: the same work, and the same words under the row.
   if (signOutHeld()) { set({ updateFailure: { code: 'update_held', retryable: true } }); return; }
   set({ updateFailure: null });
