@@ -357,8 +357,8 @@ row can't be clicked, and ECHO keeps working on its current version.
 `~/Library/Application Support/ECHO/chromium/logs/` on macOS and
 `~/.config/ECHO/chromium/logs/` on Linux. `already_configured` means this
 build's feed, channel or key differs from the one ECHO pinned on its first
-run. `update_busy` means an install whose outcome is unknown kept the
-updater's lock. Moving a seat to another publisher remains a separately
+run. `invalid_update_state` means the updater's `state.json` or `floor.json`
+is damaged. Moving a seat to another publisher remains a separately
 reviewed bootstrap change.
 
 ## Verify Mac and Linux client activation

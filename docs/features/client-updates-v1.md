@@ -164,7 +164,7 @@ keeps the stored floor. `config.json` keeps the floor it was first pinned with
 and a higher one goes to `updater/floor.json`, so a client from before that
 change still reads its configuration and state, ignoring the raised floor. A
 feed below the higher of the two fails with `stale_metadata`, and an offer
-saved from one is never shown again: `--status` then reports `not_checked`.
+saved from one is not offered again: `--status` then reports `not_checked`.
 Changing the publisher, feed, channel or installation type requires a
 separately reviewed bootstrap; feed contents cannot change those settings. A
 configuration that differs in any of them fails with `already_configured` and
@@ -228,8 +228,8 @@ A later app with a different publisher key, feed or channel cannot change the
 pin: its launch fails with `already_configured`. The sidebar then shows
 **Updates are off**, a row that can't be clicked. It shows whenever the
 updater should run in this release but couldn't start, for example also with
-`update_busy` while an install whose outcome is unknown keeps the updater's
-lock. desktop.log keeps only the code, as `update off <code>`. A build whose
+`invalid_update_state` when an updater file such as `floor.json` is damaged.
+desktop.log keeps only the code, as `update off <code>`. A build whose
 updater is off for a reason under **When it runs** shows no row. Per-user
 state lives in `<appData>/ECHO/desktop/updater/`, created `0700`, next to
 Chromium's `ECHO/chromium` and apart from the CLI root:

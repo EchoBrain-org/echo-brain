@@ -84,7 +84,7 @@ Adopt option C, the founder's choice.
   raises the stored one, and a build with a lower floor keeps it. The effective
   floor is the largest any build of this publisher has carried. A raise keeps
   the anti-rollback checkpoint, and updates stay on. A feed below the floor
-  fails with `stale_metadata`. An offer saved from such a feed is never shown
+  fails with `stale_metadata`. An offer saved from such a feed is not offered
   again: an automatic check inside the hour reports `not_due`, and
   `update --status` reports `not_checked`.
 - **The publisher checks the live feed without the new floor.** The replacement
@@ -96,14 +96,18 @@ Adopt option C, the founder's choice.
   to the live feed's sequence plus one
   ([coordinated release](../../deploy/release/README.md#prepare-the-transition-before-staging)).
   It then refuses the live feed instead of offering that feed's older release
-  as a new version.
+  as a new version. Until the build's own feed is published, any replacement
+  of the live feed, including an expiry refresh or a rollback, is at or above
+  that floor and is offered to seats running the build. So publish the build's
+  feed before any other replacement of the live feed, or expect those seats to
+  be offered the live release.
 - **The desktop says when updates are off.** A quiet sidebar row reads
   **Updates are off**. It can't be clicked and never installs anything. It
   shows only when the updater should run in this packaged release but couldn't
   start: the launch failed, or the release-bound client's `client-update.js`
   didn't load. The launch fails, for example, with `already_configured` for a
-  build from another publisher, or with `update_busy` when an install whose
-  outcome is unknown kept its lock. `updaterSetup` refusals still show
+  build from another publisher, or with `invalid_update_state` when an updater
+  file such as `floor.json` is damaged. `updaterSetup` refusals still show
   nothing: a development, smoke or test build, an unsupported platform or
   installation, a missing or invalid identity, or no `pkexec`.
 - **Logs keep codes only.** Error codes and log lines keep their names and
@@ -141,6 +145,10 @@ Adopt option C, the founder's choice.
 - **No data migration.** `config.json` and `state.json` keep today's format
   and stamps. `floor.json` appears only when a higher floor is configured.
 - **Rollback** is a revert. Builds without this change ignore `floor.json`.
+  After a revert the pin again includes the floor, so a desktop whose build
+  carries another floor than its `config.json` switches its updater off, as
+  on 2026-10-25. Builds made after a revert must carry the floor that seats
+  were first pinned with.
 - **Local evidence:**
   - update core (`tests/person-client/client-update.test.ts`): a higher floor
     goes to `floor.json` and leaves `config.json` and `state.json` byte for
@@ -149,7 +157,7 @@ Adopt option C, the founder's choice.
     even with a higher floor; both files keep the formats older builds read;
     `floor.json` only rises, and one with another stamp or malformed fails
     with `invalid_update_state`; after a raise, through the CLI and the app's
-    adapter, the saved offer is not shown again and a feed below the floor
+    adapter, the saved offer is not offered again and a feed below the floor
     fails with `stale_metadata`;
   - publisher (`tests/architecture/client-update-publish.test.ts`): a bundle
     whose floor is above the live feed plans, executes and verifies its

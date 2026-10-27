@@ -76,6 +76,11 @@ representative acceptance is not proof that every enrolled seat updated.
    published refuses the older live feed instead of offering that feed's
    release as a new version
    ([ADR-0050](../../docs/decisions/ADR-0050-update-floor-only-rises.md)).
+   Until the candidate's own feed is published, any replacement of the live
+   feed, including an expiry refresh or a rollback, is at or above that floor
+   and is offered to seats running the candidate. So publish the candidate's
+   feed before any other replacement of the live feed, or expect those seats
+   to be offered the live release.
    Enrolled desktops accept the raise and keep updating; an enrolled CLI keeps
    the configuration it has. A first release sets up the hosting and signer
    before this step. Build both CLI kits and both desktop packages from those
