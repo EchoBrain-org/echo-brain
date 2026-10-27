@@ -48,7 +48,6 @@ import {
   validatePersonEvidenceDeskResponseV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
-  type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
   type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
   type PersonEvidenceSearchRequestV1,
   type PersonEvidenceOpenRequestV1,
@@ -157,8 +156,6 @@ export interface PersonRecordSearchItemV1 {
     | "project-members-readable-person-v1";
 }
 
-/** An Ask citation of an approved record or a source passage. */
-export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
 /**
  * The Ask's answer, on `/v7`: it may cite live tickets and pages, follow-ups (ADR-0040), and projects, people, tools and
  * tool containers (research tool contract v1).

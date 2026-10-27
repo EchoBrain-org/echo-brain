@@ -2,7 +2,6 @@ export {
   PersonAuthorityClient,
   PersonAuthorityClientError,
   type PersonAuthorityClientOptions,
-  type PersonAnswerCitationV3,
   type PersonAnswerV8,
   type PersonEvidenceDeskV1,
   type PersonEvidenceOpenV1,

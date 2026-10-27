@@ -127,11 +127,11 @@ describe('one status vocabulary (F7)', () => {
 
   it('says how far a meeting\'s follow-ups have come: sent is open and done, and dismissed ones count in none of it', () => {
     const of = (counts: Partial<typeof summary>) => followUpProgress({ ...summary, ...counts });
-    expect(of({ unsent: 3, open: 1, not_relevant: 2 })).toEqual({ total: 4, sent: 1, unsent: 3, open: 1, done: 0 });
+    expect(of({ unsent: 3, open: 1, not_relevant: 2 })).toEqual({ total: 4, sent: 1, open: 1, done: 0 });
     expect(progressWords(of({ unsent: 3, open: 1, not_relevant: 2 }))).toBe('1 of 4 sent · 0 done');
     expect(progressWords(of({ open: 2, done: 3, not_relevant: 1 }))).toBe('5 of 5 sent · 3 done');
     // A check's verdict never moves one: a landed item is still open.
-    expect(of({ unsent: 1, open: 2, landed: 2 })).toEqual({ total: 3, sent: 2, unsent: 1, open: 2, done: 0 });
+    expect(of({ unsent: 1, open: 2, landed: 2 })).toEqual({ total: 3, sent: 2, open: 2, done: 0 });
     expect(of({ not_relevant: 2 }).total).toBe(0);
   });
 
