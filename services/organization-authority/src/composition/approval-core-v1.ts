@@ -134,8 +134,8 @@ export interface ApprovalCoreV1 {
   /** Same stager, but its reconcilePendingDeliveries only touches one source, so one person's broken proposal never fails
    *  another person's intake cycle. The runtime's lanes use this. */
   stagerForSource(sourceKey: string): ApprovalWorkflowStagerV1;
-  /** The publisher (approval-publisher-v1.ts) with this core's after_record hooks. observeAndFinalizePendingApprovals is a no-op;
-   *  reconcileApprovalPresentations runs each presenter in turn, and is undefined when there are none. */
+  /** The publisher (approval-publisher-v1.ts) with this core's after_record hooks; reconcileApprovalPresentations runs each
+   *  presenter in turn, and is undefined when there are none. */
   readonly processing: ApprovalWorkflowProcessingV1;
   decide(surface: ApprovalSurfaceV1, request: ApprovalDecisionRequestV1, authorize: () => ApprovalAuthorizationV1): ApprovalDecideResultV1;
   proposal(approvalId: string): ApprovalProposalViewV1 | undefined;

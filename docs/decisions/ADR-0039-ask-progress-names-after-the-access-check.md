@@ -335,3 +335,7 @@ On 2026-10-19 the founder approved moving the desktop's Mine Ask and plain
 `--progress` needs no `--live`, `--live` changes nothing, and `--tickets`
 still never streams
 ([Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)).
+
+On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) retired progress V1 and
+V2 with the clients' decoders for them, `/v5` and `/v6`, and the `--live` and
+`--tickets` options of `person ask`. Ask streams only progress V3, on `/v7`.

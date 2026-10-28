@@ -131,3 +131,6 @@ Ask route (`/v7` and its fallbacks), whose cores keep the access check after
 the audit write that the `/v3` core never had. The Authority keeps serving
 `/v3` to installed clients until it is retired
 ([Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)).
+
+On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) retired `/v3` to `/v6`
+and the `off_scope` outcome. `/v7` is the only Ask route.

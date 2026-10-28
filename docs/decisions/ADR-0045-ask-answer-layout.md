@@ -91,3 +91,9 @@ parallel items, or which named a list's members.
   at most ten headings.
 - The eval and judge read statements as before; a row's statement says what
   its cells show.
+
+## Later decisions
+
+On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) dropped the coverage note
+above. On 2026-10-26 [ADR-0049](ADR-0049-only-me-is-a-lock.md) shows a
+table's caption only when the table opens the answer.

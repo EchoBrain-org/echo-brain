@@ -7,8 +7,8 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERMISSIONS
 created_at: 2026-10-20
-reviewed_at: 2026-10-20
-reviewed_ref: 819a9efac47b6e53355f6227936c7c6c68ddfbb8
+reviewed_at: 2026-10-27
+reviewed_ref: 1adfdf1e15a74a284443a1d66e6f54f8020ca770
 status: accepted
 supersedes:
   - ADR-0010

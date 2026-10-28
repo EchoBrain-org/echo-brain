@@ -284,14 +284,13 @@ export function stateCounts(counts: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'o
 export interface FollowUpProgress {
   readonly total: number;
   readonly sent: number;
-  readonly unsent: number;
   readonly open: number;
   readonly done: number;
 }
 
 /** A summary's progress. Dismissed follow-ups count in none of it. */
 export function followUpProgress(counts: Pick<PersonOpenItemsSummaryV1, 'unsent' | 'open' | 'done'>): FollowUpProgress {
-  return { total: counts.unsent + counts.open + counts.done, sent: counts.open + counts.done, unsent: counts.unsent, open: counts.open, done: counts.done };
+  return { total: counts.unsent + counts.open + counts.done, sent: counts.open + counts.done, open: counts.open, done: counts.done };
 }
 
 /** "1 of 4 sent · 0 done": a meeting's follow-ups under its title. */

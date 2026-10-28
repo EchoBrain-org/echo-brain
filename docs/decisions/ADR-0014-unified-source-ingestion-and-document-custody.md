@@ -199,3 +199,10 @@ Document discovery/read/download must also pass the SCOUT four-account live
 exercise on the exact released candidate. Layer 4 Ask and approved-record
 retrieval remain unchanged; passing source ingestion tests does not qualify
 document answers or cross-document semantic analysis.
+
+## Later decisions
+
+On 2026-10-25 [ADR-0048](ADR-0048-retire-older-person-routes.md) retired
+every `/v1/person/documents` route and the `/v2/person/updates` note write;
+the `/v2` document routes read every stored document, whichever version
+uploaded it.

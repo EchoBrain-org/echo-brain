@@ -7,8 +7,8 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERSON-CLIENT
 created_at: 2026-10-26
-reviewed_at: 2026-10-26
-reviewed_ref: aa79d90c81dbcf8f0147ecb66bfbbe4edbf2c2ff
+reviewed_at: 2026-10-27
+reviewed_ref: d06d3a8a327831f30635e1a22022873936ae1681
 status: proposed
 supersedes: []
 superseded_by: []
@@ -36,8 +36,9 @@ Three different things carried a lock: Jira and Confluence items (always
 `only_me`, because ECHO reads them with the person's own access), meetings in
 private custody before review, and things kept to oneself (an Only me capture
 or a meeting item routed to Only me). Capture made "who can read" one
-exclusive choice, so a private item could never also be filed in a project,
-although audience and association are separate facts in the data (ADR-0017).
+exclusive choice, although audience and association are separate facts in the
+data (ADR-0017). An Only me capture was still saved filed in the projects
+ticked, but a meeting item routed to Only me could not be filed in a project.
 Mine listed what the person added, with any audience, and had its own Ask
 scope. Ask showed one timeline for every place (ADR-0047).
 
@@ -89,8 +90,9 @@ Adopt option 2, the founder's choice.
   project set); a private group's record binds the restricted reviewer with no
   project audience and the projects as its association, and its approval id
   hashes `private: true` in. Like Only me it keeps its quotes and the reasons
-  for its own items. A reason that supports no item goes to one record only:
-  the plain Only me group's, else the first private group's in group order.
+  for its own items. A reason that supports no item goes to at most one
+  record: the plain Only me group's, else the first private group's in group
+  order; with neither it is left out.
   Record log V6 binds such association rows to the approval;
   retrieval admits the record to its approver and then narrows it by
   association. Receipts and record refs say `private`; Slack's closed card

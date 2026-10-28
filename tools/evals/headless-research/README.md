@@ -47,10 +47,11 @@ a separate 100-row cutoff; omitted rows remain explicit.
 ## Personal Claude account selection
 
 An optional staging selection binds **interactive Ask research for one authenticated
-ECHO membership** to that person's own native Claude Code sign-in. It does not
-replace OpenRouter: other members, background research, evaluation, extraction
-and the final answer writer keep their existing provider. The account is never
-selected by question text, a client header, or a project lead's identity.
+ECHO membership** to that person's own native Claude Code sign-in. Since #354
+(`fd46bc7`) the same account also writes the final answer. It does not replace
+OpenRouter: other members, background research, evaluation and extraction keep
+their existing provider. The account is never selected by question text, a
+client header, or a project lead's identity.
 
 The service accepts these three non-secret settings together, only at the fixed
 staging origin:

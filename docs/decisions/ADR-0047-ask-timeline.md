@@ -7,8 +7,8 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERSON-CLIENT
 created_at: 2026-10-25
-reviewed_at: 2026-10-25
-reviewed_ref: 8cc3ffffe517ba5e67fc96890d40ae8eef39304d
+reviewed_at: 2026-10-27
+reviewed_ref: aa79d90c81dbcf8f0147ecb66bfbbe4edbf2c2ff
 status: proposed
 supersedes: []
 superseded_by: []
@@ -55,8 +55,9 @@ lived in the answer it never saw.
 ## Decision and consequences
 
 - **Device-only.** The desktop keeps one timeline file per account next to the
-  person session, owner-only, at most 200 turns and 90 days. Our own sign-out
-  or an account change deletes it. The Authority still stores no Ask content.
+  person session, owner-only, pruned to at most 200 turns and 90 days each
+  time a turn is saved. Our own sign-out or an account change deletes it. The
+  Authority still stores no Ask content.
 - **An old answer always says what changed.** A new content-free Person read,
   `POST /v1/person/ask/check`, takes the sources an old answer cited and
   returns `same`, `changed`, `unreadable` or `unknown` for each, deciding
@@ -96,7 +97,8 @@ lived in the answer it never saw.
 - Server first: the Authority that takes `previous` and serves the two new
   reads is released before the desktop that sends and reads them. The desktop
   never retries an Ask without `previous`, and a failed check or activity
-  read stays quiet (no tags, no dots).
+  read stays quiet: it adds no tag or dot, and a failed activity read leaves
+  the dots as they were.
 - An Authority rolled back must still serve `/v7`: no client asks an older Ask
   route, so one without it fails every Ask as `not_supported`.
 - Rollback is a desktop that stops sending `previous` and stops reading the two

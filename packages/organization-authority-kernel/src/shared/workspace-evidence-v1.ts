@@ -7,9 +7,6 @@ import type { EvidenceSourceCapabilitiesV1, PersonLiveSourceDescriptorV2 } from 
  * their visibility and their audits are server composition.
  */
 
-/** The first Ask response version whose citations admit a workspace item or a tool container. */
-export const WORKSPACE_MINIMUM_RESPONSE_VERSION_V1 = 8 as const;
-
 export type WorkspaceSourceIdV1 = 'projects' | 'people' | 'tools';
 export const WORKSPACE_SOURCE_IDS_V1: readonly WorkspaceSourceIdV1[] = Object.freeze(['projects', 'people', 'tools']);
 /** The desk item kind of each workspace source. */

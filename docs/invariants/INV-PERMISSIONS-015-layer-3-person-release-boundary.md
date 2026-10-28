@@ -32,6 +32,8 @@ decision_ids:
   - ADR-0042
   - ADR-0044
   - ADR-0046
+  - ADR-0047
+  - ADR-0049
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary as narrowed by ADR-0046 (their importer only), the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary

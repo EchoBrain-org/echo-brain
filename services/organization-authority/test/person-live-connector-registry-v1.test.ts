@@ -68,23 +68,21 @@ describe('live connector registrations (research tool contract v1)', () => {
     await expectReaderHonors(await confluenceReader(), CONFLUENCE_PAGE_CAPABILITIES_V1);
   });
 
-  it('registers Jira projects and Confluence spaces as tool containers for the V8 answer only', () => {
+  it('registers Jira projects and Confluence spaces as tool containers', () => {
     const containers = [JIRA_PROJECTS_LIVE_CONNECTOR_V1, CONFLUENCE_SPACES_LIVE_CONNECTOR_V1].map(entry => ({ ...entry, open }));
     expect(register({ ...JIRA_LIVE_CONNECTOR_V1, open }, { ...CONFLUENCE_LIVE_CONNECTOR_V1, open }, ...containers)
-      .map(({ descriptor, scopes, minimum_response_version }) => [descriptor.source_id, descriptor.selector, descriptor.kind, descriptor.tool_id, scopes, minimum_response_version]))
+      .map(({ descriptor, scopes }) => [descriptor.source_id, descriptor.selector, descriptor.kind, descriptor.tool_id, scopes]))
       .toEqual([
-        ['jira', 'tickets', 'ticket', 'jira', ['global', 'project'], 5],
-        ['confluence', 'pages', 'page', 'confluence', ['global', 'project'], 6],
-        ['jira_projects', 'jira_projects', 'tool_container', 'jira', ['global', 'project'], 8],
-        ['confluence_spaces', 'confluence_spaces', 'tool_container', 'confluence', ['global', 'project'], 8],
+        ['jira', 'tickets', 'ticket', 'jira', ['global', 'project']],
+        ['confluence', 'pages', 'page', 'confluence', ['global', 'project']],
+        ['jira_projects', 'jira_projects', 'tool_container', 'jira', ['global', 'project']],
+        ['confluence_spaces', 'confluence_spaces', 'tool_container', 'confluence', ['global', 'project']],
       ]);
   });
 
-  it('refuses a container an earlier answer would be asked to cite, or one that declares no capabilities', () => {
+  it('refuses a container that declares no capabilities', () => {
     const jira = { ...JIRA_PROJECTS_LIVE_CONNECTOR_V1, open };
-    for (const minimum_response_version of [5, 6, 7]) expect(() => register({ ...jira, minimum_response_version })).toThrow('Live connector registration is invalid');
     const { capabilities: _capabilities, ...bare } = jira.descriptor;
     expect(() => register({ ...jira, descriptor: bare })).toThrow('Live connector registration is invalid');
-    expect(() => register({ ...JIRA_LIVE_CONNECTOR_V1, open, minimum_response_version: 7 })).toThrow('Live connector registration is invalid');
   });
 });

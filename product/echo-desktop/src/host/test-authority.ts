@@ -47,11 +47,15 @@ const EXTRACTOR = 'fixture-extractor-v1';
 interface Contract {
   validateOrganizationDirectorySearchV1(value: unknown): { query?: string; limit?: number; cursor?: string };
   validateOrganizationDirectoryV1(value: unknown): unknown;
-  validatePersonListRequestV1(value: unknown): { project_id?: string; mine?: true; only_me?: true; cursor?: string };
+  validatePersonListRequestV1(value: unknown): { project_id?: string; only_me?: true; cursor?: string };
   validatePersonListResponseV1(value: unknown): unknown;
   validatePersonOpenRequestV1(value: unknown): { ref: string; cursor?: string };
   validatePersonOpenResponseV1(value: unknown): unknown;
-  validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string; mine?: true };
+  validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string };
+  /** The Ask timeline's reads (ADR-0047): the source check's request and answer, and what arrived in your projects. */
+  validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown>; marker?: string }[] };
+  validatePersonAskCheckV1(value: unknown): unknown;
+  validatePersonProjectActivityV1(value: unknown): unknown;
   validatePersonRunsRequestV1(value: unknown): RunsRequest;
   validatePersonRunsResultV1(operation: string, value: unknown): unknown;
   /** A meetings request, here a handed-in meeting's submit. */
@@ -289,11 +293,11 @@ export function layoutAnswer(question: string, scope: Record<string, unknown>, l
 /**
  * The modes whose `/v7` answers use the earlier turn (`previous`, C3) and whose
  * source check (C1) reports changes. `changed` finds a cited page changed and a
- * cited follow-up gone; `quiet` finds nothing different on Ask again. Every
- * other mode answers without using the earlier turn and its source check
- * returns 404. Every mode serves project activity (C2).
+ * cited follow-up gone. Every other mode answers without using the earlier
+ * turn and its source check returns 404. Every mode serves project activity
+ * (C2).
  */
-export const TIMELINE_MODES: ReadonlySet<string> = new Set(['ask-timeline', 'ask-timeline-changed', 'ask-timeline-quiet']);
+export const TIMELINE_MODES: ReadonlySet<string> = new Set(['ask-timeline', 'ask-timeline-changed']);
 /** An answer citation, as a V8 answer carries it. */
 type TimelineCitation = { kind: string; label: string; visibility: string; citation: Record<string, unknown>; ref?: string };
 /** What the timeline's answers cite: two THERM tickets (only yours), the DVT plan page (the team's), and a follow-up. */
@@ -331,9 +335,9 @@ function timelineV8(question: string, scope: Record<string, unknown>, citations:
  * answer's tickets: the one it names, the only one (resolved, its full
  * question naming it), or, with several, "Which one?", one choice each, never
  * a guess. Ask again answers the earlier question and says what is different
- * since (nothing, when `quiet`).
+ * since.
  */
-export function timelineAnswer(question: string, scope: Record<string, unknown>, previous: Record<string, unknown> | undefined, quiet = false): Record<string, unknown> {
+export function timelineAnswer(question: string, scope: Record<string, unknown>, previous: Record<string, unknown> | undefined): Record<string, unknown> {
   const owns = (asked: string, ticket: TimelineCitation) => timelineV8(asked, scope, [ticket], [cites([ticket], `Dev owns ${ticketKey(ticket)}, since Oct 21.`, [0])]);
   const alone = (asked: string) => {
     const named = [THERM_482, THERM_490].find(ticket => asked.includes(ticketKey(ticket)));
@@ -362,7 +366,7 @@ export function timelineAnswer(question: string, scope: Record<string, unknown>,
   }
   if (previous?.purpose === 'ask_again') {
     const answer = alone(question);
-    return { ...answer, question: String(previous.question), since: { statements: quiet ? [] : [cites(answer.citations, 'THERM-482 moved to In Progress.', [0])] } };
+    return { ...answer, question: String(previous.question), since: { statements: [cites(answer.citations, 'THERM-482 moved to In Progress.', [0])] } };
   }
   return alone(question);
 }
@@ -826,13 +830,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       { text: '30 Jira tickets are open, APOLLO-1 and APOLLO-2 among them.', citation_indexes: [0, 1], private: true },
     ] }],
   });
-  /** What a Mine Ask reads (ADR-0024): only what Ari added, here Ari's note, never a live tool, a follow-up or the workspace. */
-  const mineItems = () => progressItems().filter(item => 'ref' in item && item.ref.startsWith('note:'));
-  /** The V8 answer a Mine Ask gives from Ari's note. */
-  const mineAnswer = (question: string, scope: Record<string, unknown>) => ({
-    schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered', citations: mineItems(),
-    parts: [{ question, status: 'answered', statements: [{ text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0], private: false }] }],
-  });
   /**
    * A streamed Ask on `/v7`, framed by the contract itself (progress V3): a
    * search of meetings, documents and Jira, its reads of four places, then,
@@ -844,25 +841,22 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * Jira and Apollo's Jira project, and the answer cites all four.
    * `ask-progress-listed` only lists Jira's 30 rows, a page of 25 and then the
    * other 5, and reads none in full: its receipt counts all 30 rows it looked
-   * through (ADR-0043). A Mine Ask searches meetings and documents and reads
-   * Ari's note alone. `ask-layout` searches Confluence and Jira, reads THERM's
-   * pages and tickets and answers at once, laid out when the Ask asked for it
-   * (`layout`).
+   * through (ADR-0043). `ask-layout` searches Confluence and Jira, reads
+   * THERM's pages and tickets and answers at once, laid out when the Ask asked
+   * for it (`layout`).
    */
   const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, layout = false): Response => {
     const format = api.formatPersonAskProgressEventV3;
-    const mine = scope.kind === 'mine';
-    const listed = !mine && mode === 'ask-progress-listed';
-    const laid = !mine && mode === 'ask-layout';
-    const workspace = !mine && mode === 'ask-progress-workspace';
-    const items = listed ? [] : mine ? mineItems() : laid ? THERM_CITATIONS : workspace ? workspaceCitations : progressItems();
+    const listed = mode === 'ask-progress-listed';
+    const laid = mode === 'ask-layout';
+    const workspace = mode === 'ask-progress-workspace';
+    const items = listed ? [] : laid ? THERM_CITATIONS : workspace ? workspaceCitations : progressItems();
     const searched = listed ? { type: 'searched', sources: [{ kind: 'tickets', tool_id: 'jira' }], found: 30 }
       : laid ? { type: 'searched', sources: [{ kind: 'pages', tool_id: 'confluence' }, { kind: 'tickets', tool_id: 'jira' }], found: items.length }
-      : mine ? { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }], found: items.length }
         : workspace ? { type: 'searched', sources: [{ kind: 'projects' }, { kind: 'people' }, { kind: 'tools' }, { kind: 'containers', tool_id: 'jira' }], found: 4 }
           : { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
     const [part] = desktop.answer.parts as Record<string, unknown>[];
-    const response = listed ? listedAnswer(question, scope) : mine ? mineAnswer(question, scope) : laid ? layoutAnswer(question, scope, layout)
+    const response = listed ? listedAnswer(question, scope) : laid ? layoutAnswer(question, scope, layout)
       : workspace ? workspaceAnswer(question, scope)
       : { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
     const steps = listed
@@ -2054,29 +2048,25 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // The Ask timeline's reads (ADR-0047): the source check, by citation, and what arrived in your projects. Each is checked
     // by the contract's validator; other modes return 404 for the source check.
     if (method === 'POST' && path === '/v1/person/ask/check' && TIMELINE_MODES.has(mode)) {
-      const api = await contract() as unknown as Record<string, unknown>;
-      const request = body as { schema_version?: unknown; kind?: unknown; items?: unknown } | undefined;
-      const items = request?.items;
+      const api = await contract();
+      let items: ReturnType<Contract['validatePersonAskCheckRequestV1']>['items'];
       try {
-        if (typeof api.validatePersonAskCheckRequestV1 === 'function') (api.validatePersonAskCheckRequestV1 as (value: unknown) => unknown)(body);
+        ({ items } = api.validatePersonAskCheckRequestV1(body));
       } catch {
         return failure('invalid_request', 400);
       }
-      if (request?.schema_version !== 1 || request.kind !== 'echo-person-ask-check-request-v1' || !Array.isArray(items) || items.length < 1 || items.length > 100) {
-        return failure('invalid_request', 400);
-      }
-      const checked = timelineCheck(items as { citation: Record<string, unknown>; marker?: string }[], mode === 'ask-timeline-changed');
-      if (typeof api.validatePersonAskCheckV1 === 'function') (api.validatePersonAskCheckV1 as (value: unknown) => unknown)(checked);
+      const checked = timelineCheck(items, mode === 'ask-timeline-changed');
+      api.validatePersonAskCheckV1(checked);
       return json(checked);
     }
     if (method === 'GET' && path === '/v1/person/project-activity') {
-      const api = await contract() as unknown as Record<string, unknown>;
+      const api = await contract();
       arrive();
       const activity = projectActivityOf(listed(), arrivals);
-      if (typeof api.validatePersonProjectActivityV1 === 'function') (api.validatePersonProjectActivityV1 as (value: unknown) => unknown)(activity);
+      api.validatePersonProjectActivityV1(activity);
       return json(activity);
     }
-    // Ask, `/v7` (research tool contract v1): the V8 answer, which every Ask asks for, Mine too.
+    // Ask, `/v7` (research tool contract v1): the V8 answer, which every Ask asks for.
     if (method === 'POST' && path === '/v7/person/ask') {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
@@ -2087,14 +2077,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       asks += 1;
       if (mode === 'ask-unavailable') return failure('unavailable', 503);
       if (mode === 'ask-hangs') return new Promise<Response>(() => undefined);
-      // One project, only what you added, or all you may read.
-      const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : request.mine ? { kind: 'mine' } : { kind: 'global' };
+      // One project, or all you may read.
+      const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : { kind: 'global' };
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
       const api = await contract();
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
       if (TIMELINE_MODES.has(mode)) {
-        const answered = json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined, mode === 'ask-timeline-quiet'));
+        const answered = json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
         answered.headers.set('x-echo-person-ask-route', '7');
         return answered;
       }
@@ -2107,7 +2097,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       if (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed' || mode === 'ask-layout') {
         const answered = json(mode === 'ask-progress-listed' ? listedAnswer(question, scope)
-          : mode === 'ask-layout' && scope.kind !== 'mine' ? layoutAnswer(question, scope, laidOut) : workspaceAnswer(question, scope));
+          : mode === 'ask-layout' ? layoutAnswer(question, scope, laidOut) : workspaceAnswer(question, scope));
         answered.headers.set('x-echo-person-ask-route', '7');
         return answered;
       }

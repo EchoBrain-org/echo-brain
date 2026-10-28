@@ -55,11 +55,14 @@ Slack request bodies and response URLs never enter the record contract.
 A decision routes each decision and action to a destination, and each
 destination group is its own record: it holds only its items, names the
 proposal and the snapshot the reviewer saw, and carries a record approval id
-derived from the proposal and its projects (`approvalRecordIdV2`). It accepts
-only restricted reviewer (Only me) or project members readable (Projects), so
-new meeting approvals never record organization member readable. Its event's
-consequence names only that audience, which is also the record's association:
-no record carries a transcript choice or source (ADR-0046). It validates the
+derived from the proposal, its projects and its private flag
+(`approvalRecordIdV2(…, isPrivate)`). It accepts only restricted reviewer (Only
+me) or project members readable (Projects), so new meeting approvals never
+record organization member readable. Its event's consequence names only that
+audience, which is also the record's association, except for a record kept
+private inside its projects: it binds the restricted reviewer with no project
+audience, and its projects as association only (ADR-0049). No record carries
+a transcript choice or source (ADR-0046). It validates the
 confirmed action owners with `approval-owner-choice-v1.ts`, the one owner rule
 every approval surface shares.
 

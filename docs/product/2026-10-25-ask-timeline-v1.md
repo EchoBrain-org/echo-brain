@@ -1,8 +1,14 @@
 # Ask timeline v1: history that says what changed, follow-ups, and project dots
 
-Date: 2026-10-25. Status: building; the founder validates the result on the
-desktop. Decision record: [ADR-0047](../decisions/ADR-0047-ask-timeline.md).
+Date: 2026-10-25. Status: shipped in #365 (aa79d90); shipped is not deployed
+or qualified, and the founder validates the result on the desktop. Decision
+record: [ADR-0047](../decisions/ADR-0047-ask-timeline.md).
 Design canvas: "Ask timeline" (clickable prototype and five state boards).
+[Quieter Ask v1](2026-10-26-quieter-ask-and-only-me-v1.md) (#368) later
+showed one thread per place, made the question a 15px, weight 600 heading,
+dropped "Nothing changed since …" from the page, and folds away a turn asked
+again. [ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md) made a
+404 from C2's read `not_found`.
 
 ## What the founder asked for
 

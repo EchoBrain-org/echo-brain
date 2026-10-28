@@ -15,8 +15,9 @@ import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 /**
  * Answer layout v1 over HTTP (ADR-0045): `POST /v7/person/ask` with
  * `x-echo-answer-layout: 1` answers a V8 part that carries its layout, built
- * from the writer's forms; without the header the same Ask has none, and a
- * header with another value is refused before the Ask runs.
+ * from the writer's forms; without the header the same Ask has none. A header
+ * with another value is refused before the Ask runs: see the V7 Ask's own HTTP
+ * test, which refuses it for the JSON answer and the stream.
  */
 
 afterEach(closeAskServers);
@@ -92,16 +93,5 @@ describe('answer layout v1 on /v7 (ADR-0045)', () => {
     const terminal = decodeAll(createPersonAskProgressDecoderV3(), await streamed.text()).at(-1)!;
     if (terminal.type !== 'answer') throw new Error('expected the answer event');
     expect(terminal.response).toEqual(laid);
-  });
-
-  it('refuses a layout header with another value before the Ask runs', async () => {
-    const f = await sentFixture();
-    let calls = 0;
-    const model: StructuredGenerationPort = { async generate() { calls += 1; throw new Error('no model call expected'); } };
-    const base = await origin(f, model);
-    const response = await ask(base, { [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: 'yes' });
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: { code: 'invalid_request' } });
-    expect(calls).toBe(0);
   });
 });

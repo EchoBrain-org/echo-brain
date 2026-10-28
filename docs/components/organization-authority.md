@@ -196,7 +196,8 @@ raw-record metadata is added. Its required ports expose the complete desk
 contract; legacy Ask contracts remain separate.
 
 The answer kernel owns request-local orchestration and budgets. Pure model
-protocol and response helpers handle parsing and canonical V4 validation, while
+protocol and response helpers handle parsing and canonical V8 validation
+(`validatePersonAnswerResponseV8`), while
 the route binds the Person, desk, model and request audit. It receives no storage
 handle or provider-specific implementation. Architecture tests traverse its
 entire import closure to enforce that separation.

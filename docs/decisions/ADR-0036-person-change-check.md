@@ -85,3 +85,10 @@ Option 2.
 - **Deferred.** Seconds-level delivery, a full hand-on chain, and notifications
   for changes made while ECHO was closed would need option 3, or a server-side
   inbox, which needs new tables.
+
+## Later decisions
+
+On 2026-10-25 [ADR-0048](ADR-0048-retire-older-person-routes.md) retired the
+compatibility fallback above: the person client reads a 404 from the check as
+`not_found`, as from any other read, and the desktop has no older-Authority
+mode.

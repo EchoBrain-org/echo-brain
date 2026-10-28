@@ -73,16 +73,16 @@ describe('Ask with follow-ups as evidence (ADR-0040)', () => {
       await ask(routeOf(f, model).route, 'mina', request as Partial<PersonAnswerRequestV3>).catch(() => undefined);
       expect([request, catalog().includes('follow_ups')]).toEqual([request, expected]);
     }
-    // The desks trigger research and open items bind name no answer version, so they never bind follow-ups.
+    // The desks trigger research and open items bind serve no Ask, so they never bind follow-ups.
     const { options } = routeOf(f, scripted([]).model);
     const context = { authority_id: 'authority', organization_id: f.person.organization_id, state_lineage_id: 'lineage', principal_id: f.people.mina.principal_id,
       membership_id: f.people.mina.membership_id, session_family_id: 'psf_mina', request_id: `trigger_run_${randomUUID()}` };
     const background = await bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'mina', scope: { kind: 'global' } }, context);
     expect(background.live_sources).toEqual([]);
-    const asked = await bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'mina', scope: { kind: 'global' }, response_version: 8 }, context);
+    const asked = await bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'mina', scope: { kind: 'global' }, ask: true }, context);
     expect(asked.live_sources).toEqual([expect.objectContaining({ source_id: 'follow_ups' })]);
     // A desk bound for one person never reads follow-ups as another.
-    await expect(bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'rafael', scope: { kind: 'global' }, response_version: 8 }, context)).rejects.toMatchObject({ code: 'stale_access_state' });
+    await expect(bindPersonLiveEvidenceDeskV1(options, [], { access_token: 'rafael', scope: { kind: 'global' }, ask: true }, context)).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 });
 

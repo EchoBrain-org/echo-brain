@@ -64,7 +64,7 @@ describe('tool container connectors share their tool\'s runtime (research tool c
     { tool: 'Jira', items: 'issues', containers: 'projects', scopes: ['read:jira-work', 'read:jira-user'],
       routes: { '/myself': { accountId: 'fixture-account', active: true, accountType: 'atlassian' },
         '/project/search': { isLast: true, values: [{ id: '10000', key: 'ECHO', name: 'Echo Platform', self: `${SITE}/rest/api/3/project/10000` }] } },
-      registered: [['jira', 5], ['jira_projects', 8]], listed: [['tool_container', 'Echo Platform', 'Jira project ECHO: Echo Platform\nECHO projects: Launchscope']],
+      registered: [['jira', 'ticket'], ['jira_projects', 'tool_container']], listed: [['tool_container', 'Echo Platform', 'Jira project ECHO: Echo Platform\nECHO projects: Launchscope']],
       connectors(database: Database.Database, fetch: typeof globalThis.fetch) {
         const nango = connected(new JiraConnectionStoreV1(database));
         new JiraProjectMappingStoreV1(database).set(person.organization_id, ECHO_PROJECT, null, canonicalSha256({ command: 1 }), { cloud_id: CLOUD, project_id: '10000', project_key: 'ECHO' });
@@ -74,7 +74,7 @@ describe('tool container connectors share their tool\'s runtime (research tool c
     { tool: 'Confluence', items: 'pages', containers: 'spaces', scopes: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user'],
       routes: { '/rest/api/user/current': { accountId: 'fixture-account', type: 'known', accountType: 'atlassian' },
         '/api/v2/spaces': { results: [{ id: '42', key: 'ENG', name: 'Engineering' }], _links: {} } },
-      registered: [['confluence', 6], ['confluence_spaces', 8]], listed: [['tool_container', 'Engineering', 'Confluence space ENG: Engineering\nECHO projects: Launchscope']],
+      registered: [['confluence', 'page'], ['confluence_spaces', 'tool_container']], listed: [['tool_container', 'Engineering', 'Confluence space ENG: Engineering\nECHO projects: Launchscope']],
       connectors(database: Database.Database, fetch: typeof globalThis.fetch) {
         const nango = connected(new ConfluenceConnectionStoreV1(database));
         new ConfluenceProjectMappingStoreV1(database).set(person.organization_id, ECHO_PROJECT, null, canonicalSha256({ command: 1 }), { cloud_id: CLOUD, space_ids: ['42'] });
@@ -93,7 +93,7 @@ describe('tool container connectors share their tool\'s runtime (research tool c
       });
       const { counts, definitions } = tool.connectors(database, fetch as typeof globalThis.fetch);
       const { registered, listed } = await containersOf(definitions, counts);
-      expect(registered.map(definition => [definition.descriptor.source_id, definition.minimum_response_version])).toEqual(tool.registered);
+      expect(registered.map(definition => [definition.descriptor.source_id, definition.descriptor.kind])).toEqual(tool.registered);
       expect(listed).toEqual(tool.listed);
     } finally { database.close(); }
   });

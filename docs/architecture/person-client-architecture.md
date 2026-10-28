@@ -240,7 +240,9 @@ meeting titles after their reads complete. Selecting a source's number or row
 opens its approved record alongside the answer.
 
 Cards show decisions, actions, rationale, and approved evidence excerpts beside
-the statement each excerpt supports. Meeting dates, excerpt timestamps,
+the statement each excerpt supports. A record shared with a project carries no
+evidence excerpts (ADR-0046 ruling 22, #362); only a record its approver alone
+reads keeps them. Meeting dates, excerpt timestamps,
 participant display names, and the record approver's display name are optional;
 absent metadata is omitted. Participants are source observations, not confirmed
 attendance. No email or opaque participant ID substitutes for a missing name.

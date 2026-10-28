@@ -1,7 +1,9 @@
 # Quieter Ask, one thread per place, and Only me as a lock (v1)
 
-Date: 2026-10-26. Status: building; the founder validates the result on the
-desktop. Decision record: [ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md).
+Date: 2026-10-26. Status: shipped in #368 (bb976f5) and #369 (d06d3a8), which
+needs the record log V6 fresh-state reset; shipped is not deployed or
+qualified, and the founder validates the result on the desktop. Decision
+record: [ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md).
 Design canvas: "Quieter Ask" (today vs quieter, a sentence under the pointer,
 Home, the Only me list, a project page, Capture, a project's thread).
 
@@ -237,4 +239,5 @@ nothing, as before.
   covers notes, as before.
 - Imported meetings in the Only me list keep their custody titles until their
   review state is joined in (separate work).
-- The writer still words answers as before (separate work).
+- The writer's wording changed separately (#370, daa503d;
+  `tools/evals/ask-wording`).

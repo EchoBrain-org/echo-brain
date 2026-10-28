@@ -24,26 +24,16 @@ describe('an answer cites sources, not passages', () => {
     expect(externalSourceProvider(source)).toBe('Notion');
     expect(externalSourceProvider({ ...source, tool_id: 'knowledge-base' })).toBe('Knowledge Base');
     expect(externalSourceProvider(source, [{ tool_id: 'notion', name: 'Product Wiki', status: 'linked' }])).toBe('Product Wiki');
-    expect(sourceGroups([source, { ...source, tool_id: 'confluence' }, { ...source }])).toEqual([
-      { kind: 'page', indexes: [0, 2] }, { kind: 'page', indexes: [1] },
-    ]);
+    expect(sourceGroups([source, { ...source, tool_id: 'confluence' }, { ...source }])).toEqual([{ indexes: [0, 2] }, { indexes: [1] }]);
   });
   it('groups repeated ticket citations by link while keeping another item distinct', () => {
     const ticket: AnswerSource = { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7', permalink: 'https://example.test/tickets/7' };
-    expect(sourceGroups([ticket, page('12345'), { ...ticket, label: 'ECHO-7 updated title' }])).toEqual([
-      { kind: 'ticket', indexes: [0, 2] }, { kind: 'page', indexes: [1] },
-    ]);
+    expect(sourceGroups([ticket, page('12345'), { ...ticket, label: 'ECHO-7 updated title' }])).toEqual([{ indexes: [0, 2] }, { indexes: [1] }]);
   });
   it('groups the passages of one document, the items of one meeting record, and keeps each page apart, in first-cited order', () => {
     const sources = [original('a', '4'), original('b', '5', 'SCOUT-Software-Review-v0.1.md'), original('a', '6'), record('7'), record('7'),
       page('12345'), page('12346'), original('b', '8', 'SCOUT-Software-Review-v0.1.md')];
-    expect(sourceGroups(sources)).toEqual([
-      { kind: 'original', indexes: [0, 2] },
-      { kind: 'original', indexes: [1, 7] },
-      { kind: 'record', indexes: [3, 4] },
-      { kind: 'page', indexes: [5] },
-      { kind: 'page', indexes: [6] },
-    ]);
+    expect(sourceGroups(sources)).toEqual([{ indexes: [0, 2] }, { indexes: [1, 7] }, { indexes: [3, 4] }, { indexes: [5] }, { indexes: [6] }]);
   });
 
   it('gives a sentence one marker per source it cites, in source order', () => {

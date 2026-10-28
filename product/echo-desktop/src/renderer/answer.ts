@@ -10,7 +10,6 @@ export const MAX_SOURCES = 32;
  * document or one record are one source, numbered once.
  */
 export interface SourceGroup {
-  readonly kind: AnswerSource['kind'];
   /** Its citations, by their place in the answer's sources. */
   readonly indexes: readonly number[];
 }
@@ -68,12 +67,12 @@ export function answerSentences(answer: Answer): [string, AnswerStatement][] {
 
 /** An answer's sources, in the order it first cites them. */
 export function sourceGroups(sources: readonly AnswerSource[]): SourceGroup[] {
-  const groups = new Map<string, { kind: AnswerSource['kind']; indexes: number[] }>();
+  const groups = new Map<string, { indexes: number[] }>();
   sources.forEach((source, index) => {
     const key = groupKey(source);
     const group = groups.get(key);
     if (group) group.indexes.push(index);
-    else groups.set(key, { kind: source.kind, indexes: [index] });
+    else groups.set(key, { indexes: [index] });
   });
   return [...groups.values()];
 }

@@ -9,8 +9,6 @@ export interface CardSignal {
   subject: string | null;
   /** A decision's: proposed, decided or unresolved. */
   status: string | null;
-  /** What was said in the meeting, each as the meeting tool wrote it. */
-  quotes: readonly string[];
 }
 
 /** One line of a quote: "[09:01] Jonas Becker: …" when the meeting tool wrote it so, else the words alone. */

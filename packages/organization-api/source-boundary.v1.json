@@ -37,7 +37,7 @@
       {
         "name": "Person update contracts",
         "path": "packages/organization-api/src/person-updates.ts",
-        "export": "validatePersonUpdateSubmitV1"
+        "export": "validatePersonUpdateRequestId"
       },
       {
         "name": "Person update V2 contracts",

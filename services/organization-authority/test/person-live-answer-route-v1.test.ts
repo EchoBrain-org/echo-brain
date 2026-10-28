@@ -22,7 +22,7 @@ function connector(kind: 'ticket' | 'page', delay: number, outcome: 'bound' | 'u
     const timer = setTimeout(() => outcome instanceof Error ? reject(outcome) : resolve(outcome === 'bound' ? bound : undefined), delay);
     signal?.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
   }));
-  const value = { descriptor: { source_id: kind, kind, selector: `${kind}s`, description: `Live ${kind}s.`, metadata_only_list: true, tool_id }, scopes: ['global', 'project'], minimum_response_version: 5,
+  const value = { descriptor: { source_id: kind, kind, selector: `${kind}s`, description: `Live ${kind}s.`, metadata_only_list: true, tool_id }, scopes: ['global', 'project'],
     application: { source } } as unknown as PersonLiveConnectorSourceV1;
   return { value, source, bound };
 }

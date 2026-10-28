@@ -563,6 +563,5 @@ describe('approval core: construction', () => {
     expect(Object.isFrozen(core)).toBe(true);
     expect(Object.isFrozen(core.processing)).toBe(true);
     expect(core.processing.reconcileApprovalPresentations).toBeUndefined();
-    await core.processing.observeAndFinalizePendingApprovals(signal());
   });
 });

@@ -20,6 +20,14 @@ account: "Save to" on import or folder watch records a project suggestion that
 pre-ticks the approval card instead of creating a source per project. Text
 below that names the organization source lane describes the sprint as planned.
 
+Status update, 2026-10-27: phase 2 merged in #283 (3c2000e). The
+folder-to-project mapping was replaced on 2026-10-25 (#360) by
+[private meeting intake and per-item routing v1](2026-10-24-private-meeting-intake-and-item-routing-v1.md)
+([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)): a
+watch is off, covers my meetings, or covers one folder, over the last 7 days;
+a project only pre-ticks destinations; and unapproved notes are readable by
+their importer alone.
+
 Granola becomes a personal connection that follows an ECHO person across their
 devices. Slack's bot remains the only connector with organization-level setup.
 Authority identity, membership, signing, model configuration, and hosting remain
