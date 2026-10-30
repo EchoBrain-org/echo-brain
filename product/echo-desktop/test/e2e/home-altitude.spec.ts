@@ -126,3 +126,9 @@ test('zooming into a project puts the focus on its first row, not on someone fro
   await expect(page.getByTestId('alt-decision').first()).toBeFocused();
 });
 
+test('a click on a heading or empty space leaves the keyboard where it was', async () => {
+  const page = await myProjects();
+  await page.getByTestId('alt-group-head').first().click();
+  expect(await page.evaluate(() => document.activeElement?.classList.contains('alt-level') ?? false)).toBe(false);
+});
+

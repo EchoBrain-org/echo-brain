@@ -1344,6 +1344,13 @@ function showList(status: ListStatus, list: State['projects']): void {
   // Your projects, read: Home zoomed out reads what it has not read of them yet.
   if (status === 'active' && !list.loading && !list.failure) {
     projectsKnown = true;
+    if (list.next === null) {
+      // The sidebar holds every project now: Home's own copy of the pages, and any failure reading them, no longer count.
+      if (state.altitude.list !== null || state.altitude.listFailure !== null) set({ altitude: { ...state.altitude, list: null, listFailure: null } });
+    } else if (state.route.page !== 'home' || state.altitude.level === 'me') {
+      // Out of sight, Home's copy of the pages goes stale: the next zoom reads them again.
+      if (state.altitude.list !== null) set({ altitude: { ...state.altitude, list: null } });
+    }
     if (state.route.page === 'home' && state.altitude.level !== 'me') {
       // More pages than the sidebar shows: Home reads them all again, so a project gone from (or new to) a later page counts.
       if (list.next !== null) void readAltitudeList();
@@ -2676,6 +2683,8 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
       : { archivedProjects: { ...from, items: without }, projects: { ...to, items: moved } }),
       ...sameProjectRoute(fresh),
       toast: detail.archived ? `Archived ${fresh.name}` : `Restored ${fresh.name}` });
+    if (detail.archived) projectLeftHere(project.project_id);
+    else if (state.altitude.list !== null) set({ altitude: { ...state.altitude, list: [...state.altitude.list, fresh] } });
     listChanged();
     return;
   }
@@ -2707,6 +2716,7 @@ function forgetLeftProject(projectId: string): void {
   set({ projects: { ...state.projects, items: projects }, archivedProjects: { ...state.archivedProjects, items: archivedProjects }, compose: nextCompose,
     route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: making && !ownProject ? making : null,
     barScope: { kind: 'global' }, organization: null });
+  projectLeftHere(projectId);
   listChanged();
   if (making && ownProject) finishNewProject(making);
   unresolvedChanged();
@@ -5410,6 +5420,22 @@ async function readAltitudeList(): Promise<void> {
   const account = expect();
   if (!account || !(await readWholeList(account, () => sameAccount(account)))) return;
   if (followFocus() || altitudeProjects().some(project => !state.altitude.reads[project.project_id])) void loadAltitude(false);
+}
+
+/**
+ * A project left your list here (you left or archived it): it goes from what
+ * Home read and from its copy of your projects, and Home zoomed on it goes to
+ * My projects.
+ */
+function projectLeftHere(projectId: string): void {
+  const { [projectId]: _left, ...reads } = state.altitude.reads;
+  const focus = state.altitude.project_id === projectId;
+  const altitude = {
+    ...state.altitude, reads, list: state.altitude.list?.filter(project => project.project_id !== projectId) ?? null,
+    ...(focus ? { project_id: null, level: state.altitude.level === 'project' ? 'projects' as const : state.altitude.level } : {}),
+  };
+  set({ altitude });
+  if (focus) rememberAltitude(altitude);
 }
 
 /** Your whole list, once Home knows it: only a project missing from the whole list is gone. */

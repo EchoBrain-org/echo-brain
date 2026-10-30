@@ -117,7 +117,8 @@ export function Stops({ state }: { state: State }) {
       <div class="alt-pill">
         {stop('projects', 'My projects', 'My projects', <Grid />, false)}
         <span class="alt-link" aria-hidden="true" />
-        {stop('project', project ? `Project, ${project.name}` : 'Project', project?.name ?? '', project ? <Tile project={project} /> : <Folder />, project === null)}
+        {/* A remembered project Home cannot see yet (past the sidebar's first page) still opens: the zoom reads your whole list. */}
+        {stop('project', project ? `Project, ${project.name}` : 'Project', project?.name ?? '', project ? <Tile project={project} /> : <Folder />, project_id === null)}
         <span class="alt-link" aria-hidden="true" />
         {stop('person', person ? `Person, ${person.name}` : 'Person', person?.name ?? '', person ? <FaceMark {...person} /> : <OnePerson />, person === null)}
       </div>
@@ -176,7 +177,7 @@ export function MyProjects({ state }: { state: State }) {
           <span key={health} class="alt-chip" data-testid="alt-chip" title={`${count(health)} ${HEALTH[health].toLowerCase()}`}><HealthDot health={health} />{count(health)}</span>
         ))}
       </header>
-      {state.altitude.listFailure && <div class="alt-unread">Couldn’t read every project just now</div>}
+      {state.altitude.listFailure && state.projects.next !== null && <div class="alt-unread">Couldn’t read every project just now</div>}
       {/* On first open the rows keep your list's order while their reads come in, so nothing moves under the pointer. */}
       {!state.altitude.settled ? <section class="alt-group" data-testid="alt-group" data-group="reading">{rows.map(row)}</section> : <>
         {(['off', 'risk', 'on'] as const).map(health => {
@@ -258,7 +259,9 @@ export function PersonLevel({ state }: { state: State }) {
   const theirs = [...new Map(groups.flatMap(group => group.rows).map(item => [item.item_id, item])).values()];
   const needs = theirs.filter(item => needsAttention(item, now)).length;
   // Your projects themselves read (or none to read), and each of them read: only then is "nothing waiting" true.
-  const failed = reads.some(read => read?.failure) || Boolean(state.projects.failure) || Boolean(state.altitude.listFailure);
+  // A sidebar page that failed counts only when nothing of your list could be read; Home's own read of every page, while it is the list in use.
+  const listFailed = (Boolean(state.projects.failure) && projects.length === 0) || (Boolean(state.altitude.listFailure) && state.projects.next !== null);
+  const failed = reads.some(read => read?.failure) || listFailed;
   const read = !failed && (projects.length > 0 || !state.projects.loading) && reads.every(read => read !== undefined && !unknown(read));
   return (
     <div class="alt-level-body" data-testid="alt-person-level">
@@ -341,10 +344,15 @@ export function Altitude({ state }: { state: State }) {
     const out = DEPTH[level] < DEPTH[before];
     const from = !out ? null : level === 'projects' && project_id !== null ? `project:${project_id}` : level === 'project' && membership_id !== null ? `person:${membership_id}` : null;
     const back = from === null ? null : root.querySelector<HTMLElement>(`[data-zoom="${CSS.escape(from)}"]`);
-    (back ?? root.querySelector<HTMLElement>('[data-alt-nav]:not([disabled])') ?? root).focus();
+    const target = back ?? root.querySelector<HTMLElement>('[data-alt-nav]:not([disabled])');
+    if (target) { target.focus(); return; }
+    // No rows yet: the level holds the focus (↓ finds the rows once they come), and lets go of it after, so a click never lands on it.
+    root.tabIndex = -1;
+    root.addEventListener('blur', () => root.removeAttribute('tabindex'), { once: true });
+    root.focus();
   }, [level, project_id, membership_id]);
   return (
-    <div class="alt-level" ref={box} tabIndex={-1} key={`${level} ${project_id} ${membership_id}`} onWheel={pinch} onKeyDown={arrows}>
+    <div class="alt-level" ref={box} key={`${level} ${project_id} ${membership_id}`} onWheel={pinch} onKeyDown={arrows}>
       {level === 'project' ? <ProjectLevel state={state} /> : level === 'person' ? <PersonLevel state={state} /> : <MyProjects state={state} />}
     </div>
   );

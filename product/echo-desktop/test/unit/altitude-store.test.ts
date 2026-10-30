@@ -381,3 +381,64 @@ describe('Home altitudes, when loads are cut short or the list is long', () => {
   });
 });
 
+describe('Home altitudes when your projects change', () => {
+  it('leaving the project Home is zoomed on sends Home to My projects', async () => {
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }),
+      'projects.leave': () => ok({}),
+      runs: params => ((params as { request: Request }).request.operation === 'items'
+        ? ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }) : fail('unavailable', { retryable: true })),
+    }, () => lists));
+    const store = await startStore();
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    await flush(80);
+    store.toggleProjectSettings(THERMAL, 'sidebar');
+    store.askProjectSetting('leave');
+    store.confirmProjectSetting();
+    await flush(80);
+    const altitude = store.getState().altitude;
+    expect(altitude.level).toBe('projects');
+    expect(altitude.project_id).toBeNull();
+    expect(altitude.reads[THERMAL.project_id]).toBeUndefined();
+  });
+
+  it('a change to a long list made while Home sits at Me is seen on the next zoom', async () => {
+    lists = { active: numbered(12), archived: [] };
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(200);
+    store.zoomTo('me');
+    const joined = project(13, 10, { name: 'Joined later' });
+    lists = { active: [...numbered(12), joined], archived: [] };
+    await store.loadProjects();
+    await flush(80);
+    store.zoomTo('projects');
+    await flush(200);
+    expect(store.altitudeProjects().map(each => each.project_id)).toContain(joined.project_id);
+  });
+
+  it('stops saying it could not read every page once your projects fit the sidebar', async () => {
+    lists = { active: numbered(12), archived: [] };
+    let calls = 0;
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }),
+      'projects.list': params => {
+        const cursor = (params as { cursor?: string }).cursor;
+        if (cursor && (calls += 1) > 1) return fail('unavailable', { retryable: true });
+        if (lists.active.length <= 10) return ok({ items: lists.active, next_cursor: null });
+        return ok(cursor ? { items: lists.active.slice(10), next_cursor: null } : { items: lists.active.slice(0, 10), next_cursor: 'more' });
+      },
+      runs: params => ((params as { request: Request }).request.operation === 'items'
+        ? ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }) : fail('unavailable', { retryable: true })),
+    }, () => lists));
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(200);
+    expect(store.getState().altitude.listFailure).not.toBeNull();
+    lists = { active: numbered(5), archived: [] };
+    await store.loadProjects();
+    await flush(80);
+    expect(store.getState().altitude.listFailure).toBeNull();
+  });
+});
+

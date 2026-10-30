@@ -243,9 +243,29 @@ describe('a long or unread list of projects', () => {
   it('says when every page of your projects could not be read', async () => {
     const { MyProjects, PersonLevel } = await import('../../src/renderer/screens/altitude.js');
     const listFailure = { code: 'unavailable', retryable: true };
-    expect(text(render(MyProjects({ state: await stateWith({ reads: READS, listFailure }) })))).toContain('Couldn’t read every project just now');
-    expect(text(render(PersonLevel({ state: await stateWith({ level: 'person', membership_id: 'mem_mina', name: 'Mina Patel', reads: READS, listFailure }) }))))
-      .toContain('Couldn’t read every project just now');
+    // While Home's own read of every page is the list in use: the sidebar has more pages than it shows.
+    const paged = { next: 'more' };
+    expect(text(render(MyProjects({ state: await stateWith({ reads: READS, listFailure }, [THERMAL, CERT, PACKAGING], paged) })))).toContain('Couldn’t read every project just now');
+    expect(text(render(PersonLevel({ state: await stateWith({ level: 'person', membership_id: 'mem_mina', name: 'Mina Patel', reads: READS, listFailure },
+      [THERMAL, CERT, PACKAGING], paged) })))).toContain('Couldn’t read every project just now');
+  });
+});
+
+describe('stops and notices for a long list', () => {
+  it('keeps the Project stop open at Me for a remembered project it cannot see on the sidebar’s first page', async () => {
+    const { Stops } = await import('../../src/renderer/screens/altitude.js');
+    const tree = render(Stops({ state: await stateWith({ level: 'me', project_id: 'prj_far-away' }, [THERMAL, CERT, PACKAGING], { next: 'more' }) }));
+    const stop = byTestId(tree, 'alt-stop').find(each => each.props['data-level'] === 'project')!;
+    expect(stop.props.disabled).toBe(false);
+    expect(stop.props['aria-label']).toBe('Project');
+  });
+
+  it('a person does not blame a sidebar page that failed when every project was read', async () => {
+    const { PersonLevel } = await import('../../src/renderer/screens/altitude.js');
+    const tree = render(PersonLevel({ state: await stateWith({ level: 'person', membership_id: 'mem_nobody', name: 'Nobody Here', reads: READS },
+      [THERMAL, CERT, PACKAGING], { failure: { code: 'unavailable', retryable: true } }) }));
+    expect(text(tree)).not.toContain('Couldn’t read every project just now');
+    expect(text(tree)).toContain('Nothing of theirs is waiting');
   });
 });
 
