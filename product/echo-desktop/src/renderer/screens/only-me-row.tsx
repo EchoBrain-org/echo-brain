@@ -19,15 +19,18 @@ const KINDS: Readonly<Record<ListItem['ref']['kind'], { word: string; Icon: type
 /** Tiles a row shows before "+N"; an item can be filed in up to 20 projects (ADR-0049). */
 const TILES = 3;
 const DAY = 86_400_000;
-/** Today's time on a 24-hour clock, "09:30", so it fits the age's column. */
-const CLOCK = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+/**
+ * Today's time on a 24-hour clock, "09:30", so it fits the age's column. Made on each call: a formatter keeps the time zone
+ * it was made in, and ECHO runs for days, across a move to another zone.
+ */
+const CLOCK: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
 
 /** How long ago something was added, short: the time today ("10:12"), days under a week ("3d"), then the day ("Sep 18"). */
 export function shortAge(iso: string, now = Date.now()): string {
   const time = Date.parse(iso);
   if (Number.isNaN(time)) return '';
   const today = startOfDay(now);
-  if (time >= today) return CLOCK.format(time);
+  if (time >= today) return new Date(time).toLocaleTimeString('en-US', CLOCK);
   // Whole days between midnights, rounded over a clock change.
   const days = Math.round((today - startOfDay(time)) / DAY);
   return days < 7 ? `${days}d` : monthDay(iso) ?? '';
