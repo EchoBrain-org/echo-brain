@@ -1089,6 +1089,95 @@ describe('Checks keep moving (one place to look v1)', () => {
     expect([requests('list').length, rowsReads()]).toEqual([lists + 1, rows]);
   });
 
+  /** Home's load, its rows held, left for a project; then a meeting approved in Slack, two records, both checks queued. */
+  async function leftMidLoad() {
+    fx.hold.rows = true;
+    const store = await start();
+    await store.openProject(project);
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'slack' };
+    fx.run = impactRun('pending');
+    fx.more = [further('pending')];
+    fx.moved.reviews = 1;
+    return store;
+  }
+  /** The held Home load lands, with the runs list it read before the approval. */
+  async function landLoad() {
+    fx.hold.rows = false;
+    release('rows');
+    await flush();
+  }
+
+  it('lets no Home load left on its way undo a newer drive: the driver keeps following its check, and starts the next one', async () => {
+    await leftMidLoad();
+    // The change check sees the approval: the driver starts the oldest check, and follows it.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(starts()).toEqual([further('pending').run_id]);
+    await landLoad();
+    fx.more = [further('done')];
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(starts()).toEqual([further('pending').run_id, impactRun('pending').run_id]);
+  });
+
+  it('never starts a check twice when a Home load left on its way found it queued and the driver has started it since', async () => {
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('pending');
+    fx.hold.rows = true;
+    const store = await start();
+    await store.openProject(project);
+    fx.moved.reviews = 1;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(starts()).toEqual([impactRun('pending').run_id]);
+    await landLoad();
+    expect(starts()).toEqual([impactRun('pending').run_id]);
+  });
+
+  it('lets the driver\'s look still on its way drive, not a Home load left on its way that read the runs before it', async () => {
+    await leftMidLoad();
+    fx.hold.list = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fx.waiting.list).toHaveLength(1);
+    await landLoad();
+    fx.hold.list = false;
+    release('list');
+    await flush();
+    expect(starts()).toEqual([further('pending').run_id]);
+  });
+
+  it('drives with a Home load left on its way when the only look on its way began before it, which drives nothing', async () => {
+    const store = await checking();
+    await store.openProject(project);
+    // The driver's next look is on its way as Home opens, and is left again at once.
+    fx.hold.list = true;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fx.waiting.list).toHaveLength(1);
+    fx.hold.list = false;
+    fx.run = impactRun('done');
+    fx.more = [further('pending')];
+    store.goHome();
+    await store.openProject(project);
+    await flush();
+    // That look lands after the load began, and so drives nothing: the load's list does.
+    release('list');
+    await flush();
+    expect(starts()).toEqual([further('pending').run_id]);
+  });
+
+  it('lets no Home load on its way undo a newer drive while the window is closed to the tray', async () => {
+    fx.hold.rows = true;
+    const store = await start();
+    hide(store);
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'slack' };
+    fx.run = impactRun('pending');
+    fx.more = [further('pending')];
+    fx.moved.reviews = 1;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(starts()).toEqual([further('pending').run_id]);
+    await landLoad();
+    fx.more = [further('done')];
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(starts()).toEqual([further('pending').run_id, impactRun('pending').run_id]);
+  });
+
   it('reads what a finished check found once Home shows: away from Home nothing looks for it, and the driver goes quiet', async () => {
     const store = await checking();
     await store.openProject(project);
@@ -1157,6 +1246,53 @@ describe('Checks keep moving (one place to look v1)', () => {
     store.goHome();
     await flush();
     expect(starts()).toEqual([impactRun('pending').run_id]);
+  });
+
+  it.each(['another page opens', 'another app comes in front'] as const)('lifts the hold once Try again reads the tools, even when %s before they answer', async how => {
+    fx.granola = 'linked';
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('pending');
+    fx.failTools = true;
+    const store = await start();
+    expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
+    // Try again: the tools answer this time, but Home is left before they do.
+    fx.failTools = false;
+    fx.hold.tools = true;
+    const again = store.loadHome();
+    await flush();
+    if (how === 'another page opens') await store.openProject(project);
+    else cover(store);
+    fx.hold.tools = false;
+    release('tools');
+    await again;
+    await flush();
+    expect(starts()).toEqual([impactRun('pending').run_id]);
+  });
+
+  it('never lifts the next account\'s hold with the tools the last account\'s Try again read', async () => {
+    fx.granola = 'linked';
+    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+    fx.run = impactRun('pending');
+    fx.failTools = true;
+    const store = await start();
+    // Try again, its tools still on their way as another account signs in, whose own tools cannot be read.
+    fx.failTools = false;
+    fx.hold.tools = true;
+    void store.loadHome();
+    await flush();
+    fx.hold.tools = false;
+    fx.failTools = true;
+    fx.member = 'other';
+    await store.refreshStatus();
+    await flush();
+    expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
+    // The last account's tools answer: the new account's hold stays, so a meeting approved elsewhere starts nothing.
+    release('tools');
+    await flush();
+    await store.openProject(project);
+    fx.moved.reviews = 1;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(starts()).toEqual([]);
   });
 
   it('stops at sign-out, and signing in again on another page starts what is queued there', async () => {

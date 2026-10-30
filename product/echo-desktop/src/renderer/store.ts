@@ -5807,10 +5807,13 @@ async function readReviews(mine: number, tools: Promise<Result<ConnectedTools>> 
  * poll). A poll reads what waits on you only once a check has ended, or after
  * that read failed. Home stops loading, and drives its runs, once its rows
  * are read; their live read goes on, and alone says whether a sweep is due.
+ * Its runs drive only if no drive or look of the driver's began since it did:
+ * that one goes by a newer list, which this read's must not undo (R3).
  */
 async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promise<Result<ConnectedTools>>): Promise<void> {
   const account = expect();
   const before = state.home?.runs ?? [];
+  const ran = runSeq;
   /** One part, shown once read while Home is still this read's; answered as settled. */
   const shown = <T>(read: Promise<T>, apply: (value: T) => Partial<HomeState>): Promise<PromiseSettledResult<T>> => read.then(
     value => {
@@ -5833,10 +5836,12 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
   const unread = waiting ? await waiting.rows : undefined;
   const toolsFailure = reviews.status === 'rejected' && reviews.reason instanceof ToolsFailed ? reviews.reason.failure : undefined;
   // A read that is no longer Home's shows nothing, so it settles nothing Home owes either. Home was left or covered while it
-  // was on its way: unless a newer Home load drives, the runs it read still do, for the account it read them for (R1, R3).
+  // was on its way: unless a newer Home load, drive or look drives, the runs it read still do, for the account it read them for (R1, R3).
   const home = homeShown(mine);
   if (!home) {
-    if (!toolsFailure && !runsHeld && homeShown() === null && sameExpect(expect(), account) && runsGo()) {
+    // Tools that answered lift their hold, though Home was left before they did: this load was the Try again it waits for (R4).
+    if (tools && !toolsFailure && sameExpect(expect(), account)) runsHeld = false;
+    if (runSeq === ran && !toolsFailure && !runsHeld && homeShown() === null && sameExpect(expect(), account) && runsGo()) {
       const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
       void driveRuns(runs.status === 'fulfilled' ? runs.value.runs : runsSeen, publishing, runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
     }
@@ -5853,7 +5858,7 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
   if (toolsFailure) return;
   // The next poll waits longer after a failed runs read, or a failed read of what a check found.
   const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed ? unread : undefined;
-  void driveRuns(home.runs, home.reviews.some(review => review.status === 'publishing'), failed, waiting?.sweepDue);
+  if (runSeq === ran) void driveRuns(home.runs, home.reviews.some(review => review.status === 'publishing'), failed, waiting?.sweepDue);
 }
 
 /**
@@ -5964,6 +5969,8 @@ function kickRuns(): void {
 
 /** One look: Home's own read while Home is seen, as its poll; anywhere else the runs list alone. */
 function lookAtRuns(): void {
+  // Its list is newer than any read before it, whose runs drive no more (R3).
+  runSeq += 1;
   const home = homeSeen();
   const look = (home ? readHome(home.seq, true) : readRuns()).finally(() => { if (looking === look) looking = null; });
   looking = look;
