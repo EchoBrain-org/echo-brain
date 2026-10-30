@@ -36,6 +36,24 @@ const requests = () => rpc.mock.calls.filter(([name]) => name === 'runs').map(([
 const projectReads = (id?: string) => requests().filter(request => request.operation === 'items' && request.scope === 'project' && (id === undefined || request.id === id));
 const live = (request: Request) => request.read === undefined;
 
+/** The Authority's follow-up reads, from `rows`, `failing` and `paged`. */
+function runsHandler(params: Record<string, unknown>): unknown {
+    const request = (params as { request: Request }).request;
+    if (request.operation === 'item') {
+      const found = Object.values(rows).flat().find(item => item.item_id === request.item_id)!;
+      return ok(request.read === undefined ? { ...found, reach: 'opened' } : found);
+    }
+    if (request.operation !== 'items' || request.scope !== 'project') return fail('unavailable', { retryable: true });
+    if (failing.has(request.id!)) return fail('unavailable', { retryable: true });
+    const all = rows[request.id!] ?? [];
+    const summary = { ...EMPTY_SUMMARY, open: all.filter(item => item.state === 'open').length, done: all.filter(item => item.state === 'done').length };
+    if (request.read === 'counts') return ok({ items: [], next_cursor: null, summary, stages: [] });
+    const items = all.filter(item => !request.states || request.states.includes(item.state));
+    const page = paged.has(request.id!) && request.read === 'rows' ? (request.cursor === undefined ? items.slice(0, 1) : items.slice(1)) : items;
+    const next = paged.has(request.id!) && request.read === 'rows' && request.cursor === undefined ? 'page-2' : null;
+    return ok({ items: live(request) ? page.map(item => ({ ...item, reach: 'opened' })) : page, next_cursor: next, summary, stages: [] });
+}
+
 storeLifecycle(new Date('2026-10-30T12:00:00.000Z'));
 beforeEach(() => {
   held = new Held();
@@ -47,22 +65,7 @@ beforeEach(() => {
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
     'app.status': () => ok({ signed_in: true, account }),
-    runs: params => {
-      const request = (params as { request: Request }).request;
-      if (request.operation === 'item') {
-        const found = Object.values(rows).flat().find(item => item.item_id === request.item_id)!;
-        return ok(request.read === undefined ? { ...found, reach: 'opened' } : found);
-      }
-      if (request.operation !== 'items' || request.scope !== 'project') return fail('unavailable', { retryable: true });
-      if (failing.has(request.id!)) return fail('unavailable', { retryable: true });
-      const all = rows[request.id!] ?? [];
-      const summary = { ...EMPTY_SUMMARY, open: all.filter(item => item.state === 'open').length, done: all.filter(item => item.state === 'done').length };
-      if (request.read === 'counts') return ok({ items: [], next_cursor: null, summary, stages: [] });
-      const items = all.filter(item => !request.states || request.states.includes(item.state));
-      const page = paged.has(request.id!) && request.read === 'rows' ? (request.cursor === undefined ? items.slice(0, 1) : items.slice(1)) : items;
-      const next = paged.has(request.id!) && request.read === 'rows' && request.cursor === undefined ? 'page-2' : null;
-      return ok({ items: live(request) ? page.map(item => ({ ...item, reach: 'opened' })) : page, next_cursor: next, summary, stages: [] });
-    },
+    runs: runsHandler,
   }, () => lists));
 });
 
@@ -439,6 +442,61 @@ describe('Home altitudes when your projects change', () => {
     await store.loadProjects();
     await flush(80);
     expect(store.getState().altitude.listFailure).toBeNull();
+  });
+});
+
+describe('Home altitudes keep their copy of a long list while they read it again', () => {
+  it('coming back Home zoomed on a project past the first page keeps it on screen while every page is read again, even if that read fails', async () => {
+    lists = { active: numbered(12), archived: [] };
+    const twelfth = lists.active[11]!;
+    const store = await startStore();
+    store.zoomTo('project', { project_id: twelfth.project_id });
+    await flush(200);
+    await store.openProject(lists.active[0]!);
+    await store.loadProjects();
+    await flush(80);
+    const release = held.hold('projects.list');
+    store.goHome();
+    await flush(40);
+    expect(store.altitudeProjects().map(each => each.project_id)).toContain(twelfth.project_id);
+    release(fail('unavailable', { retryable: true }));
+    await flush(120);
+    expect(store.altitudeProjects().map(each => each.project_id)).toContain(twelfth.project_id);
+    expect(store.getState().altitude.listFailure?.code).toBe('unavailable');
+  });
+
+  it('a project restored while Home shows My projects is read', async () => {
+    const OLD = project(5, 25, { name: 'Old', status: 'archived' });
+    lists = { active: [THERMAL, BATTERY], archived: [OLD] };
+    rpc.mockImplementation(rpcFor(held, { 'app.status': () => ok({ signed_in: true, account }), runs: runsHandler, 'projects.archive': () => ok({}) }, () => lists));
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(80);
+    store.toggleProjectSettings(OLD, 'sidebar');
+    store.askProjectSetting('unarchive');
+    store.confirmProjectSetting();
+    await flush(120);
+    expect(projectReads(OLD.project_id).some(request => request.read === 'counts')).toBe(true);
+  });
+
+  it('a read of every page on its way when you leave a project does not bring it back', async () => {
+    lists = { active: numbered(12), archived: [] };
+    const third = lists.active[2]!;
+    rpc.mockImplementation(rpcFor(held, { 'app.status': () => ok({ signed_in: true, account }), runs: runsHandler, 'projects.leave': () => ok({}) }, () => lists));
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(200);
+    const release = held.hold('projects.list');
+    void store.loadAltitude();
+    await flush(20);
+    store.toggleProjectSettings(third, 'sidebar');
+    store.askProjectSetting('leave');
+    store.confirmProjectSetting();
+    lists = { active: lists.active.filter(each => each !== third), archived: [] };
+    await flush(40);
+    release(ok({ items: numbered(12).slice(0, 10), next_cursor: 'more' }));
+    await flush(200);
+    expect(store.altitudeProjects().map(each => each.project_id)).not.toContain(third.project_id);
   });
 });
 

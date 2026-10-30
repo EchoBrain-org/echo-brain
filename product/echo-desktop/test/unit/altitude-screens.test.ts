@@ -37,7 +37,7 @@ async function stateWith(altitude: Partial<AltitudeState>, projects: ProjectSumm
     ...getState(), status: { client_version: 'test', signed_in: true, account: ACCOUNT },
     projects: { items: projects, next: null, loading: false, ...list },
     home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
-    altitude: { level: 'projects', project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: true, reading: false, listFailure: null, ...altitude },
+    altitude: { level: 'projects', project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: true, reading: false, listFailure: null, listStale: false, ...altitude },
   };
 }
 
@@ -266,6 +266,17 @@ describe('stops and notices for a long list', () => {
       [THERMAL, CERT, PACKAGING], { failure: { code: 'unavailable', retryable: true } }) }));
     expect(text(tree)).not.toContain('Couldn’t read every project just now');
     expect(text(tree)).toContain('Nothing of theirs is waiting');
+  });
+});
+
+describe('a project Home cannot find on your list', () => {
+  it('says it is reading, or that it could not read every project, with a way back to My projects', async () => {
+    const { ProjectLevel } = await import('../../src/renderer/screens/altitude.js');
+    const lost = { level: 'project' as const, project_id: 'prj_far-away' };
+    expect(text(render(ProjectLevel({ state: await stateWith(lost, [THERMAL], { next: 'more' }) })))).toContain('Reading');
+    const failed = render(ProjectLevel({ state: await stateWith({ ...lost, listFailure: { code: 'unavailable', retryable: true } }, [THERMAL], { next: 'more' }) }));
+    expect(text(failed)).toContain('Couldn’t read every project just now');
+    expect(byTestId(failed, 'alt-back-to-projects')).toHaveLength(1);
   });
 });
 

@@ -643,6 +643,8 @@ export interface AltitudeState {
   reading: boolean;
   /** Why the last read of every page of your projects failed; null once one succeeds. */
   listFailure: Failure | null;
+  /** Your projects moved out of Home's sight: `list` is still what Home shows, and the next load reads every page again. */
+  listStale: boolean;
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
@@ -651,7 +653,7 @@ const ALTITUDE = 'echo.home.altitude';
 const LEVELS: readonly AltLevel[] = ['me', 'projects', 'project', 'person'];
 
 function emptyAltitude(level: AltLevel = 'me'): AltitudeState {
-  return { level, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: false, reading: false, listFailure: null };
+  return { level, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: false, reading: false, listFailure: null, listStale: false };
 }
 
 const accountKey = (account: Expect) => `${account.authority} ${account.membership_id}`;
@@ -1346,10 +1348,15 @@ function showList(status: ListStatus, list: State['projects']): void {
     projectsKnown = true;
     if (list.next === null) {
       // The sidebar holds every project now: Home's own copy of the pages, and any failure reading them, no longer count.
-      if (state.altitude.list !== null || state.altitude.listFailure !== null) set({ altitude: { ...state.altitude, list: null, listFailure: null } });
-    } else if (state.route.page !== 'home' || state.altitude.level === 'me') {
-      // Out of sight, Home's copy of the pages goes stale: the next zoom reads them again.
-      if (state.altitude.list !== null) set({ altitude: { ...state.altitude, list: null } });
+      if (state.altitude.list !== null || state.altitude.listFailure !== null) {
+        listToken += 1;
+        set({ altitude: { ...state.altitude, list: null, listFailure: null, listStale: false } });
+      }
+    } else if ((state.route.page !== 'home' || state.altitude.level === 'me') && state.altitude.list !== null && !state.altitude.listStale) {
+      // Out of sight, Home keeps showing its copy of the pages, and reads them all again on its next load (a read already
+      // on its way may predate the change, so it no longer counts).
+      listToken += 1;
+      set({ altitude: { ...state.altitude, listStale: true } });
     }
     if (state.route.page === 'home' && state.altitude.level !== 'me') {
       // More pages than the sidebar shows: Home reads them all again, so a project gone from (or new to) a later page counts.
@@ -2685,6 +2692,8 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
       toast: detail.archived ? `Archived ${fresh.name}` : `Restored ${fresh.name}` });
     if (detail.archived) projectLeftHere(project.project_id);
     else if (state.altitude.list !== null) set({ altitude: { ...state.altitude, list: [...state.altitude.list, fresh] } });
+    // Home zoomed out reads a project restored to your list (and lets go of one archived).
+    if (state.route.page === 'home' && state.altitude.level !== 'me') void loadAltitude(false);
     listChanged();
     return;
   }
@@ -2721,6 +2730,8 @@ function forgetLeftProject(projectId: string): void {
   if (making && ownProject) finishNewProject(making);
   unresolvedChanged();
   void loadHome();
+  // Home, where leaving lands, reads again as it does whenever it is shown.
+  if (state.altitude.level !== 'me') void loadAltitude();
 }
 
 // ---- people ----------------------------------------------------------------------
@@ -5411,7 +5422,10 @@ async function readWholeList(account: Expect, current: () => boolean): Promise<b
   const still = () => token === listToken && current();
   const read = await readProjectPages(account, 'active', Number.POSITIVE_INFINITY, still);
   if (!still() || read === null) return false;
-  set({ altitude: { ...state.altitude, list: read.ok ? read.pages.flatMap(page => page.items) : state.altitude.list, listFailure: read.ok ? null : read.failure } });
+  // A failed read keeps the copy Home had (it still shows those projects) and says it could not read them all.
+  set({ altitude: read.ok
+    ? { ...state.altitude, list: read.pages.flatMap(page => page.items), listFailure: null, listStale: false }
+    : { ...state.altitude, listFailure: read.failure } });
   return true;
 }
 
@@ -5428,6 +5442,8 @@ async function readAltitudeList(): Promise<void> {
  * My projects.
  */
 function projectLeftHere(projectId: string): void {
+  // A read of every page already on its way may still hold this project: it no longer counts.
+  listToken += 1;
   const { [projectId]: _left, ...reads } = state.altitude.reads;
   const focus = state.altitude.project_id === projectId;
   const altitude = {
@@ -5524,7 +5540,7 @@ export function loadAltitude(fresh = true): Promise<void> {
   const token = ++altitudeToken;
   const mine = () => token === altitudeToken && sameAccount(account);
   const run = async () => {
-    if (state.projects.next !== null && (again || state.altitude.list === null)) {
+    if (state.projects.next !== null && (again || state.altitude.list === null || state.altitude.listStale)) {
       await readWholeList(account, mine);
       if (!mine()) return;
       followFocus();

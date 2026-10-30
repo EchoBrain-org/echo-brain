@@ -198,7 +198,17 @@ export function MyProjects({ state }: { state: State }) {
 /** One project: its decisions, then its follow-ups by owner, those needing attention first. */
 export function ProjectLevel({ state }: { state: State }) {
   const project = altitudeProjects(state).find(each => each.project_id === state.altitude.project_id);
-  if (!project) return <div class="alt-level-body" data-testid="alt-project-level" />;
+  if (!project) {
+    // A remembered project Home cannot see yet: your projects are still being read, or could not be read.
+    return (
+      <div class="alt-level-body" data-testid="alt-project-level">
+        <div class="alt-unread">
+          {state.altitude.listFailure ? 'Couldn’t read every project just now' : 'Reading'}{' '}
+          {state.altitude.listFailure && <button type="button" class="link-button" data-testid="alt-back-to-projects" onClick={() => zoomTo('projects')}>My projects</button>}
+        </div>
+      </div>
+    );
+  }
   const read = state.altitude.reads[project.project_id];
   const now = Date.now();
   const rows = rowsOf(read);
