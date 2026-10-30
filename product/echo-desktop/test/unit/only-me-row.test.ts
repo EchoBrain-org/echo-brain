@@ -159,4 +159,16 @@ describe('Only me', () => {
     const tree = await page([item('Comet notes', { projects: ['Comet'] })], { next: 'page-2' }, [APOLLO, BEACON, COMET]);
     expect(tiles(byTestId(tree, 'only-me-row')[0]!).map(tile => tile.props.style)).toEqual([identity(COMET.project_id)]);
   });
+
+  it('takes the sidebar\'s newer rows over Home\'s older whole list: a project made or renamed since keeps its hue', async () => {
+    const delta = project(4, 31, { name: 'Delta' });
+    const renamed = { ...APOLLO, name: 'Apollo launch' };
+    const tree = await page(
+      [item('Delta notes', { projects: ['Delta'] }), item('Launch notes', { projects: ['Apollo launch'] })],
+      { items: [delta, renamed, BEACON], next: 'page-2' }, [APOLLO, BEACON, COMET],
+    );
+    const [first, second] = byTestId(tree, 'only-me-row');
+    expect(tiles(first!).map(tile => tile.props.style)).toEqual([identity(delta.project_id)]);
+    expect(tiles(second!).map(tile => tile.props.style)).toEqual([identity(APOLLO.project_id)]);
+  });
 });

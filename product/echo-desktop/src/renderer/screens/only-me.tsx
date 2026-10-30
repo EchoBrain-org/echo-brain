@@ -1,8 +1,20 @@
+import type { ProjectSummary } from '../../shared/protocol.js';
 import { message } from '../messages.js';
 import { altitudeProjects, moreList, openListItem, retryList, type State } from '../store.js';
 import { Caret } from './icons.js';
 import { useKeptPlace } from './items.js';
 import { OnlyMeRow, projectsByName } from './only-me-row.js';
+
+/**
+ * Every project of yours a tile can name: Home's whole list, with the sidebar's
+ * rows laid over it by id, as the sidebar's are read more often. A project made,
+ * joined or renamed since Home last read every page keeps its hue.
+ */
+function knownProjects(state: State): readonly ProjectSummary[] {
+  const byId = new Map(altitudeProjects(state).map(project => [project.project_id, project]));
+  for (const project of state.projects.items) if (project.status === 'active') byId.set(project.project_id, project);
+  return [...byId.values()];
+}
 
 /**
  * Only me, from the sidebar (ADR-0049, One place to look v1): everything only
@@ -22,8 +34,8 @@ export function OnlyMe({ state }: { state: State }) {
       </div>
     );
   }
-  // Rows name projects only: each tile finds its project among every one of yours Home can see.
-  const byName = projectsByName(altitudeProjects(state));
+  // Rows name projects only: each tile finds its project among every one of yours the app has read.
+  const byName = projectsByName(knownProjects(state));
   const now = Date.now();
   return (
     <div class="column only-me" data-testid="only-me" aria-busy={list?.loading ?? true} ref={column}>
