@@ -154,6 +154,7 @@ async function authority(method: string, params: { project_id?: string; request?
   const unavailable = fail('unavailable', { retryable: true });
   switch (method) {
     case 'app.status': return ok(fx.signedIn ? { signed_in: true, account: { ...ACCOUNT, membership_id: fx.member } } : { signed_in: false, account: null });
+    case 'account.signOut': fx.signedIn = false; return ok({ signed_in: false, account: null, client_version: 'test' });
     case 'projects.list': return ok({ items: [], next_cursor: null });
     case 'projects.members': return ok({ items: [], next_cursor: null });
     case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
@@ -908,6 +909,26 @@ describe('Sweeps from Home', () => {
     await expectQuiet();
   });
 
+  it('reads your follow-ups again when the sweep Home started ends while they show, so "ECHO checked" says when it ended', async () => {
+    fx.page = { items: [item('1', 'landed')], next_cursor: null, stages: [], summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1, last_checked_at: '2026-10-07T09:00:00.000Z' } };
+    const store = await dueSweep();
+    expect(fx.sweep?.state).toBe('running');
+    // Follow-ups opens while the sweep goes: its first read says when ECHO last checked before it.
+    await store.openYourFollowUps();
+    await flush();
+    const yours = () => store.followUpShown() as FollowUpList;
+    expect(yours().summary?.last_checked_at).toBe('2026-10-07T09:00:00.000Z');
+    const reads = requests('items').length;
+    // The sweep ends on Follow-ups. It moves no follow-up's state, so the change check sees nothing: the driver reads them again.
+    fx.sweep = sweepRun('done');
+    fx.page = { ...fx.page, summary: { ...fx.page.summary, last_checked_at: '2026-10-08T12:30:00.000Z' } };
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flush();
+    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.read}`)).toContain('involved rows');
+    expect(yours().summary?.last_checked_at).toBe('2026-10-08T12:30:00.000Z');
+    expect(store.getState().route.page).toBe('follow-ups');
+  });
+
   it('keeps a check queued while the Authority holds its start, looking again at the usual pace, then starts it', async () => {
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.run = impactRun('pending');
@@ -1192,6 +1213,28 @@ describe('Checks keep moving (one place to look v1)', () => {
     expect(store.homeRows()).toMatchObject([{ kind: 'send', send: { run_id: fx.run.run_id } }]);
   });
 
+  it('reads your follow-ups again when a Home read left on its way for them sees the check end', async () => {
+    fx.page = { items: [item('1', 'landed')], next_cursor: null, stages: [], summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1, last_checked_at: '2026-10-07T09:00:00.000Z' } };
+    const store = await checking();
+    // Home's next look reads the runs list as the check ends; that list is still on its way as Follow-ups opens.
+    fx.run = impactRun('done');
+    fx.hold.list = true;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fx.waiting.list).toHaveLength(1);
+    fx.hold.list = false;
+    await store.openYourFollowUps();
+    await flush();
+    const yours = () => store.followUpShown() as FollowUpList;
+    expect(yours().summary?.last_checked_at).toBe('2026-10-07T09:00:00.000Z');
+    fx.page = { ...fx.page, summary: { ...fx.page.summary, last_checked_at: '2026-10-08T12:30:00.000Z' } };
+    const reads = requests('items').length;
+    // The list lands, no longer Home's: it drives, and what shows of the follow-ups is read again.
+    release('list');
+    await flush();
+    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.read}`)).toContain('involved rows');
+    expect(yours().summary?.last_checked_at).toBe('2026-10-08T12:30:00.000Z');
+  });
+
   it('never sends a second start while one is on its way', async () => {
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.run = impactRun('pending');
@@ -1294,6 +1337,40 @@ describe('Checks keep moving (one place to look v1)', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(starts()).toEqual([]);
   });
+
+  it.each(['on Home', 'after another page opens'] as const)(
+    'never lifts the hold of a load after signing out and back in as the same person with the tools that person\'s last Try again read, %s',
+    async when => {
+      fx.granola = 'linked';
+      fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+      fx.run = impactRun('pending');
+      fx.failTools = true;
+      const store = await start();
+      // Try again, its tools still on their way as the person signs out, then back in, and the new load's tools cannot be read.
+      fx.failTools = false;
+      fx.hold.tools = true;
+      void store.loadHome();
+      await flush();
+      fx.hold.tools = false;
+      store.accountCommand('signout');
+      await store.signOut();
+      await flush();
+      expect(store.getState().status?.signed_in).toBe(false);
+      fx.failTools = true;
+      fx.signedIn = true;
+      await store.refreshStatus();
+      await flush();
+      expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
+      if (when === 'after another page opens') await store.openProject(project);
+      // The earlier Try again's tools answer: the new load's hold stays, so a meeting approved elsewhere starts nothing.
+      release('tools');
+      await flush();
+      if (when === 'on Home') await store.openProject(project);
+      fx.moved.reviews = 1;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(starts()).toEqual([]);
+    },
+  );
 
   it('stops at sign-out, and signing in again on another page starts what is queued there', async () => {
     const store = await checking();
