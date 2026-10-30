@@ -169,7 +169,7 @@ function installPatch(fixture: Fixture, { app, control = ['Package: echo-desktop
     DPKG_DEB: shellScript(fixture.root, 'dpkg-deb', `printf '%s\\n' ${control.map(line => `'${line}'`).join(' ')}`),
     EXIT_WAIT_SECONDS: waitSeconds,
   };
-  return { state, aptLog, checkpoint: patch.CHECKPOINT, patch };
+  return { state, aptLog, checkpoint, patch };
 }
 
 function verify(fixture: Fixture, trustedUid = uid): Reply {

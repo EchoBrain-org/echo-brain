@@ -107,7 +107,7 @@ export interface DocumentSummary {
 }
 
 /** One piece of a document's extracted text, from a page or a paragraph. */
-export interface TextChunk {
+interface TextChunk {
   readonly anchor: 'page' | 'paragraph';
   readonly start: number;
   readonly text: string;
@@ -167,7 +167,7 @@ export interface InvitationSaved {
 }
 
 /** Add files…: the documents chosen in main's dialog, each as a handle, and the names of any it refused. */
-export interface ChosenFiles {
+interface ChosenFiles {
   readonly files: readonly FileHandle[];
   readonly refused: readonly string[];
 }
@@ -215,7 +215,7 @@ export interface SourceRef {
   readonly document_id?: string;
 }
 
-/** Who may read an approved record: the organization's members, or its reviewer only. */
+/** Who may read an approved record: the organization's members, a project's members, or its reviewer only. */
 export type RecordPolicy = 'organization-member-readable-person-v2' | 'restricted-reviewer-person-v2' | 'project-members-readable-person-v1';
 
 /** An approved record an answer cites, read with `person records --record-sha256`. */
@@ -479,7 +479,7 @@ export interface RecordSection {
   readonly more: boolean;
 }
 
-/** An approved meeting record, as the source pane shows it. Every text is at most 2,000 characters. */
+/** An approved meeting record, as the source pane or the reader shows it. The pane's texts are at most 2,000 characters; the reader's at most 4,000 a part, and a long item's parts are joined. */
 export interface ApprovedRecord {
   readonly title?: string;
   /** When it was approved (ISO 8601), as its row shows it: only on a record opened by its ref. */
@@ -670,7 +670,7 @@ export interface ConfluenceSpacesPage { items: readonly ConfluenceSpace[]; next_
  * What an open item says now, read live for you in this request and never
  * stored: its citation as a source "Open in …" can open, and its details.
  */
-export interface OpenItemCurrent extends Omit<PersonOpenItemCurrentV1, 'citation'> {
+interface OpenItemCurrent extends Omit<PersonOpenItemCurrentV1, 'citation'> {
   readonly source: AnswerSource;
 }
 /**

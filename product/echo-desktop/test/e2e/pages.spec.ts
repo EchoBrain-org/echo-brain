@@ -76,7 +76,7 @@ test('the ask bar has the caret at launch and whenever the window comes forward'
   await expect(page.getByTestId('ask-field')).toBeFocused();
 });
 
-test('an ask can be cancelled, and its late answer is dropped', async () => {
+test('an ask can be cancelled, and Ask closes on the page it was asked from', async () => {
   run = await launch('ask-hangs');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);

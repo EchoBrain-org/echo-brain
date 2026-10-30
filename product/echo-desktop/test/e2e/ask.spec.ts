@@ -423,7 +423,7 @@ test('a laid-out answer reads as a document, and its table scrolls in its own bo
 });
 
 // Ask progress and internal links v1 (ADR-0039). The fixture streams a search
-// of meetings, documents and Jira and five reads (two of Tuesday sync's
+// of meetings, documents and Jira and four reads (two of Tuesday sync's
 // decisions), then waits for `release-ask`.
 const opens = () => run.calls().filter(call => call.path === '/v1/person/open').map(call => call.body?.ref);
 const progressSteps = (page: Page) => page.getByTestId('ask-steps').getByTestId('ask-step');

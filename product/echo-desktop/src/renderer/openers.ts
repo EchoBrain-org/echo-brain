@@ -8,7 +8,7 @@ import type { AnswerSource, ItemRef } from '../shared/protocol.js';
  * a new kind of item joins by naming its opener here, as follow-ups did, and
  * then projects, people, tools and tools' containers.
  */
-export interface Opener {
+interface Opener {
   /**
    * What the panel shows: the meeting's approved record with the cited items
    * lit (`record`), the cited passages (`passages`), a follow-up's title,
@@ -25,7 +25,7 @@ export interface Opener {
  * A full page in the app: the reader, on one item by its ref; a follow-up's
  * item page, by its id; a project, by its id; or Tools.
  */
-export type FullPage = { readonly kind: 'reader'; readonly ref: ItemRef } | { readonly kind: 'follow_up'; readonly item_id: string }
+type FullPage = { readonly kind: 'reader'; readonly ref: ItemRef } | { readonly kind: 'follow_up'; readonly item_id: string }
   | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'tools' };
 
 const reader = (ref: ItemRef): FullPage => ({ kind: 'reader', ref });

@@ -19,7 +19,7 @@ beforeEach(() => {
   directories = [];
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
-    'app.status': () => ok(signedIn ? { signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } }
+    'app.status': () => ok(signedIn ? { signed_in: true, account: ACCOUNT }
       : { signed_in: false, account: null }),
     'projects.members': () => ok({ items: members, next_cursor: null }),
     'projects.read': () => ok(apollo),
@@ -190,7 +190,7 @@ describe('another account signing in', () => {
     expect(store.getState().compose).toMatchObject({ status: 'unknown', kept: true });
     const requestId = store.getState().compose!.requestId;
     rpc.mockImplementation(rpcFor(held, {
-      'app.status': () => ok({ signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'someone-else', display_name: 'Else', role: 'employee' } }),
+      'app.status': () => ok({ signed_in: true, account: { ...ACCOUNT, membership_id: 'someone-else', display_name: 'Else' } }),
       'documents.abandon': () => ok(null),
     }, () => ({ active: [], archived: [] })));
     await store.refreshStatus();
@@ -217,7 +217,7 @@ describe('another account signing in', () => {
     if (projectTools) expect(store.getState().projectSettings?.tools?.connect).toMatchObject({ phase: 'waiting' });
     else expect(store.getState().sheet).toMatchObject({ kind: 'tool-connect', phase: 'waiting' });
     rpc.mockImplementation(rpcFor(held, {
-      'app.status': () => ok({ signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'someone-else', display_name: 'Else', role: 'employee' } }),
+      'app.status': () => ok({ signed_in: true, account: { ...ACCOUNT, membership_id: 'someone-else', display_name: 'Else' } }),
       'tools.cancel': () => ok({ status: 'cancelled', failure_reason: null }),
       'tools.status': () => ok({ status: 'pending', failure_reason: null }),
     }, () => ({ active: [], archived: [] })));

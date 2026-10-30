@@ -251,7 +251,6 @@ describe('view models copy only what the renderer may see', () => {
 
 describe('live matches', () => {
   const item = { context_id: `ctx_${'1'.repeat(64)}`, received_at: AT, title: 'Apollo update', excerpt: 'We agreed to ship.' };
-  const APOLLO = 'prj_11111111-1111-4111-8111-111111111111';
 
   it('a project search counts only for the project searched, and who can read a match stays behind', () => {
     const reply = { schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id: APOLLO, next_cursor: null,

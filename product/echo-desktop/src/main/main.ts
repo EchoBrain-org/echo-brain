@@ -31,6 +31,7 @@ const RENDERER_EXTENSIONS = ['.html', '.js', '.css', '.map', '.woff2'];
 /** The window behind the page follows the system's appearance: styles.css's --frame in each, so nothing flashes before the page paints. */
 const frameColor = () => (nativeTheme.shouldUseDarkColors ? '#0B0C0E' : '#EEEEEC');
 const DOCUMENT_EXTENSIONS = new Set(['.txt', '.md', '.markdown', '.pdf', '.docx']);
+const DOCUMENT_FILTERS = [{ name: 'Documents', extensions: ['txt', 'md', 'pdf', 'docx'] }];
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 /** What an owner's invitation export holds; the person client checks the rest. */
 const INVITATION_FILE = 'person-invitation.json';
@@ -214,11 +215,11 @@ function issueHandle(path: string, kind: HandleKind, size?: number): FileHandle 
   const handle = randomUUID();
   // A file to send may wait its turn a long time: in a draft, or behind New project's other files.
   handles.set(handle, { path, kind, expires: kind === 'document' ? Infinity : Date.now() + 10 * 60_000 });
-  return { handle, name: path.split(sep).pop() ?? 'Document', ...(size === undefined ? {} : { size }) };
+  return { handle, name: basename(path), ...(size === undefined ? {} : { size }) };
 }
 
 function vetDocument(path: string): FileHandle | null {
-  if (typeof path !== 'string' || path === '' || !isAbsolute(path) || !DOCUMENT_EXTENSIONS.has(extname(path).toLowerCase())) return null;
+  if (path === '' || !isAbsolute(path) || !DOCUMENT_EXTENSIONS.has(extname(path).toLowerCase())) return null;
   let stats;
   try { stats = lstatSync(path); } catch { return null; }
   if (!stats.isFile() || stats.isSymbolicLink() || stats.size === 0 || stats.size > MAX_DOCUMENT_BYTES) return null;
@@ -227,7 +228,7 @@ function vetDocument(path: string): FileHandle | null {
 
 /** The folder the owner sent, or the file in it. Never a link. */
 function vetInvitation(chosen: string): FileHandle | null {
-  if (typeof chosen !== 'string' || !isAbsolute(chosen)) return null;
+  if (!isAbsolute(chosen)) return null;
   try {
     const path = lstatSync(chosen).isDirectory() ? join(chosen, INVITATION_FILE) : chosen;
     const stats = lstatSync(path);
@@ -270,7 +271,7 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
     case 'dialog.openDocument': {
       if (!window) return refused();
       const chosen = await dialog.showOpenDialog(window, {
-        properties: ['openFile'], filters: [{ name: 'Documents', extensions: ['txt', 'md', 'pdf', 'docx'] }],
+        properties: ['openFile'], filters: DOCUMENT_FILTERS,
       });
       if (chosen.canceled || chosen.filePaths.length !== 1) return { ok: true, value: null };
       const vetted = vetDocument(chosen.filePaths[0]!);
@@ -279,7 +280,7 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
     case 'dialog.openDocuments': {
       if (!window) return refused();
       const chosen = await dialog.showOpenDialog(window, {
-        properties: ['openFile', 'multiSelections'], filters: [{ name: 'Documents', extensions: ['txt', 'md', 'pdf', 'docx'] }],
+        properties: ['openFile', 'multiSelections'], filters: DOCUMENT_FILTERS,
       });
       if (chosen.canceled) return { ok: true, value: { files: [], refused: [] } };
       if (chosen.filePaths.length > MAX_PROJECT_FILES) return refused('too_many_files');
@@ -810,8 +811,6 @@ if (!test.ECHO_DESKTOP_HIDDEN) {
 /** The wait for a refresh to finish, while it runs: another Quit joins it. */
 let draining: Promise<void> | null = null;
 let drained = false;
-/** Each Quit the dialog cancels ends its attempt: a wait from it that settles later quits nothing. */
-let quitAttempt = 0;
 app.on('before-quit', event => {
   // Never kill the host mid-refresh: that leaves the shared session claimed.
   // Wait here, while the window is open: once it closes the app must exit at
@@ -820,10 +819,8 @@ app.on('before-quit', event => {
   if (draining) { event.preventDefault(); return; }
   if (host && !drained) {
     event.preventDefault();
-    const attempt = quitAttempt;
     const cap = new Promise(resolveCap => setTimeout(resolveCap, 5_000));
     draining = Promise.race([callHost('host.drain', {}), cap]).then(() => {
-      if (attempt !== quitAttempt) return;
       draining = null;
       drained = true;
       app.quit();
@@ -839,8 +836,6 @@ app.on('before-quit', event => {
     if (choice !== 0) {
       // ECHO stays open: a later Quit waits again, from the start.
       event.preventDefault();
-      quitAttempt += 1;
-      draining = null;
       drained = false;
       // A Restart click's relaunch goes with the quit it asked for.
       updater?.quitCancelled();

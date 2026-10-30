@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from '../../src/shared/protocol.js';
-import { fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -23,7 +23,7 @@ beforeEach(() => {
   held = new Held();
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
-    'app.status': () => ok(signedIn ? { signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } }
+    'app.status': () => ok(signedIn ? { signed_in: true, account: ACCOUNT }
       : { signed_in: false, account: null }),
     'people.directory': () => ok({ items: [ann, bob], next_cursor: null }),
     'projects.create': () => ok({ project_id: fresh.project_id }),

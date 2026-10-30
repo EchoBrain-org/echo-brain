@@ -120,9 +120,7 @@ test('a native account sheet dismisses the project menu without restoring it aft
 test('Rename owns Escape, Capture and the caret while it is up', async () => {
   run = await launch();
   const { page, app } = run;
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-rename').click();
+  await openApolloSetting(page, 'rename');
   await expect(page.getByTestId('project-rename-input')).toBeFocused();
   // Capture and the window coming forward open nothing under the dialog, and do not take its caret.
   await emit(app, 'echo-test:capture');

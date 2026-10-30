@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { State } from '../../src/renderer/store.js';
 import type { UpdateState } from '../../src/shared/protocol.js';
-import { elements, project, text } from './harness.js';
+import { ACCOUNT, elements, project, text } from './harness.js';
 
 const { loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk } = vi.hoisted(() => ({
   loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn(), openNewProject: vi.fn(), returnToAsk: vi.fn(),
@@ -22,7 +22,7 @@ async function projectFailure(archived: boolean): Promise<State> {
   const { getState } = await import('../../src/renderer/store.js');
   return {
     ...getState(),
-    status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } },
+    status: { client_version: 'test', signed_in: true, account: ACCOUNT },
     [archived ? 'archivedProjects' : 'projects']: { items: [], next: null, loading: false, failure: { code: 'unavailable', retryable: true } },
     home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
   };
@@ -55,7 +55,7 @@ describe('New project', () => {
     const { getState } = await import('../../src/renderer/store.js');
     return {
       ...getState(), route: { page: 'home' },
-      status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } },
+      status: { client_version: 'test', signed_in: true, account: ACCOUNT },
       projects: { items: [], next: null, loading: false },
       home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
     };
@@ -92,7 +92,7 @@ describe('your follow-ups (F9)', () => {
     const { getState } = await import('../../src/renderer/store.js');
     return {
       ...getState(), route,
-      status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'employee' } },
+      status: { client_version: 'test', signed_in: true, account: ACCOUNT },
       home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
     };
   }
@@ -120,7 +120,7 @@ describe('Ask', () => {
     const ask = { seq: 1, latest: null, asked: [], opened: null, openedAt: 0, focus: null, earlier: false, forQuestion: false, asking: null, clarify: null, failed: null, took: {} };
     return {
       ...getState(), route, ask: open ? ask : null,
-      status: { client_version: 'test', signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: 'member', display_name: 'Fixture', role: 'owner' } },
+      status: { client_version: 'test', signed_in: true, account: { ...ACCOUNT, role: 'owner' } },
       home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
     };
   }

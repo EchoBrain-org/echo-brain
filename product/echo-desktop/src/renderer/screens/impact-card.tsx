@@ -33,16 +33,14 @@ export function FollowUpsLabel({ words, open, class: name, testid }: Counted & {
  * any. A meeting sent to several destinations has a record, and so a check,
  * for each: `label` names the destination.
  */
-export function ImpactSection({ run, publishing, busy, followUps, onRetry, label }: {
+export function ImpactSection({ run, busy, followUps, onRetry, label }: {
   run: PersonRunV1 | undefined;
-  publishing: boolean;
   busy: boolean;
   /** The meeting's follow-ups counted, once read, and what opens them when there are any. */
   followUps: Counted | null;
   onRetry(): void;
   label?: string;
 }) {
-  if (run === undefined && !publishing) return null;
   const name = label === undefined ? 'Impact' : `Impact · ${label}`;
   return <section class="impact" aria-label={name}>
     <div class="impact-head">

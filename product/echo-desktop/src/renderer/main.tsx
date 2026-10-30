@@ -25,7 +25,7 @@ import {
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
   hostFailed, keepNewProject, matchesShown, newProjectProgress, openCapture, openNotified, openOnlyMe, pageCovered, paneTarget, projectSettingsModal, readUpdate, refreshStatus,
   retryStart, sheetShown, shownItem, signinPhase, toastOpensOnlyMe, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged,
-  useStore, WARNINGS, windowState, type State,
+  useStore, WARNINGS, windowState, zoomOut, type State,
 } from './store.js';
 import { woke } from './freshness.js';
 
@@ -87,6 +87,8 @@ function back(): void {
   if (state.reader) return closeReader();
   if (state.organization?.confirm) return cancelRevoke();
   if (state.organization?.menu) return toggleEmployeeMenu(state.organization.menu);
+  // On Home zoomed on a project or a person, Escape zooms one level out.
+  if (state.route.page === 'home' && zoomOut()) return;
   if (state.route.page !== 'home') return goHome();
 }
 

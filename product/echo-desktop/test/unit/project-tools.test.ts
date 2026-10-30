@@ -9,8 +9,6 @@ const revision = '00000000-0000-4000-8000-000000000001';
 let held: Held;
 let jira: string | null;
 let spaces: string[];
-let catalog: string[];
-let confluenceRead: () => unknown;
 const confluenceSets = () => rpc.mock.calls.filter(([method]) => method === 'projects.confluenceSet').map(([, params]) => (params as { space_ids: string[] | null }).space_ids);
 
 storeLifecycle();
@@ -18,14 +16,12 @@ beforeEach(() => {
   held = new Held();
   jira = null;
   spaces = [];
-  catalog = ['1', '2'];
-  confluenceRead = () => ok({ project_id: apollo.project_id, revision: spaces.length > 0 ? revision : null, mapping: spaces.length > 0 ? { space_ids: [...spaces] } : null });
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
     'account.tools': () => ok({ tools: [{ tool_id: 'jira', name: 'Jira', status: 'linked' }, { tool_id: 'confluence', name: 'Confluence', status: 'linked' }] }),
     'projects.jiraRead': () => ok({ project_id: apollo.project_id, revision: jira ? revision : null, mapping: jira ? { project_id: '1', project_key: jira } : null }),
-    'projects.confluenceRead': () => confluenceRead(),
-    'projects.confluenceSpaces': () => ok({ items: catalog.map(id => ({ id, name: `Space ${id}`, key: `S${id}` })), next_cursor: null }),
+    'projects.confluenceRead': () => ok({ project_id: apollo.project_id, revision: spaces.length > 0 ? revision : null, mapping: spaces.length > 0 ? { space_ids: [...spaces] } : null }),
+    'projects.confluenceSpaces': () => ok({ items: ['1', '2'].map(id => ({ id, name: `Space ${id}`, key: `S${id}` })), next_cursor: null }),
     'projects.jiraSet': params => { jira = params.jira_project as string | null; return ok({ project_id: apollo.project_id, revision, mapping: jira ? { project_id: '1', project_key: jira } : null }); },
     'projects.confluenceSet': params => { spaces = (params.space_ids as string[] | null) ?? []; return ok({ project_id: apollo.project_id, revision, mapping: spaces.length > 0 ? { space_ids: spaces } : null }); },
   }, () => ({ active: [apollo], archived: [] })));

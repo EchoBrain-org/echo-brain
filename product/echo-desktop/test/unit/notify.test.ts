@@ -137,7 +137,6 @@ describe('what notifies (N2)', () => {
     let hold = false;
     const arrivals: ((value: unknown) => void)[] = [];
     rpc.mockImplementation(changesRpc({
-      'app.status': () => ok(account ? { signed_in: true, account } : { signed_in: false, account: null }),
       'projects.activity': () => (hold ? new Promise(resolve => { arrivals.push(resolve); }) : ok({ items: [] })),
     }));
     const store = await signedIn();
@@ -377,7 +376,6 @@ describe('what never notifies (N3)', () => {
     authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
     let refuseMore = false;
     rpc.mockImplementation(changesRpc({
-      'app.status': () => ok({ signed_in: true, account: ACCOUNT }),
       'projects.list': params => (refuseMore && params.cursor ? fail('unavailable', { retryable: true }) : fixture['projects.list']!(params)),
     }));
     await startStore();

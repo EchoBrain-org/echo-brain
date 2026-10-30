@@ -5,9 +5,9 @@ import { renamedProject, reread } from '../../src/renderer/feed.js';
 const row = (title: string, hour: number, kind: ListItem['ref']['kind'] = 'note'): ListItem => ({
   ref: { kind, id: `${kind}-${title}` }, title, added_at: `2026-09-20T${String(hour).padStart(2, '0')}:00:00.000Z`, visibility: 'project', projects: [],
 });
+const key = (item: ListItem) => `${item.ref.kind}:${item.ref.id}`;
 
 describe('a first page read again', () => {
-  const key = (item: ListItem) => `${item.ref.kind}:${item.ref.id}`;
   const hours = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, index) => row(`n${from - index}`, from - index));
 
   it('leads with the page and keeps the older rows More loaded, with the cursor past them', () => {
@@ -48,7 +48,6 @@ describe('a project renamed while its rows show', () => {
 });
 
 describe('rows added at the same instant', () => {
-  const key = (item: ListItem) => `${item.ref.kind}:${item.ref.id}`;
   it('are told apart by ref, as the Authority orders them: one the page should hold but does not is dropped', () => {
     const same = (title: string, kind: ListItem['ref']['kind'] = 'note') => row(title, 10, kind);
     // document:… sorts before note:…, so the page's last row (note b) is followed by note c, not by the document.

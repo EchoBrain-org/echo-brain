@@ -61,7 +61,6 @@ describe('the maintainer scripts', () => {
     const { status, calls } = run('postinst', 'configure');
     expect(status).toBe(0);
     expect(calls).toContain("update-alternatives --install /usr/bin/echo-desktop echo-desktop /opt/ECHO/echo-desktop 100");
-    expect(calls).toContain('chmod 0755 /opt/ECHO/chrome-sandbox');
     expect(calls.filter(call => call.startsWith('chmod '))).toEqual(['chmod 0755 /opt/ECHO/chrome-sandbox']);
   });
 

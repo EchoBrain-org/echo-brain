@@ -234,7 +234,7 @@ test('the person who sent a follow-up is told when its owner marks it done', asy
   const counted = ['itm_00000000-0000-4000-8000-000000000031', 'itm_00000000-0000-4000-8000-000000000039'];
   await expect.poll(() => notices(app)).toEqual([{ title: 'ECHO', body: '2 follow-ups changed', target: { kind: 'items', item_ids: counted } }]);
   // Each left the open follow-ups Ari is involved in, and the read of those closed since settled it: none was read by its id.
-  const itemReads = () => app.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'item').map(call => call.body!.item_id);
+  const itemReads = () => requests('item').map(body => body.item_id);
   expect(itemReads()).toEqual([]);
   // Clicked: a list of exactly those two, each read by its id, as Ari may see them now.
   await clickNotice(app, 0);
