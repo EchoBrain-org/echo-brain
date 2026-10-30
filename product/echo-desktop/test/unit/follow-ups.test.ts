@@ -134,6 +134,16 @@ describe('your Follow-ups page (One place to look v1, K)', () => {
     expect(buttons.map(button => text(button))).toEqual(['All', 'MP1', 'RM1', 'F1', '1']);
   });
 
+  it('gives each owner one hover over its whole button, its face too: who ("You" for you), what they hold open, and what a click does', async () => {
+    const buttons = ownerButtons(await yours());
+    expect(buttons.map(button => button.props.title)).toEqual([
+      'Show every follow-up', 'Mina Patel · 1 open now · show only theirs', 'Rafael Moreno · 1 open now · show only theirs', 'You · 1 open now · show only yours',
+      'No owner yet · 1 · show only those',
+    ]);
+    // Nothing in a button has a hover of its own, which would show in place of the button's.
+    expect(buttons.flatMap(button => elements(button.props.children).filter(node => node.props.title !== undefined).map(node => node.props.title))).toEqual([]);
+  });
+
   it('lists current work as one list, what needs attention first, longest waiting first, and folds Done at the end', async () => {
     const tree = await yours();
     const current = elements(tree).find(node => node.props['aria-label'] === 'Follow-ups not done yet')!;

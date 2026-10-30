@@ -212,8 +212,9 @@ function Row({ state, list, item, label, name, now, ticking }: {
 /**
  * The owner line (K, F3): All, then a face for everyone who owns a row read,
  * counted by what they hold open now, then No owner. A face shows only their
- * rows; All, or the same face again, shows everyone's. Counts cover the rows
- * read so far: they grow as More reads more.
+ * rows; All, or the same face again, shows everyone's. Each button's hover,
+ * over its face too, says whose ("You" for you) and what a click does. Counts
+ * cover the rows read so far: they grow as More reads more.
  */
 function Owners({ faces, shown, me }: { faces: readonly OwnerFace[]; shown: string | null; me: string | null }) {
   const pick = (face: OwnerFace) => {
@@ -223,7 +224,7 @@ function Owners({ faces, shown, me }: { faces: readonly OwnerFace[]; shown: stri
         aria-label={`${who}, ${face.key === 'none' ? face.count : `${face.count} open`}`}
         title={face.key === 'none' ? `No owner yet · ${face.count} · show only those` : `${who} · ${face.count} open now · show only ${face.key === me ? 'yours' : 'theirs'}`}
         onClick={() => filterOwner(face.key)}>
-        {face.key === 'none' ? <span class="follow-up-none" aria-hidden="true" /> : <FaceMark membership_id={face.key} name={face.name} />}
+        {face.key === 'none' ? <span class="follow-up-none" aria-hidden="true" /> : <FaceMark membership_id={face.key} name={face.name} titled={false} />}
         {(face.key === 'none' || face.count > 0) && <span class="follow-ups-n">{face.count}</span>}
       </button>
     );
