@@ -1334,8 +1334,14 @@ const refreshing = new Set<ListStatus>();
 
 function listChanged(): void { projectsEdition += 1; }
 
-/** One of the sidebar's lists, shown. */
-function showList(status: ListStatus, list: State['projects']): void {
+/** Rows laid over `list` by project: each row read takes the place of its project's. */
+function laidOver(list: ProjectSummary[], rows: readonly ProjectSummary[]): ProjectSummary[] {
+  const read = new Map(rows.map(row => [row.project_id, row]));
+  return list.map(item => read.get(item.project_id) ?? item);
+}
+
+/** One of the sidebar's lists, shown; `read`, the rows of it just read, none older than a change made here. */
+function showList(status: ListStatus, list: State['projects'], read: readonly ProjectSummary[] = []): void {
   set(status === 'active' ? { projects: list } : { archivedProjects: list });
   // Your projects, read: Home zoomed out reads what it has not read of them yet.
   if (status === 'active' && !list.loading && !list.failure) {
@@ -1348,9 +1354,10 @@ function showList(status: ListStatus, list: State['projects']): void {
       }
     } else if (state.route.page !== 'home') {
       // Out of sight, Home keeps showing its copy of the pages, and reads them all again on its next load. A read already on
-      // its way may predate the change, so it no longer counts, whether or not Home has a copy yet.
+      // its way may predate the change, so it no longer counts, whether or not Home has a copy yet. The rows just read take
+      // their projects' places in it, so Only me's tiles find a project renamed elsewhere by its new name.
       listToken += 1;
-      if (state.altitude.list !== null && !state.altitude.listStale) set({ altitude: { ...state.altitude, listStale: true } });
+      if (state.altitude.list !== null) set({ altitude: { ...state.altitude, list: laidOver(state.altitude.list, read), listStale: true } });
     }
     if (state.route.page === 'home') {
       // More pages than the sidebar shows: Home reads them all again, so a project gone from (or new to) a later page counts.
@@ -1367,6 +1374,7 @@ async function loadProjectList(status: ListStatus, more: boolean): Promise<void>
   if (!account || (more && !state[key].next)) return;
   const cursor = more ? state[key].next ?? undefined : undefined;
   showList(status, { ...state[key], loading: true, failure: undefined });
+  const edition = projectsEdition;
   const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
   if (!sameAccount(account)) return;
   if (!result.ok) {
@@ -1377,7 +1385,8 @@ async function loadProjectList(status: ListStatus, more: boolean): Promise<void>
   }
   if (status === 'active' && rolesChanged(result.value.items)) emptyBar();
   const items = appendPage(more ? state[key].items : [], result.value.items, project => project.project_id);
-  showList(status, { items, next: result.value.next_cursor, loading: false });
+  // A page read before a change made here is older than it: Home's copy keeps what the change made of it.
+  showList(status, { items, next: result.value.next_cursor, loading: false }, edition === projectsEdition ? result.value.items : []);
   listChanged();
   refreshIfOwed(status);
 }
@@ -1418,7 +1427,8 @@ function showProjectList(status: ListStatus, pages: readonly ProjectPage[], show
     if (items.length >= shown) break;
   }
   if (status === 'active' && rolesChanged(items)) emptyBar();
-  showList(status, { items, next, loading: false });
+  // Every page read, past the ones shown: the change check reads them all.
+  showList(status, { items, next, loading: false }, pages.flatMap(page => page.items));
   return true;
 }
 

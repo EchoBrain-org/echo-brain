@@ -626,6 +626,72 @@ describe('Home altitudes keep their copy of a long list while they read it again
     expect(shown).toContain('Made here');
   });
 
+  describe('out of Home’s sight, its copy takes the rows the sidebar just read, so Only me’s tiles find a project renamed elsewhere', () => {
+    const FIRST = numbered(12)[0]!;
+    const TWELFTH = numbered(12)[11]!;
+    /** Renamed on another machine. */
+    const renamed = (of: ProjectSummary, name: string) => {
+      lists = { ...lists, active: lists.active.map(each => (each.project_id === of.project_id ? { ...each, name } : each)) };
+    };
+
+    beforeEach(() => {
+      lists = { active: numbered(12), archived: [] };
+      rpc.mockImplementation(rpcFor(held, {
+        'app.status': () => ok({ signed_in: true, account }), runs: runsHandler,
+        'projects.rename': params => ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' }),
+      }, () => lists));
+    });
+
+    it('the sidebar’s first page read again, then the change check reading every page', async () => {
+      const store = await startStore();
+      await flush(200);
+      expect(store.getState().altitude.list).not.toBeNull();
+      await store.openOnlyMe();
+      renamed(FIRST, 'Renamed elsewhere');
+      await store.loadProjects();
+      await flush(80);
+      expect(names(store.altitudeProjects())).toContain('Renamed elsewhere');
+      expect(names(store.altitudeProjects())).not.toContain(FIRST.name);
+      // Past the sidebar's first page: the change check reads every page.
+      renamed(TWELFTH, 'Also renamed elsewhere');
+      await vi.advanceTimersByTimeAsync(61_000);
+      await flush(200);
+      expect(names(store.altitudeProjects())).toContain('Also renamed elsewhere');
+      expect(names(store.altitudeProjects())).not.toContain(TWELFTH.name);
+      // Home still reads every page again when it shows.
+      expect(store.getState().altitude.listStale).toBe(true);
+    });
+
+    it('but not a row the sidebar had before Home read its copy, nor a page read before a rename made here', async () => {
+      // Three pages: More leaves one for the sidebar to read, so Home's copy still counts.
+      lists = { active: numbered(25), archived: [] };
+      const store = await startStore();
+      await flush(200);
+      renamed(FIRST, 'Renamed elsewhere');
+      // Home shown reads every page: its copy has the new name, while the sidebar still shows the old one.
+      store.goHome();
+      await flush(200);
+      await store.openOnlyMe();
+      await store.loadProjects(true);
+      expect(store.getState().projects.next).not.toBeNull();
+      await flush(80);
+      expect(names(store.altitudeProjects())).toContain('Renamed elsewhere');
+      const release = held.hold('projects.list');
+      void store.loadProjects();
+      await flush(20);
+      const second = lists.active[1]!;
+      store.toggleProjectSettings(second, 'sidebar');
+      store.beginProjectRename();
+      store.setProjectRename('Renamed here');
+      store.confirmProjectSetting();
+      await flush(80);
+      release(ok(keysetPage(lists.active, undefined)));
+      await flush(80);
+      expect(names(store.altitudeProjects())).toContain('Renamed here');
+      expect(names(store.altitudeProjects())).not.toContain(second.name);
+    });
+  });
+
   it('a read of every page on its way when you leave a project does not bring it back', async () => {
     lists = { active: numbered(12), archived: [] };
     const third = lists.active[2]!;
