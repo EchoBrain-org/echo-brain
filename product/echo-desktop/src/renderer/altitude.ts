@@ -33,10 +33,16 @@ function waitingSince(item: OpenItemView): string | null {
   return moved.at(-1) ?? item.created_at;
 }
 
+/** Elapsed waiting time, or null once closed. Thresholds use this before display rounding. */
+function waitedMs(item: OpenItemView, now: number): number | null {
+  const since = waitingSince(item);
+  return since === null ? null : Math.max(0, now - Date.parse(since));
+}
+
 /** Whole days it has waited, or null once closed. */
 export function waitedDays(item: OpenItemView, now: number): number | null {
-  const since = waitingSince(item);
-  return since === null ? null : Math.max(0, Math.floor((now - Date.parse(since)) / DAY_MS));
+  const elapsed = waitedMs(item, now);
+  return elapsed === null ? null : Math.floor(elapsed / DAY_MS);
 }
 
 /** Nobody can act on it: ECHO found no owner and fell back to the approver, or it waits on the project's leads. */
@@ -47,8 +53,8 @@ export function unowned(item: OpenItemView): boolean {
 export function needsAttention(item: OpenItemView, now: number): boolean {
   if (!waiting(item)) return false;
   if (unowned(item)) return true;
-  const days = waitedDays(item, now)!;
-  return item.state === 'unsent' ? days > UNSENT_DAYS : days > OPEN_DAYS;
+  const elapsed = waitedMs(item, now)!;
+  return elapsed > (item.state === 'unsent' ? UNSENT_DAYS : OPEN_DAYS) * DAY_MS;
 }
 
 /** Someone a row shows as a face, and whether one of theirs needs attention. */
@@ -83,7 +89,7 @@ export function rollup(rows: readonly OpenItemView[], counts: { unsent: number; 
   const kept = rows.filter(item => item.state !== 'not_relevant');
   const flagged = kept.filter(item => needsAttention(item, now));
   const waits = kept.flatMap(item => { const days = waitedDays(item, now); return days === null ? [] : [days]; });
-  const late = flagged.some(item => (waitedDays(item, now) ?? 0) > OFF_TRACK_DAYS);
+  const late = flagged.some(item => (waitedMs(item, now) ?? 0) > OFF_TRACK_DAYS * DAY_MS);
   return {
     done: counts ? counts.done : kept.filter(item => item.state === 'done').length,
     total: counts ? counts.unsent + counts.open + counts.done : kept.length,

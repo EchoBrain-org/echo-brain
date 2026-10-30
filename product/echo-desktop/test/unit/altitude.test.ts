@@ -36,6 +36,20 @@ describe('needs attention', () => {
     expect(needsAttention(item({ sentDaysAgo: 2 }), NOW)).toBe(false);
   });
 
+  it('flags unsent work immediately after a day, without rounding away elapsed hours', () => {
+    expect(needsAttention(unsentItem(1), NOW)).toBe(false);
+    expect(needsAttention(unsentItem(1 + 1 / DAY), NOW)).toBe(true);
+    expect(needsAttention(unsentItem(1.5), NOW)).toBe(true);
+  });
+
+  it('flags open work immediately after three days, while displaying only whole waiting days', () => {
+    expect(needsAttention(item({ sentDaysAgo: 3 }), NOW)).toBe(false);
+    expect(needsAttention(item({ sentDaysAgo: 3 + 1 / DAY }), NOW)).toBe(true);
+    const waiting = item({ sentDaysAgo: 3.5 });
+    expect(needsAttention(waiting, NOW)).toBe(true);
+    expect(waitedDays(waiting, NOW)).toBe(3);
+  });
+
   it('never flags a done or dismissed follow-up', () => {
     expect(needsAttention(item({ sentDaysAgo: 20, state: 'done' }), NOW)).toBe(false);
     expect(needsAttention(item({ sentDaysAgo: 20, state: 'not_relevant' }), NOW)).toBe(false);
@@ -79,6 +93,14 @@ describe('roll-up', () => {
     expect(result.health).toBe('off');
     expect(result.oldest).toBe(8);
     expect(result.needs).toBe(1);
+  });
+
+  it('goes off track immediately after seven days, while displaying seven whole waiting days', () => {
+    expect(rollup([item({ sentDaysAgo: 7 })], null, NOW).health).toBe('risk');
+    expect(rollup([item({ sentDaysAgo: 7 + 1 / DAY })], null, NOW).health).toBe('off');
+    const result = rollup([item({ sentDaysAgo: 7.5 })], null, NOW);
+    expect(result.health).toBe('off');
+    expect(result.oldest).toBe(7);
   });
 
   it('shows each owner once, those needing attention first, and nobody for a follow-up with no owner', () => {
