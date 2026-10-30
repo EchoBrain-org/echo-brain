@@ -955,6 +955,29 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // granola-checked: Mina approved Kickoff review into Thermostat redesign and sent its three items to herself, Rafael and S.
   // Okafor; none is checked yet. Ari reads the decision, and none of its items involves Ari (canvas 9.7: "3 follow-ups" on its
   // row). granola-paged: the same, except that all three are done since, so the project's oldest follow-ups are closed ones.
+  // altitude (Home altitude v1): Apollo is off track (Mina's ticket open nine days, a follow-up ECHO found no owner for, Rafael's
+  // done), Beacon at risk (Rafael's page open four days, Ari's open since today). Times count back from now, as Home measures.
+  if (mode === 'altitude') {
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const fanCurve = { approval_id: 'apr_' + '6'.repeat(64), record_sha256: sha('record:Fan curve'), title: 'Fan curve', first_line: 'Peak at 60%.',
+      approved_at: ago(10), project_ids: [THERMOSTAT] };
+    const vendor = { approval_id: 'apr_' + '7'.repeat(64), record_sha256: sha('record:Vendor review'), title: 'Vendor review', first_line: 'Two suppliers.',
+      approved_at: ago(5), project_ids: [SUPPLIER] };
+    const item = (n: number, rest: Pick<OpenItem, 'kind' | 'decision' | 'owner' | 'state' | 'expected'> & { sent: number | null; made: number; set?: number }): OpenItem => ({
+      item_id: `itm_00000000-0000-4000-8000-0000000000${n}`, run_id: `run_00000000-0000-4000-8000-0000000000${n}`, readable: true, opens: true,
+      live: { citation: ticket(`ECHO-${n}`, rest.expected ?? 'Follow-up', `100${n}`), says_now: 'As it was.' }, relation: rest.kind === 'action' ? null : 'needs_updating',
+      approver: ARI, created_at: ago(rest.made), sent_at: rest.sent === null ? null : ago(rest.sent), state_set_at: rest.sent === null ? null : ago(rest.set ?? rest.sent),
+      state_set_by: rest.sent === null ? null : ARI, owner_set_at: null, owner_set_by: null, send_included: rest.sent === null ? null : true, check: null,
+      kind: rest.kind, decision: rest.decision, owner: rest.owner, state: rest.state, expected: rest.expected,
+    });
+    openItems.push(
+      item(61, { kind: 'ticket', decision: fanCurve, owner: { ...MINA, match: 'name' }, state: 'open', expected: 'Spec page says 60%', sent: 9, made: 9 }),
+      item(62, { kind: 'action', decision: fanCurve, owner: { ...ARI, match: 'approver' }, state: 'unsent', expected: 'Heat-sink sourcing', sent: null, made: 2 }),
+      item(63, { kind: 'action', decision: fanCurve, owner: { ...RAFAEL, match: 'name' }, state: 'done', expected: 'Soak test plan', sent: 6, made: 6, set: 1 }),
+      { ...item(64, { kind: 'page', decision: vendor, owner: { ...RAFAEL, match: 'name' }, state: 'open', expected: 'Lead time', sent: 4, made: 4 }), live: { citation: SUPPLIER_BRIEF, says_now: 'Four weeks.' } },
+      item(65, { kind: 'action', decision: vendor, owner: { ...ARI, match: 'name' }, state: 'open', expected: 'Order samples', sent: 0, made: 0 }),
+    );
+  }
   if (mode === 'granola-checked' || mode === 'granola-paged') {
     const kickoff = { approval_id: 'apr_' + 'e'.repeat(64), record_sha256: sha('record:Kickoff review'), title: 'Kickoff review',
       first_line: 'Freeze the firmware after the pilot.', approved_at: '2026-09-29T15:00:00.000Z', project_ids: [THERMOSTAT] };
