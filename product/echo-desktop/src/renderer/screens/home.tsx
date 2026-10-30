@@ -219,6 +219,12 @@ function Top({ state }: { state: State }) {
   );
 }
 
+/** Why Home's last read failed, and Try again: under what needs you, on Home's top and in a kind's list alike. */
+function Failed({ home }: { home: State['home'] }) {
+  if (!home?.failure) return null;
+  return <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>;
+}
+
 /**
  * What needs you, at the top of Home, by kind (One place to look v1): meetings
  * to approve, checks to retry, follow-ups to send, follow-ups to update (and
@@ -228,8 +234,7 @@ function Top({ state }: { state: State }) {
  */
 function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
   const home = state.home;
-  const failure = home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>;
-  if (home?.failure && rows.length === 0) return <section class="needs-section" data-testid="home-error">{failure}</section>;
+  if (home?.failure && rows.length === 0) return <section class="needs-section" data-testid="home-error"><Failed home={home} /></section>;
   if (rows.length === 0) {
     return (
       <section class="needs-section" data-testid="needs" aria-busy={busy(home)}>
@@ -245,16 +250,17 @@ function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
       <h2 class="home-label" id="needs-head" data-testid="needs-head">Needs you{waiting > 0 && <span class="n">{waiting}</span>}</h2>
       {homeCategories(rows).map(category => (category.rows.length === 1 ? shown(category.rows[0]!)
         : <CategoryLine key={category.category} category={category} name={name(category.rows[0]!)} />))}
-      {failure}
+      <Failed home={home} />
     </section>
   );
 }
 
 /**
  * One kind's list: Home zoomed into it (One place to look v1). Its verb and
- * how many, then its rows exactly as Needs you shows them, the newest first.
- * The title row's Home, Escape, the stops and the sidebar's Home go back to
- * the top; so does the store, by itself, once its last row is dealt with.
+ * how many, then its rows exactly as Needs you shows them, the newest first,
+ * and, as there, why Home's last read failed, with Try again. The title row's
+ * Home, Escape, the stops and the sidebar's Home go back to the top; so does
+ * the store, by itself, once its last row is dealt with.
  */
 function CategoryList({ state, category }: { state: State; category: NeedCategory }) {
   const all = homeRows(state);
@@ -267,6 +273,7 @@ function CategoryList({ state, category }: { state: State; category: NeedCategor
           <span class="need-list-verb">{CATEGORY[category].verb}</span><span class="need-category-count">{rows.length}</span>
         </h2>
         {rows.map(shown)}
+        <Failed home={state.home} />
       </section>
     </div>
   );
