@@ -386,16 +386,17 @@ describe('Home altitudes, reading only what each step needs', () => {
 describe('Home altitudes, when loads are cut short or the list is long', () => {
   it('a zoom that cuts a sweep short still reads the projects it left half read', async () => {
     lists = { active: numbered(6), archived: [] };
+    // Home's first reads, its first projects' among them, wait: a quick click on a project cuts that sweep short.
+    const releases = Array.from({ length: 12 }, () => held.hold('runs'));
     const store = await startStore();
-    const releases = Array.from({ length: 8 }, () => held.hold('runs'));
-    store.zoomTo('projects');
     await flush(20);
+    const loading = () => lists.active.map(each => store.getState().altitude.reads[each.project_id]?.loading ?? 'unread');
+    expect(loading()).toContain(true);
     store.zoomTo('project', { project_id: lists.active[5]!.project_id });
     await flush(20);
-    releases.forEach(release => release(empty()));
+    releases.forEach(release => release(anyRuns()));
     await flush(300);
-    const reads = store.getState().altitude.reads;
-    expect(lists.active.map(each => reads[each.project_id]?.loading ?? 'unread')).toEqual(Array(6).fill(false));
+    expect(loading()).toEqual(Array(6).fill(false));
   });
 
   it('a load cut short reads no further page', async () => {
