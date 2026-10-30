@@ -231,7 +231,7 @@ function Owners({ faces, shown, me }: { faces: readonly OwnerFace[]; shown: stri
   };
   return (
     <div class="follow-ups-owners" role="group" aria-label="Show follow-ups by owner">
-      <button type="button" class="follow-ups-owner all" data-testid="follow-ups-owner" data-key="" aria-pressed={shown === null} aria-label="Every owner"
+      <button type="button" class="follow-ups-owner all" data-testid="follow-ups-owner" data-key="" aria-pressed={shown === null} aria-label="All owners"
         title="Show every follow-up" onClick={() => filterOwner(null)}>All</button>
       {faces.map(pick)}
     </div>

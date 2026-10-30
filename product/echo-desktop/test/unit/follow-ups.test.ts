@@ -129,9 +129,11 @@ describe('your Follow-ups page (One place to look v1, K)', () => {
 
   it('shows who owns what: All, then a face per owner counted by what they hold open, needing attention first, then No owner', async () => {
     const buttons = ownerButtons(await yours());
-    expect(buttons.map(button => button.props['aria-label'])).toEqual(['Every owner', 'Mina Patel, 1 open', 'Rafael Moreno, 1 open', 'You, 1 open', 'No owner, 1']);
+    expect(buttons.map(button => button.props['aria-label'])).toEqual(['All owners', 'Mina Patel, 1 open', 'Rafael Moreno, 1 open', 'You, 1 open', 'No owner, 1']);
     expect(buttons.map(button => button.props['aria-pressed'])).toEqual([true, false, false, false, false]);
     expect(buttons.map(button => text(button))).toEqual(['All', 'MP1', 'RM1', 'F1', '1']);
+    // All's name starts with the word it shows, so saying "click All" finds it.
+    expect(String(buttons[0]!.props['aria-label'])).toMatch(/^All\b/);
   });
 
   it('gives each owner one hover over its whole button, its face too: who ("You" for you), what they hold open, and what a click does', async () => {

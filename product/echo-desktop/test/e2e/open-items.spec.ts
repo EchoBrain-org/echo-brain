@@ -56,7 +56,7 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   // owners above it, counted by what they hold open; every row ticked, as one click sends them all.
   const unsent = ofState(list, 'unsent');
   await expect(unsent).toHaveText([/^ECHO-12 · Pilot launch/, /^Thermostat PRD · Pilot scope/, /^Send the revised quote/, /^Confirm the trace/]);
-  expect(await owners(list)).toEqual(['Every owner', 'Mina Patel, 0 open', 'Rafael Moreno, 0 open', 'No owner, 1']);
+  expect(await owners(list)).toEqual(['All owners', 'Mina Patel, 0 open', 'Rafael Moreno, 0 open', 'No owner, 1']);
   for (const name of ['Send the revised quote', 'Confirm the trace', 'ECHO-12 · Pilot launch', 'Thermostat PRD · Pilot scope']) {
     await expect(list.getByRole('checkbox', { name, exact: true })).toBeChecked();
   }
@@ -199,7 +199,7 @@ test('a meeting\'s list shows one owner\'s follow-ups at a time, and Send sends 
   // Still hers, now open, and counted on her face.
   await expect(line.getByRole('button', { name: 'Mina Patel, 2 open' })).toHaveAttribute('aria-pressed', 'true');
   // Everyone's again: the other two are still not sent, and nothing came back ticked.
-  await line.getByRole('button', { name: 'Every owner' }).click();
+  await line.getByRole('button', { name: 'All owners' }).click();
   await expect(ofState(list, 'unsent')).toHaveText([/^Thermostat PRD · Pilot scope/, /^Send the revised quote/]);
   await expect(list.getByRole('checkbox', { checked: true })).toHaveCount(0);
   // No owner: the PRD page alone, whose Pick owner still works. Rafael's now, No owner holds nothing: everyone's again.
@@ -209,7 +209,7 @@ test('a meeting\'s list shows one owner\'s follow-ups at a time, and Send sends 
   await pickOwner(page, 'Rafael Moreno', 'Raf');
   await expect(list.getByTestId('follow-ups-said')).toHaveText('Owner changed to Rafael');
   await expect(rows).toHaveCount(4);
-  await expect(line.getByRole('button', { name: 'Every owner' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(line.getByRole('button', { name: 'All owners' })).toHaveAttribute('aria-pressed', 'true');
   await expect(line.getByRole('button', { name: 'No owner, 1' })).toHaveCount(0);
   await expect(rowOf(rows, 'Thermostat PRD').getByRole('button', { name: /^Owner: Rafael/ })).toBeFocused();
 });
@@ -229,8 +229,8 @@ test('the Follow-ups page shows who owns what, keeps one owner\'s rows through a
   await expect(rows).toHaveCount(5);
   // Who owns what Ari sent: Ari, Mina and Rafael, each counted by what they hold open; each waited weeks, so each needs
   // attention, and they go by name.
-  expect(await owners(list)).toEqual(['Every owner', 'You, 1 open', 'Mina Patel, 2 open', 'Rafael Moreno, 2 open']);
-  await expect(line.getByRole('button', { name: 'Every owner' })).toHaveAttribute('aria-pressed', 'true');
+  expect(await owners(list)).toEqual(['All owners', 'You, 1 open', 'Mina Patel, 2 open', 'Rafael Moreno, 2 open']);
+  await expect(line.getByRole('button', { name: 'All owners' })).toHaveAttribute('aria-pressed', 'true');
   // A row: its mark (open for weeks, solid orange), its owner, its project's tile, how long it waited; the rest on hover.
   const echo12 = rowOf(rows, 'ECHO-12');
   await expect(echo12.locator('.follow-up-state')).toHaveAttribute('data-tone', 'late');
@@ -259,7 +259,7 @@ test('the Follow-ups page shows who owns what, keeps one owner\'s rows through a
   await expect(rows).toHaveCount(2);
   await page.getByTestId('sidebar-follow-ups').click();
   await expect(rows).toHaveCount(5);
-  await expect(line.getByRole('button', { name: 'Every owner' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(line.getByRole('button', { name: 'All owners' })).toHaveAttribute('aria-pressed', 'true');
 });
 
 /** Pilot planning as Ari approved it in the checked modes. */
