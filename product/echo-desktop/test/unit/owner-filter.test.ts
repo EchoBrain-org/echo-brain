@@ -25,7 +25,9 @@ beforeEach(() => {
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(new Held(), {
     runs: params => {
-      const request = params.request as { operation: string; states?: string[]; item_id?: string; items?: { item_id: string; include: boolean }[] };
+      const request = params.request as {
+        operation: string; states?: string[]; item_id?: string; items?: { item_id: string; include: boolean }[]; state?: OpenItemView['state']; owner_membership_id?: string;
+      };
       if (request.operation === 'items') {
         const items = rows.filter(item => !request.states || request.states.includes(item.state));
         const count = (state: OpenItemView['state']) => rows.filter(item => item.state === state).length;
@@ -42,6 +44,15 @@ beforeEach(() => {
           return sent ? { ...item, state: sent.include ? 'open' : 'not_relevant', sent_at: '2026-10-14T11:00:00.000Z', state_set_at: '2026-10-14T11:00:00.000Z' } : item;
         });
         return ok({ sent: request.items!.filter(entry => entry.include).length, not_relevant: 0 });
+      }
+      if (request.operation === 'assign') {
+        const to = [MINA, RAFAEL, ME].find(person => person.membership_id === request.owner_membership_id)!;
+        rows = rows.map(item => (item.item_id === request.item_id ? { ...item, owner: { ...to, match: 'picked' }, owner_set_at: '2026-10-14T11:00:00.000Z', owner_set_by: ME } : item));
+        return ok({});
+      }
+      if (request.operation === 'set_state') {
+        rows = rows.map(item => (item.item_id === request.item_id ? { ...item, state: request.state!, state_set_at: '2026-10-14T11:00:00.000Z', state_set_by: ME } : item));
+        return ok({});
       }
       return fail('unavailable', { retryable: true });
     },
@@ -118,6 +129,39 @@ describe('a follow-ups list\'s owner filter', () => {
     await store.openYourFollowUps();
     await flush();
     expect(list(store)).toMatchObject({ scope: 'involved' });
+    expect(list(store).owner).toBeUndefined();
+  });
+
+  it('falls back to everyone\'s for good once none of the rows read is that owner\'s: a later read bringing one back filters nothing', async () => {
+    // Yours, its Done folded: Mina, Rafael and you each hold one open.
+    const open = (n: number, owner: typeof MINA) => followUp(n, { approver: ME, owner: { ...owner, match: 'name' } });
+    rows = [open(1, MINA), open(2, RAFAEL), open(3, ME)];
+    const store = await startStore();
+    await store.openYourFollowUps();
+    await flush();
+    store.filterOwner(MINA.membership_id);
+    // Her one row marked done on its page, then Back: the list is read again as far as it shows (its current work), so none of hers.
+    await store.openFollowUp(id(1), rows[0]!);
+    await flush();
+    await store.setFollowUpState('done');
+    store.closeFollowUp();
+    await flush();
+    expect(list(store).items.map(item => item.item_id)).toEqual([id(2), id(3)]);
+    expect(list(store).owner).toBeUndefined();
+    // Done opened: her done row is read back in, and everyone's still show, as All said they would.
+    store.toggleClosedGroup('done');
+    await flush();
+    expect(list(store).items.map(item => item.item_id)).toEqual([id(2), id(3), id(1)]);
+    expect(list(store).owner).toBeUndefined();
+  });
+
+  it('falls back to everyone\'s too when its owner\'s last row is given to someone else from the list', async () => {
+    const store = await meeting();
+    store.filterOwner(RAFAEL.membership_id);
+    store.toggleOwnerPicker(id(3));
+    await flush();
+    await store.pickFollowUpOwner({ membership_id: MINA.membership_id, display_name: MINA.name });
+    expect(list(store).items.find(item => item.item_id === id(3))?.owner.membership_id).toBe(MINA.membership_id);
     expect(list(store).owner).toBeUndefined();
   });
 

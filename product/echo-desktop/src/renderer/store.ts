@@ -26,7 +26,7 @@ import { renamedProject, reread } from './feed.js';
 import { askedWhen } from './format.js';
 import * as freshness from './freshness.js';
 import { meetingMessage, message } from './messages.js';
-import { ACTIVE_STATES, CLOSED_STATES, firstName, ownerRows, reopenSends, sentWords } from './needs.js';
+import { ACTIVE_STATES, CLOSED_STATES, firstName, ownerRows, ownerShown, reopenSends, sentWords } from './needs.js';
 
 /** Only me: everything only you can read, filed in a project or not (ADR-0049). Follow-ups: everything you sent, own or last handed on. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'only-me' } | { page: 'tools' } | { page: 'decision' }
@@ -6529,7 +6529,8 @@ interface ListFields extends ChangeView {
   opened?: string;
   /**
    * The owner line's filter (One place to look v1, F3): only this owner's rows (their membership id, or `none` for the rows
-   * waiting for one); none, everyone's. Kept with the list, so it holds through its item pages and reads; a new list has none.
+   * waiting for one); none, everyone's. Kept with the list, so it holds through its item pages and reads while one of its rows is
+   * that owner's; once none is, it is dropped (All), so a later read bringing one back filters nothing. A new list has none.
    */
   owner?: string;
 }
@@ -6600,7 +6601,9 @@ function changeView(): FollowUpList | ItemPage | null {
 
 function setView(view: FollowUpView): void {
   const stack = followUpsShown();
-  if (stack?.views.some(entry => entry.seq === view.seq)) set({ followUps: { ...stack, views: stack.views.map(entry => (entry.seq === view.seq ? view : entry)) } });
+  // A list's owner filter with none of its rows left shows everyone's (All), and stays so: a later read bringing one back filters nothing.
+  const next = view.kind === 'list' && view.owner !== undefined && ownerShown(view.items, view.owner) === null ? { ...view, owner: undefined } : view;
+  if (stack?.views.some(entry => entry.seq === view.seq)) set({ followUps: { ...stack, views: stack.views.map(entry => (entry.seq === view.seq ? next : entry)) } });
 }
 
 /** A view opened over what shows: the page, or the view before it. */
