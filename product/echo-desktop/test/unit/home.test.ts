@@ -154,6 +154,7 @@ async function authority(method: string, params: { project_id?: string; request?
   const unavailable = fail('unavailable', { retryable: true });
   switch (method) {
     case 'app.status': return ok(fx.signedIn ? { signed_in: true, account: { ...ACCOUNT, membership_id: fx.member } } : { signed_in: false, account: null });
+    case 'account.signOut': fx.signedIn = false; return ok({ signed_in: false, account: null, client_version: 'test' });
     case 'projects.list': return ok({ items: [], next_cursor: null });
     case 'projects.members': return ok({ items: [], next_cursor: null });
     case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });
@@ -1336,6 +1337,40 @@ describe('Checks keep moving (one place to look v1)', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(starts()).toEqual([]);
   });
+
+  it.each(['on Home', 'after another page opens'] as const)(
+    'never lifts the hold of a load after signing out and back in as the same person with the tools that person\'s last Try again read, %s',
+    async when => {
+      fx.granola = 'linked';
+      fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+      fx.run = impactRun('pending');
+      fx.failTools = true;
+      const store = await start();
+      // Try again, its tools still on their way as the person signs out, then back in, and the new load's tools cannot be read.
+      fx.failTools = false;
+      fx.hold.tools = true;
+      void store.loadHome();
+      await flush();
+      fx.hold.tools = false;
+      store.accountCommand('signout');
+      await store.signOut();
+      await flush();
+      expect(store.getState().status?.signed_in).toBe(false);
+      fx.failTools = true;
+      fx.signedIn = true;
+      await store.refreshStatus();
+      await flush();
+      expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
+      if (when === 'after another page opens') await store.openProject(project);
+      // The earlier Try again's tools answer: the new load's hold stays, so a meeting approved elsewhere starts nothing.
+      release('tools');
+      await flush();
+      if (when === 'on Home') await store.openProject(project);
+      fx.moved.reviews = 1;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(starts()).toEqual([]);
+    },
+  );
 
   it('stops at sign-out, and signing in again on another page starts what is queued there', async () => {
     const store = await checking();

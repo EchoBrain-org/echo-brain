@@ -5852,7 +5852,8 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
   const home = homeShown(mine);
   if (!home) {
     // Tools that answered lift their hold, though Home was left before they did: this load was the Try again it waits for (R4).
-    if (tools && !toolsFailure && sameExpect(expect(), account)) runsHeld = false;
+    // Only while it is still Home's newest load: a newer one (after a sign-out and in, even as the same person) holds its own.
+    if (tools && !toolsFailure && state.home?.seq === mine && sameExpect(expect(), account)) runsHeld = false;
     if (runSeq === ran && !toolsFailure && !runsHeld && homeShown() === null && sameExpect(expect(), account) && runsGo()) {
       const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
       if (runs.status === 'fulfilled') endedOffHome(runs.value.runs);
