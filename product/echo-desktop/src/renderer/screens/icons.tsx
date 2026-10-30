@@ -121,3 +121,45 @@ export const KindMark = ({ kind }: { kind: 'approve' | 'send' | 'update' | 'revi
     case 'checking': return <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.4" stroke="currentColor" stroke-width="1.5" fill="none" /></svg>;
   }
 };
+
+/** My projects: four tiles, in outline. */
+export const Grid = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="1.5" y="1.5" width="4.5" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none" /><rect x="8" y="1.5" width="4.5" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none" /><rect x="1.5" y="8" width="4.5" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none" /><rect x="8" y="8" width="4.5" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none" /></svg>
+);
+/** Me on Home's map: a sight on yourself. */
+export const Locate = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="1.7" fill="none" /><circle cx="12" cy="12" r="2.2" fill="currentColor" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
+);
+/** A ticket's row: a ticket stub, in outline. */
+export const Ticket = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h13A1.5 1.5 0 0 1 20 7.5V10a2 2 0 0 0 0 4v2.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 16.5V14a2 2 0 0 0 0-4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none" /><path d="M14 6.5v11" stroke="currentColor" stroke-width="1.4" stroke-dasharray="1.6 2" /></svg>
+);
+
+/**
+ * The mark Home's altitudes share (Home altitude v1): a ring that fills as
+ * work finishes, a pie of `fraction` inside it, and full with a tick when it
+ * is all done. Dashed while nothing has been sent. Its tone says whether it
+ * needs attention (signal) or is done.
+ */
+export const Ring = ({ fraction, tone = 'muted', dashed = false }: { fraction: number; tone?: 'muted' | 'done' | 'signal' | 'faint'; dashed?: boolean }) => {
+  const colour = `var(--ring-${tone})`;
+  const angle = Math.min(Math.max(fraction, 0), 1) * 2 * Math.PI;
+  const x = 7 + 3.4 * Math.sin(angle), y = 7 - 3.4 * Math.cos(angle);
+  return (
+    <svg class="ring-mark" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <circle cx="7" cy="7" r="5.8" stroke={colour} stroke-width="1.4" fill="none" stroke-dasharray={dashed ? '1.8 2.2' : undefined} />
+      {fraction >= 1 ? <>
+        <circle cx="7" cy="7" r="5.8" fill={colour} />
+        <path d="M4.3 7.1l1.9 1.9 3.5-3.7" stroke="var(--ink)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+      </> : fraction > 0 && <path d={`M7 7L7 3.6A3.4 3.4 0 ${fraction > 0.5 ? 1 : 0} 1 ${x.toFixed(2)} ${y.toFixed(2)}Z`} fill={colour} />}
+    </svg>
+  );
+};
+
+/** A project's health: a calm dot on track, an orange ring at risk, a solid orange dot off track. */
+export const HealthDot = ({ health }: { health: 'on' | 'risk' | 'off' }) => (
+  <svg class={`health-mark ${health}`} width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+    {health === 'risk' ? <circle cx="5" cy="5" r="3.6" stroke="var(--signal)" stroke-width="1.6" fill="none" />
+      : <circle cx="5" cy="5" r="4" fill={health === 'off' ? 'var(--signal)' : 'var(--done)'} />}
+  </svg>
+);

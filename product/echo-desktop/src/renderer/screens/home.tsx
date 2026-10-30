@@ -5,6 +5,7 @@ import { actionCount, homeFooter, itemLine, itemNames, meetingSuffix, monthDay, 
 import {
   awaitingLive, homeRows, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openOnlyMe, openYourFollowUps, type NeedRow, type State,
 } from '../store.js';
+import { Altitude, Stops } from './altitude.js';
 import { KindMark, Lock, Plus } from './icons.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
@@ -179,12 +180,25 @@ export function Footer({ state }: { state: State }) {
 }
 
 /**
- * Home: only what waits on you. Decisions from meetings to approve, checks
+ * Home: the stops, then Me (only what waits on you) or, zoomed out, your
+ * projects, one project or one person (Home altitude v1).
+ */
+export function Home({ state }: { state: State }) {
+  return (
+    <div class="home" data-testid="home">
+      <Stops state={state} />
+      {state.altitude.level === 'me' ? <NeedsYou state={state} /> : <Altitude state={state} />}
+    </div>
+  );
+}
+
+/**
+ * Me: only what waits on you. Decisions from meetings to approve, checks
  * to retry, meetings you approved with follow-ups to send, follow-ups that
  * wait on you, and checks still on their way; grouped once it is long.
  * Projects live in the sidebar.
  */
-export function Home({ state }: { state: State }) {
+function NeedsYou({ state }: { state: State }) {
   // Groups opened past their first five rows stay open while Home is on screen.
   const [open, setOpen] = useState<ReadonlySet<HomeGroupName>>(new Set());
   const home = state.home;
