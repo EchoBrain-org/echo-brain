@@ -802,8 +802,10 @@ function applyStatus(status: AppStatus): void {
     // A sign-out the host lost mid-way did happen: the account goes as it would have. Any other sign-out still drops what
     // a screen keeps beside its sheet, as the sheet goes, even one the cover has away.
     if (signOutPending) { signOutPending = null; forgetAccount(); } else dropAccountKeeps();
-    // No one to check for: signing in again starts over, learning what is there, and reads the timeline again.
+    // No one to check for: signing in again starts over, learning what is there, and reads the timeline again. No run starts
+    // for no one either, even from a list on its way.
     freshness.stop();
+    stopRunPolling();
     forgetTimeline();
     set({ news: new Set(), visit: null });
     emptyBar();
@@ -829,6 +831,8 @@ function applyStatus(status: AppStatus): void {
   signOutPending = null;
   if (!same || !wasSignedIn) {
     void loadHome();
+    // Checks move on any page: away from Home, or covered, the driver looks at the runs itself (R4).
+    kickRuns();
     // This account's Ask timeline on this computer (ADR-0047), and when it last opened each project.
     void loadTimeline();
     rememberSeen(lastAccount);
@@ -907,6 +911,11 @@ function forgetAccount(): void {
   openUnread = false;
   resultOwed = false;
   sweepOwed = null;
+  // So were the driver's runs list, Home's hold on it and a start or look on its way: the next account's go at once.
+  runsSeen = [];
+  runsHeld = false;
+  starting = null;
+  looking = null;
   lastAccount = null;
   // A Home load on its way is the last account's: the next one starts afresh.
   homeLoading = null;
@@ -5092,10 +5101,11 @@ let comingBack = false;
 
 /**
  * Where the window stands, as main says when it changes. Not in front: the
- * page is covered (the privacy cover), and its live reads and polls stop. In
- * front: it uncovers. On screen and in front again: ECHO came back, and what
- * shows is read again (R4). Owed reads wait while the window cannot be seen
- * (R6). Answers the return's reads when it came back, else null.
+ * page is covered (the privacy cover), and its live reads and polls stop;
+ * checks keep moving, by the runs list alone (R1). In front: it uncovers. On
+ * screen and in front again: ECHO came back, and what shows is read again
+ * (R4). Owed reads wait while the window cannot be seen (R6). Answers the
+ * return's reads when it came back, else null.
  */
 export function windowState(next: { onScreen: boolean; front: boolean }): Promise<void> | null {
   const back = next.onScreen && next.front && !canSee();
@@ -5113,7 +5123,6 @@ export function windowState(next: { onScreen: boolean; front: boolean }): Promis
  * again for the account on return.
  */
 function conceal(): void {
-  stopRunPolling();
   // The source pane closes and forgets what it read; the records are read again on return.
   const reading = state.sources !== null;
   // People closes, as the sidebar's rows must take a drop; unless a change in it is on its way.
@@ -5194,6 +5203,8 @@ const reading = new Set<Surface>();
 function owe({ back, areas }: { readonly back: boolean; readonly areas: readonly freshness.ScreenArea[] }): void {
   if (back) comingBack = false;
   if (!expect()) return;
+  // Coming back, or a meeting approved or published anywhere (the reviews moved): a check may wait to start, on any page (R4).
+  if (back || areas.includes('reviews')) kickRuns();
   for (const surface of SURFACES) {
     if ((back || surface.areas.some(area => areas.includes(area))) && surface.shows()) owed.set(surface, back || owed.get(surface) === true);
   }
@@ -5701,6 +5712,11 @@ function checkEnded(before: readonly PersonRunV1[], after: readonly PersonRunV1[
   return before.some(run => going(run) && !after.some(next => next.run_id === run.run_id && going(next)));
 }
 
+/** The sweep Home asked for is no longer going in this list: what it found is owed. */
+function swept(runs: readonly PersonRunV1[]): boolean {
+  return sweepOwed !== null && !runs.some(run => run.run_id === sweepOwed && going(run));
+}
+
 /** Tools that could not be read: they fail Home's load, which says so with their own failure. */
 class ToolsFailed extends CommandFailed {}
 
@@ -5741,6 +5757,7 @@ async function readReviews(mine: number, tools: Promise<Result<ConnectedTools>> 
  * are read; their live read goes on, and alone says whether a sweep is due.
  */
 async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promise<Result<ConnectedTools>>): Promise<void> {
+  const account = expect();
   const before = state.home?.runs ?? [];
   /** One part, shown once read while Home is still this read's; answered as settled. */
   const shown = <T>(read: Promise<T>, apply: (value: T) => Partial<HomeState>): Promise<PromiseSettledResult<T>> => read.then(
@@ -5750,7 +5767,6 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
       return { status: 'fulfilled' as const, value };
     },
     (reason: unknown) => ({ status: 'rejected' as const, reason }));
-  const swept = (runs: readonly PersonRunV1[]) => sweepOwed !== null && !runs.some(run => run.run_id === sweepOwed && going(run));
   const ended = (runs: readonly PersonRunV1[]) => checkEnded(before, runs) || swept(runs);
   const reviewsRead = shown(readReviews(mine, tools), reviews => ({ reviews }));
   const runsRead = shown(runsCommand({ schema_version: 1, operation: 'list' }), value => {
@@ -5763,17 +5779,25 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
   const checkSwept = runs.status === 'fulfilled' && swept(runs.value.runs);
   if (waiting === null && homeShown(mine) && (openUnread || resultOwed)) waiting = readWaiting(mine, true);
   const unread = waiting ? await waiting.rows : undefined;
-  // A read that is no longer Home's shows nothing, so it settles nothing Home owes either.
-  const home = homeShown(mine);
-  if (!home) return;
   const toolsFailure = reviews.status === 'rejected' && reviews.reason instanceof ToolsFailed ? reviews.reason.failure : undefined;
+  // A read that is no longer Home's shows nothing, so it settles nothing Home owes either. Home was left or covered while it
+  // was on its way: unless a newer Home load drives, the runs it read still do, for the account it read them for (R1, R3).
+  const home = homeShown(mine);
+  if (!home) {
+    if (!toolsFailure && !runsHeld && homeShown() === null && sameExpect(expect(), account) && runsGo()) {
+      const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
+      void driveRuns(runs.status === 'fulfilled' ? runs.value.runs : runsSeen, publishing, runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
+    }
+    return;
+  }
   set({ home: { ...home, loading: false, failure: reviews.status === 'fulfilled' ? undefined : poll ? home.failure : toolsFailure ?? { code: 'unavailable', retryable: true } } });
   if (checkSwept) sweepOwed = null;
   if (waiting) openUnread = unread !== undefined;
   // A check that ended owes a read of what it found (set as its list showed); only a read that brings its rows pays it.
   if (waiting && unread === undefined) resultOwed = false;
   updateDecisionRuns(home.runs);
-  // Tools that could not be read fail the load, as Home says: it waits for Try again, and starts no run meanwhile.
+  // Tools that could not be read fail the load, as Home says: it waits for Try again, and no run starts meanwhile, on any page.
+  if (tools) runsHeld = toolsFailure !== undefined;
   if (toolsFailure) return;
   // The next poll waits longer after a failed runs read, or a failed read of what a check found.
   const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed ? unread : undefined;
@@ -5831,13 +5855,35 @@ async function readHomeLive(mine: number, fresh: boolean): Promise<boolean> {
   return sweepDue;
 }
 
+// ---- checks keep moving: the runs driver (one place to look v1, R1–R4) ---------------------
+
 let runPoll: ReturnType<typeof setTimeout> | null = null;
 let runSeq = 0;
 /** Polls in a row whose runs read failed, or whose start started nothing: each waits longer than the one before. */
 let runFailures = 0;
-/** How often Home looks again while a check is going, and the longest it waits after failed reads. */
+/** How often the driver looks again while a check is going, and the longest it waits after failed reads. */
 const RUN_POLL_MS = 5_000;
 const RUN_POLL_MAX_MS = 60_000;
+/** The runs list the driver last went by, whoever read it: Home's state keeps its own (R3). */
+let runsSeen: readonly PersonRunV1[] = [];
+/** Home could not read the tools: as Home says, no run starts by itself until a Home load reads them (Try again). */
+let runsHeld = false;
+/** The driver's own look on its way, if any: a kick meanwhile has nothing to add. */
+let looking: Promise<void> | null = null;
+
+/**
+ * Checks go wherever ECHO runs for you: signed in, on any page, with the
+ * window in front, behind other apps or closed to the tray (R1). Nothing runs
+ * once ECHO quits, and nothing for no one.
+ */
+function runsGo(): boolean {
+  return Boolean(state.status?.signed_in) && expect() !== null;
+}
+
+/** Home reads its own runs, with what waits on you: while it shows and can be seen. Anywhere else the driver reads the runs list alone. */
+function homeSeen(): HomeState | null {
+  return canSee() ? homeShown() : null;
+}
 
 function stopRunPolling(): void {
   runSeq += 1;
@@ -5848,16 +5894,60 @@ function stopRunPolling(): void {
 function pollRuns(mine: number, delay: number): void {
   runPoll = setTimeout(() => {
     runPoll = null;
-    const home = homeShown();
-    if (mine === runSeq && home) void readHome(home.seq, true);
+    if (mine !== runSeq || !runsGo()) return;
+    const home = homeSeen();
+    if (home) void readHome(home.seq, true);
+    else lookAtRuns();
   }, delay);
 }
 
 /**
+ * Looks at the runs now, when nothing else is about to (R4): on sign-in, on
+ * coming back, when the reviews move (a meeting approved or published), and
+ * once Check now stops following its sweep. Not while Home's tools failed,
+ * a look is armed or on its way, or Home reads its own.
+ */
+function kickRuns(): void {
+  if (!runsGo() || runsHeld || runPoll !== null || looking !== null || homeSeen() !== null) return;
+  lookAtRuns();
+}
+
+function lookAtRuns(): void {
+  const look = readRuns().finally(() => { if (looking === look) looking = null; });
+  looking = look;
+}
+
+/**
+ * The driver's own look, away from Home or while Home cannot be seen: the
+ * runs list alone, none of it written to Home (R3). A check it sees end owes
+ * Home what it found, read once Home shows; the open decision follows its
+ * checks; then the next queued run starts. A Home load, a newer look or
+ * another account since drives instead: this list starts nothing.
+ */
+async function readRuns(): Promise<void> {
+  const account = expect();
+  const mine = runSeq;
+  let listed: readonly PersonRunV1[] | undefined;
+  let failure: Failure | undefined;
+  try {
+    listed = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
+  } catch (error) {
+    failure = failureOf(error);
+  }
+  if (mine !== runSeq || !sameExpect(expect(), account) || !runsGo()) return;
+  if (listed) {
+    if (checkEnded(runsSeen, listed) || swept(listed)) resultOwed = true;
+    if (swept(listed)) sweepOwed = null;
+    updateDecisionRuns(listed);
+  }
+  await driveRuns(listed ?? runsSeen, false, failure);
+}
+
+/**
  * Milliseconds until the next runs read, or null for none. `failures` counts
- * consecutive failed reads. Home looks again only while a check is pending or
- * running, a review is publishing, or what a finished check found is still
- * unread (`owed`); after failed reads it waits twice as long each time (10 s,
+ * consecutive failed reads. The driver looks again only while a check is
+ * pending or running, a review is publishing, or what a finished check found
+ * is still unread (`owed`); after failed reads it waits twice as long each time (10 s,
  * 20 s, at most 60 s). A read that failed as unavailable with nothing in
  * flight is not tried again: an Authority with no model answers so for good,
  * and no check ever ends there.
@@ -5886,36 +5976,52 @@ export function runToStart(runs: readonly PersonRunV1[]): PersonRunV1 | undefine
 const BUSY: Failure = { code: 'busy', retryable: true };
 
 /**
+ * The start on its way, if any. One goes at a time: a start asked for
+ * meanwhile (Home's list and the driver's, or Check now's, can name the same
+ * queued run at once) is answered by it, never sent again (R3). The Authority
+ * runs one check per person, so a second start could only be `busy`.
+ */
+let starting: Promise<Failure | undefined> | null = null;
+
+/**
  * Starts a queued run. A start that starts nothing (refused, failed, or
  * `busy`) is answered with why, so the next look waits longer, as after a
  * failed runs read (ruling R50). A start the Authority holds `pending` (its
  * search index has not caught up yet) is not one: holding costs it a few reads,
- * so Home looks again at the usual pace and the check starts soon after the
- * search index catches up.
+ * so the driver looks again at the usual pace and the check starts soon after
+ * the search index catches up.
  */
-async function startRun(run_id: string): Promise<Failure | undefined> {
-  try {
-    const { state: started } = await runsCommand({ schema_version: 1, operation: 'start', run_id });
-    return started === 'busy' ? BUSY : undefined;
-  } catch (error) {
-    return failureOf(error);
-  }
+function startRun(run_id: string): Promise<Failure | undefined> {
+  if (starting) return starting;
+  const answer = (async () => {
+    try {
+      const { state: started } = await runsCommand({ schema_version: 1, operation: 'start', run_id });
+      return started === 'busy' ? BUSY : undefined;
+    } catch (error) {
+      return failureOf(error);
+    }
+  })();
+  starting = answer;
+  void answer.finally(() => { if (starting === answer) starting = null; });
+  return answer;
 }
 
 /**
- * Runs go only from your signed-in desktop: start the next queued one when
- * none is going, impact checks first, then sweeps (a sweep's attempt that
- * went back to the queue is started again like an impact check's); then look
- * again when `runPollDelay` says. Once no run is queued or going, a sweep
- * Home's live read says is due (`sweepDue`, once it answers) is asked for and
- * started, once per Home load. `failure` is the runs read's, when it failed:
- * the list is the last good one.
+ * Runs go only from your signed-in desktop, on whatever page shows (R1):
+ * start the next queued one when none is going, impact checks first, then
+ * sweeps (a sweep's attempt that went back to the queue is started again like
+ * an impact check's); then look again when `runPollDelay` says, by Home's
+ * reads while Home is seen, else by the runs list alone. Once no run is queued
+ * or going, a sweep Home's live read says is due (`sweepDue`, once it
+ * answers) is asked for and started, once per Home load. `failure` is the
+ * runs read's, when it failed: the list is the last good one.
  */
 async function driveRuns(listed: readonly PersonRunV1[], publishing = false, failure?: Failure, sweepDue = Promise.resolve(false)): Promise<void> {
   stopRunPolling();
+  runsSeen = listed;
   const mine = runSeq;
   const load = homeLoads;
-  const current = () => mine === runSeq && homeShown() !== null;
+  const current = () => mine === runSeq && runsGo();
   // A failed read never skips the start or the sweep request (D6): each is tried, and its failure joins the read's.
   let failed = failure;
   const next = runToStart(listed);
@@ -5931,7 +6037,9 @@ async function driveRuns(listed: readonly PersonRunV1[], publishing = false, fai
     if (!current()) return;
   }
   runFailures = failed ? runFailures + 1 : 0;
-  const delay = runPollDelay({ runs: listed, publishing, failures: runFailures, lastFailure: failed, owed: resultOwed || sweepOwed !== null });
+  // What a finished check found is Home's to read: owed, it keeps the driver looking only while Home reads (R2).
+  const owed = (homeSeen() !== null && resultOwed) || sweepOwed !== null;
+  const delay = runPollDelay({ runs: listed, publishing, failures: runFailures, lastFailure: failed, owed });
   if (delay !== null && current()) pollRuns(mine, delay);
 }
 
@@ -6212,7 +6320,8 @@ export async function retryImpact(run_id: string): Promise<void> {
     if (!shown) return;
     editDecision({ runs: shown.runs.map(item => (item.run_id === run_id ? { ...item, state: 'pending', error_code: null } : item)) });
     const runs = await runsCommand({ schema_version: 1, operation: 'list' });
-    // Home looks again while it runs; away from Home the decision reads its checks once more, as a meeting's line does.
+    // The driver looks again while it runs, on any page; away from Home the decision also reads its checks once more at once, as
+    // a meeting's line does.
     if (homeUnder()) void driveRuns(runs.runs);
     else { await driveRuns(runs.runs); await readRecordRuns(mine); }
   } catch { /* the card still offers Try again */ }
@@ -7210,11 +7319,20 @@ export async function checkNow(): Promise<void> {
  * Check now's sweep, followed until it ends (`done` or `failed`; null once
  * nothing waits on it, `ours`). It is started at once; if another run goes
  * first (`busy`), each runs list says what starts next, impact checks before
- * sweeps. The list is read at Home's pace (`runPollDelay`): longer after a
- * failed read or a start that started nothing, and not while ECHO is behind
- * another app.
+ * sweeps. The list is read at the driver's pace (`runPollDelay`): longer after
+ * a failed read or a start that started nothing; on while ECHO is behind
+ * other apps, as checks are (R1). Once it stops following, the driver goes on
+ * with whatever queued behind its sweep (R4).
  */
 async function followSweep(runId: string, ours: () => boolean): Promise<'done' | 'failed' | null> {
+  try {
+    return await sweepEnded(runId, ours);
+  } finally {
+    kickRuns();
+  }
+}
+
+async function sweepEnded(runId: string, ours: () => boolean): Promise<'done' | 'failed' | null> {
   let next: string | undefined = runId;
   let failures = 0;
   let lastFailure: Failure | undefined;
@@ -7229,7 +7347,7 @@ async function followSweep(runId: string, ours: () => boolean): Promise<'done' |
     await new Promise(resolve => setTimeout(resolve, runPollDelay({ runs: [], publishing: false, failures, lastFailure, owed: true })!));
     next = undefined;
     if (!ours()) return null;
-    if (state.concealed) continue;
+    if (!runsGo()) continue;
     let runs: readonly PersonRunV1[];
     try {
       runs = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
