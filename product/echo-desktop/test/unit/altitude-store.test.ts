@@ -424,17 +424,22 @@ describe('Home altitudes, when loads are cut short or the list is long', () => {
       .toEqual([]);
   });
 
-  it('a project that joins your list while a sweep is on its way is read', async () => {
+  it('a project that joins your list while a load is on its way is read', async () => {
     const store = await startStore();
-    const release = held.hold('runs');
-    store.zoomTo('projects');
+    await flush(80);
+    // Home's first reads are in; a zoom's reads (counts, waiting rows, every row) wait, so its load is on its way, not fresh.
+    const releases = Array.from({ length: 3 }, () => held.hold('runs'));
+    store.zoomTo('project', { project_id: THERMAL.project_id });
     await flush(20);
+    expect(store.getState().altitude.reads[THERMAL.project_id]?.loading).toBe(true);
     const added = project(9, 20, { name: 'Late' });
     lists = { active: [THERMAL, BATTERY, added], archived: [] };
     await store.loadProjects();
-    release(empty());
+    releases.forEach(release => release(anyRuns()));
     await flush(200);
     expect(projectReads(added.project_id).some(request => request.read === 'counts')).toBe(true);
+    const reads = store.getState().altitude.reads;
+    expect([THERMAL, added].map(each => reads[each.project_id]?.loading)).toEqual([false, false]);
   });
 
   it('with more projects than the sidebar’s first page, a project leaving the list sends Home back at once', async () => {
