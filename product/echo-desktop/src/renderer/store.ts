@@ -6,7 +6,7 @@ import type {
 import { useEffect, useState } from 'preact/hooks';
 import type {
   Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool, ContextContent,
-  DocumentText, Employee, Expect, ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView, ProjectActivity,
+  DocumentText, Employee, Expect, ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, PastedMeeting, UpdateState,
 } from '../shared/protocol.js';
@@ -817,7 +817,7 @@ function applyStatus(status: AppStatus): void {
     unresolvedChanged();
     return;
   }
-  const same = lastAccount?.authority === next.authority && lastAccount.membership_id === next.membership_id;
+  const same = sameExpect(lastAccount, next);
   // Someone else: nothing of the last account's survives, not even a draft. Home opens where this account last left it.
   if (!same) { forgetAccount(); set({ altitude: recalledAltitude(next) }); }
   // A new role is a change of access: the bar's text goes, and People & invites is for owners.
@@ -1416,10 +1416,10 @@ async function readProjectPages(account: Expect, status: ListStatus, enough: num
  */
 function showProjectList(status: ListStatus, pages: readonly ProjectPage[], shown: number, first = false): boolean {
   if (!first && state[LIST_KEY[status]].loading) { refreshOwed.add(status); return false; }
-  const items: ProjectSummary[] = [];
+  let items: ProjectSummary[] = [];
   let next: string | null = null;
   for (const page of pages) {
-    items.push(...page.items.filter(project => !items.some(row => row.project_id === project.project_id)));
+    items = appendPage(items, page.items, project => project.project_id);
     next = page.next_cursor;
     if (items.length >= shown) break;
   }
@@ -1624,7 +1624,7 @@ const ACTIVITY_EVERY_MS = 120_000;
 
 /** An account as a short hash (FNV-1a twice over, 16 hex digits): the key its last-opened times are kept under. */
 export function accountHash(account: Expect): string {
-  const text = `${account.authority} ${account.membership_id}`;
+  const text = accountKey(account);
   return [0x811c9dc5, 0x01000193].map(basis => {
     let hash = basis;
     for (const character of text) hash = Math.imul(hash ^ character.codePointAt(0)!, 0x01000193) >>> 0;
@@ -1712,7 +1712,7 @@ async function readActivity(due: boolean): Promise<void> {
   const open = state.route.page === 'project' && !state.concealed ? state.route.project.project_id : null;
   const kept: Record<string, string> = {};
   const news = new Set<string>();
-  for (const { project_id: id, latest_at: at } of result.value.items as readonly ProjectActivity[]) {
+  for (const { project_id: id, latest_at: at } of result.value.items) {
     const last = seen[id];
     if (last === undefined || id === open) { kept[id] = seenNow(at, last); continue; }
     kept[id] = last;
@@ -1792,8 +1792,7 @@ async function loadList(how: 'first' | 'more' | 'quiet'): Promise<void> {
     return;
   }
   const page = result.value;
-  if (how === 'first') { set({ list: { ...current, loading: false, items: [...page.items], next: page.next_cursor } }); return; }
-  set({ list: { ...current, loading: false, items: appendPage(current.items, page.items, refKey), next: page.next_cursor } });
+  set({ list: { ...current, loading: false, items: appendPage(how === 'first' ? [] : current.items, page.items, refKey), next: page.next_cursor } });
 }
 
 function refKey(item: ListItem): string { return `${item.ref.kind}:${item.ref.id}`; }
@@ -2400,12 +2399,9 @@ export function projectToolsSavable(settings: ProjectSettingsState): boolean {
 
 /** What a project reads, as its tools line and Save's toast say it. */
 function readsOf(settings: ProjectSettingsState): Pick<ProjectReads, 'jira' | 'confluence'> {
-  const jira = settings.jira?.value;
-  const confluence = settings.confluence?.value;
-  return {
-    ...(jira ? { jira: jira.mapping?.project_key ?? null } : {}),
-    ...(confluence ? { confluence: confluence.mapping ? confluence.mapping.space_ids.length : null } : {}),
-  };
+  const jira = projectToolReads(settings, 'jira');
+  const confluence = projectToolReads(settings, 'confluence');
+  return { ...(jira !== undefined ? { jira } : {}), ...(confluence !== undefined ? { confluence } : {}) };
 }
 
 export function readsWords(reads: Pick<ProjectReads, 'jira' | 'confluence'>): string[] {
@@ -2587,7 +2583,7 @@ export function confirmProjectSetting(): void {
   if (!settings || projectSettingsBlocked()) return;
   if (settings.rename !== null) {
     const name = projectName(settings.rename);
-    if (!projectRenameValid(settings.rename, settings.project.name) || name === null) return;
+    if (name === null || name === settings.project.name) return;
     void sendProjectSetting(settings.project, 'rename', { name });
     return;
   }
@@ -2910,7 +2906,7 @@ export function confirmMemberChange(): void {
 
 const TOO_MANY_FILES = 'Add up to 20 files.';
 /** Said when New project closes after Create with files that may not have been saved, people who may not have been added, or both. */
-export const UNSAVED_FILES = 'Some files may not have been saved.';
+const UNSAVED_FILES = 'Some files may not have been saved.';
 const UNADDED_PEOPLE = 'Some people may not have been added.';
 const UNFINISHED = 'Some people and files may not have been added.';
 /** The toasts that warn, shown with the warning mark. */
@@ -4202,7 +4198,7 @@ export function activeTurn(current: State = state): TimelineTurn | undefined {
 }
 
 /** The citations of that turn's answer: the first 32. */
-export function answerSources(current: State = state): readonly AnswerSource[] {
+function answerSources(current: State = state): readonly AnswerSource[] {
   return activeTurn(current)?.answer.sources.slice(0, MAX_SOURCES) ?? [];
 }
 
@@ -4291,7 +4287,7 @@ export function litAtoms(current: State, target: PaneTarget): ReadonlySet<string
 }
 
 /** Where `atoms` are in a meeting Ask read: each one's section and place. */
-export function citedItems(record: ApprovedRecord, atoms: ReadonlySet<string>): CitedItem[] {
+function citedItems(record: ApprovedRecord, atoms: ReadonlySet<string>): CitedItem[] {
   return RECORD_SECTIONS.flatMap(section => record[section].items.flatMap((item, index) =>
     item.atom_id !== undefined && atoms.has(item.atom_id) ? [{ section, index }] : []));
 }
@@ -4328,10 +4324,8 @@ export function openFullPage(): void {
   const read = source.kind === 'record' ? state.sources?.records[source.record.record_sha256] : undefined;
   const cited = read !== undefined && !read.loading && 'value' in read ? citedItems(read.value, litAtoms(state, target)) : [];
   closeAsk();
-  if (page.kind === 'reader') {
-    void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' },
-      undefined, { cited });
-  }
+  void openReader(page.ref, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' },
+    undefined, { cited });
 }
 
 /**
@@ -4530,21 +4524,17 @@ async function readEvidence(gen: number): Promise<void> {
   if (passages.length === 0) return;
   const mine = ++seq;
   set({ sources: { ...sources, evidence: { seq: mine, group: target.number, reads: Object.fromEntries(passages.map(([place]) => [place, { loading: true }])) } } });
-  let next = 0;
-  const reader = async () => {
+  await inTurns(passages, EVIDENCE_READS_AT_ONCE, async ([place, ref]) => {
     // A pane that moved on, or another app in front, stops the rest.
-    while (next < passages.length && sourcesAt(gen)?.evidence?.seq === mine) {
-      const [place, ref] = passages[next++]!;
-      const result = await rpc('ask.source', { expect: account, scope, ref });
-      // Replies for another source or answer, or that land while another app is in front, are dropped.
-      const now = sourcesAt(gen);
-      if (now?.evidence?.seq !== mine) return;
-      set({ sources: { ...now, evidence: { ...now.evidence, reads: { ...now.evidence.reads,
-        [place]: result.ok ? { loading: false, value: result.value } : { loading: false, failure: result.failure } } } } });
-      if (!result.ok) accountLost(result.failure);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(EVIDENCE_READS_AT_ONCE, passages.length) }, reader));
+    if (sourcesAt(gen)?.evidence?.seq !== mine) return;
+    const result = await rpc('ask.source', { expect: account, scope, ref });
+    // Replies for another source or answer, or that land while another app is in front, are dropped.
+    const now = sourcesAt(gen);
+    if (now?.evidence?.seq !== mine) return;
+    set({ sources: { ...now, evidence: { ...now.evidence, reads: { ...now.evidence.reads,
+      [place]: result.ok ? { loading: false, value: result.value } : { loading: false, failure: result.failure } } } } });
+    if (!result.ok) accountLost(result.failure);
+  });
 }
 
 /** Try again, on the original the pane shows: all its passages, read again. */
@@ -5057,7 +5047,7 @@ export function canDrop(event: DragEvent): boolean {
  */
 export async function acceptDrop(file: File, on: ProjectSummary | 'window' | 'sheet'): Promise<void> {
   if (!expect() || sheetShown() || projectSettingsModal()) return;
-  const target = on === 'window' || on === 'sheet' ? (on === 'window' ? state.route.page === 'project' ? state.route.project : null : null) : on;
+  const target = on === 'sheet' ? null : on === 'window' ? (state.route.page === 'project' ? state.route.project : null) : on;
   if (target?.status === 'archived') { set({ toast: 'Restore this project to add files or notes.' }); return; }
   const result = await dropFile(file);
   if (!expect() || sheetShown() || projectSettingsModal()) return;
@@ -5294,7 +5284,7 @@ export type NeedRow =
   | { kind: 'failed'; review: PersonMeetingReviewV2; run: PersonRunV1 }
   | { kind: 'send'; send: HomeView['send'][number] }
   | { kind: 'update' | 'review'; item: OpenItemView };
-export interface HomeState {
+interface HomeState {
   seq: number;
   loading: boolean;
   failure?: Failure;
@@ -5328,11 +5318,11 @@ export function destinationFrom(value: { readonly project_ids: readonly string[]
   return value.project_ids === null ? null : destinationOf(value.project_ids, value.private === true);
 }
 /** Whether a destination is filed in projects for you alone: the lock, pressed while projects are ticked. */
-export function keptPrivate(destination: Destination): boolean {
+function keptPrivate(destination: Destination): boolean {
   return destination !== null && destination.projects.length > 0 && destination.private;
 }
 /** One record's follow-ups counted on the decision page, by its check. */
-export interface RecordLine { summary: OpenItemsView['summary'] | null; stage: PersonImpactStageV1 | null }
+interface RecordLine { summary: OpenItemsView['summary'] | null; stage: PersonImpactStageV1 | null }
 
 /**
  * The decision open from Home, or from a meeting's follow-ups: what was proposed, where each decision and action goes,
@@ -5875,7 +5865,7 @@ function pollRuns(mine: number, delay: number): void {
 export function runPollDelay(input: {
   readonly runs: readonly PersonRunV1[]; readonly publishing: boolean; readonly failures: number; readonly lastFailure?: Failure; readonly owed?: boolean;
 }): number | null {
-  const inFlight = input.publishing || input.owed === true || input.runs.some(run => run.state === 'pending' || run.state === 'running');
+  const inFlight = input.publishing || input.owed === true || input.runs.some(going);
   if (input.failures === 0) return inFlight ? RUN_POLL_MS : null;
   if (!inFlight && input.lastFailure?.code === 'unavailable') return null;
   return Math.min(RUN_POLL_MAX_MS, RUN_POLL_MS * 2 ** input.failures);
@@ -7120,7 +7110,7 @@ function backTo(at: number): void {
   pickerSeq += 1;
   if (stack.views.slice(at + 1).some(view => view.kind === 'decision' && view.seq === state.decision?.seq)) {
     set({ decision: null });
-    // Its line counted the meeting by its check: a meeting's reader under them counts it by its record again.
+    // A meeting's reader under them reads its line again.
     if (state.reader?.ref.kind === 'meeting') void loadLine('impactLine', 'record', state.reader.ref.id);
   }
   if (at < 0) {
@@ -7146,7 +7136,7 @@ function backTo(at: number): void {
   }
 }
 
-/** After follow-ups changed, what they were over is read again: Home, a meeting's line (in the reader or on its decision), a project's line. */
+/** After follow-ups changed, what they were over is read again: Home, a meeting's line in the reader, a project's line. */
 function refreshUnder(): void {
   const route = state.route;
   if (route.page === 'home') void loadHome(false);
