@@ -26,7 +26,7 @@ import { renamedProject, reread } from './feed.js';
 import { askedWhen } from './format.js';
 import * as freshness from './freshness.js';
 import { meetingMessage, message } from './messages.js';
-import { ACTIVE_STATES, CLOSED_STATES, firstName, ownerRows, reopenSends, sentWords } from './needs.js';
+import { ACTIVE_STATES, CLOSED_STATES, firstName, ownerRows, ownerShown, reopenSends, sentWords } from './needs.js';
 
 /** Only me: everything only you can read, filed in a project or not (ADR-0049). Follow-ups: everything you sent, own or last handed on. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'only-me' } | { page: 'tools' } | { page: 'decision' }
@@ -6548,7 +6548,8 @@ interface ListFields extends ChangeView {
   opened?: string;
   /**
    * The owner line's filter (One place to look v1, F3): only this owner's rows (their membership id, or `none` for the rows
-   * waiting for one); none, everyone's. Kept with the list, so it holds through its item pages and reads; a new list has none.
+   * waiting for one); none, everyone's. Kept with the list, so it holds through its item pages and reads while one of its rows is
+   * that owner's; once none is, it is dropped (All), so a later read bringing one back filters nothing. A new list has none.
    */
   owner?: string;
 }
@@ -6619,7 +6620,9 @@ function changeView(): FollowUpList | ItemPage | null {
 
 function setView(view: FollowUpView): void {
   const stack = followUpsShown();
-  if (stack?.views.some(entry => entry.seq === view.seq)) set({ followUps: { ...stack, views: stack.views.map(entry => (entry.seq === view.seq ? view : entry)) } });
+  // A list's owner filter with none of its rows left shows everyone's (All), and stays so: a later read bringing one back filters nothing.
+  const next = view.kind === 'list' && view.owner !== undefined && ownerShown(view.items, view.owner) === null ? { ...view, owner: undefined } : view;
+  if (stack?.views.some(entry => entry.seq === view.seq)) set({ followUps: { ...stack, views: stack.views.map(entry => (entry.seq === view.seq ? next : entry)) } });
 }
 
 /** A view opened over what shows: the page, or the view before it. */
@@ -7379,8 +7382,9 @@ export async function openListDecision(): Promise<void> {
 /**
  * Check now, faint on a meeting's or a project's list (canvas 9.6, 9.7): a
  * sweep of that scope. With nothing open the list says so; otherwise
- * "Checking…" until the sweep ends, then the list is read again. A sweep that
- * fails says so, and Try again asks for another.
+ * "Checking…" until the sweep ends, then the list is read again, and what
+ * it found is read on Back by what is under it, as after a change. A sweep
+ * that fails says so, and Try again asks for another.
  */
 export async function checkNow(): Promise<void> {
   const list = shownView('list');
@@ -7408,7 +7412,9 @@ export async function checkNow(): Promise<void> {
   const now = ours();
   if (!now || ended === null) return;
   setView({ ...now, check: ended === 'done' ? null : 'failed' });
-  if (ended === 'done') await readList(now.seq, 'again');
+  if (ended !== 'done') return;
+  changedFrom(now.seq);
+  await readList(now.seq, 'again');
 }
 
 /**

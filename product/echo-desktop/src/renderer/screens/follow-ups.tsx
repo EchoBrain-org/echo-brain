@@ -4,9 +4,9 @@ import type { Member, OpenItemView, ProjectSummary } from '../../shared/protocol
 import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
-  checkWords, CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, homeFooter, itemHistory, itemKind, itemNames, itemTitle,
-  liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
-  type OwnerFace,
+  checkWords, CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, itemHistory, itemKind, itemNames, itemTitle,
+  lastChecked, liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
+  summaryTotal, type OwnerFace,
 } from '../needs.js';
 import {
   altitudeProjects, awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, filterOwner, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps,
@@ -212,8 +212,9 @@ function Row({ state, list, item, label, name, now, ticking }: {
 /**
  * The owner line (K, F3): All, then a face for everyone who owns a row read,
  * counted by what they hold open now, then No owner. A face shows only their
- * rows; All, or the same face again, shows everyone's. Counts cover the rows
- * read so far: they grow as More reads more.
+ * rows; All, or the same face again, shows everyone's. Each button's hover,
+ * over its face too, says whose ("You" for you) and what a click does. Counts
+ * cover the rows read so far: they grow as More reads more.
  */
 function Owners({ faces, shown, me }: { faces: readonly OwnerFace[]; shown: string | null; me: string | null }) {
   const pick = (face: OwnerFace) => {
@@ -223,14 +224,14 @@ function Owners({ faces, shown, me }: { faces: readonly OwnerFace[]; shown: stri
         aria-label={`${who}, ${face.key === 'none' ? face.count : `${face.count} open`}`}
         title={face.key === 'none' ? `No owner yet · ${face.count} · show only those` : `${who} · ${face.count} open now · show only ${face.key === me ? 'yours' : 'theirs'}`}
         onClick={() => filterOwner(face.key)}>
-        {face.key === 'none' ? <span class="follow-up-none" aria-hidden="true" /> : <FaceMark membership_id={face.key} name={face.name} />}
+        {face.key === 'none' ? <span class="follow-up-none" aria-hidden="true" /> : <FaceMark membership_id={face.key} name={face.name} titled={false} />}
         {(face.key === 'none' || face.count > 0) && <span class="follow-ups-n">{face.count}</span>}
       </button>
     );
   };
   return (
     <div class="follow-ups-owners" role="group" aria-label="Show follow-ups by owner">
-      <button type="button" class="follow-ups-owner all" data-testid="follow-ups-owner" data-key="" aria-pressed={shown === null} aria-label="Every owner"
+      <button type="button" class="follow-ups-owner all" data-testid="follow-ups-owner" data-key="" aria-pressed={shown === null} aria-label="All owners"
         title="Show every follow-up" onClick={() => filterOwner(null)}>All</button>
       {faces.map(pick)}
     </div>
@@ -338,7 +339,8 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
     );
   };
   const foot = ticked > 0 || list.said !== null;
-  const checked = list.scope === 'involved' ? homeFooter(state.home?.open ?? null).checked : null;
+  // Yours says when ECHO last checked: by its own read, which every read of it brings fresh, or Home's, when read since.
+  const checked = list.scope === 'involved' ? lastChecked([list.summary?.last_checked_at, state.home?.open?.last_checked_at], now) : null;
   return (
     <div class="column follow-ups" data-testid="follow-ups" ref={column} aria-busy={list.loading || list.busy}>
       <Head list={list} />

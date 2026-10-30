@@ -73,9 +73,9 @@ const PROJECT = { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 
 /**
  * Your Follow-ups page, as K draws it: Mina's ticket open nine days (late), Rafael's page open four (needs attention), yours open
  * since this morning, one ECHO found no owner for (not sent for two days), Mina's next not sent since this morning, and
- * Rafael's done one, folded. ECHO last checked two hours ago.
+ * Rafael's done one, folded. Home last read that ECHO checked two hours ago (`homeChecked`); the list's own read, never.
  */
-async function yours(patch: Partial<Pick<FollowUpList, 'owner' | 'expanded'>> = {}): Promise<Node> {
+async function yours(patch: Partial<Pick<FollowUpList, 'owner' | 'expanded' | 'summary'>> = {}, homeChecked: string | null = daysAgo(2 / 24)): Promise<Node> {
   const { getState } = await import('../../src/renderer/store.js');
   const { FollowUps } = await import('../../src/renderer/screens/follow-ups.js');
   const decision = { ...followUp(1).decision!, project_ids: [PROJECT.project_id] };
@@ -95,7 +95,7 @@ async function yours(patch: Partial<Pick<FollowUpList, 'owner' | 'expanded'>> = 
     picker: null, stale: false, ...patch,
   };
   const home = { seq: 1, loading: false, meetings: true, reviews: [], runs: [], live: {}, reading: false,
-    open: { send: [], items: [], landed: 0, waiting: 2, last_checked_at: new Date(NOW - 2 * 3_600_000).toISOString(), sweep_due: false } };
+    open: { send: [], items: [], landed: 0, waiting: 2, last_checked_at: homeChecked, sweep_due: false } };
   const state = { ...getState(), status: { signed_in: true, account: ACCOUNT }, home, projects: { items: [PROJECT], next: null, loading: false } } as unknown as State;
   return render(FollowUps({ state, list })) as Node;
 }
@@ -116,11 +116,34 @@ describe('your Follow-ups page (One place to look v1, K)', () => {
     expect(text(byTestId(tree, 'follow-ups-checked'))).toBe('ECHO checked 2 h ago');
   });
 
+  it('says when ECHO last checked from the list\'s own read too, which is newer than Home\'s once a check finished off Home', async () => {
+    const summary = { ...EMPTY_SUMMARY, unsent: 2, open: 3, done: 1, last_checked_at: daysAgo(5 / 1440) };
+    expect(text(byTestId(await yours({ summary }), 'follow-ups-checked'))).toBe('ECHO checked 5 min ago');
+    // Home not read yet, or never told of a check: the list's own read still says it.
+    expect(text(byTestId(await yours({ summary }, null), 'follow-ups-checked'))).toBe('ECHO checked 5 min ago');
+    // Neither read knows of one: nothing is said.
+    expect(byTestId(await yours({}, null), 'follow-ups-checked')).toEqual([]);
+    // Home read since the list was (a decision page opened over it): Home's newer time.
+    expect(text(byTestId(await yours({ summary: { ...summary, last_checked_at: daysAgo(3) } }), 'follow-ups-checked'))).toBe('ECHO checked 2 h ago');
+  });
+
   it('shows who owns what: All, then a face per owner counted by what they hold open, needing attention first, then No owner', async () => {
     const buttons = ownerButtons(await yours());
-    expect(buttons.map(button => button.props['aria-label'])).toEqual(['Every owner', 'Mina Patel, 1 open', 'Rafael Moreno, 1 open', 'You, 1 open', 'No owner, 1']);
+    expect(buttons.map(button => button.props['aria-label'])).toEqual(['All owners', 'Mina Patel, 1 open', 'Rafael Moreno, 1 open', 'You, 1 open', 'No owner, 1']);
     expect(buttons.map(button => button.props['aria-pressed'])).toEqual([true, false, false, false, false]);
     expect(buttons.map(button => text(button))).toEqual(['All', 'MP1', 'RM1', 'F1', '1']);
+    // All's name starts with the word it shows, so saying "click All" finds it.
+    expect(String(buttons[0]!.props['aria-label'])).toMatch(/^All\b/);
+  });
+
+  it('gives each owner one hover over its whole button, its face too: who ("You" for you), what they hold open, and what a click does', async () => {
+    const buttons = ownerButtons(await yours());
+    expect(buttons.map(button => button.props.title)).toEqual([
+      'Show every follow-up', 'Mina Patel · 1 open now · show only theirs', 'Rafael Moreno · 1 open now · show only theirs', 'You · 1 open now · show only yours',
+      'No owner yet · 1 · show only those',
+    ]);
+    // Nothing in a button has a hover of its own, which would show in place of the button's.
+    expect(buttons.flatMap(button => elements(button.props.children).filter(node => node.props.title !== undefined).map(node => node.props.title))).toEqual([]);
   });
 
   it('lists current work as one list, what needs attention first, longest waiting first, and folds Done at the end', async () => {

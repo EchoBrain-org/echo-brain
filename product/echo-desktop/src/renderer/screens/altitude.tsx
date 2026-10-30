@@ -31,8 +31,9 @@ export function Tile({ project }: { project: ProjectSummary }) {
   return <span class="alt-tile" style={identity(project.project_id)} aria-hidden="true">{initial(project.name)}</span>;
 }
 
-export function FaceMark({ membership_id, name, needs = false }: { membership_id: string; name: string; needs?: boolean }) {
-  return <span class={`face${needs ? ' needs' : ''}`} style={identity(membership_id)} title={name}>{initials(name)}</span>;
+/** A person's face: their initials on their colour, named on hover, unless what holds it has its own hover (`titled` false), which then shows over it too. */
+export function FaceMark({ membership_id, name, needs = false, titled = true }: { membership_id: string; name: string; needs?: boolean; titled?: boolean }) {
+  return <span class={`face${needs ? ' needs' : ''}`} style={identity(membership_id)} title={titled ? name : undefined}>{initials(name)}</span>;
 }
 
 export function NoOwner() {

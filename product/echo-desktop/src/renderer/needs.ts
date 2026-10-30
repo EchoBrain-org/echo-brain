@@ -432,8 +432,18 @@ function checkedAgo(iso: string, now: number): string {
 export function homeFooter(open: Pick<HomeView, 'waiting' | 'last_checked_at'> | null, now = Date.now()): { link: string; checked: string | null } {
   return {
     link: open !== null && open.waiting > 0 ? `${open.waiting} waiting on others` : 'Follow-ups',
-    checked: open === null || open.last_checked_at === null ? null : `ECHO checked ${checkedAgo(open.last_checked_at, now)}`,
+    checked: lastChecked([open?.last_checked_at], now),
   };
+}
+
+/**
+ * When ECHO last checked one of yours, as "ECHO checked 2 h ago": the latest
+ * of the times reads said (your Follow-ups list's own, and Home's, whichever
+ * was read since); null when none knows of one.
+ */
+export function lastChecked(times: readonly (string | null | undefined)[], now = Date.now()): string | null {
+  const at = times.filter((time): time is string => typeof time === 'string').sort().at(-1);
+  return at === undefined ? null : `ECHO checked ${checkedAgo(at, now)}`;
 }
 
 /** One event of a follow-up's history. */
