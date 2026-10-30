@@ -5855,6 +5855,7 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
     if (tools && !toolsFailure && sameExpect(expect(), account)) runsHeld = false;
     if (runSeq === ran && !toolsFailure && !runsHeld && homeShown() === null && sameExpect(expect(), account) && runsGo()) {
       const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
+      if (runs.status === 'fulfilled') endedOffHome(runs.value.runs);
       void driveRuns(runs.status === 'fulfilled' ? runs.value.runs : runsSeen, publishing, runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
     }
     return;
@@ -5991,7 +5992,8 @@ function lookAtRuns(): void {
 /**
  * The driver's own look, away from Home or while Home cannot be seen: the
  * runs list alone, none of it written to Home (R3). A check it sees end owes
- * Home what it found, read once Home shows; the open decision follows its
+ * Home what it found, read once Home shows, and the follow-ups that show are
+ * read again (`endedOffHome`); the open decision follows its
  * checks; then the next queued run starts. A Home load, a newer look or
  * another account since drives instead: this list starts nothing.
  */
@@ -6007,11 +6009,23 @@ async function readRuns(): Promise<void> {
   }
   if (mine !== runSeq || !sameExpect(expect(), account) || !runsGo()) return;
   if (listed) {
-    if (checkEnded(runsSeen, listed) || swept(listed)) resultOwed = true;
-    if (swept(listed)) sweepOwed = null;
+    endedOffHome(listed);
     updateDecisionRuns(listed);
   }
   await driveRuns(listed ?? runsSeen, false, failure);
+}
+
+/**
+ * A runs list read off Home, before the driver goes by it: a check it shows
+ * ended since the driver's last list owes Home what it found, and what shows
+ * of the follow-ups is read again at once, with when ECHO last checked. A
+ * sweep moves no follow-up's state, so the change check never sees it end.
+ */
+function endedOffHome(listed: readonly PersonRunV1[]): void {
+  if (!checkEnded(runsSeen, listed) && !swept(listed)) return;
+  resultOwed = true;
+  if (swept(listed)) sweepOwed = null;
+  owe({ back: false, areas: ['follow_ups'] });
 }
 
 /**
