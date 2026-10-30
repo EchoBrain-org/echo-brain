@@ -5203,12 +5203,13 @@ const reading = new Set<Surface>();
 function owe({ back, areas }: { readonly back: boolean; readonly areas: readonly freshness.ScreenArea[] }): void {
   if (back) comingBack = false;
   if (!expect()) return;
-  // Coming back, or a meeting approved or published anywhere (the reviews moved): a check may wait to start, on any page (R4).
-  if (back || areas.includes('reviews')) kickRuns();
   for (const surface of SURFACES) {
     if ((back || surface.areas.some(area => areas.includes(area))) && surface.shows()) owed.set(surface, back || owed.get(surface) === true);
   }
   settleOwed();
+  // Coming back, or a meeting approved or published anywhere (the reviews moved): a check may wait to start, on any page (R4).
+  // Home's own load, owed just now, drives where it shows.
+  if (back || areas.includes('reviews')) kickRuns();
 }
 
 /**
@@ -5894,26 +5895,26 @@ function stopRunPolling(): void {
 function pollRuns(mine: number, delay: number): void {
   runPoll = setTimeout(() => {
     runPoll = null;
-    if (mine !== runSeq || !runsGo()) return;
-    const home = homeSeen();
-    if (home) void readHome(home.seq, true);
-    else lookAtRuns();
+    if (mine === runSeq && runsGo()) lookAtRuns();
   }, delay);
 }
 
 /**
  * Looks at the runs now, when nothing else is about to (R4): on sign-in, on
  * coming back, when the reviews move (a meeting approved or published), and
- * once Check now stops following its sweep. Not while Home's tools failed,
- * a look is armed or on its way, or Home reads its own.
+ * once Check now stops following its sweep. Not while Home's tools failed, a
+ * look is armed or on its way, or a Home load (which drives) is on its way
+ * while Home is seen.
  */
 function kickRuns(): void {
-  if (!runsGo() || runsHeld || runPoll !== null || looking !== null || homeSeen() !== null) return;
+  if (!runsGo() || runsHeld || runPoll !== null || looking !== null || (homeSeen() !== null && homeLoading !== null)) return;
   lookAtRuns();
 }
 
+/** One look: Home's own read while Home is seen, as its poll; anywhere else the runs list alone. */
 function lookAtRuns(): void {
-  const look = readRuns().finally(() => { if (looking === look) looking = null; });
+  const home = homeSeen();
+  const look = (home ? readHome(home.seq, true) : readRuns()).finally(() => { if (looking === look) looking = null; });
   looking = look;
 }
 

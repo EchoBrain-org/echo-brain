@@ -1208,20 +1208,20 @@ describe('Checks keep moving (one place to look v1)', () => {
     expect(sentFor()).toEqual(['other']);
   });
 
-  /** A project's follow-ups, open over its page, with nothing in flight. */
-  async function projectList() {
+  /** A project's follow-ups, open over its page (or over Home), with nothing in flight. */
+  async function projectList(over: 'project' | 'Home' = 'project') {
     fx.granola = null;
     fx.page = { items: [item('1')], next_cursor: null, stages: [], summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1 } };
     const store = await start();
-    await store.openProject(project);
+    if (over === 'project') await store.openProject(project);
     await store.openFollowUps('project', project.project_id, project.name);
     return store;
   }
   const check = (store: Store) => (store.followUpShown() as FollowUpList | null)?.check;
 
-  it('starts what queued behind Check now\'s sweep once that sweep ends', async () => {
+  it.each(['project', 'Home'] as const)('starts what queued behind Check now\'s sweep once that sweep ends, on a list over %s', async over => {
     fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
-    const store = await projectList();
+    const store = await projectList(over);
     void store.checkNow();
     await flush();
     expect(starts()).toEqual([sweepRun('pending').run_id]);
