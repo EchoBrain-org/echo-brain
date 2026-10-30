@@ -143,19 +143,39 @@ describe('Home altitudes', () => {
   });
 
   it('another account’s sign-in starts at the top with nothing of the last account’s, and drops its late answers', async () => {
+    // Once Home's first reads are in, the last account's reads of its projects wait until the new account's own have landed,
+    // then answer with a follow-up and counts of theirs.
+    const late: (() => void)[] = [];
+    let holding = false;
+    const theirs = ok({ items: [row('late', THERMAL)], next_cursor: null, summary: { ...EMPTY_SUMMARY, open: 9 }, stages: [] });
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }),
+      runs: params => {
+        const { expect: from, request } = params as { expect: { membership_id: string }; request: Request };
+        return holding && from.membership_id === ACCOUNT.membership_id && request.scope === 'project'
+          ? new Promise(resolve => late.push(() => resolve(theirs))) : runsHandler(params);
+      },
+    }, () => lists));
     const store = await startStore();
-    const release = held.hold('runs');
+    await flush(80);
+    holding = true;
     store.zoomTo('project', { project_id: THERMAL.project_id });
+    await flush(20);
+    expect(late.length).toBeGreaterThan(0);
     account = { ...ACCOUNT, membership_id: 'another-member' };
     await store.refreshStatus();
-    await flush();
-    release(ok({ items: [row('late', THERMAL)], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }));
-    await flush(80);
+    await flush(200);
+    expect(store.getState().altitude.reads[THERMAL.project_id]?.loading).toBe(false);
+    late.forEach(answer => answer());
+    await flush(200);
     const altitude = store.getState().altitude;
     expect(altitude.level).toBe('projects');
     expect(altitude.category).toBeNull();
     expect(altitude.project_id).toBeNull();
-    expect(Object.values(altitude.reads).flatMap(read => read.active).map(item => item.item_id)).not.toContain('itm_late');
+    const reads = Object.values(altitude.reads);
+    expect(reads.flatMap(read => [...read.active, ...(read.all ?? [])]).map(item => item.item_id)).not.toContain('itm_late');
+    expect(reads.map(read => read.counts?.open)).not.toContain(9);
+    expect(Object.keys(altitude.live)).not.toContain('itm_late');
   });
 
   it('a project that left your list falls back to My projects when Home shows again', async () => {
