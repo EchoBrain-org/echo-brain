@@ -2,7 +2,7 @@ import { identity, initial, when } from '../format.js';
 import { message } from '../messages.js';
 import { actionCount, itemLine, itemNames, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
 import {
-  awaitingLive, homeCategories, homeRows, loadHome, needAt, needsCount, openCategory, openDecision, openFollowUp, openFollowUps, openNewProject,
+  awaitingLive, categoryOf, homeCategories, homeRows, loadHome, needAt, needsCount, openCategory, openDecision, openFollowUp, openFollowUps, openNewProject,
   type HomeCategory, type NeedCategory, type NeedRow, type State,
 } from '../store.js';
 import { Altitude, MyProjects } from './altitude.js';
@@ -81,7 +81,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
     const send = row.send;
     const owners = shortNames(send.owners);
     return (
-      <button type="button" class="need-row send" data-testid="need-row" data-kind="send" data-alt-nav={`send:${send.run_id}`}
+      <button type="button" class="need-row send" data-testid="need-row" data-kind="send" data-category="send" data-alt-nav={`send:${send.run_id}`}
         onClick={() => void openFollowUps('record', send.decision.record_sha256, send.decision.title)}>
         <span class="need-kind"><KindMark kind="send" />{KIND.send}</span>
         <span class="need-text">
@@ -97,7 +97,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
   const review = row.review;
   const run = row.kind === 'approve' ? undefined : row.run;
   return (
-    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-alt-nav={`meeting:${review.approval_id}`} disabled={row.kind === 'checking'}
+    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-category={categoryOf(row)} data-alt-nav={`meeting:${review.approval_id}`} disabled={row.kind === 'checking'}
       onClick={() => void openDecision(review.approval_id, run ?? null)}>
       <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">
@@ -124,7 +124,7 @@ function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { 
   // Shown from ECHO's own fields at once: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
   const reading = state.home?.reading === true && awaitingLive(item);
   return (
-    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-alt-nav={`item:${item.item_id}`} aria-busy={reading || undefined}
+    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-category={categoryOf(row)} data-alt-nav={`item:${item.item_id}`} aria-busy={reading || undefined}
       onClick={() => void openFollowUp(item.item_id, item)}>
       <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">

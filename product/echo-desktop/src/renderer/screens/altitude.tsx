@@ -392,7 +392,9 @@ export function Altitude({ state, top }: { state: State; top: ComponentChildren 
     const out = before !== null && depth(level, category) < depth(before.level, before.category);
     const from = !out ? null : before.category !== null ? `category:${before.category}` : level === 'projects' && project_id !== null ? `project:${project_id}`
       : level === 'project' && membership_id !== null ? `person:${membership_id}` : null;
-    const back = from === null ? null : root.querySelector<HTMLElement>(`[data-zoom="${CSS.escape(from)}"]`);
+    const back = from === null ? null : root.querySelector<HTMLElement>(`[data-zoom="${CSS.escape(from)}"]`)
+      // Out of a kind's list down to one row: the top shows that row in place of the kind's line.
+      ?? (before?.category ? root.querySelector<HTMLElement>(`[data-category="${before.category}"][data-alt-nav]:not([disabled])`) : null);
     const rows = navRows(root);
     const kept = before === null && held?.at === at ? held : null;
     const left = kept ? rows.find(row => row.dataset.altNav === kept.row) ?? rows[Math.min(kept.index, rows.length - 1)] : undefined;

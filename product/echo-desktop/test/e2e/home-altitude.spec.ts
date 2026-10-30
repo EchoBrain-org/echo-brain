@@ -292,6 +292,29 @@ test('a kind’s list stays while one row is left, and goes back to the top by i
   await expect(page.getByTestId('back')).toHaveCount(0);
 });
 
+test('leaving a kind’s list down to one row puts the focus on that row on the top, not on the row above it', async () => {
+  app = await launch('granola-review-paste');
+  const { page } = app;
+  await paste(page, 'Supplier sync', 'move the pilot to Friday.');
+  // One meeting to approve, its own row, above the two to update, one line.
+  const rows = page.getByTestId('need-row');
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toHaveAttribute('data-kind', 'approve');
+  await page.getByTestId('need-category').click();
+  await expect(rows).toHaveCount(2);
+  await rows.filter({ hasText: 'ECHO-12' }).click();
+  await page.getByTestId('follow-up').getByRole('button', { name: 'Mark done', exact: true }).click();
+  await expect(page.getByTestId('follow-up-said')).toHaveText('Done · Undo');
+  await page.getByTestId('back').click();
+  await expect(rows).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(top(page)).toBeVisible();
+  // The top shows the one left as its row, in place of its kind's line: it has the focus.
+  await expect(page.getByTestId('need-category')).toHaveCount(0);
+  await expect(rows).toHaveCount(2);
+  await expect(rows.filter({ hasText: 'Thermostat PRD' })).toBeFocused();
+});
+
 test('back from a row’s page the focus is on that row, and once that row is dealt with and read away, on the row in its place', async () => {
   app = await launch('granola-review');
   const { page } = app;
