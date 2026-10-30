@@ -225,14 +225,14 @@ One flat list, newest first, of everything only you can read:
 
 Today the desktop starts queued checks only while Home or a meeting's decision
 page is showing and ECHO is in front. From v1, while you are signed in and ECHO
-is open, it keeps the queue moving on every page and while ECHO is behind
-other apps:
+is running, it keeps the queue moving on every page: with the window in front,
+behind other apps, or closed to the tray:
 
 - One check at a time, oldest first, impact checks before sweeps. These rules
   are unchanged; the server still allows one live check per person.
 - It polls only while something is queued or running, with today's back-off.
-- It stops when you sign out or switch account, and nothing runs while ECHO
-  is closed (unchanged).
+- It stops when you sign out or switch account, and nothing runs once ECHO
+  quits (unchanged).
 - Home's own reads still happen only when Home shows.
 
 ## Calls made in design (the founder checks these on the desktop)
@@ -251,8 +251,8 @@ other apps:
    their rows, dimmed.
 8. Every follow-up list (project, meeting, notification) takes the new rows,
    not only "your follow-ups".
-9. Checks keep moving while ECHO is behind other apps. They don't run while
-   it is closed.
+9. Checks keep moving while ECHO is running, even with the window closed to
+   the tray. They don't run once it quits.
 
 ## Architecture
 
