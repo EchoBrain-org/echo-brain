@@ -116,6 +116,33 @@ account under a hash of it, and goes when the timeline does: at our own
 sign-out, or when another account signs in here. A project seen for the first
 time has no dot, and a read that fails leaves the dots as they were.
 
+Home zooms ([Home altitude v1](../../docs/product/2026-10-29-home-altitude-v1.md)).
+A row of stops at its top, **My projects · a project · a person**, with **⌖ Me**
+beside them, moves it between four altitudes. All of them use data the
+Authority already sends, and nothing is typed in by hand.
+
+- **Me** is Home as below, under **Needs you**.
+- **My projects** puts each of your projects on one row:
+  - its health dot (on track, at risk, or off track, in the one signal colour);
+  - an orange count of follow-ups needing attention;
+  - its owners' faces;
+  - a ring and a percentage for how many follow-ups are done;
+  - how long its oldest waiting follow-up has waited.
+
+  A follow-up needs attention when it hasn't been sent for over a day, has
+  been open for over three, or has no owner. Off track means one has waited
+  over seven days, or three or more need attention.
+- **A project** lists its decisions, then its follow-ups grouped by owner,
+  those needing attention first.
+- **A person** lists their follow-ups in your projects, project by project.
+
+Click a row or a group to zoom in. Escape zooms out from a project or a
+person, after it has cleared the bar or closed what is open. A trackpad
+pinch also zooms. My projects only reads rows, never live. A project reads
+its waiting follow-ups live once, as its follow-ups list does. A person reads
+at most 20 of theirs live. Home remembers its altitude per account on this
+computer.
+
 Home shows only what waits on you, under **Needs you**. Each row is one of:
 
 - **Approve**: a meeting waiting for your decision. Its card shows what was

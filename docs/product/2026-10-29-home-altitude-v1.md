@@ -1,6 +1,6 @@
 # Home you can zoom: one list from me to all my projects (v1)
 
-Date: 2026-10-29. Status: design, waiting for the founder's approval. Desktop
+Date: 2026-10-29. Status: built on `feat/home-altitude`; the founder validates the result on the desktop. Desktop
 only: no server, contract, or schema change. Mockups (throwaway, git-ignored):
 `.superpowers/brainstorm/90909-1793339103/content/map-linear.html` is the
 direction the founder picked. The earlier `zoom-options.html`,
