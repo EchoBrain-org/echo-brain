@@ -4,6 +4,7 @@ import {
   actionCount, activeTotal, checkWords, followUpCount, followUpProgress, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemLine, itemNames, itemTitle,
   liveFacts, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
+import { EMPTY_SUMMARY as summary } from './harness.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
 /** An item you opened carries what it says now; any other, why it does not (here, by default, that you can't open it). */
@@ -15,7 +16,6 @@ const item = (patch: Partial<OpenItemView> = {}): OpenItemView => ({
 });
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink: 'https://example.atlassian.net/browse/ECHO-12' };
 const OKAFOR = { membership_id: 'mem_00000000-0000-4000-8000-000000000003', name: 'S. Okafor', active: true };
-const summary = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 const pilot = { approval_id: 'apr_1', record_sha256: 'sha256:1', title: 'Pilot planning', first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T12:00:00.000Z', project_ids: [] };
 /** One of the meeting's own actions: its title is its words, and it is never read live. */
 const action = (patch: Partial<OpenItemView> = {}) => item({ kind: 'action', relation: 'needs_updating', expected: 'Send the revised quote', reach: 'not_read', decision: pilot, ...patch });

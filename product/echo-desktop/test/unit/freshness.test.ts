@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList } from '../../src/renderer/store.js';
 import type { Account, ProjectSummary } from '../../src/shared/protocol.js';
 import { MINA, authority, followUp, id, nextCheck, sent, stated, changesRpc, CLOCK, fixture } from './changes-fixture.js';
-import { ACCOUNT, cover, fail, flush, hide, ok, project, show, startStore, storeLifecycle, uncover, unhide, wake } from './harness.js';
+import { ACCOUNT, cover, fail, flush, hide, names, ok, project, show, startStore, storeLifecycle, uncover, unhide, wake } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -28,6 +28,8 @@ const runs = (operation: string, match: (request: Record<string, unknown>) => bo
   calls('runs').filter(([, params]) => params.request.operation === operation && match(params.request)).length;
 /** Home's reads of its rows. */
 const homeReads = () => runs('home', request => request.read === 'rows');
+/** The Follow-ups list's reads of its rows. */
+const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open' && request.changed_since === undefined);
 type Store = Awaited<ReturnType<typeof startStore>>;
 const meetings = (operation: string) => calls('tools.meetings').filter(([, params]) => params.request.operation === operation).length;
 const lists = (status: 'active' | 'archived') => calls('projects.list').filter(([, params]) => (params.status ?? 'active') === status).length;
@@ -162,7 +164,7 @@ describe('when a check runs (R2)', () => {
     release();
     await flush();
     expect(checks()).toBe(stopped ? 1 : 2);
-    if (!stopped) expect(store.getState().projects.items.map(row => row.name)).toContain('Comet');
+    if (!stopped) expect(names(store.getState().projects.items)).toContain('Comet');
   });
 
   it('stops at sign-out, and starts over for another account', async () => {
@@ -239,7 +241,6 @@ describe('what a moved area reads again (R3)', () => {
   it('follow-ups: the Follow-ups list as far as it showed, and an item page, rows only', async () => {
     const store = await startStore();
     await store.openYourFollowUps();
-    const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open' && request.changed_since === undefined);
     const before = listRows();
     authority.items = [followUp(1)];
     await nextCheck();
@@ -326,8 +327,6 @@ describe('what a moved area reads again (R3)', () => {
 });
 
 describe('what coming back reads again, on each page (R4)', () => {
-  const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open'
-    && request.changed_since === undefined);
   it.each([
     ['Home: its rows, read live again', async () => undefined, () => [homeReads()]],
     ['a project: its feed\'s first page, its members and its line', (store: Store) => store.openProject(apollo),
@@ -355,7 +354,7 @@ describe('what coming back reads again, on each page (R4)', () => {
     authority.active = [project(9, 29, { name: 'New' }), apollo];
     await show(store);
     await flush();
-    expect(store.getState().projects.items.map(row => row.name)).toEqual(['New', 'Apollo']);
+    expect(names(store.getState().projects.items)).toEqual(['New', 'Apollo']);
     // No notification: without a check, nothing says what moved.
     expect(noticeTexts()).toEqual([]);
   });
@@ -446,7 +445,7 @@ describe('the sidebar, and projects you were added to (P2-3)', () => {
     refuse = false;
     await show(store);
     await flush();
-    expect(store.getState().projects.items.map(row => row.name)).toEqual(['Apollo']);
+    expect(names(store.getState().projects.items)).toEqual(['Apollo']);
     expect(store.getState().projects.failure).toBeUndefined();
     // Learned on that check, not told: Apollo was yours before.
     expect(noticeTexts()).toEqual([]);
@@ -463,7 +462,7 @@ describe('the sidebar, and projects you were added to (P2-3)', () => {
     authority.active = [comet, apollo];
     await show(store);
     await flush();
-    expect(store.getState().projects.items.map(row => row.name)).toEqual(['Comet', 'Apollo']);
+    expect(names(store.getState().projects.items)).toEqual(['Comet', 'Apollo']);
     expect(noticeTexts()).toEqual([]);
     authority.changes = 'ok';
     await nextCheck(120);

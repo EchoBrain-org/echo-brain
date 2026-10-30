@@ -212,9 +212,8 @@ describe('what the page sends with an Ask and a check', () => {
   };
 
   it('carries the earlier turn as the client takes it, only on an Ask that has one', () => {
-    const expect_ = ARI;
-    expect(askArgv('Who owns it?', { kind: 'global' }, expect_)).not.toContainEqual(expect.stringMatching(/^--previous=/u));
-    expect(askArgv('Who owns it?', { kind: 'global' }, expect_, previous).at(-1)).toBe(`--previous=${JSON.stringify(previous)}`);
+    expect(askArgv('Who owns it?', { kind: 'global' }, ARI)).not.toContainEqual(expect.stringMatching(/^--previous=/u));
+    expect(askArgv('Who owns it?', { kind: 'global' }, ARI, previous).at(-1)).toBe(`--previous=${JSON.stringify(previous)}`);
   });
 
   it('takes an earlier turn only within C3\'s bounds', () => {

@@ -3,12 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import type { OpenItemsView } from '../../src/shared/protocol.js';
 import { followUp } from './changes-fixture.js';
-import { byTestId, elements, plainHooks, render, text, type Node } from './harness.js';
+import { byTestId, elements, EMPTY_SUMMARY, plainHooks, render, text, type Node } from './harness.js';
 
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', original => plainHooks(original));
 
-const counted: OpenItemsView['summary'] = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 
 /** Your list, its current work read to its end with no row, counted as `counts` say, its closed groups closed. */
 async function notices(counts: Partial<OpenItemsView['summary']>): Promise<unknown[]> {
@@ -16,7 +15,7 @@ async function notices(counts: Partial<OpenItemsView['summary']>): Promise<unkno
   const { FollowUps } = await import('../../src/renderer/screens/follow-ups.js');
   const list: FollowUpList = {
     kind: 'list', seq: 1, scope: 'involved', title: null, loading: false, items: [], live: {}, reading: false, reads: [{ parts: ['active'], pages: [{ cursor: null, ids: [] }], next: null }],
-    summary: { ...counted, ...counts }, stage: null, ticks: {}, sends: {}, check: null, expanded: {}, busy: false, said: null, picker: null, stale: false,
+    summary: { ...EMPTY_SUMMARY, ...counts }, stage: null, ticks: {}, sends: {}, check: null, expanded: {}, busy: false, said: null, picker: null, stale: false,
   };
   return elements(FollowUps({ state: getState(), list })).filter(node => node.props.class === 'notice').map(node => node.props.children);
 }
@@ -38,7 +37,7 @@ async function meeting(): Promise<Node> {
   const list: FollowUpList = {
     kind: 'list', seq: 1, scope: 'record', id: items[0]!.decision!.record_sha256, title: 'Pilot planning', loading: false, items, live: {}, reading: false,
     reads: [{ parts: ['active'], pages: [{ cursor: null, ids: items.map(item => item.item_id) }], next: null }],
-    summary: { ...counted, unsent: 3, open: 1, not_relevant: 1, decisions: 1 }, stage: null,
+    summary: { ...EMPTY_SUMMARY, unsent: 3, open: 1, not_relevant: 1, decisions: 1 }, stage: null,
     ticks: Object.fromEntries(unsent.map(item => [item.item_id, true])), sends: {}, check: null, expanded: {}, busy: false, said: null, picker: null, stale: false,
   };
   return render(FollowUps({ state: getState(), list })) as Node;

@@ -264,7 +264,7 @@ function itemsAnswer(request: { states?: readonly string[]; cursor?: string; rea
     : [...answer.items.filter(entry => entry.item_id !== fx.readItem?.item_id), ...(fx.readItem ? [fx.readItem] : [])]
       .filter(entry => entry.run_id === id && !(fx.itemGone && entry.item_id === fx.readItem?.item_id));
   const listed = (read === 'counts' ? [] : states ? scoped.filter(entry => states.includes(entry.state)) : scoped)
-    .map(entry => (read === 'rows' ? (({ current: _current, ...rest }) => ({ ...rest, reach: 'not_read' as const }))(entry) : entry));
+    .map(entry => (read === 'rows' ? rowOnly(entry) : entry));
   const from = cursor === undefined ? 0 : Number(cursor.slice(1));
   const size = fx.pageSize ?? Math.max(listed.length, 1);
   return ok({ ...answer, items: listed.slice(from, from + size), next_cursor: from + size < listed.length ? `c${from + size}` : null });
@@ -513,14 +513,14 @@ describe('Home decisions and impact checks', () => {
     await flush();
     store.setDecisionRoute('act-1', null);
     const reviews = () => rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
-    rpc.mockImplementationOnce(async () => ({ ok: false, failure: { code: 'timeout', retryable: true, mutation_outcome: 'unknown' } }));
+    rpc.mockImplementationOnce(async () => fail('timeout', { retryable: true, mutation_outcome: 'unknown' }));
     await store.decide('approve');
     expect(store.getState().decision).toMatchObject({ busy: false, unknown: true, failure: 'This may not have been sent.' });
     store.setDecisionRoute('act-1', store.ONLY_ME);
     store.setDecisionRoutes({ projects: [project.project_id], private: false });
     store.setDecisionOwner('act-1', 'Someone else');
     expect(store.getState().decision).toMatchObject({ routes: { 'dec-1': store.ONLY_ME, 'act-1': null }, owners: { 'act-1': 'Rafael Moreno' } });
-    rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'approved', decided_on: 'desktop' } }));
+    rpc.mockImplementationOnce(async () => ok({ status: 'approved', decided_on: 'desktop' }));
     await store.decide('approve');
     expect(reviews()).toHaveLength(2);
     expect(reviews()[1]).toEqual(reviews()[0]);
@@ -554,7 +554,7 @@ describe('Home decisions and impact checks', () => {
     store.setDecisionRoute('dec-1', to(...many.slice(20)));
     expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': to(...many.slice(0, 20)) });
     store.setDecisionOwner('act-1', ' R. Moreno ');
-    rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'publishing', decided_on: 'desktop' } }));
+    rpc.mockImplementationOnce(async () => ok({ status: 'publishing', decided_on: 'desktop' }));
     await store.decide('approve');
     const sent = rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
     expect(sent).toEqual([expect.objectContaining({ action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: null }, { signal_id: 'act-1', project_ids: many.slice(0, 20) }],
@@ -640,7 +640,7 @@ describe('Home decisions and impact checks', () => {
     store.setDecisionRoutes(mine(therm));
     expect(routes()).toEqual({ 'dec-1': mine(therm), 'act-1': mine(therm) });
     store.setDecisionRoute('act-1', to(therm));
-    rpc.mockImplementationOnce(async () => ({ ok: true, value: { status: 'publishing', decided_on: 'desktop' } }));
+    rpc.mockImplementationOnce(async () => ok({ status: 'publishing', decided_on: 'desktop' }));
     await store.decide('approve');
     const sent = rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
     expect(sent).toEqual([expect.objectContaining({ action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: [therm], private: true }, { signal_id: 'act-1', project_ids: [therm] }] })]);

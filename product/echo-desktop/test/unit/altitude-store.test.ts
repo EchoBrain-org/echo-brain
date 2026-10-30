@@ -35,6 +35,9 @@ type Request = { operation: string; scope?: string; id?: string; read?: string; 
 const requests = () => rpc.mock.calls.filter(([name]) => name === 'runs').map(([, params]) => (params as { request: Request }).request);
 const projectReads = (id?: string) => requests().filter(request => request.operation === 'items' && request.scope === 'project' && (id === undefined || request.id === id));
 const live = (request: Request) => request.read === undefined;
+const runsAfter = (from: number) => rpc.mock.calls.slice(from).filter(([name]) => name === 'runs')
+  .map(([, params]) => params as { expect: { membership_id: string }; request: Request });
+const empty = () => ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] });
 
 /** The Authority's follow-up reads, from `rows`, `failing` and `paged`. */
 function runsHandler(params: Record<string, unknown>): unknown {
@@ -179,9 +182,6 @@ describe('Home altitudes', () => {
 });
 
 describe('Home altitudes, reading only what each step needs', () => {
-  const runsAfter = (from: number) => rpc.mock.calls.slice(from).filter(([name]) => name === 'runs')
-    .map(([, params]) => params as { expect: { membership_id: string }; request: Request });
-
   it('a zoom reads only what is new: the project zoomed into, and nothing on the way back out', async () => {
     const store = await startStore();
     store.zoomTo('projects');
@@ -218,7 +218,7 @@ describe('Home altitudes, reading only what each step needs', () => {
     account = { ...ACCOUNT, membership_id: 'another-member' };
     await store.refreshStatus();
     const from = rpc.mock.calls.length;
-    releases.forEach(release => release(ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] })));
+    releases.forEach(release => release(empty()));
     await flush(200);
     expect(runsAfter(from).filter(call => call.expect.membership_id === ACCOUNT.membership_id)).toEqual([]);
     expect(Object.keys(store.getState().altitude.reads)).toEqual([]);
@@ -266,7 +266,7 @@ describe('Home altitudes, reading only what each step needs', () => {
     expect(store.getState().altitude.settled).toBe(false);
     vi.advanceTimersByTime(1_500);
     expect(store.getState().altitude.settled).toBe(true);
-    release(ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }));
+    release(empty());
   });
 
   it('a project read no longer zoomed on drops its done follow-ups', async () => {
@@ -282,10 +282,6 @@ describe('Home altitudes, reading only what each step needs', () => {
 });
 
 describe('Home altitudes, when loads are cut short or the list is long', () => {
-  const runsAfter = (from: number) => rpc.mock.calls.slice(from).filter(([name]) => name === 'runs')
-    .map(([, params]) => params as { expect: { membership_id: string }; request: Request });
-  const empty = () => ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] });
-
   it('a zoom that cuts a sweep short still reads the projects it left half read', async () => {
     lists = { active: numbered(6), archived: [] };
     const store = await startStore();
@@ -390,7 +386,7 @@ describe('Home altitudes when your projects change', () => {
       'app.status': () => ok({ signed_in: true, account }),
       'projects.leave': () => ok({}),
       runs: params => ((params as { request: Request }).request.operation === 'items'
-        ? ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }) : fail('unavailable', { retryable: true })),
+        ? empty() : fail('unavailable', { retryable: true })),
     }, () => lists));
     const store = await startStore();
     store.zoomTo('project', { project_id: THERMAL.project_id });
@@ -432,7 +428,7 @@ describe('Home altitudes when your projects change', () => {
         return ok(cursor ? { items: lists.active.slice(10), next_cursor: null } : { items: lists.active.slice(0, 10), next_cursor: 'more' });
       },
       runs: params => ((params as { request: Request }).request.operation === 'items'
-        ? ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }) : fail('unavailable', { retryable: true })),
+        ? empty() : fail('unavailable', { retryable: true })),
     }, () => lists));
     const store = await startStore();
     store.zoomTo('projects');
