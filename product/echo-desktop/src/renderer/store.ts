@@ -1731,9 +1731,9 @@ export function newOnVisit(current: State, projectId: string, addedAt: string): 
 }
 
 /**
- * Only me, from Home's footer or a toast (ADR-0049): everything only you can
- * read, filed in a project or not, newest first. Its bar is Home's, all
- * context, and a capture from it starts in no project.
+ * Only me, from the sidebar or a toast (ADR-0049, One place to look v1):
+ * everything only you can read, filed in a project or not, newest first. Its
+ * bar is Home's, all context, and a capture from it starts in no project.
  */
 export async function openOnlyMe(): Promise<void> {
   if (!expect()) return;
