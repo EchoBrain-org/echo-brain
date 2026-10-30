@@ -54,7 +54,6 @@
   /* What each kind of row asks of you. */
   --approve: #E8AB83;
   --send: #83B0D7;
-  --update: #C1B2DF;
   --review: #D7919D;
   --done: #97C8A7;
   --danger: #E08E8B;
@@ -107,7 +106,6 @@
     --on-signal: #111113;
     --approve: #90502A;
     --send: #406C9B;
-    --update: #745F98;
     --review: #9B5163;
     --done: #3D7452;
     --danger: #9F4643;
@@ -236,7 +234,6 @@ button.account-row:hover { background: var(--raise); }
 .row:hover { background: var(--hover); }
 .row .name { flex-grow: 1; min-width: 0; font-size: 14.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .meta { flex-shrink: 0; font-size: 12.5px; color: var(--faint); }
-.item-row { height: 58px; padding: 0 10px; }
 .avatar { width: 40px; height: 40px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 20px; font-size: 15px; font-weight: 600; }
 .item-icon { width: 34px; height: 34px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: var(--panel); }
 .mark { flex-shrink: 0; display: flex; align-items: center; color: var(--faint); }
@@ -497,7 +494,7 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .step-name:hover, .step-name.on { color: var(--text); text-decoration-color: currentColor; }
 /* How many of a place's items Ask read, after its name: dim, never underlined. */
 .step-name .count { display: inline-block; margin-left: 1px; color: var(--faint); }
-/* After the answer, the same line in place: one dim receipt above it, which opens its rows. */
+/* The source pane's own buttons, at the right of its head. */
 .pane-actions { display: flex; flex-shrink: 0; align-items: center; gap: 2px; }
 /* The decision, action or rationale an answer or a name cites, lit in its meeting. */
 .record-item.on { border-color: var(--cite-line); background: var(--cite); }
@@ -512,12 +509,10 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .reader .fields dt { font-size: 12px; }
 .reader .fields dd { margin-bottom: 9px; font-size: 14.5px; }
 .reader .record-section { gap: 8px; margin-top: 8px; }
-.reader .section-label { font-size: 12.5px; }
 .reader .record-item { gap: 6px; padding: 12px 14px; border-radius: 10px; font-size: 15px; line-height: 1.6; }
 .reader .record-item .status, .reader .record-item .at { font-size: 12px; }
 .reader .record-item .owner { font-size: 13px; }
 .reader .record-item .quote { font-size: 14px; line-height: 1.5; }
-.reader .chunk-label { font-size: 12px; }
 .actions { display: flex; gap: 8px; }
 
 /* Sheets over the window: Capture, and the Account's. */
@@ -595,7 +590,6 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .sheet.confirm h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .sheet.confirm p { margin: 0; font-size: 13.5px; color: var(--muted); }
 .sheet.confirm p.error { color: var(--danger); }
-.sheet.confirm p.warning { color: var(--signal-text); }
 .sheet .choices { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .plain-button.danger { color: var(--danger); }
 
@@ -606,7 +600,6 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .plain-button:disabled { opacity: 0.5; cursor: default; }
 .cover { width: var(--ask-width); max-width: calc(100% - 48px); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; letter-spacing: 0.16em; color: var(--faint); }
 .unresolved { display: flex; flex-direction: column; gap: 8px; }
-.unresolved .choices { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* A file hovering over something that takes it. */
 .side-project-row.drop-target { background: var(--selected); box-shadow: inset 0 0 0 1px var(--primary); }
@@ -663,7 +656,6 @@ button.toast:hover { background: var(--panel); }
 /* Where a project change stands, and the one shown at the top of the page. */
 .change-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 13px; }
 .banner { position: absolute; top: 52px; left: 50%; z-index: 1; transform: translateX(-50%); max-width: calc(100% - 48px); padding: 6px 12px 6px 16px; border-radius: 12px; background: var(--raise); box-shadow: var(--pop-shadow); }
-.banner.below { top: 52px; }
 
 /* People: drops from the title bar. */
 .overlay.top { align-items: flex-start; padding-top: 60px; background: var(--scrim-soft); }
@@ -741,10 +733,8 @@ button.toast:hover { background: var(--panel); }
 .tool-row .state { font-size: 12.5px; color: var(--faint); }
 .tool-row.revoked .state { color: var(--signal-text); }
 .tool-row.unavailable .name { color: var(--faint); }
-.tool-row .primary-button.small { align-self: center; }
 .tool-mark { width: 36px; height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 9px; font-size: 15px; font-weight: 700; background: var(--panel); }
 .tool-mark.off { opacity: 0.45; }
-.sheet.tool-connect:focus { outline: none; }
 .sheet.confirm p.context { font-size: 12.5px; color: var(--faint); }
 
 /* Granola: the sheet under Tools. The folder ECHO watches and meetings added by hand. */
@@ -773,13 +763,10 @@ button.toast:hover { background: var(--panel); }
 .meeting-card-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
 .meeting-card-head .meta { flex-shrink: 0; font-size: 12.5px; color: var(--faint); }
 .meeting-card .passage { max-height: 260px; overflow-y: auto; }
-.meeting-card .readers-row { display: flex; gap: 8px; }
-.meeting-card .well.picker { flex: none; max-height: 220px; min-height: 0; overflow-y: auto; padding: 8px; }
 .meeting-card .choices { margin-top: 2px; }
 .watch-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--field); }
 .watch-row .lines { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .watch-row .name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.watch-row .detail { font-size: 12px; color: var(--faint); }
 .meeting-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; }
 .meeting-controls.thirds .select-field { flex: 0 1 calc((100% - 28px) / 3); }
 .select-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 200px; min-width: 0; }
@@ -852,8 +839,6 @@ button.toast:hover { background: var(--panel); }
 .needs-foot-link:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
 .side-row .badge { min-width: 20px; height: 18px; padding: 0 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--on-signal); background: var(--signal); }
 
-/* A decision, from Home: one card, the question on top, the button at its foot. */
-
 /* An owner: a chip, a dashed Pick owner, and the people picker that opens under it. */
 .owner-slot { flex-shrink: 0; display: flex; align-items: center; gap: 2px; }
 .owner-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; max-width: 180px; padding: 0 10px 0 3px; border-radius: 8px; font-size: 12.5px; font-weight: 500; background: var(--selected); }
@@ -899,7 +884,6 @@ button.items-line:hover { background: var(--raise); }
 .tools-line .link-button { flex-shrink: 0; }
 .feed-empty { flex-grow: 1; display: flex; align-items: center; justify-content: center; }
 .sheet.tools-sheet { width: 600px; height: auto; max-height: calc(100vh - 48px); gap: 0; padding: 0; }
-.sheet.tools-sheet:focus { outline: none; }
 .tools-sheet-head { flex-shrink: 0; display: flex; align-items: flex-start; gap: 12px; padding: 20px 22px 14px; }
 .tools-sheet-head .lines { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .tools-sheet-head h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
@@ -1016,7 +1000,6 @@ button.items-line:hover { background: var(--raise); }
 .card-panel { display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
 .card-panel .primary-button { height: 40px; border-radius: 9px; font-size: 14px; }
 .card-panel .plain-button { height: 38px; border-radius: 9px; font-size: 14px; }
-.card-panel .well.picker { flex: none; max-height: 220px; min-height: 0; overflow-y: auto; padding: 6px; }
 .card-panel .picker { margin-left: 0; }
 .card-rule { height: 1px; margin: 2px 0; background: var(--line); }
 .card-busy { align-self: center; font-size: 13px; }
@@ -1127,7 +1110,7 @@ button.impact-follow-ups:hover { color: var(--text); }
 .alt-level-body { display: flex; flex-direction: column; padding: 2px 0 12px; }
 .alt-level-body.alt-empty { flex: 1; min-height: 100%; align-items: center; justify-content: center; }
 .alt-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px 6px; }
-.alt-head h2 { margin: 0 4px 0 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+.alt-head h2 { margin: 0 4px 0 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alt-head .alt-tile { width: 26px; height: 26px; font-size: 13px; border-radius: 7px; }
 .alt-head .face { width: 28px; height: 28px; border-radius: 14px; font-size: 11px; }
 .alt-chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px;
@@ -1160,7 +1143,6 @@ button.alt-group-head:hover, button.alt-group-head:focus-visible { color: var(--
 .alt-unread { padding: 18px 14px; color: var(--faint); font-size: 13px; }
 .alt-chip.faint { color: var(--faint); }
 .alt-head-mark { display: inline-flex; color: var(--muted); }
-.alt-head h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alt-head > :not(h2) { flex-shrink: 0; }
 .alt-group-head > * { flex-shrink: 0; }
 .alt-group-head .alt-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
