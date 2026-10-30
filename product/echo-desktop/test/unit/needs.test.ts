@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
   actionCount, activeTotal, checkWords, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, homeFooter, itemHistory, itemKind,
-  itemLine, itemNames, itemTitle, liveFacts, markWords, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords,
-  progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
+  itemLine, itemNames, itemTitle, lastChecked, liveFacts, markWords, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows,
+  ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
 import { EMPTY_SUMMARY as summary } from './harness.js';
 
@@ -292,6 +292,13 @@ describe('ECHO\'s re-reads, kept underneath', () => {
     expect(homeFooter({ waiting: 0, last_checked_at: ago(120) }, now)).toEqual({ link: 'Follow-ups', checked: 'ECHO checked 2 h ago' });
     expect(homeFooter({ waiting: 0, last_checked_at: null }, now)).toEqual({ link: 'Follow-ups', checked: null });
     expect(homeFooter(null, now)).toEqual({ link: 'Follow-ups', checked: null });
+  });
+
+  it('says on your Follow-ups when ECHO last checked by the latest time any read said, whichever was read last', () => {
+    expect(lastChecked([ago(5), ago(120)], now)).toBe('ECHO checked 5 min ago');
+    expect(lastChecked([ago(120), ago(5)], now)).toBe('ECHO checked 5 min ago');
+    expect(lastChecked([null, ago(120)], now)).toBe('ECHO checked 2 h ago');
+    expect(lastChecked([undefined, null], now)).toBeNull();
   });
 });
 

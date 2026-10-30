@@ -4,9 +4,9 @@ import type { Member, OpenItemView, ProjectSummary } from '../../shared/protocol
 import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
-  checkWords, CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, homeFooter, itemHistory, itemKind, itemNames, itemTitle,
-  liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
-  type OwnerFace,
+  checkWords, CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, itemHistory, itemKind, itemNames, itemTitle,
+  lastChecked, liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
+  summaryTotal, type OwnerFace,
 } from '../needs.js';
 import {
   altitudeProjects, awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, filterOwner, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps,
@@ -338,7 +338,8 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
     );
   };
   const foot = ticked > 0 || list.said !== null;
-  const checked = list.scope === 'involved' ? homeFooter(state.home?.open ?? null).checked : null;
+  // Yours says when ECHO last checked: by its own read, which every read of it brings fresh, or Home's, when read since.
+  const checked = list.scope === 'involved' ? lastChecked([list.summary?.last_checked_at, state.home?.open?.last_checked_at], now) : null;
   return (
     <div class="column follow-ups" data-testid="follow-ups" ref={column} aria-busy={list.loading || list.busy}>
       <Head list={list} />
