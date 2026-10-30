@@ -46,7 +46,7 @@ export class NotReadable extends Error {
   constructor() { super('not_found'); }
 }
 
-/** `{ ok: true, result }` wrapper used by ask, ask-source and documents. */
+/** `{ ok: true, result }`: the wrapper list, open, documents, ask-source, tools and other client commands print their result in. */
 export function unwrap(raw: unknown): unknown {
   const value = object(raw);
   if (value.ok !== true) throw new ViewError();
@@ -294,6 +294,8 @@ function sourceRef({ source_id, revision_id, source_sha256, representation_sha25
 }
 
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
+/** A mapping's revision, as the Authority writes one: a v4 UUID. */
+const REVISION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['organization-member-readable-person-v2', 'restricted-reviewer-person-v2', 'project-members-readable-person-v1']);
 
 /** A record the page may ask the host to read: a well-formed digest and a known policy. */
@@ -543,9 +545,7 @@ function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
  * citations carry; participants' identities and signal ids stay behind.
  */
 export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
-  const root = object(raw);
-  if (root.ok !== true) throw new ViewError();
-  const value = object(root.result);
+  const value = object(unwrap(raw));
   if (value.schema_version !== 1 || value.kind !== 'echo-clean-person-record-list-v1') throw new ViewError();
   const records = list(value.records);
   // A record the person can no longer read comes back as an empty list.
@@ -807,8 +807,7 @@ export function noteTitle(body: string): string {
 /** The CLI validates provider coordinates; only the project key and opaque revision reach the UI. */
 export function projectJiraMappingView(raw: unknown, projectId: string): ProjectJiraMapping {
   const value = object(unwrap(raw));
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-  if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !uuid.test(text(value.revision)))) throw new ViewError();
+  if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !REVISION.test(text(value.revision)))) throw new ViewError();
   const selected = value.mapping === null ? null : object(value.mapping);
   if (selected !== null && (value.revision === null || !/^[1-9][0-9]{0,19}$/.test(text(selected.project_id)) || !/^[A-Z][A-Z0-9_]{0,63}$/.test(text(selected.project_key)))) throw new ViewError();
   return { project_id: projectId, revision: value.revision as string | null,
@@ -816,8 +815,8 @@ export function projectJiraMappingView(raw: unknown, projectId: string): Project
 }
 
 export function projectConfluenceMappingView(raw: unknown, projectId: string): ProjectConfluenceMapping {
-  const value = object(unwrap(raw)); const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-  if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !uuid.test(text(value.revision)))) throw new ViewError();
+  const value = object(unwrap(raw));
+  if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !REVISION.test(text(value.revision)))) throw new ViewError();
   const mapping = value.mapping === null ? null : object(value.mapping);
   if (mapping !== null && (value.revision === null || !Array.isArray(mapping.space_ids) || mapping.space_ids.length < 1 || mapping.space_ids.length > 20 || !mapping.space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)))) throw new ViewError();
   return { project_id: projectId, revision: value.revision as string | null, mapping: mapping === null ? null : { space_ids: [...(mapping.space_ids as string[])] } };
