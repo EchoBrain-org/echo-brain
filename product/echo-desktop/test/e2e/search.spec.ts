@@ -126,7 +126,7 @@ test('the Home search survives every way back in, and a sidebar click narrows it
   await expect(page.getByTestId('matches')).toHaveCount(0);
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
 });
 
 test('only a real change of access empties the bar: an outage keeps the text, a refused search empties it', async () => {

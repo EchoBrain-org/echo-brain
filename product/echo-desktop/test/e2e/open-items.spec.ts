@@ -153,10 +153,11 @@ test('a meeting\'s follow-ups go to their owners from one list, and come back do
   await expect(item.getByTestId('follow-up-said')).toHaveText('Reopened');
   await expect(item.getByTestId('follow-up-state')).toHaveText('Open');
   expect(requests('set_state').map(body => body.state)).toEqual(['open', 'open', 'done', 'open']);
-  // Back to the Follow-ups page, read again: ECHO-12 is open; then Back is Home.
+  // Back to the Follow-ups page, read again: ECHO-12 is open. The page has no link back Home; Escape goes there.
   await page.getByTestId('back').click();
   await expect(row(group(mine, 'Open'), 'ECHO-12')).toBeVisible();
-  await page.getByTestId('back').click();
+  await expect(page.getByTestId('back')).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await expect(page.getByTestId('needs')).toBeVisible();
 });
 
@@ -167,6 +168,8 @@ test('rows show at once from ECHO\'s own fields, and what each says fills in onc
   // Every live read waits (as a slow Jira would) until the test lets it go.
   app = await launch('granola-owner', { 'hold-live': '' });
   const { page } = app;
+  // Three follow-ups to update are one line on Home's top; its list shows each.
+  await page.getByTestId('need-category').and(page.locator('[data-category="update"]')).click();
   const rows = page.getByTestId('need-row');
   // Home's rows, before any live read answered: a document named by what it is and its meeting, faintly, while ECHO reads it.
   const pilot = rows.filter({ hasText: 'Needs: launch next week' });
@@ -201,7 +204,10 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
     { title: 'ECHO', body: 'Mina handed you Jira ticket', target: { kind: 'item', item_id: 'itm_00000000-0000-4000-8000-000000000042' } },
   ]);
   expect(changes()).toBe(before + 1);
-  // Home showed, so it was read again: the new row is there with no click.
+  // Home showed, so it was read again: with no click, the two to update are one line, naming the new one; its list shows it.
+  const updates = page.getByTestId('need-category');
+  await expect(updates).toContainText('Update2A Jira ticket you can\'t openand 1 more');
+  await updates.click();
   await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toBeVisible();
   // The check starts no sweep or run.
   expect(requests('sweep')).toEqual([]);
@@ -226,7 +232,7 @@ test('a follow-up sent to you while ECHO runs comes as a notification within one
 test('the person who sent a follow-up is told when its owner marks it done', async () => {
   app = await launch('granola-checked');
   const { page } = app;
-  await expect(page.getByTestId('needs-foot')).toBeVisible();
+  await expect(page.getByTestId('sidebar-follow-ups-count')).toBeVisible();
   await expect.poll(() => app.calls().filter(call => call.path === '/v1/person/runs' && call.body && notificationScan(call.body)).length).toBe(2);
   // Mina marks done the two Ari sent her, ECHO-12 and "Confirm the trace": one notification for that check, counting them.
   writeFileSync(join(app.home, 'mina-done'), '');
@@ -248,6 +254,7 @@ test('the person who sent a follow-up is told when its owner marks it done', asy
 test('a reader who cannot open an item sees what it is, never what it says', async () => {
   app = await launch('granola-owner');
   const { page } = app;
+  await page.getByTestId('need-category').and(page.locator('[data-category="update"]')).click();
   // Ari reads Pilot planning, but cannot open this ticket in Jira.
   const home = page.getByTestId('need-row').filter({ hasText: 'confirm the trace by Friday' });
   await expect(home).toContainText('A Jira ticket you can\'t open');
@@ -373,16 +380,20 @@ test('a list reads current work first, past older closed follow-ups, each part w
 test('Home sweeps by itself, and the Follow-ups page lists everything you sent or own', async () => {
   app = await launch('granola-sweep');
   const { page } = app;
-  const foot = page.getByTestId('needs-foot');
-  // The sweep found the PRD page changed: it waits on Ari, who owns it.
-  await expect(foot).toContainText('4 waiting on others · Only me · ECHO checked just now', { timeout: 20_000 });
-  await expect(foot).not.toContainText('match');
-  // Home asked for one sweep of Ari's own items and started it; a sweep makes no Home row of its own.
+  const followUps = page.getByTestId('sidebar-follow-ups');
+  // Home asked for one sweep of Ari's own items and started it, then read what it found once it was done.
+  await expect.poll(() => {
+    const operations = runOperations();
+    const listed = operations.indexOf('list', operations.indexOf('start'));
+    return operations.indexOf('start') > operations.indexOf('sweep') && listed > 0 && operations.indexOf('home', listed) > listed;
+  }, { timeout: 20_000 }).toBe(true);
   expect(sweeps()).toEqual([{ scope: 'mine', id: undefined }]);
-  expect(runOperations().indexOf('start')).toBeGreaterThan(runOperations().indexOf('sweep'));
+  // The sweep found the PRD page changed: it waits on Ari, who owns it; a sweep makes no Home row of its own.
   await expect(page.getByTestId('need-row')).toHaveCount(1);
-  // The footer's first link is named for what waits on others, and opens Follow-ups.
-  await foot.getByRole('button', { name: '4 waiting on others', exact: true }).click();
+  // The sidebar's Follow-ups counts, in grey, what waits on others, and opens the page.
+  await expect(followUps.getByTestId('sidebar-follow-ups-count')).toHaveText('4');
+  await expect(followUps).toHaveAccessibleName('Follow-ups, 4 waiting on others');
+  await followUps.click();
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Follow-ups', exact: true })).toBeVisible();
   // Every status, current work first; the meeting's actions first; a match says so, faintly.
@@ -391,15 +402,18 @@ test('Home sweeps by itself, and the Follow-ups page lists everything you sent o
   await expect(open.getByTestId('follow-up-row').first()).toContainText('Send the revised quote');
   await expect(row(open, 'ECHO-12')).toContainText('Jira ticket · Pilot planning · matches now');
   await expect(list.getByRole('checkbox')).toHaveCount(0);
-  // Back is Home, read again; no second sweep was asked for.
-  await page.getByTestId('back').click();
-  await expect(foot).toContainText('4 waiting on others');
+  // Escape is Home, read again; no second sweep was asked for.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('needs')).toBeVisible();
+  await expect(followUps.getByTestId('sidebar-follow-ups-count')).toHaveText('4');
   expect(sweeps()).toHaveLength(1);
 });
 
 test('every Home row opens its follow-up\'s page', async () => {
   app = await launch('granola-review');
   const { page } = app;
+  // Both wait on Ari's update: one line on Home's top, whose list shows each.
+  await page.getByTestId('need-category').and(page.locator('[data-category="update"]')).click();
   const rows = page.getByTestId('need-row');
   // ECHO-12 is Mina's, sent by Ari, and changed since: a Review row (R64). Ari's own changed page stays an Update row.
   const review = rows.filter({ hasText: 'ECHO-12' });
@@ -420,18 +434,20 @@ test('every Home row opens its follow-up\'s page', async () => {
     await page.getByTestId('back').click();
     await expect(page.getByTestId('needs')).toBeVisible();
   }
-  // The approver closes the item someone else owns from its page; Home, read again, no longer shows it.
+  // The approver closes the item someone else owns from its page; Home, read again, no longer shows it, and its list stays with one.
   await review.click();
   await page.getByTestId('follow-up').getByRole('button', { name: 'Mark done', exact: true }).click();
   await expect(page.getByTestId('follow-up-said')).toHaveText('Done · Undo');
   await page.getByTestId('back').click();
   await expect(review).toHaveCount(0);
+  await expect(update).toBeVisible();
   expect(requests('set_state')).toEqual([expect.objectContaining({ item_id: 'itm_00000000-0000-4000-8000-000000000031', state: 'done' })]);
 });
 
 test('an owner change whose reply was lost shows the item as it is now, and holds nothing', async () => {
   app = await launch('granola-review-assign-lost');
   const { page } = app;
+  await page.getByTestId('need-category').and(page.locator('[data-category="update"]')).click();
   await page.getByTestId('need-row').filter({ hasText: 'ECHO-12' }).click();
   const item = page.getByTestId('follow-up');
   await item.getByRole('button', { name: /^Owner: Mina/ }).click();
@@ -509,16 +525,17 @@ test('a meeting\'s list names apart follow-ups whose titles nothing tells apart'
   expect(requests('assign')).toEqual([expect.objectContaining({ item_id: 'itm_00000000-0000-4000-8000-000000000036', owner_membership_id: 'mem_22222222-2222-4222-8222-222222222222' })]);
 });
 
-test('an empty Home with no projects still leads to the Follow-ups page', async () => {
+test('an empty Home with no projects is New project alone, and the sidebar still leads to the Follow-ups page', async () => {
   app = await launch('no-projects');
   const { page } = app;
   const empty = page.getByTestId('home-empty');
   await expect(empty.getByTestId('empty-new-project')).toBeVisible();
-  await empty.getByTestId('your-follow-ups').click();
+  await expect(page.getByTestId('empty-new-project')).toHaveCount(1);
+  await page.getByTestId('sidebar-follow-ups').click();
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Follow-ups', exact: true })).toBeVisible();
   await expect(list).toContainText('No follow-ups');
   await expect(page.getByTestId('title')).toHaveText('Follow-ups');
-  await page.getByTestId('back').click();
+  await page.keyboard.press('Escape');
   await expect(page.getByTestId('home-empty')).toBeVisible();
 });

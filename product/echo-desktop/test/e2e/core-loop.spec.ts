@@ -13,7 +13,7 @@ test('home lists your projects and a project reads its items', async () => {
   await expect(rows.nth(0)).toContainText('Apollo');
   await expect(rows.nth(0)).toHaveAttribute('data-role', 'lead');
   await expect(rows.nth(1)).toHaveAttribute('data-role', 'member');
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
 
   await rows.nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
@@ -24,7 +24,7 @@ test('home lists your projects and a project reads its items', async () => {
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('feed-row')).toBeVisible();
   await page.getByTestId('back').click();
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
 });
 

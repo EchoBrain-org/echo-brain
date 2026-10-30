@@ -183,7 +183,7 @@ test('a meeting added through Granola reaches Home as a decision to approve, eac
   expect(sent).not.toHaveProperty('share_transcript');
   expect(sent).not.toHaveProperty('project_ids');
   // Back on Home: the row says the check is on its way, then what it found waits to be sent.
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
   await expect(page.getByTestId('toast')).toContainText('Approved');
   await expect(page.getByTestId('need-row')).toHaveAttribute('data-kind', /checking|send/);
 });
