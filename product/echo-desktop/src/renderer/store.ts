@@ -612,8 +612,8 @@ export interface State {
   altitude: AltitudeState;
 }
 
-/** Home's altitudes: Me (Needs you), My projects, one project, one person. */
-export type AltLevel = 'me' | 'projects' | 'project' | 'person';
+/** Home's altitudes: My projects (its top, with Needs you above your projects), one project, one person. */
+export type AltLevel = 'projects' | 'project' | 'person';
 /**
  * One project as Home's altitudes read it: its counts, its follow-ups still waiting (`active`: not sent or open), and, once
  * Home zoomed into it, every follow-up but the dismissed ones (`all`). `reading`: its live read is on its way.
@@ -628,6 +628,8 @@ export interface ProjectRead {
 }
 export interface AltitudeState {
   level: AltLevel;
+  /** At the top, the one kind of what needs you Home is zoomed into (its list, One place to look v1); null at the top itself. */
+  category: NeedCategory | null;
   /** The project Home last zoomed into, and the person (with their name, for the stop before their rows are read). */
   project_id: string | null;
   membership_id: string | null;
@@ -648,40 +650,18 @@ export interface AltitudeState {
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
-/** Where Home was last zoomed, on this computer. */
-const ALTITUDE = 'echo.home.altitude';
-const LEVELS: readonly AltLevel[] = ['me', 'projects', 'project', 'person'];
 
-function emptyAltitude(level: AltLevel = 'me'): AltitudeState {
-  return { level, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: false, reading: false, listFailure: null, listStale: false };
+/** Home at its top: My projects, no kind of what needs you open, nothing zoomed on and nothing read yet. */
+function emptyAltitude(): AltitudeState {
+  return { level: 'projects', category: null, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: false, reading: false,
+    listFailure: null, listStale: false };
 }
 
 const accountKey = (account: Expect) => `${account.authority} ${account.membership_id}`;
 
-/** The altitude this account last left Home at on this computer; Me when there is none, it is another's, or it cannot be read. */
-function recalledAltitude(account: Expect): AltitudeState {
-  try {
-    const kept = JSON.parse(localStorage.getItem(ALTITUDE) ?? 'null') as Partial<Record<'account' | 'level' | 'project_id' | 'membership_id' | 'name', unknown>> | null;
-    if (!kept || kept.account !== accountKey(account) || !LEVELS.includes(kept.level as AltLevel)) return emptyAltitude();
-    const text = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null);
-    const altitude = { ...emptyAltitude(kept.level as AltLevel), project_id: text(kept.project_id), membership_id: text(kept.membership_id), name: text(kept.name) };
-    if (altitude.level === 'project' && altitude.project_id === null) return emptyAltitude('projects');
-    if (altitude.level === 'person' && (altitude.membership_id === null || altitude.name === null)) return emptyAltitude('projects');
-    return altitude;
-  } catch {
-    return emptyAltitude();
-  }
-}
-
-function rememberAltitude(altitude: AltitudeState): void {
-  const account = expect();
-  if (!account) return;
-  try {
-    localStorage.setItem(ALTITUDE, JSON.stringify({
-      account: accountKey(account), level: altitude.level, project_id: altitude.project_id, membership_id: altitude.membership_id, name: altitude.name,
-    }));
-  } catch { /* Home starts at Me next time. */ }
-}
+// Home no longer remembers where it was zoomed (One place to look v1): every start opens its top. Where an older version
+// kept it on this computer goes, once, if it can.
+try { localStorage.removeItem('echo.home.altitude'); } catch { /* Nothing kept, or nothing to keep it in. */ }
 
 function rememberedSidebar(): boolean {
   try { return localStorage.getItem(SIDEBAR_OPEN) !== 'false'; } catch { return true; }
@@ -731,6 +711,11 @@ function set(patch: Partial<State>): void {
   // retaining settings drafts and writes while unmounting its global handlers.
   if (state.projectSettings?.menu && (sheetShown() || (state.compose && !state.compose.hidden))) {
     state = { ...state, projectSettings: { ...state.projectSettings, menu: false } };
+  }
+  // A kind's list shows while that kind has rows: once its last is dealt with, Home goes back to its top by itself.
+  const category = state.altitude.category;
+  if ('home' in patch && category !== null && !homeRows(state).some(row => categoryOf(row) === category)) {
+    state = { ...state, altitude: { ...state.altitude, category: null } };
   }
   // A held update click says what to settle only while it is unsettled, here or in main.
   if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
@@ -818,8 +803,8 @@ function applyStatus(status: AppStatus): void {
     return;
   }
   const same = sameExpect(lastAccount, next);
-  // Someone else: nothing of the last account's survives, not even a draft. Home opens where this account last left it.
-  if (!same) { forgetAccount(); set({ altitude: recalledAltitude(next) }); }
+  // Someone else: nothing of the last account's survives, not even a draft. Home opens at its top.
+  if (!same) forgetAccount();
   // A new role is a change of access: the bar's text goes, and People & invites is for owners.
   else if (before && before.role !== next.role) {
     emptyBar();
@@ -1352,13 +1337,13 @@ function showList(status: ListStatus, list: State['projects']): void {
         listToken += 1;
         set({ altitude: { ...state.altitude, list: null, listFailure: null, listStale: false } });
       }
-    } else if (state.route.page !== 'home' || state.altitude.level === 'me') {
+    } else if (state.route.page !== 'home') {
       // Out of sight, Home keeps showing its copy of the pages, and reads them all again on its next load. A read already on
       // its way may predate the change, so it no longer counts, whether or not Home has a copy yet.
       listToken += 1;
       if (state.altitude.list !== null && !state.altitude.listStale) set({ altitude: { ...state.altitude, listStale: true } });
     }
-    if (state.route.page === 'home' && state.altitude.level !== 'me') {
+    if (state.route.page === 'home') {
       // More pages than the sidebar shows: Home reads them all again, so a project gone from (or new to) a later page counts.
       if (list.next !== null) void readAltitudeList();
       else if (followFocus() || list.items.some(project => !state.altitude.reads[project.project_id])) void loadAltitude(false);
@@ -1464,7 +1449,11 @@ function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
   return fresh.some(project => known.has(project.project_id) && known.get(project.project_id) !== project.role);
 }
 
-/** Back to Home as it was left: the same pages, the same scroll. The bar searches all context. */
+/**
+ * Back to Home as it was left: the same pages, the same scroll, a kind's list
+ * still open (Back from a decision or a follow-up opened from it, Approve).
+ * The bar searches all context.
+ */
 export function goHome(): void {
   readSeq += 1;
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
@@ -1472,7 +1461,17 @@ export function goHome(): void {
   syncSearch();
   freshness.navigated();
   void loadHome();
-  if (state.altitude.level !== 'me') void loadAltitude();
+  void loadAltitude();
+}
+
+/**
+ * The sidebar's Home: Home at its top, whatever it was zoomed on or into (One
+ * place to look v1). What it read stays, and so do the project and person
+ * stops it last zoomed on.
+ */
+export function openHome(): void {
+  set({ altitude: { ...state.altitude, level: 'projects', category: null } });
+  goHome();
 }
 
 /**
@@ -2692,8 +2691,8 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
       listToken += 1;
       set({ altitude: { ...state.altitude, list: [...state.altitude.list, fresh] } });
     }
-    // Home zoomed out reads a project restored to your list (and lets go of one archived).
-    if (state.route.page === 'home' && state.altitude.level !== 'me') void loadAltitude(false);
+    // Home reads a project restored to your list (and lets go of one archived).
+    if (state.route.page === 'home') void loadAltitude(false);
     listChanged();
     return;
   }
@@ -2731,7 +2730,7 @@ function forgetLeftProject(projectId: string): void {
   unresolvedChanged();
   void loadHome();
   // Home, where leaving lands, reads again as it does whenever it is shown.
-  if (state.altitude.level !== 'me') void loadAltitude();
+  void loadAltitude();
 }
 
 // ---- people ----------------------------------------------------------------------
@@ -5149,8 +5148,8 @@ const projectShown = () => (state.route.page === 'project' ? state.route.project
 const SURFACES: readonly Surface[] = [
   // Home, and the decision page over it: their rows, and the decision's check (only new rows read live, but on a return).
   { areas: ['follow_ups', 'reviews'], shows: () => (state.route.page === 'home' || state.route.page === 'decision') && state.home !== null, read: back => loadHome(back) },
-  // Home zoomed out: your projects' follow-ups, and the live titles of the project or person it is zoomed on.
-  { areas: ['follow_ups'], shows: () => state.route.page === 'home' && state.altitude.level !== 'me', read: () => loadAltitude() },
+  // Home's altitudes: your projects' follow-ups, and the live titles of the project or person it is zoomed on.
+  { areas: ['follow_ups'], shows: () => state.route.page === 'home', read: () => loadAltitude() },
   // The decision page's records: each finished check's follow-ups.
   { areas: ['follow_ups'], shows: () => state.route.page === 'decision' && (state.decision?.runs.length ?? 0) > 0, read: () => loadRecordLines(state.decision!) },
   { areas: ['reviews'], shows: () => state.route.page === 'decision' && state.decision !== null,
@@ -5392,6 +5391,55 @@ export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readon
   ];
 }
 
+/**
+ * What a row asks of you, as Home's top groups it (One place to look v1):
+ * Approve, Retry (a check that did not finish), Send, and Update (a follow-up
+ * that waits on you, or a Review of one you sent that changed). Checking is
+ * on its way and asks nothing yet, so it never opens a list.
+ */
+export type NeedCategory = 'approve' | 'retry' | 'send' | 'update';
+const CATEGORIES = ['approve', 'retry', 'send', 'update', 'checking'] as const;
+
+export function categoryOf(row: NeedRow): NeedCategory | 'checking' {
+  return row.kind === 'failed' ? 'retry' : row.kind === 'review' ? 'update' : row.kind;
+}
+
+/**
+ * When a row's age counts from: a meeting to approve, when it met (the
+ * reviews say no more); a check, its run's last move; a Send, when its check
+ * finished; a follow-up, when it last moved (sent, handed on, set or made).
+ */
+export function needAt(row: NeedRow): string | null {
+  switch (row.kind) {
+    case 'approve': return row.review.meeting_at;
+    case 'checking': return row.run?.updated_at ?? null;
+    case 'failed': return row.run.updated_at;
+    case 'send': return row.send.finished_at;
+    default: {
+      const { sent_at, owner_set_at, state_set_at, created_at } = row.item;
+      return [sent_at, owner_set_at, state_set_at].reduce<string>((latest, at) => (at !== null && Date.parse(at) > Date.parse(latest) ? at : latest), created_at);
+    }
+  }
+}
+
+/** One kind of what needs you on Home's top: its rows, the newest first. */
+export interface HomeCategory { category: NeedCategory | 'checking'; rows: NeedRow[] }
+
+/**
+ * Home's rows by what they ask of you, in Home's order: Approve, Retry, Send,
+ * Update, then Checking; a kind with no rows is left out. Meetings keep the
+ * reviews' own order, the newest first; the others go newest first by when
+ * they last moved.
+ */
+export function homeCategories(rows: readonly NeedRow[]): HomeCategory[] {
+  const moved = (row: NeedRow) => Date.parse(needAt(row) ?? '') || 0;
+  return CATEGORIES.flatMap(category => {
+    const these = rows.filter(row => categoryOf(row) === category);
+    const newest = category === 'approve' || category === 'checking' ? these : [...these].sort((a, b) => moved(b) - moved(a));
+    return newest.length === 0 ? [] : [{ category, rows: newest }];
+  });
+}
+
 /** A load of Home's altitudes is the last account's, or an earlier one's, once this moves on. */
 let altitudeToken = 0;
 let altitudeLoading: { key: string; done: Promise<void> } | null = null;
@@ -5445,7 +5493,6 @@ function projectLeftHere(projectId: string): void {
     ...(focus ? { project_id: null, level: state.altitude.level === 'project' ? 'projects' as const : state.altitude.level } : {}),
   };
   set({ altitude });
-  if (focus) rememberAltitude(altitude);
 }
 
 /** Your whole list, once Home knows it: only a project missing from the whole list is gone. */
@@ -5459,32 +5506,37 @@ function followFocus(): boolean {
   const list = wholeList();
   const { project_id } = state.altitude;
   if (list === null || project_id === null || list.some(project => project.project_id === project_id)) return false;
-  const altitude = { ...state.altitude, project_id: null, level: state.altitude.level === 'project' ? 'projects' as const : state.altitude.level };
-  set({ altitude });
-  rememberAltitude(altitude);
+  set({ altitude: { ...state.altitude, project_id: null, level: state.altitude.level === 'project' ? 'projects' as const : state.altitude.level } });
   return true;
 }
 
 /**
  * Home zooms to `level`: on a project or a person when given one, else the
- * last it zoomed on. Me reads nothing new; every other altitude reads what it
+ * last it zoomed on, and out of any kind's list. Each altitude reads what it
  * has not read yet (Home altitude v1).
  */
 export function zoomTo(level: AltLevel, target: { project_id?: string; membership_id?: string; name?: string } = {}): void {
-  const altitude = {
-    ...state.altitude, level, project_id: target.project_id ?? state.altitude.project_id,
+  set({ altitude: {
+    ...state.altitude, level, category: null, project_id: target.project_id ?? state.altitude.project_id,
     membership_id: target.membership_id ?? state.altitude.membership_id, name: target.name ?? state.altitude.name,
-  };
-  set({ altitude });
-  rememberAltitude(altitude);
-  if (level !== 'me') void loadAltitude(false);
+  } });
+  void loadAltitude(false);
 }
 
-/** One level out: a person to their project, a project to My projects. False on My projects and Me, which go nowhere. */
+/** Home zooms into one kind of what needs you: its list, at the top's altitude (One place to look v1). It reads nothing new. */
+export function openCategory(category: NeedCategory): void {
+  set({ altitude: { ...state.altitude, level: 'projects', category } });
+}
+
+/**
+ * One level out: a person to their project, a project to My projects, a
+ * kind's list to the top. False at the top, which goes nowhere.
+ */
 export function zoomOut(): boolean {
-  const { level, project_id } = state.altitude;
+  const { level, project_id, category } = state.altitude;
   if (level === 'person') { zoomTo(project_id === null ? 'projects' : 'project'); return true; }
   if (level === 'project') { zoomTo('projects'); return true; }
+  if (category !== null) { set({ altitude: { ...state.altitude, category: null } }); return true; }
   return false;
 }
 
@@ -5525,7 +5577,6 @@ export function loadAltitude(fresh = true): Promise<void> {
   if (!account) return Promise.resolve();
   followFocus();
   const { level, project_id, membership_id } = state.altitude;
-  if (level === 'me') return Promise.resolve();
   altitudeOwed ||= fresh;
   const again = altitudeOwed;
   // A load on its way is joined only for the same zoom over the same projects: one that just joined your list is read.

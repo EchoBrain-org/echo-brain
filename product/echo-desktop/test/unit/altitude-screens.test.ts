@@ -1,8 +1,10 @@
-// Home's altitudes on the page (Home altitude v1): the stops, My projects grouped by health with what needs attention and how
-// long it waited, a project's decisions and owners, a person's follow-ups by project, and Me as Home has always been.
+// Home's altitudes on the page (Home altitude v1, One place to look v1): the stops; Home's top, with what needs you by kind
+// above your projects, each with a mark only when it is not on track, why, how much is done and how long its oldest waited;
+// one kind's list; a project's decisions and owners; and a person's follow-ups by project.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PersonMeetingReviewV2 } from '@echo-brain/organization-api';
 import type { AltitudeState, ProjectRead, State } from '../../src/renderer/store.js';
-import type { OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
+import type { HomeView, OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
 import { ACCOUNT, byTestId, elements, EMPTY_SUMMARY, plainHooks, project, render, text } from './harness.js';
 
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
@@ -31,15 +33,25 @@ const read = (active: OpenItemView[], extra: Partial<ProjectRead> = {}): Project
   loading: false, counts: { ...EMPTY_SUMMARY, open: active.length }, active, all: null, reading: false, ...extra,
 });
 
-async function stateWith(altitude: Partial<AltitudeState>, projects: ProjectSummary[] = [THERMAL, CERT, PACKAGING], list: Partial<State['projects']> = {}): Promise<State> {
+async function stateWith(altitude: Partial<AltitudeState>, projects: ProjectSummary[] = [THERMAL, CERT, PACKAGING], list: Partial<State['projects']> = {},
+  home: Partial<NonNullable<State['home']>> = {}): Promise<State> {
   const { getState } = await import('../../src/renderer/store.js');
   return {
     ...getState(), status: { client_version: 'test', signed_in: true, account: ACCOUNT },
     projects: { items: projects, next: null, loading: false, ...list },
-    home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
-    altitude: { level: 'projects', project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: true, reading: false, listFailure: null, listStale: false, ...altitude },
+    home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false, ...home },
+    altitude: { level: 'projects', category: null, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: true, reading: false,
+      listFailure: null, listStale: false, ...altitude },
   };
 }
+
+/** A meeting waiting for you to approve it. */
+const meeting = (title: string, meeting_at: string | null = null): PersonMeetingReviewV2 => ({
+  approval_id: `apr_${title.toLowerCase().replace(/\W/g, '')}`, title, project_ids: [], status: 'pending', decided_on: null, first_line: `${title} decided.`,
+  action_count: 1, meeting_at, all_day: false, records: [],
+});
+/** What waits on you: these follow-ups, yours to update. */
+const waiting = (items: OpenItemView[]): HomeView => ({ send: [], items, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
 
 const READS = {
   [THERMAL.project_id]: read([item('t1', THERMAL, { days: 9, kind: 'ticket' }), item('t2', THERMAL, { days: 4, owner_name: 'Rafael Moreno' }),
@@ -51,12 +63,16 @@ const READS = {
 beforeEach(() => { vi.useFakeTimers({ now: NOW }); });
 
 describe('the stops', () => {
-  it('on Me, light Me and leave the project and person stops off until Home has zoomed on one', async () => {
+  it('at the top light My projects, a kind’s list open or not, with no Me; the project and person stops stay off until Home has zoomed on one', async () => {
     const { Stops } = await import('../../src/renderer/screens/altitude.js');
-    const tree = render(Stops({ state: await stateWith({ level: 'me' }) }));
-    expect(byTestId(tree, 'alt-me')[0]!.props['aria-pressed']).toBe(true);
-    const stops = byTestId(tree, 'alt-stop');
-    expect(stops.map(stop => [stop.props['data-level'], stop.props.disabled ?? false])).toEqual([['projects', false], ['project', true], ['person', true]]);
+    for (const category of [null, 'update'] as const) {
+      const tree = render(Stops({ state: await stateWith({ category }) }));
+      expect(byTestId(tree, 'alt-me')).toHaveLength(0);
+      const stops = byTestId(tree, 'alt-stop');
+      expect(stops.map(stop => [stop.props['data-level'], stop.props['aria-pressed'], stop.props.disabled ?? false]))
+        .toEqual([['projects', true, false], ['project', false, true], ['person', false, true]]);
+      expect(text(tree)).toBe('My projects');
+    }
   });
 
   it('name the project and person Home last zoomed on', async () => {
@@ -67,18 +83,41 @@ describe('the stops', () => {
 });
 
 describe('My projects', () => {
-  it('groups projects off track, at risk, then on track, each with what needs attention and its longest wait', async () => {
+  /** A row's part, by its class. */
+  const part = (row: unknown, name: string) => elements(row).find(node => node.props.class === name);
+
+  it('puts projects off track, at risk, then on track: a mark only when not on track, why, a grey bar of what is done, and the oldest wait', async () => {
     const { MyProjects } = await import('../../src/renderer/screens/altitude.js');
     const tree = render(MyProjects({ state: await stateWith({ reads: READS }) }));
-    expect(byTestId(tree, 'alt-group-head').map(text)).toEqual(['Off track1', 'At risk1', 'On track1']);
+    expect(text(byTestId(tree, 'alt-projects-head')[0])).toBe('Projects');
+    // One flat list: order carries the grouping, with no health chips or group bars.
+    expect(byTestId(tree, 'alt-group-head')).toHaveLength(0);
+    expect(byTestId(tree, 'alt-chip')).toHaveLength(0);
     const rows = byTestId(tree, 'alt-project');
     expect(rows.map(row => row.props['data-project'])).toEqual([THERMAL.project_id, CERT.project_id, PACKAGING.project_id]);
-    const thermal = text(rows[0]);
-    expect(thermal).toContain('Thermal');
-    expect(thermal).toContain('3');
-    expect(thermal).toContain('9d');
-    expect(rows[2]!.props['aria-label']).toBe('Packaging, On track');
-    expect(text(rows[2])).toContain('75%');
+    expect(rows.map(row => row.props['aria-label'])).toEqual(['Thermal, Off track', 'Certification, At risk', 'Packaging, On track']);
+    // A solid dot off track, a ring at risk, nothing on track.
+    expect(rows.map(row => elements(row).find(node => typeof node.props.class === 'string' && node.props.class.startsWith('health-mark'))?.props.class ?? null))
+      .toEqual(['health-mark off', 'health-mark risk', null]);
+    // Why, faint, only when not on track: the follow-up needing attention that waited longest, and whose it is.
+    expect(text(part(rows[0], 'alt-reason'))).toBe('Jira ticket · Thermal sync · Mina Patel');
+    expect(text(part(rows[1], 'alt-reason'))).toBe('Follow-up c1 · Mina Patel');
+    expect(part(rows[2], 'alt-reason')).toBeUndefined();
+    // Done out of every follow-up, as a grey bar with its words on hover; no percentage.
+    expect(part(rows[2], 'alt-bar')!.props.title).toBe('3 of 4 follow-ups done');
+    expect(elements(part(rows[2], 'alt-bar')).find(node => node.type === 'i')!.props.style).toEqual({ width: '75%' });
+    expect(text(rows[2])).not.toContain('%');
+    expect(rows.map(row => text(part(row, 'alt-date')))).toEqual(['9d', '4d', '0d']);
+  });
+
+  it('says no owner when nobody owns the reason, and draws no bar for a project with no follow-ups', async () => {
+    const { MyProjects } = await import('../../src/renderer/screens/altitude.js');
+    const nobodys = item('n1', THERMAL, { kind: 'action', expected: 'Heat-sink sourcing', owner: { ...person('Lin Chen'), match: 'approver' } });
+    const reads = { [THERMAL.project_id]: read([nobodys]), [CERT.project_id]: read([], { counts: EMPTY_SUMMARY }) };
+    const rows = byTestId(render(MyProjects({ state: await stateWith({ reads }, [THERMAL, CERT]) })), 'alt-project');
+    expect(text(part(rows[0], 'alt-reason'))).toBe('Heat-sink sourcing · no owner');
+    expect(part(rows[1], 'alt-bar')).toBeUndefined();
+    expect(text(part(rows[1], 'alt-date'))).toBe('');
   });
 
   it('shows a project it could not read as unread, never on track', async () => {
@@ -88,6 +127,9 @@ describe('My projects', () => {
     const broken = byTestId(tree, 'alt-project').find(row => row.props['data-project'] === BROKEN.project_id)!;
     expect(broken.props['aria-label']).toBe('Battery pack, Couldn’t read just now');
     expect(elements(broken).some(node => node.props.title === 'Couldn’t read just now')).toBe(true);
+    // Its faint ring, never a health mark, and last.
+    expect(elements(broken).some(node => node.props.class === 'ring-mark')).toBe(true);
+    expect(byTestId(tree, 'alt-project').at(-1)).toBe(broken);
   });
 
   it('with no projects, offers a new one', async () => {
@@ -128,19 +170,71 @@ describe('a person', () => {
 });
 
 describe('Home', () => {
-  it('on Me is Needs you, as it has always been, under the stops', async () => {
+  /** Home's top, or a kind's list, as it shows. */
+  const home = async (altitude: Partial<AltitudeState>, homePart: Partial<NonNullable<State['home']>>, projects?: ProjectSummary[]) => {
     const { Home } = await import('../../src/renderer/screens/home.js');
-    const tree = render(Home({ state: await stateWith({ level: 'me' }) }));
-    expect(byTestId(tree, 'alt-stops')).toHaveLength(1);
-    expect(byTestId(tree, 'needs')).toHaveLength(1);
-    expect(byTestId(tree, 'alt-projects')).toHaveLength(0);
+    return render(Home({ state: await stateWith({ reads: READS, ...altitude }, projects, {}, homePart) }));
+  };
+
+  it('at its top shows what needs you above your projects, with no stops (they are in the title row) and no footer', async () => {
+    const tree = await home({}, { open: waiting([item('u1', THERMAL)]) });
+    const parts = elements(tree).map(node => node.props['data-testid']).filter(id => id === 'needs' || id === 'alt-projects');
+    expect(parts).toEqual(['needs', 'alt-projects']);
+    expect(text(byTestId(tree, 'needs-head')[0])).toBe('Needs you1');
+    expect(byTestId(tree, 'alt-stops')).toHaveLength(0);
+    for (const gone of ['needs-foot', 'your-follow-ups', 'home-only-me']) expect(byTestId(tree, gone)).toHaveLength(0);
   });
 
-  it('zoomed out shows My projects in place of Needs you', async () => {
-    const { Home } = await import('../../src/renderer/screens/home.js');
-    const tree = render(Home({ state: await stateWith({ reads: READS }) }));
-    expect(byTestId(tree, 'alt-projects')).toHaveLength(1);
+  it('shows a kind with one row as that row, and a kind with two or more as one line that opens its list', async () => {
+    const tree = await home({}, { reviews: [meeting('Supplier sync', ago(0.1)), meeting('Weekly standup')], open: waiting([item('u1', THERMAL, { days: 2 })]) });
+    // The one Update is its row, as it has always been; the two meetings to approve are one line.
+    expect(byTestId(tree, 'need-row').map(row => row.props['data-kind'])).toEqual(['update']);
+    const [line] = byTestId(tree, 'need-category');
+    expect(line!.type).toBe('button');
+    expect(line!.props['data-category']).toBe('approve');
+    expect(line!.props.title).toBe('See all 2 to approve');
+    // Its verb and count, the newest's name, how many more, and how long ago the newest met.
+    expect(text(line)).toBe('Approve2Supplier syncand 1 more2h');
+    // The badge's number: everything that waits on you.
+    expect(text(byTestId(tree, 'needs-head')[0])).toBe('Needs you3');
+    const { getState } = await import('../../src/renderer/store.js');
+    (line!.props.onClick as () => void)();
+    expect(getState().altitude.category).toBe('approve');
+  });
+
+  it('shows two checks on their way as one faint line that opens nothing, and never counts them', async () => {
+    const checking = (title: string): PersonMeetingReviewV2 => ({ ...meeting(title), status: 'publishing', decided_on: 'desktop' });
+    const tree = await home({}, { reviews: [checking('Supplier sync'), checking('Weekly standup')] });
+    const [line] = byTestId(tree, 'need-category');
+    expect(line!.type).toBe('div');
+    expect(line!.props['data-category']).toBe('checking');
+    expect(text(line)).toBe('CheckingSupplier syncand 1 more');
+    expect(text(byTestId(tree, 'needs-head')[0])).toBe('Needs you');
+  });
+
+  it('says Nothing needs you in one quiet line, with your projects below it', async () => {
+    const tree = await home({}, {});
+    expect(text(byTestId(tree, 'home-clear')[0])).toBe('Nothing needs you');
+    expect(byTestId(tree, 'needs-head')).toHaveLength(0);
+    expect(byTestId(tree, 'alt-project')).toHaveLength(3);
+  });
+
+  it('with no projects and nothing waiting is the first run: New project, once', async () => {
+    const tree = await home({}, {}, []);
+    expect(byTestId(tree, 'home-empty')).toHaveLength(1);
+    expect(byTestId(tree, 'empty-new-project')).toHaveLength(1);
     expect(byTestId(tree, 'needs')).toHaveLength(0);
+  });
+
+  it('zoomed into a kind shows its verb and count, then its rows newest first, in place of the top', async () => {
+    const older = item('u1', THERMAL, { days: 3, expected: 'Older' }), newer = item('u2', CERT, { days: 1, expected: 'Newer' });
+    const tree = await home({ category: 'update' }, { open: waiting([older, newer]) });
+    const [list] = byTestId(tree, 'needs');
+    expect(list!.props['data-category']).toBe('update');
+    expect(text(byTestId(tree, 'need-list-head')[0])).toBe('Update2');
+    expect(byTestId(tree, 'need-row').map(row => text(row))).toEqual([expect.stringContaining('Newer'), expect.stringContaining('Older')]);
+    expect(byTestId(tree, 'alt-projects')).toHaveLength(0);
+    expect(byTestId(tree, 'need-category')).toHaveLength(0);
   });
 });
 
@@ -197,10 +291,9 @@ describe('what the altitudes say while reading, and when a read fails', () => {
 });
 
 describe('My projects on first open, and without a list', () => {
-  it('keeps the list’s order, ungrouped, until the first reads settle', async () => {
+  it('keeps the list’s order until the first reads settle', async () => {
     const { MyProjects } = await import('../../src/renderer/screens/altitude.js');
     const tree = render(MyProjects({ state: await stateWith({ reads: READS, settled: false }, [PACKAGING, THERMAL, CERT]) }));
-    expect(byTestId(tree, 'alt-group-head')).toHaveLength(0);
     expect(byTestId(tree, 'alt-project').map(row => row.props['data-project'])).toEqual([PACKAGING.project_id, THERMAL.project_id, CERT.project_id]);
   });
 
@@ -211,12 +304,11 @@ describe('My projects on first open, and without a list', () => {
     expect(text(tree)).toContain('Couldn’t read your projects just now');
   });
 
-  it('opens with its name and how many projects are off track, at risk and on track', async () => {
+  it('within each health, puts first the project with most needing attention, then the longest wait', async () => {
     const { MyProjects } = await import('../../src/renderer/screens/altitude.js');
-    const tree = render(MyProjects({ state: await stateWith({ reads: READS }) }));
-    const head = byTestId(tree, 'alt-head')[0]!;
-    expect(text(head)).toContain('My projects');
-    expect(byTestId(head, 'alt-chip').map(chip => chip.props.title)).toEqual(['1 off track', '1 at risk', '1 on track']);
+    const reads = { ...READS, [PACKAGING.project_id]: read([item('p1', PACKAGING, { days: 5 })]) };
+    const tree = render(MyProjects({ state: await stateWith({ reads }) }));
+    expect(byTestId(tree, 'alt-project').map(row => row.props['data-project'])).toEqual([THERMAL.project_id, PACKAGING.project_id, CERT.project_id]);
   });
 });
 
@@ -252,9 +344,9 @@ describe('a long or unread list of projects', () => {
 });
 
 describe('stops and notices for a long list', () => {
-  it('keeps the Project stop open at Me for a remembered project it cannot see on the sidebar’s first page', async () => {
+  it('keeps the Project stop open at the top for a project last zoomed on that it cannot see on the sidebar’s first page', async () => {
     const { Stops } = await import('../../src/renderer/screens/altitude.js');
-    const tree = render(Stops({ state: await stateWith({ level: 'me', project_id: 'prj_far-away' }, [THERMAL, CERT, PACKAGING], { next: 'more' }) }));
+    const tree = render(Stops({ state: await stateWith({ project_id: 'prj_far-away' }, [THERMAL, CERT, PACKAGING], { next: 'more' }) }));
     const stop = byTestId(tree, 'alt-stop').find(each => each.props['data-level'] === 'project')!;
     expect(stop.props.disabled).toBe(false);
     expect(stop.props['aria-label']).toBe('Project');

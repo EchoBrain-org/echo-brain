@@ -800,11 +800,11 @@ button.toast:hover { background: var(--panel); }
 .impact-head h4 { margin: 0; }
 .impact-head .asking { font-size: 12.5px; }
 
-/* Home: only what needs you. One row per decision or item: the verb and its shape on the left, then its title, and a second line that opens with where and when. */
-.column.needs { overflow-y: auto; gap: 2px; padding: 4px 0; }
-.column.needs.empty { overflow: hidden; }
-.needs-head { display: flex; align-items: baseline; gap: 10px; margin: 0; padding: 18px 14px 10px; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
-.needs-head .count { font-family: var(--mono); font-size: 13px; font-weight: 500; letter-spacing: 0; color: var(--faint); }
+/* Home's top: what needs you, by kind, then your projects. One row per decision or item: the verb and its shape on the left, then its
+   title, and a second line that opens with where and when; two or more of one kind are one line that opens their list. */
+.needs { display: flex; flex-direction: column; gap: 2px; }
+.home-label { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 0 14px 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.home-label .n { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--faint); }
 .need-row { display: flex; align-items: flex-start; gap: 16px; width: 100%; flex-shrink: 0; padding: 14px; border: 0; border-radius: 12px; text-align: left; background: transparent; }
 .need-row:hover:not(:disabled) { background: var(--hover); }
 .need-row:disabled { cursor: default; }
@@ -827,16 +827,24 @@ button.toast:hover { background: var(--panel); }
 .need-where-more { flex-shrink: 0; }
 .need-dot { width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; margin: -2px 0; border-radius: 5px; font-size: 9.5px; font-weight: 600; }
 .need-detail .asking { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
-/* Past ten rows Home groups them, in its order, each group showing five rows until Show N more opens it. */
-.needs-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
-.needs-group-head { margin: 0; padding: 16px 14px 4px; }
-.needs-more { align-self: flex-start; margin: 2px 6px 6px; font-size: 13px; }
-.home-clear { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; font-size: 14px; color: var(--muted); }
-/* Under the rows, and on an empty Home: one line. Its links (what waits on others, else Follow-ups; Only me), then when ECHO last checked. */
-.needs-foot { flex-shrink: 0; margin-top: auto; padding: 14px 14px 4px; font-size: 12.5px; line-height: 1.5; color: var(--faint); }
-.needs-foot-link { font-weight: 500; color: var(--muted); }
-.needs-foot-link svg { margin-right: 4px; vertical-align: -1px; }
-.needs-foot-link:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+/* A kind with two or more rows: its verb and count in the signal, the newest's name, how many more and how long ago, faintly, and a
+   chevron; checks on their way, all faint, open nothing. */
+.need-category { display: flex; align-items: center; gap: 16px; width: 100%; height: 44px; flex-shrink: 0; padding: 0 14px; border: 0; border-radius: 12px;
+  text-align: left; color: var(--text); background: transparent; }
+button.need-category:hover { background: var(--hover); }
+.need-category .need-kind { color: var(--signal-text); }
+.need-category-count { flex-shrink: 0; min-width: 22px; padding: 1px 6px; border-radius: 6px; text-align: center; font-family: var(--mono); font-size: 12px;
+  font-weight: 600; color: var(--signal-text); background: var(--signal-soft); }
+.need-category-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 500; letter-spacing: -0.005em; }
+.need-category-more { flex-shrink: 0; margin-left: -8px; font-size: 13px; color: var(--faint); white-space: nowrap; }
+.need-category-age { flex-shrink: 0; margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--faint); }
+.need-category > svg:last-child { flex-shrink: 0; color: var(--faint); }
+.need-category.checking, .need-category.checking .need-kind, .need-category.checking .need-category-name { color: var(--faint); font-weight: 400; }
+/* One kind's list: its verb, in the signal, and its count. */
+.need-list-head { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 14px 8px; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+.need-list-verb { color: var(--signal-text); }
+/* Nothing needs you: one quiet line, as tall as a kind's, so the projects never move up under the pointer as it fills. */
+.home-clear { display: flex; align-items: center; min-height: 44px; padding: 0 14px; font-size: 14px; color: var(--muted); }
 .side-row .badge { min-width: 20px; height: 18px; padding: 0 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--on-signal); background: var(--signal); }
 
 /* An owner: a chip, a dashed Pick owner, and the people picker that opens under it. */
@@ -1085,8 +1093,11 @@ button.impact-follow-ups:hover { color: var(--text); }
    for what needs attention. */
 :root { --ring-muted: var(--control); --ring-done: var(--done); --ring-signal: var(--signal); --ring-faint: var(--line-strong); }
 .home { width: var(--ask-width); max-width: calc(100% - 48px); height: 100%; min-height: 0; display: flex; flex-direction: column; }
-.home > .column { width: 100%; max-width: none; height: auto; flex: 1; min-height: 0; }
-.alt-stops { flex-shrink: 0; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 2px 0 6px; }
+/* On Home the title bar holds the stops in place of a name (One place to look v1): the sides share what is left, so the stops stay
+   centred and whole however narrow the window, and their focus rings are not cut off. */
+.titlebar:has(> .alt-title) .side { width: auto; flex: 1 1 0; min-width: 0; }
+.title.alt-title { flex: none; display: flex; justify-content: center; overflow: visible; }
+.alt-stops { flex-shrink: 0; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .alt-pill { display: flex; align-items: center; padding: 3px; border: 1px solid var(--line-strong); border-radius: 999px;
   background: color-mix(in srgb, var(--panel) 72%, transparent); -webkit-backdrop-filter: blur(14px) saturate(150%); backdrop-filter: blur(14px) saturate(150%);
   box-shadow: var(--bar-shadow); }
@@ -1097,10 +1108,6 @@ button.impact-follow-ups:hover { color: var(--text); }
 .alt-stop:disabled { opacity: 0.45; cursor: default; }
 .alt-stop span:last-child { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .alt-link { width: 8px; height: 1px; background: var(--line-strong); }
-.alt-me { width: 30px; height: 30px; flex-shrink: 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 15px; display: flex; align-items: center;
-  justify-content: center; color: var(--muted); background: var(--panel); box-shadow: var(--bar-shadow); }
-.alt-me:hover { color: var(--text); }
-.alt-me.on { color: var(--signal-text); border-color: color-mix(in srgb, var(--signal) 55%, transparent); }
 .alt-tile { width: 20px; height: 20px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; font-size: 10.5px; font-weight: 600; }
 .alt-stop .alt-tile { width: 18px; height: 18px; font-size: 10px; border-radius: 5px; }
 .alt-stop .face { width: 18px; height: 18px; font-size: 8px; }
@@ -1109,6 +1116,21 @@ button.impact-follow-ups:hover { color: var(--text); }
 @media (prefers-reduced-motion: reduce) { .alt-level { animation: none; } }
 .alt-level-body { display: flex; flex-direction: column; padding: 2px 0 12px; }
 .alt-level-body.alt-empty { flex: 1; min-height: 100%; align-items: center; justify-content: center; }
+.alt-level-body.home-top { gap: 26px; padding-top: 14px; }
+/* Your projects at Home's top: a mark only when not on track, the tile and name with why, faint, then a grey bar of what is done and
+   how long the oldest waited. */
+.alt-projects { display: flex; flex-direction: column; }
+.alt-projects > .empty-capture { align-self: center; margin-top: 8px; }
+.alt-project-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) 64px 40px; align-items: center; column-gap: 12px; width: 100%; height: 40px;
+  flex-shrink: 0; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; text-align: left; font-size: 14px; color: var(--text); }
+.alt-project-row:hover, .alt-project-row:focus-visible { background: var(--hover); }
+.alt-project-row.faint { color: var(--faint); }
+.alt-what { display: flex; align-items: center; gap: 10px; min-width: 0; white-space: nowrap; }
+.alt-project-name { flex-shrink: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.alt-reason { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--faint); }
+.alt-done { display: flex; align-items: center; }
+.alt-bar { display: block; width: 64px; height: 4px; border-radius: 2px; overflow: hidden; background: var(--line-strong); }
+.alt-bar i { display: block; height: 100%; border-radius: 2px; background: var(--faint); }
 .alt-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px 6px; }
 .alt-head h2 { margin: 0 4px 0 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alt-head .alt-tile { width: 26px; height: 26px; font-size: 13px; border-radius: 7px; }

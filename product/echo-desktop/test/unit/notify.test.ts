@@ -396,8 +396,9 @@ describe('what never notifies (N3)', () => {
     authority.archived = [project(50, 2, { status: 'archived' })];
     await signedIn();
     const reads = rpc.mock.calls.filter(([method]) => method === 'projects.list').map(([, params]) => `${params.status}${params.cursor ? ' more' : ''}`);
-    // Every page, once: the three active pages, which also fill the sidebar's first, and the archived one.
-    expect(reads.sort()).toEqual(['active', 'active more', 'active more', 'archived']);
+    // Every page, once: the three active pages, which also fill the sidebar's first, and the archived one. Home, which opens at its
+    // top with your projects, reads the three active pages once more itself, as it does for any list longer than the sidebar shows.
+    expect(reads.sort()).toEqual(['active', 'active', 'active more', 'active more', 'active more', 'active more', 'archived']);
     await nextCheck();
     expect(notices()).toEqual([]);
   });

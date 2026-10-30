@@ -6,6 +6,7 @@ import { ConfirmSignOut } from './screens/account.js';
 import { AskView, Bar, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Decision } from './screens/decision.js';
+import { Stops } from './screens/altitude.js';
 import { FollowUp, FollowUps } from './screens/follow-ups.js';
 import { Home } from './screens/home.js';
 import { ChangeLine, changeShownInPlace } from './screens/change.js';
@@ -87,7 +88,7 @@ function back(): void {
   if (state.reader) return closeReader();
   if (state.organization?.confirm) return cancelRevoke();
   if (state.organization?.menu) return toggleEmployeeMenu(state.organization.menu);
-  // On Home zoomed on a project or a person, Escape zooms one level out.
+  // On Home zoomed on a project or a person, or into one kind of what needs you, Escape zooms one level out.
   if (state.route.page === 'home' && zoomOut()) return;
   if (state.route.page !== 'home') return goHome();
 }
@@ -167,6 +168,9 @@ function App() {
   // an answer or an original shows until ECHO is back. The sidebar's project
   // rows stay, so a file dragged from Finder can still be dropped on one.
   const covered = pageCovered(state);
+  // Home itself, nothing over it: the title row holds its stops where a page's name would be (One place to look v1). Never under
+  // the cover, since a stop names a project or a person.
+  const homeShows = !covered && !state.ask && !view && !listDecision && !state.reader && state.route.page === 'home';
   const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : onlyMe ? 'Only me' : decision ? 'Decision'
     : state.route.page === 'follow-ups' ? 'Follow-ups' : null;
   // A follow-ups view names itself: Follow-ups, the meeting or the project; an item; a decision.
@@ -175,10 +179,13 @@ function App() {
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : viewName ?? pageName ?? 'ECHO';
   // Back leaves Ask for the page it was asked from; asked over a reader (or a follow-ups view), Back goes to it.
   // A follow-ups view goes back to the one before it, or to the reader it was opened over.
+  // Follow-ups and Only me are places of their own, opened from the sidebar: no link back Home. A page reached by drilling in keeps
+  // its link, and so does one kind's list on Home.
   const overlay = over > 0;
   const covering = state.reader !== null || overlay;
+  const sidebarPage = state.route.page === 'follow-ups' || state.route.page === 'only-me';
   const backLabel = covered ? null : (state.ask && covering) || (overlay && (state.reader !== null || over > 1)) ? 'Back'
-    : state.ask || covering ? pageName ?? 'Home' : pageName ? 'Home' : null;
+    : state.ask || covering ? pageName ?? 'Home' : pageName ? (sidebarPage ? null : 'Home') : homeShows && state.altitude.category !== null ? 'Home' : null;
   const pane = !covered && paneTarget(state) !== null;
   // A project change not shown where it was asked for shows at the top of the page.
   const banner = state.change && !state.concealed && !changeShownInPlace(state) ? state.change : null;
@@ -189,7 +196,7 @@ function App() {
   // The bar's matches rise from the bar: a toast moves to the top of the page while they show, so neither hides the other.
   const toastClass = `toast${matchesShown(state) ? ' lifted' : ''}`;
   return (
-    <Shell state={state} title={title} backLabel={backLabel} pane={pane}
+    <Shell state={state} title={title} center={homeShows ? <Stops state={state} /> : null} backLabel={backLabel} pane={pane}
       trailing={inProject && !covered && !state.ask ? <><MembersButton state={state} /><ProjectToolsButton state={state} /><ProjectSettingsButton state={state} /></> : null}>
       <main class="page">
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
@@ -234,11 +241,12 @@ function App() {
 
 /**
  * One window: the sidebar (unless hidden), then the title bar and the page.
- * A file dropped anywhere but a project row goes to Capture: into the open
- * sheet, or a new capture for the project on screen, or in no project.
+ * The title bar names the page, or holds `center` in its place (Home's
+ * stops). A file dropped anywhere but a project row goes to Capture: into the
+ * open sheet, or a new capture for the project on screen, or in no project.
  */
-function Shell({ state, title, backLabel, pane = false, trailing = null, children }: {
-  state: State; title: string; backLabel: string | null; pane?: boolean; trailing?: ComponentChildren; children: ComponentChildren;
+function Shell({ state, title, center = null, backLabel, pane = false, trailing = null, children }: {
+  state: State; title: string; center?: ComponentChildren; backLabel: string | null; pane?: boolean; trailing?: ComponentChildren; children: ComponentChildren;
 }) {
   const open = state.sidebarOpen;
   const onDrop = (event: DragEvent) => {
@@ -260,7 +268,8 @@ function Shell({ state, title, backLabel, pane = false, trailing = null, childre
               aria-pressed={open} onClick={toggleSidebar}><SidebarIcon /></button>
             {backLabel && <button type="button" class="back" data-testid="back" onClick={back}><Back /><span>{backLabel}</span></button>}
           </div>
-          <div class={`title${title === 'ECHO' ? ' brand' : ''}`} data-testid="title">{title}</div>
+          {center ? <div class="title alt-title" data-testid="title">{center}</div>
+            : <div class={`title${title === 'ECHO' ? ' brand' : ''}`} data-testid="title">{title}</div>}
           <div class="side">{trailing}</div>
         </header>
         {children}
