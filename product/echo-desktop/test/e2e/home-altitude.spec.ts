@@ -437,6 +437,7 @@ test('Try again in a kind’s list gives the focus back to the row it was on whe
   const rows = page.getByTestId('need-row');
   const prd = rows.filter({ hasText: 'Thermostat PRD' });
   await expect(rows).toHaveCount(2);
+  await expect(rows.filter({ hasText: 'ECHO-12' })).toBeFocused();
   await page.keyboard.press('ArrowDown');
   await expect(prd).toBeFocused();
   // Mina marks ECHO-12 done; the check that tells of it reads Home again while ECHO cannot read the meetings: the list says so
