@@ -126,9 +126,9 @@ export const KindMark = ({ kind }: { kind: 'approve' | 'send' | 'update' | 'revi
 export const Grid = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="1.5" y="1.5" width="4.5" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none" /><rect x="8" y="1.5" width="4.5" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none" /><rect x="1.5" y="8" width="4.5" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none" /><rect x="8" y="8" width="4.5" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none" /></svg>
 );
-/** Me on Home's map: a sight on yourself. */
-export const Locate = () => (
-  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="1.7" fill="none" /><circle cx="12" cy="12" r="2.2" fill="currentColor" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
+/** Only me, in the sidebar: the lock (ADR-0049), drawn in the sidebar's outline and as large as its neighbours. */
+export const Padlock = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.8" y="10.4" width="14.4" height="10.4" rx="2.4" stroke="currentColor" stroke-width="1.6" fill="none" /><path d="M8 10.4V8a4 4 0 0 1 8 0v2.4" stroke="currentColor" stroke-width="1.6" fill="none" /></svg>
 );
 /** A ticket's row: a ticket stub, in outline. */
 export const Ticket = () => (

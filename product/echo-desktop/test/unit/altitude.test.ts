@@ -73,7 +73,7 @@ describe('needs attention', () => {
 
 describe('roll-up', () => {
   it('is on track and empty with no follow-ups', () => {
-    expect(rollup([], null, NOW)).toEqual({ done: 0, total: 0, needs: 0, health: 'on', oldest: null, faces: [] });
+    expect(rollup([], null, NOW)).toEqual({ done: 0, total: 0, needs: 0, health: 'on', oldest: null, faces: [], reason: null });
   });
 
   it('takes done and total from the counts when it has them', () => {
@@ -101,6 +101,17 @@ describe('roll-up', () => {
     const result = rollup([item({ sentDaysAgo: 7.5 })], null, NOW);
     expect(result.health).toBe('off');
     expect(result.oldest).toBe(7);
+  });
+
+  it('gives as its reason the follow-up needing attention that has waited longest, and none while nothing needs attention', () => {
+    const late = item({ sentDaysAgo: 9 });
+    const behind = item({ sentDaysAgo: 5 });
+    const fresh = item({ sentDaysAgo: 1 });
+    expect(rollup([behind, late, fresh], null, NOW).reason).toBe(late);
+    expect(rollup([fresh, item({ sentDaysAgo: 20, state: 'done' })], null, NOW).reason).toBeNull();
+    // One nobody can act on needs attention from the start: with nothing older needing it, it is the reason.
+    const nobodys = unsentItem(0, { owner: { ...person('Ari'), match: 'approver' } });
+    expect(rollup([fresh, nobodys], null, NOW).reason).toBe(nobodys);
   });
 
   it('shows each owner once, those needing attention first, and nobody for a follow-up with no owner', () => {

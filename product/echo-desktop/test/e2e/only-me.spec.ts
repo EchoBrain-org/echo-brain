@@ -22,19 +22,19 @@ const log = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8'
 
 type Rpc = (method: string, params?: unknown) => Promise<{ ok: boolean; failure?: { code: string } }>;
 
-test('Home\'s footer opens Only me: what only you can read, filed or not, newest first, with no lock on any row; More reads the rest', async () => {
+test('the sidebar\'s Only me opens what only you can read, filed or not, newest first, with no lock on any row; More reads the rest', async () => {
   run = await launch('only-me');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  // Mine is gone: Home, Ask, Capture and Follow-ups, then your projects; Tools stays at the bottom.
-  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText(['Home', 'Ask', /Capture/, 'Follow-ups', 'Tools']);
-  // A quiet link after Follow-ups, with its lock and no count.
-  await expect(page.getByTestId('needs-foot')).toContainText('Follow-ups · Only me');
-  await expect(page.getByTestId('home-only-me')).toHaveText('Only me');
-  await page.getByTestId('home-only-me').click();
+  // Home, Ask, Capture, Follow-ups, then Only me under it with its lock and no count; then your projects; Tools stays at the bottom.
+  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText(['Home', 'Ask', /Capture/, 'Follow-ups', 'Only me', 'Tools']);
+  await expect(page.getByTestId('needs-foot')).toHaveCount(0);
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('title')).toHaveText('Only me');
-  await expect(page.getByTestId('back')).toHaveText('Home');
-  await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+  // A place of its own: its row is lit, Home's is not, and there is no link back.
+  await expect(page.getByTestId('back')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar-only-me')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('sidebar-home')).not.toHaveAttribute('aria-current', 'page');
   const rows = page.getByTestId('only-me-row');
   await expect(rows).toHaveCount(10);
   // One flat row each: a grey shape for its kind (named on hover), the title, and a short age; no boxed icon.
@@ -70,15 +70,16 @@ test('Home\'s footer opens Only me: what only you can read, filed or not, newest
   await expect(page.getByTestId('only-me-more')).toHaveCount(0);
   expect(lists().map(call => call.body)).toEqual([{ schema_version: 1, only_me: true }, { schema_version: 1, only_me: true, cursor: expect.any(String) }]);
 
-  await page.getByTestId('back').click();
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
-  await expect(page.getByTestId('home-only-me')).toBeVisible();
+  // Escape goes Home.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
+  await expect(page.getByTestId('sidebar-only-me')).not.toHaveAttribute('aria-current', 'page');
 });
 
 test('a project renamed from Only me takes its new name in every row, and the rows More loaded stay', async () => {
   run = await launch('only-me');
   const { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   const rows = page.getByTestId('only-me-row');
   await expect(rows).toHaveCount(10);
   await page.getByTestId('only-me-more').click();
@@ -100,7 +101,7 @@ test('a file filed in two projects shows a tile for each, in the sidebar\'s hues
   run = await launch('only-me-filed');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   const contract = page.getByTestId('only-me-row').filter({ hasText: 'Supplier contract' });
   // A file: its shape, with its type and size on hover, and no extension or size line in the row.
   await expect(contract).toHaveAttribute('data-kind', 'document');
@@ -136,7 +137,7 @@ test('a file filed in two projects shows a tile for each, in the sidebar\'s hues
 test('an item opened from Only me is read by its ref, Back returns to Only me, and it can be filed in another project but not removed', async () => {
   run = await launch('only-me');
   const { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   const rows = page.getByTestId('only-me-row');
   await expect(rows).toHaveCount(10);
   await rows.nth(0).click();
@@ -170,7 +171,7 @@ test('an item opened from Only me is read by its ref, Back returns to Only me, a
 test('signing out on Only me leaves it and clears what it read, and signing in again lands on Home', async () => {
   run = await launch('only-me');
   const { page, app, home } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await page.getByTestId('only-me-row').nth(0).click();
   await expect(page.getByTestId('reader-text')).not.toBeEmpty();
   // Signed out elsewhere, as the terminal's `person logout` does.
@@ -183,10 +184,10 @@ test('signing out on Only me leaves it and clears what it read, and signing in a
   await page.getByTestId('signin-url').fill('https://authority.example');
   await page.getByTestId('signin-button').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
   await expect(page.getByTestId('reader')).toHaveCount(0);
   await expect(page.getByTestId('only-me-row')).toHaveCount(0);
-  await expect(page.getByTestId('home-only-me')).toBeVisible();
+  await expect(page.getByTestId('sidebar-only-me')).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
 });
 
@@ -194,7 +195,7 @@ test('while meetings wait to be indexed, a save on Only me keeps the meetings sh
   run = await launch('only-me-meetings-held');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   const rows = page.getByTestId('only-me-row');
   await expect(rows.filter({ hasText: 'Pricing review' })).toHaveCount(1);
   // Saved from Only me, in no project: only you can read it, so Only me is read again.
@@ -221,7 +222,7 @@ test('while meetings wait to be indexed, a save on Only me keeps the meetings sh
 test('a meeting opened from Only me is its approved record: More reads the rest, and a long action\'s parts join into one', async () => {
   run = await launch('only-me');
   const { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await page.getByTestId('only-me-row').filter({ hasText: 'Pricing review' }).click();
   const record = page.getByTestId('record');
   // Headed like any item read from Only me: its title, and who can read it in the row's words, with when it was added.
@@ -338,14 +339,14 @@ test('a note locked in a project lists there with the lock for its owner, never 
   await expect(page.getByTestId('back')).toHaveText('Apollo');
   // Only me holds it too, naming Apollo.
   await page.getByTestId('sidebar-home').click();
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('only-me-row').filter({ hasText: 'Private pricing notes' }).getByTestId('only-me-tiles')).toHaveAttribute('title', 'Apollo');
 });
 
 test('with nothing only you can read Only me is blank, and a file dropped on it starts Capture in no project', async () => {
   run = await launch('only-me-empty');
   const { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('only-me')).toBeVisible();
   await expect(page.getByTestId('only-me')).toHaveAttribute('aria-busy', 'false');
   await expect(page.getByTestId('only-me-row')).toHaveCount(0);
@@ -364,7 +365,7 @@ test('with nothing only you can read Only me is blank, and a file dropped on it 
 test('Only me that could not be read says why and reads again; a project you were taken out of is no longer available, and you stay signed in', async () => {
   run = await launch('only-me-fails-once');
   let { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('only-me-error')).toContainText('ECHO is unavailable right now. Try again.');
   await page.getByTestId('only-me-retry').click();
   await expect(page.getByTestId('only-me-row')).toHaveCount(10);
@@ -391,7 +392,7 @@ test('Only me refused for the same account says your access changed, and reads s
   run = await launch('only-me-unauthorized');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('only-me-error')).toContainText('Your access changed. Sign in again.');
   const after = () => log().split('list.page unauthorized')[1] ?? '';
   await expect.poll(() => after().match(/app\.status/g)?.length ?? 0).toBe(1);
@@ -452,7 +453,7 @@ test('a project\'s page lists its approved meetings too, and an owner\'s Only me
   await expect(page.getByTestId('back')).toHaveText('Beacon');
 
   await page.getByTestId('sidebar-home').click();
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('title')).toHaveText('Only me');
   await expect(page.getByTestId('reader')).toHaveCount(0);
   await expect(page.getByTestId('only-me-row').filter({ hasText: 'Pricing review' })).toHaveCount(1);

@@ -29,7 +29,7 @@ beforeEach(() => {
   }, () => ({ active: [], archived: [] })));
 });
 
-it('keeps identical actions from different meetings distinguishable on Home', async () => {
+it('keeps identical actions from different meetings distinguishable on Home, in its line and in their list', async () => {
   const store = await startStore();
   const { Home } = await import('../../src/renderer/screens/home.js');
   const one = followUp(1, { expected: 'Send the prototype' });
@@ -37,7 +37,10 @@ it('keeps identical actions from different meetings distinguishable on Home', as
   const state = store.getState();
   const home = { ...state.home!, loading: false, reading: false, reviews: [], runs: [], failure: undefined,
     open: { send: [], items: [one, two], landed: 0, waiting: 0, last_checked_at: null, sweep_due: false } };
-  const rows = byTestId(render(Home({ state: { ...state, home } })), 'need-row').map(text);
+  // At the top the two are one Update line, which names the newest by its qualified name.
+  const top = render(Home({ state: { ...state, home } }));
+  expect(text(byTestId(top, 'need-category')[0])).toMatch(/Send the prototype · from (Pilot planning|Supplier review)/);
+  const rows = byTestId(render(Home({ state: { ...state, home, altitude: { ...state.altitude, category: 'update' } } })), 'need-row').map(text);
   expect(rows).toHaveLength(2);
   expect(new Set(rows).size, JSON.stringify(rows)).toBe(2);
 });

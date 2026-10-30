@@ -5,15 +5,17 @@ import { byDecision, byOwner, byProject, needsAttention, rollup, unowned, waited
 import { identity, initial, initials } from '../format.js';
 import { itemKind, itemTitle, monthDay } from '../needs.js';
 import {
-  altitudeProjects, awaitingLive, loadProjects, openFollowUp, openFollowUps, openNewProject, openProject, shownItem, zoomOut, zoomTo, type AltLevel, type ProjectRead, type State,
+  altitudeProjects, awaitingLive, loadProjects, openCategory, openFollowUp, openFollowUps, openNewProject, openProject, shownItem, zoomOut, zoomTo, type AltLevel,
+  type NeedCategory, type ProjectRead, type State,
 } from '../store.js';
-import { Calendar, Chevron, Doc, Folder, Grid, HealthDot, KindMark, Locate, OnePerson, Page, Plus, Ring, Ticket, Ticks } from './icons.js';
+import { Calendar, Chevron, Doc, Folder, Grid, HealthDot, KindMark, OnePerson, Page, Plus, Ring, Ticket, Ticks } from './icons.js';
 
 /**
- * Home's altitudes (Home altitude v1): the stops, and My projects, one
- * project and one person, each in the same row: a mark, who or what, its
- * name, what needs attention, its people, how far along, and how long.
- * Words are in each mark's tooltip.
+ * Home's altitudes (Home altitude v1, One place to look v1): the stops, in
+ * the title row; your projects at Home's top, one row each; then one project
+ * and one person, each in the same row: a mark, who or what, its name, what
+ * needs attention, its people, how far along, and how long. Words are in each
+ * mark's tooltip.
  */
 
 const HEALTH: Readonly<Record<Health, string>> = { on: 'On track', risk: 'At risk', off: 'Off track' };
@@ -41,7 +43,7 @@ function Faces({ faces }: { faces: readonly Face[] }) {
   return <>{faces.slice(0, 4).map(face => <FaceMark key={face.membership_id} {...face} />)}</>;
 }
 
-/** One row, every altitude: the same columns, so the page reads the same however far out it is. */
+/** One row, in a project and for a person: the same columns, so the page reads the same however far in it is. */
 function Row({ testid, mark, markTitle, who, name, faint = false, needs = null, needsTitle, people = null, progress = null, date = null, label, zoom, onClick, data = {} }: {
   testid: string; mark: ComponentChildren; markTitle: string; who: ComponentChildren; name: ComponentChildren; faint?: boolean;
   needs?: ComponentChildren; needsTitle?: string; people?: ComponentChildren; progress?: ComponentChildren; date?: ComponentChildren;
@@ -101,7 +103,7 @@ function GroupHead({ children }: { children: ComponentChildren }) {
   return <div class="alt-group-head" data-testid="alt-group-head">{children}</div>;
 }
 
-/** The stops: My projects, the project and the person Home last zoomed on, and Me. */
+/** The stops, in the title row on Home: My projects (its top, and any kind's list there), then the project and the person Home last zoomed on. */
 export function Stops({ state }: { state: State }) {
   const { level, project_id, membership_id, name } = state.altitude;
   const project = project_id === null ? null : altitudeProjects(state).find(each => each.project_id === project_id) ?? null;
@@ -122,76 +124,83 @@ export function Stops({ state }: { state: State }) {
         <span class="alt-link" aria-hidden="true" />
         {stop('person', person ? `Person, ${person.name}` : 'Person', person?.name ?? '', person ? <FaceMark {...person} /> : <OnePerson />, person === null)}
       </div>
-      <button type="button" class={`alt-me${level === 'me' ? ' on' : ''}`} data-testid="alt-me" aria-label="Me" title="Me" aria-pressed={level === 'me'}
-        onClick={() => zoomTo('me')}><Locate /></button>
     </nav>
   );
 }
 
-/** My projects: each project's health, what needs attention, its people, how far along, and how long its oldest has waited. */
+/** A project at Home's top, as its reads roll up; null while it is unread, or its read failed. */
+interface ProjectLine { project: ProjectSummary; read: ProjectRead | undefined; up: ReturnType<typeof rollup> | null }
+
+/**
+ * One project at Home's top (One place to look v1): a mark only when it is
+ * not on track (a solid orange dot off track, an orange ring at risk; a faint
+ * ring while unread), its tile and name, and, faint, why: the follow-up that
+ * has needed attention longest, and whose it is. Then a grey bar of how much
+ * of its work is done (none with no follow-ups), and how long its oldest has
+ * waited. A click zooms into it.
+ */
+function ProjectRow({ state, line: { project, read, up } }: { state: State; line: ProjectLine }) {
+  const label = up ? HEALTH[up.health] : read?.failure ? UNREAD : 'Reading';
+  const detail = up ? [up.needs > 0 ? `${up.needs} need attention` : null, up.oldest !== null ? `oldest waiting ${days(up.oldest)}` : null].filter(Boolean).join(' · ') : '';
+  // Its title as the live reads Home already made say it (its own, and its altitudes'), so it reads as in Needs you above.
+  const why = up?.reason
+    ? `${itemTitle(shownItem(up.reason, { ...state.home?.live, ...state.altitude.live }))} · ${unowned(up.reason) ? 'no owner' : up.reason.owner.name}` : null;
+  return (
+    <button type="button" class={`alt-project-row${up ? '' : ' faint'}`} data-testid="alt-project" data-alt-nav="" data-project={project.project_id}
+      data-zoom={`project:${project.project_id}`} aria-label={`${project.name}, ${label}`} onClick={() => zoomTo('project', { project_id: project.project_id })}>
+      <span class="alt-mark" title={detail === '' ? label : `${label} · ${detail}`}>
+        {!up ? <Ring fraction={0} tone="faint" /> : up.health !== 'on' && <HealthDot health={up.health} />}
+      </span>
+      <span class="alt-what">
+        <Tile project={project} /><span class="alt-project-name">{project.name}</span>
+        {why !== null && <span class="alt-reason" title={why}>{why}</span>}
+      </span>
+      <span class="alt-done">
+        {up && up.total > 0 && (
+          <span class="alt-bar" title={`${up.done} of ${up.total} follow-ups done`}><i style={{ width: `${percent(up.done, up.total)}%` }} /></span>
+        )}
+      </span>
+      <span class="alt-date">{up && up.oldest !== null ? `${up.oldest}d` : null}</span>
+    </button>
+  );
+}
+
+/**
+ * Your projects, under Home's Needs you: off track, then at risk, then on
+ * track (those needing attention most, then waiting longest, first), then any
+ * it could not read. Order carries the grouping: there are no group bars.
+ */
 export function MyProjects({ state }: { state: State }) {
   const projects = altitudeProjects(state);
-  if (projects.length === 0) {
-    return (
-      <div class="alt-level-body alt-empty" data-testid="alt-projects">
-        {state.projects.failure ? (
-          <div class="alt-unread">Couldn’t read your projects just now <button type="button" class="link-button" onClick={() => void loadProjects()}>Try again</button></div>
-        ) : !state.projects.loading && (
-          <button type="button" class="empty-capture" data-testid="empty-new-project" onClick={openNewProject}>
-            <span class="ring" aria-hidden="true"><Plus /></span><span>New project</span>
-          </button>
-        )}
-      </div>
-    );
-  }
   const now = Date.now();
-  const rows = projects.map(project => {
+  const lines: ProjectLine[] = projects.map(project => {
     const read = state.altitude.reads[project.project_id];
     // A project whose last read failed is never shown as on track: it says it couldn't be read.
     const known = read !== undefined && !read.failure && !unknown(read);
     return { project, read, up: known ? rollup(read.active, read.counts, now) : null };
   });
-  const row = ({ project, read, up }: (typeof rows)[number]) => {
-    const zoom = () => zoomTo('project', { project_id: project.project_id });
-    const data = { 'data-project': project.project_id };
-    if (!up) {
-      const failed = Boolean(read?.failure);
-      return <Row key={project.project_id} testid="alt-project" data={data} zoom={`project:${project.project_id}`} onClick={zoom} faint
-        label={`${project.name}, ${failed ? UNREAD : 'Reading'}`} mark={<Ring fraction={0} tone="faint" />} markTitle={failed ? UNREAD : 'Reading'}
-        who={<Tile project={project} />} name={project.name} />;
-    }
-    const detail = [up.needs > 0 ? `${up.needs} need attention` : null, up.oldest !== null ? `oldest waiting ${days(up.oldest)}` : null].filter(Boolean).join(' · ');
-    return <Row key={project.project_id} testid="alt-project" data={data} zoom={`project:${project.project_id}`} onClick={zoom}
-      label={`${project.name}, ${HEALTH[up.health]}`} mark={<HealthDot health={up.health} />} markTitle={detail === '' ? HEALTH[up.health] : `${HEALTH[up.health]} · ${detail}`}
-      who={<Tile project={project} />} name={project.name} needs={up.needs > 0 ? up.needs : null} needsTitle={`${up.needs} need attention`}
-      people={<Faces faces={up.faces} />} progress={<Progress {...up} />} date={up.oldest === null ? null : `${up.oldest}d`} />;
-  };
-  const rank = (a: (typeof rows)[number], b: (typeof rows)[number]) => b.up!.needs - a.up!.needs || (b.up!.oldest ?? -1) - (a.up!.oldest ?? -1);
-  const count = (health: Health) => rows.filter(each => each.up?.health === health).length;
-  const unread = rows.filter(each => each.up === null);
+  const rank = (a: ProjectLine, b: ProjectLine) => b.up!.needs - a.up!.needs || (b.up!.oldest ?? -1) - (a.up!.oldest ?? -1);
+  // On first open the rows keep your list's order while their reads come in, so nothing moves under the pointer.
+  const ordered = !state.altitude.settled ? lines : [
+    ...(['off', 'risk', 'on'] as const).flatMap(health => lines.filter(line => line.up?.health === health).sort(rank)),
+    ...lines.filter(line => line.up === null),
+  ];
   return (
-    <div class="alt-level-body" data-testid="alt-projects">
-      <header class="alt-head" data-testid="alt-head">
-        <span class="alt-head-mark" aria-hidden="true"><Grid /></span><h2>My projects</h2>
-        {(['off', 'risk', 'on'] as const).map(health => (
-          <span key={health} class="alt-chip" data-testid="alt-chip" title={`${count(health)} ${HEALTH[health].toLowerCase()}`}><HealthDot health={health} />{count(health)}</span>
-        ))}
-      </header>
-      {state.altitude.listFailure && state.projects.next !== null && <div class="alt-unread">Couldn’t read every project just now</div>}
-      {/* On first open the rows keep your list's order while their reads come in, so nothing moves under the pointer. */}
-      {!state.altitude.settled ? <section class="alt-group" data-testid="alt-group" data-group="reading">{rows.map(row)}</section> : <>
-        {(['off', 'risk', 'on'] as const).map(health => {
-          const these = rows.filter(each => each.up?.health === health).sort(rank);
-          return these.length === 0 ? null : (
-            <section key={health} class="alt-group" data-testid="alt-group" data-group={health}>
-              <GroupHead><HealthDot health={health} /><span class="alt-label">{HEALTH[health]}</span><span class="n">{these.length}</span></GroupHead>
-              {these.map(row)}
-            </section>
-          );
-        })}
-        {unread.length > 0 && <section class="alt-group" data-testid="alt-group" data-group="unread">{unread.map(row)}</section>}
+    <section class="alt-projects" data-testid="alt-projects" aria-labelledby="alt-projects-head">
+      <h2 class="home-label" id="alt-projects-head" data-testid="alt-projects-head">Projects</h2>
+      {projects.length === 0 ? (
+        state.projects.failure ? (
+          <div class="alt-unread">Couldn’t read your projects just now <button type="button" class="link-button" onClick={() => void loadProjects()}>Try again</button></div>
+        ) : !state.projects.loading && (
+          <button type="button" class="empty-capture" data-testid="empty-new-project" onClick={openNewProject}>
+            <span class="ring" aria-hidden="true"><Plus /></span><span>New project</span>
+          </button>
+        )
+      ) : <>
+        {state.altitude.listFailure && state.projects.next !== null && <div class="alt-unread">Couldn’t read every project just now</div>}
+        {ordered.map(line => <ProjectRow key={line.project.project_id} state={state} line={line} />)}
       </>}
-    </div>
+    </section>
   );
 }
 
@@ -316,6 +325,7 @@ function pinch(event: WheelEvent): void {
   const [level, id] = (target?.dataset.zoom ?? '').split(':');
   if (level === 'project' && id) zoomTo('project', { project_id: id });
   else if (level === 'person' && id && target?.dataset.name) zoomTo('person', { membership_id: id, name: target.dataset.name });
+  else if (level === 'category' && id) openCategory(id as NeedCategory);
 }
 
 /** ↑ and ↓ move between rows once one (or the level itself) has the focus; the Ask bar keeps its own keys. */
@@ -335,25 +345,29 @@ function arrows(event: KeyboardEvent): void {
   next.focus();
 }
 
-const DEPTH: Readonly<Record<AltLevel, number>> = { me: 0, projects: 1, project: 2, person: 3 };
+/** How far in Home is: its top, one kind's list just under it, then a project, then a person. */
+const DEPTH: Readonly<Record<AltLevel, number>> = { projects: 0, project: 2, person: 3 };
+const depth = (level: AltLevel, category: NeedCategory | null) => DEPTH[level] + (category === null ? 0 : 1);
 
 /**
- * Home zoomed out: the altitude it shows, re-made at each zoom so it eases in.
+ * Home: the altitude it shows, re-made at each zoom so it eases in. At the
+ * top it shows `top` (what needs you and your projects, or one kind's list).
  * A zoom that took away the row with the focus (Enter on it, Escape from it)
  * gives the focus, on the way out, to the row it came from; on the way in, to
  * the first row; with no rows yet, to the level itself, where ↓ finds them.
  */
-export function Altitude({ state }: { state: State }) {
-  const { level, project_id, membership_id } = state.altitude;
+export function Altitude({ state, top }: { state: State; top: ComponentChildren }) {
+  const { level, category, project_id, membership_id } = state.altitude;
   const box = useRef<HTMLDivElement>(null);
-  const was = useRef(level);
+  const was = useRef({ level, category });
   useEffect(() => {
     const before = was.current;
-    was.current = level;
+    was.current = { level, category };
     const root = box.current;
     if (!root || (document.activeElement !== null && document.activeElement !== document.body)) return;
-    const out = DEPTH[level] < DEPTH[before];
-    const from = !out ? null : level === 'projects' && project_id !== null ? `project:${project_id}` : level === 'project' && membership_id !== null ? `person:${membership_id}` : null;
+    const out = depth(level, category) < depth(before.level, before.category);
+    const from = !out ? null : before.category !== null ? `category:${before.category}` : level === 'projects' && project_id !== null ? `project:${project_id}`
+      : level === 'project' && membership_id !== null ? `person:${membership_id}` : null;
     const back = from === null ? null : root.querySelector<HTMLElement>(`[data-zoom="${CSS.escape(from)}"]`);
     const target = back ?? root.querySelector<HTMLElement>('[data-alt-nav]:not([disabled])');
     if (target) { target.focus(); return; }
@@ -361,10 +375,10 @@ export function Altitude({ state }: { state: State }) {
     root.tabIndex = -1;
     root.addEventListener('blur', () => root.removeAttribute('tabindex'), { once: true });
     root.focus();
-  }, [level, project_id, membership_id]);
+  }, [level, category, project_id, membership_id]);
   return (
-    <div class="alt-level" ref={box} key={`${level} ${project_id} ${membership_id}`} onWheel={pinch} onKeyDown={arrows}>
-      {level === 'project' ? <ProjectLevel state={state} /> : level === 'person' ? <PersonLevel state={state} /> : <MyProjects state={state} />}
+    <div class="alt-level" ref={box} key={`${level} ${category} ${project_id} ${membership_id}`} onWheel={pinch} onKeyDown={arrows}>
+      {level === 'project' ? <ProjectLevel state={state} /> : level === 'person' ? <PersonLevel state={state} /> : top}
     </div>
   );
 }

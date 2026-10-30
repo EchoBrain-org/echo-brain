@@ -408,24 +408,33 @@ describe('Home rows', () => {
     expect(store.homeRows().map(row => row.kind)).toEqual(['review', 'update']);
   });
 
-  it('groups a long Home past ten rows that wait on you, five rows to a group until it is opened', async () => {
-    const { homeGroups } = await import('../../src/renderer/screens/home.js');
-    type Row = Parameters<typeof homeGroups>[0][number];
-    const rows = (kind: Row['kind'], count: number) => Array.from({ length: count }, (_, at) => ({ kind, at }) as unknown as Row);
-    const summary = (groups: ReturnType<typeof homeGroups>) => groups?.map(group => [group.name, group.label, group.count, group.rows.length, group.hidden]);
-    // Ten that wait on you, however many checks are on their way: one list.
-    expect(homeGroups([...rows('approve', 4), ...rows('update', 6), ...rows('checking', 3)], new Set())).toBeNull();
-    // Eleven: groups in Home's order, each counted; an empty kind makes no group.
-    const long = [...rows('approve', 2), ...rows('failed', 1), ...rows('send', 1), ...rows('review', 2), ...rows('update', 5), ...rows('checking', 1)];
-    expect(summary(homeGroups(long, new Set()))).toEqual([
-      ['decisions', 'Decisions', 3, 3, 0], ['send', 'To send', 1, 1, 0], ['follow-ups', 'Follow-ups', 7, 5, 2], ['checking', 'Checking', 1, 1, 0],
-    ]);
-    expect(homeGroups(long, new Set())![0]!.rows.map(row => row.kind)).toEqual(['approve', 'approve', 'failed']);
-    // Its first five rows in Home's order: changed items (Review) before the others.
-    expect(homeGroups(long, new Set())![2]!.rows.map(row => row.kind)).toEqual(['review', 'review', 'update', 'update', 'update']);
-    // Opened, a group shows every row.
-    expect(summary(homeGroups(long, new Set(['follow-ups'])))?.[2]).toEqual(['follow-ups', 'Follow-ups', 7, 7, 0]);
-    expect(summary(homeGroups([...rows('update', 12)], new Set()))).toEqual([['follow-ups', 'Follow-ups', 12, 5, 7]]);
+  it('groups rows by what they ask of you: Approve, Retry, Send, Update (Review too), then Checking, each newest first', async () => {
+    const { categoryOf, homeCategories, needAt } = await import('../../src/renderer/store.js');
+    type Row = Parameters<typeof categoryOf>[0];
+    const approve = (id: string, meeting_at: string | null): Row => ({ kind: 'approve', review: { ...meeting(id, 'pending'), meeting_at } });
+    const send = (id: string, finished_at: string): Row => ({ kind: 'send', send: { ...sendRow(), run_id: `run_${id}`, finished_at } });
+    const update = (id: string, moved: Partial<OpenItemView>): Row => ({ kind: 'update', item: { ...item(id), ...moved } });
+    const review: Row = { kind: 'review', item: { ...item('3', 'changed'), state_set_at: '2026-10-09T09:00:00.000Z' } };
+    const rows: Row[] = [
+      approve('a', '2026-10-06T12:00:00.000Z'), approve('e', null),
+      { kind: 'failed', review: meeting('b', 'approved'), run: impactRun('failed', '22') },
+      send('old', '2026-10-07T10:00:00.000Z'), send('new', '2026-10-08T10:00:00.000Z'),
+      review, update('1', {}), update('5', { owner_set_at: '2026-10-12T09:00:00.000Z' }),
+      { kind: 'checking', review: meeting('d', 'publishing') },
+    ];
+    expect(rows.map(categoryOf)).toEqual(['approve', 'approve', 'retry', 'send', 'send', 'update', 'update', 'update', 'checking']);
+    const categories = homeCategories(rows);
+    expect(categories.map(each => [each.category, each.rows.length])).toEqual([['approve', 2], ['retry', 1], ['send', 2], ['update', 3], ['checking', 1]]);
+    // Meetings keep the reviews' order, the newest first; a meeting's age is when it met, and it has none when the tool did not say.
+    expect(categories[0]!.rows).toEqual(rows.slice(0, 2));
+    expect(categories[0]!.rows.map(needAt)).toEqual(['2026-10-06T12:00:00.000Z', null]);
+    // The others, newest first by when they last moved: a Send when its check finished, a follow-up when it was sent, handed on or set.
+    expect(categories[2]!.rows.map(row => 'send' in row && row.send.run_id)).toEqual(['run_new', 'run_old']);
+    expect(categories[3]!.rows.map(row => 'item' in row && row.item.item_id)).toEqual(['itm_00000005', 'itm_00000003', 'itm_00000001']);
+    expect(categories[3]!.rows.map(needAt)).toEqual(['2026-10-12T09:00:00.000Z', '2026-10-09T09:00:00.000Z', '2026-10-08T11:00:00.000Z']);
+    // A check's age is its run's last move; a kind with no rows is no category.
+    expect(needAt(rows[2]!)).toBe(impactRun('failed', '22').updated_at);
+    expect(homeCategories(rows.slice(5, 8)).map(each => each.category)).toEqual(['update']);
   });
 
   it('names an Approve row\'s meeting and its day', async () => {
@@ -461,24 +470,6 @@ describe('Home rows', () => {
     // No project Home knows: it starts with the time; with neither, there is nothing to open the line.
     expect(text(render(Where({ state, at: fiveAgo, projects: ['prj_33333333-3333-4333-8333-333333333333'] })))).toBe('5m · ');
     expect(Where({ state, projects: [] })).toBeNull();
-  });
-
-  it('ends Home with one line: its link to Follow-ups, named for what waits on others, Only me, then when ECHO checked', async () => {
-    const { Footer } = await import('../../src/renderer/screens/home.js');
-    const foot = (open: Pick<HomeView, 'waiting' | 'last_checked_at'> | null) =>
-      render(Footer({ state: { home: open && { open } } as unknown as Parameters<typeof Footer>[0]['state'] }));
-    const link = (tree: unknown, id = 'your-follow-ups') => elements(tree).filter(node => node.props['data-testid'] === id);
-    const twoAgo = new Date(Date.now() - 2 * 60_000).toISOString();
-    expect(text(foot({ waiting: 2, last_checked_at: twoAgo }))).toBe('2 waiting on others · Only me · ECHO checked 2 min ago');
-    expect(text(link(foot({ waiting: 2, last_checked_at: twoAgo })))).toBe('2 waiting on others');
-    // Nothing waits on others, or Home not read yet: the link is still there, as Follow-ups.
-    expect(text(link(foot({ waiting: 0, last_checked_at: twoAgo })))).toBe('Follow-ups');
-    expect(text(foot(null))).toBe('Follow-ups · Only me');
-    // Only me has its lock and no count (ADR-0049).
-    const [onlyMe] = link(foot({ waiting: 2, last_checked_at: twoAgo }), 'home-only-me');
-    expect(onlyMe?.type).toBe('button');
-    expect(text(onlyMe)).toBe('Only me');
-    expect(elements(onlyMe).some(node => node.type === 'svg')).toBe(true);
   });
 
   it('polls only while something is in flight, and backs off after failed reads', async () => {

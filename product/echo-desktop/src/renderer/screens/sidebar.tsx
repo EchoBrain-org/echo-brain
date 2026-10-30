@@ -3,11 +3,11 @@ import { dateTime, identity, initial } from '../format.js';
 import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
 import {
-  goHome, installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openNewProject, openOrganization, openProject, openTools,
+  installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openHome, openNewProject, openOnlyMe, openOrganization, openProject, openTools,
   openYourFollowUps, returnToAsk, settleWords, showAccountMenu, signInAgain, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Ask, Capture, Chevron, Home as HomeIcon, People, Person, Plug, Plus, Ticks, Up } from './icons.js';
+import { Ask, Capture, Chevron, Home as HomeIcon, Padlock, People, Person, Plug, Plus, Ticks, Up } from './icons.js';
 import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
@@ -94,14 +94,16 @@ export function SignInDueRow({ state }: { state: State }) {
 }
 
 /**
- * Always beside the page: Home (Only me is a link there, ADR-0049), Ask (back
- * to where you left it, and current while it is open over any page), Capture,
- * Follow-ups (everything you sent, own or last handed on), your projects (one
- * click switches) under a Projects header whose "+" starts a new project,
- * People & invites for owners, Tools, a new version, the weekly sign-in once
- * it is a day away, and who is signed in. It shares the list Home loads. While
- * another app is in front the page is covered, but the project rows stay, so
- * a dropped file lands.
+ * Always beside the page, every place one click away (One place to look v1):
+ * Home (at its top, with an orange count of what needs you), Ask (back to
+ * where you left it, and current while it is open over any page), Capture,
+ * Follow-ups (everything you sent, own or last handed on, with a grey count
+ * of what others still owe you), Only me (everything only you can read,
+ * ADR-0049), your projects (one click switches) under a Projects header whose
+ * "+" starts a new project, People & invites for owners, Tools, a new
+ * version, the weekly sign-in once it is a day away, and who is signed in. It
+ * shares the list Home loads. While another app is in front the page is
+ * covered, but the project rows stay, so a dropped file lands.
  */
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
@@ -112,9 +114,12 @@ export function Sidebar({ state }: { state: State }) {
   const current = page === 'project' && state.route.page === 'project' ? state.route.project.project_id : null;
   const tools = page === 'tools';
   const followUps = page === 'follow-ups';
-  // Home's own pages: a decision opened from it, and Only me.
-  const home = page === 'home' || page === 'decision' || page === 'only-me';
+  const onlyMe = page === 'only-me';
+  // Home, and a decision opened from it.
+  const home = page === 'home' || page === 'decision';
   const needs = needsCount(state);
+  // What others still owe you, as Home's last read said it: grey, since none of it waits on you.
+  const waiting = state.home?.open?.waiting ?? 0;
   const archived = state.archivedProjects;
   const [archivedOpen, setArchivedOpen] = useState(false);
   return (
@@ -123,7 +128,7 @@ export function Sidebar({ state }: { state: State }) {
       {account && (
         <div class="sidebar-rows">
           <button type="button" class={`side-row${home ? ' current' : ''}`} data-testid="sidebar-home" aria-current={home ? 'page' : undefined}
-            onClick={goHome} onDragOver={noDrop} onDrop={noDrop}>
+            onClick={() => openHome()} onDragOver={noDrop} onDrop={noDrop}>
             <HomeIcon /><span class="label">Home</span>{needs > 0 && <span class="badge" data-testid="sidebar-badge">{needs}</span>}
           </button>
           {/* With nothing asked yet there is nothing to go back to: the cursor goes to the bar. */}
@@ -135,8 +140,13 @@ export function Sidebar({ state }: { state: State }) {
             <Capture /><span class="label">Capture</span><span class="hint">{CAPTURE_HINT}</span>
           </button>
           <button type="button" class={`side-row${followUps ? ' current' : ''}`} data-testid="sidebar-follow-ups" aria-current={followUps ? 'page' : undefined}
-            onClick={() => void openYourFollowUps()} onDragOver={noDrop} onDrop={noDrop}>
+            aria-label={waiting > 0 ? `Follow-ups, ${waiting} waiting on others` : undefined} onClick={() => void openYourFollowUps()} onDragOver={noDrop} onDrop={noDrop}>
             <Ticks /><span class="label">Follow-ups</span>
+            {waiting > 0 && <span class="side-count" data-testid="sidebar-follow-ups-count" title={`${waiting} waiting on others`}>{waiting}</span>}
+          </button>
+          <button type="button" class={`side-row${onlyMe ? ' current' : ''}`} data-testid="sidebar-only-me" aria-current={onlyMe ? 'page' : undefined}
+            onClick={() => void openOnlyMe()} onDragOver={noDrop} onDrop={noDrop}>
+            <Padlock /><span class="label">Only me</span>
           </button>
         </div>
       )}

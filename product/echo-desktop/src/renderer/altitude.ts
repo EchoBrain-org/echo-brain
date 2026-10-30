@@ -73,6 +73,8 @@ interface Rollup {
   /** Days the oldest waiting follow-up has waited, or null when none waits. */
   oldest: number | null;
   faces: Face[];
+  /** Why it is not on track: of those needing attention, the one that has waited longest; null when none needs attention. */
+  reason: OpenItemView | null;
 }
 
 function faces(rows: readonly OpenItemView[], now: number): Face[] {
@@ -102,6 +104,7 @@ export function rollup(rows: readonly OpenItemView[], counts: { unsent: number; 
     health: late || flagged.length >= OFF_TRACK_COUNT ? 'off' : flagged.length > 0 ? 'risk' : 'on',
     oldest: waits.length === 0 ? null : Math.max(...waits),
     faces: faces(kept, now),
+    reason: flagged.reduce<OpenItemView | null>((longest, item) => (longest === null || waitedMs(item, now)! > waitedMs(longest, now)! ? item : longest), null),
   };
 }
 

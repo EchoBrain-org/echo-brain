@@ -31,7 +31,7 @@ test('the sidebar lists your projects, and one click switches project from any p
   await expect(page.getByTestId('title')).toHaveText('Beacon');
   await expect(page.getByTestId('scope-chip')).toHaveText('Beacon');
   await page.getByTestId('back').click();
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
   await expect(rows.nth(1)).not.toHaveAttribute('aria-current', 'page');
 });
 

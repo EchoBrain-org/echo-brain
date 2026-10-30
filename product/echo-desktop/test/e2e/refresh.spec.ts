@@ -39,9 +39,10 @@ test('added to the oldest of many projects: past the sidebar\'s pages, it is sti
   const { page, app } = run;
   const rows = page.getByTestId('sidebar-project');
   await expect(rows).toHaveCount(10);
-  // Learned at sign-in: every page of Ari's projects, active (two pages) and archived, which filled the sidebar's first.
+  // Learned at sign-in: every page of Ari's projects, active (two pages) and archived, which filled the sidebar's first. Home,
+  // open at its top with your projects, reads the two active pages once more itself, as it does for a list past the sidebar's.
   await expect.poll(checks).toBe(1);
-  await expect.poll(lists).toBe(3);
+  await expect.poll(lists).toBe(5);
   writeFileSync(join(run.home, 'added-oldest'), '');
   // The next check (a wake's, rather than the timer's) finds it.
   await emit(app, 'echo-test:wake');
@@ -90,6 +91,8 @@ test('a hidden window is notified, and reads what shows once it is shown again',
   expect(homeReads()).toBe(before);
   await emit(app, 'echo-test:shown');
   await expect.poll(homeReads).toBe(before + 1);
+  // Two to update now: one line on Home's top, whose list holds the new one.
+  await page.getByTestId('need-category').and(page.locator('[data-category="update"]')).click();
   await expect(page.getByTestId('need-row').filter({ hasText: 'order six weeks ahead' })).toBeVisible();
   expect(desktopLog()).toMatch(/lifecycle shown\n/);
 });

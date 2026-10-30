@@ -1,5 +1,6 @@
-// Home altitudes in the store (Home altitude v1): what each altitude reads, and when it reads nothing; zooming in and out; a
-// project's read failing alone; and nothing of one account's altitude surviving another's sign-in.
+// Home altitudes in the store (Home altitude v1, One place to look v1): what each altitude reads; zooming in and out, and into
+// one kind of what needs you; a project's read failing alone; Home opening at its top on every start; and nothing of one
+// account's altitude surviving another's sign-in.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
 import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, numbered, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
@@ -38,6 +39,9 @@ const live = (request: Request) => request.read === undefined;
 const runsAfter = (from: number) => rpc.mock.calls.slice(from).filter(([name]) => name === 'runs')
   .map(([, params]) => params as { expect: { membership_id: string }; request: Request });
 const empty = () => ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] });
+/** A held runs reply that answers whichever read takes it, empty: a project's follow-ups, Home's runs, or what waits on you. */
+const anyRuns = () => ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [], runs: [], send: [], landed: 0, waiting: 0, last_checked_at: null,
+  sweep_due: false });
 
 /** The Authority's follow-up reads, from `rows`, `failing` and `paged`. */
 function runsHandler(params: Record<string, unknown>): unknown {
@@ -73,15 +77,15 @@ beforeEach(() => {
 });
 
 describe('Home altitudes', () => {
-  it('reads nothing of your projects while Home shows Me', async () => {
+  it('opens at its top, My projects with no kind open, and reads your projects there with no click', async () => {
     const store = await startStore();
-    expect(store.getState().altitude.level).toBe('me');
-    expect(projectReads()).toEqual([]);
+    await flush(80);
+    expect(store.getState().altitude).toMatchObject({ level: 'projects', category: null });
+    for (const each of [THERMAL, BATTERY]) expect(projectReads(each.project_id).some(request => request.read === 'counts')).toBe(true);
   });
 
   it('My projects counts and reads each project’s waiting follow-ups, and never reads one live', async () => {
     const store = await startStore();
-    store.zoomTo('projects');
     await flush(80);
     for (const each of [THERMAL, BATTERY]) {
       const reads = projectReads(each.project_id);
@@ -125,8 +129,6 @@ describe('Home altitudes', () => {
     expect(store.zoomOut()).toBe(true);
     expect(store.getState().altitude.level).toBe('projects');
     expect(store.zoomOut()).toBe(false);
-    store.zoomTo('me');
-    expect(store.zoomOut()).toBe(false);
   });
 
   it('one project’s read failing leaves the others read', async () => {
@@ -140,7 +142,7 @@ describe('Home altitudes', () => {
     expect(reads[THERMAL.project_id]?.active).toHaveLength(1);
   });
 
-  it('another account’s sign-in starts at Me with nothing of the last account’s, and drops its late answers', async () => {
+  it('another account’s sign-in starts at the top with nothing of the last account’s, and drops its late answers', async () => {
     const store = await startStore();
     const release = held.hold('runs');
     store.zoomTo('project', { project_id: THERMAL.project_id });
@@ -150,9 +152,10 @@ describe('Home altitudes', () => {
     release(ok({ items: [row('late', THERMAL)], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }));
     await flush(80);
     const altitude = store.getState().altitude;
-    expect(altitude.level).toBe('me');
+    expect(altitude.level).toBe('projects');
+    expect(altitude.category).toBeNull();
     expect(altitude.project_id).toBeNull();
-    expect(Object.values(altitude.reads).flatMap(read => read.active)).toEqual([]);
+    expect(Object.values(altitude.reads).flatMap(read => read.active).map(item => item.item_id)).not.toContain('itm_late');
   });
 
   it('a project that left your list falls back to My projects when Home shows again', async () => {
@@ -166,18 +169,88 @@ describe('Home altitudes', () => {
     expect(store.getState().altitude.project_id).toBeNull();
   });
 
-  it('starts at the altitude this account left Home at on this computer, and at Me for another account or none', async () => {
-    const kept = (account: string) => ({ getItem: (key: string) => (key === 'echo.home.altitude' ? JSON.stringify({ account, level: 'projects' }) : null), setItem: vi.fn() });
-    vi.stubGlobal('localStorage', kept(`${ACCOUNT.authority} ${ACCOUNT.membership_id}`));
+  it('opens at the top on every start, never where an earlier one was zoomed, and forgets the place an older version kept', async () => {
+    const left = JSON.stringify({ account: `${ACCOUNT.authority} ${ACCOUNT.membership_id}`, level: 'project', project_id: THERMAL.project_id });
+    const storage = { getItem: vi.fn((key: string) => (key === 'echo.home.altitude' ? left : null)), setItem: vi.fn(), removeItem: vi.fn() };
+    vi.stubGlobal('localStorage', storage);
     const store = await startStore();
-    expect(store.getState().altitude.level).toBe('projects');
+    expect(store.getState().altitude).toMatchObject({ level: 'projects', category: null, project_id: null });
+    expect(storage.removeItem).toHaveBeenCalledWith('echo.home.altitude');
+    // Zooming keeps nothing for the next start.
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    expect(storage.setItem.mock.calls.filter(([key]) => key === 'echo.home.altitude')).toEqual([]);
+    expect(storage.getItem.mock.calls.filter(([key]) => key === 'echo.home.altitude')).toEqual([]);
+    // No storage at all, or storage that refuses: the top all the same.
     vi.resetModules();
-    vi.stubGlobal('localStorage', kept(`${ACCOUNT.authority} someone-else`));
-    expect((await startStore()).getState().altitude.level).toBe('me');
-    vi.resetModules();
-    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('blocked'); }, setItem: vi.fn() });
-    const again = await startStore();
-    expect(again.getState().altitude.level).toBe('me');
+    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('blocked'); }, setItem: vi.fn(), removeItem: () => { throw new Error('blocked'); } });
+    expect((await startStore()).getState().altitude).toMatchObject({ level: 'projects', category: null });
+  });
+});
+
+describe('one kind of what needs you, as Home zoomed into it (One place to look v1)', () => {
+  /** What waits on you, as the Authority's home read answers it: each follow-up yours to update. */
+  let waits: OpenItemView[];
+  const yours = (id: string, of: ProjectSummary) => row(id, of, { owner: { ...MINA, membership_id: ACCOUNT.membership_id, name: ACCOUNT.display_name, match: 'name' } });
+  beforeEach(() => {
+    waits = [yours('w1', THERMAL), yours('w2', BATTERY)];
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }),
+      runs: params => {
+        const request = (params as { request: Request }).request;
+        if (request.operation === 'home') return ok({ send: [], items: waits, landed: 0, waiting: 0, last_checked_at: null, sweep_due: false });
+        if (request.operation === 'list') return ok({ runs: [] });
+        return runsHandler(params);
+      },
+    }, () => lists));
+  });
+
+  it('opens one kind’s list in place of the top; zooming out, the stops or a zoom anywhere close it', async () => {
+    const store = await startStore();
+    await flush(80);
+    expect(store.homeRows().map(each => each.kind)).toEqual(['update', 'update']);
+    store.openCategory('update');
+    expect(store.getState().altitude).toMatchObject({ level: 'projects', category: 'update' });
+    expect(store.zoomOut()).toBe(true);
+    expect(store.getState().altitude.category).toBeNull();
+    expect(store.zoomOut()).toBe(false);
+    store.openCategory('update');
+    store.zoomTo('projects');
+    expect(store.getState().altitude.category).toBeNull();
+    store.openCategory('update');
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    expect(store.getState().altitude).toMatchObject({ level: 'project', category: null });
+  });
+
+  it('comes back from another page as it was left, but the sidebar’s Home opens the top and keeps what it read', async () => {
+    const store = await startStore();
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    await flush(80);
+    store.zoomTo('projects');
+    store.openCategory('update');
+    await store.openOnlyMe();
+    store.goHome();
+    expect(store.getState().altitude.category).toBe('update');
+    await store.openOnlyMe();
+    store.openHome();
+    expect(store.getState().route).toEqual({ page: 'home' });
+    const altitude = store.getState().altitude;
+    // The project stop stays open on the project last zoomed into.
+    expect(altitude).toMatchObject({ level: 'projects', category: null, project_id: THERMAL.project_id });
+    expect(altitude.reads[THERMAL.project_id]?.active.map(item => item.item_id)).toEqual(['itm_t1']);
+  });
+
+  it('goes back to the top by itself once its last row is dealt with, and stays while one is left', async () => {
+    const store = await startStore();
+    await flush(80);
+    store.openCategory('update');
+    waits = waits.slice(0, 1);
+    await store.loadHome();
+    await flush(40);
+    expect(store.getState().altitude.category).toBe('update');
+    waits = [];
+    await store.loadHome();
+    await flush(40);
+    expect(store.getState().altitude.category).toBeNull();
   });
 });
 
@@ -211,17 +284,27 @@ describe('Home altitudes, reading only what each step needs', () => {
 
   it('after another account signs in, the last account’s load sends nothing more', async () => {
     lists = { active: numbered(6), archived: [] };
+    // Every read of the last account's projects waits until after the switch, then answers with a follow-up of theirs.
+    const late: (() => void)[] = [];
+    const theirs = ok({ items: [row('late', lists.active[0]!)], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] });
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }),
+      runs: params => {
+        const { expect: from, request } = params as { expect: { membership_id: string }; request: Request };
+        return from.membership_id === ACCOUNT.membership_id && request.scope === 'project' ? new Promise(resolve => late.push(() => resolve(theirs))) : runsHandler(params);
+      },
+    }, () => lists));
     const store = await startStore();
-    const releases = Array.from({ length: 8 }, () => held.hold('runs'));
-    store.zoomTo('projects');
     await flush(20);
+    expect(projectReads().length).toBeGreaterThan(0);
     account = { ...ACCOUNT, membership_id: 'another-member' };
     await store.refreshStatus();
     const from = rpc.mock.calls.length;
-    releases.forEach(release => release(empty()));
+    late.forEach(answer => answer());
     await flush(200);
-    expect(runsAfter(from).filter(call => call.expect.membership_id === ACCOUNT.membership_id)).toEqual([]);
-    expect(Object.keys(store.getState().altitude.reads)).toEqual([]);
+    expect(runsAfter(from).filter(call => call.request.scope === 'project' && call.expect.membership_id === ACCOUNT.membership_id)).toEqual([]);
+    // What Home reads now is the new account's own: none of the last account's late answers lands.
+    expect(Object.values(store.getState().altitude.reads).flatMap(read => read.active).map(item => item.item_id)).not.toContain('itm_late');
   });
 
   it('falls back to My projects as soon as the project it is zoomed on leaves your list', async () => {
@@ -234,12 +317,11 @@ describe('Home altitudes, reading only what each step needs', () => {
     expect(store.getState().altitude.level).toBe('projects');
   });
 
-  it('covers every page of your projects, and keeps a remembered project past the sidebar’s first page', async () => {
+  it('covers every page of your projects, and zooms on a project past the sidebar’s first page', async () => {
     lists = { active: numbered(12), archived: [] };
     const twelfth = lists.active[11]!;
-    vi.stubGlobal('localStorage', { getItem: (key: string) => (key === 'echo.home.altitude'
-      ? JSON.stringify({ account: `${ACCOUNT.authority} ${ACCOUNT.membership_id}`, level: 'project', project_id: twelfth.project_id }) : null), setItem: vi.fn() });
     const store = await startStore();
+    store.zoomTo('project', { project_id: twelfth.project_id });
     await flush(200);
     expect(store.getState().altitude.level).toBe('project');
     expect(store.getState().altitude.project_id).toBe(twelfth.project_id);
@@ -259,14 +341,14 @@ describe('Home altitudes, reading only what each step needs', () => {
   });
 
   it('keeps your projects in list order until the first reads settle, or a second and a half', async () => {
+    // Home's first reads, its projects' among them, wait.
+    const releases = Array.from({ length: 10 }, () => held.hold('runs'));
     const store = await startStore();
-    const release = held.hold('runs');
-    store.zoomTo('projects');
     await flush(40);
     expect(store.getState().altitude.settled).toBe(false);
     vi.advanceTimersByTime(1_500);
     expect(store.getState().altitude.settled).toBe(true);
-    release(empty());
+    releases.forEach(release => release(anyRuns()));
   });
 
   it('a project read no longer zoomed on drops its done follow-ups', async () => {
@@ -299,16 +381,26 @@ describe('Home altitudes, when loads are cut short or the list is long', () => {
   it('a load cut short reads no further page', async () => {
     paged.add(THERMAL.project_id);
     rows[THERMAL.project_id] = [row('t1', THERMAL), row('t3', THERMAL)];
+    // The last account's first reads of its projects wait until after the switch, then answer that a second page follows.
+    const late: (() => void)[] = [];
+    const page = ok({ items: [row('t1', THERMAL)], next_cursor: 'page-2', summary: EMPTY_SUMMARY, stages: [] });
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }),
+      runs: params => {
+        const { expect: from, request } = params as { expect: { membership_id: string }; request: Request };
+        return from.membership_id === ACCOUNT.membership_id && request.scope === 'project' ? new Promise(resolve => late.push(() => resolve(page))) : runsHandler(params);
+      },
+    }, () => lists));
     const store = await startStore();
-    const releases = Array.from({ length: 4 }, () => held.hold('runs'));
-    store.zoomTo('projects');
     await flush(20);
+    expect(projectReads(THERMAL.project_id).length).toBeGreaterThan(0);
     account = { ...ACCOUNT, membership_id: 'another-member' };
     await store.refreshStatus();
     const from = rpc.mock.calls.length;
-    releases.forEach(release => release(ok({ items: [row('t1', THERMAL)], next_cursor: 'page-2', summary: EMPTY_SUMMARY, stages: [] })));
+    late.forEach(answer => answer());
     await flush(200);
-    expect(runsAfter(from).filter(call => call.request.cursor === 'page-2' && call.expect.membership_id === ACCOUNT.membership_id)).toEqual([]);
+    expect(runsAfter(from).filter(call => call.request.scope === 'project' && call.request.cursor === 'page-2' && call.expect.membership_id === ACCOUNT.membership_id))
+      .toEqual([]);
   });
 
   it('a project that joins your list while a sweep is on its way is read', async () => {
@@ -401,17 +493,16 @@ describe('Home altitudes when your projects change', () => {
     expect(altitude.reads[THERMAL.project_id]).toBeUndefined();
   });
 
-  it('a change to a long list made while Home sits at Me is seen on the next zoom', async () => {
+  it('a change to a long list made while Home is out of sight is seen when Home shows again', async () => {
     lists = { active: numbered(12), archived: [] };
     const store = await startStore();
-    store.zoomTo('projects');
     await flush(200);
-    store.zoomTo('me');
+    await store.openOnlyMe();
     const joined = project(13, 10, { name: 'Joined later' });
     lists = { active: [...numbered(12), joined], archived: [] };
     await store.loadProjects();
     await flush(80);
-    store.zoomTo('projects');
+    store.goHome();
     await flush(200);
     expect(store.altitudeProjects().map(each => each.project_id)).toContain(joined.project_id);
   });
@@ -500,16 +591,17 @@ describe('Home altitudes drop a read of every page that a change overtook', () =
   it('a read of every page still on its way when your projects change out of sight does not land', async () => {
     lists = { active: numbered(12), archived: [] };
     const store = await startStore();
+    await flush(200);
     const release = held.hold('projects.list');
-    store.zoomTo('projects');
+    void store.loadAltitude();
     await flush(20);
-    store.zoomTo('me');
+    await store.openOnlyMe();
     lists = { active: [...numbered(12), project(13, 10, { name: 'Joined later' })], archived: [] };
     await store.loadProjects();
     await flush(40);
     release(ok({ items: numbered(12).slice(0, 10), next_cursor: 'more' }));
     await flush(200);
-    expect(store.getState().altitude.list).toBeNull();
+    // Home keeps the copy it had, to read again when it shows: the read the change overtook never replaced it.
+    expect(store.getState().altitude.listStale).toBe(true);
   });
 });
-

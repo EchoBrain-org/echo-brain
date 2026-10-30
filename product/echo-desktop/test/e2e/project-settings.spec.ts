@@ -61,7 +61,7 @@ test('a sidebar action targets its row without navigating and preserves member p
   run = await launch();
   const { page } = run;
   await page.getByRole('button', { name: 'Actions for Beacon' }).click();
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
   await expect(page.getByTestId('project-settings-menu')).toHaveCount(1);
   await expect(page.getByTestId('project-rename')).toHaveCount(0);
   await expect(page.getByTestId('project-archive')).toHaveCount(0);
@@ -73,7 +73,7 @@ test('a sidebar action targets its row without navigating and preserves member p
   await page.getByTestId('project-leave').click();
   await expect(page.getByRole('heading', { name: 'Leave Beacon?' })).toBeVisible();
   await page.getByTestId('project-settings-confirm').click();
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
   expect(settingCalls().at(-1)?.body).toMatchObject({ kind: 'echo-project-leave-v1', project_id: BEACON });
 });
