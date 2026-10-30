@@ -110,6 +110,16 @@ describe('My projects', () => {
     expect(rows.map(row => text(part(row, 'alt-date')))).toEqual(['9d', '4d', '0d']);
   });
 
+  it('names the reason as Home’s own live read of it does, when Home has one', async () => {
+    const { MyProjects } = await import('../../src/renderer/screens/altitude.js');
+    const t1 = READS[THERMAL.project_id]!.active[0]!;
+    const current = { source: { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-61 · Fan curve', permalink: 'https://example.atlassian.net/browse/ECHO-61' },
+      says_now: 'Peak at 60%.' };
+    const state = await stateWith({ reads: READS }, undefined, {}, { live: { [t1.item_id]: { reach: 'opened', current } } });
+    const [thermal] = byTestId(render(MyProjects({ state })), 'alt-project');
+    expect(text(part(thermal, 'alt-reason'))).toBe('ECHO-61 · Fan curve · Mina Patel');
+  });
+
   it('says no owner when nobody owns the reason, and draws no bar for a project with no follow-ups', async () => {
     const { MyProjects } = await import('../../src/renderer/screens/altitude.js');
     const nobodys = item('n1', THERMAL, { kind: 'action', expected: 'Heat-sink sourcing', owner: { ...person('Lin Chen'), match: 'approver' } });

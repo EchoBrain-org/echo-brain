@@ -2,8 +2,8 @@ import { identity, initial, when } from '../format.js';
 import { message } from '../messages.js';
 import { actionCount, itemLine, itemNames, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
 import {
-  awaitingLive, homeCategories, homeRows, loadHome, needAt, openCategory, openDecision, openFollowUp, openFollowUps, openNewProject, type HomeCategory,
-  type NeedCategory, type NeedRow, type State,
+  awaitingLive, homeCategories, homeRows, loadHome, needAt, needsCount, openCategory, openDecision, openFollowUp, openFollowUps, openNewProject,
+  type HomeCategory, type NeedCategory, type NeedRow, type State,
 } from '../store.js';
 import { Altitude, MyProjects } from './altitude.js';
 import { Chevron, KindMark, Plus } from './icons.js';
@@ -15,6 +15,9 @@ const CATEGORY: Record<HomeCategory['category'], { verb: string; mark: NeedRow['
   approve: { verb: 'Approve', mark: 'approve' }, retry: { verb: 'Retry', mark: 'failed' }, send: { verb: 'Send', mark: 'send' },
   update: { verb: 'Update', mark: 'update' }, checking: { verb: 'Checking', mark: 'checking' },
 };
+
+/** Home's reads are on their way: what it shows may still change. */
+const busy = (home: State['home']) => (home ? home.loading || home.reading : true);
 
 /** How long ago, as Home's lines say it beside a kind: now, 5m, 2h, 3d; nothing with no time. */
 export function age(iso: string | null, now = Date.now()): string {
@@ -225,20 +228,20 @@ function Top({ state }: { state: State }) {
  */
 function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
   const home = state.home;
-  const busy = home ? home.loading || home.reading : true;
   const failure = home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>;
   if (home?.failure && rows.length === 0) return <section class="needs" data-testid="home-error">{failure}</section>;
   if (rows.length === 0) {
     return (
-      <section class="needs" data-testid="needs" aria-busy={busy}>
+      <section class="needs" data-testid="needs" aria-busy={busy(home)}>
         <div class="home-clear" data-testid="home-clear">{home && !home.loading && 'Nothing needs you'}</div>
       </section>
     );
   }
-  const waiting = rows.filter(row => row.kind !== 'checking').length;
+  // The sidebar badge's own count: checks on their way are never counted.
+  const waiting = needsCount(state);
   const { shown, name } = needRowsOf(state, rows);
   return (
-    <section class="needs" data-testid="needs" aria-busy={busy} aria-labelledby="needs-head">
+    <section class="needs" data-testid="needs" aria-busy={busy(home)} aria-labelledby="needs-head">
       <h2 class="home-label" id="needs-head" data-testid="needs-head">Needs you{waiting > 0 && <span class="n">{waiting}</span>}</h2>
       {homeCategories(rows).map(category => (category.rows.length === 1 ? shown(category.rows[0]!)
         : <CategoryLine key={category.category} category={category} name={name(category.rows[0]!)} />))}
@@ -254,13 +257,12 @@ function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
  * the top; so does the store, by itself, once its last row is dealt with.
  */
 function CategoryList({ state, category }: { state: State; category: NeedCategory }) {
-  const home = state.home;
   const all = homeRows(state);
   const rows = homeCategories(all).find(each => each.category === category)?.rows ?? [];
   const { shown } = needRowsOf(state, all);
   return (
     <div class="alt-level-body">
-      <section class="needs" data-testid="needs" data-category={category} aria-busy={home ? home.loading || home.reading : true} aria-labelledby="need-list-head">
+      <section class="needs" data-testid="needs" data-category={category} aria-busy={busy(state.home)} aria-labelledby="need-list-head">
         <h2 class="need-list-head" id="need-list-head" data-testid="need-list-head">
           <span class="need-list-verb">{CATEGORY[category].verb}</span><span class="need-category-count">{rows.length}</span>
         </h2>

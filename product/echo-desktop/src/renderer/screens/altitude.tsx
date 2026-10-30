@@ -142,7 +142,9 @@ interface ProjectLine { project: ProjectSummary; read: ProjectRead | undefined; 
 function ProjectRow({ state, line: { project, read, up } }: { state: State; line: ProjectLine }) {
   const label = up ? HEALTH[up.health] : read?.failure ? UNREAD : 'Reading';
   const detail = up ? [up.needs > 0 ? `${up.needs} need attention` : null, up.oldest !== null ? `oldest waiting ${days(up.oldest)}` : null].filter(Boolean).join(' · ') : '';
-  const why = up?.reason ? `${itemTitle(shownItem(up.reason, state.altitude.live))} · ${unowned(up.reason) ? 'no owner' : up.reason.owner.name}` : null;
+  // Its title as the live reads Home already made say it (its own, and its altitudes'), so it reads as in Needs you above.
+  const why = up?.reason
+    ? `${itemTitle(shownItem(up.reason, { ...state.home?.live, ...state.altitude.live }))} · ${unowned(up.reason) ? 'no owner' : up.reason.owner.name}` : null;
   return (
     <button type="button" class={`alt-project-row${up ? '' : ' faint'}`} data-testid="alt-project" data-alt-nav="" data-project={project.project_id}
       data-zoom={`project:${project.project_id}`} aria-label={`${project.name}, ${label}`} onClick={() => zoomTo('project', { project_id: project.project_id })}>
