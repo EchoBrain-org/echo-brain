@@ -202,6 +202,9 @@ input[type="checkbox"]:disabled { cursor: default; }
 .side-row:hover, .side-project:hover { color: var(--text); background: var(--hover); }
 .side-row .label, .side-project .label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-row .hint { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+/* What others still owe you, on Follow-ups: a count in grey, never the badge's orange, and grey on hover and when current too. */
+.side-row .side-count { flex-shrink: 0; min-width: 20px; text-align: center; font-family: var(--mono); font-size: 11px; font-weight: 500;
+  font-variant-numeric: tabular-nums; color: var(--faint); }
 .sidebar-list { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; gap: 1px; padding: 0 10px 8px; overflow-y: auto; }
 .side-header { padding: 18px 10px 6px; font-size: 12px; font-weight: 500; color: var(--faint); }
 /* A header with its own action at the right end (Projects' "+"), lined up with the rows' "…" and as tall as the plain header. */
