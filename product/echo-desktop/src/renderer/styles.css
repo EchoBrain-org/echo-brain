@@ -609,11 +609,31 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .row .lines { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .row .lines .name { flex-grow: 0; }
 .row .detail { font-size: 12px; color: var(--faint); }
-/* Only me's rows name the projects each is filed in, faintly; a project row's empty mark keeps the times in line. */
-.row .projects { flex-shrink: 1; min-width: 0; max-width: 40%; font-size: 12.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A project row's empty mark keeps the times in line. */
 .item-row .mark { width: 12px; justify-content: center; }
 /* Wide enough for "Yesterday", the longest English date label, so every date ends at the same edge. */
 .item-row .meta { min-width: 72px; white-space: nowrap; text-align: right; font-family: var(--mono); font-size: 11.5px; }
+/* Only me (One place to look v1): Home's flat rows. A grey shape for the kind, the title, a tile per project it is filed in, the age. */
+.only-me { padding-top: 8px; }
+.only-me-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) 80px 44px; align-items: center; column-gap: 12px; width: 100%; height: 40px;
+  flex-shrink: 0; padding: 0 14px; border: 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; font-size: 13.5px; color: var(--text); }
+.only-me-row:hover, .only-me-row:focus-visible { background: var(--hover); }
+.only-me-kind { display: inline-flex; align-items: center; justify-content: center; color: var(--faint); }
+.only-me-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Three tiles and "+17" fit; a name with no one project of yours behind it gets a quiet tile. */
+.only-me-tiles { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.only-me-tiles .alt-tile { width: 16px; height: 16px; font-size: 9px; border-radius: 4px; }
+.only-me-unplaced { color: var(--faint); background: var(--tag); }
+.only-me-tiles-more { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+/* Wide enough for "Sep 30", the longest age, so every age ends at the same edge. */
+.only-me-age { font-family: var(--mono); font-size: 11.5px; color: var(--faint); text-align: right; white-space: nowrap; }
+/* More sits where the next row would, its caret in the kind's column; the word darkens with it. */
+.only-me-more { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; column-gap: 12px; width: 100%; height: 40px; flex-shrink: 0;
+  padding: 0 14px; border: 0; background: transparent; text-align: left; font-size: 13px; color: var(--muted); }
+.only-me-more svg { justify-self: center; }
+.only-me-more:hover:not(:disabled), .only-me-more:focus-visible { color: var(--text); }
+.only-me-more:hover:not(:disabled) span { text-decoration: underline; text-underline-offset: 3px; }
+.only-me-more:disabled { opacity: 0.5; cursor: default; }
 button.toast { color: inherit; }
 button.toast:hover { background: var(--panel); }
 .empty-capture { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px; border: 0; border-radius: 12px; font-size: 14px; color: var(--muted); background: none; }
