@@ -32,7 +32,7 @@ test('a failed check gives its reason, offers Try again, and then its follow-ups
   const list = page.getByTestId('follow-ups');
   await expect(list.getByRole('heading', { name: 'Pilot planning' })).toBeVisible();
   // An item opened for you opens in its tool from its page.
-  await list.getByTestId('follow-up-row').filter({ hasText: 'ECHO-12' }).click();
+  await list.getByTestId('follow-up-row').filter({ hasText: 'ECHO-12' }).locator('.follow-up-open').click();
   await page.getByTestId('follow-up').getByRole('button', { name: 'Open in Jira' }).click();
   await expect.poll(opened).toEqual(['https://example.atlassian.net/browse/ECHO-12']);
   await page.getByTestId('back').click();
