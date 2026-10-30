@@ -5836,6 +5836,8 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
   // was on its way: unless a newer Home load drives, the runs it read still do, for the account it read them for (R1, R3).
   const home = homeShown(mine);
   if (!home) {
+    // Tools that answered lift their hold, though Home was left before they did: this load was the Try again it waits for (R4).
+    if (tools && !toolsFailure && sameExpect(expect(), account)) runsHeld = false;
     if (!toolsFailure && !runsHeld && homeShown() === null && sameExpect(expect(), account) && runsGo()) {
       const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
       void driveRuns(runs.status === 'fulfilled' ? runs.value.runs : runsSeen, publishing, runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
