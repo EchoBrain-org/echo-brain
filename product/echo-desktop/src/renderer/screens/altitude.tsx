@@ -18,22 +18,22 @@ import { Calendar, Chevron, Doc, Folder, Grid, HealthDot, KindMark, Locate, OneP
 
 const HEALTH: Readonly<Record<Health, string>> = { on: 'On track', risk: 'At risk', off: 'Off track' };
 const UNREAD = 'Couldn’t read just now';
-const KIND_ICON: Readonly<Record<OpenItemView['kind'], () => ComponentChildren>> = {
+export const KIND_ICON: Readonly<Record<OpenItemView['kind'], () => ComponentChildren>> = {
   action: () => <Ticks />, ticket: () => <Ticket />, page: () => <Page />, document: () => <Doc />, record: () => <Calendar />,
 };
 
 const days = (count: number) => (count === 1 ? '1 day' : `${count} days`);
 const percent = (done: number, total: number) => (total === 0 ? 100 : Math.round((done / total) * 100));
 
-function Tile({ project }: { project: ProjectSummary }) {
+export function Tile({ project }: { project: ProjectSummary }) {
   return <span class="alt-tile" style={identity(project.project_id)} aria-hidden="true">{initial(project.name)}</span>;
 }
 
-function FaceMark({ membership_id, name, needs = false }: { membership_id: string; name: string; needs?: boolean }) {
+export function FaceMark({ membership_id, name, needs = false }: { membership_id: string; name: string; needs?: boolean }) {
   return <span class={`face${needs ? ' needs' : ''}`} style={identity(membership_id)} title={name}>{initials(name)}</span>;
 }
 
-function NoOwner() {
+export function NoOwner() {
   return <span class="face none" title="No owner">?</span>;
 }
 
