@@ -410,7 +410,7 @@ export function Altitude({ state, top }: { state: State; top: ComponentChildren 
     root.focus();
   }, [level, category, project_id, membership_id]);
   // This render took the focus from the level (a reload moved or read away what had it): the row it was on takes it again, else the
-  // row now in its place, else the last row.
+  // row now in its place, else the last row. Home stays scrolled where the person left it.
   useEffect(() => {
     const root = box.current;
     const kept = held;
@@ -418,7 +418,7 @@ export function Altitude({ state, top }: { state: State; top: ComponentChildren 
     const rows = navRows(root);
     const index = rows.findIndex(row => row.dataset.altNav === kept.row);
     if (index >= 0) kept.index = index;
-    if (had && focusLost()) rows[Math.min(kept.index, rows.length - 1)]?.focus();
+    if (had && focusLost()) rows[Math.min(kept.index, rows.length - 1)]?.focus({ preventScroll: true });
   });
   return (
     <div class="alt-level" ref={box} key={at} onWheel={pinch} onKeyDown={arrows} onFocusCapture={event => hold(event, at)}>
