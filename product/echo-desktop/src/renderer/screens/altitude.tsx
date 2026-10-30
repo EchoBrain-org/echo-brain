@@ -44,13 +44,13 @@ function Faces({ faces }: { faces: readonly Face[] }) {
 }
 
 /** One row, in a project and for a person: the same columns, so the page reads the same however far in it is. */
-function Row({ testid, mark, markTitle, who, name, faint = false, needs = null, needsTitle, people = null, progress = null, date = null, label, zoom, onClick, data = {} }: {
-  testid: string; mark: ComponentChildren; markTitle: string; who: ComponentChildren; name: ComponentChildren; faint?: boolean;
+function Row({ testid, nav, mark, markTitle, who, name, faint = false, needs = null, needsTitle, people = null, progress = null, date = null, label, zoom, onClick, data = {} }: {
+  testid: string; nav: string; mark: ComponentChildren; markTitle: string; who: ComponentChildren; name: ComponentChildren; faint?: boolean;
   needs?: ComponentChildren; needsTitle?: string; people?: ComponentChildren; progress?: ComponentChildren; date?: ComponentChildren;
   label?: string; zoom?: string; onClick: () => void; data?: Record<string, string>;
 }) {
   return (
-    <button type="button" class={`alt-row${faint ? ' faint' : ''}`} data-testid={testid} data-alt-nav="" data-zoom={zoom} aria-label={label} onClick={onClick} {...data}>
+    <button type="button" class={`alt-row${faint ? ' faint' : ''}`} data-testid={testid} data-alt-nav={nav} data-zoom={zoom} aria-label={label} onClick={onClick} {...data}>
       <span class="alt-mark" title={markTitle}>{mark}</span>
       <span class="alt-who">{who}</span>
       <span class="alt-name">{name}</span>
@@ -74,7 +74,7 @@ function ItemRow({ state, item, now, reading }: { state: State; item: OpenItemVi
   const waited = waitedDays(shown, now);
   const words = shown.state === 'unsent' ? 'Not sent yet' : shown.state === 'done' ? 'Done' : 'Sent, still open';
   return (
-    <Row testid="alt-item" data={{ 'data-item': shown.item_id, 'data-state': shown.state }}
+    <Row testid="alt-item" nav={`item:${shown.item_id}`} data={{ 'data-item': shown.item_id, 'data-state': shown.state }}
       mark={<Ring fraction={shown.state === 'done' ? 1 : 0} tone={shown.state === 'done' ? 'done' : needs ? 'signal' : 'muted'} dashed={shown.state === 'unsent'} />}
       markTitle={waited === null ? words : `${words} · waiting ${days(waited)}`}
       who={<span class="alt-kind" data-kind={shown.kind} title={itemKind(shown, state.tools?.items)}>{KIND_ICON[shown.kind]()}</span>}
@@ -146,7 +146,7 @@ function ProjectRow({ state, line: { project, read, up } }: { state: State; line
   const why = up?.reason
     ? `${itemTitle(shownItem(up.reason, { ...state.home?.live, ...state.altitude.live }))} · ${unowned(up.reason) ? 'no owner' : up.reason.owner.name}` : null;
   return (
-    <button type="button" class={`alt-project-row${up ? '' : ' faint'}`} data-testid="alt-project" data-alt-nav="" data-project={project.project_id}
+    <button type="button" class={`alt-project-row${up ? '' : ' faint'}`} data-testid="alt-project" data-alt-nav={`project:${project.project_id}`} data-project={project.project_id}
       data-zoom={`project:${project.project_id}`} aria-label={`${project.name}, ${label}`} onClick={() => zoomTo('project', { project_id: project.project_id })}>
       <span class="alt-mark" title={detail === '' ? label : `${label} · ${detail}`}>
         {!up ? <Ring fraction={0} tone="faint" /> : up.health !== 'on' && <HealthDot health={up.health} />}
@@ -240,7 +240,7 @@ export function ProjectLevel({ state }: { state: State }) {
         <section class="alt-group" data-testid="alt-group" data-group="decisions">
           <GroupHead><span>Decisions</span><span class="n">{decisions.length}</span></GroupHead>
           {decisions.map(decision => (
-            <Row key={decision.record_sha256} testid="alt-decision" onClick={() => void openFollowUps('record', decision.record_sha256, decision.title)}
+            <Row key={decision.record_sha256} testid="alt-decision" nav={`record:${decision.record_sha256}`} onClick={() => void openFollowUps('record', decision.record_sha256, decision.title)}
               mark={<Ring fraction={decision.total === 0 ? 1 : decision.done / decision.total} tone={decision.done >= decision.total ? 'done' : decision.needs > 0 ? 'signal' : 'muted'} />}
               markTitle={`${decision.done} of ${decision.total} follow-ups done`} who={<span class="alt-kind approve" title="Decision"><KindMark kind="approve" /></span>}
               name={decision.title} needs={decision.needs > 0 ? decision.needs : null} needsTitle={`${decision.needs} need attention`}
@@ -253,7 +253,7 @@ export function ProjectLevel({ state }: { state: State }) {
           {group.key === 'none' ? (
             <div class="alt-group-head alt-owner" data-testid="alt-owner"><NoOwner /><span class="alt-label">{group.name}</span><span class="n">{group.total}</span></div>
           ) : (
-            <button type="button" class="alt-group-head alt-owner" data-testid="alt-owner" data-alt-nav="" data-zoom={`person:${group.key}`} data-name={group.name}
+            <button type="button" class="alt-group-head alt-owner" data-testid="alt-owner" data-alt-nav={`person:${group.key}`} data-zoom={`person:${group.key}`} data-name={group.name}
               onClick={() => zoomTo('person', { membership_id: group.key, name: group.name })}>
               <FaceMark membership_id={group.key} name={group.name} needs={group.needs > 0} /><span class="alt-label">{group.name}</span><span class="n">{group.total}</span>
               <span class="more" title={`${group.done} of ${group.total} done`}><Ring fraction={group.done / group.total} tone={group.done === group.total ? 'done' : 'muted'} /><Chevron /></span>
@@ -298,7 +298,7 @@ export function PersonLevel({ state }: { state: State }) {
         const health = projectRead && !projectRead.failure && !unknown(projectRead) ? rollup(projectRead.active, null, now).health : null;
         return (
           <section key={group.project_id} class="alt-group" data-testid="alt-group" data-group={group.project_id}>
-            <button type="button" class="alt-group-head" data-testid="alt-project-head" data-alt-nav="" data-zoom={`project:${group.project_id}`}
+            <button type="button" class="alt-group-head" data-testid="alt-project-head" data-alt-nav={`project:${group.project_id}`} data-zoom={`project:${group.project_id}`}
               onClick={() => zoomTo('project', { project_id: group.project_id })}>
               <Tile project={project} /><span class="alt-label">{project.name}</span><span class="n">{group.rows.length}</span>
               <span class="more" title={health ? HEALTH[health] : UNREAD}>{health ? <HealthDot health={health} /> : <Ring fraction={0} tone="faint" />}<Chevron /></span>
@@ -328,12 +328,15 @@ function pinch(event: WheelEvent): void {
   else if (level === 'category' && id) openCategory(id as NeedCategory);
 }
 
+/** The rows ↑ and ↓ move between, each `data-alt-nav` naming its row (`item:…`, `project:…`), in the order they show. */
+const navRows = (box: HTMLElement) => [...box.querySelectorAll<HTMLElement>('[data-alt-nav]:not([disabled])')];
+
 /** ↑ and ↓ move between rows once one (or the level itself) has the focus; the Ask bar keeps its own keys. */
 function arrows(event: KeyboardEvent): void {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
   const here = document.activeElement;
   const box = event.currentTarget as HTMLElement;
-  const all = [...box.querySelectorAll<HTMLElement>('[data-alt-nav]:not([disabled])')];
+  const all = navRows(box);
   if (here === box) {
     if (event.key === 'ArrowDown' && all[0]) { event.preventDefault(); all[0].focus(); }
     return;
@@ -350,34 +353,68 @@ const DEPTH: Readonly<Record<AltLevel, number>> = { projects: 0, project: 2, per
 const depth = (level: AltLevel, category: NeedCategory | null) => DEPTH[level] + (category === null ? 0 : 1);
 
 /**
+ * The row Home's focus was on last, kept while Home is away (a row's page, a
+ * decision, another page): at which altitude, which row, and where it was
+ * among the rows.
+ */
+let held: { at: string; row: string; index: number } | null = null;
+
+/** Nothing has the focus: whatever had it went, or a click let go of it. */
+const focusLost = () => document.activeElement === null || document.activeElement === document.body;
+
+/** A row took the focus: Home keeps it, to give it back. */
+function hold(event: FocusEvent, at: string): void {
+  const row = event.target as HTMLElement;
+  if (row.dataset?.altNav !== undefined) held = { at, row: row.dataset.altNav, index: navRows(event.currentTarget as HTMLElement).indexOf(row) };
+}
+
+/**
  * Home: the altitude it shows, re-made at each zoom so it eases in. At the
  * top it shows `top` (what needs you and your projects, or one kind's list).
  * A zoom that took away the row with the focus (Enter on it, Escape from it)
  * gives the focus, on the way out, to the row it came from; on the way in, to
  * the first row; with no rows yet, to the level itself, where ↓ finds them.
+ * Back on Home as it was left, the row it was left on has it again, else the
+ * row now in its place; so does the row in place of one that went with the
+ * focus (dealt with, then read away).
  */
 export function Altitude({ state, top }: { state: State; top: ComponentChildren }) {
   const { level, category, project_id, membership_id } = state.altitude;
+  const at = `${level} ${category} ${project_id} ${membership_id}`;
   const box = useRef<HTMLDivElement>(null);
-  const was = useRef({ level, category });
+  // Null until it shows: Home is back, not zoomed.
+  const was = useRef<{ level: AltLevel; category: NeedCategory | null } | null>(null);
   useEffect(() => {
     const before = was.current;
     was.current = { level, category };
     const root = box.current;
-    if (!root || (document.activeElement !== null && document.activeElement !== document.body)) return;
-    const out = depth(level, category) < depth(before.level, before.category);
+    if (!root || !focusLost()) return;
+    const out = before !== null && depth(level, category) < depth(before.level, before.category);
     const from = !out ? null : before.category !== null ? `category:${before.category}` : level === 'projects' && project_id !== null ? `project:${project_id}`
       : level === 'project' && membership_id !== null ? `person:${membership_id}` : null;
     const back = from === null ? null : root.querySelector<HTMLElement>(`[data-zoom="${CSS.escape(from)}"]`);
-    const target = back ?? root.querySelector<HTMLElement>('[data-alt-nav]:not([disabled])');
+    const rows = navRows(root);
+    const kept = before === null && held?.at === at ? held : null;
+    const left = kept ? rows.find(row => row.dataset.altNav === kept.row) ?? rows[Math.min(kept.index, rows.length - 1)] : undefined;
+    const target = back ?? left ?? rows[0];
     if (target) { target.focus(); return; }
     // No rows yet: the level holds the focus (↓ finds the rows once they come), and lets go of it after, so a click never lands on it.
     root.tabIndex = -1;
     root.addEventListener('blur', () => root.removeAttribute('tabindex'), { once: true });
     root.focus();
   }, [level, category, project_id, membership_id]);
+  // The row with the focus went (a reload read it away): the row now in its place takes the focus, else the last row.
+  useEffect(() => {
+    const root = box.current;
+    const kept = held;
+    if (!root || kept?.at !== at) return;
+    const rows = navRows(root);
+    const index = rows.findIndex(row => row.dataset.altNav === kept.row);
+    if (index >= 0) kept.index = index;
+    else if (focusLost()) rows[Math.min(kept.index, rows.length - 1)]?.focus();
+  });
   return (
-    <div class="alt-level" ref={box} key={`${level} ${category} ${project_id} ${membership_id}`} onWheel={pinch} onKeyDown={arrows}>
+    <div class="alt-level" ref={box} key={at} onWheel={pinch} onKeyDown={arrows} onFocusCapture={event => hold(event, at)}>
       {level === 'project' ? <ProjectLevel state={state} /> : level === 'person' ? <PersonLevel state={state} /> : top}
     </div>
   );

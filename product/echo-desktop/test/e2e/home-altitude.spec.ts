@@ -292,6 +292,34 @@ test('a kind’s list stays while one row is left, and goes back to the top by i
   await expect(page.getByTestId('back')).toHaveCount(0);
 });
 
+test('back from a row’s page the focus is on that row, and once that row is dealt with and read away, on the row in its place', async () => {
+  app = await launch('granola-review');
+  const { page } = app;
+  await page.getByTestId('need-category').click();
+  const rows = page.getByTestId('need-row');
+  const echo = rows.filter({ hasText: 'ECHO-12' });
+  const prd = rows.filter({ hasText: 'Thermostat PRD' });
+  await expect(rows).toHaveCount(2);
+  await expect(echo).toBeFocused();
+  // The second row's page, then Back: that row, not the first.
+  await page.keyboard.press('ArrowDown');
+  await expect(prd).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('follow-up')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(list(page)).toBeVisible();
+  await expect(prd).toBeFocused();
+  // The first row's page, Mark done, then Back: Home reads its row away, and the focus moves to the row now in its place.
+  await page.keyboard.press('ArrowUp');
+  await expect(echo).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.getByTestId('follow-up').getByRole('button', { name: 'Mark done', exact: true }).click();
+  await expect(page.getByTestId('follow-up-said')).toHaveText('Done · Undo');
+  await page.keyboard.press('Escape');
+  await expect(rows).toHaveCount(1);
+  await expect(prd).toBeFocused();
+});
+
 test('nothing needs you: one quiet line, with your projects below it', async () => {
   app = await launch();
   const { page } = app;
