@@ -128,8 +128,8 @@ interface SweepRun {
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
-const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-checked', 'granola-paged', 'granola-review', 'granola-review-assign-lost', 'granola-sweep',
-  'granola-alike', 'granola-routes', 'granola-extra-failed']);
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-checked', 'granola-paged', 'granola-review', 'granola-review-assign-lost', 'granola-review-paste',
+  'granola-sweep', 'granola-alike', 'granola-routes', 'granola-extra-failed']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 /** A project made long ago, that Ari is added to when a test says (`added-oldest`). */
@@ -412,9 +412,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting's first record: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
-  // The hand-in modes list Paste a meeting. Each meeting pasted, once per content: processed at once, it waits for review,
-  // its first line the decision and its second the action, each starting at the project it suggests.
-  const handIn = mode.startsWith('hand-in');
+  // The hand-in modes (and granola-review-paste, in place of Granola) list Paste a meeting. Each meeting pasted, once per
+  // content: processed at once, it waits for review, its first line the decision and its second the action, each starting at
+  // the project it suggests.
+  const handIn = mode.startsWith('hand-in') || mode === 'granola-review-paste';
   const pasted: { meeting_id: string; title: string; lines: readonly [string, string]; meeting_at: string | null; all_day: boolean; project_ids: string[] }[] = [];
   // The checks of its other records, one per further destination: they find nothing, but in granola-routes each finds the
   // actions sent there, and in granola-extra-failed each fails until Try again.
@@ -1097,11 +1098,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // by Ari, and a supplier page Ari cannot open to Rafael. In granola-checked Mina's sweep checked them
   // two hours ago; granola-review is the same, except that ECHO-12, Mina's to update, changed and still
   // does not match (a Review row on Ari's Home); granola-review-assign-lost also loses the first assign's
-  // reply, once it is made. In the sweep modes none has been checked, so Home says a
-  // sweep is due. granola-alike: the
-  // check is done and nothing is sent yet; it also found items whose titles nothing tells apart: two
-  // supplier pages Ari cannot open, with the same expected phrase, and two tickets Jira did not answer
-  // for just now, not assessed (no expected phrase).
+  // reply, once it is made, and granola-review-paste has Paste a meeting in place of Granola. In the sweep
+  // modes none has been checked, so Home says a sweep is due. granola-alike: the check is done and nothing
+  // is sent yet; it also found items whose titles nothing tells apart: two supplier pages Ari cannot open,
+  // with the same expected phrase, and two tickets Jira did not answer for just now, not assessed (no
+  // expected phrase).
   if (mode === 'granola-checked' || mode === 'granola-paged' || mode.startsWith('granola-review') || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
     granolaReview = { action: 'approve', routes: routesTo([THERMOSTAT]), owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, owner: action.owner })) };
@@ -1274,7 +1275,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           slackLinked ? tool('slack', 'Slack', 'linked', 'T0123ABCD', 'U0123ABCD') : tool('slack', 'Slack', 'unlinked', 'T0123ABCD', null),
           tool('jira', 'Jira', jiraLinked ? 'linked' : mode === 'tools-revoked' ? 'revoked' : 'unlinked', JIRA_CLOUD, jiraLinked ? 'atlassian-account-1' : null),
           tool('confluence', 'Confluence', confluenceLinked ? 'linked' : 'unlinked', CONFLUENCE_CLOUD, confluenceLinked ? 'atlassian-account-1' : null),
-          mode.startsWith('granola') && !sentToAri ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
+          mode.startsWith('granola') && !sentToAri && !handIn ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
             external_scope_id: null, external_subject_id: null, organization_setup: null },
           ...(handIn ? [tool('hand-in', 'Paste a meeting', 'linked', null, 'hand-in')] : []),
         ],

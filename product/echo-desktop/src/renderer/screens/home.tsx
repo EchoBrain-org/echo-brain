@@ -2,7 +2,7 @@ import { identity, initial, when } from '../format.js';
 import { message } from '../messages.js';
 import { actionCount, itemLine, itemNames, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
 import {
-  awaitingLive, homeCategories, homeRows, loadHome, needAt, needsCount, openCategory, openDecision, openFollowUp, openFollowUps, openNewProject,
+  awaitingLive, categoryOf, homeCategories, homeRows, loadHome, needAt, needsCount, openCategory, openDecision, openFollowUp, openFollowUps, openNewProject,
   type HomeCategory, type NeedCategory, type NeedRow, type State,
 } from '../store.js';
 import { Altitude, MyProjects } from './altitude.js';
@@ -81,7 +81,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
     const send = row.send;
     const owners = shortNames(send.owners);
     return (
-      <button type="button" class="need-row send" data-testid="need-row" data-kind="send" data-alt-nav=""
+      <button type="button" class="need-row send" data-testid="need-row" data-kind="send" data-category="send" data-alt-nav={`send:${send.run_id}`}
         onClick={() => void openFollowUps('record', send.decision.record_sha256, send.decision.title)}>
         <span class="need-kind"><KindMark kind="send" />{KIND.send}</span>
         <span class="need-text">
@@ -97,7 +97,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
   const review = row.review;
   const run = row.kind === 'approve' ? undefined : row.run;
   return (
-    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-alt-nav="" disabled={row.kind === 'checking'}
+    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-category={categoryOf(row)} data-alt-nav={`meeting:${review.approval_id}`} disabled={row.kind === 'checking'}
       onClick={() => void openDecision(review.approval_id, run ?? null)}>
       <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">
@@ -124,7 +124,7 @@ function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { 
   // Shown from ECHO's own fields at once: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
   const reading = state.home?.reading === true && awaitingLive(item);
   return (
-    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-alt-nav="" aria-busy={reading || undefined}
+    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-category={categoryOf(row)} data-alt-nav={`item:${item.item_id}`} aria-busy={reading || undefined}
       onClick={() => void openFollowUp(item.item_id, item)}>
       <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">
@@ -171,7 +171,7 @@ function CategoryLine({ category: { category, rows }, name }: { category: HomeCa
   </>;
   if (category === 'checking') return <div class="need-category checking" data-testid="need-category" data-category={category}>{words}</div>;
   return (
-    <button type="button" class="need-category" data-testid="need-category" data-category={category} data-alt-nav="" data-zoom={`category:${category}`}
+    <button type="button" class="need-category" data-testid="need-category" data-category={category} data-alt-nav={`category:${category}`} data-zoom={`category:${category}`}
       title={`See all ${rows.length} to ${verb.toLowerCase()}`} onClick={() => openCategory(category)}>
       {words}<span class="need-category-age">{age(needAt(rows[0]!))}</span><Chevron />
     </button>
@@ -219,6 +219,12 @@ function Top({ state }: { state: State }) {
   );
 }
 
+/** Why Home's last read failed, and Try again: under what needs you, on Home's top and in a kind's list alike. */
+function Failed({ home }: { home: State['home'] }) {
+  if (!home?.failure) return null;
+  return <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>;
+}
+
 /**
  * What needs you, at the top of Home, by kind (One place to look v1): meetings
  * to approve, checks to retry, follow-ups to send, follow-ups to update (and
@@ -228,8 +234,7 @@ function Top({ state }: { state: State }) {
  */
 function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
   const home = state.home;
-  const failure = home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>;
-  if (home?.failure && rows.length === 0) return <section class="needs-section" data-testid="home-error">{failure}</section>;
+  if (home?.failure && rows.length === 0) return <section class="needs-section" data-testid="home-error"><Failed home={home} /></section>;
   if (rows.length === 0) {
     return (
       <section class="needs-section" data-testid="needs" aria-busy={busy(home)}>
@@ -245,16 +250,17 @@ function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
       <h2 class="home-label" id="needs-head" data-testid="needs-head">Needs you{waiting > 0 && <span class="n">{waiting}</span>}</h2>
       {homeCategories(rows).map(category => (category.rows.length === 1 ? shown(category.rows[0]!)
         : <CategoryLine key={category.category} category={category} name={name(category.rows[0]!)} />))}
-      {failure}
+      <Failed home={home} />
     </section>
   );
 }
 
 /**
  * One kind's list: Home zoomed into it (One place to look v1). Its verb and
- * how many, then its rows exactly as Needs you shows them, the newest first.
- * The title row's Home, Escape, the stops and the sidebar's Home go back to
- * the top; so does the store, by itself, once its last row is dealt with.
+ * how many, then its rows exactly as Needs you shows them, the newest first,
+ * and, as there, why Home's last read failed, with Try again. The title row's
+ * Home, Escape, the stops and the sidebar's Home go back to the top; so does
+ * the store, by itself, once its last row is dealt with.
  */
 function CategoryList({ state, category }: { state: State; category: NeedCategory }) {
   const all = homeRows(state);
@@ -267,6 +273,7 @@ function CategoryList({ state, category }: { state: State; category: NeedCategor
           <span class="need-list-verb">{CATEGORY[category].verb}</span><span class="need-category-count">{rows.length}</span>
         </h2>
         {rows.map(shown)}
+        <Failed home={state.home} />
       </section>
     </div>
   );

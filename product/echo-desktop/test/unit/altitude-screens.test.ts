@@ -246,6 +246,19 @@ describe('Home', () => {
     expect(byTestId(tree, 'alt-projects')).toHaveLength(0);
     expect(byTestId(tree, 'need-category')).toHaveLength(0);
   });
+
+  it('says when Home could not read, with Try again, under the rows it still shows: at its top and in a kind’s list alike', async () => {
+    const rows = waiting([item('u1', THERMAL, { days: 3 }), item('u2', CERT, { days: 1 })]);
+    for (const category of [null, 'update'] as const) {
+      const [needs] = byTestId(await home({ category }, { open: rows, failure: { code: 'unavailable', retryable: true } }), 'needs');
+      const shown = elements(needs);
+      const said = shown.findIndex(node => node.props.class === 'error more');
+      expect(text(shown[said])).toBe('ECHO is unavailable right now. Try again. Try again');
+      expect(elements(shown[said]).filter(node => node.type === 'button').map(text)).toEqual(['Try again']);
+      // Under the rows it kept from its last good read.
+      expect(shown.findLastIndex(node => node.props['data-testid'] === 'need-row' || node.props['data-testid'] === 'need-category')).toBeLessThan(said);
+    }
+  });
 });
 
 describe('what the altitudes say while reading, and when a read fails', () => {
