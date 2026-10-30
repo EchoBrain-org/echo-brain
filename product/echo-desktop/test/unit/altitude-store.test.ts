@@ -3,7 +3,7 @@
 // account's altitude surviving another's sign-in.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
-import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, names, numbered, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, keysetPage, names, numbered, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -663,5 +663,146 @@ describe('Home altitudes drop a read of every page that a change overtook', () =
     await flush(200);
     // Home keeps the copy it had, to read again when it shows: the read the change overtook never replaced it.
     expect(store.getState().altitude.listStale).toBe(true);
+  });
+
+  describe('a change made here that overtakes it has every page read again, so what that read carried still lands', () => {
+    /** You were added to an old project: it sorts onto the second page. */
+    const JOINED = project(13, 5, { name: 'Joined', role: 'member' });
+    const OLD = project(14, 4, { name: 'Old', status: 'archived' });
+    const MADE = project(15, 30, { name: 'Made here' });
+    /** The next second page of your active projects read waits until it is released. */
+    let holding: boolean;
+    let release: (() => void) | null;
+
+    beforeEach(() => {
+      lists = { active: numbered(12), archived: [OLD] };
+      holding = false;
+      release = null;
+      rpc.mockImplementation(rpcFor(held, {
+        'app.status': () => ok({ signed_in: true, account }), runs: runsHandler,
+        'projects.rename': params => ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' }),
+        'projects.archive': () => ok({}),
+        'projects.create': () => ok({ project_id: MADE.project_id }),
+        'projects.read': () => ok(MADE),
+        'projects.list': params => {
+          const page = ok(keysetPage(params.status === 'archived' ? lists.archived : lists.active, params.cursor));
+          if (!holding || params.status === 'archived' || params.cursor === undefined) return page;
+          holding = false;
+          return new Promise(resolve => { release = () => resolve(page); });
+        },
+      }, () => lists));
+    });
+
+    function rename(of: ProjectSummary, name: string, store: Awaited<ReturnType<typeof startStore>>): void {
+      store.toggleProjectSettings(of, 'sidebar');
+      store.beginProjectRename();
+      store.setProjectRename(name);
+      store.confirmProjectSetting();
+      lists = { ...lists, active: lists.active.map(each => (each.project_id === of.project_id ? { ...each, name } : each)) };
+    }
+
+    it('a rename on Home while Home reads every page again', async () => {
+      const store = await startStore();
+      await flush(200);
+      expect(store.getState().altitude.list).not.toBeNull();
+      lists = { ...lists, active: [...numbered(12), JOINED] };
+      holding = true;
+      await store.loadProjects();
+      await flush(40);
+      expect(release).not.toBeNull();
+      rename(lists.active[0]!, 'Renamed', store);
+      await flush(80);
+      release!();
+      await flush(300);
+      const shown = names(store.altitudeProjects());
+      expect(shown).toContain('Renamed');
+      expect(shown).not.toContain('Project 1');
+      expect(shown).toContain('Joined');
+      expect(projectReads(JOINED.project_id).some(request => request.read === 'counts')).toBe(true);
+    });
+
+    it('a rename while Home, just shown, reads every page', async () => {
+      const store = await startStore();
+      await flush(200);
+      await store.openOnlyMe();
+      lists = { ...lists, active: [...numbered(12), JOINED] };
+      holding = true;
+      store.goHome();
+      await flush(40);
+      expect(release).not.toBeNull();
+      rename(lists.active[0]!, 'Renamed', store);
+      await flush(80);
+      release!();
+      await flush(300);
+      const shown = names(store.altitudeProjects());
+      expect(shown).toContain('Renamed');
+      expect(shown).toContain('Joined');
+      expect(projectReads(JOINED.project_id).some(request => request.read === 'counts')).toBe(true);
+    });
+
+    it('a restore on Home while Home reads every page again', async () => {
+      const store = await startStore();
+      await flush(200);
+      lists = { ...lists, active: [...numbered(12), JOINED] };
+      holding = true;
+      await store.loadProjects();
+      await flush(40);
+      expect(release).not.toBeNull();
+      store.toggleProjectSettings(OLD, 'sidebar');
+      store.askProjectSetting('unarchive');
+      store.confirmProjectSetting();
+      lists = { active: [...lists.active, { ...OLD, status: 'active' }], archived: [] };
+      await flush(80);
+      release!();
+      await flush(300);
+      const shown = names(store.altitudeProjects());
+      expect(shown).toContain('Old');
+      expect(shown).toContain('Joined');
+      expect(projectReads(JOINED.project_id).some(request => request.read === 'counts')).toBe(true);
+    });
+
+    it('an archive on Home while Home reads every page again', async () => {
+      const store = await startStore();
+      await flush(200);
+      const third = lists.active[2]!;
+      lists = { ...lists, active: [...numbered(12), JOINED] };
+      holding = true;
+      await store.loadProjects();
+      await flush(40);
+      expect(release).not.toBeNull();
+      store.toggleProjectSettings(third, 'sidebar');
+      store.askProjectSetting('archive');
+      store.confirmProjectSetting();
+      lists = { active: lists.active.filter(each => each.project_id !== third.project_id), archived: [...lists.archived, { ...third, status: 'archived' }] };
+      await flush(80);
+      release!();
+      await flush(300);
+      const shown = names(store.altitudeProjects());
+      expect(shown).not.toContain(third.name);
+      expect(shown).toContain('Joined');
+      expect(projectReads(JOINED.project_id).some(request => request.read === 'counts')).toBe(true);
+    });
+
+    it('a project made here while a read of every page is on its way out of Home’s sight', async () => {
+      const store = await startStore();
+      await flush(200);
+      lists = { ...lists, active: [...numbered(12), JOINED] };
+      holding = true;
+      void store.loadAltitude();
+      await flush(40);
+      expect(release).not.toBeNull();
+      await store.openOnlyMe();
+      store.openNewProject();
+      await flush();
+      store.setNewProjectName('Made here');
+      await store.createProject();
+      lists = { ...lists, active: [MADE, ...lists.active] };
+      await flush(80);
+      release!();
+      await flush(300);
+      expect(names(store.altitudeProjects())).toContain('Made here');
+      // Home reads every page again when it shows: the read the project overtook carried a project you joined.
+      expect(store.getState().altitude.listStale).toBe(true);
+    });
   });
 });
