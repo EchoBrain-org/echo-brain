@@ -14,15 +14,14 @@ function Mark({ visibility }: { visibility: Visibility }) {
 const ICONS = { imported_meeting: Calendar, note: Note, document: Page, meeting: Calendar };
 
 /**
- * One row: what kind it is, its title (a document's kind and size under it),
- * the names of your projects it is filed in, who can read it, and when it was
- * added. A project's own page leaves the projects out, says on a meeting's row
- * how many of its follow-ups are not closed ("4 follow-ups"), and marks a row
- * that arrived since your previous visit "New" for this visit (ADR-0047).
- * Only me leaves out who can read it (`mark`): every row there is only yours.
+ * One row of a project's page: what kind it is, its title (a document's kind
+ * and size under it), who can read it, and when it was added. A meeting's row
+ * says how many of its follow-ups are not closed ("4 follow-ups"), and a row
+ * that arrived since your previous visit is marked "New" for this visit
+ * (ADR-0047). Only me draws its own row (only-me-row.tsx).
  */
-export function ItemRow({ item, testid, projects, mark = true, badge, fresh = false, onOpen }: {
-  item: ListItem; testid: string; projects: boolean; mark?: boolean; badge?: string | null | undefined; fresh?: boolean; onOpen: () => void;
+export function ItemRow({ item, testid, badge, fresh = false, onOpen }: {
+  item: ListItem; testid: string; badge?: string | null | undefined; fresh?: boolean; onOpen: () => void;
 }) {
   const Icon = ICONS[item.ref.kind];
   return (
@@ -35,9 +34,8 @@ export function ItemRow({ item, testid, projects, mark = true, badge, fresh = fa
         </span>
       ) : <span class="name">{item.title}</span>}
       {fresh && <span class="new-tag" data-testid="item-new">New</span>}
-      {projects && item.projects.length > 0 && <span class="projects" data-testid="item-projects">{item.projects.join(', ')}</span>}
       {badge && <span class="open-count" data-testid="item-follow-ups">{badge}</span>}
-      {mark && <Mark visibility={item.visibility} />}
+      <Mark visibility={item.visibility} />
       <span class="meta">{when(item.added_at)}</span>
     </button>
   );

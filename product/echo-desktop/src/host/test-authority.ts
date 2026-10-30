@@ -151,12 +151,15 @@ const ATOM_PART_BYTES = 3 * 1024;
 
 /**
  * The modes where Ari has added notes, uploads and approved meetings of their own, some only Ari can read (ADR-0049);
- * `only-me-empty` has none yet.
+ * `only-me-empty` has none yet, and `only-me-filed` adds a file of Ari's own filed in two projects.
  */
-const ONLY_ME_MODES = new Set(['only-me', 'owner-only-me', 'only-me-empty', 'only-me-fails-once', 'only-me-meetings-held', 'only-me-unauthorized']);
+const ONLY_ME_MODES = new Set(['only-me', 'owner-only-me', 'only-me-empty', 'only-me-fails-once', 'only-me-meetings-held', 'only-me-unauthorized',
+  'only-me-filed']);
 const PRICING_REVIEW = `sha256:${'7'.repeat(64)}`;
 const BEACON_KICKOFF = `sha256:${'8'.repeat(64)}`;
 const PRICING_MEMO = `doc_${'9'.repeat(64)}`;
+/** Ari's own contract, filed in Apollo and Beacon under the Only me lock (`only-me-filed`). */
+const SUPPLIER_CONTRACT = `doc_${'4'.repeat(64)}`;
 const LAUNCH_CHECKLIST = `ctx_${'b'.repeat(64)}`;
 /** Ari's own notes on a supplier call, filed in Apollo under the Only me lock. */
 const SUPPLIER_CALL = `ctx_${'5'.repeat(64)}`;
@@ -526,6 +529,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       pages: [[{ ordinal: 0, anchor_kind: 'page', anchor_start: 1, text: 'Annual plans lead the price sheet.' }]],
     });
     ownDocuments.add(PRICING_MEMO);
+    if (mode === 'only-me-filed') {
+      documents.push({
+        document_id: SUPPLIER_CONTRACT, request_id: '00000000-0000-4000-8000-0000000000d4', filename: 'Supplier contract.pdf', title: 'Supplier contract',
+        original: '%PDF-1.4 Supplier contract\n', detected_media_type: 'application/pdf', audience: { kind: 'only_me' },
+        association_project_ids: [apollo, beacon], received_at: '2026-09-21T21:30:00.000Z', extraction_state: 'ready',
+        pages: [[{ ordinal: 0, anchor_kind: 'page', anchor_start: 1, text: 'Lead times are two weeks.' }]],
+      });
+      ownDocuments.add(SUPPLIER_CONTRACT);
+    }
     catalog.set(LAUNCH_CHECKLIST, {
       received_at: '2026-09-20T12:00:00.000Z', title: 'Launch checklist', text: 'Book the venue.\nSend the invites.\n', audience: { kind: 'team' },
     });
