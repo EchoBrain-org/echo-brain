@@ -2665,6 +2665,12 @@ function replaceProject(project: ProjectSummary): void {
   const update = (items: ProjectSummary[]) => items.map(item => item.project_id === project.project_id ? project : item);
   set({ projects: { ...state.projects, items: update(state.projects.items) }, archivedProjects: { ...state.archivedProjects, items: update(state.archivedProjects.items) },
     ...sameProjectRoute(project) });
+  if (state.altitude.list !== null) {
+    // Home's copy of every page takes it too, out of sight or not (Only me's tiles find projects there by name). A read of
+    // every page on its way may predate the change: it no longer counts.
+    listToken += 1;
+    set({ altitude: { ...state.altitude, list: update(state.altitude.list) } });
+  }
   listChanged();
 }
 
@@ -3028,6 +3034,12 @@ async function openCreated(): Promise<void> {
   if (!state.projects.items.some(item => item.project_id === project.project_id)) {
     set({ projects: { ...state.projects, items: [project, ...state.projects.items] } });
     listChanged();
+  }
+  const list = state.altitude.list;
+  if (list !== null && !list.some(item => item.project_id === project.project_id)) {
+    // Home's copy of every page has it too, as a restore does. A read of every page on its way may predate it: it no longer counts.
+    listToken += 1;
+    set({ altitude: { ...state.altitude, list: [project, ...list] } });
   }
   setNewProject({ opening: false, project, notice: undefined, hidden: true }, mine);
   void openProject(project);

@@ -3,7 +3,7 @@
 // account's altitude surviving another's sign-in.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
-import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, numbered, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, names, numbered, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -564,6 +564,40 @@ describe('Home altitudes keep their copy of a long list while they read it again
     store.confirmProjectSetting();
     await flush(120);
     expect(projectReads(OLD.project_id).some(request => request.read === 'counts')).toBe(true);
+  });
+
+  it('a project renamed or made out of Home’s sight is in its copy by its name now, so Only me’s tiles still find it', async () => {
+    lists = { active: numbered(12), archived: [] };
+    const first = lists.active[0]!;
+    const made = project(13, 30, { name: 'Made here' });
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }), runs: runsHandler,
+      'projects.rename': params => ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' }),
+      'projects.create': () => ok({ project_id: made.project_id }),
+      'projects.read': () => ok(made),
+    }, () => lists));
+    const store = await startStore();
+    await flush(200);
+    expect(store.getState().altitude.list).not.toBeNull();
+    await store.openOnlyMe();
+    store.toggleProjectSettings(first, 'sidebar');
+    store.beginProjectRename();
+    store.setProjectRename('Renamed');
+    store.confirmProjectSetting();
+    lists = { active: [{ ...first, name: 'Renamed' }, ...lists.active.slice(1)], archived: [] };
+    await flush(80);
+    store.openNewProject();
+    await flush();
+    store.setNewProjectName('Made here');
+    await store.createProject();
+    lists = { active: [made, ...lists.active], archived: [] };
+    await flush(80);
+    await store.openOnlyMe();
+    await flush(80);
+    const shown = names(store.altitudeProjects());
+    expect(shown).toContain('Renamed');
+    expect(shown).not.toContain(first.name);
+    expect(shown).toContain('Made here');
   });
 
   it('a read of every page on its way when you leave a project does not bring it back', async () => {
