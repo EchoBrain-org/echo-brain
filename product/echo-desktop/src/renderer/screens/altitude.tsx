@@ -376,13 +376,16 @@ function hold(event: FocusEvent, at: string): void {
  * gives the focus, on the way out, to the row it came from; on the way in, to
  * the first row; with no rows yet, to the level itself, where ↓ finds them.
  * Back on Home as it was left, the row it was left on has it again, else the
- * row now in its place; so does the row in place of one that went with the
- * focus (dealt with, then read away).
+ * row now in its place. A read that takes the focus from the level (it moves
+ * the row with it, reads that row away, or takes Try again) gives it back the
+ * same way; a focus already elsewhere (a click let go of it) stays there.
  */
 export function Altitude({ state, top }: { state: State; top: ComponentChildren }) {
   const { level, category, project_id, membership_id } = state.altitude;
   const at = `${level} ${category} ${project_id} ${membership_id}`;
   const box = useRef<HTMLDivElement>(null);
+  // The focus is in the level as it was before this render.
+  const had = box.current?.contains(document.activeElement) ?? false;
   // Null until it shows: Home is back, not zoomed.
   const was = useRef<{ level: AltLevel; category: NeedCategory | null } | null>(null);
   useEffect(() => {
@@ -406,7 +409,8 @@ export function Altitude({ state, top }: { state: State; top: ComponentChildren 
     root.addEventListener('blur', () => root.removeAttribute('tabindex'), { once: true });
     root.focus();
   }, [level, category, project_id, membership_id]);
-  // The row with the focus went (a reload read it away): the row now in its place takes the focus, else the last row.
+  // This render took the focus from the level (a reload moved or read away what had it): the row it was on takes it again, else the
+  // row now in its place, else the last row. Home stays scrolled where the person left it.
   useEffect(() => {
     const root = box.current;
     const kept = held;
@@ -414,7 +418,7 @@ export function Altitude({ state, top }: { state: State; top: ComponentChildren 
     const rows = navRows(root);
     const index = rows.findIndex(row => row.dataset.altNav === kept.row);
     if (index >= 0) kept.index = index;
-    else if (focusLost()) rows[Math.min(kept.index, rows.length - 1)]?.focus();
+    if (had && focusLost()) rows[Math.min(kept.index, rows.length - 1)]?.focus({ preventScroll: true });
   });
   return (
     <div class="alt-level" ref={box} key={at} onWheel={pinch} onKeyDown={arrows} onFocusCapture={event => hold(event, at)}>

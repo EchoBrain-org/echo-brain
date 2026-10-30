@@ -1338,9 +1338,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           if (mode === 'granola-window-full' && body?.watch !== 'off') return failure('quota_exceeded', 409);
           granolaWatch = { watch: body?.watch as string, folder_id: body?.folder_id as string | null, project_id: body?.project_id as string | null }; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
-        // granola-routes: once approved, the meeting is past the newest reviews the list holds, so the list no longer names it.
-        case 'reviews': return json({ reviews: (granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added')
-          && !(mode === 'granola-routes' && granolaApproved) ? [review] : [] });
+        // granola-routes: once approved, the meeting is past the newest reviews the list holds, so the list no longer names it. While
+        // the test's `reviews-unavailable` file is there, the read fails, as an Authority that cannot answer just then.
+        case 'reviews':
+          if (elsewhere('reviews-unavailable')) return failure('unavailable', 503);
+          return json({ reviews: (granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added')
+            && !(mode === 'granola-routes' && granolaApproved) ? [review] : [] });
         case 'review_open': {
           // The proposal, by its own id or by one of its records' (whose proposal the Authority answers).
           if (body?.approval_id !== review.approval_id && !records.some(record => record.approval_id === body?.approval_id)) return failure('not_found', 404);
