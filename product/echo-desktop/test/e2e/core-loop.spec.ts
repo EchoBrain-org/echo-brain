@@ -174,7 +174,7 @@ test('an unconfirmed save says so, locks the text and never claims it was sent',
   await page.getByTestId('place-team').click();
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
-  await expect(page.getByTestId('sent')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveCount(0);
   await expect(page.getByTestId('compose-body')).toHaveValue('Draft');
   await expect(page.getByTestId('compose-body')).toHaveAttribute('readonly', '');
   await expect(page.getByTestId('capture-place')).toBeDisabled();
@@ -191,7 +191,7 @@ test('retry resends the identical request and then says where it went', async ()
   await expect(page.getByTestId('compose-retry')).toHaveText('Try again');
   await page.getByTestId('compose-retry').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
-  const posts = run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
+  const posts = notes();
   expect(posts).toHaveLength(2);
   expect(posts[1]!.body).toEqual(posts[0]!.body);
 });
@@ -207,7 +207,7 @@ test('check status on an unconfirmed save learns it was not saved, then sends it
   await expect(page.getByTestId('compose-error')).toHaveText('It was not saved. Try again.');
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
-  const posts = run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
+  const posts = notes();
   expect(posts[1]!.body?.request_id).toBe(posts[0]!.body?.request_id);
 });
 
