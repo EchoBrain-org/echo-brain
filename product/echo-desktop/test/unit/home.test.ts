@@ -1865,6 +1865,31 @@ describe('Check now', () => {
     expect(requests('sweep')).toHaveLength(1);
   });
 
+  it('has what it found read on Back by the lists under it, so your Follow-ups say when ECHO last checked', async () => {
+    fx.granola = null;
+    fx.page = listPage();
+    const store = await start();
+    await store.openYourFollowUps();
+    await flush();
+    // A project's follow-ups opened over yours, and checked.
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
+    await store.openFollowUps('project', project.project_id, project.name);
+    await flush();
+    const checking = store.checkNow();
+    await flush();
+    fx.sweep = sweepRun('done');
+    fx.page = { ...listPage(), items: [item('1', 'landed')], summary: { ...listPage().summary, landed: 1, last_checked_at: '2026-10-08T12:00:00.000Z' } };
+    await vi.advanceTimersByTimeAsync(5_000);
+    await checking;
+    const reads = requests('items').length;
+    store.closeFollowUp();
+    await flush();
+    // Yours, read again rows only: its rows and its last check as the sweep left them.
+    expect(requests('items').slice(reads).map(request => `${request.scope} ${request.read}`)).toEqual(['involved rows']);
+    const yours = store.followUpShown() as FollowUpList;
+    expect([yours.scope, yours.items[0]?.check?.verdict, yours.summary?.last_checked_at]).toEqual(['involved', 'landed', '2026-10-08T12:00:00.000Z']);
+  });
+
   it('starts a queued impact check before its sweep, which waits its turn', async () => {
     fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
     const store = await projectList();

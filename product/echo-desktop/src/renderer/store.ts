@@ -7363,8 +7363,9 @@ export async function openListDecision(): Promise<void> {
 /**
  * Check now, faint on a meeting's or a project's list (canvas 9.6, 9.7): a
  * sweep of that scope. With nothing open the list says so; otherwise
- * "Checking…" until the sweep ends, then the list is read again. A sweep that
- * fails says so, and Try again asks for another.
+ * "Checking…" until the sweep ends, then the list is read again, and what
+ * it found is read on Back by what is under it, as after a change. A sweep
+ * that fails says so, and Try again asks for another.
  */
 export async function checkNow(): Promise<void> {
   const list = shownView('list');
@@ -7392,7 +7393,9 @@ export async function checkNow(): Promise<void> {
   const now = ours();
   if (!now || ended === null) return;
   setView({ ...now, check: ended === 'done' ? null : 'failed' });
-  if (ended === 'done') await readList(now.seq, 'again');
+  if (ended !== 'done') return;
+  changedFrom(now.seq);
+  await readList(now.seq, 'again');
 }
 
 /**
