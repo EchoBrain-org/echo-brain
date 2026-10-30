@@ -82,5 +82,34 @@ test('Home comes back at the altitude it was left at', async () => {
   await expect(page.getByTestId('title')).toHaveText('Beacon');
   await page.getByTestId('sidebar-home').click();
   await expect(page.getByTestId('alt-project-level')).toBeVisible();
-  await expect(page.getByTestId('alt-head').or(page.locator('.alt-head'))).toContainText('Apollo');
+  await expect(page.getByTestId('alt-head')).toContainText('Apollo');
 });
+
+test('the keyboard zooms in and out without losing its place', async () => {
+  const page = await myProjects();
+  const apollo = page.getByTestId('alt-project').first();
+  await apollo.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('alt-project-level')).toBeVisible();
+  // The focus lands on the new level's first row, so the arrows keep working.
+  await expect.poll(() => page.evaluate(() => document.activeElement?.hasAttribute('data-alt-nav') ?? false)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('alt-projects')).toBeVisible();
+  // Back out, the focus is on the project it came from, and ↓ moves to the next.
+  await expect(apollo).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByTestId('alt-project').nth(1)).toBeFocused();
+});
+
+test('a trackpad pinch zooms: spread over a project to go in, pinch to come out', async () => {
+  const page = await myProjects();
+  const pinch = (selector: string, deltaY: number) => page.locator(selector).first().evaluate((node, delta) => {
+    node.dispatchEvent(new WheelEvent('wheel', { deltaY: delta, ctrlKey: true, bubbles: true, cancelable: true }));
+  }, deltaY);
+  await pinch('[data-testid="alt-project"]', -120);
+  await expect(page.getByTestId('alt-project-level')).toBeVisible();
+  await page.waitForTimeout(450);
+  await pinch('[data-testid="alt-project-level"]', 120);
+  await expect(page.getByTestId('alt-projects')).toBeVisible();
+});
+

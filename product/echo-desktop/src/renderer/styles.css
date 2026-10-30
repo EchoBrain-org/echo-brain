@@ -1158,3 +1158,9 @@ button.alt-group-head:hover, button.alt-group-head:focus-visible { color: var(--
 .alt-kind { display: inline-flex; color: var(--muted); }
 .alt-kind.approve { color: var(--approve); }
 .alt-unread { padding: 18px 14px; color: var(--faint); font-size: 13px; }
+.alt-chip.faint { color: var(--faint); }
+.alt-head-mark { display: inline-flex; color: var(--muted); }
+.alt-head h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alt-head > :not(h2) { flex-shrink: 0; }
+.alt-group-head > * { flex-shrink: 0; }
+.alt-group-head .alt-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

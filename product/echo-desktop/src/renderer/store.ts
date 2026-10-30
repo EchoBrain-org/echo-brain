@@ -635,6 +635,12 @@ export interface AltitudeState {
   reads: Readonly<Record<string, ProjectRead>>;
   /** What live reads brought of the follow-ups shown, by item (B1). */
   live: LiveParts;
+  /** Every page of your projects, read for Home when the sidebar shows only its first pages; null until then. */
+  list: ProjectSummary[] | null;
+  /** My projects groups its rows by health: false on first open until its reads came in, or SETTLE_MS passed. */
+  settled: boolean;
+  /** A person's follow-ups are being read live. */
+  reading: boolean;
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
@@ -643,7 +649,7 @@ const ALTITUDE = 'echo.home.altitude';
 const LEVELS: readonly AltLevel[] = ['me', 'projects', 'project', 'person'];
 
 function emptyAltitude(level: AltLevel = 'me'): AltitudeState {
-  return { level, project_id: null, membership_id: null, name: null, reads: {}, live: {} };
+  return { level, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: false, reading: false };
 }
 
 const accountKey = (account: Expect) => `${account.authority} ${account.membership_id}`;
@@ -903,6 +909,9 @@ function forgetAccount(): void {
   homeToken += 1;
   // So is where Home was zoomed, and what it read there.
   altitudeToken += 1;
+  altitudeLoading = null;
+  altitudeOwed = false;
+  if (settleTimer !== null) { clearTimeout(settleTimer); settleTimer = null; }
   projectsKnown = false;
   emptyBar();
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
@@ -1332,7 +1341,10 @@ function showList(status: ListStatus, list: State['projects']): void {
   // Your projects, read: Home zoomed out reads what it has not read of them yet.
   if (status === 'active' && !list.loading && !list.failure) {
     projectsKnown = true;
-    if (state.route.page === 'home' && state.altitude.level !== 'me' && list.items.some(project => !state.altitude.reads[project.project_id])) void loadAltitude();
+    if (state.route.page === 'home' && state.altitude.level !== 'me') {
+      const moved = followFocus();
+      if (moved || list.items.some(project => !state.altitude.reads[project.project_id])) void loadAltitude(false);
+    }
   }
 }
 
@@ -5364,13 +5376,40 @@ export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readon
 /** A load of Home's altitudes is the last account's, or an earlier one's, once this moves on. */
 let altitudeToken = 0;
 let altitudeLoading: { key: string; done: Promise<void> } | null = null;
+/** A fresh read was asked for and has not finished: the next load reads everything again, whatever asked for it. */
+let altitudeOwed = false;
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
+/** How long My projects keeps your list's order on its first open while its reads come in. */
+const SETTLE_MS = 1_500;
 /** Your projects have been read since this account signed in: until then a remembered project is not "gone". */
 let projectsKnown = false;
 
+/** Your projects as Home's altitudes see them: the sidebar's list when it holds them all, else every page, read for Home. */
+export function altitudeProjects(current: State = state): readonly ProjectSummary[] {
+  return current.projects.next === null ? current.projects.items : current.altitude.list ?? current.projects.items;
+}
+
+/** Your whole list, once Home knows it: only a project missing from the whole list is gone. */
+function wholeList(): readonly ProjectSummary[] | null {
+  if (!projectsKnown) return null;
+  return state.projects.next === null ? state.projects.items : state.altitude.list;
+}
+
+/** Zoomed on a project no longer on your list, Home goes to My projects (zoomed on a person, it forgets it). True when it moved. */
+function followFocus(): boolean {
+  const list = wholeList();
+  const { project_id } = state.altitude;
+  if (list === null || project_id === null || list.some(project => project.project_id === project_id)) return false;
+  const altitude = { ...state.altitude, project_id: null, level: state.altitude.level === 'project' ? 'projects' as const : state.altitude.level };
+  set({ altitude });
+  rememberAltitude(altitude);
+  return true;
+}
+
 /**
  * Home zooms to `level`: on a project or a person when given one, else the
- * last it zoomed on. Me reads nothing new; every other altitude reads your
- * projects' follow-ups (Home altitude v1).
+ * last it zoomed on. Me reads nothing new; every other altitude reads what it
+ * has not read yet (Home altitude v1).
  */
 export function zoomTo(level: AltLevel, target: { project_id?: string; membership_id?: string; name?: string } = {}): void {
   const altitude = {
@@ -5379,7 +5418,7 @@ export function zoomTo(level: AltLevel, target: { project_id?: string; membershi
   };
   set({ altitude });
   rememberAltitude(altitude);
-  if (level !== 'me') void loadAltitude();
+  if (level !== 'me') void loadAltitude(false);
 }
 
 /** One level out: a person to their project, a project to My projects. False on My projects and Me, which go nowhere. */
@@ -5405,62 +5444,87 @@ function addLive(items: readonly OpenItemView[]): void {
   set({ altitude: { ...state.altitude, live: { ...state.altitude.live, ...liveParts(items) } } });
 }
 
+/** My projects groups and sorts its rows from now on: its first reads came in, or took long enough. */
+function settle(): void {
+  if (settleTimer !== null) { clearTimeout(settleTimer); settleTimer = null; }
+  if (!state.altitude.settled) set({ altitude: { ...state.altitude, settled: true } });
+}
+
 /**
- * What Home's altitude shows, read: each of your projects' counts and
- * waiting follow-ups (rows only, a few projects at a time); zoomed on a
- * project, all its follow-ups and then its waiting ones live; zoomed on a
- * person, theirs live one by one, at most PERSON_LIVE_MAX. A project that
- * left your list, once your list is read, sends Home to My projects.
+ * What Home's altitude shows, read. Fresh (Home shown again, a return, a
+ * change): every project's counts and waiting follow-ups again, and a
+ * person's live; never joined to a load on its way, whose reads may predate
+ * the change. Otherwise (a zoom), only what is new: projects not read yet,
+ * and the project zoomed into. A project zoomed into reads all its follow-ups,
+ * then its waiting ones live; a person's are read live one by one, at most
+ * PERSON_LIVE_MAX, from projects still on your list. When the sidebar shows
+ * only its first pages, Home reads every page. A newer load, or another
+ * account, stops an older one at its next project.
  */
-export function loadAltitude(): Promise<void> {
+export function loadAltitude(fresh = true): Promise<void> {
   const account = expect();
   if (!account) return Promise.resolve();
-  if (projectsKnown && state.altitude.project_id !== null && !state.projects.items.some(project => project.project_id === state.altitude.project_id)) {
-    const altitude = { ...state.altitude, project_id: null, level: state.altitude.level === 'project' ? 'projects' as const : state.altitude.level };
-    set({ altitude });
-    rememberAltitude(altitude);
-  }
+  followFocus();
   const { level, project_id, membership_id } = state.altitude;
   if (level === 'me') return Promise.resolve();
-  const projects = state.projects.items.map(project => project.project_id);
-  const key = [level, project_id, membership_id, ...projects].join(' ');
-  if (altitudeLoading?.key === key) return altitudeLoading.done;
+  altitudeOwed ||= fresh;
+  const again = altitudeOwed;
+  const key = [level, project_id, membership_id].join(' ');
+  if (!again && altitudeLoading?.key === key) return altitudeLoading.done;
   const token = ++altitudeToken;
   const mine = () => token === altitudeToken && sameAccount(account);
-  const done = (async () => {
-    await inTurns(projects, PROJECT_READS_AT_ONCE, async id => {
-      setRead(id, { loading: true });
-      const zoomed = level === 'project' && id === project_id;
+  if (!state.altitude.settled && settleTimer === null) settleTimer = setTimeout(settle, SETTLE_MS);
+  const run = async () => {
+    if (state.projects.next !== null && (again || state.altitude.list === null)) {
+      const read = await readProjectPages(account, 'active', Number.POSITIVE_INFINITY);
+      if (!mine()) return;
+      if (read?.ok) set({ altitude: { ...state.altitude, list: read.pages.flatMap(page => page.items) } });
+      followFocus();
+    }
+    const listed = altitudeProjects().map(project => project.project_id);
+    const zoomed = state.altitude.level === 'project' ? state.altitude.project_id : null;
+    const due = listed.filter(id => again || id === zoomed || !state.altitude.reads[id] || state.altitude.reads[id]!.failure !== undefined);
+    await inTurns(due, PROJECT_READS_AT_ONCE, async id => {
+      if (!mine()) return;
+      const focus = id === zoomed;
+      setRead(id, { loading: true, ...(focus ? { reading: true } : {}) });
       const [counts, active, all] = await Promise.all([
         readItems(account, { scope: 'project', id, read: 'counts' }, null, 1),
         readItems(account, { scope: 'project', id, read: 'rows', states: ['unsent', 'open'] }, null, Number.POSITIVE_INFINITY),
-        zoomed ? readItems(account, { scope: 'project', id, read: 'rows', states: ['unsent', 'open', 'done'] }, null, Number.POSITIVE_INFINITY) : null,
+        focus ? readItems(account, { scope: 'project', id, read: 'rows', states: ['unsent', 'open', 'done'] }, null, Number.POSITIVE_INFINITY) : null,
       ]);
       if (!mine()) return;
       const failed = [counts, active, all].find(read => read !== null && !read.ok);
-      if (failed && !failed.ok) { setRead(id, { loading: false, failure: failed.failure }); return; }
+      if (failed && !failed.ok) { setRead(id, { loading: false, reading: false, failure: failed.failure }); return; }
       const rows = (read: typeof active) => (read.ok ? read.pages.flatMap(page => page.items) : []);
-      setRead(id, {
-        loading: false, failure: undefined, counts: counts.ok ? counts.last.summary : null, active: rows(active),
-        ...(all ? { all: rows(all), reading: true } : {}),
-      });
-      if (!zoomed) return;
+      // Only the project zoomed into keeps its done follow-ups: another's would go stale here, unread again.
+      setRead(id, { loading: false, failure: undefined, counts: counts.ok ? counts.last.summary : null, active: rows(active), all: all ? rows(all) : null });
+      if (!focus) return;
       // Then what its waiting follow-ups say now in their tools: the first page, as the project's follow-ups list reads it.
       const now = await readItems(account, { scope: 'project', id, states: ['unsent', 'open'] }, null, 1);
       if (!mine()) return;
       if (now.ok) addLive(now.pages.flatMap(page => page.items));
       setRead(id, { reading: false });
     });
-    if (!mine() || level !== 'person' || membership_id === null) return;
-    const theirs = Object.values(state.altitude.reads).flatMap(read => read.active)
-      .filter(item => item.owner.membership_id === membership_id && !unowned(item) && item.kind !== 'action' && !state.altitude.live[item.item_id]);
-    const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()].slice(0, PERSON_LIVE_MAX);
-    await inTurns(unread, PROJECT_READS_AT_ONCE, async item => {
-      const read = await readOne(account, item.item_id, true);
+    if (!mine()) return;
+    if (state.altitude.level === 'person' && membership_id !== null) {
+      const theirs = listed.flatMap(id => state.altitude.reads[id]?.active ?? [])
+        .filter(item => item.owner.membership_id === membership_id && !unowned(item) && item.kind !== 'action' && (again || !state.altitude.live[item.item_id]));
+      const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()].slice(0, PERSON_LIVE_MAX);
+      set({ altitude: { ...state.altitude, reading: unread.length > 0 } });
+      await inTurns(unread, PROJECT_READS_AT_ONCE, async item => {
+        if (!mine()) return;
+        const read = await readOne(account, item.item_id, true);
+        if (mine()) addLive([liveRead(item, read)]);
+      });
       if (!mine()) return;
-      addLive([liveRead(item, read)]);
-    });
-  })();
+      set({ altitude: { ...state.altitude, reading: false } });
+    }
+    altitudeOwed = false;
+    settle();
+  };
+  // Started after it is known as the load on its way, so a load asked for meanwhile can join it.
+  const done = Promise.resolve().then(run);
   altitudeLoading = { key, done };
   void done.finally(() => { if (altitudeLoading?.done === done) altitudeLoading = null; });
   return done;

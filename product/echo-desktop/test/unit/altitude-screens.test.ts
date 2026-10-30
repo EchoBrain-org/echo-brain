@@ -31,13 +31,13 @@ const read = (active: OpenItemView[], extra: Partial<ProjectRead> = {}): Project
   loading: false, counts: { ...EMPTY_SUMMARY, open: active.length }, active, all: null, reading: false, ...extra,
 });
 
-async function stateWith(altitude: Partial<AltitudeState>, projects: ProjectSummary[] = [THERMAL, CERT, PACKAGING]): Promise<State> {
+async function stateWith(altitude: Partial<AltitudeState>, projects: ProjectSummary[] = [THERMAL, CERT, PACKAGING], list: Partial<State['projects']> = {}): Promise<State> {
   const { getState } = await import('../../src/renderer/store.js');
   return {
     ...getState(), status: { client_version: 'test', signed_in: true, account: ACCOUNT },
-    projects: { items: projects, next: null, loading: false },
+    projects: { items: projects, next: null, loading: false, ...list },
     home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
-    altitude: { level: 'projects', project_id: null, membership_id: null, name: null, reads: {}, live: {}, ...altitude },
+    altitude: { level: 'projects', project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: true, reading: false, ...altitude },
   };
 }
 
@@ -143,3 +143,80 @@ describe('Home', () => {
     expect(byTestId(tree, 'needs')).toHaveLength(0);
   });
 });
+
+describe('what the altitudes say while reading, and when a read fails', () => {
+  it('a project header never says On track or 100% before its project is read, or when the read failed', async () => {
+    const { ProjectLevel } = await import('../../src/renderer/screens/altitude.js');
+    const reading = text(render(ProjectLevel({ state: await stateWith({ level: 'project', project_id: THERMAL.project_id, reads: {} }) })));
+    expect(reading).toContain('Reading');
+    expect(reading).not.toContain('On track');
+    expect(reading).not.toContain('100%');
+    const failed = { [THERMAL.project_id]: { ...read([]), counts: null, failure: { code: 'unavailable', retryable: true } } };
+    const unread = text(render(ProjectLevel({ state: await stateWith({ level: 'project', project_id: THERMAL.project_id, reads: failed }) })));
+    expect(unread).toContain('Couldn’t read just now');
+    expect(unread).not.toContain('On track');
+    expect(unread).not.toContain('100%');
+  });
+
+  it('a person says nothing is waiting only once every project has been read', async () => {
+    const { PersonLevel } = await import('../../src/renderer/screens/altitude.js');
+    const someone = { level: 'person' as const, membership_id: 'mem_nobody', name: 'Nobody Here' };
+    const loading = { ...READS, [CERT.project_id]: read([], { loading: true, counts: null }) };
+    expect(text(render(PersonLevel({ state: await stateWith({ ...someone, reads: loading }) })))).not.toContain('Nothing of theirs is waiting');
+    const failed = { ...READS, [CERT.project_id]: { ...read([]), failure: { code: 'unavailable', retryable: true } } };
+    expect(text(render(PersonLevel({ state: await stateWith({ ...someone, reads: failed }) })))).toContain('Couldn’t read every project just now');
+    expect(text(render(PersonLevel({ state: await stateWith({ ...someone, reads: READS }) })))).toContain('Nothing of theirs is waiting');
+  });
+
+  it('a title waits faintly only while its live read is on its way', async () => {
+    const { ProjectLevel } = await import('../../src/renderer/screens/altitude.js');
+    const done = item('d1', THERMAL, { kind: 'ticket', state: 'done' });
+    const open = item('o1', THERMAL, { kind: 'ticket' });
+    const faint = async (reading: boolean) => elements(render(ProjectLevel({ state: await stateWith({
+      level: 'project', project_id: THERMAL.project_id, reads: { [THERMAL.project_id]: read([open], { all: [open, done], reading }) } }) })))
+      .filter(node => node.props.class === 'reading-title').length;
+    expect(await faint(true)).toBe(1);
+    expect(await faint(false)).toBe(0);
+  });
+
+  it('a person shows only what is waiting, even for a project whose done follow-ups were read', async () => {
+    const { PersonLevel } = await import('../../src/renderer/screens/altitude.js');
+    const closed = item('x1', THERMAL, { state: 'done' });
+    const reads = { ...READS, [THERMAL.project_id]: { ...READS[THERMAL.project_id]!, all: [...READS[THERMAL.project_id]!.active, closed] } };
+    const tree = render(PersonLevel({ state: await stateWith({ level: 'person', membership_id: 'mem_mina', name: 'Mina Patel', reads }) }));
+    expect(byTestId(tree, 'alt-item').map(row => row.props['data-item'])).not.toContain('itm_x1');
+  });
+
+  it('a person’s header counts a follow-up filed in two projects once', async () => {
+    const { PersonLevel } = await import('../../src/renderer/screens/altitude.js');
+    const shared = item('s1', THERMAL, { days: 5 });
+    const reads = { [THERMAL.project_id]: read([shared]), [CERT.project_id]: read([shared]), [PACKAGING.project_id]: read([]) };
+    const tree = render(PersonLevel({ state: await stateWith({ level: 'person', membership_id: 'mem_mina', name: 'Mina Patel', reads }) }));
+    expect(byTestId(tree, 'alt-chip').map(text)).toEqual(['1', '1']);
+  });
+});
+
+describe('My projects on first open, and without a list', () => {
+  it('keeps the list’s order, ungrouped, until the first reads settle', async () => {
+    const { MyProjects } = await import('../../src/renderer/screens/altitude.js');
+    const tree = render(MyProjects({ state: await stateWith({ reads: READS, settled: false }, [PACKAGING, THERMAL, CERT]) }));
+    expect(byTestId(tree, 'alt-group-head')).toHaveLength(0);
+    expect(byTestId(tree, 'alt-project').map(row => row.props['data-project'])).toEqual([PACKAGING.project_id, THERMAL.project_id, CERT.project_id]);
+  });
+
+  it('does not offer a new project when your projects could not be read', async () => {
+    const { MyProjects } = await import('../../src/renderer/screens/altitude.js');
+    const tree = render(MyProjects({ state: await stateWith({}, [], { failure: { code: 'unavailable', retryable: true } }) }));
+    expect(byTestId(tree, 'empty-new-project')).toHaveLength(0);
+    expect(text(tree)).toContain('Couldn’t read your projects just now');
+  });
+
+  it('opens with its name and how many projects are off track, at risk and on track', async () => {
+    const { MyProjects } = await import('../../src/renderer/screens/altitude.js');
+    const tree = render(MyProjects({ state: await stateWith({ reads: READS }) }));
+    const head = byTestId(tree, 'alt-head')[0]!;
+    expect(text(head)).toContain('My projects');
+    expect(byTestId(head, 'alt-chip').map(chip => chip.props.title)).toEqual(['1 off track', '1 at risk', '1 on track']);
+  });
+});
+

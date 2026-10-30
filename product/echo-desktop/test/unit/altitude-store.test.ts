@@ -2,7 +2,7 @@
 // project's read failing alone; and nothing of one account's altitude surviving another's sign-in.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
-import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, numbered, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -169,3 +169,107 @@ describe('Home altitudes', () => {
     expect(again.getState().altitude.level).toBe('me');
   });
 });
+
+describe('Home altitudes, reading only what each step needs', () => {
+  const runsAfter = (from: number) => rpc.mock.calls.slice(from).filter(([name]) => name === 'runs')
+    .map(([, params]) => params as { expect: { membership_id: string }; request: Request });
+
+  it('a zoom reads only what is new: the project zoomed into, and nothing on the way back out', async () => {
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(80);
+    let from = rpc.mock.calls.length;
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    await flush(80);
+    expect(runsAfter(from).every(call => call.request.id === THERMAL.project_id)).toBe(true);
+    expect(runsAfter(from).length).toBeGreaterThan(0);
+    from = rpc.mock.calls.length;
+    store.zoomOut();
+    await flush(80);
+    expect(runsAfter(from)).toEqual([]);
+  });
+
+  it('a fresh read (Home shown, a return) reads every project again, and the person’s follow-ups live again', async () => {
+    const store = await startStore();
+    store.zoomTo('person', { membership_id: MINA.membership_id, name: MINA.name });
+    await flush(120);
+    const from = rpc.mock.calls.length;
+    await store.loadAltitude();
+    await flush(120);
+    const again = runsAfter(from);
+    for (const each of [THERMAL, BATTERY]) expect(again.some(call => call.request.id === each.project_id && call.request.read === 'counts')).toBe(true);
+    expect(again.filter(call => call.request.operation === 'item').map(call => call.request.item_id).sort()).toEqual(['itm_b1', 'itm_t1']);
+  });
+
+  it('after another account signs in, the last account’s load sends nothing more', async () => {
+    lists = { active: numbered(6), archived: [] };
+    const store = await startStore();
+    const releases = Array.from({ length: 8 }, () => held.hold('runs'));
+    store.zoomTo('projects');
+    await flush(20);
+    account = { ...ACCOUNT, membership_id: 'another-member' };
+    await store.refreshStatus();
+    const from = rpc.mock.calls.length;
+    releases.forEach(release => release(ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] })));
+    await flush(200);
+    expect(runsAfter(from).filter(call => call.expect.membership_id === ACCOUNT.membership_id)).toEqual([]);
+    expect(Object.keys(store.getState().altitude.reads)).toEqual([]);
+  });
+
+  it('falls back to My projects as soon as the project it is zoomed on leaves your list', async () => {
+    const store = await startStore();
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    await flush(80);
+    lists = { active: [BATTERY], archived: [] };
+    await store.loadProjects();
+    await flush(40);
+    expect(store.getState().altitude.level).toBe('projects');
+  });
+
+  it('covers every page of your projects, and keeps a remembered project past the sidebar’s first page', async () => {
+    lists = { active: numbered(12), archived: [] };
+    const twelfth = lists.active[11]!;
+    vi.stubGlobal('localStorage', { getItem: (key: string) => (key === 'echo.home.altitude'
+      ? JSON.stringify({ account: `${ACCOUNT.authority} ${ACCOUNT.membership_id}`, level: 'project', project_id: twelfth.project_id }) : null), setItem: vi.fn() });
+    const store = await startStore();
+    await flush(200);
+    expect(store.getState().altitude.level).toBe('project');
+    expect(store.getState().altitude.project_id).toBe(twelfth.project_id);
+    expect(new Set(projectReads().filter(request => request.read === 'counts').map(request => request.id)).size).toBe(12);
+  });
+
+  it('reads live only the person’s follow-ups in projects still on your list', async () => {
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(80);
+    lists = { active: [THERMAL], archived: [] };
+    await store.loadProjects();
+    const from = rpc.mock.calls.length;
+    store.zoomTo('person', { membership_id: MINA.membership_id, name: MINA.name });
+    await flush(120);
+    expect(runsAfter(from).filter(call => call.request.operation === 'item').map(call => call.request.item_id)).toEqual(['itm_t1']);
+  });
+
+  it('keeps your projects in list order until the first reads settle, or a second and a half', async () => {
+    const store = await startStore();
+    const release = held.hold('runs');
+    store.zoomTo('projects');
+    await flush(40);
+    expect(store.getState().altitude.settled).toBe(false);
+    vi.advanceTimersByTime(1_500);
+    expect(store.getState().altitude.settled).toBe(true);
+    release(ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }));
+  });
+
+  it('a project read no longer zoomed on drops its done follow-ups', async () => {
+    const store = await startStore();
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    await flush(80);
+    expect(store.getState().altitude.reads[THERMAL.project_id]?.all).not.toBeNull();
+    store.zoomTo('projects');
+    await store.loadAltitude();
+    await flush(80);
+    expect(store.getState().altitude.reads[THERMAL.project_id]?.all).toBeNull();
+  });
+});
+
