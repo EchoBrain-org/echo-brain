@@ -1352,11 +1352,11 @@ function showList(status: ListStatus, list: State['projects']): void {
         listToken += 1;
         set({ altitude: { ...state.altitude, list: null, listFailure: null, listStale: false } });
       }
-    } else if ((state.route.page !== 'home' || state.altitude.level === 'me') && state.altitude.list !== null && !state.altitude.listStale) {
-      // Out of sight, Home keeps showing its copy of the pages, and reads them all again on its next load (a read already
-      // on its way may predate the change, so it no longer counts).
+    } else if (state.route.page !== 'home' || state.altitude.level === 'me') {
+      // Out of sight, Home keeps showing its copy of the pages, and reads them all again on its next load. A read already on
+      // its way may predate the change, so it no longer counts, whether or not Home has a copy yet.
       listToken += 1;
-      set({ altitude: { ...state.altitude, listStale: true } });
+      if (state.altitude.list !== null && !state.altitude.listStale) set({ altitude: { ...state.altitude, listStale: true } });
     }
     if (state.route.page === 'home' && state.altitude.level !== 'me') {
       // More pages than the sidebar shows: Home reads them all again, so a project gone from (or new to) a later page counts.
@@ -2691,7 +2691,11 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
       ...sameProjectRoute(fresh),
       toast: detail.archived ? `Archived ${fresh.name}` : `Restored ${fresh.name}` });
     if (detail.archived) projectLeftHere(project.project_id);
-    else if (state.altitude.list !== null) set({ altitude: { ...state.altitude, list: [...state.altitude.list, fresh] } });
+    else if (state.altitude.list !== null) {
+      // A read of every page on its way may predate the restore: it no longer counts.
+      listToken += 1;
+      set({ altitude: { ...state.altitude, list: [...state.altitude.list, fresh] } });
+    }
     // Home zoomed out reads a project restored to your list (and lets go of one archived).
     if (state.route.page === 'home' && state.altitude.level !== 'me') void loadAltitude(false);
     listChanged();

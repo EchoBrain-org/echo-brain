@@ -500,3 +500,20 @@ describe('Home altitudes keep their copy of a long list while they read it again
   });
 });
 
+describe('Home altitudes drop a read of every page that a change overtook', () => {
+  it('a read of every page still on its way when your projects change out of sight does not land', async () => {
+    lists = { active: numbered(12), archived: [] };
+    const store = await startStore();
+    const release = held.hold('projects.list');
+    store.zoomTo('projects');
+    await flush(20);
+    store.zoomTo('me');
+    lists = { active: [...numbered(12), project(13, 10, { name: 'Joined later' })], archived: [] };
+    await store.loadProjects();
+    await flush(40);
+    release(ok({ items: numbered(12).slice(0, 10), next_cursor: 'more' }));
+    await flush(200);
+    expect(store.getState().altitude.list).toBeNull();
+  });
+});
+
