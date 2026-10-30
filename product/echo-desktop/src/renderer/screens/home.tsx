@@ -229,10 +229,10 @@ function Top({ state }: { state: State }) {
 function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
   const home = state.home;
   const failure = home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>;
-  if (home?.failure && rows.length === 0) return <section class="needs" data-testid="home-error">{failure}</section>;
+  if (home?.failure && rows.length === 0) return <section class="needs-section" data-testid="home-error">{failure}</section>;
   if (rows.length === 0) {
     return (
-      <section class="needs" data-testid="needs" aria-busy={busy(home)}>
+      <section class="needs-section" data-testid="needs" aria-busy={busy(home)}>
         <div class="home-clear" data-testid="home-clear">{home && !home.loading && 'Nothing needs you'}</div>
       </section>
     );
@@ -241,7 +241,7 @@ function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
   const waiting = needsCount(state);
   const { shown, name } = needRowsOf(state, rows);
   return (
-    <section class="needs" data-testid="needs" aria-busy={busy(home)} aria-labelledby="needs-head">
+    <section class="needs-section" data-testid="needs" aria-busy={busy(home)} aria-labelledby="needs-head">
       <h2 class="home-label" id="needs-head" data-testid="needs-head">Needs you{waiting > 0 && <span class="n">{waiting}</span>}</h2>
       {homeCategories(rows).map(category => (category.rows.length === 1 ? shown(category.rows[0]!)
         : <CategoryLine key={category.category} category={category} name={name(category.rows[0]!)} />))}
@@ -262,7 +262,7 @@ function CategoryList({ state, category }: { state: State; category: NeedCategor
   const { shown } = needRowsOf(state, all);
   return (
     <div class="alt-level-body">
-      <section class="needs" data-testid="needs" data-category={category} aria-busy={busy(state.home)} aria-labelledby="need-list-head">
+      <section class="needs-section" data-testid="needs" data-category={category} aria-busy={busy(state.home)} aria-labelledby="need-list-head">
         <h2 class="need-list-head" id="need-list-head" data-testid="need-list-head">
           <span class="need-list-verb">{CATEGORY[category].verb}</span><span class="need-category-count">{rows.length}</span>
         </h2>

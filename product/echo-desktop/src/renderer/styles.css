@@ -805,7 +805,7 @@ button.toast:hover { background: var(--panel); }
 
 /* Home's top: what needs you, by kind, then your projects. One row per decision or item: the verb and its shape on the left, then its
    title, and a second line that opens with where and when; two or more of one kind are one line that opens their list. */
-.needs { display: flex; flex-direction: column; gap: 2px; }
+.needs-section { display: flex; flex-direction: column; gap: 2px; }
 .home-label { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 0 14px 6px; font-size: 13px; font-weight: 600; color: var(--text); }
 .home-label .n { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--faint); }
 .need-row { display: flex; align-items: flex-start; gap: 16px; width: 100%; flex-shrink: 0; padding: 14px; border: 0; border-radius: 12px; text-align: left; background: transparent; }
