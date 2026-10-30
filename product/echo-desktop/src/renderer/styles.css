@@ -1036,8 +1036,10 @@ button.items-line:hover { background: var(--raise); }
 .card-delta-label.needs::before { width: 7px; height: 7px; border: 0; border-radius: 1px; background: var(--approve); transform: rotate(45deg); }
 .card-delta-now { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; color: var(--muted); }
 
-/* Follow-ups (follow-ups thread v1): a list grouped by status, each row opening its page; Send and Dismiss under the Not sent rows. */
-.column.follow-ups { gap: 20px; padding: 10px 0 4px; }
+/* Follow-ups (One place to look v1, K): every follow-ups list the same: an owner line that filters, then one flat row per
+   follow-up, current work first, each closed status folded at the end; Send and Dismiss under the current rows. */
+/* Positioned, so what only a screen reader hears (your list's heading, a foot with nothing to say) scrolls with it. */
+.column.follow-ups { position: relative; gap: 12px; padding: 10px 0 4px; }
 .follow-ups-head { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
 .follow-ups-head h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
 .follow-ups-head h1:focus, #follow-up-title:focus, #decision-ask:focus { outline: none; }
@@ -1052,28 +1054,68 @@ button.items-line:hover { background: var(--raise); }
 .result-line { flex-shrink: 0; font-size: 13.5px; color: var(--muted); }
 .result-line.error { color: var(--danger); }
 .result-line .link-button { padding: 2px 4px; }
-.follow-ups-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
-.follow-ups-rows { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
-.follow-ups-rows > * + * { border-top: 1px solid var(--line); }
-.follow-ups-rows > .picker { border-top: 0; }
-.follow-ups-rows .picker { margin: 0 14px 12px 42px; }
-.follow-up-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; cursor: pointer; }
-.follow-up-row:first-child { border-radius: 11px 11px 0 0; }
-.follow-up-row:last-child { border-radius: 0 0 11px 11px; }
-.follow-up-row:only-child { border-radius: 11px; }
-.follow-up-row:hover { background: var(--hover); }
-.follow-up-row .send-box { margin: 0; }
-.follow-up-open { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 0; border: 0; text-align: left; color: inherit; background: transparent; }
-.follow-up-title { font-size: 14.5px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
-.follow-up-sub { font-size: 12.5px; color: var(--faint); }
+/* The owner line: All, pressed the way the sidebar marks its current row, then a face per owner with what they hold open. */
+.follow-ups-owners { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding-left: 4px; }
+.follow-ups-owner { box-sizing: border-box; height: 24px; padding: 0 8px 0 2px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 6px;
+  color: var(--text); background: transparent; }
+.follow-ups-owner:hover { background: var(--hover); }
+.follow-ups-owner.all { margin-right: 4px; padding: 0 8px; font-size: 13px; font-weight: 600; }
+.follow-ups-owner[aria-pressed="true"] { background: var(--selected); }
+.follow-ups-owner .face, .follow-up-owner .face { width: 20px; height: 20px; font-size: 8.5px; }
+.follow-ups-n { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--faint); }
+/* No owner: an empty hairline circle where a face would be. */
+.follow-up-none { flex: none; box-sizing: border-box; width: 20px; height: 20px; border-radius: 50%; border: 1.3px solid var(--line-strong); }
+/* One row per follow-up: [tick] | state | title (a faint kind mark for a document) | owner | project | age. The title column is
+   fixed, so every owner sits beside its follow-up and all owners line up for scanning down. */
+.follow-ups-rows { flex-shrink: 0; display: flex; flex-direction: column; }
+.follow-up-row { box-sizing: border-box; width: 100%; height: 40px; flex-shrink: 0; padding: 0 12px; display: grid; align-items: center; column-gap: 12px;
+  grid-template-columns: 20px minmax(0, 240px) minmax(0, 1fr) 16px 40px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.follow-up-row.ticking { grid-template-columns: 16px 20px minmax(0, 240px) minmax(0, 1fr) 16px 40px; }
+.follow-ups-rows > .follow-up-row:last-child { border-bottom: 0; }
+.follow-up-row:hover, .follow-up-row:focus-within { background: var(--hover); }
+.follow-ups-rows > .picker { margin: 4px 12px 10px 44px; }
+/* The state mark fills as a follow-up moves: a dashed ring (not sent), a ring (open), a tick (done); a struck ring, dimmed
+   (dismissed). Orange only where it needs attention, by Home's rule: a ring, then solid past a week. */
+.follow-up-state { display: grid; place-items: center; }
+.follow-up-state[data-mark="not_relevant"] { opacity: 0.6; }
+.follow-up-mark { overflow: visible; color: var(--faint); fill: none; stroke: currentColor; stroke-width: 1.5; }
+.follow-up-mark .fill { fill: currentColor; stroke: none; }
+.follow-up-mark .tick { stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.follow-up-mark.signal, .follow-up-mark.late { color: var(--signal); }
+.follow-up-open { min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; border: 0; text-align: left; font-size: 13.5px; color: inherit; background: transparent; }
+.follow-up-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.follow-up-kind { flex: none; display: inline-flex; color: var(--faint); }
+.follow-up-row .owner-slot { min-width: 0; display: flex; align-items: center; }
+.follow-up-owner { min-width: 0; max-width: 100%; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.follow-up-owner-name { overflow: hidden; text-overflow: ellipsis; }
+/* Not sent yet: it is not with them yet, so the owner steps back like the dashed mark. */
+.follow-up-owner.later { color: var(--faint); }
+.follow-up-owner.later .face { opacity: 0.6; }
+.follow-up-owner-button { min-width: 0; max-width: 100%; display: inline-flex; align-items: center; margin-left: -4px; padding: 2px 8px 2px 4px; border: 0; border-radius: 6px;
+  color: inherit; background: transparent; }
+.follow-up-owner-button:hover:not([aria-disabled="true"]), .follow-up-owner-button[aria-expanded="true"] { background: var(--selected); }
+.follow-up-pick { font-size: 13.5px; font-weight: 500; color: var(--signal-text); }
+.follow-up-tile { display: grid; place-items: center; }
+.follow-up-tile .alt-tile { width: 16px; height: 16px; font-size: 9px; border-radius: 5px; }
+.follow-up-age { font-family: var(--mono); font-size: 12.5px; color: var(--faint); text-align: right; white-space: nowrap; }
 /* A row's title while ECHO reads it in its tool: what it is and its meeting, faint, gently pulsing until the read fills it. */
 .reading-title { color: var(--faint); animation: reading 1.6s infinite ease-in-out; }
 @keyframes reading { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 @media (prefers-reduced-motion: reduce) { .reading-title { animation: none; } }
-/* A closed group opens and closes ("Done · 12"). */
-.follow-ups-group .disclosure { margin-left: -4px; padding: 2px 4px; }
-/* Right under the Not sent rows; held at the window's foot only while the list runs past it, the rows fading under it. */
-.follow-ups-foot { position: sticky; bottom: 0; flex-shrink: 0; display: flex; align-items: center; gap: 10px; margin-top: -8px; padding: 8px 0; background: var(--ink); box-shadow: 0 8px 0 var(--ink); }
+/* A closed status, folded at the end ("Done 12"): Home's section label that opens and closes; its rows step back. */
+.follow-ups-fold { flex-shrink: 0; display: flex; flex-direction: column; margin-top: 14px; }
+.follow-ups-fold-head { align-self: flex-start; display: flex; align-items: baseline; gap: 8px; padding: 2px 12px 6px; border: 0; border-radius: 6px;
+  font-size: 13px; font-weight: 600; color: var(--text); background: transparent; }
+.follow-ups-fold-head svg { align-self: center; color: var(--faint); transition: transform 120ms ease; }
+.follow-ups-fold-head:hover svg { color: var(--text); }
+.follow-ups-fold-head[aria-expanded="true"] svg { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .follow-ups-fold-head svg { transition: none; } }
+.follow-ups-fold .follow-up-title { color: var(--muted); }
+.follow-ups-fold .face, .follow-ups-fold .alt-tile { opacity: 0.6; }
+/* Your list's last line: when ECHO last checked one of yours, faint. */
+.follow-ups-checked { flex-shrink: 0; padding: 4px 12px 0; font-size: 12.5px; color: var(--faint); }
+/* Right under the current rows; held at the window's foot only while the list runs past it, the rows fading under it. */
+.follow-ups-foot { position: sticky; bottom: 0; flex-shrink: 0; display: flex; align-items: center; gap: 10px; margin-top: -4px; padding: 8px 0; background: var(--ink); box-shadow: 0 8px 0 var(--ink); }
 .follow-ups-foot::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 12px; background: linear-gradient(transparent, var(--ink)); pointer-events: none; }
 .follow-ups-foot .primary-button.small { align-self: auto; }
 .follow-ups-foot .result-line { min-width: 0; }

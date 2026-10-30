@@ -26,7 +26,7 @@ import { renamedProject, reread } from './feed.js';
 import { askedWhen } from './format.js';
 import * as freshness from './freshness.js';
 import { meetingMessage, message } from './messages.js';
-import { ACTIVE_STATES, CLOSED_STATES, firstName, reopenSends, sentWords } from './needs.js';
+import { ACTIVE_STATES, CLOSED_STATES, firstName, ownerRows, reopenSends, sentWords } from './needs.js';
 
 /** Only me: everything only you can read, filed in a project or not (ADR-0049). Follow-ups: everything you sent, own or last handed on. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'only-me' } | { page: 'tools' } | { page: 'decision' }
@@ -6439,10 +6439,11 @@ type ListSource = { scope: 'involved' | 'record' | 'project'; id?: string; ids?:
 
 /**
  * A follow-ups list, a page at a time. Current work (Not sent and Open) shows
- * first, so it is never behind More; each closed group (Done, Dismissed) shows
- * its rows once opened: a meeting's and a notification's start open, yours
- * and a project's closed ("Done · 12"). Not sent rows you may send are ticked
- * to Send or Dismiss them.
+ * first, as one list, so it is never behind More; each closed group (Done,
+ * Dismissed) shows its rows once opened: a meeting's and a notification's
+ * start open, yours and a project's closed ("Done · 12"). Not sent rows you
+ * may send are ticked to Send or Dismiss them. Its owner line shows one
+ * owner's rows at a time, or everyone's.
  */
 export type FollowUpList = ListSource & ListFields;
 
@@ -6475,6 +6476,11 @@ interface ListFields extends ChangeView {
   expanded: Readonly<Partial<Record<ClosedState, true>>>;
   /** The row whose page was opened from this list last: coming back, it takes the focus. */
   opened?: string;
+  /**
+   * The owner line's filter (One place to look v1, F3): only this owner's rows (their membership id, or `none` for the rows
+   * waiting for one); none, everyone's. Kept with the list, so it holds through its item pages and reads; a new list has none.
+   */
+  owner?: string;
 }
 
 /** One follow-up's page (F5): from a row with the row's copy, or by its id alone, then read again. */
@@ -6846,6 +6852,25 @@ export function retryFollowUps(): Promise<void> {
   return list?.failed ? readList(list.seq, list.failed.read) : Promise.resolve();
 }
 
+/**
+ * The owner line (One place to look v1, F3 and F4): only one owner's rows
+ * (`none`: those waiting for one), or, picked again or on All (`null`),
+ * everyone's. Rows it hides are unticked, so Send and Dismiss act only on rows
+ * you see. Not while a change is on its way.
+ */
+export function filterOwner(owner: string | null): void {
+  const list = shownView('list');
+  if (!list || list.busy) return;
+  const next = owner === null || owner === list.owner ? undefined : owner;
+  const shown = new Set(ownerRows(list.items, next).map(item => item.item_id));
+  setView({ ...list, owner: next, picker: null, ticks: Object.fromEntries(Object.entries(list.ticks).filter(([item_id]) => shown.has(item_id))) });
+}
+
+/** The Not sent rows a list would send: ticked, sendable, and shown under its owner filter. */
+export function tickedRows(list: FollowUpList): OpenItemView[] {
+  return ownerRows(list.items, list.owner).filter(item => list.ticks[item.item_id] && sendable(item));
+}
+
 /** A Not sent row's tick. */
 export function tickFollowUp(item_id: string): void {
   const list = shownView('list');
@@ -6895,7 +6920,7 @@ function notSent(include: boolean): string {
 }
 
 /**
- * Send N or Dismiss N: the ticked Not sent rows, one send per check (run)
+ * Send N or Dismiss N: the ticked Not sent rows that show, one send per check (run)
  * listing only those items, to their owners (`include`) or dismissed (F1),
  * for the account shown when it was clicked; it stops once the list closes or
  * the account changes. The list stays: it is read again rows only, which
@@ -6908,7 +6933,7 @@ export async function sendTicked(include: boolean): Promise<void> {
   const list = shownView('list');
   const account = expect();
   if (!list || !account || list.busy || list.loading || state.concealed) return;
-  const ticked = list.items.filter(item => list.ticks[item.item_id] && sendable(item));
+  const ticked = tickedRows(list);
   if (ticked.length === 0) return;
   setView({ ...list, busy: true, said: null, picker: null });
   const sends: Record<string, SendCommand> = { ...list.sends };

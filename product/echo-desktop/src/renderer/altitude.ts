@@ -26,7 +26,7 @@ export type Health = 'on' | 'risk' | 'off';
 const waiting = (item: OpenItemView) => item.state === 'unsent' || item.state === 'open';
 
 /** Since when it has waited: an unsent one since it was made, an open one since it was sent or last set; null once closed. */
-function waitingSince(item: OpenItemView): string | null {
+export function waitingSince(item: OpenItemView): string | null {
   if (item.state === 'unsent') return item.created_at;
   if (item.state !== 'open') return null;
   const moved = [item.sent_at, item.state_set_at].filter((at): at is string => at !== null).sort();
@@ -55,6 +55,11 @@ export function needsAttention(item: OpenItemView, now: number): boolean {
   if (unowned(item)) return true;
   const elapsed = waitedMs(item, now)!;
   return elapsed > (item.state === 'unsent' ? UNSENT_DAYS : OPEN_DAYS) * DAY_MS;
+}
+
+/** Waiting longer than a week, by the clock: what puts its project off track, and what a follow-ups row marks solid. */
+export function overdue(item: OpenItemView, now: number): boolean {
+  return (waitedMs(item, now) ?? 0) > OFF_TRACK_DAYS * DAY_MS;
 }
 
 /** Someone a row shows as a face, and whether one of theirs needs attention. */
@@ -89,7 +94,7 @@ export function rollup(rows: readonly OpenItemView[], counts: { unsent: number; 
   const kept = rows.filter(item => item.state !== 'not_relevant');
   const flagged = kept.filter(item => needsAttention(item, now));
   const waits = kept.flatMap(item => { const days = waitedDays(item, now); return days === null ? [] : [days]; });
-  const late = flagged.some(item => (waitedMs(item, now) ?? 0) > OFF_TRACK_DAYS * DAY_MS);
+  const late = flagged.some(item => overdue(item, now));
   return {
     done: counts ? counts.done : kept.filter(item => item.state === 'done').length,
     total: counts ? counts.unsent + counts.open + counts.done : kept.length,
