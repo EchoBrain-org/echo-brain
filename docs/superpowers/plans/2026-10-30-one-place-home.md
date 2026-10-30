@@ -23,7 +23,7 @@ The base commit exports `Tile`, `FaceMark`, `NoOwner` and `KIND_ICON` from
 **Spec:** `docs/product/2026-10-30-one-place-home-v1.md`. Read it first. It is
 the binding authority, and this plan argues from it.
 
-**Code map:** `/Users/zhenye/Desktop/echo-brain/.worktrees/home-altitude/.superpowers/sdd/2026-10-30-one-place-home/map-<area>.json`
+**Code map:** `.superpowers/sdd/2026-10-30-one-place-home/map-<area>.json`
 (`home`, `sidebar`, `followups`, `onlyme`, `runs`). Each map gives every code
 site with file:line, what it does today and what it needs, and every test that
 breaks. Read your track's maps before you write code.
@@ -195,7 +195,7 @@ cover where they own the code:
 
 ## Track A: Home, title row, sidebar
 
-**Worktree:** `/Users/zhenye/Desktop/echo-brain/.worktrees/oph-home`, branch
+**Worktree:** `.worktrees/oph-home`, branch
 `feat/oph-home`.
 **Maps:** `map-home.json`, `map-sidebar.json`.
 
@@ -248,7 +248,7 @@ cover where they own the code:
 
 ## Track B: Follow-ups
 
-**Worktree:** `/Users/zhenye/Desktop/echo-brain/.worktrees/oph-followups`,
+**Worktree:** `.worktrees/oph-followups`,
 branch `feat/oph-followups`.
 **Map:** `map-followups.json`.
 
@@ -281,7 +281,7 @@ branch `feat/oph-followups`.
 
 ## Track C: Only me
 
-**Worktree:** `/Users/zhenye/Desktop/echo-brain/.worktrees/oph-onlyme`, branch
+**Worktree:** `.worktrees/oph-onlyme`, branch
 `feat/oph-onlyme`.
 **Map:** `map-onlyme.json`.
 
@@ -307,7 +307,7 @@ branch `feat/oph-followups`.
 
 ## Track D: Checks keep moving
 
-**Worktree:** `/Users/zhenye/Desktop/echo-brain/.worktrees/oph-runs`, branch
+**Worktree:** `.worktrees/oph-runs`, branch
 `feat/oph-runs`.
 **Map:** `map-runs.json`.
 
