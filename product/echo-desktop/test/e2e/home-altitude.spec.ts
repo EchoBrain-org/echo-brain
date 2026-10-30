@@ -1,9 +1,12 @@
 // Home (Home altitude v1, One place to look v1), against the fixture Authority's worlds. In `altitude`, Apollo is off track
 // (Mina's ticket open nine days, a follow-up with no owner, Rafael's done), Beacon at risk (Rafael's page open four days, Ari's
 // open today, which waits on Ari: Home's one Update), and two of Ari's wait on others. In `granola-review`, two follow-ups wait
-// on Ari: ECHO-12, Mina's, changed since Ari sent it (Review), and Ari's own PRD page (Update).
+// on Ari: ECHO-12, Mina's, changed since Ari sent it (Review), and Ari's own PRD page (Update). In `granola-owner`, Mina sent Ari
+// three to update, the oldest a ticket from a meeting Ari cannot read ("order six weeks ahead").
 import { expect, test, type Page } from '@playwright/test';
-import { launch, type Launched } from './launch.js';
+import { rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { emit, launch, type Launched } from './launch.js';
 
 let app: Launched;
 test.afterEach(async () => { await app?.close(); });
@@ -340,6 +343,57 @@ test('back from a row’s page the focus is on that row, and once that row is de
   await expect(page.getByTestId('follow-up-said')).toHaveText('Done · Undo');
   await page.keyboard.press('Escape');
   await expect(rows).toHaveCount(1);
+  await expect(prd).toBeFocused();
+});
+
+test('back on a row that Home’s read then moves to the top, the focus stays on that row and the arrows go on from there', async () => {
+  app = await launch('granola-owner');
+  const { page } = app;
+  await page.getByTestId('need-category').and(page.locator('[data-category="update"]')).click();
+  const rows = page.getByTestId('need-row');
+  const vendor = rows.filter({ hasText: 'order six weeks ahead' });
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(2)).toContainText('order six weeks ahead');
+  // The last row's page: Mark done, then Undo, which makes it the newest to update.
+  await vendor.click();
+  const item = page.getByTestId('follow-up');
+  await item.getByRole('button', { name: 'Mark done', exact: true }).click();
+  await expect(page.getByTestId('follow-up-said')).toHaveText('Done · Undo');
+  await page.getByTestId('follow-up-said').getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.getByTestId('follow-up-said')).not.toContainText('Done');
+  // Back: the list as it was left, that row focused; Home's read then moves it to the top, and it keeps the focus.
+  await page.keyboard.press('Escape');
+  await expect(list(page)).toBeVisible();
+  await expect(rows.first()).toContainText('order six weeks ahead');
+  await expect(vendor).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(rows.nth(1)).toBeFocused();
+});
+
+test('Try again in a kind’s list gives the focus back to the row it was on when the failure goes', async () => {
+  app = await launch('granola-review');
+  const { page } = app;
+  await page.getByTestId('need-category').click();
+  const rows = page.getByTestId('need-row');
+  const prd = rows.filter({ hasText: 'Thermostat PRD' });
+  await expect(rows).toHaveCount(2);
+  await page.keyboard.press('ArrowDown');
+  await expect(prd).toBeFocused();
+  // Mina marks ECHO-12 done; the check that tells of it reads Home again while ECHO cannot read the meetings: the list says so
+  // under its row, with Try again.
+  writeFileSync(join(app.home, 'reviews-unavailable'), '');
+  writeFileSync(join(app.home, 'mina-done'), '');
+  await emit(app.app, 'echo-test:wake');
+  const again = list(page).getByRole('button', { name: 'Try again', exact: true });
+  await expect(again).toBeVisible();
+  await expect(rows).toHaveCount(1);
+  await expect(prd).toBeFocused();
+  rmSync(join(app.home, 'reviews-unavailable'));
+  // Try again by the keyboard: the failure goes with it, and the focus is back on the row.
+  await page.keyboard.press('Tab');
+  await expect(again).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(again).toHaveCount(0);
   await expect(prd).toBeFocused();
 });
 
