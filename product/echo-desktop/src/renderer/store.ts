@@ -641,6 +641,8 @@ export interface AltitudeState {
   settled: boolean;
   /** A person's follow-ups are being read live. */
   reading: boolean;
+  /** Why the last read of every page of your projects failed; null once one succeeds. */
+  listFailure: Failure | null;
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
@@ -649,7 +651,7 @@ const ALTITUDE = 'echo.home.altitude';
 const LEVELS: readonly AltLevel[] = ['me', 'projects', 'project', 'person'];
 
 function emptyAltitude(level: AltLevel = 'me'): AltitudeState {
-  return { level, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: false, reading: false };
+  return { level, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: false, reading: false, listFailure: null };
 }
 
 const accountKey = (account: Expect) => `${account.authority} ${account.membership_id}`;
@@ -911,6 +913,7 @@ function forgetAccount(): void {
   altitudeToken += 1;
   altitudeLoading = null;
   altitudeOwed = false;
+  listToken += 1;
   if (settleTimer !== null) { clearTimeout(settleTimer); settleTimer = null; }
   projectsKnown = false;
   emptyBar();
@@ -1342,8 +1345,9 @@ function showList(status: ListStatus, list: State['projects']): void {
   if (status === 'active' && !list.loading && !list.failure) {
     projectsKnown = true;
     if (state.route.page === 'home' && state.altitude.level !== 'me') {
-      const moved = followFocus();
-      if (moved || list.items.some(project => !state.altitude.reads[project.project_id])) void loadAltitude(false);
+      // More pages than the sidebar shows: Home reads them all again, so a project gone from (or new to) a later page counts.
+      if (list.next !== null) void readAltitudeList();
+      else if (followFocus() || list.items.some(project => !state.altitude.reads[project.project_id])) void loadAltitude(false);
     }
   }
 }
@@ -1377,7 +1381,7 @@ function refreshIfOwed(status: ListStatus): void {
 }
 
 /** Pages of your projects of one status, from the first, each with the cursor after it: until they hold `enough` rows, or all. */
-async function readProjectPages(account: Expect, status: ListStatus, enough: number)
+async function readProjectPages(account: Expect, status: ListStatus, enough: number, current: () => boolean = () => true)
   : Promise<{ ok: true; pages: ProjectPage[] } | { ok: false; failure: Failure } | null> {
   const pages: ProjectPage[] = [];
   for (let cursor: string | null = null, rows = 0; ;) {
@@ -1387,7 +1391,7 @@ async function readProjectPages(account: Expect, status: ListStatus, enough: num
     pages.push(result.value);
     rows += result.value.items.length;
     cursor = result.value.next_cursor;
-    if (cursor === null || rows >= enough) return { ok: true, pages };
+    if (cursor === null || rows >= enough || !current()) return { ok: true, pages };
   }
 }
 
@@ -5389,6 +5393,25 @@ export function altitudeProjects(current: State = state): readonly ProjectSummar
   return current.projects.next === null ? current.projects.items : current.altitude.list ?? current.projects.items;
 }
 
+let listToken = 0;
+
+/** Every page of your projects, read for Home; a failure is kept to say so. False when a newer read or another account took over. */
+async function readWholeList(account: Expect, current: () => boolean): Promise<boolean> {
+  const token = ++listToken;
+  const still = () => token === listToken && current();
+  const read = await readProjectPages(account, 'active', Number.POSITIVE_INFINITY, still);
+  if (!still() || read === null) return false;
+  set({ altitude: { ...state.altitude, list: read.ok ? read.pages.flatMap(page => page.items) : state.altitude.list, listFailure: read.ok ? null : read.failure } });
+  return true;
+}
+
+/** Your projects moved while the sidebar shows only its first pages: Home's whole list again, then what it changed. */
+async function readAltitudeList(): Promise<void> {
+  const account = expect();
+  if (!account || !(await readWholeList(account, () => sameAccount(account)))) return;
+  if (followFocus() || altitudeProjects().some(project => !state.altitude.reads[project.project_id])) void loadAltitude(false);
+}
+
 /** Your whole list, once Home knows it: only a project missing from the whole list is gone. */
 function wholeList(): readonly ProjectSummary[] | null {
   if (!projectsKnown) return null;
@@ -5469,36 +5492,44 @@ export function loadAltitude(fresh = true): Promise<void> {
   if (level === 'me') return Promise.resolve();
   altitudeOwed ||= fresh;
   const again = altitudeOwed;
-  const key = [level, project_id, membership_id].join(' ');
+  // A load on its way is joined only for the same zoom over the same projects: one that just joined your list is read.
+  const key = [level, project_id, membership_id, ...altitudeProjects().map(project => project.project_id)].join(' ');
   if (!again && altitudeLoading?.key === key) return altitudeLoading.done;
   const token = ++altitudeToken;
   const mine = () => token === altitudeToken && sameAccount(account);
-  if (!state.altitude.settled && settleTimer === null) settleTimer = setTimeout(settle, SETTLE_MS);
   const run = async () => {
     if (state.projects.next !== null && (again || state.altitude.list === null)) {
-      const read = await readProjectPages(account, 'active', Number.POSITIVE_INFINITY);
+      await readWholeList(account, mine);
       if (!mine()) return;
-      if (read?.ok) set({ altitude: { ...state.altitude, list: read.pages.flatMap(page => page.items) } });
       followFocus();
     }
     const listed = altitudeProjects().map(project => project.project_id);
+    // Nothing to read yet (your projects are still on their way): My projects keeps its order until they come.
+    if (listed.length > 0 && !state.altitude.settled && settleTimer === null) settleTimer = setTimeout(settle, SETTLE_MS);
     const zoomed = state.altitude.level === 'project' ? state.altitude.project_id : null;
-    const due = listed.filter(id => again || id === zoomed || !state.altitude.reads[id] || state.altitude.reads[id]!.failure !== undefined);
+    // Due: everything on a fresh read; else the project zoomed into, and any not read, failed, or cut short by a newer load.
+    const due = listed.filter(id => {
+      const read = state.altitude.reads[id];
+      return again || id === zoomed || !read || read.failure !== undefined || read.loading;
+    });
     await inTurns(due, PROJECT_READS_AT_ONCE, async id => {
       if (!mine()) return;
       const focus = id === zoomed;
       setRead(id, { loading: true, ...(focus ? { reading: true } : {}) });
       const [counts, active, all] = await Promise.all([
         readItems(account, { scope: 'project', id, read: 'counts' }, null, 1),
-        readItems(account, { scope: 'project', id, read: 'rows', states: ['unsent', 'open'] }, null, Number.POSITIVE_INFINITY),
-        focus ? readItems(account, { scope: 'project', id, read: 'rows', states: ['unsent', 'open', 'done'] }, null, Number.POSITIVE_INFINITY) : null,
+        readItems(account, { scope: 'project', id, read: 'rows', states: ['unsent', 'open'] }, null, Number.POSITIVE_INFINITY, mine),
+        focus ? readItems(account, { scope: 'project', id, read: 'rows', states: ['unsent', 'open', 'done'] }, null, Number.POSITIVE_INFINITY, mine) : null,
       ]);
       if (!mine()) return;
       const failed = [counts, active, all].find(read => read !== null && !read.ok);
       if (failed && !failed.ok) { setRead(id, { loading: false, reading: false, failure: failed.failure }); return; }
       const rows = (read: typeof active) => (read.ok ? read.pages.flatMap(page => page.items) : []);
       // Only the project zoomed into keeps its done follow-ups: another's would go stale here, unread again.
-      setRead(id, { loading: false, failure: undefined, counts: counts.ok ? counts.last.summary : null, active: rows(active), all: all ? rows(all) : null });
+      setRead(id, {
+        loading: false, failure: undefined, counts: counts.ok ? counts.last.summary : null, active: rows(active), all: all ? rows(all) : null,
+        ...(focus ? {} : { reading: false }),
+      });
       if (!focus) return;
       // Then what its waiting follow-ups say now in their tools: the first page, as the project's follow-ups list reads it.
       const now = await readItems(account, { scope: 'project', id, states: ['unsent', 'open'] }, null, 1);
@@ -5509,8 +5540,10 @@ export function loadAltitude(fresh = true): Promise<void> {
     if (!mine()) return;
     if (state.altitude.level === 'person' && membership_id !== null) {
       const theirs = listed.flatMap(id => state.altitude.reads[id]?.active ?? [])
-        .filter(item => item.owner.membership_id === membership_id && !unowned(item) && item.kind !== 'action' && (again || !state.altitude.live[item.item_id]));
-      const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()].slice(0, PERSON_LIVE_MAX);
+        .filter(item => item.owner.membership_id === membership_id && !unowned(item) && item.kind !== 'action');
+      // The same first PERSON_LIVE_MAX of theirs each time, however often Home zooms on them; the rest keep stored words.
+      const unread = [...new Map(theirs.map(item => [item.item_id, item])).values()].slice(0, PERSON_LIVE_MAX)
+        .filter(item => again || !state.altitude.live[item.item_id]);
       set({ altitude: { ...state.altitude, reading: unread.length > 0 } });
       await inTurns(unread, PROJECT_READS_AT_ONCE, async item => {
         if (!mine()) return;
@@ -5521,7 +5554,7 @@ export function loadAltitude(fresh = true): Promise<void> {
       set({ altitude: { ...state.altitude, reading: false } });
     }
     altitudeOwed = false;
-    settle();
+    if (listed.length > 0) settle();
   };
   // Started after it is known as the load on its way, so a load asked for meanwhile can join it.
   const done = Promise.resolve().then(run);
@@ -6458,7 +6491,7 @@ interface ItemsQuery {
  * An items read's pages from `cursor`, until they hold `atLeast` rows or there is no next page: each with the cursor it was read
  * from, and the last one's answer (its next cursor, summary and stages). Only a lost account reads the account again.
  */
-async function readItems(account: Expect, query: ItemsQuery, cursor: string | null, atLeast: number)
+async function readItems(account: Expect, query: ItemsQuery, cursor: string | null, atLeast: number, current: () => boolean = () => true)
   : Promise<{ ok: true; pages: { cursor: string | null; items: readonly OpenItemView[] }[]; last: OpenItemsView } | { ok: false; failure: Failure }> {
   const pages: { cursor: string | null; items: readonly OpenItemView[] }[] = [];
   for (let next = cursor, rows = 0; ;) {
@@ -6473,7 +6506,8 @@ async function readItems(account: Expect, query: ItemsQuery, cursor: string | nu
     pages.push({ cursor: next, items: last.items });
     rows += last.items.length;
     next = last.next_cursor;
-    if (next === null || rows >= atLeast) return { ok: true, pages, last };
+    // A read no longer wanted (a newer load took over) asks for no further page.
+    if (next === null || rows >= atLeast || !current()) return { ok: true, pages, last };
   }
 }
 

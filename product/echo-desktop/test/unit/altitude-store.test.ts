@@ -28,8 +28,10 @@ let account: typeof ACCOUNT | { authority: string; membership_id: string; displa
 /** Each project's follow-ups, as the Authority holds them. */
 let rows: Record<string, OpenItemView[]>;
 let failing: Set<string>;
+/** Projects whose rows read answers in two pages. */
+let paged: Set<string>;
 
-type Request = { operation: string; scope?: string; id?: string; read?: string; states?: string[]; item_id?: string };
+type Request = { operation: string; scope?: string; id?: string; read?: string; states?: string[]; item_id?: string; cursor?: string };
 const requests = () => rpc.mock.calls.filter(([name]) => name === 'runs').map(([, params]) => (params as { request: Request }).request);
 const projectReads = (id?: string) => requests().filter(request => request.operation === 'items' && request.scope === 'project' && (id === undefined || request.id === id));
 const live = (request: Request) => request.read === undefined;
@@ -41,6 +43,7 @@ beforeEach(() => {
   account = ACCOUNT;
   rows = { [THERMAL.project_id]: [row('t1', THERMAL), row('t2', THERMAL, { state: 'done' })], [BATTERY.project_id]: [row('b1', BATTERY)] };
   failing = new Set();
+  paged = new Set();
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
     'app.status': () => ok({ signed_in: true, account }),
@@ -56,7 +59,9 @@ beforeEach(() => {
       const summary = { ...EMPTY_SUMMARY, open: all.filter(item => item.state === 'open').length, done: all.filter(item => item.state === 'done').length };
       if (request.read === 'counts') return ok({ items: [], next_cursor: null, summary, stages: [] });
       const items = all.filter(item => !request.states || request.states.includes(item.state));
-      return ok({ items: live(request) ? items.map(item => ({ ...item, reach: 'opened' })) : items, next_cursor: null, summary, stages: [] });
+      const page = paged.has(request.id!) && request.read === 'rows' ? (request.cursor === undefined ? items.slice(0, 1) : items.slice(1)) : items;
+      const next = paged.has(request.id!) && request.read === 'rows' && request.cursor === undefined ? 'page-2' : null;
+      return ok({ items: live(request) ? page.map(item => ({ ...item, reach: 'opened' })) : page, next_cursor: next, summary, stages: [] });
     },
   }, () => lists));
 });
@@ -270,6 +275,109 @@ describe('Home altitudes, reading only what each step needs', () => {
     await store.loadAltitude();
     await flush(80);
     expect(store.getState().altitude.reads[THERMAL.project_id]?.all).toBeNull();
+  });
+});
+
+describe('Home altitudes, when loads are cut short or the list is long', () => {
+  const runsAfter = (from: number) => rpc.mock.calls.slice(from).filter(([name]) => name === 'runs')
+    .map(([, params]) => params as { expect: { membership_id: string }; request: Request });
+  const empty = () => ok({ items: [], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] });
+
+  it('a zoom that cuts a sweep short still reads the projects it left half read', async () => {
+    lists = { active: numbered(6), archived: [] };
+    const store = await startStore();
+    const releases = Array.from({ length: 8 }, () => held.hold('runs'));
+    store.zoomTo('projects');
+    await flush(20);
+    store.zoomTo('project', { project_id: lists.active[5]!.project_id });
+    await flush(20);
+    releases.forEach(release => release(empty()));
+    await flush(300);
+    const reads = store.getState().altitude.reads;
+    expect(lists.active.map(each => reads[each.project_id]?.loading ?? 'unread')).toEqual(Array(6).fill(false));
+  });
+
+  it('a load cut short reads no further page', async () => {
+    paged.add(THERMAL.project_id);
+    rows[THERMAL.project_id] = [row('t1', THERMAL), row('t3', THERMAL)];
+    const store = await startStore();
+    const releases = Array.from({ length: 4 }, () => held.hold('runs'));
+    store.zoomTo('projects');
+    await flush(20);
+    account = { ...ACCOUNT, membership_id: 'another-member' };
+    await store.refreshStatus();
+    const from = rpc.mock.calls.length;
+    releases.forEach(release => release(ok({ items: [row('t1', THERMAL)], next_cursor: 'page-2', summary: EMPTY_SUMMARY, stages: [] })));
+    await flush(200);
+    expect(runsAfter(from).filter(call => call.request.cursor === 'page-2' && call.expect.membership_id === ACCOUNT.membership_id)).toEqual([]);
+  });
+
+  it('a project that joins your list while a sweep is on its way is read', async () => {
+    const store = await startStore();
+    const release = held.hold('runs');
+    store.zoomTo('projects');
+    await flush(20);
+    const added = project(9, 20, { name: 'Late' });
+    lists = { active: [THERMAL, BATTERY, added], archived: [] };
+    await store.loadProjects();
+    release(empty());
+    await flush(200);
+    expect(projectReads(added.project_id).some(request => request.read === 'counts')).toBe(true);
+  });
+
+  it('with more projects than the sidebar’s first page, a project leaving the list sends Home back at once', async () => {
+    lists = { active: numbered(12), archived: [] };
+    const twelfth = lists.active[11]!;
+    const store = await startStore();
+    store.zoomTo('project', { project_id: twelfth.project_id });
+    await flush(200);
+    lists = { active: numbered(11), archived: [] };
+    await store.loadProjects();
+    await flush(200);
+    expect(store.getState().altitude.level).toBe('projects');
+  });
+
+  it('says when it could not read every page of your projects', async () => {
+    lists = { active: numbered(12), archived: [] };
+    let calls = 0;
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }),
+      // The sidebar's own read of every page succeeds; Home's read of them, later, fails on the second page.
+      'projects.list': params => {
+        const cursor = (params as { cursor?: string }).cursor;
+        if (cursor && (calls += 1) > 1) return fail('unavailable', { retryable: true });
+        return ok(cursor ? { items: lists.active.slice(10), next_cursor: null } : { items: lists.active.slice(0, 10), next_cursor: 'more' });
+      },
+      runs: params => ((params as { request: Request }).request.operation === 'items' ? empty() : fail('unavailable', { retryable: true })),
+    }, () => lists));
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(200);
+    expect(store.getState().altitude.listFailure?.code).toBe('unavailable');
+  });
+
+  it('waits for your projects before it settles, so nothing jumps on first open', async () => {
+    const release = held.hold('projects.list');
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(40);
+    vi.advanceTimersByTime(2_000);
+    expect(store.getState().altitude.settled).toBe(false);
+    release(ok({ items: [THERMAL, BATTERY], next_cursor: null }));
+    await flush(200);
+    expect(store.getState().altitude.settled).toBe(true);
+  });
+
+  it('reads at most twenty of a person’s follow-ups live, however often Home zooms on them', async () => {
+    rows[BATTERY.project_id] = Array.from({ length: 25 }, (_, index) => row(`b${index}`, BATTERY));
+    const store = await startStore();
+    store.zoomTo('person', { membership_id: MINA.membership_id, name: MINA.name });
+    await flush(200);
+    store.zoomTo('projects');
+    await flush(80);
+    store.zoomTo('person');
+    await flush(200);
+    expect(new Set(requests().filter(request => request.operation === 'item').map(request => request.item_id)).size).toBe(20);
   });
 });
 

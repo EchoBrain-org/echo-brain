@@ -37,7 +37,7 @@ async function stateWith(altitude: Partial<AltitudeState>, projects: ProjectSumm
     ...getState(), status: { client_version: 'test', signed_in: true, account: ACCOUNT },
     projects: { items: projects, next: null, loading: false, ...list },
     home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
-    altitude: { level: 'projects', project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: true, reading: false, ...altitude },
+    altitude: { level: 'projects', project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: true, reading: false, listFailure: null, ...altitude },
   };
 }
 
@@ -217,6 +217,35 @@ describe('My projects on first open, and without a list', () => {
     const head = byTestId(tree, 'alt-head')[0]!;
     expect(text(head)).toContain('My projects');
     expect(byTestId(head, 'alt-chip').map(chip => chip.props.title)).toEqual(['1 off track', '1 at risk', '1 on track']);
+  });
+});
+
+describe('a long or unread list of projects', () => {
+  it('names and opens the Project stop for a project past the sidebar’s first page', async () => {
+    const { Stops } = await import('../../src/renderer/screens/altitude.js');
+    const far = project(12, 19, { name: 'Far away' });
+    const tree = render(Stops({ state: await stateWith({ level: 'project', project_id: far.project_id, list: [THERMAL, CERT, PACKAGING, far] },
+      [THERMAL, CERT, PACKAGING], { next: 'more' }) }));
+    const stop = byTestId(tree, 'alt-stop').find(each => each.props['data-level'] === 'project')!;
+    expect(stop.props['aria-label']).toBe('Project, Far away');
+    expect(stop.props.disabled).toBe(false);
+  });
+
+  it('a person says nothing is waiting only once your projects themselves are read', async () => {
+    const { PersonLevel } = await import('../../src/renderer/screens/altitude.js');
+    const someone = { level: 'person' as const, membership_id: 'mem_nobody', name: 'Nobody Here', reads: {} };
+    expect(text(render(PersonLevel({ state: await stateWith(someone, [], { loading: true }) })))).not.toContain('Nothing of theirs is waiting');
+    const failed = text(render(PersonLevel({ state: await stateWith(someone, [], { failure: { code: 'unavailable', retryable: true } }) })));
+    expect(failed).not.toContain('Nothing of theirs is waiting');
+    expect(failed).toContain('Couldn’t read every project just now');
+  });
+
+  it('says when every page of your projects could not be read', async () => {
+    const { MyProjects, PersonLevel } = await import('../../src/renderer/screens/altitude.js');
+    const listFailure = { code: 'unavailable', retryable: true };
+    expect(text(render(MyProjects({ state: await stateWith({ reads: READS, listFailure }) })))).toContain('Couldn’t read every project just now');
+    expect(text(render(PersonLevel({ state: await stateWith({ level: 'person', membership_id: 'mem_mina', name: 'Mina Patel', reads: READS, listFailure }) }))))
+      .toContain('Couldn’t read every project just now');
   });
 });
 

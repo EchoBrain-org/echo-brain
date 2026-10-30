@@ -1164,3 +1164,4 @@ button.alt-group-head:hover, button.alt-group-head:focus-visible { color: var(--
 .alt-head > :not(h2) { flex-shrink: 0; }
 .alt-group-head > * { flex-shrink: 0; }
 .alt-group-head .alt-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alt-level:focus { outline: none; }

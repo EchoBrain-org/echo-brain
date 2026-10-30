@@ -5,7 +5,7 @@ import { byDecision, byOwner, byProject, needsAttention, rollup, unowned, waited
 import { identity, initial, initials } from '../format.js';
 import { itemKind, itemTitle, monthDay } from '../needs.js';
 import {
-  altitudeProjects, awaitingLive, loadProjects, openFollowUp, openFollowUps, openNewProject, openProject, shownItem, zoomOut, zoomTo, type ProjectRead, type State,
+  altitudeProjects, awaitingLive, loadProjects, openFollowUp, openFollowUps, openNewProject, openProject, shownItem, zoomOut, zoomTo, type AltLevel, type ProjectRead, type State,
 } from '../store.js';
 import { Calendar, Chevron, Doc, Folder, Grid, HealthDot, KindMark, Locate, OnePerson, Page, Plus, Ring, Ticket, Ticks } from './icons.js';
 
@@ -104,7 +104,7 @@ function GroupHead({ children }: { children: ComponentChildren }) {
 /** The stops: My projects, the project and the person Home last zoomed on, and Me. */
 export function Stops({ state }: { state: State }) {
   const { level, project_id, membership_id, name } = state.altitude;
-  const project = project_id === null ? null : state.projects.items.find(each => each.project_id === project_id) ?? null;
+  const project = project_id === null ? null : altitudeProjects(state).find(each => each.project_id === project_id) ?? null;
   const person = membership_id !== null && name !== null ? { membership_id, name } : null;
   const stop = (at: 'projects' | 'project' | 'person', label: string, words: string, mark: ComponentChildren, disabled: boolean) => (
     <button type="button" class={`alt-stop${level === at ? ' on' : ''}`} data-testid="alt-stop" data-level={at} aria-label={label} title={label}
@@ -176,6 +176,7 @@ export function MyProjects({ state }: { state: State }) {
           <span key={health} class="alt-chip" data-testid="alt-chip" title={`${count(health)} ${HEALTH[health].toLowerCase()}`}><HealthDot health={health} />{count(health)}</span>
         ))}
       </header>
+      {state.altitude.listFailure && <div class="alt-unread">Couldn’t read every project just now</div>}
       {/* On first open the rows keep your list's order while their reads come in, so nothing moves under the pointer. */}
       {!state.altitude.settled ? <section class="alt-group" data-testid="alt-group" data-group="reading">{rows.map(row)}</section> : <>
         {(['off', 'risk', 'on'] as const).map(health => {
@@ -256,8 +257,9 @@ export function PersonLevel({ state }: { state: State }) {
   // A follow-up filed in two projects shows in both, and counts once.
   const theirs = [...new Map(groups.flatMap(group => group.rows).map(item => [item.item_id, item])).values()];
   const needs = theirs.filter(item => needsAttention(item, now)).length;
-  const failed = reads.some(read => read?.failure);
-  const read = reads.every(read => read !== undefined && !read.failure && !unknown(read));
+  // Your projects themselves read (or none to read), and each of them read: only then is "nothing waiting" true.
+  const failed = reads.some(read => read?.failure) || Boolean(state.projects.failure) || Boolean(state.altitude.listFailure);
+  const read = !failed && (projects.length > 0 || !state.projects.loading) && reads.every(read => read !== undefined && !unknown(read));
   return (
     <div class="alt-level-body" data-testid="alt-person-level">
       <header class="alt-head" data-testid="alt-head">
@@ -302,35 +304,47 @@ function pinch(event: WheelEvent): void {
   else if (level === 'person' && id && target?.dataset.name) zoomTo('person', { membership_id: id, name: target.dataset.name });
 }
 
-/** ↑ and ↓ move between rows once one has the focus; the Ask bar keeps its own keys. */
+/** ↑ and ↓ move between rows once one (or the level itself) has the focus; the Ask bar keeps its own keys. */
 function arrows(event: KeyboardEvent): void {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
   const here = document.activeElement;
+  const box = event.currentTarget as HTMLElement;
+  const all = [...box.querySelectorAll<HTMLElement>('[data-alt-nav]:not([disabled])')];
+  if (here === box) {
+    if (event.key === 'ArrowDown' && all[0]) { event.preventDefault(); all[0].focus(); }
+    return;
+  }
   if (!(here instanceof HTMLElement) || !here.hasAttribute('data-alt-nav')) return;
-  const all = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[data-alt-nav]:not([disabled])')];
   const next = all[all.indexOf(here) + (event.key === 'ArrowDown' ? 1 : -1)];
   if (!next) return;
   event.preventDefault();
   next.focus();
 }
 
+const DEPTH: Readonly<Record<AltLevel, number>> = { me: 0, projects: 1, project: 2, person: 3 };
+
 /**
  * Home zoomed out: the altitude it shows, re-made at each zoom so it eases in.
  * A zoom that took away the row with the focus (Enter on it, Escape from it)
- * gives the focus to the row it came from on the way out, else the first row.
+ * gives the focus, on the way out, to the row it came from; on the way in, to
+ * the first row; with no rows yet, to the level itself, where ↓ finds them.
  */
 export function Altitude({ state }: { state: State }) {
   const { level, project_id, membership_id } = state.altitude;
   const box = useRef<HTMLDivElement>(null);
+  const was = useRef(level);
   useEffect(() => {
+    const before = was.current;
+    was.current = level;
     const root = box.current;
     if (!root || (document.activeElement !== null && document.activeElement !== document.body)) return;
-    const from = level === 'projects' && project_id !== null ? `project:${project_id}` : level === 'project' && membership_id !== null ? `person:${membership_id}` : null;
+    const out = DEPTH[level] < DEPTH[before];
+    const from = !out ? null : level === 'projects' && project_id !== null ? `project:${project_id}` : level === 'project' && membership_id !== null ? `person:${membership_id}` : null;
     const back = from === null ? null : root.querySelector<HTMLElement>(`[data-zoom="${CSS.escape(from)}"]`);
-    (back ?? root.querySelector<HTMLElement>('[data-alt-nav]:not([disabled])'))?.focus();
+    (back ?? root.querySelector<HTMLElement>('[data-alt-nav]:not([disabled])') ?? root).focus();
   }, [level, project_id, membership_id]);
   return (
-    <div class="alt-level" ref={box} key={`${level} ${project_id} ${membership_id}`} onWheel={pinch} onKeyDown={arrows}>
+    <div class="alt-level" ref={box} tabIndex={-1} key={`${level} ${project_id} ${membership_id}`} onWheel={pinch} onKeyDown={arrows}>
       {level === 'project' ? <ProjectLevel state={state} /> : level === 'person' ? <PersonLevel state={state} /> : <MyProjects state={state} />}
     </div>
   );

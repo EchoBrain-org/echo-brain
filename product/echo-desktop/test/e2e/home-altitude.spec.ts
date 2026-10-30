@@ -113,3 +113,16 @@ test('a trackpad pinch zooms: spread over a project to go in, pinch to come out'
   await expect(page.getByTestId('alt-projects')).toBeVisible();
 });
 
+test('zooming into a project puts the focus on its first row, not on someone from an earlier zoom', async () => {
+  const page = await myProjects();
+  await page.getByTestId('alt-project').first().click();
+  await page.getByTestId('alt-owner').filter({ hasText: 'Mina Patel' }).click();
+  await expect(page.getByTestId('alt-person-level')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('alt-project').first()).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('alt-project-level')).toBeVisible();
+  await expect(page.getByTestId('alt-decision').first()).toBeFocused();
+});
+
