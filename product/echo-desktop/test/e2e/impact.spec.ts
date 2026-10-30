@@ -94,6 +94,8 @@ test('a meeting approved to two places has both its checks started and finished 
   const away = homeReads();
   await expect.poll(() => startedRuns().length, { timeout: 30_000 }).toBe(2);
   await expect.poll(lastFinished, { timeout: 30_000 }).toBe(true);
+  // Each started once: as many starts as checks.
+  expect(startedRuns()).toHaveLength(2);
   expect(new Set(startedRuns()).size).toBe(2);
   // Home's own reads waited: they happen once Home shows, which has what the checks found.
   expect(homeReads()).toBe(away);
@@ -113,7 +115,8 @@ test('Home opened while a check runs takes over from the page before it, and sta
   await expect(page.getByTestId('need-row').filter({ hasText: 'follow-ups to send' })).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => startedRuns().length, { timeout: 30_000 }).toBe(2);
   await expect.poll(lastFinished, { timeout: 30_000 }).toBe(true);
-  // Each check was started once, by whichever look came first.
+  // Each check was started once, by whichever look came first: as many starts as checks.
+  expect(startedRuns()).toHaveLength(2);
   expect(new Set(startedRuns()).size).toBe(2);
 });
 
@@ -130,6 +133,8 @@ for (const [where, away, back] of [
     const before = homeReads();
     await expect.poll(() => startedRuns().length, { timeout: 30_000 }).toBe(2);
     await expect.poll(lastFinished, { timeout: 30_000 }).toBe(true);
+    // Each started once: as many starts as checks.
+    expect(startedRuns()).toHaveLength(2);
     expect(new Set(startedRuns()).size).toBe(2);
     // Nothing of Home was read meanwhile; back, it reads what the checks found.
     expect(homeReads()).toBe(before);
