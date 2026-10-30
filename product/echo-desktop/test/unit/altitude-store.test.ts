@@ -1,0 +1,171 @@
+// Home altitudes in the store (Home altitude v1): what each altitude reads, and when it reads nothing; zooming in and out; a
+// project's read failing alone; and nothing of one account's altitude surviving another's sign-in.
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
+import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+
+const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
+vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
+
+const THERMAL = project(1, 30, { name: 'Thermal' });
+const BATTERY = project(2, 29, { name: 'Battery pack' });
+const MINA = { membership_id: 'mem_mina', name: 'Mina Patel', active: true };
+
+/** A follow-up in `of`, owned by Mina unless overridden. */
+function row(id: string, of: ProjectSummary, extra: Partial<OpenItemView> = {}): OpenItemView {
+  return {
+    item_id: `itm_${id}`, run_id: 'run_1', kind: 'ticket',
+    decision: { approval_id: 'apr_1', record_sha256: 'sha256:1', title: 'Pilot planning', first_line: null, approved_at: '2026-10-20T10:00:00.000Z', project_ids: [of.project_id] },
+    relation: 'conflicts', expected: 'launch next week', approver: MINA, owner: { ...MINA, match: 'name' }, waits_on: 'owner', state: 'open',
+    created_at: '2026-10-20T10:00:00.000Z', sent_at: '2026-10-20T11:00:00.000Z', state_set_at: '2026-10-20T11:00:00.000Z', state_set_by: MINA,
+    owner_set_at: null, owner_set_by: null, send_included: true, check: null, can: { set_state: true, assign: true }, reach: 'not_read', ...extra,
+  };
+}
+
+let held: Held;
+let lists: { active: ProjectSummary[]; archived: ProjectSummary[] };
+let account: typeof ACCOUNT | { authority: string; membership_id: string; display_name: string; role: string };
+/** Each project's follow-ups, as the Authority holds them. */
+let rows: Record<string, OpenItemView[]>;
+let failing: Set<string>;
+
+type Request = { operation: string; scope?: string; id?: string; read?: string; states?: string[]; item_id?: string };
+const requests = () => rpc.mock.calls.filter(([name]) => name === 'runs').map(([, params]) => (params as { request: Request }).request);
+const projectReads = (id?: string) => requests().filter(request => request.operation === 'items' && request.scope === 'project' && (id === undefined || request.id === id));
+const live = (request: Request) => request.read === undefined;
+
+storeLifecycle(new Date('2026-10-30T12:00:00.000Z'));
+beforeEach(() => {
+  held = new Held();
+  lists = { active: [THERMAL, BATTERY], archived: [] };
+  account = ACCOUNT;
+  rows = { [THERMAL.project_id]: [row('t1', THERMAL), row('t2', THERMAL, { state: 'done' })], [BATTERY.project_id]: [row('b1', BATTERY)] };
+  failing = new Set();
+  rpc.mockReset();
+  rpc.mockImplementation(rpcFor(held, {
+    'app.status': () => ok({ signed_in: true, account }),
+    runs: params => {
+      const request = (params as { request: Request }).request;
+      if (request.operation === 'item') {
+        const found = Object.values(rows).flat().find(item => item.item_id === request.item_id)!;
+        return ok(request.read === undefined ? { ...found, reach: 'opened' } : found);
+      }
+      if (request.operation !== 'items' || request.scope !== 'project') return fail('unavailable', { retryable: true });
+      if (failing.has(request.id!)) return fail('unavailable', { retryable: true });
+      const all = rows[request.id!] ?? [];
+      const summary = { ...EMPTY_SUMMARY, open: all.filter(item => item.state === 'open').length, done: all.filter(item => item.state === 'done').length };
+      if (request.read === 'counts') return ok({ items: [], next_cursor: null, summary, stages: [] });
+      const items = all.filter(item => !request.states || request.states.includes(item.state));
+      return ok({ items: live(request) ? items.map(item => ({ ...item, reach: 'opened' })) : items, next_cursor: null, summary, stages: [] });
+    },
+  }, () => lists));
+});
+
+describe('Home altitudes', () => {
+  it('reads nothing of your projects while Home shows Me', async () => {
+    const store = await startStore();
+    expect(store.getState().altitude.level).toBe('me');
+    expect(projectReads()).toEqual([]);
+  });
+
+  it('My projects counts and reads each project’s waiting follow-ups, and never reads one live', async () => {
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(80);
+    for (const each of [THERMAL, BATTERY]) {
+      const reads = projectReads(each.project_id);
+      expect(reads.filter(request => request.read === 'counts')).toHaveLength(1);
+      expect(reads.filter(request => request.read === 'rows').map(request => request.states)).toEqual([['unsent', 'open']]);
+    }
+    expect(projectReads().filter(live)).toEqual([]);
+    const read = store.getState().altitude.reads[THERMAL.project_id]!;
+    expect(read.counts?.done).toBe(1);
+    expect(read.active.map(item => item.item_id)).toEqual(['itm_t1']);
+  });
+
+  it('a project zoom reads its done follow-ups too, then reads its waiting ones live', async () => {
+    const store = await startStore();
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    await flush(80);
+    const reads = projectReads(THERMAL.project_id);
+    expect(reads.some(request => request.read === 'rows' && request.states?.join() === 'unsent,open,done')).toBe(true);
+    expect(reads.filter(live).map(request => request.states)).toEqual([['unsent', 'open']]);
+    const read = store.getState().altitude.reads[THERMAL.project_id]!;
+    expect(read.all?.map(item => item.item_id)).toEqual(['itm_t1', 'itm_t2']);
+    expect(store.getState().altitude.live['itm_t1']?.reach).toBe('opened');
+  });
+
+  it('a person zoom reads at most twenty of their waiting follow-ups live, one by one', async () => {
+    rows[BATTERY.project_id] = Array.from({ length: 25 }, (_, index) => row(`b${index}`, BATTERY));
+    const store = await startStore();
+    store.zoomTo('person', { membership_id: MINA.membership_id, name: MINA.name });
+    await flush(200);
+    const one = requests().filter(request => request.operation === 'item');
+    expect(one).toHaveLength(20);
+    expect(one.every(live)).toBe(true);
+  });
+
+  it('zooms out from a person to their project, then to My projects, and no further', async () => {
+    const store = await startStore();
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    store.zoomTo('person', { membership_id: MINA.membership_id, name: MINA.name });
+    expect(store.zoomOut()).toBe(true);
+    expect(store.getState().altitude.level).toBe('project');
+    expect(store.zoomOut()).toBe(true);
+    expect(store.getState().altitude.level).toBe('projects');
+    expect(store.zoomOut()).toBe(false);
+    store.zoomTo('me');
+    expect(store.zoomOut()).toBe(false);
+  });
+
+  it('one project’s read failing leaves the others read', async () => {
+    failing.add(BATTERY.project_id);
+    const store = await startStore();
+    store.zoomTo('projects');
+    await flush(80);
+    const reads = store.getState().altitude.reads;
+    expect(reads[BATTERY.project_id]?.failure?.code).toBe('unavailable');
+    expect(reads[THERMAL.project_id]?.failure).toBeUndefined();
+    expect(reads[THERMAL.project_id]?.active).toHaveLength(1);
+  });
+
+  it('another account’s sign-in starts at Me with nothing of the last account’s, and drops its late answers', async () => {
+    const store = await startStore();
+    const release = held.hold('runs');
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    account = { ...ACCOUNT, membership_id: 'another-member' };
+    await store.refreshStatus();
+    await flush();
+    release(ok({ items: [row('late', THERMAL)], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }));
+    await flush(80);
+    const altitude = store.getState().altitude;
+    expect(altitude.level).toBe('me');
+    expect(altitude.project_id).toBeNull();
+    expect(Object.values(altitude.reads).flatMap(read => read.active)).toEqual([]);
+  });
+
+  it('a project that left your list falls back to My projects when Home shows again', async () => {
+    const store = await startStore();
+    store.zoomTo('project', { project_id: THERMAL.project_id });
+    lists = { active: [BATTERY], archived: [] };
+    await store.loadProjects();
+    store.goHome();
+    await flush(80);
+    expect(store.getState().altitude.level).toBe('projects');
+    expect(store.getState().altitude.project_id).toBeNull();
+  });
+
+  it('starts at the altitude this account left Home at on this computer, and at Me for another account or none', async () => {
+    const kept = (account: string) => ({ getItem: (key: string) => (key === 'echo.home.altitude' ? JSON.stringify({ account, level: 'projects' }) : null), setItem: vi.fn() });
+    vi.stubGlobal('localStorage', kept(`${ACCOUNT.authority} ${ACCOUNT.membership_id}`));
+    const store = await startStore();
+    expect(store.getState().altitude.level).toBe('projects');
+    vi.resetModules();
+    vi.stubGlobal('localStorage', kept(`${ACCOUNT.authority} someone-else`));
+    expect((await startStore()).getState().altitude.level).toBe('me');
+    vi.resetModules();
+    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('blocked'); }, setItem: vi.fn() });
+    const again = await startStore();
+    expect(again.getState().altitude.level).toBe('me');
+  });
+});
