@@ -316,7 +316,7 @@ export function followUpsWords(summary: PersonOpenItemsSummaryV1, stage: PersonI
  * When ECHO last checked, as the canvas words it: "just now", "5 min ago",
  * "2 h ago", then for six hours or more the day: "today", "yesterday", "Oct 6".
  */
-function checkedAgo(iso: string, now = Date.now()): string {
+function checkedAgo(iso: string, now: number): string {
   const time = Date.parse(iso);
   if (Number.isNaN(time)) return '';
   const minutes = Math.max(0, Math.floor((now - time) / 60_000));

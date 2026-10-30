@@ -7,13 +7,13 @@ import type { OpenItemView } from '../shared/protocol.js';
  */
 
 /** Not sent for more than a day: the approver hasn't sent it. */
-export const UNSENT_DAYS = 1;
+const UNSENT_DAYS = 1;
 /** Open for more than three days since it was sent or last set. */
-export const OPEN_DAYS = 3;
+const OPEN_DAYS = 3;
 /** One waiting longer than this puts its project off track. */
-export const OFF_TRACK_DAYS = 7;
+const OFF_TRACK_DAYS = 7;
 /** This many needing attention puts a project off track. */
-export const OFF_TRACK_COUNT = 3;
+const OFF_TRACK_COUNT = 3;
 /** The most of one person's follow-ups their altitude reads live, one by one. */
 export const PERSON_LIVE_MAX = 20;
 /** How many projects My projects reads at once. */
@@ -26,7 +26,7 @@ export type Health = 'on' | 'risk' | 'off';
 const waiting = (item: OpenItemView) => item.state === 'unsent' || item.state === 'open';
 
 /** Since when it has waited: an unsent one since it was made, an open one since it was sent or last set; null once closed. */
-export function waitingSince(item: OpenItemView): string | null {
+function waitingSince(item: OpenItemView): string | null {
   if (item.state === 'unsent') return item.created_at;
   if (item.state !== 'open') return null;
   const moved = [item.sent_at, item.state_set_at].filter((at): at is string => at !== null).sort();
@@ -54,7 +54,7 @@ export function needsAttention(item: OpenItemView, now: number): boolean {
 /** Someone a row shows as a face, and whether one of theirs needs attention. */
 export interface Face { membership_id: string; name: string; needs: boolean }
 
-export interface Rollup {
+interface Rollup {
   done: number;
   total: number;
   needs: number;
@@ -95,7 +95,7 @@ export function rollup(rows: readonly OpenItemView[], counts: { unsent: number; 
 }
 
 /** One owner's follow-ups in a project; `key` is their membership id, or "none". */
-export interface OwnerGroup { key: string; name: string; rows: OpenItemView[]; done: number; total: number; needs: number }
+interface OwnerGroup { key: string; name: string; rows: OpenItemView[]; done: number; total: number; needs: number }
 
 /** A project's follow-ups by owner: those needing attention first, most first, then by name. */
 export function byOwner(rows: readonly OpenItemView[], now: number): OwnerGroup[] {
@@ -115,7 +115,7 @@ export function byOwner(rows: readonly OpenItemView[], now: number): OwnerGroup[
 }
 
 /** A decision's follow-ups in a project, at a glance. */
-export interface DecisionLine { record_sha256: string; title: string; approved_at: string; done: number; total: number; needs: number; faces: Face[] }
+interface DecisionLine { record_sha256: string; title: string; approved_at: string; done: number; total: number; needs: number; faces: Face[] }
 
 /** A project's follow-ups by the decision they came from, newest first; one whose decision you can't read now has none. */
 export function byDecision(rows: readonly OpenItemView[], now: number): DecisionLine[] {

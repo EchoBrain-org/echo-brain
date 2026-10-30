@@ -5,7 +5,7 @@ import { documentDetail, when } from '../format.js';
 import { Calendar, Globe, Lock, Note, Page } from './icons.js';
 
 /** Who can read a row, when it is not its projects' members. A project row keeps the place, so the times line up. */
-export function Mark({ visibility }: { visibility: Visibility }) {
+function Mark({ visibility }: { visibility: Visibility }) {
   if (visibility === 'only-me') return <span class="mark" title="Only me" aria-label="Only me"><Lock /></span>;
   if (visibility === 'team') return <span class="mark" title="Organization" aria-label="Organization"><Globe /></span>;
   return <span class="mark" aria-hidden="true" />;

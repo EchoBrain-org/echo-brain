@@ -122,7 +122,7 @@ function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { 
 }
 
 /** Home's groups, once it is long, in its order. */
-export type HomeGroupName = 'decisions' | 'send' | 'follow-ups' | 'checking';
+type HomeGroupName = 'decisions' | 'send' | 'follow-ups' | 'checking';
 const GROUPS: readonly { name: HomeGroupName; label: string; kinds: readonly NeedRow['kind'][] }[] = [
   { name: 'decisions', label: 'Decisions', kinds: ['approve', 'failed'] },
   { name: 'send', label: 'To send', kinds: ['send'] },
@@ -130,11 +130,11 @@ const GROUPS: readonly { name: HomeGroupName; label: string; kinds: readonly Nee
   { name: 'checking', label: 'Checking', kinds: ['checking'] },
 ];
 /** More rows than this wait on you (Checking aside), and Home groups them. */
-export const FLAT_ROWS = 10;
+const FLAT_ROWS = 10;
 /** The rows a group shows before its "Show N more". */
-export const GROUP_ROWS = 5;
+const GROUP_ROWS = 5;
 
-export interface HomeGroup {
+interface HomeGroup {
   name: HomeGroupName;
   label: string;
   /** All its rows, shown or not. */

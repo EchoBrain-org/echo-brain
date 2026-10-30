@@ -225,22 +225,22 @@ function ItemRoute({ item, decision, state, projects, names, named, frozen }: {
     onDrop={() => setDecisionRoute(item.signal_id, null)} onLock={() => lockDecisionRoute(item.signal_id)} />;
 }
 
-/** The meeting's decisions, numbered: `under` each what is chosen for it, beside it what is short. */
-function Decided({ items, under, children }: { items: readonly Item[]; under?(item: Item): ComponentChildren; children?(item: Item): ComponentChildren }) {
+/** The meeting's decisions, numbered: `under` each what is chosen for it. */
+function Decided({ items, under }: { items: readonly Item[]; under?(item: Item): ComponentChildren }) {
   const decisions = items.filter(item => item.kind === 'decision');
   if (decisions.length === 0) return null;
   return (
     <section class="card-section" aria-labelledby="decision-decided">
       <div class="section-label" id="decision-decided">Decided</div>
       <div class="card-list">{decisions.map((item, index) => (
-        <SignalRow key={item.signal_id} signal={item} number={index + 1} under={under?.(item)}>{children?.(item)}</SignalRow>
+        <SignalRow key={item.signal_id} signal={item} number={index + 1} under={under?.(item)} />
       ))}</div>
     </section>
   );
 }
 
-/** Who does what: each action with its due date beside it, its owner and where it goes under or beside it. */
-function ToDo({ items, under, children }: { items: readonly Item[]; under?(item: Item): ComponentChildren; children?(item: Item): ComponentChildren }) {
+/** Who does what: each action with its due date beside it, its owner and where it goes under it. */
+function ToDo({ items, under }: { items: readonly Item[]; under?(item: Item): ComponentChildren }) {
   const actions = items.filter(item => item.kind === 'action');
   if (actions.length === 0) return null;
   return (
@@ -248,7 +248,7 @@ function ToDo({ items, under, children }: { items: readonly Item[]; under?(item:
       <div class="section-label" id="decision-todo">To do</div>
       <div class="card-list">{actions.map(item => {
         const when = dueWords(item.due_at);
-        return <SignalRow key={item.signal_id} signal={item} under={under?.(item)}>{when && <span class="card-due">{when}</span>}{children?.(item)}</SignalRow>;
+        return <SignalRow key={item.signal_id} signal={item} under={under?.(item)}>{when && <span class="card-due">{when}</span>}</SignalRow>;
       })}</div>
     </section>
   );
@@ -356,12 +356,12 @@ function Impact({ state, decision }: { state: State; decision: DecisionState }) 
         <CardHead kind="done" verb={standing} where={open.review.title} title={approved ? ask : open.review.title} id="decision-ask"
           meta={quotes.length > 0 ? <NotesButton open={notes} onToggle={() => setNotes(!notes)} /> : undefined} />
         {notes && <NotesPanel quotes={quotes} />}
-        {status === 'publishing' && <ImpactSection run={undefined} publishing busy={decision.busy} followUps={null} onRetry={() => undefined} />}
+        {status === 'publishing' && <ImpactSection run={undefined} busy={decision.busy} followUps={null} onRetry={() => undefined} />}
         {open.records.map(record => {
           const run = runs.find(item => item.event_ref === record.approval_id);
           const line = run ? decision.lines[run.run_id] : undefined;
           const followUps = run && line ? meetingFollowUps({ scope: 'run', id: run.run_id, seq: 0, loading: false, summary: line.summary, stage: line.stage, busy: false }, open.review.title) : null;
-          return <ImpactSection key={record.approval_id} label={destinationLabel(destinationFrom(record), names)} run={run} publishing={run === undefined} busy={decision.busy}
+          return <ImpactSection key={record.approval_id} label={destinationLabel(destinationFrom(record), names)} run={run} busy={decision.busy}
             followUps={followUps} onRetry={() => { if (run) void retryImpact(run.run_id); }} />;
         })}
         {/* Where each went sits under its words, as where each goes did: beside them it would narrow them. */}

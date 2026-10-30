@@ -11,6 +11,8 @@ import { Ask, Capture, Chevron, Home as HomeIcon, People, Person, Plug, Plus, Ti
 import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
+/** A row that takes no drop: a file dropped on it goes nowhere. */
+const noDrop = (event: DragEvent) => event.stopPropagation();
 
 /**
  * One project: a click opens it, a dropped file is captured into it. A small
@@ -49,7 +51,6 @@ const twoPart = (what: string, action: string) => <span class="label"><span clas
 export function UpdateRow({ state }: { state: State }) {
   const { update, updateFailure: failure } = state;
   if (update.state === 'none') return null;
-  const noDrop = (event: DragEvent) => event.stopPropagation();
   const location = update.state === 'failed' && update.reason === 'location';
   const inert = update.state === 'installing' || update.state === 'off' || location;
   return (
@@ -77,7 +78,6 @@ export function UpdateRow({ state }: { state: State }) {
 export function SignInDueRow({ state }: { state: State }) {
   const due = state.signInDue;
   if (!due || !state.status?.signed_in) return null;
-  const noDrop = (event: DragEvent) => event.stopPropagation();
   const waiting = state.signin.phase === 'waiting';
   const failure = due.failure;
   return (
@@ -117,7 +117,6 @@ export function Sidebar({ state }: { state: State }) {
   const needs = needsCount(state);
   const archived = state.archivedProjects;
   const [archivedOpen, setArchivedOpen] = useState(false);
-  const noDrop = (event: DragEvent) => event.stopPropagation();
   return (
     <aside class="sidebar" data-testid="sidebar">
       <div class="sidebar-drag" />

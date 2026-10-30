@@ -115,7 +115,7 @@ export function listWords(words: readonly string[]): string {
  * Confluence spaces) were searched; ECHO's follow-ups as "follow-ups"; your
  * projects, people and tools as those words.
  */
-export function sourceWords(source: AskSearchedSource, tools?: readonly ConnectedTool[] | null): string {
+function sourceWords(source: AskSearchedSource, tools?: readonly ConnectedTool[] | null): string {
   if (!('tool_id' in source)) return source.kind === 'follow_ups' ? 'follow-ups' : source.kind;
   return externalSourceProvider(source, tools);
 }
