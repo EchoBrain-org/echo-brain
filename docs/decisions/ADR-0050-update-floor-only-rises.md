@@ -9,7 +9,7 @@ component_ids:
 created_at: 2026-10-27
 reviewed_at: 2026-10-27
 reviewed_ref: 4dff2d8c05e183b08b4242f88e8d0e235479d87c
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -20,9 +20,11 @@ updates:
 
 On 2026-10-25 a raised update floor switched off the desktop updater on the
 founder's Mac, with only a log line to say so. On 2026-10-27 the founder chose
-option C below for the floor, the feed publisher and the desktop. This record
-is proposed until the founder confirms the result on the desktop. It does not
-mean the change is deployed or qualified.
+option C below for the floor, the feed publisher and the desktop. The founder
+accepted this record the same day, after checking the result on the desktop
+in the first staging release that carries it
+([evidence](#migration-rollback-and-evidence)). Acceptance does not mean the
+change is qualified beyond that release.
 
 ## Context and options
 
@@ -172,4 +174,18 @@ Adopt option C, the founder's choice.
     end-to-end `e2e/update.spec.ts` under `product/echo-desktop/test/`): the
     row reads **Updates are off**, is `aria-disabled`, and a click installs
     nothing.
-- **The founder's check on the desktop** is pending.
+- **Staging evidence** from release
+  `clean-v1-20261028-ask-sidebar-updates-f2c236f`, the first with this change:
+  - The replacement lane replaced the live sequence-19 feed with the
+    release's sequence-20 feed, whose floor is 20. Before this change, a
+    replacement over the same sequence-19 feed was refused with
+    `predecessor_feed_invalid`.
+  - The founder's Mac, whose desktop updater had been off since 2026-10-25,
+    needed the one manual reinstall. After it, `floor.json` held 20,
+    `config.json` kept 1, and against the sequence-19 feed desktop.log showed
+    `update check stale_metadata` instead of offering the older release.
+  - Once the sequence-20 feed was published, the desktop's next check logged
+    `update check current`, and the Mac CLI's `update --check` reported
+    `current`.
+  - The founder checked the installed desktop, whose sidebar shows no
+    **Updates are off** row, and accepted this record.
