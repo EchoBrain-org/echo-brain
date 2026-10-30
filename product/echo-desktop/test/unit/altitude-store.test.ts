@@ -3,7 +3,7 @@
 // account's altitude surviving another's sign-in.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpenItemView, ProjectSummary } from '../../src/shared/protocol.js';
-import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, numbered, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { ACCOUNT, EMPTY_SUMMARY, fail, flush, Held, names, numbered, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -143,19 +143,39 @@ describe('Home altitudes', () => {
   });
 
   it('another account’s sign-in starts at the top with nothing of the last account’s, and drops its late answers', async () => {
+    // Once Home's first reads are in, the last account's reads of its projects wait until the new account's own have landed,
+    // then answer with a follow-up and counts of theirs.
+    const late: (() => void)[] = [];
+    let holding = false;
+    const theirs = ok({ items: [row('late', THERMAL)], next_cursor: null, summary: { ...EMPTY_SUMMARY, open: 9 }, stages: [] });
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }),
+      runs: params => {
+        const { expect: from, request } = params as { expect: { membership_id: string }; request: Request };
+        return holding && from.membership_id === ACCOUNT.membership_id && request.scope === 'project'
+          ? new Promise(resolve => late.push(() => resolve(theirs))) : runsHandler(params);
+      },
+    }, () => lists));
     const store = await startStore();
-    const release = held.hold('runs');
+    await flush(80);
+    holding = true;
     store.zoomTo('project', { project_id: THERMAL.project_id });
+    await flush(20);
+    expect(late.length).toBeGreaterThan(0);
     account = { ...ACCOUNT, membership_id: 'another-member' };
     await store.refreshStatus();
-    await flush();
-    release(ok({ items: [row('late', THERMAL)], next_cursor: null, summary: EMPTY_SUMMARY, stages: [] }));
-    await flush(80);
+    await flush(200);
+    expect(store.getState().altitude.reads[THERMAL.project_id]?.loading).toBe(false);
+    late.forEach(answer => answer());
+    await flush(200);
     const altitude = store.getState().altitude;
     expect(altitude.level).toBe('projects');
     expect(altitude.category).toBeNull();
     expect(altitude.project_id).toBeNull();
-    expect(Object.values(altitude.reads).flatMap(read => read.active).map(item => item.item_id)).not.toContain('itm_late');
+    const reads = Object.values(altitude.reads);
+    expect(reads.flatMap(read => [...read.active, ...(read.all ?? [])]).map(item => item.item_id)).not.toContain('itm_late');
+    expect(reads.map(read => read.counts?.open)).not.toContain(9);
+    expect(Object.keys(altitude.live)).not.toContain('itm_late');
   });
 
   it('a project that left your list falls back to My projects when Home shows again', async () => {
@@ -366,16 +386,17 @@ describe('Home altitudes, reading only what each step needs', () => {
 describe('Home altitudes, when loads are cut short or the list is long', () => {
   it('a zoom that cuts a sweep short still reads the projects it left half read', async () => {
     lists = { active: numbered(6), archived: [] };
+    // Home's first reads, its first projects' among them, wait: a quick click on a project cuts that sweep short.
+    const releases = Array.from({ length: 12 }, () => held.hold('runs'));
     const store = await startStore();
-    const releases = Array.from({ length: 8 }, () => held.hold('runs'));
-    store.zoomTo('projects');
     await flush(20);
+    const loading = () => lists.active.map(each => store.getState().altitude.reads[each.project_id]?.loading ?? 'unread');
+    expect(loading()).toContain(true);
     store.zoomTo('project', { project_id: lists.active[5]!.project_id });
     await flush(20);
-    releases.forEach(release => release(empty()));
+    releases.forEach(release => release(anyRuns()));
     await flush(300);
-    const reads = store.getState().altitude.reads;
-    expect(lists.active.map(each => reads[each.project_id]?.loading ?? 'unread')).toEqual(Array(6).fill(false));
+    expect(loading()).toEqual(Array(6).fill(false));
   });
 
   it('a load cut short reads no further page', async () => {
@@ -403,17 +424,22 @@ describe('Home altitudes, when loads are cut short or the list is long', () => {
       .toEqual([]);
   });
 
-  it('a project that joins your list while a sweep is on its way is read', async () => {
+  it('a project that joins your list while a load is on its way is read', async () => {
     const store = await startStore();
-    const release = held.hold('runs');
-    store.zoomTo('projects');
+    await flush(80);
+    // Home's first reads are in; a zoom's reads (counts, waiting rows, every row) wait, so its load is on its way, not fresh.
+    const releases = Array.from({ length: 3 }, () => held.hold('runs'));
+    store.zoomTo('project', { project_id: THERMAL.project_id });
     await flush(20);
+    expect(store.getState().altitude.reads[THERMAL.project_id]?.loading).toBe(true);
     const added = project(9, 20, { name: 'Late' });
     lists = { active: [THERMAL, BATTERY, added], archived: [] };
     await store.loadProjects();
-    release(empty());
+    releases.forEach(release => release(anyRuns()));
     await flush(200);
     expect(projectReads(added.project_id).some(request => request.read === 'counts')).toBe(true);
+    const reads = store.getState().altitude.reads;
+    expect([THERMAL, added].map(each => reads[each.project_id]?.loading)).toEqual([false, false]);
   });
 
   it('with more projects than the sidebar’s first page, a project leaving the list sends Home back at once', async () => {
@@ -564,6 +590,40 @@ describe('Home altitudes keep their copy of a long list while they read it again
     store.confirmProjectSetting();
     await flush(120);
     expect(projectReads(OLD.project_id).some(request => request.read === 'counts')).toBe(true);
+  });
+
+  it('a project renamed or made out of Home’s sight is in its copy by its name now, so Only me’s tiles still find it', async () => {
+    lists = { active: numbered(12), archived: [] };
+    const first = lists.active[0]!;
+    const made = project(13, 30, { name: 'Made here' });
+    rpc.mockImplementation(rpcFor(held, {
+      'app.status': () => ok({ signed_in: true, account }), runs: runsHandler,
+      'projects.rename': params => ok({ request_id: params.request_id, project_id: params.project_id, operation: 'rename' }),
+      'projects.create': () => ok({ project_id: made.project_id }),
+      'projects.read': () => ok(made),
+    }, () => lists));
+    const store = await startStore();
+    await flush(200);
+    expect(store.getState().altitude.list).not.toBeNull();
+    await store.openOnlyMe();
+    store.toggleProjectSettings(first, 'sidebar');
+    store.beginProjectRename();
+    store.setProjectRename('Renamed');
+    store.confirmProjectSetting();
+    lists = { active: [{ ...first, name: 'Renamed' }, ...lists.active.slice(1)], archived: [] };
+    await flush(80);
+    store.openNewProject();
+    await flush();
+    store.setNewProjectName('Made here');
+    await store.createProject();
+    lists = { active: [made, ...lists.active], archived: [] };
+    await flush(80);
+    await store.openOnlyMe();
+    await flush(80);
+    const shown = names(store.altitudeProjects());
+    expect(shown).toContain('Renamed');
+    expect(shown).not.toContain(first.name);
+    expect(shown).toContain('Made here');
   });
 
   it('a read of every page on its way when you leave a project does not bring it back', async () => {

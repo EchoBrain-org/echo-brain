@@ -46,6 +46,24 @@ describe('the age', () => {
     expect(shortAge('not a time', NOW)).toBe('');
   });
 
+  it('tells today’s time in the time zone you are in now, not the one ECHO started in', async () => {
+    const was = process.env.TZ;
+    try {
+      process.env.TZ = 'America/New_York';
+      vi.resetModules();
+      const { shortAge } = await import('../../src/renderer/screens/only-me-row.js');
+      // Flown to Tokyo with ECHO running: 09:00 there is 20:00 the evening before in New York.
+      process.env.TZ = 'Asia/Tokyo';
+      const added = at(30, 9, 0);
+      expect(new Date(added).getHours()).toBe(9);
+      expect(shortAge(added, new Date(2026, 9, 30, 12, 0).getTime())).toBe('09:00');
+    } finally {
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
+      vi.resetModules();
+    }
+  });
+
   it('says when it was added on hover', async () => {
     const tree = await row(item('Supplier sync', { added_at: at(30, 9, 30) }));
     const age = byTestId(tree, 'only-me-age')[0]!;
