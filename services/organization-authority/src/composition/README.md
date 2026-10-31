@@ -63,11 +63,10 @@ import a provider implementation.
 - `organization-authority-state-bootstrap.ts`, `organization-authority-setup-cli.ts`
   and `organization-authority-reset-cli.ts` own stopped-state setup and reset.
 - The `person-*` modules wire Person routes and upload processing, the
-  `readable-search-*` modules own search generations, the `*-journey-*`
-  modules record Ask journeys, `staging/` holds the staging synthetic meeting
-  source selection and personal provider and the release canary with its
-  private socket control and client, and `synthetic-demo-*` is the no-write
-  demo extraction evaluator.
+  `readable-search-*` modules own search generations, `staging/` holds the
+  staging synthetic meeting source selection and personal provider and the
+  release canary with its private socket control and client, and
+  `synthetic-demo-*` is the no-write demo extraction evaluator.
 - `observability/` holds the journey metrics and telemetry transport and the
   optional staging LangSmith trace exporter (`langsmith-observer-v1.ts`,
   `langsmith-runtime-v1.ts`), which `organization-authority-service-cli.ts`

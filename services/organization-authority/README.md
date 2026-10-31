@@ -169,6 +169,16 @@ Configure the `confluence` integration and its documented OAuth scopes before
 staging the release, then connect Confluence through Tools with browser consent.
 No existing Jira connection or fixed profile needs to be rewritten.
 
+The fixed staging connector rehearsal selects the Claude Agent SDK research
+engine through `ECHO_STAGING_CLAUDE_RESEARCH_V1`. The service rejects enabling it
+outside `https://authority-staging.echobrain.org`; an absent or false switch
+keeps the existing engine. Ordinary Ask and trigger research share the native
+ECHO evidence desk, permissions, progress and writer. Planner-disabled sweeps
+remain unchanged. SDK requests use the existing OpenRouter service binding and
+the process-wide model queue; no developer CLI sign-in is needed by the host.
+See the [service adapter and synthetic package proof](../../tools/evals/headless-research/README.md#staging-service-adapter)
+for the implementation boundary and remaining live qualification.
+
 ## Initial-owner setup internals
 
 For deployed staging, use the resumable wrapper in the
@@ -507,16 +517,6 @@ Routine releases use baseline-preserving image replacements through the
 schema changes and never migrates state.
 
 ## Verification
-
-The fixed staging connector rehearsal selects the Claude Agent SDK research
-engine through `ECHO_STAGING_CLAUDE_RESEARCH_V1`. The service rejects enabling it
-outside `https://authority-staging.echobrain.org`; an absent or false switch
-keeps the existing engine. Ordinary Ask and trigger research share the native
-ECHO evidence desk, permissions, progress and writer. Planner-disabled sweeps
-remain unchanged. SDK requests use the existing OpenRouter service binding and
-the process-wide model queue; no developer CLI sign-in is needed by the host.
-See the [service adapter and synthetic package proof](../../tools/evals/headless-research/README.md#staging-service-adapter)
-for the implementation boundary and remaining live qualification.
 
 Run the focused Authority test suite after a code change:
 
