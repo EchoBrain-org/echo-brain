@@ -100,7 +100,7 @@ function stagingSyntheticCanaryHook(
  */
 export interface OrganizationAuthorityRuntimeDependencies {
   /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
-  readonly api?: OrganizationAuthorityApiRuntimeDependencies;
+  readonly api?: Partial<OrganizationAuthorityApiRuntimeDependencies>;
 }
 
 interface ReadableSearchReconcilerV1 {
@@ -152,7 +152,7 @@ export async function openOrganizationAuthorityRuntime(
       `file:${config.pkce_key_file}`,
     ),
   };
-  const baseApiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
+  const baseApiDependencies: Partial<OrganizationAuthorityApiRuntimeDependencies> = {
     ...dependencies.api,
     record_input_codecs: config.record_input_codecs,
     ...(config.staging_research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1

@@ -108,7 +108,7 @@ export interface OrganizationAuthorityServiceConfig extends Omit<
 
 export interface OrganizationAuthorityServiceDependencies {
   /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
-  readonly api?: OrganizationAuthorityApiRuntimeDependencies;
+  readonly api?: Partial<OrganizationAuthorityApiRuntimeDependencies>;
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
   /** Provider-only test seams; production reads every page through the asker's Nango grant. */
   readonly confluence_person_live_seams?: ConfluencePersonLiveRuntimeSeamsV1;
@@ -211,7 +211,7 @@ export async function openOrganizationAuthorityService(
         signal: AbortSignal,
       ) => ReturnType<typeof runStagingSyntheticPersonalCanaryV1>)
     | undefined;
-  const apiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
+  const apiDependencies: Partial<OrganizationAuthorityApiRuntimeDependencies> = {
     ...dependencies.api,
     person_http_runtime_factory: (sessions, resources) => {
       const existing = dependencies.api?.person_http_runtime_factory?.(

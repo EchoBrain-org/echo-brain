@@ -94,17 +94,6 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it("without an answer model reports no agentic capability and refuses Ask instead of falling back", async () => {
-    const value = await server({});
-    try {
-      const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
-      expect(capabilities.status).toBe(200);
-      await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: false });
-      expect(value.sessions.authenticateAccess).toHaveBeenCalledWith({ access_token: "token" });
-      expect((await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What changed?" })).status).toBe(503);
-    } finally { await value.close(); }
-  });
-
   it("reports agentic Ask to installed clients that still probe", async () => {
     const value = await server({ application: { searchEvidence: vi.fn(), openEvidence: vi.fn() } as never, ask: { ask: vi.fn() } as never });
     try {

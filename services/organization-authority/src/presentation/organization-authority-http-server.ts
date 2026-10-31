@@ -175,13 +175,12 @@ export interface OrganizationAuthorityHttpServerOptions {
    * The evidence desk (`/v3/person/evidence/search` and `/open`, ADR-0022), composed with the answer model. Its Ask route,
    * `/v3/person/ask`, was retired with `/v4` to `/v6`: Ask is `person_answer_v7`.
    */
-  readonly person_answer_v3?: PersonAnswerV3HttpApplication;
+  readonly person_answer_v3: PersonAnswerV3HttpApplication;
   /**
-   * Ask (`/v7`, the V8 answer, research tool contract v1), optional until the runtime has a configured answer model: it may
-   * read and cite live tickets and pages, ECHO's shared follow-ups (ADR-0040), and the asker's projects, people, tools and
-   * their connected tools' containers.
+   * Ask (`/v7`, the V8 answer, research tool contract v1): it may read and cite live tickets and pages, ECHO's shared
+   * follow-ups (ADR-0040), and the asker's projects, people, tools and their connected tools' containers.
    */
-  readonly person_answer_v7?: PersonAnswerV7HttpApplication;
+  readonly person_answer_v7: PersonAnswerV7HttpApplication;
   /** The Ask source check (ADR-0047); it needs no answer model, and reads the database and the caller's own tool connections. */
   readonly person_ask_check: PersonAskCheckHttpApplicationV1;
   /** Staging-only research evaluation; its routes do not exist unless composed. */
@@ -521,7 +520,7 @@ function askOptions(request: IncomingMessage): { readonly time_context?: PersonA
 
 /** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
-  application: Application | undefined,
+  application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: {
     readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: boolean; readonly signal: AbortSignal;
@@ -529,7 +528,6 @@ function personCancellablePost<Application, Request>(
   ask = false,
 ): PersonPostHandler {
   return async (request, response) => {
-    if (application === undefined) { fail(response, 503, "unavailable"); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
     try {
@@ -555,10 +553,10 @@ const streamedFailureStatus = new WeakMap<ServerResponse, number>();
  * request may carry the asker's previous turn (ADR-0047), streamed or not. A
  * disconnect still cancels the Ask, and nothing more is written.
  */
-function personAskV7Post(application: PersonAnswerV7HttpApplication | undefined): PersonPostHandler {
+function personAskV7Post(application: PersonAnswerV7HttpApplication): PersonPostHandler {
   const plain = personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
   return async (request, response) => {
-    if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V3) { await plain(request, response); return; }
+    if (application.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V3) { await plain(request, response); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
     let stream: PersonAskProgressStreamV1 | undefined;
@@ -1151,8 +1149,8 @@ export function createOrganizationAuthorityHttpServer(
         json(response, 200, validatePersonCapabilitiesV1({
           schema_version: 1,
           kind: "echo-person-capabilities-v1",
-          // Kept for installed clients that still probe before asking; always true with an answer model.
-          agentic_ask_v1: options.person_answer_v3 !== undefined,
+          // Kept for installed clients that still probe before asking.
+          agentic_ask_v1: true,
         }));
         return;
       }

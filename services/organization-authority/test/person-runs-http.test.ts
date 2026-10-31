@@ -1,8 +1,6 @@
 import { once } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PERSON_RUNS_PATH_V1 } from '@echo-brain/organization-api';
-import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { unavailablePersonTriggerRunsV1 } from '../src/composition/organization-authority-api-runtime.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../src/presentation/person-trigger-runs-http-application.js';
 import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
@@ -22,7 +20,6 @@ const OPEN_ITEMS = {
   assign: [{ schema_version: 1, operation: 'assign', item_id: ITEM, owner_membership_id: MEMBER }, { owner: { membership_id: MEMBER, name: 'Mina Patel', active: true } }],
   sweep: [{ schema_version: 1, operation: 'sweep', scope: 'mine' }, { run_id: RUN }],
 } as const;
-const unavailable = async () => { throw new AuthorityOperationError('unavailable', 'an answer model is not configured'); };
 
 const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
 afterEach(async () => { for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; } });
@@ -38,11 +35,6 @@ describe('person runs HTTP transport', () => {
     expect(response.status).toBe(200); expect(await response.json()).toEqual({ runs: [] });
     expect(app.list).toHaveBeenCalledWith({ access_token: 'fixture', signal: expect.any(AbortSignal) });
     expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tools: { routes: [{ route_id: 'collision', method: 'POST', path: PERSON_RUNS_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) } }))).toThrow('collides with Authority route');
-  });
-
-  it('surfaces a composed no-model application as unavailable', async () => {
-    const app = { list: unavailable, start: unavailable, retry: unavailable, view: unavailable, home: unavailable, items: unavailable, item: unavailable, send: unavailable, set_state: unavailable, assign: unavailable, sweep: unavailable, close() {} } satisfies PersonTriggerRunsHttpApplicationV1;
-    expect((await post(await origin(app), { schema_version: 1, operation: 'list' })).status).toBe(503);
   });
 
   it('dispatches each open-items operation to its method with the validated request', async () => {
@@ -63,21 +55,6 @@ describe('person runs HTTP transport', () => {
     // A request the API refuses never reaches a method.
     expect((await post(base, { schema_version: 1, operation: 'set_state', item_id: ITEM, state: 'unsent' })).status).toBe(400);
     expect(methods.set_state).toHaveBeenCalledTimes(1);
-  });
-
-  it('answers unavailable from a runtime with no model, only after authenticating', async () => {
-    const authenticateAccess = vi.fn(({ access_token }: { readonly access_token: string }) => {
-      if (access_token !== 'fixture') throw new AuthorityOperationError('unauthorized', 'person authentication failed');
-      return {} as never;
-    });
-    const base = await origin(unavailablePersonTriggerRunsV1({ authenticateAccess }));
-    for (const request of [{ schema_version: 1, operation: 'list' }, { schema_version: 1, operation: 'view', run_id: RUN }, ...Object.values(OPEN_ITEMS).map(([value]) => value)]) {
-      expect((await post(base, request, 'Bearer stranger')).status).toBe(401);
-      const response = await post(base, request);
-      expect(response.status).toBe(503);
-      expect(await response.json()).toMatchObject({ error: { code: 'unavailable' } });
-    }
-    expect(authenticateAccess).toHaveBeenCalledTimes(18);
   });
 
   it('dispatches a valid sweep of each scope to its method, answers a run or nothing to check, and refuses an invalid one before any method', async () => {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { startOrganizationAuthorityApiRuntime } from '../../src/composition/organization-authority-api-runtime.js';
-import { ownerGenesis, port, signInInProcess, syntheticOidcProvider } from '../fixtures/owner-session.js';
+import { UNUSED_ANSWER_MODEL, ownerGenesis, port, signInInProcess, syntheticOidcProvider } from '../fixtures/owner-session.js';
 import { PersonSessionStore } from '../../../../src/product/person-client/session-store.js';
 import { runPersonClientCli } from '../../../../src/product/person-client/composition.js';
 
@@ -26,12 +26,8 @@ it('uses default API composition and real Person session checks through CLI, inc
     const config = { state_directory: initialized.state_directory, host: '127.0.0.1' as const, port: await port(),
       authority_url: 'https://authority.example', oidc, client_authentication: { method: 'none' as const }, pkce_sealing_key: key };
     // No project_context injection: this must exercise PC-03's real factory.
-    runtime = await startOrganizationAuthorityApiRuntime(config, { oidc_provider: provider });
-    const askWithoutModel = await fetch(`http://127.0.0.1:${runtime.address.port}/v7/person/ask`, {
-      method: 'POST', headers: { authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ schema_version: 3, question: 'What changed?' }),
-    });
-    expect(askWithoutModel.status).toBe(503);
+    const dependencies = { oidc_provider: provider, answer_composition_generation: UNUSED_ANSWER_MODEL };
+    runtime = await startOrganizationAuthorityApiRuntime(config, dependencies);
     const home = join(root, 'person'); mkdirSync(home, { mode: 0o700 });
     new PersonSessionStore(home).install('https://authority.example', initialized.authority_id, session);
     const cli = async (argv: string[]) => {
@@ -55,7 +51,7 @@ it('uses default API composition and real Person session checks through CLI, inc
     expect(submitted.stderr).toBe(''); expect(submitted.code).toBe(0);
     const receipt = JSON.parse(submitted.stdout);
     await runtime.close();
-    runtime = await startOrganizationAuthorityApiRuntime({ ...config, port: await port() }, { oidc_provider: provider });
+    runtime = await startOrganizationAuthorityApiRuntime({ ...config, port: await port() }, dependencies);
     const read = await cli(['open', '--ref', `note:${receipt.context_id}`]);
     expect(read.stderr).toBe(''); expect(read.code).toBe(0);
     expect(JSON.parse(read.stdout)).toMatchObject({ ok: true, result: { text: 'PC06 original meridian.\n',

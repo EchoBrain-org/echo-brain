@@ -153,7 +153,7 @@ it('closes already opened connectors if a later registered connector fails to st
     descriptor: { source_id, selector: source_id, kind: 'page', description: 'Live pages', metadata_only_list: true },
     scopes: ['global'],
   });
-  await expect(startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors: [
+  await expect(startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, answer_composition_generation: finishingModel().answer_composition_generation, live_connectors: [
     { ...definition('first'), open: () => ({ application: { source: async () => undefined }, close }) },
     { ...definition('second'), open: () => { throw new Error('connector startup failed'); } },
   ] })).rejects.toThrow('connector startup failed');

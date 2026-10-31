@@ -119,13 +119,6 @@ export async function expectJsonAskFallbacks(ask: ReturnType<typeof askClient>, 
     .toEqual([401, 'application/json; charset=utf-8', route.header]);
 }
 
-/** The streamed Ask route, when the Authority did not compose its Ask, answers unavailable, still route-matched. */
-export async function expectAskRouteUnavailable(ask: ReturnType<typeof askClient>, base: string, header: string): Promise<void> {
-  const response = await ask(base);
-  expect([response.status, response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)]).toEqual([503, header]);
-  await expect(response.json()).resolves.toEqual({ error: { code: 'unavailable', message: 'request failed' } });
-}
-
 /** Every event of a whole progress stream. */
 export function decodeAll<E>(decoder: { push(text: string): Iterable<E>; end(): unknown }, text: string): readonly E[] {
   const events = [...decoder.push(text)];
