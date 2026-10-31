@@ -43,18 +43,18 @@ type TopLevelRoleV2 = Exclude<
   "retrieval-facts" | "retrieval-lexical" | "retrieval-content"
 >;
 
-export interface AuthorityStateSchemaV1 {
+interface AuthorityStateSchemaV1 {
   readonly database_schema_version: number;
   readonly schema_sha256: Sha256Digest;
 }
 
-export interface AuthorityStateBindingV1 {
+interface AuthorityStateBindingV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
 }
 
-export interface AuthorityStateRoleApplierV1 {
+interface AuthorityStateRoleApplierV1 {
   /** Applies the role's frozen baseline to the completely empty handle. */
   readonly apply: (database: Database.Database) => void;
 }

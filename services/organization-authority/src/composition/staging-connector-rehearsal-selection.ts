@@ -6,7 +6,7 @@ import { CLEAN_V1_RELEASE_ID } from './clean-v1-release-id.js';
 
 const STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE = 'staging-connector-rehearsal.json';
 
-export type StagingConnectorRehearsalSelectionInput = {
+type StagingConnectorRehearsalSelectionInput = {
   readonly state_directory: string;
   readonly authority_url: string;
   readonly environment: Readonly<Record<string, string | undefined>>;

@@ -43,7 +43,7 @@ export const EMP_B = person("emp_b", "employee");
 export const EMP_C = person("emp_c", "employee");
 /** Approves r7a and r7b; never a reader. */
 export const APPROVER_X = person("approver_x", "employee");
-export const READERS = { owner: OWNER, emp_a: EMP_A, emp_b: EMP_B, emp_c: EMP_C } as const;
+const READERS = { owner: OWNER, emp_a: EMP_A, emp_b: EMP_B, emp_c: EMP_C } as const;
 export type ReaderToken = keyof typeof READERS;
 
 export const SHARED = "prj_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";

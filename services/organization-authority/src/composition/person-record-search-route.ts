@@ -118,7 +118,7 @@ export class PersonRecordSearchSnapshotChangedV1 extends EvidenceDeskSnapshotCha
  * bearer remains server-side while the query runs under one reader tuple and
  * one exact snapshot.
  */
-export interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
+interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
   readonly access_token: string;
   readonly query: string;
   /** Authority-checked project scope; association never replaces audience. */
@@ -141,12 +141,12 @@ export interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
 }
 
 /** What a desk read leaves out before its limit: records by digest, and every record only its approver may read. */
-export interface PersonRecordDeskExclusionV1 {
+interface PersonRecordDeskExclusionV1 {
   readonly record_sha256s: readonly Sha256Digest[];
   readonly approver_only: boolean;
 }
 
-export type PersonRecordSearchReleaseAuthorizationV1 =
+type PersonRecordSearchReleaseAuthorizationV1 =
   Readonly<PersonAccessAuthorization>;
 
 export interface PersonRecordSearchReleasePointerV1 {
@@ -175,7 +175,7 @@ export interface PersonRecordSearchBatchReleaseV1 {
   readonly mine?: true;
 }
 
-export interface PersonRecordSearchBatchResultV1 {
+interface PersonRecordSearchBatchResultV1 {
   readonly response: PersonRecordSearchResponseV2;
   readonly release: PersonRecordSearchBatchReleaseV1;
   /** Private desk projection of immutable V4 meeting metadata. */
@@ -191,7 +191,7 @@ export interface PersonRecordSearchBatchResultV1 {
   readonly unchecked?: EvidenceDeskUncheckedV1;
 }
 
-export interface PersonRecordDeskItemV1 {
+interface PersonRecordDeskItemV1 {
   readonly atom_id: Sha256Digest;
   readonly record_sha256: Sha256Digest;
   readonly item_kind: ReadableSearchResultItemV1["item_kind"];
@@ -215,7 +215,7 @@ export interface PersonRecordDeskItemV1 {
   readonly dates?: EvidenceDatesV1;
 }
 
-export interface PersonRecordSearchBatchApplicationV1 {
+interface PersonRecordSearchBatchApplicationV1 {
   searchBatch(
     input: PersonRecordSearchBatchInputV1,
   ): PersonRecordSearchBatchResultV1;
@@ -484,7 +484,7 @@ function isVerifiedIndexLag(
  * of another organization or contract is not lag; the anchor answers it as
  * unavailable.
  */
-export function personRecordSearchIndexLagsV1(
+function personRecordSearchIndexLagsV1(
   options: Pick<CreatePersonRecordSearchRouteV1Options, "authority" | "record" | "organization_id" | "retrieval_contract_sha256">,
 ): boolean {
   const head = recordHead(options.record);

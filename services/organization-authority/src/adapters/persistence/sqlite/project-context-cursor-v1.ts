@@ -11,7 +11,7 @@ export interface ProjectCursorScopeV1 {
   readonly organization_id: string;
   readonly membership_id: string;
 }
-export type ProjectCursorPositionV1 = readonly [string, string] | readonly [number, string, string];
+type ProjectCursorPositionV1 = readonly [string, string] | readonly [number, string, string];
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const projectId = new RegExp(`^prj_${UUID}$`);

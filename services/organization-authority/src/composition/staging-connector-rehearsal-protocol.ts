@@ -25,7 +25,7 @@ export type StagingConnectorRehearsalRequestV3 = BindingV3 & ({
   readonly action: 'verify-read';
   readonly tool: 'jira';
 });
-export const STAGING_CONNECTOR_READ_PHASES_V1 = ['local_authorization', 'connection', 'provider_verification', 'inventory', 'open', 'final_fence'] as const;
+const STAGING_CONNECTOR_READ_PHASES_V1 = ['local_authorization', 'connection', 'provider_verification', 'inventory', 'open', 'final_fence'] as const;
 export const STAGING_CONNECTOR_READ_REASONS_V1 = ['connection_absent', 'identity_unlinked', 'unauthorized', 'stale_access_state', 'not_found', 'invalid_output', 'rate_limited', 'unavailable', 'cancelled', 'deadline_exceeded', 'empty', 'quota_exceeded'] as const;
 export type StagingConnectorReadPhaseV1 = typeof STAGING_CONNECTOR_READ_PHASES_V1[number];
 export type StagingConnectorReadReasonV1 = typeof STAGING_CONNECTOR_READ_REASONS_V1[number];

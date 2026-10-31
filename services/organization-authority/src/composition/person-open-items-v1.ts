@@ -56,7 +56,7 @@ import type { SweepCountsV1 } from './person-sweep-runs-v1.js';
  * scope, and `home` says when one is due (section 6); the sweep run itself
  * reads the same items through `sweepScopeOpenItemsV1`.
  */
-export interface CreatePersonOpenItemsV1Options extends OpenItemSourcesV1 {
+interface CreatePersonOpenItemsV1Options extends OpenItemSourcesV1 {
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   readonly runs: SqliteTriggerRunsV1;
   readonly items: SqliteImpactItemsV1;
@@ -93,7 +93,7 @@ export interface OpenItemsLiveFailureV1 {
   readonly reason: 'bind' | 'open' | 'fence' | 'first_line' | 'connection';
   readonly code: string;
 }
-export type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign' | 'sweep'>;
+type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign' | 'sweep'>;
 
 /** The signed-in person an open-items read is for. */
 export interface OpenItemViewerV1 { readonly token: string; readonly authorization: PersonAccessAuthorization; readonly organization: string; readonly principal: string; readonly membership: string }

@@ -29,7 +29,7 @@ export const CONFLUENCE_PAGE_CAPABILITIES_V1: EvidenceSourceCapabilitiesV1 = Obj
   links: Object.freeze([]),
 });
 /** Jira projects and Confluence spaces are listed and searched by key and name: no filters, dates or links. */
-export const TOOL_CONTAINER_CAPABILITIES_V1: EvidenceSourceCapabilitiesV1 = Object.freeze({
+const TOOL_CONTAINER_CAPABILITIES_V1: EvidenceSourceCapabilitiesV1 = Object.freeze({
   filters: Object.freeze({}), dates: Object.freeze({}), any_date: false, links: Object.freeze([]),
 });
 

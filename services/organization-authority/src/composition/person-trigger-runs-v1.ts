@@ -37,7 +37,7 @@ type DeskScope = Parameters<typeof bindPersonLiveEvidenceDeskV1>[2]['scope'];
  */
 type RunOutput = { readonly result: object; readonly writes?: () => (transaction: Database.Database) => void };
 
-export interface CreatePersonTriggerRunsV1Options {
+interface CreatePersonTriggerRunsV1Options {
   readonly runs: SqliteTriggerRunsV1;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   /** `recordIndexLags` holds a pending run (impact or sweep) unclaimed while the index lags; without it a start claims as before and the anchor refuses. */
@@ -131,7 +131,7 @@ function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Di
 }
 
 /** The runs themselves; the open items a finished run found are served by `createPersonOpenItemsV1`. */
-export type PersonTriggerRunsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'list' | 'start' | 'retry' | 'view' | 'close'>;
+type PersonTriggerRunsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'list' | 'start' | 'retry' | 'view' | 'close'>;
 
 export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Options): PersonTriggerRunsApplicationV1 {
   const lease = options.lease_ms ?? LEASE_MS;

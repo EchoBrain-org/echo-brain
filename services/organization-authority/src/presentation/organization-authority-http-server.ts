@@ -149,7 +149,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
 function routeKey(method: string, path: string): string {
   return `${method} ${path}`;
 }
-export interface AuthorityOidcAuthorizationUrlProvider {
+interface AuthorityOidcAuthorizationUrlProvider {
   buildAuthorizationUrl(
     input: ReturnType<PersonIdentitySessionApplication["beginOidcLogin"]>,
   ): string | Promise<string>;

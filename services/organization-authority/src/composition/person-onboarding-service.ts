@@ -15,7 +15,7 @@ import {
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 
 // This on-disk name is part of the installed-state layout and remains stable.
-export const PERSON_SESSION_PKCE_KEY_FILENAME = "person-session-pkce-sealing-key";
+const PERSON_SESSION_PKCE_KEY_FILENAME = "person-session-pkce-sealing-key";
 
 export interface InitializedPersonSessionCredentials {
   readonly schema_version: 1;
@@ -39,7 +39,7 @@ export function initializePersonSessionCredentials(input: {
   });
 }
 
-export interface IssuePersonOnboardingInvitationInput {
+interface IssuePersonOnboardingInvitationInput {
   readonly state_directory: string;
   readonly oidc: PersonSessionOidcConfiguration;
   readonly pkce_sealing_key: Uint8Array;

@@ -67,7 +67,7 @@ export interface OpenItemsFixtureOptionsV1 {
 }
 
 /** One impact card as the renderer returns it, with a copy of the ticket at another text hash when asked. */
-export function fixtureCard(input: { readonly record: unknown; readonly outsideText: string; readonly actionOwner: string; readonly assessed: boolean; readonly duplicateTicket?: boolean; readonly withoutExpected?: boolean; readonly ownRecordAffected?: boolean }) {
+function fixtureCard(input: { readonly record: unknown; readonly outsideText: string; readonly actionOwner: string; readonly assessed: boolean; readonly duplicateTicket?: boolean; readonly withoutExpected?: boolean; readonly ownRecordAffected?: boolean }) {
   const ticket = { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: CLOUD, ticket_id: '10012', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-12', text_sha256: canonicalSha256('ECHO-12 text') };
   const rollout = { kind: 'approved_record' as const, atom_id: canonicalSha256('rollout atom'), record_sha256: canonicalSha256('rollout record'), policy_id: 'project-members-readable-person-v1' as const };
   const page = { kind: 'page' as const, tool_id: 'confluence', external_scope_id: CLOUD, page_id: '200', section_id: 'section-1', version: '3',

@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 
 /** Kept structural so this persistence read does not depend on approval composition. */
 interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
-export interface PublishedApprovalV1 {
+interface PublishedApprovalV1 {
   /** The decided proposal's approval id. */
   readonly approval_id: string;
   /** The source the meeting was read from: the decision's frozen transcript_source, which holds its unapproved notes. */

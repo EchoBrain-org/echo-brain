@@ -28,7 +28,7 @@ export const APPROVAL_ROUTES_MAX_V1 = 500;
 
 export type ApprovalSurfaceV1 = 'desktop' | 'slack';
 export interface ApprovalActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
-export interface ApprovalOwnerChoiceV1 { readonly signal_id: string; readonly owner: string }
+interface ApprovalOwnerChoiceV1 { readonly signal_id: string; readonly owner: string }
 /**
  * Where one decision or action goes: null = not kept, [] = Only me, otherwise 1..20 project ids, strictly ascending.
  * `private: true` keeps it for the reviewer alone inside those projects (ADR-0049): only with a project, and present only
@@ -48,7 +48,7 @@ export interface ApprovalDecisionRequestV1 {
   readonly owners: readonly ApprovalOwnerChoiceV1[];
 }
 /** One published record of an approved proposal: its own approval id and its destination ([] = Only me; `private` as its routes). */
-export interface ApprovalRecordRefV1 { readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true }
+interface ApprovalRecordRefV1 { readonly approval_id: string; readonly project_ids: readonly string[]; readonly private?: true }
 export interface ApprovalAuthorizationV1 {
   readonly actor: ApprovalActorV1;
   /** Digest of the evidence that authorized this decision: the person session, or the verified Slack click and link.
@@ -56,12 +56,12 @@ export interface ApprovalAuthorizationV1 {
   readonly evidence: { readonly kind: 'person-session' | 'slack-click'; readonly sha256: Sha256Digest };
 }
 export type ApprovalStatusV1 = 'pending' | 'publishing' | 'approved' | 'rejected' | 'superseded';
-export type ApprovalDecideResultV1 =
+type ApprovalDecideResultV1 =
   | { readonly kind: 'decided'; readonly status: 'publishing' | 'rejected'; readonly surface: ApprovalSurfaceV1 }
   | { readonly kind: 'replayed'; readonly status: 'publishing' | 'approved' | 'rejected'; readonly surface: ApprovalSurfaceV1 }
   | { readonly kind: 'already_decided'; readonly status: 'publishing' | 'approved' | 'rejected'; readonly surface: ApprovalSurfaceV1 }
   | { readonly kind: 'stale' };
-export interface ApprovalOwnerProposalV1 { readonly signal_id: string; readonly action: string; readonly proposed: string }
+interface ApprovalOwnerProposalV1 { readonly signal_id: string; readonly action: string; readonly proposed: string }
 /** An unauthenticated read: every caller compares `reviewer` with its authenticated person before showing it.
  *  Only frozen proposals are returned. */
 export interface ApprovalProposalViewV1 {
@@ -88,7 +88,7 @@ export interface ApprovalProposalViewV1 {
   readonly snapshot_json: string;
 }
 /** The exact retained revision of a reviewed meeting's source. */
-export type ApprovalMeetingSourceV1 = NonNullable<ReturnType<typeof retainedMeetingSourceCoordinateV1>>;
+type ApprovalMeetingSourceV1 = NonNullable<ReturnType<typeof retainedMeetingSourceCoordinateV1>>;
 /** Exact canonical JSON stored in authority_approval_decisions_v1.body_json; Task 8's publisher reads it. */
 export interface ApprovalDecisionBodyV1 {
   readonly request: ApprovalDecisionRequestV1;
@@ -231,7 +231,7 @@ function checkAuthorization(surface: ApprovalSurfaceV1, organizationId: string, 
 }
 
 /** One decision or action as its reviewer reads it, in the routes' order. */
-export interface ApprovalReviewItemV1 {
+interface ApprovalReviewItemV1 {
   readonly signal_id: string; readonly kind: 'decision' | 'action'; readonly text: string; readonly subject: string | null;
   /** A decision's; null for an action. */
   readonly status: 'proposed' | 'decided' | 'unresolved' | null;
@@ -240,8 +240,8 @@ export interface ApprovalReviewItemV1 {
   /** The meeting's own words, one per cited span that quotes them. */
   readonly quotes: readonly string[];
 }
-export interface ApprovalReviewReasonV1 { readonly signal_id: string; readonly text: string; readonly supports: readonly string[]; readonly quotes: readonly string[] }
-export interface ApprovalReviewV1 {
+interface ApprovalReviewReasonV1 { readonly signal_id: string; readonly text: string; readonly supports: readonly string[]; readonly quotes: readonly string[] }
+interface ApprovalReviewV1 {
   /** Who was in the meeting, by name (else id), each once. */
   readonly participants: readonly string[];
   readonly items: readonly ApprovalReviewItemV1[];

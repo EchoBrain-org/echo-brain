@@ -22,7 +22,7 @@ export interface AgenticAskAuditRequestContextV1 {
  * follow-up its id and a digest of the fields released. Never a title, name,
  * phrase or decision text.
  */
-export interface PersonFollowUpReleaseV1 {
+interface PersonFollowUpReleaseV1 {
   readonly operation: 'search' | 'list' | 'open';
   readonly items: readonly { readonly item_id: string; readonly released_fields_sha256: Sha256Digest }[];
 }

@@ -20,12 +20,12 @@ const STAGING_AUTHORITY_HOST = new URL(STAGING_AUTHORITY_ORIGIN_V1).hostname;
 const CONTROL_PATH = "/v1/run";
 const OPERATION_TIMEOUT_MS = 110_000;
 
-export interface StagingSyntheticPrivateDmCanaryControlV1 {
+interface StagingSyntheticPrivateDmCanaryControlV1 {
   readonly socket_path: string;
   close(): Promise<void>;
 }
 
-export interface OpenStagingSyntheticPrivateDmCanaryControlV1Input {
+interface OpenStagingSyntheticPrivateDmCanaryControlV1Input {
   readonly authority_url: string;
   readonly authority_host: string;
   readonly release_id: string;

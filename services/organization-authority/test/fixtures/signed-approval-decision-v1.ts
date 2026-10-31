@@ -56,7 +56,7 @@ export const SIGNED_APPROVAL_PROJECTORS = authorityRecordPolicyProjectorsV1();
 export const SIGNED_APPROVAL_APPROVER = composeRecordApproverProjectorsV1(AUTHORITY_RECORD_APPROVER_PROJECTORS_V1);
 /** The prefix of every fixture command_id. It travels in the signed reference and must never be released. */
 export const SIGNED_APPROVAL_PRIVATE_MARKER = "cmd-fixture";
-export const SIGNED_APPROVAL_ISSUED_AT = "2026-08-21T12:02:00.000Z";
+const SIGNED_APPROVAL_ISSUED_AT = "2026-08-21T12:02:00.000Z";
 
 export interface SignedApprovalInputV1 {
   /** The proposal's approval id. An approval decision's record carries the id derived for its destination (approvalRecordIdV2);

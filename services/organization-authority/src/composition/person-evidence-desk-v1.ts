@@ -52,7 +52,7 @@ export interface PersonEvidenceDeskExclusionsV1 {
 
 /** The V3 route creates one desk per request; actor, bearer and scope never
  * enter the model-facing methods. */
-export interface CreatePersonEvidenceDeskV1Options {
+interface CreatePersonEvidenceDeskV1Options {
   readonly access_token: string;
   readonly scope: PersonAskScopeV2;
   readonly originals: PersonOriginalContextEvidenceDeskPortV1;
@@ -64,7 +64,7 @@ export interface CreatePersonEvidenceDeskV1Options {
  * A result of this desk. A dated search or list also says what its date filter could not test, summed over meeting
  * records and originals (research tool contract v1): those items are not in the result.
  */
-export type PersonEvidenceDeskResultV1 = EvidenceDeskResultV1 & Pick<EvidenceDeskResultV2, "unchecked">;
+type PersonEvidenceDeskResultV1 = EvidenceDeskResultV1 & Pick<EvidenceDeskResultV2, "unchecked">;
 
 /** The concrete desk: the V1 port, `openCitation`, and results that carry `unchecked`. */
 export interface PersonEvidenceDeskV1 extends EvidenceDeskPortV1 {

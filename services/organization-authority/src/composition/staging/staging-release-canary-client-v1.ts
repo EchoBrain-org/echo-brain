@@ -10,7 +10,7 @@ const REQUEST_TIMEOUT_MS = 120_000;
 const OUTCOMES = ["staged", "not_actionable", "not_staged"] as const satisfies readonly StagingSyntheticCanaryOutcomeV1["kind"][];
 type ApprovalOutcome = (typeof OUTCOMES)[number];
 
-export type StagingSyntheticPrivateDmCanaryReceiptV1 =
+type StagingSyntheticPrivateDmCanaryReceiptV1 =
   | Readonly<{
       schema_version: 1;
       kind: "echo-staging-synthetic-private-dm-canary-receipt-v1";

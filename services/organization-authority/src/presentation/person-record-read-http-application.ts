@@ -1,8 +1,8 @@
 export const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
 
 /** Presentation-local structural views keep this HTTP seam implementation-free. */
-export type PersonRecordDigestV1 = `sha256:${string}`;
-export type PersonRecordEnvelopeV1 = Readonly<Record<string, unknown>>;
+type PersonRecordDigestV1 = `sha256:${string}`;
+type PersonRecordEnvelopeV1 = Readonly<Record<string, unknown>>;
 
 /** Optional presentation metadata, resolved now; not part of the signed record. */
 export interface PersonRecordSourceMetadataV1 {

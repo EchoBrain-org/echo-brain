@@ -97,7 +97,7 @@ function stagingSyntheticCanaryHook(
  * Narrow composition seams for deterministic local rehearsals. Production
  * callers leave this absent.
  */
-export interface OrganizationAuthorityRuntimeDependencies {
+interface OrganizationAuthorityRuntimeDependencies {
   /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
   readonly api?: Partial<OrganizationAuthorityApiRuntimeDependencies>;
 }

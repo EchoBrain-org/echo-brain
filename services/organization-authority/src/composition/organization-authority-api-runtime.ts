@@ -94,7 +94,7 @@ export interface PersonHttpRuntimeResourcesV1 {
   readonly record: import('better-sqlite3').Database;
   readonly coordinates: { readonly authority_id: string; readonly organization_id: string; readonly state_lineage_id: string };
 }
-export interface PersonHttpRuntimeV1 {
+interface PersonHttpRuntimeV1 {
   readonly applications: readonly ProviderHttpApplicationV1[];
   readonly processing?: import('./organization-authority-service-lifecycle.js').OrganizationAuthorityProcessingCycleV1;
   tools?(token: string): Promise<readonly import('@echo-brain/organization-api').OrganizationPersonToolV4[]>;

@@ -2,7 +2,7 @@ const K1 = 1.2;
 const B = 0.75;
 const SCALE = 1_000_000;
 
-export type OriginalContextPacketAnalysisV1 = Readonly<{
+type OriginalContextPacketAnalysisV1 = Readonly<{
   length: number;
   frequencies: ReadonlyMap<string, number>;
 }>;

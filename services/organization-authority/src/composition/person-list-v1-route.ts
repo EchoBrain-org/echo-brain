@@ -67,7 +67,7 @@ type Opened =
   | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "document" }>
   | (ReturnType<PersonMeetingItemsPortV1["openMeeting"]> & { readonly kind: "meeting" });
 
-export interface CreatePersonListRouteV1Options {
+interface CreatePersonListRouteV1Options {
   readonly organization_id: string;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   /** The caller's connected tools; only each tool id and status leave. */

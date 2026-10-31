@@ -65,7 +65,7 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   setWorkerLifecycle?(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void;
 }
 
-export interface OrganizationAuthorityServiceLifecycleConfig {
+interface OrganizationAuthorityServiceLifecycleConfig {
   readonly api: OrganizationAuthorityApiRuntimeConfig;
   readonly worker_interval_ms?: number;
 }

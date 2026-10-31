@@ -3,7 +3,7 @@ import type { DocumentExtractionClaimV1, PersonDocumentRepositoryV1 } from '../.
 import { PERSON_SOURCE_IDENTITY_V1, personDocumentSourceEnvelopeV1, type PersonDocumentSourceContentV1 } from '../../application/person-document-source-v1.js';
 import type { PersonTextSourceContentV1, PersonTextSourceInboxV1, PersonTextSourceFailureObservationV1 } from '../../application/ports/person-text-source-v1.js';
 
-export type PersonSourceContentV1 = PersonDocumentSourceContentV1 | PersonTextSourceContentV1;
+type PersonSourceContentV1 = PersonDocumentSourceContentV1 | PersonTextSourceContentV1;
 
 /** One Person source, backed by durable Authority custody rather than the user's device. */
 export class PersonSourceAdapterV1 implements SourceAdapterV1<PersonSourceContentV1> {

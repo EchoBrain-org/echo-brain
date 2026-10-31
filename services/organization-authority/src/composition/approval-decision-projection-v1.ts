@@ -18,12 +18,12 @@ const same = (a: unknown, b: unknown) => canonicalJson(a as JsonValue) === canon
 function refuse(): never { throw new Error('Approval decision witness differs from its record'); }
 
 /** What authorized the decision. authorization_proof_sha256 = canonicalSha256(this). */
-export interface ApprovalDecisionEvidenceWitnessV1 {
+interface ApprovalDecisionEvidenceWitnessV1 {
   readonly surface: ApprovalSurfaceV1; readonly organization_id: string; readonly principal_id: string; readonly membership_id: string;
   readonly kind: 'person-session' | 'slack-click'; readonly sha256: Sha256Digest;
 }
 /** The decision's audit entry, keyed by the proposal it decided. audit_entry_sha256 = canonicalSha256(this). */
-export interface ApprovalDecisionAuditWitnessV1 {
+interface ApprovalDecisionAuditWitnessV1 {
   readonly approval_id: string; readonly event_id: string; readonly sequence: number;
   readonly action_sha256: Sha256Digest; readonly authorization_sha256: Sha256Digest; readonly approved_at: string;
 }
@@ -60,7 +60,7 @@ export function approvalDecisionWitnessV1(decision: { readonly sequence: number;
 }
 
 /** One destination of a decision: the kept items routed to exactly one project set, kept private in it or not. */
-export interface ApprovalDecisionGroupV1 {
+interface ApprovalDecisionGroupV1 {
   /** The record's own approval id (approvalRecordIdV2). */
   readonly approval_id: string;
   /** [] = Only me. */
@@ -99,7 +99,7 @@ export function approvalDecisionGroupsV1(request: { readonly approval_id: string
     signal_ids: Object.freeze(group.signal_ids) })));
 }
 
-export interface ApprovalDecisionRecordSourceV1 {
+interface ApprovalDecisionRecordSourceV1 {
   readonly coordinates: { readonly authority_id: string; readonly organization_id: string; readonly state_lineage_id: string };
   readonly decision: { readonly sequence: number; readonly body: ApprovalDecisionBodyV1 };
   /** frozen.candidate_semantic_sha256 */
