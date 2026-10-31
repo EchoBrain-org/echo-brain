@@ -573,7 +573,9 @@ Do not reuse the operation ID until cleanup has proved absence.
 
 ## Design records
 
-The [documentation index](docs/README.md) routes to the architecture maps,
+The system overview starts at
+[docs/architecture/overview.md](docs/architecture/overview.md). The
+[documentation index](docs/README.md) routes to the architecture maps,
 components and records, and the [decision index](docs/decisions/README.md)
 lists every ADR with its status.
 
