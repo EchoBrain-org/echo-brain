@@ -395,7 +395,7 @@ describe('a project Home cannot find on your list', () => {
   });
 });
 
-describe('a remembered project when your projects could not be read at all', () => {
+describe('a project Home is zoomed on when your projects could not be read at all', () => {
   it('says so, with a way back to My projects, instead of reading forever', async () => {
     const { ProjectLevel } = await import('../../src/renderer/screens/altitude.js');
     const tree = render(ProjectLevel({ state: await stateWith({ level: 'project', project_id: 'prj_remembered' }, [], { failure: { code: 'unavailable', retryable: true } }) }));

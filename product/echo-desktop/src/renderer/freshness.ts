@@ -343,7 +343,7 @@ function followUpEvent(before: OpenItemView | null, row: OpenItemView, me: strin
 }
 
 /** When a follow-up last changed (made, sent, or its owner or state set), on the Authority's clock. */
-function changedAt(row: OpenItemView): string {
+export function changedAt(row: OpenItemView): string {
   return latest(row.created_at, row.sent_at, row.owner_set_at, row.state_set_at)!;
 }
 

@@ -10,17 +10,14 @@ import { Chevron, KindMark, Plus } from './icons.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
 const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', review: 'Review', failed: 'Retry', checking: 'Checking' };
-/** A kind's verb on Home's top, and the mark it shares with its rows. */
-const CATEGORY: Record<HomeCategory['category'], { verb: string; mark: NeedRow['kind'] }> = {
-  approve: { verb: 'Approve', mark: 'approve' }, retry: { verb: 'Retry', mark: 'failed' }, send: { verb: 'Send', mark: 'send' },
-  update: { verb: 'Update', mark: 'update' }, checking: { verb: 'Checking', mark: 'checking' },
-};
+/** A kind on Home's top: the row kind whose mark and verb it shares. */
+const CATEGORY: Record<HomeCategory['category'], NeedRow['kind']> = { approve: 'approve', retry: 'failed', send: 'send', update: 'update', checking: 'checking' };
 
 /** Home's reads are on their way: what it shows may still change. */
 const busy = (home: State['home']) => (home ? home.loading || home.reading : true);
 
 /** How long ago, as Home's lines say it beside a kind: now, 5m, 2h, 3d; nothing with no time. */
-export function age(iso: string | null, now = Date.now()): string {
+function age(iso: string | null, now = Date.now()): string {
   const minutes = iso === null ? Number.NaN : Math.floor(Math.max(0, now - Date.parse(iso)) / 60_000);
   if (Number.isNaN(minutes)) return '';
   if (minutes < 1) return 'now';
@@ -162,7 +159,8 @@ function needRowsOf(state: State, rows: readonly NeedRow[]) {
  * their way are one faint line that opens nothing: there is nothing to do yet.
  */
 function CategoryLine({ category: { category, rows }, name }: { category: HomeCategory; name: string }) {
-  const { verb, mark } = CATEGORY[category];
+  const mark = CATEGORY[category];
+  const verb = KIND[mark];
   const words = <>
     <span class="need-kind"><KindMark kind={mark} />{verb}</span>
     {category !== 'checking' && <span class="need-category-count">{rows.length}</span>}
@@ -270,7 +268,7 @@ function CategoryList({ state, category }: { state: State; category: NeedCategor
     <div class="alt-level-body">
       <section class="needs-section" data-testid="needs" data-category={category} aria-busy={busy(state.home)} aria-labelledby="need-list-head">
         <h2 class="need-list-head" id="need-list-head" data-testid="need-list-head">
-          <span class="need-list-verb">{CATEGORY[category].verb}</span><span class="need-category-count">{rows.length}</span>
+          <span class="need-list-verb">{KIND[CATEGORY[category]]}</span><span class="need-category-count">{rows.length}</span>
         </h2>
         {rows.map(shown)}
         <Failed home={state.home} />

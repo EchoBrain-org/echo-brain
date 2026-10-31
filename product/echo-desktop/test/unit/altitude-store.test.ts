@@ -61,6 +61,15 @@ function runsHandler(params: Record<string, unknown>): unknown {
     return ok({ items: live(request) ? page.map(item => ({ ...item, reach: 'opened' })) : page, next_cursor: next, summary, stages: [] });
 }
 
+/** A rename made here from the sidebar, which the Authority's list then carries. */
+function rename(of: ProjectSummary, name: string, store: Awaited<ReturnType<typeof startStore>>): void {
+  store.toggleProjectSettings(of, 'sidebar');
+  store.beginProjectRename();
+  store.setProjectRename(name);
+  store.confirmProjectSetting();
+  lists = { ...lists, active: lists.active.map(each => (each.project_id === of.project_id ? { ...each, name } : each)) };
+}
+
 storeLifecycle(new Date('2026-10-30T12:00:00.000Z'));
 beforeEach(() => {
   held = new Held();
@@ -606,11 +615,7 @@ describe('Home altitudes keep their copy of a long list while they read it again
     await flush(200);
     expect(store.getState().altitude.list).not.toBeNull();
     await store.openOnlyMe();
-    store.toggleProjectSettings(first, 'sidebar');
-    store.beginProjectRename();
-    store.setProjectRename('Renamed');
-    store.confirmProjectSetting();
-    lists = { active: [{ ...first, name: 'Renamed' }, ...lists.active.slice(1)], archived: [] };
+    rename(first, 'Renamed', store);
     await flush(80);
     store.openNewProject();
     await flush();
@@ -758,14 +763,6 @@ describe('Home altitudes drop a read of every page that a change overtook', () =
         },
       }, () => lists));
     });
-
-    function rename(of: ProjectSummary, name: string, store: Awaited<ReturnType<typeof startStore>>): void {
-      store.toggleProjectSettings(of, 'sidebar');
-      store.beginProjectRename();
-      store.setProjectRename(name);
-      store.confirmProjectSetting();
-      lists = { ...lists, active: lists.active.map(each => (each.project_id === of.project_id ? { ...each, name } : each)) };
-    }
 
     it('a rename on Home while Home reads every page again', async () => {
       const store = await startStore();

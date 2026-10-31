@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, activeTotal, checkWords, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, homeFooter, itemHistory, itemKind,
+  actionCount, activeTotal, checkWords, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, itemHistory, itemKind,
   itemLine, itemNames, itemTitle, lastChecked, liveFacts, markWords, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows,
   ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
@@ -20,6 +20,8 @@ const OKAFOR = { membership_id: 'mem_00000000-0000-4000-8000-000000000003', name
 const pilot = { approval_id: 'apr_1', record_sha256: 'sha256:1', title: 'Pilot planning', first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T12:00:00.000Z', project_ids: [] };
 /** One of the meeting's own actions: its title is its words, and it is never read live. */
 const action = (patch: Partial<OpenItemView> = {}) => item({ kind: 'action', relation: 'needs_updating', expected: 'Send the revised quote', reach: 'not_read', decision: pilot, ...patch });
+const now = Date.parse('2026-10-14T12:00:00.000Z');
+const daysAgo = (count: number) => new Date(now - count * 86_400_000).toISOString();
 
 describe('the words Home and the follow-ups use', () => {
   it('names people by first name, keeping an initial or a shared first name whole', () => {
@@ -149,8 +151,6 @@ describe('one status vocabulary (F7)', () => {
   });
 
   it('orders a list as one list of current work, what needs attention first, each part longest waiting first; then each closed status, oldest first', () => {
-    const now = Date.parse('2026-10-14T12:00:00.000Z');
-    const daysAgo = (count: number) => new Date(now - count * 86_400_000).toISOString();
     const items = [
       item({ item_id: 'itm_00000001', state: 'done', created_at: daysAgo(9) }), item({ item_id: 'itm_00000002', state: 'done', created_at: daysAgo(12) }),
       // Open two days: nothing needs doing yet. Open five and nine days: past three, they need attention.
@@ -170,8 +170,6 @@ describe('one status vocabulary (F7)', () => {
 });
 
 describe('a follow-ups row and its owner line (One place to look v1, K)', () => {
-  const now = Date.parse('2026-10-14T12:00:00.000Z');
-  const daysAgo = (count: number) => new Date(now - count * 86_400_000).toISOString();
   const RAFAEL = { membership_id: 'mem_00000000-0000-4000-8000-000000000002', name: 'Rafael Moreno', active: true };
   const ME = { membership_id: 'mem_00000000-0000-4000-8000-000000000009', name: 'Ari', active: true };
   const open = (days: number, patch: Partial<OpenItemView> = {}) => item({ sent_at: daysAgo(days), state_set_at: daysAgo(days), ...patch });
@@ -264,7 +262,7 @@ describe('ECHO\'s re-reads, kept underneath', () => {
   const checked = (verdict: NonNullable<OpenItemView['check']>['verdict']) => ({ verdict, checked_at: ago(120), checked_by: 'Mina Patel' });
 
   it('says when a check ran as the canvas does', () => {
-    const checkedAgo = (iso: string, at: number) => homeFooter({ waiting: 0, last_checked_at: iso }, at).checked!.replace('ECHO checked ', '');
+    const checkedAgo = (iso: string, at: number) => lastChecked([iso], at)!.replace('ECHO checked ', '');
     expect([checkedAgo(ago(0), now), checkedAgo(ago(0.5), now), checkedAgo(new Date(now + 30_000).toISOString(), now)]).toEqual(['just now', 'just now', 'just now']);
     expect([checkedAgo(ago(1), now), checkedAgo(ago(59), now)]).toEqual(['1 min ago', '59 min ago']);
     expect([checkedAgo(ago(60), now), checkedAgo(ago(120), now), checkedAgo(ago(359), now)]).toEqual(['1 h ago', '2 h ago', '5 h ago']);
@@ -283,15 +281,6 @@ describe('ECHO\'s re-reads, kept underneath', () => {
     expect(checkWords(null, now)).toBeNull();
     // A list row says only a match.
     expect([matchesNow(item({ check: checked('landed') })), matchesNow(item({ check: checked('changed') })), matchesNow(item())]).toEqual(['matches now', null, null]);
-  });
-
-  it('sums up under Home\'s rows what waits on others, as its link, and when ECHO checked, never what matches', () => {
-    expect(homeFooter({ waiting: 1, last_checked_at: ago(120) }, now)).toEqual({ link: '1 waiting on others', checked: 'ECHO checked 2 h ago' });
-    expect(homeFooter({ waiting: 2, last_checked_at: null }, now)).toEqual({ link: '2 waiting on others', checked: null });
-    // Nothing waits on others: the link is still there, to Follow-ups; so it is before Home is read.
-    expect(homeFooter({ waiting: 0, last_checked_at: ago(120) }, now)).toEqual({ link: 'Follow-ups', checked: 'ECHO checked 2 h ago' });
-    expect(homeFooter({ waiting: 0, last_checked_at: null }, now)).toEqual({ link: 'Follow-ups', checked: null });
-    expect(homeFooter(null, now)).toEqual({ link: 'Follow-ups', checked: null });
   });
 
   it('says on your Follow-ups when ECHO last checked by the latest time any read said, whichever was read last', () => {
