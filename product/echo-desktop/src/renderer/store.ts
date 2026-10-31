@@ -6686,7 +6686,7 @@ export function openFollowUps(scope: 'record' | 'project', id: string, title: st
 }
 
 /**
- * Follow-ups (yours), from the sidebar or Home's footer: everything you sent, own or last handed on (`involved`), as a page
+ * Follow-ups (yours), from the sidebar: everything you sent, own or last handed on (`involved`), as a page
  * of its own. The bar searches all context.
  */
 export function openYourFollowUps(): Promise<void> {

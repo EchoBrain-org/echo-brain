@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, activeTotal, checkWords, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, homeFooter, itemHistory, itemKind,
+  actionCount, activeTotal, checkWords, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, itemHistory, itemKind,
   itemLine, itemNames, itemTitle, lastChecked, liveFacts, markWords, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows,
   ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
@@ -264,7 +264,7 @@ describe('ECHO\'s re-reads, kept underneath', () => {
   const checked = (verdict: NonNullable<OpenItemView['check']>['verdict']) => ({ verdict, checked_at: ago(120), checked_by: 'Mina Patel' });
 
   it('says when a check ran as the canvas does', () => {
-    const checkedAgo = (iso: string, at: number) => homeFooter({ waiting: 0, last_checked_at: iso }, at).checked!.replace('ECHO checked ', '');
+    const checkedAgo = (iso: string, at: number) => lastChecked([iso], at)!.replace('ECHO checked ', '');
     expect([checkedAgo(ago(0), now), checkedAgo(ago(0.5), now), checkedAgo(new Date(now + 30_000).toISOString(), now)]).toEqual(['just now', 'just now', 'just now']);
     expect([checkedAgo(ago(1), now), checkedAgo(ago(59), now)]).toEqual(['1 min ago', '59 min ago']);
     expect([checkedAgo(ago(60), now), checkedAgo(ago(120), now), checkedAgo(ago(359), now)]).toEqual(['1 h ago', '2 h ago', '5 h ago']);
@@ -283,15 +283,6 @@ describe('ECHO\'s re-reads, kept underneath', () => {
     expect(checkWords(null, now)).toBeNull();
     // A list row says only a match.
     expect([matchesNow(item({ check: checked('landed') })), matchesNow(item({ check: checked('changed') })), matchesNow(item())]).toEqual(['matches now', null, null]);
-  });
-
-  it('sums up under Home\'s rows what waits on others, as its link, and when ECHO checked, never what matches', () => {
-    expect(homeFooter({ waiting: 1, last_checked_at: ago(120) }, now)).toEqual({ link: '1 waiting on others', checked: 'ECHO checked 2 h ago' });
-    expect(homeFooter({ waiting: 2, last_checked_at: null }, now)).toEqual({ link: '2 waiting on others', checked: null });
-    // Nothing waits on others: the link is still there, to Follow-ups; so it is before Home is read.
-    expect(homeFooter({ waiting: 0, last_checked_at: ago(120) }, now)).toEqual({ link: 'Follow-ups', checked: 'ECHO checked 2 h ago' });
-    expect(homeFooter({ waiting: 0, last_checked_at: null }, now)).toEqual({ link: 'Follow-ups', checked: null });
-    expect(homeFooter(null, now)).toEqual({ link: 'Follow-ups', checked: null });
   });
 
   it('says on your Follow-ups when ECHO last checked by the latest time any read said, whichever was read last', () => {

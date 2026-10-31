@@ -1,7 +1,7 @@
 import type {
   PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1, PersonOpenItemVerdictV1,
 } from '@echo-brain/organization-api';
-import type { ConnectedTool, HomeView, OpenItemView } from '../shared/protocol.js';
+import type { ConnectedTool, OpenItemView } from '../shared/protocol.js';
 import { needsAttention, overdue, waitedDays, waitingSince } from './altitude.js';
 import { externalSourceProvider } from './answer.js';
 import { clip } from './format.js';
@@ -424,24 +424,11 @@ function checkedAgo(iso: string, now: number): string {
 }
 
 /**
- * Home's footer (F9), as its two parts: its link, "2 waiting on others" (open
- * items you sent that wait on someone else) while any do, else "Follow-ups",
- * also before Home is read; and when ECHO last checked one of yours, "ECHO
- * checked 2 h ago", or null. Never what matches.
- */
-export function homeFooter(open: Pick<HomeView, 'waiting' | 'last_checked_at'> | null, now = Date.now()): { link: string; checked: string | null } {
-  return {
-    link: open !== null && open.waiting > 0 ? `${open.waiting} waiting on others` : 'Follow-ups',
-    checked: lastChecked([open?.last_checked_at], now),
-  };
-}
-
-/**
  * When ECHO last checked one of yours, as "ECHO checked 2 h ago": the latest
  * of the times reads said (your Follow-ups list's own, and Home's, whichever
  * was read since); null when none knows of one.
  */
-export function lastChecked(times: readonly (string | null | undefined)[], now = Date.now()): string | null {
+export function lastChecked(times: readonly (string | null | undefined)[], now: number): string | null {
   const at = times.filter((time): time is string => typeof time === 'string').sort().at(-1);
   return at === undefined ? null : `ECHO checked ${checkedAgo(at, now)}`;
 }
