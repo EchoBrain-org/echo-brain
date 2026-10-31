@@ -149,3 +149,23 @@ test('hidden tests ignore native window focus changes but honor explicit conceal
   await emit(app, 'echo-test:resume');
   await expect(toast).toHaveText('Saved for you');
 });
+
+test('the caret goes back to the bar as the window comes forward, but not over a row you click before the next frame', async () => {
+  run = await launch();
+  const { page, app } = run;
+  const row = page.getByTestId('sidebar-project').first();
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  // Hold the page's frames, as a busy machine does, to see what waits for the next one.
+  await page.evaluate(() => {
+    const held: FrameRequestCallback[] = [];
+    Object.assign(window, { held });
+    window.requestAnimationFrame = callback => held.push(callback);
+  });
+  const held = () => page.evaluate(() => (window as unknown as { held: FrameRequestCallback[] }).held.map(String));
+  await emit(app, 'echo-test:conceal');
+  await emit(app, 'echo-test:resume');
+  await expect.poll(async () => (await held()).some(source => source.includes('ask-field'))).toBe(true);
+  await row.focus();
+  await page.evaluate(() => { for (const callback of (window as unknown as { held: FrameRequestCallback[] }).held.splice(0)) callback(performance.now()); });
+  await expect(row).toBeFocused();
+});

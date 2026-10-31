@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useLayoutEffect, useRef } from 'preact/hooks';
 import { message } from '../messages.js';
 import { closeSheet, settleWords, signOut, signOutHeld, type SignOutSheet, type State } from '../store.js';
 import { trapTab } from './compose.js';
@@ -7,7 +7,7 @@ import { trapTab } from './compose.js';
 export function ConfirmSignOut({ state, sheet }: { state: State; sheet: SignOutSheet }) {
   const box = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
-  useEffect(() => { cancel.current?.focus(); }, [sheet.kind]);
+  useLayoutEffect(() => { cancel.current?.focus(); }, [sheet.kind]);
   const held = signOutHeld();
   return (
     <div class="overlay" onClick={closeSheet}>

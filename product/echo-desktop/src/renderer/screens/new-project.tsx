@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { MAX_PROJECT_FILES } from '../../shared/protocol.js';
 import { message } from '../messages.js';
 import {
@@ -140,7 +140,7 @@ function Picker({ state, sheet, field, queued, halted, busy }: {
 function SkipConfirm({ sheet }: { sheet: NewProjectSheet }) {
   const keep = useRef<HTMLButtonElement>(null);
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { keep.current?.focus(); }, []);
+  useLayoutEffect(() => { keep.current?.focus(); }, []);
   const pick = sheet.picks.find(entry => entry.id === sheet.skip);
   return (
     <div class="overlay" onClick={event => { event.stopPropagation(); cancelSkip(); }}>
@@ -243,7 +243,7 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
   // Whether the focus was last in the people listed, where an Add or a × takes its own button away.
   const inPeople = useRef(false);
   // The name first. Once the project exists, a control you are in keeps the focus; else the sheet.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const at = document.activeElement;
     if (made && at !== box.current && box.current?.contains(at)) return;
     (made ? box.current : name.current)?.focus();

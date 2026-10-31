@@ -1,5 +1,5 @@
 import { render, type ComponentChildren } from 'preact';
-import { useEffect } from 'preact/hooks';
+import { useEffect, useLayoutEffect } from 'preact/hooks';
 import { on } from './api.js';
 import { itemTitle } from './needs.js';
 import { ConfirmSignOut } from './screens/account.js';
@@ -43,8 +43,10 @@ const TOAST_MS = 8_000;
 /** The caret waits in the ask bar whenever the window comes forward, unless a sheet is up. */
 function focusBar(): void {
   if (sheetUp()) return;
-  // A sheet can open before the next frame (a drop, ⌘⇧E): it keeps the focus.
-  requestAnimationFrame(() => { if (!sheetUp()) document.getElementById('ask-field')?.focus(); });
+  const was = document.activeElement;
+  // A sheet can open before the next frame (a drop, ⌘⇧E), and on a busy machine that frame can be half a second away, long
+  // enough to click a row: either keeps the focus.
+  requestAnimationFrame(() => { if (!sheetUp() && document.activeElement === was) document.getElementById('ask-field')?.focus(); });
 }
 
 /**
@@ -98,10 +100,10 @@ function App() {
 
   // Capture closed (saved, or put away): the caret goes back to the bar.
   const capturing = Boolean(state.compose && !state.compose.hidden);
-  useEffect(() => { if (!capturing) focusBar(); }, [capturing]);
+  useLayoutEffect(() => { if (!capturing) focusBar(); }, [capturing]);
   // New project stepped aside or closed: the caret goes to the bar of the project it opened.
   const making = sheetShown(state)?.kind === 'new-project';
-  useEffect(() => { if (!making) focusBar(); }, [making]);
+  useLayoutEffect(() => { if (!making) focusBar(); }, [making]);
 
   // A toast that says something went well goes by itself, counted while it can be seen.
   useEffect(() => {

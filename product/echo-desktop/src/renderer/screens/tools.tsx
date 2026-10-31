@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ConnectedTool, ToolStatus } from '../../shared/protocol.js';
 import { message, TOOL_STATES, toolMessage } from '../messages.js';
 import {
@@ -97,7 +97,7 @@ export function Tools({ state, page }: { state: State; page: ToolsPage }) {
 export function ToolConnect({ sheet }: { sheet: ToolConnectSheet }) {
   useMinuteTick();
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { box.current?.focus(); }, [sheet.phase]);
+  useLayoutEffect(() => { box.current?.focus(); }, [sheet.phase]);
   const { tool } = sheet;
   const failed = sheet.phase === 'failed';
   return (
@@ -142,7 +142,7 @@ export function ToolManage({ sheet }: { sheet: ToolManageSheet }) {
 function ConnectionManage({ sheet }: { sheet: ToolManageSheet }) {
   const box = useRef<HTMLDivElement>(null);
   const done = useRef<HTMLButtonElement>(null);
-  useEffect(() => { (done.current ?? box.current)?.focus(); }, []);
+  useLayoutEffect(() => { (done.current ?? box.current)?.focus(); }, []);
   const { tool } = sheet;
   const meetings = tool.tool_id === 'granola';
   return (
