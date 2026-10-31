@@ -257,7 +257,14 @@ test('a crashed page reloads and reads status again', async () => {
   run = await launch();
   const { page, app } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.webContents.forcefullyCrashRenderer(); });
+  // Main waits for the page loaded in its place, listening before the crash so the load cannot be missed. A look sent
+  // while the dead frame is going reaches a frame Electron has disposed, and that can take down Playwright's connection.
+  await app.evaluate(({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows()[0]!.webContents;
+    const reloaded = new Promise<void>(resolveLoad => contents.once('did-finish-load', () => resolveLoad()));
+    contents.forcefullyCrashRenderer();
+    return reloaded;
+  });
   // Playwright drops a crashed page, so look from main at the reloaded one.
   // (A script sent to the dead page never settles, so each look is capped.)
   const rows = () => app.evaluate(({ BrowserWindow }) => Promise.race([
