@@ -78,7 +78,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | Desktop app | `product/echo-desktop` (its own package, not a root workspace) | Windows, tray, notifications, self-update, the device-only Ask timeline | The Person client, in-process; the update feed |
 | Person client | `src/product/person-client` (`echo-brain` CLI and library) | The Person session and tokens, retained upload originals, the CLI updater | The Authority over HTTPS |
-| Shared contracts | `packages/federation-protocol`, `packages/organization-protocol`, `packages/organization-api` | Canonical JSON, signatures, record envelopes, every Person HTTP shape | Used on both sides of the boundary |
+| Shared contracts | `packages/federation-protocol`, `packages/organization-protocol`, `packages/organization-api` | Canonical JSON, signatures, record envelopes, the Person HTTP shapes | Used on both sides of the boundary |
 | Authority service | `services/organization-authority`, composing the other `packages/*` and the server side of `providers/*` | Identity and sessions, meeting intake, extraction, approval, records, search, Ask, impact checks | Granola, Atlassian, Slack, Nango, OpenRouter, Anthropic |
 | Organization state | One state directory on one persistent volume | Six SQLite roles, provider sidecars, signing keys, secrets | Opened only by the Authority |
 | Release and operations | `tools/`, `deploy/`, `.github/workflows/` | Builds, the AWS staging slot, the client update feed, CI | AWS, only through reviewed CLIs |
@@ -87,8 +87,10 @@ Trust boundaries:
 
 - On the desktop, only the host process holds a token. The main process never
   reads the session, and the renderer runs sandboxed with no Node access.
-- The Person client is the only HTTP client of the Authority. The other
-  callers are Slack's signed interaction posts and the operator's canary socket.
+- The Person client is the Authority's only API client. The other callers are
+  the browser during sign-in (the OIDC callback and the Slack identity-link
+  callback), Slack's signed interaction posts, host scripts that read
+  `/v1/authority-descriptor`, and the operator's canary socket.
 - The Authority listens on loopback only, behind Caddy and a Cloudflare
   tunnel.
 - The Person artifacts carry no Authority code, server provider or SQLite.
@@ -161,7 +163,7 @@ Deeper: [Person client architecture](person-client-architecture.md),
 | --- | --- |
 | `federation-protocol` | RFC 8785 canonical JSON, SHA-256 digests, the P-256 signature profile, identifier rules |
 | `organization-protocol` | Signed record envelopes and receipts, the approval-decision record input, reader policies |
-| `organization-api` | Every Person ↔ Authority HTTP shape, route constant and validator; bundled into the Person client and the desktop |
+| `organization-api` | The Person ↔ Authority HTTP shapes, route constants and validators (provider tool routes live in the provider client workspaces); bundled into the Person client and the desktop |
 | `organization-control-plane` | The control-plane database (`integrations.sqlite`) and the file secret store |
 | `organization-record` | The append-only record log and the permission-aware Person reader |
 | `organization-retrieval` | Search generations: admission budget, permission segments, BM25 |
@@ -192,7 +194,8 @@ Deeper: [component catalog](../components/README.md),
 2. The intake lanes admit it as that person's private source revision. Nobody
    else can read it.
 3. The processing cycle extracts decisions and follow-ups with one model call.
-   A failure is held for an operator-authorized retry, never repeated silently.
+   A provably unbilled first failure gets one free automatic retry; any other
+   failure is held for an operator-authorized retry.
 4. The approval core freezes one proposal for the meeting.
 5. The person decides on the desktop decision page, routing each item to Only
    me, up to 20 projects, those projects privately, or Don't keep. The CLI can
@@ -227,8 +230,9 @@ Owner: [Ask and research](ask-and-research.md).
 ### An impact check finds follow-ups
 
 1. Publishing a record queues an impact check for the approver.
-2. The approver's signed-in desktop starts queued checks through
-   `person runs`. Nothing runs while no desktop is signed in.
+2. A client of the approver starts queued checks through `person runs`: in
+   practice the desktop's runs driver, while the app runs; the CLI can too.
+   The server never starts a check on its own.
 3. The check runs background research as the approver (20 rounds, 48 calls,
    300 s) and writes follow-ups, one shared row per affected item.
 4. The change check (`GET /v1/person/changes`) tells desktops what moved, and
@@ -318,7 +322,8 @@ Owners: [deploy/organization-authority/README.md](../../deploy/organization-auth
   the Person and Authority artifacts, CI shape and deployment profile.
 - `npm run check:docs` checks record metadata, backlinks, the component
   catalog and forbidden content.
-- CI runs `plan` (job selection), `check` (static, Vitest and tail legs),
+- CI runs `plan` (job selection), `check` (static, Vitest and tail legs) or
+  `docs` in its place on a verified main push,
   `person-client-package`, `desktop-app` (macOS arm64 and Linux x64),
   `authority-container` and `authority-recovery-infrastructure`, then one
   required aggregator.
@@ -326,17 +331,18 @@ Owners: [deploy/organization-authority/README.md](../../deploy/organization-auth
 ## Beta limits and known debt
 
 - **Search ceiling.** One search generation admits at most 1,024 approved
-  items and 32 permission segments (`READABLE_SEARCH_ADMISSION_BUDGET_V1`):
-  one segment for the organization, one per approver with Only me items, and
-  one per distinct set of audience projects. Past either limit the rebuild
+  items, 32 permission segments, 4,096 bytes of text per item and 17,408
+  postings, whichever binds first (`READABLE_SEARCH_ADMISSION_BUDGET_V1`).
+  Segments are one for the organization, one per approver with Only me items,
+  and one per distinct set of audience projects. Past any limit the rebuild
   throws. A running service keeps serving the previous generation, so new
   approvals stop reaching search, lists and Ask; the next restart fails before
   the API starts listening. See the
   [scaling decision guide](scaling-decision-guide.md).
 - **One process, one volume, no migrations.** A baseline change means fresh
   state.
-- **Impact checks need a signed-in desktop.** The server never starts one on
-  its own.
+- **Impact checks need a client to start them.** The approver's desktop does
+  while it runs; the server never starts one on its own.
 - **Layering debt.** Newer Person services in `composition/` open SQLite
   directly.
 - **Provider ownership debt.** The staging-only Claude research transport

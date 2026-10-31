@@ -96,7 +96,7 @@ independently identified tools without imposing a provider's identity grammar.
 
 `product/source-boundary.v1.json` declares bootstrap modules, provider folders,
 source assemblies and retired roots. The legacy machine runtime remains absent.
-Its former product graph fields must remain empty: active products are checked
+Its former product graph fields are refused: active products are checked
 through their registered workspace boundaries. The gate retains source
 tombstones and provider ownership without maintaining a second graph walker
 for the retired runtime.

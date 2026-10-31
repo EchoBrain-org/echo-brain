@@ -25,12 +25,13 @@ flowchart LR
 1. **Queue.** When the publisher appends a record, an after-record hook queues
    one impact check for it in `authority_trigger_runs_v1`, in the same
    transaction ([ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md)).
-2. **Start.** Only the approver's signed-in desktop starts queued checks. Its
-   runs driver (in `product/echo-desktop/src/renderer/store.ts`) calls
-   `person runs` with `start`, polls while a check is going, retries failed
-   ones and runs sweeps. Checks run wherever ECHO runs for that person, on any
-   page, even closed to the tray. Nothing runs once the app quits, and the
-   server never starts a check on its own.
+2. **Start.** A client of the approver starts queued checks with
+   `person runs`. In practice that is the desktop's runs driver (in
+   `product/echo-desktop/src/renderer/store.ts`): it calls `start`, polls while
+   a check is going and runs sweeps, wherever ECHO runs for that person, on any
+   page, even closed to the tray. A failed check waits on Home until the person
+   retries it. Nothing runs once the app quits, and the server never starts a
+   check on its own.
 3. **Run.** `composition/person-trigger-runs-v1.ts` runs background research
    as the approver, with the approver's access, at background model priority
    (20 rounds, 48 model calls, 300 s). At most four checks run at once per
@@ -75,7 +76,8 @@ renderers (`src/answer-composition/`).
 
 ## Limits
 
-- A check needs the approver's desktop to be running and signed in.
+- A check needs a client of the approver to start it; in practice the
+  desktop, running and signed in.
 - Research runs with the approver's access at the time of the check; the
   model gate re-checks access before every model call.
 - Background model calls share the process-wide limiter with Ask (at most four

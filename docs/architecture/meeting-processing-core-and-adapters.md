@@ -310,7 +310,7 @@ planner/answer model `anthropic/claude-sonnet-5.5`. On the staging Authority
 only, the connector rehearsal profile also selects the Claude Agent SDK
 research engine, still over OpenRouter, and a host operator may let one
 member's own Claude account research and write that member's Ask answers
-([Verification](../../services/organization-authority/README.md#verification),
+([Staging connector rehearsal](../../services/organization-authority/README.md#staging-connector-rehearsal),
 [Personal Claude staging research](../../deploy/organization-authority/README.md#personal-claude-staging-research)).
 This is an allowed selecting composition profile, not evidence that every
 active provider has completed qualification.

@@ -81,9 +81,10 @@ copy that a unit test proves equivalent.
   sets. It re-reads only the areas that moved, decides what deserves a
   notification and asks main to show it. A click sends `notice.open` and brings
   the window forward.
-- **Impact checks.** The store's runs driver starts, retries, polls and sweeps
-  impact checks through `person runs` while a person is signed in, on any
-  page. Nothing runs once the app quits; see
+- **Impact checks.** The store's runs driver starts queued impact checks,
+  polls while one runs and runs sweeps through `person runs` while a person is
+  signed in, on any page. A failed check waits on Home until the person retries
+  it. Nothing runs once the app quits; see
   [impact checks and open items](impact-checks-and-open-items.md).
 - **Ask** ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md),
   [ADR-0045](../decisions/ADR-0045-ask-answer-layout.md),
@@ -127,8 +128,11 @@ Unit tests (`test/unit`, Vitest) cover the pure rules and the host. The
 Playwright suite (`test/e2e`) launches the real app against a stateful fake
 Authority (`test/fixtures/authority.ts`). The separate `desktop-app` CI job runs
 typecheck, unit tests, Playwright, packaging with its release leak check, and a
-packaged smoke test on macOS arm64 and Linux x64; the root `npm run check`
-does not reach the desktop.
+packaged smoke test on macOS arm64 and Linux x64. The root `npm run check`
+reaches part of the desktop: `tests/architecture/ask-progress-roundtrip.test.ts`
+imports the host's client runner, Ask reader and views and the renderer's
+progress, openers and store, and root `tsc` typechecks that test. Removing or
+renaming one of those exports breaks the root check.
 
 See also: [Desktop app component](../components/desktop-app.md),
 [Person client architecture](person-client-architecture.md).
