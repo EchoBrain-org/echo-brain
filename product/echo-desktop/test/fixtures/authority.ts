@@ -2206,7 +2206,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (url.searchParams.get('record_sha256') !== digest || mode === 'record-gone') {
         return json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [] });
       }
-      const event = { kind: 'approved', policy_id: 'organization-member-readable-person-v2', approved_snapshot: { approved_payload: { brief } } };
+      const event = { kind: 'approved', policy_id: 'project-members-readable-person-v1', approved_snapshot: { approved_payload: { brief } } };
       return json({
         schema_version: 1, kind: 'echo-clean-person-record-list-v1',
         records: [{

@@ -19,7 +19,7 @@ const ticket = {
 };
 const record = `sha256:${'a'.repeat(64)}` as const;
 const decision = {
-  citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'organization-member-readable-person-v2' as const },
+  citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'project-members-readable-person-v1' as const },
   kind: 'decision' as const, label: 'DVT gate review: hold until THERM-482 is fixed', visibility: 'team' as const, ref: `meeting:${record}` as const,
 };
 const previous = (overrides: Record<string, unknown> = {}) => ({

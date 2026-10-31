@@ -4,8 +4,9 @@ import type {
   PersonPolicyIdV2,
 } from "./person-policy-fact-contracts-v2.js";
 
-export type RecordResolutionActionV1 = "approve" | "reject";
-export type RecordResolutionEventKindV1 = "approved" | "rejected";
+/** Only an approval writes a record; a rejection writes none. */
+export type RecordResolutionActionV1 = "approve";
+export type RecordResolutionEventKindV1 = "approved";
 
 /**
  * Minimal provider-neutral view shared by record append and retrieval-source

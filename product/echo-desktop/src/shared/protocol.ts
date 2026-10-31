@@ -214,7 +214,7 @@ export interface SourceRef {
 }
 
 /** Who may read an approved record: the organization's members, a project's members, or its reviewer only. */
-export type RecordPolicy = 'organization-member-readable-person-v2' | 'restricted-reviewer-person-v2' | 'project-members-readable-person-v1';
+export type RecordPolicy = 'restricted-reviewer-person-v2' | 'project-members-readable-person-v1';
 
 /** An approved record an answer cites, read as Ask cites it with `person records --record-sha256 --brief`. */
 export interface RecordRef {

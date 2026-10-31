@@ -6,7 +6,7 @@ import type { PersonItemPositionV1, PersonListStoreScopeV1, PersonStoreMeetingRo
 import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import {
-  EMP_A, EMP_B, OWNER, PROJ_X, PROJECT_NAMES, SHARED, T, UNJOINED,
+  APPROVER_X, EMP_A, EMP_B, EVERYONE, OWNER, PROJ_X, PROJECT_NAMES, SHARED, T, UNJOINED,
   meetingWorld, type ReaderToken,
 } from "./fixtures/person-meeting-world.js";
 import { failure } from "./authority-failure.js";
@@ -59,7 +59,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(byName("r4")).toEqual({ kind: "meeting", id: w.digest("r4"), title: "Pricing review", added_at: T(4), visibility: "project", association_project_ids: [SHARED], meeting_date: "2026-09-04" });
     // The audience also names UNJOINED; only the reader's own project leaves.
     expect(byName("r3")).toEqual({ kind: "meeting", id: w.digest("r3"), title: null, added_at: T(3), visibility: "projects", association_project_ids: [SHARED] });
-    expect(byName("r1")).toMatchObject({ title: "Weekly sync", visibility: "team", association_project_ids: [], meeting_date: "2026-08-31" });
+    expect(byName("r1")).toMatchObject({ title: "Weekly sync", visibility: "project", association_project_ids: [EVERYONE], meeting_date: "2026-08-31" });
     expect(walk(route, "owner", GLOBAL).find((row) => row.id === w.digest("r2"))).toMatchObject({ visibility: "approver_only", meeting_date: "2026-09-02" });
 
     const everything = [...empA, ...walk(route, "owner", GLOBAL), ...walk(route, "emp_b", MINE), ...walk(route, "owner", ONLY_ME), ...walk(route, "emp_a", inProject(SHARED))];
@@ -71,7 +71,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
   });
 
   it("narrows mine to the reader's own final approvals, and keeps mine and project inside global", async () => {
-    // r1 is a generic Team record with no approver, so it is nobody's Mine; EMP_B's Mine is its own Only me approval.
+    // r1 is approved by APPROVER_X, who never reads, so it is nobody's Mine; EMP_B's Mine is its own Only me approval.
     const w = await world({ extra: [{ name: "b_only", approval_id: "apr_b_only", projects: [], final_approver: EMP_B, issued_at: T(9) }] });
     const route = w.route();
     expect(ids(walk(route, "emp_b", MINE))).toEqual([w.digest("b_only")]);
@@ -114,8 +114,8 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     // The policy alone decides it, so it needs no approver projectors.
     expect(ids(walk(w.route({ record_approver: undefined }), "owner", ONLY_ME))).toEqual([w.digest("r2")]);
 
-    // A team approval waits for every reader, but holds nobody's only_me.
-    await w.approve({ name: "r10", approval_id: "apr_r10", projects: "team", final_approver: EMP_B, issued_at: T(10) });
+    // An approval shared with everyone waits for every reader, but holds nobody's only_me.
+    await w.approve({ name: "r10", approval_id: "apr_r10", projects: [EVERYONE], final_approver: EMP_B, issued_at: T(10) });
     expect(route.collectMeetings({ access_token: "owner", scope: GLOBAL, after: null, limit: 26 })).toEqual({ status: "held" });
     expect(ids(walk(route, "owner", ONLY_ME))).toEqual([w.digest("r2")]);
     // Another member's Only me approval holds that member's only_me, never the owner's.
@@ -150,16 +150,15 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     const w = await world();
     const route = w.route();
     const before = ids(walk(route, "emp_a", GLOBAL));
-    // Another member's Only me approval and a rejection: EMP_A cannot tell they exist.
+    // Another member's Only me approval: EMP_A cannot tell it exists.
     await w.approve({ name: "r8", approval_id: "apr_r8", projects: [], final_approver: OWNER, issued_at: T(8) });
-    await w.approve({ name: "r9", approval_id: "apr_r9", projects: "team", final_approver: EMP_B, issued_at: T(9), action: "reject" });
     expect(ids(walk(route, "emp_a", GLOBAL))).toEqual(before);
     expect(ids(walk(route, "emp_a", MINE))).toEqual([w.digest("r4")]);
     // A hold collects nothing, so it has nothing to audit.
     const audits = w.audits("person_list").length;
     expect(route.collectMeetings({ access_token: "owner", scope: GLOBAL, after: null, limit: 26 })).toEqual({ status: "held" });
     expect(route.collectMeetings({ access_token: "owner", scope: MINE, after: null, limit: 26 })).toEqual({ status: "held" });
-    await w.approve({ name: "r10", approval_id: "apr_r10", projects: "team", final_approver: EMP_B, issued_at: T(10) });
+    await w.approve({ name: "r10", approval_id: "apr_r10", projects: [EVERYONE], final_approver: EMP_B, issued_at: T(10) });
     expect(route.collectMeetings({ access_token: "emp_a", scope: GLOBAL, after: null, limit: 26 })).toEqual({ status: "held" });
     expect(w.audits("person_list")).toHaveLength(audits);
     w.rebuild();
@@ -170,8 +169,8 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
   it("holds Mine only for the reader's own new approval, and faces the owner with another member's Only me approval", async () => {
     const w = await world();
     const route = w.route();
-    // A team approval (a generic human act, which names no approver): every reader can read it, and it is nobody's Mine.
-    await w.approve({ name: "r10", approval_id: "apr_r10", projects: "team", final_approver: EMP_B, issued_at: T(10) });
+    // An approval shared with everyone by APPROVER_X, who never reads: every reader can read it, and it is nobody's Mine.
+    await w.approve({ name: "r10", approval_id: "apr_r10", projects: [EVERYONE], final_approver: APPROVER_X, issued_at: T(10) });
     expect(route.collectMeetings({ access_token: "emp_a", scope: GLOBAL, after: null, limit: 26 })).toEqual({ status: "held" });
     expect(ids(walk(route, "emp_a", MINE))).toEqual([w.digest("r4")]);
     expect(ids(walk(route, "owner", MINE))).toEqual([w.digest("r3"), w.digest("r2")]);
@@ -216,7 +215,7 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     if (page.status !== "ok") throw new Error("expected a page");
     route.commitMeetings({ access_token: "emp_a", handle: page.handle, count: 2 });
     const held = { added_at: page.rows[1]!.added_at, id: page.rows[1]!.id };
-    await w.approve({ name: "r0", approval_id: "apr_r0", projects: "team", final_approver: EMP_B, issued_at: "2026-08-31T10:00:00.000Z" });
+    await w.approve({ name: "r0", approval_id: "apr_r0", projects: [EVERYONE], final_approver: EMP_B, issued_at: "2026-08-31T10:00:00.000Z" });
     expect(route.collectMeetings({ access_token: "emp_a", scope: GLOBAL, after: held, limit: 2 })).toEqual({ status: "held" });
     w.rebuild();
     expect(ids(walk(route, "emp_a", GLOBAL, 2, held))).toEqual([w.digest("r4"), w.digest("r3"), w.digest("r1"), w.digest("r0")]);
@@ -288,10 +287,10 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     const started = performance.now();
     for (let index = 0; index < 1_017; index += 1) {
       const at = new Date(Date.parse(T(10)) + index * 60_000).toISOString();
-      // Even: EMP_A's approval decisions (Only me or SHARED, both readable and Mine for emp_a). Odd: generic Team records, nobody's Mine.
+      // Even: EMP_A's approval decisions (Only me or SHARED, both readable and Mine for emp_a). Odd: EMP_B's, shared with everyone.
       await w.approve(index % 2 === 0
         ? { name: `b${index}`, approval_id: `apr_bench_${index}`, projects: index % 4 === 0 ? [] : [SHARED], final_approver: EMP_A, issued_at: at }
-        : { name: `b${index}`, approval_id: `apr_bench_${index}`, projects: "team", final_approver: EMP_B, issued_at: at });
+        : { name: `b${index}`, approval_id: `apr_bench_${index}`, projects: [EVERYONE], final_approver: EMP_B, issued_at: at });
     }
     w.rebuild();
     const seeded = performance.now() - started;

@@ -13,7 +13,7 @@ const digest = (hex: string) => `sha256:${hex.repeat(64)}`;
 
 const ticket = (ticket_id: string, external_scope_id = CLOUD, tool_id = 'jira') => ({ kind: 'ticket', tool_id, external_scope_id, ticket_id,
   permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-12', text_sha256: digest('1') });
-const record = () => ({ kind: 'approved_record', atom_id: digest('2'), record_sha256: digest('3'), policy_id: 'organization-member-readable-person-v2' });
+const record = () => ({ kind: 'approved_record', atom_id: digest('2'), record_sha256: digest('3'), policy_id: 'project-members-readable-person-v1' });
 const document = () => ({ kind: 'source_revision', source_id: 'source:fixture', revision_id: 'revision-1', source_sha256: digest('4'),
   representation_sha256: digest('5'), anchor_sha256: digest('6') });
 const page = () => ({ kind: 'page', tool_id: 'confluence', external_scope_id: CLOUD, page_id: '200', section_id: 'section-1', version: '3',

@@ -1,14 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   PERSON_CONTENT_POLICY_CONTRACT_KIND,
   PERSON_CONTENT_POLICY_READER_AUTHENTICATION,
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-  organizationMemberReadablePersonPolicyContract,
-  organizationMemberReadablePersonPolicyContractSha256,
   projectMembersReadablePersonPolicyContract,
   projectMembersReadablePersonPolicyContractSha256,
   restrictedReviewerPersonPolicyContract,
@@ -16,12 +12,9 @@ import {
 } from "../src/person-content-policy-v2.js";
 
 describe("Person content policy v2", () => {
-  it("freezes the two exact human-visible consequence byte commitments", () => {
+  it("freezes the exact human-visible consequence byte commitment", () => {
     expect(RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT).toBe(
       "Approving records this package under restricted-reviewer-person-v2. Only you, the approving reviewer, may later read its decisions, actions, and rationales while this exact ECHO principal and membership tenure remain current and the request is authenticated by a current Authority Person session.",
-    );
-    expect(ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT).toBe(
-      "Approving records this package under organization-member-readable-person-v2. Any person authenticated by a current Authority Person session with a current active owner or employee membership in this organization, including a person who joins later, may search and read its decisions, actions, and rationales while that membership remains active.",
     );
   });
 
@@ -44,29 +37,6 @@ describe("Person content policy v2", () => {
     });
     expect(restrictedReviewerPersonPolicyContractSha256()).toBe(
       "sha256:c0b1676ad1bd2f27d9d781605420beac2e6fd3cd18ffa69f0d18ea62fe48f043",
-    );
-  });
-
-  it("freezes the exact organization-member Person contract", () => {
-    const contract = organizationMemberReadablePersonPolicyContract();
-    expect(contract).toEqual({
-      schema_version: 2,
-      kind: PERSON_CONTENT_POLICY_CONTRACT_KIND,
-      policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-      policy_consequence_sha256:
-        "sha256:2a581951072720b0dfcbbf865cd90132e18421938c9d75dd1c11bb8a1fade2cf",
-      reader_authentication: PERSON_CONTENT_POLICY_READER_AUTHENTICATION,
-      reader_selector: {
-        kind: "current-active-organization-members-v1",
-        membership_state: "active",
-        membership_scope: "same-organization-as-record",
-        eligible_membership_types: ["employee", "owner"],
-        later_members: "included",
-      },
-      readable_item_kinds: ["decision", "action", "rationale"],
-    });
-    expect(organizationMemberReadablePersonPolicyContractSha256()).toBe(
-      "sha256:7a874f8b8c0bea7fd58066f93e4f4a26f6f6c05bbbdfe45bf2141f0b2f3ff5e3",
     );
   });
 

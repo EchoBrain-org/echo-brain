@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, listView, membersView, noteMatchesView,
+  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, isRecordRef, listView, membersView, noteMatchesView,
   noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
@@ -163,7 +163,7 @@ describe('view models copy only what the renderer may see', () => {
   });
 
   it('keeps each cited approved record by digest and policy, and each original by its coordinates, in citation order', () => {
-    const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' };
+    const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' };
     const original = { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
       representation_sha256: sha('5'), anchor_sha256: sha('6') };
     const answered = (citations: unknown[]) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
@@ -173,7 +173,7 @@ describe('view models copy only what the renderer may see', () => {
       { citation: { ...original, label: 'Pricing call' }, kind: 'document_passage', label: 'Pricing call', visibility: 'team' },
     ]) }, { kind: 'global' });
     expect(visible(answer.sources)).toEqual([
-      { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') },
+      { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' }, atom_id: sha('1') },
       { kind: 'original', label: 'Pricing call', ref: { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
         representation_sha256: sha('5'), anchor_sha256: sha('6') } },
     ]);
@@ -453,12 +453,19 @@ describe('text the API accepts', () => {
   });
 });
 
+describe('a record the page may ask the host to read', () => {
+  it('names a known record policy: Only me or projects, never the retired organization-wide (Team) policy', () => {
+    for (const policy_id of ['restricted-reviewer-person-v2', 'project-members-readable-person-v1']) expect(isRecordRef({ record_sha256: sha('5'), policy_id })).toBe(true);
+    expect(isRecordRef({ record_sha256: sha('5'), policy_id: 'organization-member-readable-person-v2' })).toBe(false);
+  });
+});
+
 describe('an approved record shows only what the source pane needs', () => {
-  const asked = { record_sha256: sha('5'), policy_id: 'organization-member-readable-person-v2' } as const;
+  const asked = { record_sha256: sha('5'), policy_id: 'project-members-readable-person-v1' } as const;
   const atom = (signal: string) => personRecordAtomIdV1(sha('5'), signal);
   const item = (kind: string, id: string, text: string, extra: Record<string, unknown> = {}) => ({ id, kind, text, ...extra });
   /** What `person records --record-sha256 --brief` prints for one listed record: the client's cited record. */
-  const reply = (brief: Record<string, unknown>, policy = 'organization-member-readable-person-v2', approver: string | null = 'Maya Chen') => ({ ok: true,
+  const reply = (brief: Record<string, unknown>, policy = 'project-members-readable-person-v1', approver: string | null = 'Maya Chen') => ({ ok: true,
     result: JSON.parse(JSON.stringify(personCitedRecordV1(validatePersonRecordListV1({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [{
       position: 1, approval_id: 'apr_1', record_sha256: sha('5'),
       envelope: { record_sha256: sha('5'), body: { event: { kind: 'approved', policy_id: policy, approved_snapshot: { approved_payload: { brief: {
@@ -480,7 +487,7 @@ describe('an approved record shows only what the source pane needs', () => {
     }), asked);
     expect(view).toEqual({
       title: 'Tuesday sync', started_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Maya Chen',
-      participants: ['Maya Chen', 'Ari'], participants_more: false, visibility: 'organization',
+      participants: ['Maya Chen', 'Ari'], participants_more: false, visibility: 'project',
       // Only a decision still open says so.
       decisions: { more: false, items: [
         { text: 'Ship annual plans first.', status: 'proposed', excerpts: [{ quote: 'Annual first.', at: '2026-09-15T17:12:00Z' }, { quote: 'Two' }], atom_id: atom('d1') },
@@ -601,7 +608,7 @@ describe('documents, members and project changes', () => {
 });
 
 // Citations as the Authority sends them, for the Ask tests below.
-const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' };
+const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' };
 /** A passage of an original, its anchor told apart by `anchor`: an answer cites each passage once. */
 const passage = (anchor = '6') => ({ kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
   representation_sha256: sha('5'), anchor_sha256: sha(anchor) });
@@ -610,7 +617,7 @@ const coordinates = (anchor = '6') => ({ source_id: `source:${'3'.repeat(64)}`, 
 const ticket = { kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: { kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant',
   ticket_id: '10007', permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: sha('7') } };
 const named = { citation: record, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${sha('2')}` };
-const namedSource = { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') };
+const namedSource = { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' }, atom_id: sha('1') };
 /** A V8 answer whose one statement cites its first source, private as that source is. */
 const v8 = (citations: readonly Record<string, unknown>[]) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered', citations,
   parts: [{ question: 'What did we ship?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0],

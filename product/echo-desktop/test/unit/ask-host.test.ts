@@ -7,7 +7,7 @@ import type { AskProgressNotice, Expect } from '../../src/shared/protocol.js';
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 const EXPECT: Expect = { authority: 'https://authority.example.test', membership_id: 'mem_00000000-0000-4000-8000-000000000001' };
 const CANCEL = '00000000-0000-4000-8000-000000000001';
-const decision = { citation: { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' },
+const decision = { citation: { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' },
   kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${sha('2')}` };
 const line = (value: unknown) => JSON.stringify(value);
 
@@ -22,7 +22,7 @@ describe('the command an Ask runs', () => {
 
   it('reads what it cites: a meeting by its record, as Ask cites it, a passage where it was asked', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
-    expect(askRecordArgv({ record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' })).toEqual(['records', `--record-sha256=${sha('2')}`, '--brief']);
+    expect(askRecordArgv({ record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' })).toEqual(['records', `--record-sha256=${sha('2')}`, '--brief']);
     const ref = { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha('6') };
     const passage = ['ask-source', `--source-id=${ref.source_id}`, '--revision-id=r1', `--source-sha256=${sha('4')}`, `--representation-sha256=${sha('5')}`, `--anchor-sha256=${sha('6')}`];
     expect(askSourceArgv(ref, { kind: 'global' })).toEqual(passage);
@@ -49,7 +49,7 @@ describe('the progress lines of an Ask', () => {
       { cancel_id: CANCEL, expect: EXPECT, step: { type: 'stage', stage: 'searching' } },
       { cancel_id: CANCEL, expect: EXPECT, step: { type: 'searched', sources: [{ kind: 'meetings' }], found: 3 } },
       { cancel_id: CANCEL, expect: EXPECT, step: { type: 'read', items: [
-        { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') },
+        { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' }, atom_id: sha('1') },
       ] } },
     ]);
   });

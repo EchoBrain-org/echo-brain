@@ -21,8 +21,8 @@ const OWNER_MAX_CHARACTERS = 120;
 const TEXT_MAX_BYTES = 256 * 1024;
 const TIMEZONE = /^[A-Za-z0-9_+\-/]{1,64}$/;
 
-export type PersonCitedRecordPolicyV1 = 'organization-member-readable-person-v2' | 'restricted-reviewer-person-v2' | 'project-members-readable-person-v1';
-const POLICIES: readonly PersonCitedRecordPolicyV1[] = ['organization-member-readable-person-v2', 'restricted-reviewer-person-v2', 'project-members-readable-person-v1'];
+export type PersonCitedRecordPolicyV1 = 'restricted-reviewer-person-v2' | 'project-members-readable-person-v1';
+const POLICIES: readonly PersonCitedRecordPolicyV1[] = ['restricted-reviewer-person-v2', 'project-members-readable-person-v1'];
 const STATUSES = ['proposed', 'decided', 'unresolved'] as const;
 type Kind = 'decision' | 'action' | 'rationale';
 

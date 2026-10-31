@@ -118,7 +118,7 @@ export function deskItem(caseId, index, item) {
   if (item.kind === "decision") {
     return Object.freeze({
       id, kind: "decision", label: item.label, text: item.text, visibility: "team", occurred_at: item.occurred_at, receipt_sha256,
-      citation: Object.freeze({ kind: "approved_record", atom_id: canonicalSha256({ fixture: "ask-wording-atom", key }), record_sha256: canonicalSha256({ fixture: "ask-wording-record", key }), policy_id: "organization-member-readable-person-v2" }),
+      citation: Object.freeze({ kind: "approved_record", atom_id: canonicalSha256({ fixture: "ask-wording-atom", key }), record_sha256: canonicalSha256({ fixture: "ask-wording-record", key }), policy_id: "project-members-readable-person-v1" }),
     });
   }
   return Object.freeze({

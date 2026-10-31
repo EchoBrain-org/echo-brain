@@ -18,7 +18,7 @@ function listed(brief: Record<string, unknown>, change: (record: Record<string, 
   const record: Record<string, unknown> = {
     position: 1, approval_id: 'apr_1', record_sha256: RECORD,
     envelope: { record_sha256: RECORD, body: { event: {
-      kind: 'approved', policy_id: 'organization-member-readable-person-v2', approved_snapshot: { approved_payload: { brief: {
+      kind: 'approved', policy_id: 'project-members-readable-person-v1', approved_snapshot: { approved_payload: { brief: {
         meeting: { id: 'm1', title: 'Tuesday sync' }, decisions: [], actions: [], rationales: [], ...brief,
       } } },
     } } },
@@ -54,7 +54,7 @@ describe('one approved record as Ask cites it', () => {
       rationales: [item('rationale', 'r1', 'It funds the launch.')],
     }));
     expect(cited).toEqual({
-      schema_version: 1, kind: 'echo-person-cited-record-v1', record_sha256: RECORD, policy_id: 'organization-member-readable-person-v2',
+      schema_version: 1, kind: 'echo-person-cited-record-v1', record_sha256: RECORD, policy_id: 'project-members-readable-person-v1',
       title: 'Tuesday sync', started_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Maya Chen',
       participants: ['Maya Chen', 'Ari'], participants_more: false,
       decisions: { more: false, items: [{ atom_id: atom('d1'), text: 'Ship annual plans first.', status: 'proposed', quotes: [

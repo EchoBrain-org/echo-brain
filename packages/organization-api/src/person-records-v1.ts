@@ -35,7 +35,6 @@ export interface PersonRecordSearchItemV1 {
   readonly kind: "decision" | "action" | "rationale";
   readonly text: string;
   readonly policy_id:
-    | "organization-member-readable-person-v2"
     | "restricted-reviewer-person-v2"
     | "project-members-readable-person-v1";
 }
@@ -174,8 +173,7 @@ export function validatePersonRecordSearchV2(
       typeof item.text !== "string" ||
       item.text.length === 0 ||
       item.text !== item.text.normalize("NFC") ||
-      (item.policy_id !== "organization-member-readable-person-v2" &&
-        item.policy_id !== "restricted-reviewer-person-v2" &&
+      (item.policy_id !== "restricted-reviewer-person-v2" &&
         item.policy_id !== "project-members-readable-person-v1")
     ) {
       throw new Error("record search item is invalid");

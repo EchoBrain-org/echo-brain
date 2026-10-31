@@ -18,7 +18,7 @@ vi.mock('@echo-brain/organization-authority-kernel/answer-composition/agentic-tr
   return { ...real, AGENTIC_TRIGGER_DEFINITIONS_V1: Object.freeze([...real.AGENTIC_TRIGGER_DEFINITIONS_V1, started]) };
 });
 
-const record = { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' as const };
+const record = { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'project-members-readable-person-v1' as const };
 const PROJECT = 'prj_00000000-0000-4000-8000-000000000001' as const;
 const OTHER_PROJECT = 'prj_00000000-0000-4000-8000-000000000002' as const;
 const member = (name: string) => ({ organization_id: 'organization-1', principal_id: `principal-${name}`, membership_id: `member-${name}`, session_family_id: `family-${name}` });

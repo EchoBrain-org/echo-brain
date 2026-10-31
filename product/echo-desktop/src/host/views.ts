@@ -291,7 +291,7 @@ function sourceRef({ source_id, revision_id, source_sha256, representation_sha25
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
 /** A mapping's revision, as the Authority writes one: a v4 UUID. */
 const REVISION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['organization-member-readable-person-v2', 'restricted-reviewer-person-v2', 'project-members-readable-person-v1']);
+const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['restricted-reviewer-person-v2', 'project-members-readable-person-v1']);
 
 /** A record the page may ask the host to read: a well-formed digest and a known policy. */
 export function isRecordRef(value: unknown): value is RecordRef {
@@ -480,7 +480,7 @@ function isoTime(value: unknown): string | undefined {
 
 /** Who can read a record, by its policy. */
 const RECORD_VISIBILITY: Readonly<Record<RecordPolicy, ApprovedRecord['visibility']>> = {
-  'organization-member-readable-person-v2': 'organization', 'project-members-readable-person-v1': 'project', 'restricted-reviewer-person-v2': 'approver',
+  'project-members-readable-person-v1': 'project', 'restricted-reviewer-person-v2': 'approver',
 };
 
 /** A section of a cited record, as the pane shows it: only a decision still open says so, and each item keeps the atom id its citations carry. */

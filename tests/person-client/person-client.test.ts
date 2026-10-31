@@ -203,7 +203,7 @@ function v8Answer(input: { readonly scope?: unknown; readonly text?: string; rea
   };
 }
 const RECORD_CITATION = {
-  citation: { kind: "approved_record", atom_id: `sha256:${"c".repeat(64)}`, record_sha256: `sha256:${"b".repeat(64)}`, policy_id: "organization-member-readable-person-v2" },
+  citation: { kind: "approved_record", atom_id: `sha256:${"c".repeat(64)}`, record_sha256: `sha256:${"b".repeat(64)}`, policy_id: "project-members-readable-person-v1" },
   kind: "decision", label: "Pricing review", visibility: "team",
 };
 const SOURCE_CITATION = {
@@ -722,7 +722,7 @@ describe("Person client", () => {
               record_sha256: `sha256:${"b".repeat(64)}`,
               kind: "decision",
               text: "Use simple pricing.",
-              policy_id: "organization-member-readable-person-v2",
+              policy_id: "project-members-readable-person-v1",
             },
           ],
         });
@@ -849,7 +849,7 @@ describe("Person client", () => {
         expect(Math.abs(Date.now() - Date.parse(headers.get('x-echo-client-now')!))).toBeLessThan(5_000);
         expect(headers.get('x-echo-answer-layout')).toBe('1');
         return json({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
-          citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
+          citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'project-members-readable-person-v1' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
           direct: { text: 'The launch date moved.', citation_indexes: [0], private: false },
           parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch date moved.', citation_indexes: [0], private: false }] }],
         });

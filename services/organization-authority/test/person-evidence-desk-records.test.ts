@@ -2,10 +2,10 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canonicalJson, canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, OrganizationRecordAppenderV4 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { OrganizationRecordAppenderV4 } from '@echo-brain/organization-record/organization-record-api-v1';
 import {
   buildReadableSearchGenerationV1,
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V2,
   READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
   READABLE_SEARCH_FACTS_BASELINE_V3,
@@ -27,7 +27,7 @@ import { createPersonEvidenceDeskV1 } from '../src/composition/person-evidence-d
 import { createPersonRecordSearchRouteV1, type PersonEvidenceDeskRecordsV1 } from '../src/composition/person-record-search-route.js';
 import * as recordHeadReader from '../src/composition/readable-search-generation-reconciler.js';
 import { meetingWorld, EMP_A, SHARED } from './fixtures/person-meeting-world.js';
-import { COORDINATES, appendInput, database as recordDatabase, protocolAuthority } from '../../../packages/organization-record/test/fixtures/record-append-fixture.js';
+import { COORDINATES, RECORD_POLICY_PROJECTORS, appendInput, database as recordDatabase, protocolAuthority, recordApprovalId } from '../../../packages/organization-record/test/fixtures/record-append-fixture.js';
 
 import { SIGNED_APPROVAL_CODECS, SIGNED_APPROVAL_PROJECTORS, appendSignedApprovalV1 } from './fixtures/signed-approval-decision-v1.js';
 
@@ -35,6 +35,8 @@ const roots: string[] = [];
 const closers: (() => void)[] = [];
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 const RETRIEVAL_CONTRACT = digest('evidence-desk-retrieval-contract');
+/** The reader every route here authenticates; the fixture record is kept for it alone (Only me). */
+const READER = { principal_id: 'principal_reader', membership_id: 'membership_reader' } as const;
 
 function stateRoot(): string {
   const path = realpathSync(mkdtempSync(join(tmpdir(), 'echo-evidence-desk-records-')));
@@ -60,11 +62,11 @@ function authorization(): PersonAccessAuthorization {
 function atom(input: { readonly record_sha256: Sha256Digest; readonly envelope_sha256: Sha256Digest }, text = 'Decision 0'): ReadableSearchAtomV1 {
   return {
     authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, record_position: 1,
-    record_sha256: input.record_sha256, envelope_sha256: input.envelope_sha256, approval_id: 'approval-1', atom_id: sha256Digest('atom'), atom_order: 0,
+    record_sha256: input.record_sha256, envelope_sha256: input.envelope_sha256, approval_id: recordApprovalId('approval-1'), atom_id: sha256Digest('atom'), atom_order: 0,
     signal_id_sha256: sha256Digest('signal'), item_kind: 'decision', text, text_sha256: sha256Digest(text),
-    policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2, policy_contract_sha256: sha256Digest('member-policy'),
+    policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2, policy_contract_sha256: sha256Digest('restricted-policy'),
     authorization_audit_event_id: 'audit-1', authorization_audit_sequence: 1, authorization_audit_entry_sha256: sha256Digest('audit'),
-    provider_action_sha256: sha256Digest('provider'), authorization_proof_sha256: sha256Digest('proof'), reviewer_principal_id: null, reviewer_membership_id: null,
+    provider_action_sha256: sha256Digest('provider'), authorization_proof_sha256: sha256Digest('proof'), reviewer_principal_id: READER.principal_id, reviewer_membership_id: READER.membership_id,
   };
 }
 
@@ -81,7 +83,7 @@ function generation(state_directory: string, atoms: readonly ReadableSearchAtomV
       content: plane('retrieval-content', READABLE_SEARCH_CONTENT_BASELINE_V2, 2), lexical: plane('retrieval-lexical', READABLE_SEARCH_LEXICAL_BASELINE_V2, 2),
     } },
     exact_head: { ...COORDINATES, position: 1, record_sha256: atoms[0]!.record_sha256 },
-    retrieval_contract_sha256: RETRIEVAL_CONTRACT, organization_member_policy_contract_sha256: sha256Digest('member-policy'), restricted_reviewer_policy_contract_sha256: sha256Digest('restricted-policy'),
+    retrieval_contract_sha256: RETRIEVAL_CONTRACT, restricted_reviewer_policy_contract_sha256: sha256Digest('restricted-policy'),
     analyzer: { analyzer_contract_sha256: sha256Digest('analyzer-contract'), analyzer_source_sha256: sha256Digest('analyzer-source'), node_version: '22.22.1', unicode_version: '16.0', icu_version: '76.1' },
     source_revision: 'test', builder_artifact_sha256: sha256Digest('builder'), sqlite_version: '3.50.4', atoms,
   };
@@ -117,7 +119,7 @@ async function fixture(options: { readonly active?: boolean; readonly corrupt?: 
   const authority = authorityDatabase();
   const record = recordDatabase();
   closers.push(() => { record.close(); authority.close(); });
-  const appended = await new OrganizationRecordAppenderV4(record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, ...(options.atom_text === undefined ? {} : { decision_text: options.atom_text }) }));
+  const appended = await new OrganizationRecordAppenderV4(record, COORDINATES, RECORD_POLICY_PROJECTORS).append(appendInput({ authority: protocolAuthority(), reviewer: READER, ...(options.atom_text === undefined ? {} : { decision_text: options.atom_text }) }));
   const state_directory = stateRoot();
   const recordAtom = atom({ ...appended, envelope_sha256: options.atom_envelope_sha256 ?? appended.envelope_sha256 }, options.atom_text);
   if (options.active !== false) {
@@ -134,7 +136,7 @@ async function fixture(options: { readonly active?: boolean; readonly corrupt?: 
   };
   const route = createPersonRecordSearchRouteV1({
     state_directory, ...COORDINATES, retrieval_contract_sha256: RETRIEVAL_CONTRACT,
-    sessions, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority),
+    sessions, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority), record_input_codecs: SIGNED_APPROVAL_CODECS,
     ...(options.corrupt ? { search_generation: () => { throw new Error('corrupt readable index'); } } : {}),
   });
   const makeDesk = () => createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: route });
@@ -184,7 +186,7 @@ describe('Person evidence desk over the real approved-record route', () => {
     const desk = value.makeDesk();
     const searched = await desk.search({ query: 'Decision', limit: 10 });
     const hit = searched.items.find(item => item.citation.kind === 'approved_record');
-    expect(hit).toMatchObject({ kind: 'decision', text: value.recordAtom.text, visibility: 'team', attributes: { status: 'decided' }, ref: meeting });
+    expect(hit).toMatchObject({ kind: 'decision', text: value.recordAtom.text, visibility: 'approver_only', attributes: { status: 'decided' }, ref: meeting });
     expect(searched.receipt_digests).not.toHaveLength(0);
 
     // Inventory items, opened items and fresh citation opens carry the same ref.
@@ -221,7 +223,7 @@ describe('Person evidence desk over the real approved-record route', () => {
     const value = await fixture();
     const desk = value.makeDesk();
     await desk.search({ query: 'Decision' });
-    await new OrganizationRecordAppenderV4(value.record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, approval_id: 'approval-2' }));
+    await new OrganizationRecordAppenderV4(value.record, COORDINATES, RECORD_POLICY_PROJECTORS).append(appendInput({ authority: protocolAuthority(), reviewer: READER, approval_id: 'approval-2' }));
     await expect(desk.revalidate({})).rejects.toMatchObject({ name: 'PersonRecordSearchSnapshotChangedV1', code: 'unavailable' });
     value.revoke();
     await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
@@ -230,7 +232,7 @@ describe('Person evidence desk over the real approved-record route', () => {
   it.each([false, true])('restarts pinned search and list after an append (index published: %s)', async published => {
     const value = await fixture();
     const release = value.route.searchBatch({ access_token: 'token', query: 'Decision' }).release;
-    const appended = await new OrganizationRecordAppenderV4(value.record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, approval_id: 'approval-2' }));
+    const appended = await new OrganizationRecordAppenderV4(value.record, COORDINATES, RECORD_POLICY_PROJECTORS).append(appendInput({ authority: protocolAuthority(), reviewer: READER, approval_id: 'approval-2' }));
     if (published) publish(value.authority, value.state_directory, value.recordAtom, { position: 2, record_sha256: appended.record_sha256 });
     const input = { access_token: 'token', expected_pointer: release.active_pointer };
     for (const read of [() => value.route.searchBatch({ ...input, query: 'Decision' }), () => value.route.listDeskBatch(input)]) {
@@ -243,7 +245,7 @@ describe('Person evidence desk over the real approved-record route', () => {
   it('classifies a verified advance observed at the search final fence as retryable', async () => {
     const value = await fixture();
     const before = recordHeadReader.readReadableSearchRecordHeadV1(value.record);
-    await new OrganizationRecordAppenderV4(value.record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, approval_id: 'approval-2' }));
+    await new OrganizationRecordAppenderV4(value.record, COORDINATES, RECORD_POLICY_PROJECTORS).append(appendInput({ authority: protocolAuthority(), reviewer: READER, approval_id: 'approval-2' }));
     // The first head read sees the pre-append snapshot; the final fence sees the real new log.
     const read = vi.spyOn(recordHeadReader, 'readReadableSearchRecordHeadV1').mockReturnValueOnce(before);
     try {
@@ -443,7 +445,7 @@ describe('Person evidence desk: one source at a time', () => {
 });
 
 describe('Person evidence desk over an approval-decision record with a confirmed owner', () => {
-  async function approvedFixture(withCodecs: boolean) {
+  async function approvedFixture() {
     const authority = authorityDatabase();
     const record = recordDatabase();
     closers.push(() => { record.close(); authority.close(); });
@@ -460,23 +462,18 @@ describe('Person evidence desk over an approval-decision record with a confirmed
     let checks = 0;
     const state_directory = stateRoot();
     publish(authority, state_directory, recordAtom);
-    const route = createPersonRecordSearchRouteV1({ state_directory, ...COORDINATES, retrieval_contract_sha256: RETRIEVAL_CONTRACT, sessions: { authenticateAccess: () => ({ ...authorization(), checked_at: new Date(Date.UTC(2026, 8, 27, 1, 0, checks++)).toISOString() }) }, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority), ...(withCodecs ? { record_input_codecs: SIGNED_APPROVAL_CODECS } : {}) });
+    const route = createPersonRecordSearchRouteV1({ state_directory, ...COORDINATES, retrieval_contract_sha256: RETRIEVAL_CONTRACT, sessions: { authenticateAccess: () => ({ ...authorization(), checked_at: new Date(Date.UTC(2026, 8, 27, 1, 0, checks++)).toISOString() }) }, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority), record_input_codecs: SIGNED_APPROVAL_CODECS });
     return createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: route });
   }
 
   it('reads the confirmed owner from the signed approval, and matches the owned search text exactly', async () => {
-    const desk = await approvedFixture(true);
+    const desk = await approvedFixture();
     const searched = await desk.search({ query: 'Jules', limit: 10 });
     const action = searched.items.find(item => item.citation.kind === 'approved_record');
     expect(action).toMatchObject({ kind: 'action', text: 'Action 1 Owner: Jules.', attributes: { owner: 'Jules' } });
     // Its list label is its own line; the owner is the row's own fact (ADR-0041).
     expect(action!.list_label).toMatch(/^Action 1 \(.+\)$/u);
     expect(action!.list_label).not.toContain('Jules');
-  });
-
-  it('needs the Authority record codecs to read an approval-decision record at all', async () => {
-    const desk = await approvedFixture(false);
-    await expect(desk.search({ query: 'Jules', limit: 10 })).rejects.toMatchObject({ code: 'unavailable' });
   });
 });
 

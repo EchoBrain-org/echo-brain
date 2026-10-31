@@ -10,11 +10,13 @@ import { replay, SCENARIOS, type Scenario } from "./fixtures/agentic-scenarios.j
  * baseline pins current prompt, model-input and audit fingerprints.
  *
  * Every fixture was recorded while these scenarios answered V4 (and
- * `live_ticket_and_page` V6). Ask now answers only V8, whose answer to each
- * scenario is the recorded one with its `schema_version` and `kind` alone
+ * `live_ticket_and_page` V6), citing records under the organization-wide
+ * (Team) policy, since retired: the fixture records are project records now.
+ * Ask now answers only V8, whose answer to each scenario is the recorded one
+ * with its `schema_version`, `kind` and approved-record citation policy alone
  * changed: the replay checks that the audit binds the V8 answer it released,
- * then fingerprints that answer, and the audit record, under the version the
- * scenario recorded. Every other byte is compared as recorded.
+ * then fingerprints that answer, and the audit record, under the version and
+ * policy the scenario recorded. Every other byte is compared as recorded.
  */
 const HISTORICAL_FIXTURE = new URL("./agentic-ask-golden.v1.json", import.meta.url);
 const HISTORICAL_FIXTURE_SHA256 = "sha256:8aff56ec626c367b738acb98217c406e2be46ef255279ac6331227b3bcf0f417";
@@ -27,9 +29,13 @@ const QUALITY_FIXTURE = new URL("./agentic-ask-quality-baseline.v1.json", import
 const RETIRED_SCENARIOS = new Set(["small_scope_preload"]);
 const current = <T>(recorded: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(recorded).filter(([name]) => !RETIRED_SCENARIOS.has(name)));
 
-/** The released V8 answer as the fixtures recorded it: in the scenario's recorded version, every other byte unchanged. */
+/** Every fixture record was a Team record when the fixtures were recorded; it is a project record now. */
+const RECORDED_RECORD_POLICY = { current: '"policy_id":"project-members-readable-person-v1"', recorded: '"policy_id":"organization-member-readable-person-v2"' };
+
+/** The released V8 answer as the fixtures recorded it: in the scenario's recorded version and record policy, every other byte unchanged. */
 function asRecorded(response: object, version: Scenario["recorded"]) {
-  return { ...response, schema_version: version, kind: `echo-clean-person-answer-v${version}` };
+  const recorded = JSON.parse(JSON.stringify(response).replaceAll(RECORDED_RECORD_POLICY.current, RECORDED_RECORD_POLICY.recorded)) as object;
+  return { ...recorded, schema_version: version, kind: `echo-clean-person-answer-v${version}` };
 }
 
 async function run(name: string, scenario: Scenario) {
