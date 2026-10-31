@@ -93,7 +93,7 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
         </div>
       )}
       {items.map(item => (
-        <ItemRow key={`${item.ref.kind}:${item.ref.id}`} item={item} testid="feed-row" onOpen={() => void openListItem(item)} badge={badge(item)}
+        <ItemRow key={`${item.ref.kind}:${item.ref.id}`} item={item} onOpen={() => void openListItem(item)} badge={badge(item)}
           fresh={newOnVisit(state, project.project_id, item.added_at)} />
       ))}
       {more && (
