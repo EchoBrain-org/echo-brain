@@ -19,7 +19,7 @@ paths below are relative to its `organization-control-plane/` folder:
 | Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack `auth.test` checks of an install and the DM-code person link |
 | Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
 | `security/file-secret-store` | The private secret store for the organization's Slack app credential bundle: client ID/secret, signing secret, and Nango connection ID ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)) |
-| Slack provider `slack-approval-integration-v1` | What the Slack approval plug-in uses: the control database opener (`openOrganizationControlDatabase`), the active Slack connection read (`readActiveSlackConnectionV1`), and the Slack identity-link lookups that pick, recheck and click-match an approval card's target (`resolveSlackDmApprovalTargetV1`, `isCurrentSlackDmApprovalTargetV1`, `matchSlackApprovalClickActorV1`) |
+| Slack provider `slack-approval-integration-v1` | What the Slack approval plug-in uses: the active Slack connection read (`readActiveSlackConnectionV1`), and the Slack identity-link lookups that pick, recheck and click-match an approval card's target (`resolveSlackDmApprovalTargetV1`, `isCurrentSlackDmApprovalTargetV1`, `matchSlackApprovalClickActorV1`) |
 | `organization-control-database-v1` | Opening the control database and applying the current V4 baseline |
 | `record-visibility-policy-contracts-v1` | The restricted reviewer (Only me) policy identifier, consequence text and contract digests, and the Person approval policy and digest types |
 

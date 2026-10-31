@@ -10,7 +10,6 @@
     "packages/organization-control-plane/src/organization-control-database-v1.ts",
     "packages/organization-control-plane/src/record-visibility-policy-contracts-v1.ts",
     "packages/organization-control-plane/src/security/file-secret-store.ts",
-    "packages/organization-control-plane/src/persistence/open-organization-control-database.ts",
     "packages/organization-control-plane/src/application/record-visibility-policy-contracts-v1.ts",
     "packages/organization-control-plane/src/application/organization-secret-store-contracts.ts",
     "packages/organization-control-plane/src/canonical/canonical-json.ts"

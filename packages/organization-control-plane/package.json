@@ -17,10 +17,6 @@
       "types": "./dist/security/file-secret-store.d.ts",
       "import": "./dist/security/file-secret-store.js"
     },
-    "./persistence/open-organization-control-database": {
-      "types": "./dist/persistence/open-organization-control-database.d.ts",
-      "import": "./dist/persistence/open-organization-control-database.js"
-    },
     "./application/record-visibility-policy-contracts-v1": {
       "types": "./dist/application/record-visibility-policy-contracts-v1.d.ts",
       "import": "./dist/application/record-visibility-policy-contracts-v1.js"

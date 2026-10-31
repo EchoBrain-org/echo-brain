@@ -7,7 +7,7 @@ import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
-import { openOrganizationControlDatabase } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
+import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 
 const REPO = resolve(import.meta.dirname, '../..');
 const [mode, root, releaseId] = process.argv.slice(2);
