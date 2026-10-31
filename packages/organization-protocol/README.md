@@ -76,8 +76,11 @@ every approval surface shares.
 - meeting-source and decision-processor provenance; and
 - the Authority signing key and canonical record digest.
 
-The envelope accepts the provider-neutral human-action input, plus any input
-codec the caller registers, such as the approval-decision proof above.
+The envelope reads its record input through a closed codec registry. Without
+one, it accepts only the provider-neutral human-act input
+(`HUMAN_ACT_RECORD_INPUT_CODECS_V4`). The Authority registers that input and
+the approval-decision proof above, and appends only approval-decision
+records; human-act records come only from test fixtures.
 Validation recomputes every joined digest and rejects mismatched
 provenance, event, policy, or predecessor facts.
 
