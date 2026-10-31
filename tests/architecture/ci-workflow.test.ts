@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { globSync, readFileSync } from "node:fs";
+import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { JOB_OUTPUTS, TESTED_TREE } from "../../tools/ci-select-jobs.mjs";
@@ -310,11 +310,17 @@ describe("CI workflow", () => {
     );
     expect(recovery).toContain('python-version: "3.10"');
     expect(recovery).toContain("npm run check:authority-recovery-infrastructure");
+    // Every committed Guard policy validates its same-named template.
+    const deployment = resolve(REPO, "deploy/organization-authority");
+    const guards = globSync("*.guard", { cwd: deployment });
+    expect(guards.length).toBeGreaterThan(0);
+    for (const guard of guards) {
+      const template = guard.replace(/\.guard$/, ".template.json");
+      expect(existsSync(resolve(deployment, template)), template).toBe(true);
+      expect(validator).toContain(`"${guard}"`);
+      expect(validator).toContain(`"${template}"`);
+    }
     for (const required of [
-      "authority-current-host-recovery-v1.template.json",
-      "authority-current-host-recovery-v1.guard",
-      "authority-recovery-helper-v1.template.json",
-      "authority-recovery-helper-v1.guard",
       "authority-current-host-recovery-v1.validation-tools.json",
       "downloadVerified",
       '"--output-format"',

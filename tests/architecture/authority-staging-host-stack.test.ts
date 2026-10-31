@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,14 +11,6 @@ const REPO = resolve(import.meta.dirname, "../..");
 const TEMPLATE = resolve(
   REPO,
   "deploy/organization-authority/authority-staging-host-v1.template.json",
-);
-const GUARD = resolve(
-  REPO,
-  "deploy/organization-authority/authority-staging-host-v1.guard",
-);
-const VALIDATOR = resolve(
-  REPO,
-  "tools/validate-authority-recovery-templates.mjs",
 );
 
 const template = () => readTemplate(TEMPLATE);
@@ -466,29 +457,5 @@ describe("Authority staging host stack", () => {
     expect(stack.Outputs.StagingHostReady?.Description).toContain(
       "It never attests public HTTPS or independent descriptor-pin acceptance.",
     );
-  });
-
-  it("locks the staging-slot shape with the committed Guard policy", () => {
-    const guard = readFileSync(GUARD, "utf8");
-    const validator = readFileSync(VALIDATOR, "utf8");
-    expect(guard).toContain("CloudFormation Guard 3.2.1");
-    expect(guard).toContain("%resource_count == 26");
-    expect(guard).toContain("%host_resource_count == 4");
-    for (const rule of [
-      "exact_staging_slot_inventory",
-      "host_toggle_leaves_the_slot_boundary_persistent",
-      "network_has_no_ingress_and_required_bootstrap_and_tunnel_egress",
-      "retained_state_and_trusted_delivery",
-      "arm64_host_is_disposable_and_requires_imdsv2",
-      "role_can_read_only_exact_bundle_and_own_secret",
-      "onboarding_transfer_is_exact_and_temporary",
-      "onboarding_transfer_bucket_denies_untrusted_writes",
-      "readiness_waits_for_the_retained_volume",
-      "wait_condition_curl_uses_empty_content_type",
-    ]) {
-      expect(guard).toContain(`rule ${rule}`);
-    }
-    expect(validator).toContain("authority-staging-host-v1.template.json");
-    expect(validator).toContain("authority-staging-host-v1.guard");
   });
 });

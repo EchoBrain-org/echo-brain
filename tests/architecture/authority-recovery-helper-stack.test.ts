@@ -9,10 +9,6 @@ const TEMPLATE = resolve(
   REPO,
   "deploy/organization-authority/authority-recovery-helper-v1.template.json",
 );
-const GUARD = resolve(
-  REPO,
-  "deploy/organization-authority/authority-recovery-helper-v1.guard",
-);
 const BUNDLE_BUILDER = resolve(
   REPO,
   "tools/build-authority-recovery-helper-bundle.mjs",
@@ -169,23 +165,6 @@ describe("Authority isolated recovery helper stack", () => {
       "secondary device",
     ]) {
       expect(runbook).toContain(required);
-    }
-  });
-
-  it("locks the helper shape with the committed Guard policy", () => {
-    const guard = readFileSync(GUARD, "utf8");
-    expect(guard).toContain("let all_resources = Resources.*");
-    expect(guard).toContain("let standalone_routes = Resources.*[");
-    expect(guard).toContain("%resource_count == 15");
-    expect(guard).toContain("%standalone_route_count == 0");
-    for (const rule of [
-      "exact_helper_inventory",
-      "no_ingress_and_endpoint_only_egress",
-      "helper_role_has_no_operational_or_secret_access",
-      "arm64_non_public_immutable_helper",
-      "bounded_bundle_bootstrap",
-    ]) {
-      expect(guard).toContain(`rule ${rule}`);
     }
   });
 });

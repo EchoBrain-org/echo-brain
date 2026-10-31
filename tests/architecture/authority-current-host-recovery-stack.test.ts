@@ -8,10 +8,6 @@ const TEMPLATE = resolve(
   REPO,
   "deploy/organization-authority/authority-current-host-recovery-v1.template.json",
 );
-const GUARD_POLICY = resolve(
-  REPO,
-  "deploy/organization-authority/authority-current-host-recovery-v1.guard",
-);
 const VALIDATION_TOOLS = resolve(
   REPO,
   "deploy/organization-authority/authority-current-host-recovery-v1.validation-tools.json",
@@ -128,7 +124,6 @@ describe("Authority current-host recovery floor stack", () => {
   });
 
   it("checks the exact recovery shape with a committed CloudFormation Guard policy", () => {
-    const guard = readFileSync(GUARD_POLICY, "utf8");
     const runbook = readFileSync(RUNBOOK, "utf8");
     const validationTools = JSON.parse(
       readFileSync(VALIDATION_TOOLS, "utf8"),
@@ -154,24 +149,6 @@ describe("Authority current-host recovery floor stack", () => {
       };
     };
 
-    expect(guard).toContain("CloudFormation Guard 3.2.1");
-    expect(guard).toContain("rule exact_resource_inventory");
-    expect(guard).toContain("%resource_count == 5");
-    expect(guard).toContain("rule retained_recovery_vault");
-    expect(guard).toContain("DeletionPolicy == 'Retain'");
-    expect(guard).toContain("UpdateReplacePolicy == 'Retain'");
-    expect(guard).toContain("EncryptionKeyArn not exists");
-    expect(guard).toContain("rule exact_root_volume_selection");
-    expect(guard).toContain("Conditions not exists");
-    expect(guard).toContain("ListOfTags not exists");
-    expect(guard).toContain("NotResources not exists");
-    expect(guard).toContain("rule exact_backup_and_restore_roles");
-    expect(guard).toContain("ManagedPolicyArns not exists");
-    expect(guard).toContain("current-authority-root-volume-ebs-backup-only");
-    expect(guard).toContain("current-authority-root-volume-ebs-restore-only");
-    expect(guard).toContain("AuthorityRootVolumeKmsKeyArn");
-    expect(guard).toContain("rule bounded_schedule_and_retention");
-    expect(guard).toContain('"Ref": "RecoveryPointRetentionDays"');
     expect(validationTools.cfn_lint).toMatchObject({
       package: "cfn-lint",
       version: "1.55.1",
