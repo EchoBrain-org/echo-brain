@@ -47,6 +47,13 @@ const PAIRS = Object.freeze([
   Object.freeze({
     template: join(
       DEPLOYMENT,
+      "authority-staging-data-backup-v1.template.json",
+    ),
+    guard: join(DEPLOYMENT, "authority-staging-data-backup-v1.guard"),
+  }),
+  Object.freeze({
+    template: join(
+      DEPLOYMENT,
       "authority-staging-journey-observability-v1.template.json",
     ),
     guard: join(

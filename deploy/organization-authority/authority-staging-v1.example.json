@@ -17,5 +17,8 @@
     "accountId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "zoneId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "hostname": "authority-staging.example.invalid"
+  },
+  "backup": {
+    "alertTopicArn": "arn:aws:sns:us-west-2:123456789012:echo-authority-staging-observability-v1-authority-alerts"
   }
 }

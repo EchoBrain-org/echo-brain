@@ -904,7 +904,7 @@ the accepted image, its exact runtime profile, and the saved environment tuple;
 the release wrapper restores those together before it claims a recovered public
 Authority.
 
-### Current-host recovery floor
+### Off-host backups and the recovery floor
 
 [Environment drift](../release/README.md#environment-drift-before-staging)
 blocks staging. The wrapper has no automatic repair: investigate the change on
@@ -912,10 +912,19 @@ the host, and never overwrite an accepted snapshot to make the equality check
 pass.
 
 The release recovery unit above restores accepted deployment configuration. It
-does not reconstruct `clean-data/` if the Authority root volume is lost or
-corrupted. Until the later retained-data-volume and replaceable-host programme
-exists, the whole current root volume is the off-host protection boundary for
-`clean-data/`, including its `state/`, `release/`, and `private/` directories.
+does not reconstruct `clean-data/` if the volume that holds it is lost or
+corrupted. Where `clean-data/`, with its `state/`, `release/`, and `private/`
+directories, lives decides the off-host protection boundary:
+
+- On the pre-slot EC2 host, `clean-data/` sits on the root volume, so the
+  whole root volume is the boundary. RB-OPERATIONS-002 below covers it.
+- On the staging slot, `clean-data/` is the retained data volume
+  ([ADR-0009](../../docs/decisions/ADR-0009-retained-authority-data-volume-boundary.md))
+  and the root volume is replaceable host material. Retention alone is not a
+  backup. Enroll the volume with `npm run authority:staging -- backup` and
+  rehearse its restore with
+  [RB-OPERATIONS-004](../../docs/operations/RB-OPERATIONS-004-authority-staging-data-volume-backup.md).
+  The quiesced drill point uses the same installed maintenance wrapper.
 
 Use [RB-OPERATIONS-002](../../docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md)
 to complete the active root-volume encryption evidence gate, create the
