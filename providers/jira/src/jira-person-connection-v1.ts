@@ -2,11 +2,9 @@ import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1
 import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1, type PersonProjectNamesV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import { validateJiraProjectReadV1, validateJiraProjectSetV1, type JiraProjectMappingV1 } from '@echo-brain/provider-jira-client/organization-api/jira-project-mapping-v1';
 import type { JiraProjectMappingStoreV1 } from './jira-project-mapping-store-v1.js';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
-import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import { JiraConnectionStoreV1, type JiraStoredConnectionV1 } from './jira-connection-store-v1.js';
+import type { JiraConnectionStoreV1 } from './jira-connection-store-v1.js';
 import { createJiraCloudTransportV1, type JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { createJiraPersonLiveContainerReaderV1 } from './jira-person-live-container-reader-v1.js';
 import { createJiraPersonLiveEvidenceReaderV1 } from './jira-person-live-evidence-reader-v1.js';
@@ -35,7 +33,6 @@ export function createJiraPersonConnectionV1(options: {
   });
   const { actor, tags, authenticated } = shared;
   const access = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
-  const { projectAccess, mappingInput, projectScope } = access;
   /** This person's current connection as a transport, fenced on the same actor and grant before every request. */
   function openTransport(input: { readonly access_token: string; readonly signal?: AbortSignal }): JiraCloudTransportV1 {
     const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
@@ -55,41 +52,19 @@ export function createJiraPersonConnectionV1(options: {
   }
   return Object.freeze({
     ...shared.application,
-    projectRead(input: { readonly access_token: string; readonly request: unknown }): JiraProjectMappingV1 {
-      const { person, requirePerson } = actor(input.access_token);
-      const request = mappingInput(() => validateJiraProjectReadV1(input.request));
-      const access = projectAccess(input.access_token, request.project_id);
-      const result = access.store.read(person.organization_id, request.project_id);
-      requirePerson(); access.current();
-      return result;
-    },
-    async projectSet(input: { readonly access_token: string; readonly request: unknown; readonly signal?: AbortSignal }): Promise<JiraProjectMappingV1> {
-      const { person, requirePerson } = actor(input.access_token);
-      const request = mappingInput(() => validateJiraProjectSetV1(input.request));
-      const access = projectAccess(input.access_token, request.project_id, true);
-      const current = () => { requirePerson(); access.current(); input.signal?.throwIfAborted(); };
-      current();
-      const command = canonicalSha256({ person, request });
-      const replay = access.store.prepare(person.organization_id, request.project_id, request.expected_revision, command);
-      if (replay !== undefined) return replay;
-      let mapping: JiraProjectMappingV1['mapping'] = null;
-      if (request.jira_project !== null) {
-        const stored = options.store.current(person);
-        if (stored === undefined || !stored.active) jiraFailure('unauthorized');
-        const connectionCurrent = () => { current(); options.store.requireCurrent(stored.binding); };
-        const transport = createJiraCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), connectionCurrent));
-        const { origin } = await verifyJiraConnectionV1(transport, { expected_origin: stored.site, signal: input.signal });
-        const prefix = `https://api.atlassian.com/ex/jira/${cloud}`;
-        const readProject = async (id: string) => parseJiraProject(await transport.request({ path: `/ex/jira/${cloud}/rest/api/3/project/${id}`, query: { expand: 'projectKeys' }, signal: input.signal }), origin, prefix);
-        const selected = await readProject(request.jira_project);
-        if (!jiraProjectMatches(selected, request.jira_project)) jiraFailure('invalid_output');
-        connectionCurrent();
-        mapping = Object.freeze({ cloud_id: cloud, project_id: selected.id, project_key: selected.key });
-      }
-      current();
-      // No asynchronous work between the final grant check and the atomic CAS.
-      return access.store.set(person.organization_id, request.project_id, request.expected_revision, command, mapping);
-    },
+    projectRead: (input: { readonly access_token: string; readonly request: unknown }): JiraProjectMappingV1 =>
+      access.read({ lifecycle: shared, validate: validateJiraProjectReadV1 }, input),
+    /** A lead maps the ECHO project to one Jira project their own connection can read, saved by its stable id. */
+    projectSet: (input: { readonly access_token: string; readonly request: unknown; readonly signal?: AbortSignal }): Promise<JiraProjectMappingV1> => access.set({
+      lifecycle: shared, validate: validateJiraProjectSetV1, selection: request => request.jira_project,
+      async resolve(project, connection, signal) {
+        const transport = createJiraCloudTransportV1(connection.transport);
+        const { origin } = await verifyJiraConnectionV1(transport, { expected_origin: connection.stored.site, signal });
+        const selected = parseJiraProject(await transport.request({ path: `/ex/jira/${cloud}/rest/api/3/project/${project}`, query: { expand: 'projectKeys' }, signal }), origin, `https://api.atlassian.com/ex/jira/${cloud}`);
+        if (!jiraProjectMatches(selected, project)) jiraFailure('invalid_output');
+        return Object.freeze({ cloud_id: cloud, project_id: selected.id, project_key: selected.key });
+      },
+    }, input),
     /** Assignee account ids by ticket id, read in bulk with this person's own connection. */
     assigneeAccounts(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
       return readTickets(input, readJiraAssigneeAccountsV1);
@@ -102,19 +77,12 @@ export function createJiraPersonConnectionV1(options: {
     ticketMarkers(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string | null>> {
       return readTickets(input, readJiraTicketMarkersV1);
     },
-    async source(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined> {
-      const { person, requirePerson } = actor(input.access_token);
-      const scope = projectScope(input.access_token, person.organization_id, input.project_id, cloud, validateJiraProjectReadV1);
-      if (scope === null) return undefined;
-      const stored: JiraStoredConnectionV1 | undefined = options.store.current(person);
-      if (stored === undefined || !stored.active) return undefined;
-      const current = () => { requirePerson(); options.store.requireCurrent(stored.binding); scope?.current(); };
-      const selectedProject = scope?.mapping.project_id;
-      current();
-      const reader = await createJiraPersonLiveEvidenceReaderV1({ binding: stored.binding, transport: createJiraCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current)), expected_origin: stored.site, signal: input.signal, ...(selectedProject === undefined ? {} : { project: selectedProject }) });
-      current();
-      return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current }, access: { tool_id: 'jira', external_scope_id: cloud, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
-    },
+    /** This person's Jira tickets as one request's audited live source; a project scope reads only its mapped Jira project. */
+    source: (input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined> => access.source({
+      scope_id: cloud, validate: validateJiraProjectReadV1, lifecycle: shared, store: options.store,
+      reader: ({ binding, fetch: authenticatedFetch, expected_origin, signal }, mapping) => createJiraPersonLiveEvidenceReaderV1({ binding, transport: createJiraCloudTransportV1(authenticatedFetch),
+        expected_origin, signal, ...(mapping === undefined ? {} : { project: mapping.project_id }) }),
+    }, input),
     /** The Jira projects the asker can browse, as tool containers (research tool contract v1); a project scope reads only its mapped one. */
     containerSource: (input: Parameters<typeof access.containerSource>[1]) => access.containerSource({
       scope_id: cloud, validate: validateJiraProjectReadV1, lifecycle: shared, store: options.store, containers: mapping => [mapping.project_id],

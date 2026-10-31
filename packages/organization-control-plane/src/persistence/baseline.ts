@@ -1,6 +1,6 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
-import { sha256Digest } from "../canonical/canonical-json.js";
 
 /** `ECOP` is stable for the Control Plane database role. */
 export const ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID = 0x45434f50;
@@ -10,8 +10,9 @@ export function organizationControlBaselineSqlV4(): string {
   return readFileSync(new URL("../../baselines/organization-control-plane-baseline-v4.sql", import.meta.url), "utf8");
 }
 
+/** Hashes the baseline file's own UTF-8 bytes. */
 export function organizationControlBaselineSha256V4(): `sha256:${string}` {
-  return sha256Digest(organizationControlBaselineSqlV4());
+  return `sha256:${createHash("sha256").update(organizationControlBaselineSqlV4()).digest("hex")}`;
 }
 
 export function applyOrganizationControlBaselineV4(database: Database.Database): void {

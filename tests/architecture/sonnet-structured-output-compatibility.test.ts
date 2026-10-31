@@ -45,7 +45,6 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
     expect(sentSchema(body)).toMatchObject({ type: 'object', additionalProperties: false, required: schema.required });
     expect(JSON.stringify(sentSchema(body))).toContain('maxItems'); // Bounds survive as descriptions.
     expect(JSON.stringify(schema)).toBe(before);
-    expect(sentSchema(await wireRequest(schema, 'deepseek/deepseek-v3.2'))).toEqual(schema);
   });
 
   // The kernel's tests own the Ask date format and pattern; this checks the

@@ -3,7 +3,7 @@ import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "@echo-brain
 import { createOpenRouterStructuredGenerationAdapter, OpenRouterStructuredGenerationError, parseModelJson } from "../../../../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 
 const structuredRequest = {
-  model: "openai/gpt-4.1-mini",
+  model: "anthropic/claude-sonnet-5.5",
   system_prompt: "system",
   user_prompt: "user",
   schema: { type: "object" },
@@ -80,32 +80,16 @@ describe("OpenRouter structured generation", () => {
     expect(typeof request?.body).toBe("string");
     expect(JSON.parse(request?.body as string)).toMatchObject({
       stream: false,
-      max_tokens: 300,
-      temperature: 0,
+      max_tokens: 4_396,
+      reasoning: { effort: "medium" },
       response_format: { type: "json_schema", json_schema: {
-        name: "echo_layer4", strict: true, schema: structuredRequest.schema,
+        name: "echo_layer4", strict: true, schema: { ...structuredRequest.schema, additionalProperties: false },
       } },
     });
-    // No measured bad hosts for this model: nothing is ignored and no order is pinned.
+    expect(JSON.parse(request?.body as string)).not.toHaveProperty("temperature");
+    // No host is ignored and no order is pinned.
     expect(JSON.parse(request?.body as string).provider).toEqual({ require_parameters: true, data_collection: "deny", sort: "throughput" });
     expect(request?.headers).toMatchObject({ "x-openrouter-metadata": "enabled" });
-  });
-
-  it("ignores the hosts measured to garble DeepSeek V3.2, at temperature 0, without pinning an order", async () => {
-    const bodies: unknown[] = [];
-    const adapter = createOpenRouterStructuredGenerationAdapter({
-      credential_ref: "openrouter-production",
-      credential_resolver: () => "secret-not-in-errors",
-      fetch_impl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
-        bodies.push(JSON.parse(init!.body as string));
-        return new Response(JSON.stringify({ choices: [{ message: { content: '{"queries":[]}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
-      }) as typeof fetch,
-    });
-    await adapter.generate({ ...structuredRequest, model: "deepseek/deepseek-v3.2" });
-    expect(bodies[0]).toMatchObject({ model: "deepseek/deepseek-v3.2", temperature: 0 });
-    expect((bodies[0] as { provider: unknown }).provider).toEqual({
-      require_parameters: true, data_collection: "deny", sort: "throughput", ignore: ["friendli", "atlas-cloud"],
-    });
   });
 
   it("gives Sonnet 5.5 bounded reasoning headroom without sending unsupported temperature", async () => {

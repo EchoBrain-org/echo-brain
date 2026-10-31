@@ -1,13 +1,11 @@
-import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import { createPersonProviderValidationV1, type PersonProviderFailureCodeV1 } from '@echo-brain/provider-runtime/person-provider-v1';
 export const CONFLUENCE_CLOUD_ID=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 /** A Confluence page or space id. */
 export const CONFLUENCE_ID = /^[1-9][0-9]{0,19}$/;
 const API_ORIGIN = 'https://api.atlassian.com';
-export function confluenceFailure(code: 'invalid_request'|'invalid_output'|'unauthorized'|'not_found'|'stale_access_state'|'unavailable'|'rate_limited'): never { throw new AuthorityOperationError(code, 'Confluence live evidence operation could not be completed'); }
-export function confluenceString(value: unknown, max=1024, pattern?: RegExp): string { if(typeof value!=='string'||value.length<1||value.length>max||value!==value.normalize('NFC')||/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)||(pattern!==undefined&&!pattern.test(value))) confluenceFailure('invalid_output'); return value; }
-export function confluenceRecord(value: unknown): Record<string,unknown> { if(value===null||typeof value!=='object'||Array.isArray(value)) confluenceFailure('invalid_output'); return value as Record<string,unknown>; }
-export function confluenceArray(value: unknown, max=512): readonly unknown[] { if(!Array.isArray(value)||value.length>max) confluenceFailure('invalid_output'); return value; }
+const validation = createPersonProviderValidationV1('confluence', CONFLUENCE_CLOUD_ID, 'Confluence live evidence operation could not be completed');
+export const { record: confluenceRecord, array: confluenceArray, string: confluenceString, copyBinding: copyConfluenceBindingV1 } = validation;
+export function confluenceFailure(code: PersonProviderFailureCodeV1): never { return validation.failure(code); }
 /**
  * The opaque cursor of a Confluence next link to `path`, by its public wiki or OAuth proxy path, never the link itself:
  * a next link repeats limit, status and space selectors, and only the cursor goes on to our own pinned request.
@@ -34,7 +32,6 @@ export function confluenceAtlasDocumentV1(body: unknown): string {
   if (typeof representation.value !== 'string') confluenceFailure('invalid_output');
   return representation.value;
 }
-export function copyConfluenceBindingV1(value: PersonConnectorReadBindingV1): PersonConnectorReadBindingV1 { if(value.tool_id!=='confluence'||typeof value.external_scope_id!=='string'||typeof value.external_subject_id!=='string'||typeof value.read_grant_sha256!=='string') confluenceFailure('unauthorized'); return Object.freeze({...value}); }
 
 /** Fixed server-only policy for shared Atlassian consent and custody. */
 export const CONFLUENCE_PERSON_PROVIDER_V1 = Object.freeze({

@@ -1,4 +1,4 @@
-import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { VerifiedSlackConnection } from "./slack-integration-contracts.js";
 
 /** The exact existing auth.test + bots.info proof, shared with capability-aware recovery. */
