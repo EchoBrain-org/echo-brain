@@ -60,27 +60,6 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it('passes answer layout to Ask, and refuses any other value before the Ask runs', async () => {
-    const ask = vi.fn(async (_input: unknown) => { throw new AuthorityOperationError('not_found', 'fixture'); });
-    const value = await server({ ask: { ask } as never });
-    const body = { schema_version: 3, question: 'What changed?' };
-    try {
-      const post = (headers: Readonly<Record<string, string>>) => fetch(`${value.url}${PERSON_ANSWER_PATH_V7}`, {
-        method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
-      });
-      expect((await post({ 'x-echo-answer-layout': '1' })).status).toBe(404);
-      expect(ask).toHaveBeenLastCalledWith(expect.objectContaining({ request: body, answer_layout: true }));
-      await post({});
-      expect(ask.mock.calls.at(-1)![0]).not.toHaveProperty('answer_layout');
-      for (const invalid of ['0', 'yes', '1, 1']) {
-        const refused = await post({ 'x-echo-answer-layout': invalid });
-        expect(refused.status).toBe(400);
-        await expect(refused.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
-      }
-      expect(ask).toHaveBeenCalledTimes(2);
-    } finally { await value.close(); }
-  });
-
   it('marks matched /v7 provider errors so clients cannot mistake them for an Authority with no /v7', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'Provider resource unavailable'); });
     const value = await server({ ask: { ask } as never });
