@@ -264,9 +264,11 @@ Owner: [client updates](../features/client-updates-v1.md).
 
 ### Release the Authority
 
-CI builds the arm64 image; the reviewed release CLI stages it on the slot,
-runs a canary, waits for a human decision and promotes it. Every host action is
-a named wrapper run through bounded SSM.
+The release operator builds the arm64 image (`npm run build:authority-image`),
+publishes it to the image registry and records its digest; no tool pushes it.
+The reviewed release CLI then stages that exact digest on the slot, runs a
+canary, waits for a human decision and promotes it. Every host action is a
+named wrapper run through bounded SSM.
 
 Owner: [operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md).
 
