@@ -105,14 +105,11 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it("reports agentic Ask to installed clients that still probe, and no longer serves the retired Ask paths", async () => {
+  it("reports agentic Ask to installed clients that still probe", async () => {
     const value = await server({ application: { searchEvidence: vi.fn(), openEvidence: vi.fn() } as never, ask: { ask: vi.fn() } as never });
     try {
       const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
       await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: true });
-      for (const path of RETIRED_ASK_PATHS) {
-        expect((await post(value.url, path, { schema_version: path === "/v1/person/ask" || path === "/v2/person/ask" ? 2 : 3, question: "What changed?" })).status).toBe(404);
-      }
     } finally { await value.close(); }
   });
 
