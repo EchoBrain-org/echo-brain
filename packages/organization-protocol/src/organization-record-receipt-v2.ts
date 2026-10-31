@@ -1,4 +1,4 @@
-import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecRegistryV4 } from "./record-input-codec-v4.js";
+import type { RecordInputCodecRegistryV4 } from "./record-input-codec-v4.js";
 import { Buffer } from "node:buffer";
 import {
   canonicalJsonBytes,
@@ -13,7 +13,6 @@ import {
   resolvePinnedOrganizationAuthority,
 } from "./authority-descriptor.js";
 import type { PinnedOrganizationAuthority } from "./authority-descriptor.js";
-import type { PersonContentPolicyIdV2 } from "./human-act-record-input-v1.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
@@ -64,7 +63,6 @@ const RECEIPT_BODY_KEYS = [
   "policy_fact_outcome",
 ] as const;
 
-const NO_POLICY_FACT_OUTCOME_KEYS = ["kind"] as const;
 const APPENDED_POLICY_FACT_OUTCOME_KEYS = ["kind", "policy_id"] as const;
 
 const RECEIPT_SIGNATURE_INPUT_KEYS = [
@@ -86,18 +84,16 @@ const RECEIPT_WRAPPER_KEYS = [
 
 const CREATE_INPUT_KEYS = ["envelope", "record_position", "issued_at"] as const;
 
-export interface NoPolicyFactOutcomeV2 {
-  readonly kind: "none";
-}
+type RecordPolicyIdV2 =
+  | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
+  | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
+  | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
 
-export interface AppendedPolicyFactOutcomeV2 {
+/** Every record is an approval, so every receipt names the policy whose facts its append wrote. */
+export interface OrganizationRecordPolicyFactOutcomeV2 {
   readonly kind: "appended";
-  readonly policy_id: PersonContentPolicyIdV2 | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
+  readonly policy_id: RecordPolicyIdV2;
 }
-
-export type OrganizationRecordPolicyFactOutcomeV2 =
-  | NoPolicyFactOutcomeV2
-  | AppendedPolicyFactOutcomeV2;
 
 export interface OrganizationRecordReceiptBodyV2 {
   readonly schema_version: 2;
@@ -107,7 +103,7 @@ export interface OrganizationRecordReceiptBodyV2 {
   readonly state_lineage_id: string;
   readonly envelope_id: string;
   readonly semantic_idempotency_key: Sha256Digest;
-  readonly event_kind: "approved" | "rejected";
+  readonly event_kind: "approved";
   readonly record_position: number;
   readonly record_sha256: Sha256Digest;
   readonly predecessor_record_sha256: Sha256Digest | null;
@@ -154,7 +150,7 @@ function assertNullableDigest(
 function assertPolicyId(
   value: unknown,
   label: string,
-): asserts value is PersonContentPolicyIdV2 | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID {
+): asserts value is RecordPolicyIdV2 {
   if (
     value !== RESTRICTED_REVIEWER_PERSON_POLICY_ID &&
     value !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID &&
@@ -166,26 +162,7 @@ function assertPolicyId(
 
 function validatePolicyFactOutcome(
   value: unknown,
-  eventKind: "approved" | "rejected",
 ): OrganizationRecordPolicyFactOutcomeV2 {
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.prototype.hasOwnProperty.call(value, "kind") &&
-    Object.getOwnPropertyDescriptor(value, "kind")?.value === "none"
-  ) {
-    const outcome = exactObject(
-      value,
-      NO_POLICY_FACT_OUTCOME_KEYS,
-      "Record receipt v2 no-policy-fact outcome",
-      MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
-    );
-    if (eventKind !== "rejected") {
-      fail("Record receipt v2 approval must append policy facts");
-    }
-    return { kind: outcome.kind as "none" };
-  }
   const outcome = exactObject(
     value,
     APPENDED_POLICY_FACT_OUTCOME_KEYS,
@@ -194,9 +171,6 @@ function validatePolicyFactOutcome(
   );
   if (outcome.kind !== "appended") {
     fail("Record receipt v2 policy fact outcome kind is unsupported");
-  }
-  if (eventKind !== "approved") {
-    fail("Record receipt v2 rejection must not append policy facts");
   }
   assertPolicyId(outcome.policy_id, "Record receipt v2 policy fact outcome");
   return { kind: "appended", policy_id: outcome.policy_id };
@@ -224,7 +198,7 @@ export function validateOrganizationRecordReceiptBodyV2(
     body.semantic_idempotency_key,
     "Record receipt body v2 semantic_idempotency_key",
   );
-  if (body.event_kind !== "approved" && body.event_kind !== "rejected") {
+  if (body.event_kind !== "approved") {
     fail("Record receipt body v2 event kind is unsupported");
   }
   assertPositiveSafeInteger(
@@ -257,10 +231,7 @@ export function validateOrganizationRecordReceiptBodyV2(
     fail("Record receipt body v2 resulting head must be the appended record");
   }
   assertTimestamp(body.issued_at, "Record receipt body v2 issued_at");
-  const policyFactOutcome = validatePolicyFactOutcome(
-    body.policy_fact_outcome,
-    body.event_kind,
-  );
+  const policyFactOutcome = validatePolicyFactOutcome(body.policy_fact_outcome);
   return {
     schema_version: 2,
     kind: ORGANIZATION_RECORD_RECEIPT_V2_KIND,
@@ -389,12 +360,7 @@ function assertReceiptMatchesEnvelope(
   ) {
     fail("Record receipt v2 does not bind the exact record envelope v4");
   }
-  const outcome = receipt.body.policy_fact_outcome;
-  if (
-    (event.kind === "rejected" && outcome.kind !== "none") ||
-    (event.kind === "approved" &&
-      (outcome.kind !== "appended" || outcome.policy_id !== event.policy_id))
-  ) {
+  if (receipt.body.policy_fact_outcome.policy_id !== event.policy_id) {
     fail("Record receipt v2 policy fact outcome does not match the record event");
   }
 }
@@ -404,7 +370,7 @@ export function verifyOrganizationRecordReceiptV2(
   envelopeValue: unknown,
   pinnedAuthority: PinnedOrganizationAuthority,
   expectedStateLineageId: string,
-  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+  codecs: RecordInputCodecRegistryV4,
 ): OrganizationRecordReceiptV2 {
   const envelope = verifyOrganizationRecordEnvelopeV4(
     envelopeValue,
@@ -464,7 +430,7 @@ export async function createOrganizationRecordReceiptV2(
   pinnedAuthority: PinnedOrganizationAuthority,
   expectedStateLineageId: string,
   sign: AuthorityDetachedSigner,
-  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+  codecs: RecordInputCodecRegistryV4,
 ): Promise<OrganizationRecordReceiptV2> {
   const input = exactObject(value, CREATE_INPUT_KEYS, "Create record receipt v2 input", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   const envelope = verifyOrganizationRecordEnvelopeV4(
@@ -490,9 +456,7 @@ export async function createOrganizationRecordReceiptV2(
     record_head_position: input.record_position,
     record_head_sha256: envelope.record_sha256,
     issued_at: input.issued_at,
-    policy_fact_outcome: event.kind === "approved"
-      ? { kind: "appended", policy_id: event.policy_id }
-      : { kind: "none" },
+    policy_fact_outcome: { kind: "appended", policy_id: event.policy_id },
   });
   const receiptSha256 = organizationRecordReceiptBodyV2Sha256(body);
   const authority = resolvePinnedOrganizationAuthority(pinnedAuthority);

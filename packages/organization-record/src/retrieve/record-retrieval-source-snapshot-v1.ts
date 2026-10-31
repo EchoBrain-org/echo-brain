@@ -6,22 +6,15 @@ import {
 import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import {
-  createPersonPolicyFactProjectorV2,
-} from "../application/person-policy-facts-v2.js";
-import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonPolicyFactItemKindV2,
   type PersonPolicyIdV2,
 } from "../application/person-policy-fact-contracts-v2.js";
 import { derivedAtomIdentity } from "../application/atom-identity.js";
-import {
-  createRecordPolicyFactProjectorRegistryV1,
-  type RecordPolicyFactEnvelopeV1,
-  type RecordPolicyFactProjectorRegistryV1,
+import type {
+  RecordPolicyFactEnvelopeV1,
+  RecordPolicyFactProjectorRegistryV1,
 } from "../application/record-policy-fact-projection-v1.js";
-
-type RecordEventKind = "approved" | "rejected";
-type RecordAction = "approve" | "reject";
 
 /**
  * The protocol-owned verifier is deliberately injected by Authority
@@ -31,20 +24,18 @@ type RecordAction = "approve" | "reject";
 export interface RecordRetrievalSourceVerifiedEnvelopeV1
   extends RecordPolicyFactEnvelopeV1 {
   readonly body: RecordPolicyFactEnvelopeV1["body"] & {
-    readonly event:
-      | {
-          readonly kind: "approved";
-          readonly approved_snapshot: {
-            readonly approved_payload: {
-              readonly brief: {
-                readonly decisions: readonly RecordRetrievalSourceSignalV1[];
-                readonly actions: readonly RecordRetrievalSourceSignalV1[];
-                readonly rationales: readonly RecordRetrievalSourceSignalV1[];
-              };
-            };
+    readonly event: {
+      readonly kind: "approved";
+      readonly approved_snapshot: {
+        readonly approved_payload: {
+          readonly brief: {
+            readonly decisions: readonly RecordRetrievalSourceSignalV1[];
+            readonly actions: readonly RecordRetrievalSourceSignalV1[];
+            readonly rationales: readonly RecordRetrievalSourceSignalV1[];
           };
-        }
-      | { readonly kind: "rejected" };
+        };
+      };
+    };
   };
 }
 
@@ -61,7 +52,7 @@ export interface RecordRetrievalSourceSnapshotInputV1 {
   /** Must invoke the protocol's signature and V4 schema verifier. */
   readonly verify_envelope: (value: unknown) => RecordRetrievalSourceVerifiedEnvelopeV1;
   /** Explicit approval-protocol registry selected by composition. */
-  readonly policy_projectors?: RecordPolicyFactProjectorRegistryV1;
+  readonly policy_projectors: RecordPolicyFactProjectorRegistryV1;
 }
 
 export interface RecordRetrievalSourceHeadV1 {
@@ -69,24 +60,23 @@ export interface RecordRetrievalSourceHeadV1 {
   readonly record_sha256: Sha256Digest;
 }
 
+/** Every stored record is an approval: a rejection writes none. */
 export interface RecordRetrievalSourceRowV1 {
   readonly position: number;
   readonly envelope_id: string;
-  readonly event_kind: RecordEventKind;
+  readonly event_kind: "approved";
   readonly approval_id: string;
-  readonly action: RecordAction;
+  readonly action: "approve";
   readonly semantic_idempotency_key: Sha256Digest;
   readonly envelope_sha256: Sha256Digest;
   readonly predecessor_position: number | null;
   readonly predecessor_record_sha256: Sha256Digest | null;
   readonly record_sha256: Sha256Digest;
-  readonly classification:
-    | {
-        readonly kind: "approved";
-        readonly policy_id: PersonPolicyIdV2;
-        readonly atom_count: number;
-      }
-    | { readonly kind: "rejected" };
+  readonly classification: {
+    readonly kind: "approved";
+    readonly policy_id: PersonPolicyIdV2;
+    readonly atom_count: number;
+  };
 }
 
 /** An atom released to the search index, with every immutable Person-v2 proof fact. */
@@ -135,9 +125,9 @@ export interface RecordRetrievalSourceSnapshotV1 {
 interface StoredRecordRow {
   readonly position: number;
   readonly envelope_id: string;
-  readonly event_kind: RecordEventKind;
+  readonly event_kind: string;
   readonly approval_id: string;
-  readonly action: RecordAction;
+  readonly action: string;
   readonly semantic_idempotency_key: Sha256Digest;
   readonly canonical_envelope: string;
   readonly envelope_sha256: Sha256Digest;
@@ -228,7 +218,6 @@ function assertEqual(actual: unknown, expected: unknown, label: string): void {
 function expectedSignals(
   envelope: RecordRetrievalSourceVerifiedEnvelopeV1,
 ): readonly RecordRetrievalSourceSignalV1[] {
-  if (envelope.body.event.kind !== "approved") return Object.freeze([]);
   const grouped: ReadonlyArray<
     readonly [PersonPolicyFactItemKindV2, readonly RecordRetrievalSourceSignalV1[]]
   > = [
@@ -368,7 +357,7 @@ function sourceRow(
     envelope_id: requiredText(row.envelope_id, "row envelope_id"),
     event_kind: classification.kind,
     approval_id: requiredText(row.approval_id, "row approval_id"),
-    action: classification.kind === "approved" ? "approve" : "reject",
+    action: "approve",
     semantic_idempotency_key: requiredDigest(
       row.semantic_idempotency_key,
       "row semantic idempotency key",
@@ -394,13 +383,7 @@ function asJsonObject(value: unknown, label: string): JsonObject {
  * search index builder will scope before indexing.
  */
 export class RecordRetrievalSourceSnapshotPortV1 {
-  constructor(
-    private readonly database: Database.Database,
-    private readonly defaultPolicyProjectors: RecordPolicyFactProjectorRegistryV1 =
-      createRecordPolicyFactProjectorRegistryV1([
-        createPersonPolicyFactProjectorV2(),
-      ]),
-  ) {}
+  constructor(private readonly database: Database.Database) {}
 
   snapshot(input: RecordRetrievalSourceSnapshotInputV1): RecordRetrievalSourceSnapshotV1 {
     requiredText(input.authority_id, "authority_id");
@@ -515,16 +498,9 @@ export class RecordRetrievalSourceSnapshotPortV1 {
         body.predecessor_record_sha256,
         "row predecessor digest",
       );
-      assertEqual(
-        body.event.kind === "approved",
-        reference.action === "approve",
-        "event/action join",
-      );
-      assertEqual(
-        body.event.kind === "rejected",
-        reference.action === "reject",
-        "rejection/action join",
-      );
+      // Only an approval writes a record; any other event or action is refused.
+      assertEqual(body.event.kind, "approved", "record event kind");
+      assertEqual(reference.action, "approve", "record action");
 
       const predecessorPosition = prior?.position ?? null;
       const predecessorHash = prior?.record_sha256 ?? null;
@@ -541,21 +517,12 @@ export class RecordRetrievalSourceSnapshotPortV1 {
 
       const recordFacts = factsByPosition.get(position) ?? [];
       const signals = expectedSignals(envelope);
-      if (body.event.kind === "rejected") {
-        if (recordFacts.length !== 0)
-          invalid("rejection must contribute no Person atoms");
-        rows.push(sourceRow(position, row, Object.freeze({ kind: "rejected" })));
-        prior = row;
-        continue;
-      }
-
       if (recordFacts.length !== signals.length) {
         invalid(
           "approved record Person facts do not exactly cover its signals",
         );
       }
-      const binding = (input.policy_projectors ?? this.defaultPolicyProjectors)
-        .policyBinding(envelope);
+      const binding = input.policy_projectors.policyBinding(envelope);
       const expectedFamily =
         binding.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
           ? "reviewer"

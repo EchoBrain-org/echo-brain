@@ -66,12 +66,11 @@ export type PersonPolicyFactRowV2 =
   | RestrictedReviewerPersonPolicyFactRowV2
   | ProjectMembersReadablePersonPolicyFactRowV2;
 
-export type PersonPolicyFactOutcomeV2 =
-  | { readonly kind: 'none' }
-  | {
-      readonly kind: 'appended';
-      readonly policy_id: PersonPolicyIdV2;
-    };
+/** Every record is an approval, so every append writes its policy's facts. */
+export interface PersonPolicyFactOutcomeV2 {
+  readonly kind: 'appended';
+  readonly policy_id: PersonPolicyIdV2;
+}
 
 export interface PersonPolicyFactProjectionV2 {
   readonly facts: readonly PersonPolicyFactRowV2[];

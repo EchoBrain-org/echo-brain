@@ -20,7 +20,6 @@ export type {
   OrganizationRecordParticipantRoleV1,
   OrganizationRecordParticipantV1,
   OrganizationRecordRationaleSignalV1,
-  OrganizationRecordRejectionPayloadV1,
   OrganizationRecordSignalV1,
   OrganizationRecordSourceLocatorV1,
 } from "./contracts.js";
@@ -50,17 +49,8 @@ export type {
   OrganizationRecordReceiptBodyV2,
   OrganizationRecordReceiptV2,
 } from "./organization-record-receipt-v2.js";
-export {
-  buildHumanActRecordInputV1,
-  validateApprovedDecisionSnapshotV2,
-  validateHumanActRecordInputV1,
-} from "./human-act-record-input-v1.js";
-export type {
-  ApprovedDecisionSnapshotV2,
-  HumanActEventV1,
-  HumanActRecordInputV1,
-  PersonContentPolicyIdV2,
-} from "./human-act-record-input-v1.js";
+export { validateApprovedDecisionSnapshotV2 } from "./approved-decision-snapshot-v2.js";
+export type { ApprovedDecisionSnapshotV2 } from "./approved-decision-snapshot-v2.js";
 export {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
@@ -75,7 +65,7 @@ export {
   projectMembersReadablePersonPolicyContractSha256,
 } from "./person-content-policy-v2.js";
 
-export { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecV4, type RecordInputCodecRegistryV4, type RecordResolutionRefV4, type RecordHumanActEventV4, type ValidatedRecordInputV4 } from "./record-input-codec-v4.js";
+export { createRecordInputCodecRegistryV4, type RecordInputCodecV4, type RecordInputCodecRegistryV4, type RecordResolutionRefV4, type RecordHumanActEventV4, type ValidatedRecordInputV4 } from "./record-input-codec-v4.js";
 
 export * from './approval-decision-record-input-v2.js';
 export * from './record-append-factories-v4.js';

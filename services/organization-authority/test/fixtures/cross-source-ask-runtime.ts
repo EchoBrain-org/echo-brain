@@ -157,7 +157,7 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
       db.transaction(() => {
         const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?").pluck().get(guard) as string;
         db.exec(`DROP TRIGGER ${guard}`);
-        runs.enqueueApprovedRecord(db, { approval_id: 'cross-source-public', proposal_approval_id: 'cross-source-public', record_sha256, reviewer: owner, decided_at: new Date().toISOString() });
+        runs.enqueueApprovedRecord(db, { approval_id: seeded.approved_approval_id, proposal_approval_id: 'cross-source-public', record_sha256, reviewer: owner, decided_at: new Date().toISOString() });
         db.exec(sql);
       })();
     }

@@ -156,15 +156,3 @@ export interface OrganizationRecordApprovalPayloadV1 {
   reviewed_at: string;
   surface: string;
 }
-
-/**
- * A rejection records the act, never the rejected candidate content. The
- * optional reason is explicitly organization-visible.
- */
-export interface OrganizationRecordRejectionPayloadV1 {
-  source: OrganizationRecordSourceLocatorV1;
-  meeting_id: string;
-  rejected_at: string;
-  reason: string | null;
-  reconsider_after: string | null;
-}

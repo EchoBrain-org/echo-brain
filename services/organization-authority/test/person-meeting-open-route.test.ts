@@ -6,7 +6,7 @@ import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record
 import { releasableBodyV1 } from "../src/application/person-item-text-v1.js";
 import { validatePersonOpenResponseV1 } from "@echo-brain/organization-api";
 import { failure } from "./authority-failure.js";
-import { EMP_A, EMP_B, OWNER, SHARED, T, UNJOINED, meetingWorld, type ReaderToken } from "./fixtures/person-meeting-world.js";
+import { EMP_A, EMP_B, EVERYONE, OWNER, SHARED, T, UNJOINED, meetingWorld, type ReaderToken } from "./fixtures/person-meeting-world.js";
 import { SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
 
 type World = Awaited<ReturnType<typeof meetingWorld>>;
@@ -48,19 +48,16 @@ async function world(options: { readonly long?: boolean } = {}) {
     })),
   });
   await w.approve({
-    name: "thirty", approval_id: "apr_thirty", projects: "team", final_approver: EMP_B, issued_at: T(12), signals: { decisions: 30 },
+    name: "thirty", approval_id: "apr_thirty", projects: [EVERYONE], final_approver: EMP_B, issued_at: T(12), signals: { decisions: 30 },
     brief: withMeeting((brief) => ({ meeting: { ...brief.meeting, participants: Array.from({ length: 40 }, (_, index) => ({ id: `p-${index}`, display_name: `Person ${String(index + 1).padStart(2, "0")}` })) } })),
   });
   // Twelve 3,000-byte atoms cross the 32 KiB page budget before the 25-atom cap.
   await w.approve({
-    name: "budget", approval_id: "apr_budget", projects: "team", final_approver: EMP_B, issued_at: T(13), signals: { decisions: 12 },
+    name: "budget", approval_id: "apr_budget", projects: [EVERYONE], final_approver: EMP_B, issued_at: T(13), signals: { decisions: 12 },
     brief: withMeeting((brief) => ({ decisions: brief.decisions.map((signal, index) => ({ ...signal, text: `${index}`.padEnd(3_000, "x") })) })),
   });
-  // A generic human-act brief may carry an owner no approver confirmed; it is never released.
-  await w.approve({
-    name: "mallory", approval_id: "apr_mallory", projects: "team", final_approver: EMP_B, issued_at: T(14), signals: { decisions: 0, actions: 1 },
-    brief: withMeeting((brief) => ({ actions: brief.actions.map((signal) => ({ ...signal, owner: "Mallory" })) })),
-  });
+  // An action whose approver confirmed no owner.
+  await w.approve({ name: "unowned", approval_id: "apr_unowned", projects: [EVERYONE], final_approver: EMP_B, issued_at: T(14), signals: { decisions: 0, actions: 1 } });
   await w.approve({ name: "emp_a_only", approval_id: "apr_emp_a_only", projects: [], final_approver: EMP_A, issued_at: T(15) });
   w.rebuild();
   if (options.long === true) {
@@ -71,12 +68,12 @@ async function world(options: { readonly long?: boolean } = {}) {
     });
     // 24 short decisions, then the split action: its first part ends the 25-part page.
     await w.approve({
-      name: "boundary", approval_id: "apr_boundary", projects: "team", final_approver: EMP_B, issued_at: T(19), signals: { decisions: 24, actions: 1 },
+      name: "boundary", approval_id: "apr_boundary", projects: [EVERYONE], final_approver: EMP_B, issued_at: T(19), signals: { decisions: 24, actions: 1 },
       brief: withMeeting((brief) => ({ actions: brief.actions.map((signal) => ({ ...signal, text: LONG_ACTION })) })),
     });
     // A form feed and a cp1252 C1 character in approved text.
     await w.approve({
-      name: "controls", approval_id: "apr_controls", projects: "team", final_approver: EMP_B, issued_at: T(20), signals: { decisions: 1 },
+      name: "controls", approval_id: "apr_controls", projects: [EVERYONE], final_approver: EMP_B, issued_at: T(20), signals: { decisions: 1 },
       brief: withMeeting((brief) => ({ decisions: brief.decisions.map((signal) => ({ ...signal, text: CONTROLS })) })),
     });
   }
@@ -182,9 +179,8 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     ]);
     expect(walked.flatMap((opened) => opened.atoms).slice(24).map((atom) => atom.text).join("")).toBe(LONG_ACTION);
     for (const opened of [...walked, page!]) expect(validated(opened).kind).toBe("echo-person-open-v1");
-    const mallory = route.openMeeting({ access_token: "emp_b", record_sha256: w.digest("mallory") });
-    expect(mallory.atoms).toEqual([{ kind: "action", text: "Action 0" }]);
-    expect(JSON.stringify(mallory)).not.toContain("Mallory");
+    // An action no approver confirmed an owner for carries none.
+    expect(route.openMeeting({ access_token: "emp_b", record_sha256: w.digest("unowned") }).atoms).toEqual([{ kind: "action", text: "Action 0" }]);
   });
 
   it("replaces the characters the open contract refuses in approved text, so the meeting still opens", async () => {
@@ -199,8 +195,8 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     const w = await world();
     const route = w.route();
     const misses = {
-      emp_a: [sha256Digest("guessed-record"), w.digest("r5"), w.digest("r2"), w.digest("r6")],
-      owner: [sha256Digest("guessed-record"), w.digest("r5"), w.digest("emp_a_only"), w.digest("r6")],
+      emp_a: [sha256Digest("guessed-record"), w.digest("r2"), w.digest("r6")],
+      owner: [sha256Digest("guessed-record"), w.digest("emp_a_only"), w.digest("r6")],
     } as const;
     for (const [token, records] of Object.entries(misses) as [ReaderToken, readonly Sha256Digest[]][]) {
       for (const record_sha256 of records) {

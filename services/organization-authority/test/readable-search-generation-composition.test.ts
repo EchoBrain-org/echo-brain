@@ -9,11 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createRecordPolicyFactProjectorRegistryV1,
-  createPersonPolicyFactProjectorV2,
-  openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-api-v1";
+import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   clearReadableSearchActiveGenerationV1,
   READABLE_SEARCH_SCORER_ID,
@@ -21,6 +17,7 @@ import {
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
+import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from "../src/composition/authority-record-protocols-v1.js";
 import {
   createReadableSearchGenerationReconcilerV1,
   readableSearchGenerationContractV1,
@@ -89,9 +86,8 @@ describe("readable-search generation composition", () => {
           authority_id: initialized.authority_id,
           organization_id: initialized.organization_id,
         }),
-        policy_projectors: createRecordPolicyFactProjectorRegistryV1([
-          createPersonPolicyFactProjectorV2(),
-        ]),
+        policy_projectors: authorityRecordPolicyProjectorsV1(),
+        record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
         now: () => "2026-08-22T12:01:00.000Z",
       });
       const first = await reconciler.reconcile(new AbortController().signal);

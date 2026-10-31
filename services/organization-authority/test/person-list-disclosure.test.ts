@@ -32,7 +32,7 @@ import { createPersonListRouteV1 } from "../src/composition/person-list-v1-route
 import { personMeetingReleaseOptionsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
-import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, STANDARD_RECORDS, T, UNJOINED, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
+import { APPROVER_X, EMP_A, EMP_B, EMP_C, EVERYONE, OWNER, PROJECT_NAMES, PROJ_X, SHARED, STANDARD_RECORDS, T, UNJOINED, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
 import { addMembership, authorization, seedProject } from "./fixtures/project-context-sqlite.js";
 import { SIGNED_APPROVAL_APPROVER, SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
 
@@ -90,7 +90,7 @@ async function disclosureWorld() {
   w.grant(OWNER_B, OWNER);
   addMembership(w.authority, RETURNED, "Ari Employee", "ari-returned@example.test");
   await w.approve({
-    name: "quoted", approval_id: "apr_quoted", projects: "team", final_approver: EMP_B, issued_at: T(8),
+    name: "quoted", approval_id: "apr_quoted", projects: [EVERYONE], final_approver: APPROVER_X, issued_at: T(8),
     brief: (brief: OrganizationRecordDecisionBriefV1) => ({
       ...brief,
       decisions: brief.decisions.map((signal) => ({ ...signal, evidence: signal.evidence.map((span) => ({ ...span, quote: `${QUOTE} ${span.block_id}` })) })),
@@ -321,11 +321,11 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     beforeAll(async () => { f = await disclosureWorld(); sharedCleanups.push(...cleanups.splice(0)); });
     afterAll(async () => { for (const cleanup of sharedCleanups.splice(0).reverse()) await cleanup(); });
 
-    it("N-1, N-8, N-9: another member's only-me items, rejected and pending meetings stay hidden, and every miss is one 404", async () => {
+    it("N-1, N-8, N-9: another member's only-me items and pending meetings stay hidden, and every miss is one 404", async () => {
       const hidden: Readonly<Record<Token, readonly string[]>> = {
-        owner: [f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.refs.empAFiledOnlyNote, f.refs.empAFiledOnlyDocument, f.meeting("emp_a_only"), f.meeting("r5")],
-        emp_a: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.meeting("r2"), f.meeting("r5")],
-        emp_b: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.refs.empAFiledOnlyNote, f.refs.empAFiledOnlyDocument, f.meeting("r2"), f.meeting("emp_a_only"), f.meeting("r5")],
+        owner: [f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.refs.empAFiledOnlyNote, f.refs.empAFiledOnlyDocument, f.meeting("emp_a_only")],
+        emp_a: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.meeting("r2")],
+        emp_b: [f.refs.ownerOnlyNote, f.refs.ownerOnlyDocument, f.refs.empAOnlyNote, f.refs.empAOnlyDocument, f.refs.empAFiledOnlyNote, f.refs.empAFiledOnlyDocument, f.meeting("r2"), f.meeting("emp_a_only")],
         emp_c: [], returned: [],
       };
       for (const token of ["owner", "emp_a", "emp_b"] as const) {
@@ -424,7 +424,7 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
         }
       }
       const mine = async (token: Token) => (await f.refsOf(token, { mine: true })).filter((ref) => ref.startsWith("meeting:"));
-      // r1 and quoted are generic team records with no approver: everyone reads them, nobody has them as mine.
+      // r1 and quoted are shared with everyone by APPROVER_X, who never reads: everyone reads them, nobody has them as mine.
       expect(await mine("emp_b")).toEqual([f.meeting("b_only")]);
       expect(await f.refsOf("emp_a")).toContain(f.meeting("r1"));
       expect(await mine("emp_a")).toEqual([f.meeting("emp_a_only"), f.meeting("r4")]);
@@ -519,8 +519,8 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     const f = await disclosureWorld();
     await f.admitNotes();
     const approvers = new Map<string, { readonly principal_id: string; readonly membership_id: string }>([
-      // Generic team records (r1, r7a, r7b, quoted) name no approver, so they are nobody's mine and never cited here.
-      ...STANDARD_RECORDS.filter((input) => input.projects !== "team").map((input) => [f.meeting(input.name), input.final_approver] as const),
+      // r1, r7a, r7b and quoted are APPROVER_X's, who never reads, so they are nobody's mine and never cited here.
+      ...STANDARD_RECORDS.map((input) => [f.meeting(input.name), input.final_approver] as const),
       [f.meeting("emp_a_only"), EMP_A], [f.meeting("b_only"), EMP_B],
     ]);
     const added = (ref: string) => (ref.startsWith("note:")

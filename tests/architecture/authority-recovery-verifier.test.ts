@@ -17,13 +17,10 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  createRecordPolicyFactProjectorRegistryV1,
-  createPersonPolicyFactProjectorV2,
-  openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-api-v1";
+import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/file-organization-authority-signer.js";
+import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from "../../services/organization-authority/src/composition/authority-record-protocols-v1.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/readable-search-generation-composition.js";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
@@ -108,9 +105,8 @@ async function buildTemplate(cleanData: string): Promise<string> {
         authority_id: initialized.authority_id,
         organization_id: initialized.organization_id,
       }),
-      policy_projectors: createRecordPolicyFactProjectorRegistryV1([
-        createPersonPolicyFactProjectorV2(),
-      ]),
+      policy_projectors: authorityRecordPolicyProjectorsV1(),
+      record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
       now: () => "2026-08-25T12:01:00.000Z",
     });
     await reconciler.reconcile(new AbortController().signal);

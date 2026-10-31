@@ -66,7 +66,8 @@
       "packages/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts",
       "packages/organization-record/src/new-lineage-v1.ts",
       "packages/organization-record/src/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
-      "packages/organization-record/src/retrieve/approved-meeting-transcript-grant-reader-v1.ts"
+      "packages/organization-record/src/retrieve/approved-meeting-transcript-grant-reader-v1.ts",
+      "packages/organization-record/src/application/person-policy-facts-v2.ts"
     ]
   },
   "layer_rules": [

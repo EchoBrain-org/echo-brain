@@ -42,7 +42,7 @@ import {
   organizationRecordLogBaselineSha256V6,
 } from "../src/persistence/record-log-baseline.js";
 import { openOrganizationRecordDatabase } from "../src/persistence/open-organization-record-database.js";
-import { COORDINATES, RECORD_INPUT_CODECS, appendInput, authorizationWitness, database, humanAct, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
+import { COORDINATES, FIXTURE_PROJECT_ID, RECORD_INPUT_CODECS, RECORD_POLICY_PROJECTORS, appendInput, approvalDecision, database, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
 
 describe("organization record log baseline V6", () => {
   it("creates fresh immutable project audience and association facts, and no transcript grant", () => {
@@ -338,7 +338,7 @@ describe("V4 organization-record append", () => {
         ...COORDINATES,
         policy_projectors: projectors,
         verify_envelope: () =>
-          envelope as RecordRetrievalSourceVerifiedEnvelopeV1,
+          envelope as unknown as RecordRetrievalSourceVerifiedEnvelopeV1,
       });
       expect(snapshot.rows[0]?.classification).toEqual({
         kind: "approved",
@@ -354,12 +354,12 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
       const result = await app.append(
         appendInput({
           authority,
           signal_count: 11,
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
         }),
       );
       expect(result).toMatchObject({ outcome: "appended", position: 1 });
@@ -381,46 +381,31 @@ describe("V4 organization-record append", () => {
       expect(
         db
           .prepare(
-            "SELECT atom_order FROM organization_record_member_readable_person_fact ORDER BY atom_order",
+            "SELECT atom_order FROM organization_record_project_members_readable_person_fact ORDER BY atom_order",
           )
           .all(),
       ).toEqual(
         Array.from({ length: 11 }, (_, atom_order) => ({ atom_order })),
       );
+      expect(
+        db.prepare("SELECT project_id FROM organization_record_project_members_readable_person_record_fact").pluck().all(),
+      ).toEqual([FIXTURE_PROJECT_ID]);
     } finally {
       db.close();
     }
   });
 
-  it("commits a real rejected V4 record without Person facts", async () => {
+  it("refuses a rejection: only an approval writes a record", async () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
+      const approval = appendInput({ authority, approval_id: "approval-rejected" });
+      await expect(
+        app.append({ ...approval, action: "reject" as never }),
+      ).rejects.toThrow("does not match its append allocation");
       expect(
-        (
-          await app.append(
-            appendInput({
-              authority,
-              approval_id: "approval-rejected",
-              action: "reject",
-            }),
-          )
-        ).outcome,
-      ).toBe("appended");
-      expect(
-        db
-          .prepare(
-            "SELECT count(*) AS count FROM organization_record_member_readable_person_fact",
-          )
-          .get(),
-      ).toEqual({ count: 0 });
-      expect(
-        db
-          .prepare(
-            "SELECT count(*) AS count FROM organization_record_restricted_reviewer_person_fact",
-          )
-          .get(),
+        db.prepare("SELECT count(*) AS count FROM organization_record_log").get(),
       ).toEqual({ count: 0 });
     } finally {
       db.close();
@@ -431,20 +416,13 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
       const approved = appendInput({
         authority,
         approval_id: "approval-reader",
         policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
       });
       const first = await app.append(approved);
-      await app.append(
-        appendInput({
-          authority,
-          approval_id: "approval-reader-rejected",
-          action: "reject",
-        }),
-      );
       const reader = new PersonRecordReaderV1(db);
       expect(
         reader.list({
@@ -455,7 +433,7 @@ describe("V4 organization-record append", () => {
       ).toMatchObject([
         {
           position: 1,
-          approval_id: "approval-reader",
+          approval_id: approved.approval_id,
           record_sha256: first.record_sha256,
         },
       ]);
@@ -475,40 +453,40 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
       const oldest = await app.append(
         appendInput({
           authority,
           approval_id: "approval-exact-page-0",
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
         }),
       );
-      // Unsigned member-readable filler pushes the oldest record past a full page.
+      // Unsigned project-readable filler pushes the oldest record past a full page.
       const unsignedReceipt: V4ReceiptFactory = {
         ...receiptFactory(authority, { sign_calls: { value: 0 } }),
         sign: async ({ receipt_seed }) => ({ body: receipt_seed }),
         verify: ({ receipt }) => receipt as JsonObject,
       };
       for (let index = 1; index < 101; index += 1) {
-        const approval_id = `approval-exact-page-${index}`;
-        const human = humanAct(approval_id, "approve", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, 1);
+        const decision = approvalDecision({ proposal_approval_id: `approval-exact-page-${index}`, policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, signal_count: 1 });
+        const approval_id = decision.approval_decision_ref_v2.approval_id;
         await app.append({
           approval_id,
           action: "approve",
-          semantic_idempotency_key: human.semantic_idempotency_key,
+          semantic_idempotency_key: decision.semantic_idempotency_key,
           receipt_issued_at: "2026-08-21T12:02:00.000Z",
-          authorization_witness: authorizationWitness(human),
+          authorization_witness: {},
           envelope_factory: {
             create: async (allocation) => ({
               record_sha256: sha256Digest(approval_id),
               body: {
                 schema_version: 4, kind: "echo-organization-record-envelope-v4",
                 envelope_id: `envelope-${approval_id}`, ...COORDINATES,
-                semantic_idempotency_key: human.semantic_idempotency_key,
+                semantic_idempotency_key: decision.semantic_idempotency_key,
                 predecessor_position: allocation.predecessor_position,
                 predecessor_record_sha256: allocation.predecessor_record_sha256,
-                human_act_resolution_ref: human.human_act_resolution_ref,
-                event: human.event,
+                human_act_resolution_ref: decision.approval_decision_ref_v2,
+                event: decision.event,
               },
             }) as unknown as JsonObject,
             verify: (value) => value as V4RecordEnvelopeView & JsonObject,
@@ -528,6 +506,7 @@ describe("V4 organization-record append", () => {
         ...COORDINATES,
         principal_id: "principal-other",
         membership_id: "membership-other",
+        project_ids: [FIXTURE_PROJECT_ID],
       };
       expect(reader.list({ ...readerInput, limit: 100 }).map((r) => r.position)).not.toContain(1);
       expect(reader.list({
@@ -547,12 +526,12 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
-      const member = await app.append(
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
+      const project = await app.append(
         appendInput({
           authority,
-          approval_id: "approval-member-snapshot",
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          approval_id: "approval-project-snapshot",
+          policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
           signal_counts: { decisions: 1, actions: 1, rationales: 1 },
         }),
       );
@@ -563,15 +542,9 @@ describe("V4 organization-record append", () => {
           policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
         }),
       );
-      const rejected = await app.append(
-        appendInput({
-          authority,
-          approval_id: "approval-rejected-snapshot",
-          action: "reject",
-        }),
-      );
       const snapshot = new RecordRetrievalSourceSnapshotPortV1(db).snapshot({
         ...COORDINATES,
+        policy_projectors: RECORD_POLICY_PROJECTORS,
         verify_envelope: (value) =>
           verifyOrganizationRecordEnvelopeV4(
             value,
@@ -581,16 +554,16 @@ describe("V4 organization-record append", () => {
       });
 
       expect(snapshot.head).toEqual({
-        position: 3,
-        record_sha256: rejected.record_sha256,
+        position: 2,
+        record_sha256: restricted.record_sha256,
       });
       expect(snapshot.rows).toMatchObject([
         {
           position: 1,
-          record_sha256: member.record_sha256,
+          record_sha256: project.record_sha256,
           classification: {
             kind: "approved",
-            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+            policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
             atom_count: 3,
           },
         },
@@ -603,11 +576,8 @@ describe("V4 organization-record append", () => {
             atom_count: 1,
           },
         },
-        {
-          position: 3,
-          classification: { kind: "rejected" },
-        },
       ]);
+      expect(snapshot.rows).toHaveLength(2);
       expect(snapshot.atoms.map((atom) => atom.text)).toEqual([
         "Decision 0",
         "Action 0",
@@ -621,6 +591,7 @@ describe("V4 organization-record append", () => {
             (atom) =>
               atom.reviewer_principal_id === null &&
               atom.reviewer_membership_id === null &&
+              atom.audience_project_ids.join() === FIXTURE_PROJECT_ID &&
               atom.provider_action_sha256.startsWith("sha256:") &&
               atom.authorization_proof_sha256.startsWith("sha256:"),
           ),
@@ -641,23 +612,24 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
       await app.append(
         appendInput({
           authority,
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
         }),
       );
       db.exec(
-        "DROP TRIGGER organization_record_member_readable_person_fact_immutable_update",
+        "DROP TRIGGER organization_record_project_members_fact_immutable_update",
       );
       db.prepare(
-        `UPDATE organization_record_member_readable_person_fact
+        `UPDATE organization_record_project_members_readable_person_fact
             SET provider_action_sha256 = ? WHERE record_position = 1`,
       ).run(sha256Digest("tampered-provider-action"));
       expect(() =>
         new RecordRetrievalSourceSnapshotPortV1(db).snapshot({
           ...COORDINATES,
+          policy_projectors: RECORD_POLICY_PROJECTORS,
           verify_envelope: (value) =>
             verifyOrganizationRecordEnvelopeV4(
               value,
@@ -675,7 +647,7 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
       const envelope_calls = { value: 0 };
       const sign_calls = { value: 0 };
       const input = appendInput({
@@ -699,7 +671,7 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
       const first = appendInput({ authority });
       await app.append(first);
       const calls = { value: 0 };
@@ -723,7 +695,7 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
       const input = appendInput({
         authority,
         receipt: receiptFactory(authority, {
@@ -742,6 +714,7 @@ describe("V4 organization-record append", () => {
       const recovered = await new OrganizationRecordAppenderV4(
         db,
         COORDINATES,
+        RECORD_POLICY_PROJECTORS,
       ).append(appendInput({ authority }));
       expect(recovered.outcome).toBe("duplicate");
       expect(canonicalJson(recovered.receipt.body as JsonObject)).toBe(
@@ -761,7 +734,7 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
       const input = appendInput({
         authority,
         receipt: receiptFactory(authority, {
@@ -776,7 +749,7 @@ describe("V4 organization-record append", () => {
         `INSERT INTO organization_record_signed_receipt (position, signed_receipt, materialized_at) VALUES (1, ?, '2026-08-21T12:03:00.000Z')`,
       ).run('{"body":{}}');
       await expect(
-        new OrganizationRecordAppenderV4(db, COORDINATES).append(
+        new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS).append(
           appendInput({ authority }),
         ),
       ).rejects.toThrow();
@@ -789,7 +762,7 @@ describe("V4 organization-record append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS);
       const input = appendInput({
         authority,
         receipt: receiptFactory(authority, {
@@ -820,7 +793,7 @@ describe("V4 organization-record append", () => {
         VALUES (1, ?, '2026-08-21T12:04:00.000Z')`,
       ).run(canonicalJson(wrongSeedReceipt));
       await expect(
-        new OrganizationRecordAppenderV4(db, COORDINATES).append(
+        new OrganizationRecordAppenderV4(db, COORDINATES, RECORD_POLICY_PROJECTORS).append(
           appendInput({ authority }),
         ),
       ).rejects.toThrow("committed receipt seed");

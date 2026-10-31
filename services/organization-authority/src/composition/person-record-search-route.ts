@@ -18,7 +18,7 @@ import {
   type JsonObject,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
-import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, validateOrganizationRecordEnvelopeV4, type OrganizationRecordDecisionBriefV1, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
+import { validateOrganizationRecordEnvelopeV4, type OrganizationRecordDecisionBriefV1, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import {
   PERSON_LIST_TEXT_MAX_BYTES_V1,
   PERSON_OPEN_ATOMS_BUDGET_BYTES_V1,
@@ -417,7 +417,7 @@ export interface CreatePersonRecordSearchRouteV1Options {
   readonly capture_projects?: CaptureRecordProjectsV1;
   readonly search_generation?: SearchGeneration;
   /** The Authority's record codecs; approval-decision records need them to parse. */
-  readonly record_input_codecs?: RecordInputCodecRegistryV4;
+  readonly record_input_codecs: RecordInputCodecRegistryV4;
   /** The composed approver projectors. Mine needs them; without them mine is unavailable, never global. */
   readonly record_approver?: RecordApproverProjectorV1;
   /** Resolves only the approver named by a record already released to this reader. */
@@ -671,7 +671,7 @@ function deskItems(record: Database.Database, items: readonly ReadableSearchResu
     let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
     try {
       parsed = parseCanonicalJson(row.canonical_envelope) as JsonObject;
-      envelope = validateOrganizationRecordEnvelopeV4(parsed, presentation.record_input_codecs ?? HUMAN_ACT_RECORD_INPUT_CODECS_V4);
+      envelope = validateOrganizationRecordEnvelopeV4(parsed, presentation.record_input_codecs);
     } catch { metadataUnavailable(); }
     if (sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || envelope.record_sha256 !== item.record_sha256 || envelope.body.event.kind !== "approved") metadataUnavailable();
     // The meeting as the person open names it: participants' display names, and the approver's current directory name.
@@ -713,7 +713,7 @@ function boundedDeskItems(items: readonly ReadableSearchResultItemV1[]): readonl
   );
 }
 
-function approvedRecordAtomCount(record: Database.Database, position: number, recordSha256: Sha256Digest, codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4): number {
+function approvedRecordAtomCount(record: Database.Database, position: number, recordSha256: Sha256Digest, codecs: RecordInputCodecRegistryV4): number {
   const row = record.prepare(`SELECT canonical_envelope FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`).get(position, recordSha256) as { readonly canonical_envelope: string } | undefined;
   if (row === undefined) metadataUnavailable();
   let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
@@ -962,7 +962,7 @@ export function createPersonRecordSearchRouteV1(
     let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
     try {
       parsed = parseCanonicalJson(row.canonical_envelope) as JsonObject;
-      envelope = validateOrganizationRecordEnvelopeV4(parsed, options.record_input_codecs ?? HUMAN_ACT_RECORD_INPUT_CODECS_V4);
+      envelope = validateOrganizationRecordEnvelopeV4(parsed, options.record_input_codecs);
     } catch { metadataUnavailable(); }
     const event = envelope.body.event;
     if (envelope.record_sha256 !== recordSha256 || event.kind !== "approved") metadataUnavailable();

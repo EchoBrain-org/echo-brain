@@ -12,7 +12,7 @@ import {
   validateApprovalDecisionRecordInputV2,
 } from "../src/approval-decision-record-input-v2.js";
 import { isApprovalOwnerTextV1 } from "../src/approval-owner-choice-v1.js";
-import { approvedDecisionSnapshotV2Sha256, validateApprovedDecisionSnapshotV2 } from "../src/human-act-record-input-v1.js";
+import { approvedDecisionSnapshotV2Sha256, validateApprovedDecisionSnapshotV2 } from "../src/approved-decision-snapshot-v2.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
@@ -21,7 +21,7 @@ import {
   projectMembersReadablePersonPolicyContractSha256,
   restrictedReviewerPersonPolicyContractSha256,
 } from "../src/person-content-policy-v2.js";
-import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "../src/record-input-codec-v4.js";
+import { createRecordInputCodecRegistryV4 } from "../src/record-input-codec-v4.js";
 
 const PROPOSAL_ID = `apr_${"a".repeat(64)}`;
 const PROJECT_1 = "prj_00000000-0000-4000-8000-000000000001";
@@ -119,7 +119,7 @@ describe("approval decision record input v2", () => {
     expect(validated.semantic_idempotency_key).toBe(canonicalSha256(input.approval_decision_ref_v2 as JsonValue));
     const again = APPROVAL_DECISION_RECORD_INPUT_CODEC_V2.fromReference(input.approval_decision_ref_v2, input.event);
     expect(canonicalJson(again as unknown as JsonValue)).toBe(canonicalJson(validated as unknown as JsonValue));
-    const registry = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, APPROVAL_DECISION_RECORD_INPUT_CODEC_V2]);
+    const registry = createRecordInputCodecRegistryV4([APPROVAL_DECISION_RECORD_INPUT_CODEC_V2]);
     expect(registry.validateInput(input).semantic_idempotency_key).toBe(validated.semantic_idempotency_key);
     expect(registry.fromReference(input.approval_decision_ref_v2, input.event).human_act_resolution_ref.kind).toBe(APPROVAL_DECISION_REF_KIND_V2);
     expect(APPROVAL_DECISION_RECORD_INPUT_CODEC_V2).toMatchObject({ input_reference_field: "approval_decision_ref_v2", reference_kind: "echo-approval-decision-ref-v2", reference_schema_version: 2 });

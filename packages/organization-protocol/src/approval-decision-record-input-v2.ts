@@ -2,7 +2,7 @@ import { canonicalSha256, type JsonValue, type Sha256Digest } from '@echo-brain/
 import { asRecord, assertExactKeys, assertDigest, assertPositiveSafeInteger, assertTimestamp, canonicalSnapshot } from './validation-support.js';
 import { organizationProtocolValidationFailure as fail } from './validation-error.js';
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from './record-payload.js';
-import { approvedDecisionSnapshotV2Sha256, validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from './human-act-record-input-v1.js';
+import { approvedDecisionSnapshotV2Sha256, validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from './approved-decision-snapshot-v2.js';
 import {
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, projectMembersReadablePersonPolicyContractSha256,
   restrictedReviewerPersonPolicyContractSha256,

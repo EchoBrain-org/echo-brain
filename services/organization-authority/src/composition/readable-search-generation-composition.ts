@@ -1,4 +1,4 @@
-import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
+import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { join } from "node:path";
 import { readdirSync, statSync } from "node:fs";
 import { currentCoreRuntimeDetailV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -244,7 +244,8 @@ function lineagePlane(
  * reads approved records only and makes no model call.
  */
 export function createReadableSearchGenerationReconcilerV1(input: {
-  readonly record_input_codecs?: RecordInputCodecRegistryV4;
+  /** The record codecs the Authority appends with; every stored envelope is verified through them. */
+  readonly record_input_codecs: RecordInputCodecRegistryV4;
   readonly state_directory: string;
   readonly root: StateLineageRootManifestV2;
   readonly authority: Database.Database;
@@ -319,7 +320,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
             value,
             pinnedAuthority,
             input.root.state_lineage_id,
-            input.record_input_codecs ?? HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+            input.record_input_codecs,
           ),
       });
       if (currentCoreRuntimeDetailV1() !== null) {
