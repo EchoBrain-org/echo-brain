@@ -491,7 +491,12 @@ describe("Authority staging onboarding input preflight", () => {
     const environment = sanitizedAwsEnvironment({
       AWS_ACCESS_KEY_ID: "ambient-key",
       AWS_SECRET_ACCESS_KEY: "ambient-secret",
+      AWS_SESSION_TOKEN: "ambient-session-token",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/web-identity",
+      AWS_CONFIG_FILE: "/tmp/aws-config",
+      AWS_SHARED_CREDENTIALS_FILE: "/tmp/aws-credentials",
       AWS_PROFILE: "wrong-profile",
+      AWS_DEFAULT_PROFILE: "wrong-default-profile",
       AWS_ENDPOINT_URL: "https://endpoint.example",
       AWS_ENDPOINT_URL_S3: "https://s3-endpoint.example",
       AWS_CA_BUNDLE: "/tmp/ca.pem",
@@ -509,6 +514,10 @@ describe("Authority staging onboarding input preflight", () => {
     for (const key of [
       "AWS_ACCESS_KEY_ID",
       "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+      "AWS_WEB_IDENTITY_TOKEN_FILE",
+      "AWS_CONFIG_FILE",
+      "AWS_SHARED_CREDENTIALS_FILE",
       "AWS_ENDPOINT_URL",
       "AWS_ENDPOINT_URL_S3",
       "AWS_CA_BUNDLE",
