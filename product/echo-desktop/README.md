@@ -388,7 +388,7 @@ npm start
 `npm start` builds the app and runs it against the test fixture Authority in a
 throwaway home and app-data directory, deleted on exit; it never reads or
 writes your real ECHO session. `npm start -- <mode>` selects one of the
-fixture's test modes in `src/host/test-authority.ts`.
+fixture's test modes in `test/fixtures/authority.ts`.
 
 `npm run typecheck` checks the app's TypeScript. `npm test` builds the app,
 then runs the unit tests (`test/unit`, Vitest) and the Electron end-to-end

@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { checkOf } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
-import { layoutAnswer } from '../../src/host/test-authority.js';
+import { layoutAnswer } from '../fixtures/authority.js';
 
 /**
  * An approved item's id as the Authority derives it (organization-record's

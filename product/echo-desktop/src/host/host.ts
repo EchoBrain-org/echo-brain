@@ -68,7 +68,7 @@ async function load(): Promise<ClientModules> {
   if (__ECHO_TEST_HOOK__ && process.env.ECHO_DESKTOP_TEST_FIXTURES) {
     // Belt and braces with main: the fixture never writes into the real home.
     if (sameFolder(home!, homedir())) throw new Error('The test Authority needs a private ECHO_HOME');
-    const test = await import('./test-authority.js');
+    const test = await import('../../test/fixtures/authority.js');
     const hook = test.installTestAuthority(home!, process.env.ECHO_DESKTOP_TEST_FIXTURES, sessions.PersonSessionStore);
     Object.assign(dependencies, hook.dependencies);
     now = hook.now;
