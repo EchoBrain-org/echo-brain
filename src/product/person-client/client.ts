@@ -695,7 +695,7 @@ export class PersonClient {
    * request-advertised live evidence sources, ECHO's shared follow-ups
    * (ADR-0040), and the asker's projects, people, tools and tool containers
    * (research tool contract v1). It may carry the asker's previous turn
-   * (ADR-0047). An Authority without `/v7` fails with `not_supported`.
+   * (ADR-0047).
    */
   async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
     previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
@@ -771,7 +771,7 @@ export class PersonClient {
     return this.withReadSession((authority, token) => authority.runs(token, value, signal));
   }
 
-  /** Whether each source old answers cited is the same, changed, unreadable or unknown now (ADR-0047); `not_supported` from an older Authority. */
+  /** Whether each source old answers cited is the same, changed, unreadable or unknown now (ADR-0047). */
   async askCheck(value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
     return this.withReadSession((authority, token) => authority.askCheck(token, value, signal));
   }

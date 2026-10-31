@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V7, PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8, type PersonAskProgressEventV3,
 } from '@echo-brain/organization-api';
 import type { AgenticAskAuditEntryV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
@@ -96,7 +96,6 @@ describe('Ask progress over HTTP', () => {
     expect(streamed.status).toBe(200);
     expect(streamed.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
     expect(streamed.headers.get('cache-control')).toBe('no-store');
-    expect(streamed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
     expect(streamed.headers.has('content-length')).toBe(false);
     const raw = await streamed.text();
     const events = decode(raw);
@@ -123,7 +122,7 @@ describe('Ask progress over HTTP', () => {
   it('keeps JSON for any other header value, the retired progress values included, and for failures before the stream starts', async () => {
     const f = fixture();
     const base = await origin(f);
-    await expectJsonAskFallbacks(ask, base, { header: '7', others: ['0', 'yes', '11', '1', '2'], validate: validatePersonAnswerResponseV8 });
+    await expectJsonAskFallbacks(ask, base, { others: ['0', 'yes', '11', '1', '2'], validate: validatePersonAnswerResponseV8 });
     const invalid = await ask(base, { body: { schema_version: 3 } });
     expect(invalid.status).toBe(400);
     expect(invalid.headers.get('content-type')).toBe('application/json; charset=utf-8');
@@ -137,7 +136,6 @@ describe('Ask progress over HTTP', () => {
     const base = await origin(f, event => { observed.push(event); });
     const response = await ask(base);
     expect(response.status).toBe(200);
-    expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
     const events = decode(await response.text());
     expect(events.at(-1)).toEqual({ type: 'error', status: 401, error: { code: 'unauthorized', message: 'request failed' } });
     // The request's span records the status the error event carries, as the JSON route's failure would: the wire's 200 says nothing.
@@ -174,10 +172,7 @@ describe('Ask progress over HTTP', () => {
 
 // The Ask on /v7 streams progress V3 inside the snapshot-retry wrapper.
 describe('Ask progress across a restarted Ask on /v7', () => {
-  const streamed = (base: string) => ask(base).then(async response => {
-    expect(response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
-    return decode(await response.text());
-  });
+  const streamed = (base: string) => ask(base).then(async response => decode(await response.text()));
   /** The first attempt's audit record is written; the check after it sees the record snapshot advance. */
   const AFTER_AUDIT = 4;
   /** The check before the first attempt's writer, after it named the note: it stops before any audit write. */

@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { expect, vi } from 'vitest';
-import { PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_V1 } from '@echo-brain/organization-api';
+import { PERSON_ASK_PROGRESS_HEADER_V1 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { SqlitePersonAgenticAskAuditV1 } from '../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
@@ -104,19 +104,18 @@ export function askClient(defaults: { readonly path: string; readonly progress: 
 
 /**
  * What the streamed Ask route answers in JSON: a progress value other than its own gets the answer `validate` accepts,
- * and a failure before the stream starts is the ordinary JSON error with the route header, so a client never takes it
- * for an Authority without the route.
+ * and a failure before the stream starts is the ordinary JSON error.
  */
 export async function expectJsonAskFallbacks(ask: ReturnType<typeof askClient>, base: string,
-  route: { readonly header: string; readonly others: readonly string[]; readonly validate: (value: unknown) => unknown }): Promise<void> {
+  route: { readonly others: readonly string[]; readonly validate: (value: unknown) => unknown }): Promise<void> {
   for (const progress of route.others) {
     const response = await ask(base, { progress });
     expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
     route.validate(await response.json());
   }
   const unauthenticated = await ask(base, { token: 'stranger' });
-  expect([unauthenticated.status, unauthenticated.headers.get('content-type'), unauthenticated.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)])
-    .toEqual([401, 'application/json; charset=utf-8', route.header]);
+  expect([unauthenticated.status, unauthenticated.headers.get('content-type')]).toEqual([401, 'application/json; charset=utf-8']);
+  await expect(unauthenticated.json()).resolves.toEqual({ error: { code: 'unauthorized', message: 'request failed' } });
 }
 
 /** Every event of a whole progress stream. */

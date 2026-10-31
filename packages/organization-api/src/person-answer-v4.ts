@@ -44,12 +44,11 @@ import {
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
 const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
 /**
- * The evidence desk and the capability read (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the
- * Ask routes before it, `/v3` to `/v6` with the V4 to V7 answers, were retired.
+ * The evidence desk (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the Ask routes before it,
+ * `/v3` to `/v6` with the V4 to V7 answers, were retired, and so was the capability read.
  */
 export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
 export const PERSON_EVIDENCE_OPEN_PATH_V1 = '/v3/person/evidence/open';
-export const PERSON_CAPABILITIES_PATH_V1 = '/v3/person/capabilities';
 
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
@@ -165,12 +164,6 @@ export interface PersonEvidenceDeskResponseV1 {
   readonly items: readonly PersonEvidenceDeskItemV1[];
   readonly truncated: boolean;
   readonly notice?: string;
-}
-
-export interface PersonCapabilitiesV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-person-capabilities-v1';
-  readonly agentic_ask_v1: boolean;
 }
 
 function text(value: unknown, label: string, maximumBytes: number, multiline = false): asserts value is string {
@@ -523,11 +516,4 @@ export function validatePersonEvidenceDeskResponseV1(value: unknown): PersonEvid
   const result = { schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: scope(input.scope), items: Object.freeze(items), truncated: input.truncated, ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}) };
   if (canonicalJsonBytes(result).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) fail('Evidence desk response exceeds JSON byte bound');
   return Object.freeze(result) as PersonEvidenceDeskResponseV1;
-}
-
-export function validatePersonCapabilitiesV1(value: unknown): PersonCapabilitiesV1 {
-  const input = object(value, 'Person capabilities');
-  assertExactKeys(input, ['schema_version', 'kind', 'agentic_ask_v1'], 'Person capabilities');
-  if (input.schema_version !== 1 || input.kind !== 'echo-person-capabilities-v1' || typeof input.agentic_ask_v1 !== 'boolean') fail('Person capabilities is invalid');
-  return Object.freeze({ schema_version: 1, kind: 'echo-person-capabilities-v1', agentic_ask_v1: input.agentic_ask_v1 });
 }

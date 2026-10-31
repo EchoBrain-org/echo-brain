@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import { PERSON_ANSWER_ROUTE_HEADER_V5, type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
+import { type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -784,13 +784,13 @@ describe("Person client", () => {
     });
   });
 
-  // Ask is one route, /v7, in every scope, Mine included: an Authority without it fails with not_supported, and no other
-  // route is asked.
+  // Ask is one route, /v7, in every scope, Mine included: its 404 is not_found, as any other read's, and no other route is
+  // asked.
   it.each([
     { argv: [], body: {} },
     { argv: ["--mine"], body: { mine: true } },
     { argv: ["--project", "prj_00000000-0000-4000-8000-000000000019"], body: { project_id: "prj_00000000-0000-4000-8000-000000000019" } },
-  ])("asks $argv on /v7 alone, and fails with not_supported on an Authority without it", async ({ argv, body }) => {
+  ])("asks $argv on /v7 alone, and fails its 404 as not_found", async ({ argv, body }) => {
     await withHome(async home => {
       await installFixtureSession(home);
       const scope = "mine" in body ? { kind: "mine" } : "project_id" in body ? { kind: "project", project_id: body.project_id } : { kind: "global" };
@@ -801,7 +801,7 @@ describe("Person client", () => {
           home_directory: home, now: () => NOW,
           fetch: async (input, init) => {
             asked.push([new URL(String(input)).pathname, JSON.parse(String(init?.body)), new Headers(init?.headers).has("x-echo-ask-progress")]);
-            return served ? json(answer) : json({ error: { code: "not_found", message: "route absent" } }, 404);
+            return served ? json(answer) : json({ error: { code: "not_found", message: "request failed" } }, 404);
           },
         });
         if (served) {
@@ -809,7 +809,7 @@ describe("Person client", () => {
           expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: answer });
         } else {
           expect(result.code).toBe(1);
-          expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, action: "ask", code: "not_supported", status: 404 });
+          expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, action: "ask", code: "not_found", status: 404 });
         }
         expect(asked).toEqual([["/v7/person/ask", { schema_version: 3, question: "What did we decide?", ...body }, false]]);
       }
@@ -877,7 +877,7 @@ describe("Person client", () => {
     });
   });
 
-  // A diagnostic capture rides on the Ask: an Authority without /v7 fails it with not_supported, and nothing else is asked.
+  // A diagnostic capture rides on the Ask: a 404 fails it as not_found, and nothing else is asked.
   it.each([{ served: true }, { served: false }])('carries a capture on /v7 alone (served: $served)', async ({ served }) => {
     await withHome(async home => {
       const asked: unknown[] = [];
@@ -885,11 +885,11 @@ describe("Person client", () => {
       const answer = v8PageAnswer();
       const client = await signedInClient(home, async (input, init) => {
         asked.push([new URL(String(input)).pathname, JSON.parse(String(init?.body)).capture_id]);
-        return served ? json(answer) : json({ error: { code: 'not_found', message: 'route absent' } }, 404);
+        return served ? json(answer) : json({ error: { code: 'not_found', message: 'request failed' } }, 404);
       });
       const ask = client.askWithLiveSources('What changed?', undefined, undefined, capture_id);
       if (served) await expect(ask).resolves.toEqual(answer);
-      else await expect(ask).rejects.toMatchObject({ code: 'not_supported', status: 404 });
+      else await expect(ask).rejects.toMatchObject({ code: 'not_found', status: 404 });
       expect(asked).toEqual([['/v7/person/ask', capture_id]]);
     });
   });
@@ -907,23 +907,17 @@ describe("Person client", () => {
   });
 
   it.each([
-    // The route header, with /v7's own number or another value: the route matched, so it is the route's own failure.
-    { name: 'a matched-route provider 404', marker: '7', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
-    { name: 'an unknown route marker', marker: 'future', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
-    { name: 'a malformed unmarked 404', marker: undefined, body: { unsupported: true }, code: 'invalid_response' },
-    { name: 'an unmarked 404 with another error code', marker: undefined, body: { error: { code: 'unavailable', message: 'request failed' } }, code: 'unavailable' },
-    // Only a not_found 404 with no route header is an Authority without /v7.
-    { name: 'an unmarked not_found 404', marker: undefined, body: { error: { code: 'not_found', message: 'route absent' } }, code: 'not_supported' },
-  ])('reads $name from /v7 as $code, and asks nothing else', async ({ marker, body, code }) => {
+    { name: 'a provider 404', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
+    { name: 'a malformed 404', body: { unsupported: true }, code: 'invalid_response' },
+    { name: 'a 404 with another error code', body: { error: { code: 'unavailable', message: 'request failed' } }, code: 'unavailable' },
+  ])('reads $name from /v7 as $code, and asks nothing else', async ({ body, code }) => {
     for (const progress of [false, true]) {
       await withHome(async home => {
         const paths: string[] = [];
         const client = fixtureClient(home, async input => {
           const path = new URL(String(input)).pathname; paths.push(path);
           if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
-          const response = json(body, 404);
-          if (marker !== undefined) response.headers.set(PERSON_ANSWER_ROUTE_HEADER_V5, marker);
-          return response;
+          return json(body, 404);
         });
         await client.installSession('https://authority.example', ROTATED_SESSION);
         const asked = progress ? client.askWithLiveProgress('What is current?', undefined, undefined, () => undefined) : client.askWithLiveSources('What is current?');

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V7, PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
   type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
@@ -88,7 +88,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     const base = await origin(f, planner.model);
     const plain = await ask(base, { progress: null });
     expect(plain.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    expect(plain.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
     const json = validatePersonAnswerResponseV8(await plain.json());
     planner.reset();
     const project = { citation: { kind: 'project', project_id: f.projectA }, kind: 'project', label: 'Project A', visibility: 'project', ref: `project:${f.projectA}` };
@@ -101,7 +100,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     const streamed = await ask(base);
     expect(streamed.status).toBe(200);
     expect(streamed.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
-    expect(streamed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
     const raw = await streamed.text();
     const events = decode(raw);
     const searched = events.filter(event => event.type === 'searched');
@@ -153,7 +151,7 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {
       for (const value of ['2', 'true', '1, 1']) {
         const refused = await ask(base, { progress, headers: { 'x-echo-answer-layout': value } });
-        expect([refused.status, refused.headers.get('content-type'), refused.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)]).toEqual([400, 'application/json; charset=utf-8', '7']);
+        expect([refused.status, refused.headers.get('content-type')]).toEqual([400, 'application/json; charset=utf-8']);
         await expect(refused.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
       }
     }

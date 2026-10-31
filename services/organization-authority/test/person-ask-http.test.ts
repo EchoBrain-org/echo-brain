@@ -4,8 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   PERSON_ANSWER_PATH_V7,
-  PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   validatePersonAnswerResponseV8,
@@ -60,7 +58,7 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it('marks matched /v7 provider errors so clients cannot mistake them for an Authority with no /v7', async () => {
+  it('answers /v7 provider errors and invalid requests with their codes, and retired Ask routes with the plain 404', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'Provider resource unavailable'); });
     const value = await server({ ask: { ask } as never });
     try {
@@ -69,16 +67,16 @@ describe("Agentic Ask HTTP capability gate", () => {
       });
       const failed = await post(PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What changed?' });
       expect(failed.status).toBe(404);
-      expect(failed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
+      expect(failed.headers.has('x-echo-person-ask-route')).toBe(false);
       await expect(failed.json()).resolves.toEqual({ error: { code: 'not_found', message: 'request failed' } });
       const invalid = await post(PERSON_ANSWER_PATH_V7, {});
       expect(invalid.status).toBe(400);
-      expect(invalid.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
-      // A retired route, like one that never existed, is a plain 404 with no route header.
+      await expect(invalid.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
+      // A retired route, like one that never existed, is a plain 404.
       for (const path of ['/v0/person/ask', ...RETIRED_ASK_PATHS]) {
         const absent = await post(path, { schema_version: 3, question: 'What changed?' });
         expect(absent.status).toBe(404);
-        expect(absent.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe(false);
+        await expect(absent.json()).resolves.toEqual({ error: { code: 'not_found', message: 'request failed' } });
       }
       expect(ask).toHaveBeenCalledTimes(1);
     } finally { await value.close(); }
@@ -94,22 +92,16 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it("reports agentic Ask to installed clients that still probe", async () => {
-    const value = await server({ application: { searchEvidence: vi.fn(), openEvidence: vi.fn() } as never, ask: { ask: vi.fn() } as never });
-    try {
-      const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
-      await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: true });
-      expect(value.sessions.authenticateAccess).toHaveBeenCalledWith({ access_token: "token" });
-    } finally { await value.close(); }
-  });
-
-  it("requires authentication for capability discovery", async () => {
+  it("answers the retired capability read as a route that never existed, and keeps it from provider adapters", async () => {
     const value = await server({});
     try {
-      const response = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`);
-      expect(response.status).toBe(401);
+      const response = await fetch(`${value.url}/v3/person/capabilities`, { headers: { authorization: "Bearer token" } });
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: { code: "not_found", message: "request failed" } });
       expect(value.sessions.authenticateAccess).not.toHaveBeenCalled();
     } finally { await value.close(); }
+    const adapter = { routes: [{ route_id: "collision", method: "GET" as const, path: "/v3/person/capabilities" }], accept: async () => ({ status: 200 as const, body: {} }) };
+    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tool_connections: [adapter] }))).toThrow("collides with Authority route");
   });
 
   it("forwards a client disconnect as the Ask's abort signal", async () => {

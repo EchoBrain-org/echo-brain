@@ -2,7 +2,6 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_ANSWER_PATH_V7,
-  PERSON_ANSWER_ROUTE_HEADER_V5,
   personAnswerCitationKeyV8,
   personWorkspaceRefV1,
   validatePersonAnswerCitationV6,
@@ -39,7 +38,6 @@ const response = (citations: readonly { readonly visibility: string }[] = [proje
 describe('Workspace answer V8 (research tool contract v1)', () => {
   it('serves on its own route and cites projects, people, tools and tool containers', () => {
     expect(PERSON_ANSWER_PATH_V7).toBe('/v7/person/ask');
-    expect(PERSON_ANSWER_ROUTE_HEADER_V5).toBe('x-echo-person-ask-route');
     const all = [project, person, tool, container];
     const accepted = validatePersonAnswerResponseV8(response(all));
     expect(accepted.citations).toEqual(all);

@@ -60,8 +60,6 @@ import type { PersonRecordSearchHttpApplicationV1 } from "./person-record-search
 import type { PersonEmployeeHttpApplication } from "./person-employee-http-application.js";
 import {
   PERSON_ANSWER_PATH_V7,
-  PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_RUNS_PATH_V1,
   PERSON_DIAGNOSTICS_PATH_V1,
@@ -70,7 +68,6 @@ import {
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   validatePersonAnswerRequestV3,
-  validatePersonCapabilitiesV1,
   validatePersonEvidenceOpenRequestV1,
   validatePersonRunsRequestV1,
   validatePersonDiagnosticsRequestV1,
@@ -127,7 +124,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_ASK_CHECK_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
-  `GET ${PERSON_CAPABILITIES_PATH_V1}`,
   `GET ${PERSON_CHANGES_ROUTE_V1}`,
   `GET ${PERSON_PROJECT_ACTIVITY_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
@@ -211,10 +207,10 @@ function providerIngressRoutes(
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
       // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
-      // ADR-0048), so no adapter can mount one.
+      // ADR-0048; the capability read), so no adapter can mount one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
         [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
-          '/v2/person/tools', '/v3/person/tools']
+          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities']
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -1095,26 +1091,9 @@ export function createOrganizationAuthorityHttpServer(
         );
         return;
       }
-      if (
-        method === "GET" &&
-        url.pathname === PERSON_CAPABILITIES_PATH_V1 &&
-        url.search === ""
-      ) {
-        options.sessions.authenticateAccess({ access_token: accessToken(request.headers.authorization) });
-        if ((await rawBody(request)).byteLength !== 0) {
-          throw new AuthorityOperationError("invalid_request", "request is invalid");
-        }
-        json(response, 200, validatePersonCapabilitiesV1({
-          schema_version: 1,
-          kind: "echo-person-capabilities-v1",
-          // Kept for installed clients that still probe before asking.
-          agentic_ask_v1: true,
-        }));
-        return;
-      }
       const personGet = method === "GET" ? personReadGets.get(url.pathname) : undefined;
       if (personGet !== undefined) {
-        // Authenticated first, as capabilities is; the read takes no query and no body.
+        // Authenticated first; the read takes no query and no body.
         const access_token = accessToken(request.headers.authorization);
         options.sessions.authenticateAccess({ access_token });
         if (url.search !== "" || (await rawBody(request)).byteLength !== 0) {
@@ -1130,11 +1109,7 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (method === "POST" && url.search === "") {
         const personRead = personReadPosts.get(url.pathname);
-        if (personRead !== undefined) {
-          // Tells the route's own not-found from an Authority with no `/v7`. Set before body validation or application execution.
-          if (url.pathname === PERSON_ANSWER_PATH_V7) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '7');
-          await personRead(request, response); return;
-        }
+        if (personRead !== undefined) { await personRead(request, response); return; }
       }
       fail(response, 404, "not_found");
     } catch (error) {

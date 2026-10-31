@@ -128,7 +128,6 @@ describe('one runtime without live connectors', () => {
       body: JSON.stringify({ schema_version: 3, question: 'What changed?', ...(mine ? { mine: true } : {}) }),
     });
     expect(response.status).toBe(200);
-    expect(response.headers.get('x-echo-person-ask-route')).toBe('7');
     expect(await response.json()).toMatchObject({ schema_version: 8, scope: { kind: mine ? 'mine' : 'global' }, citations: [] });
     expect(generate).toHaveBeenCalled();
     const [prompt] = generate.mock.calls[0] as unknown as [{ readonly user_prompt: string }];

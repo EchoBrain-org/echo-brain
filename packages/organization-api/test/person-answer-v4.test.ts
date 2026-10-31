@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
-  validatePersonCapabilitiesV1,
   validatePersonEvidenceDeskResponseV1,
   validatePersonEvidenceOpenRequestV1,
   validatePersonEvidenceSearchRequestV1,
@@ -21,14 +19,11 @@ const citation = {
 const receipt_sha256 = `sha256:${'c'.repeat(64)}`;
 
 describe('Agentic Ask V1 public contracts', () => {
-  it('defines the desk and capability endpoints, and the Ask request', () => {
+  it('defines the desk endpoints and the Ask request', () => {
     expect(PERSON_EVIDENCE_SEARCH_PATH_V1).toBe('/v3/person/evidence/search');
     expect(PERSON_EVIDENCE_OPEN_PATH_V1).toBe('/v3/person/evidence/open');
-    expect(PERSON_CAPABILITIES_PATH_V1).toBe('/v3/person/capabilities');
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What changed?', project_id }))
       .toEqual({ schema_version: 3, question: 'What changed?', project_id });
-    expect(validatePersonCapabilitiesV1({ schema_version: 1, kind: 'echo-person-capabilities-v1', agentic_ask_v1: false }))
-      .toEqual({ schema_version: 1, kind: 'echo-person-capabilities-v1', agentic_ask_v1: false });
   });
 
   it('accepts a structured answer with cited prose and bounded deterministic fallback records', () => {
