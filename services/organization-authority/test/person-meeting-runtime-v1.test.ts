@@ -80,7 +80,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
     source(setting, guard) {
       sources.push({ tool_id, source_key: setting.source_key });
       const identity = { kind: 'meeting-source' as const, adapter_id: setting.source_adapter_id, instance_id: setting.source_adapter_instance_id, version: setting.source_adapter_version };
-      return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
+      return { identity,
         requireCurrent() { guard(); current(); },
         async pull(input) {
           pulls++; guard(); current(); const cursor = readGranolaCheckpointV1(input.cursor!);

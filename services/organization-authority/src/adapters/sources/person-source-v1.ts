@@ -1,4 +1,4 @@
-import type { AdapterConfig, AdapterOperationContext, SourceAdapterV1, SourcePullRequestV1, SourceAdmissionScopeV1, SourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
+import type { AdapterOperationContext, SourceAdapterV1, SourcePullRequestV1, SourceAdmissionScopeV1, SourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
 import type { DocumentExtractionClaimV1, PersonDocumentRepositoryV1 } from '../../application/ports/document-v1.js';
 import { PERSON_SOURCE_IDENTITY_V1, personDocumentSourceEnvelopeV1, type PersonDocumentSourceContentV1 } from '../../application/person-document-source-v1.js';
 import type { PersonTextSourceContentV1, PersonTextSourceInboxV1, PersonTextSourceFailureObservationV1 } from '../../application/ports/person-text-source-v1.js';
@@ -13,14 +13,6 @@ export class PersonSourceAdapterV1 implements SourceAdapterV1<PersonSourceConten
   private readonly textFailures: PersonTextSourceFailureObservationV1[] = [];
   private preferText = false;
   constructor(private readonly inbox: Pick<PersonDocumentRepositoryV1,'claimExtraction'>, private readonly texts?:PersonTextSourceInboxV1) {}
-  validateConfig(config: AdapterConfig) {
-    const ok = config.adapter_id === this.identity.adapter_id && config.instance_id === this.identity.instance_id;
-    return {ok,errors:ok?[]:['Person source identity mismatch']};
-  }
-  async healthCheck(context?: AdapterOperationContext) {
-    context?.signal.throwIfAborted();
-    return {status:'healthy' as const,checked_at:new Date().toISOString()};
-  }
   async pull(request: SourcePullRequestV1, context?: AdapterOperationContext) {
     context?.signal.throwIfAborted();
     if (request.cursor !== undefined) throw new Error('Person source uses durable work leases, not provider cursors');

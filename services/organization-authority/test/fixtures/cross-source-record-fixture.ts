@@ -172,8 +172,7 @@ export async function seedCrossSourceRecords(
     const identity = { kind: 'meeting-source' as const, adapter_id: 'granola', instance_id: 'unapproved-fixture', version: '1.0.0' };
     await pullAndAdmitSourceBatchV1({
       source: new MeetingSourceBridgeV1({
-        identity, validateConfig: () => ({ ok: true, errors: [] }),
-        healthCheck: async () => ({ status: 'healthy' as const, checked_at: ISSUED_AT }),
+        identity,
         pull: async () => ({ meetings: [{ schema_version: 1 as const, id: 'unapproved-cross-source-meeting',
           provenance: { source: identity, external_id: 'unapproved-cross-source-meeting', canonical_revision: '1', observed_at: ISSUED_AT, normalizer_version: '1.0.0' },
           capture: { state: 'complete' as const, components: [{ kind: 'transcript' as const, state: 'available' as const }] },

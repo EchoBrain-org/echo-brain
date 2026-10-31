@@ -1,4 +1,4 @@
-import type { Adapter, AdapterOperationContext } from "../contracts/adapter.js";
+import type { AdapterOperationContext } from "../contracts/adapter.js";
 import type {
   SourceAdapterIdentityV1,
   SourceAdmissionScopeV1,
@@ -7,7 +7,7 @@ import type {
   SourcePullRequestV1,
 } from "../contracts/source.js";
 
-export interface SourceAdapterV1<TContent = unknown> extends Adapter {
+export interface SourceAdapterV1<TContent = unknown> {
   readonly identity: SourceAdapterIdentityV1;
   pull(request: SourcePullRequestV1, context?: AdapterOperationContext): Promise<SourceBatchV1<TContent>>;
 }

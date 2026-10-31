@@ -118,7 +118,7 @@ describe('durable common source admission',()=>{
     const {db,store}=fixture(); const accepted=claim(); const person=new PersonSourceAdapterV1({claimExtraction:()=>accepted});
     const documents=await pullAndAdmitSourceBatchV1({source:person,request:{limit:1},admission:{store,scope:value=>person.scopeFor(value)}});
     expect(documents.admissions).toEqual(['admitted']); expect(person.claimFor(documents.sources[0]!)).toBe(accepted);
-    const value=meeting();const source=new MeetingSourceBridgeV1({identity:value.provenance.source,validateConfig:()=>({ok:true,errors:[]}),healthCheck:async()=>({status:'healthy',checked_at:at}),pull:async()=>({meetings:[value],next_cursor:'next'})});
+    const value=meeting();const source=new MeetingSourceBridgeV1({identity:value.provenance.source,pull:async()=>({meetings:[value],next_cursor:'next'})});
     await pullAndAdmitSourceBatchV1({source,request:{limit:1},admission:{store,scope:{organization_id:'org_fixture',custody_ref:'organization:org_fixture',access_policy_ref:'meeting-admission:fixture',analysis_policy:'automatic'}}});
     expect(db.prepare('SELECT adapter_id,analysis_policy FROM authority_sources_v1 ORDER BY adapter_id').all()).toEqual([{adapter_id:'meeting',analysis_policy:'automatic'},{adapter_id:'person',analysis_policy:'on_request'}]);
     const contents=db.prepare('SELECT content_json FROM authority_source_contents_v1').pluck().all() as string[];

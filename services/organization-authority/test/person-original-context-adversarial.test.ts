@@ -45,8 +45,6 @@ function fixture() {
   const admit = (meeting: MeetingDocument) => pullAndAdmitSourceBatchV1({
     source: new MeetingSourceBridgeV1({
       identity: meeting.provenance.source,
-      validateConfig: () => ({ ok: true, errors: [] }),
-      healthCheck: async () => ({ status: "healthy" as const, checked_at: PROJECT_CONTEXT_NOW }),
       pull: async () => ({ meetings: [meeting], next_cursor: `${meeting.id}-next` }),
     }),
     request: { limit: 1 },

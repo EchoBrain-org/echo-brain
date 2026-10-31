@@ -3,7 +3,7 @@ import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol'
 import { PERSON_HAND_IN_MEETING_ID_V1, PERSON_HAND_IN_TOOL_ID_V1, validatePersonHandInMeetingV1 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { AdapterError, assertCanonicalMeetingDocument, type AdapterConfig, type MeetingDocument, type MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
+import { AdapterError, assertCanonicalMeetingDocument, type MeetingDocument, type MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import { HAND_IN_SOURCE_ADAPTER_ID_V1, SqlitePersonHandInMeetingsV1, type StoredHandInMeetingV1 } from '../adapters/persistence/sqlite/person-hand-in-meetings-v1.js';
 import type { PersonalMeetingCheckpointV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
@@ -135,9 +135,6 @@ export function createHandInPersonMeetingProviderV1(options: { readonly database
       if (identity.adapter_id !== HAND_IN_SOURCE_ADAPTER_ID_V1 || identity.version !== VERSION) throw new Error('Hand-in meeting source identity differs');
       return {
         identity, requireCurrent: current,
-        validateConfig: (config: AdapterConfig) => config.adapter_id === identity.adapter_id && config.instance_id === identity.instance_id
-          ? { ok: true, errors: [] } : { ok: false, errors: ['hand-in meeting source identity differs'] },
-        healthCheck: async () => ({ status: 'healthy' as const, checked_at: new Date().toISOString(), message: 'handed-in meetings' }),
         async pull(request) {
           current();
           const checkpoint = readHandInCheckpointV1(request.cursor ?? initial());

@@ -13,7 +13,7 @@ import type {
   MeetingPullRequest,
 } from "../contracts/meeting.js";
 
-export interface MeetingSourceAdapter extends Adapter {
+export interface MeetingSourceAdapter {
   readonly identity: AdapterIdentity & { kind: 'meeting-source' };
   pull(
     request: MeetingPullRequest,

@@ -1,4 +1,4 @@
-import type { AdapterConfig, AdapterOperationContext } from "../contracts/adapter.js";
+import type { AdapterOperationContext } from "../contracts/adapter.js";
 import type { MeetingDocument, MeetingProvenance } from "../contracts/meeting.js";
 import type { SourceEnvelopeV1, SourcePullRequestV1 } from "../contracts/source.js";
 import { assertCanonicalMeetingBatch, assertCanonicalMeetingDocument } from "../contracts/validation.js";
@@ -47,8 +47,6 @@ export function meetingFromSourceEnvelopeV1(source: SourceEnvelopeV1<MeetingSour
 export class MeetingSourceBridgeV1 implements SourceAdapterV1<MeetingSourceContentV1> {
   constructor(private readonly delegate: MeetingSourceAdapter) {}
   get identity() { return this.delegate.identity; }
-  validateConfig(config: AdapterConfig) { return this.delegate.validateConfig(config); }
-  healthCheck(context?: AdapterOperationContext) { return this.delegate.healthCheck(context); }
   async pull(request: SourcePullRequestV1, context?: AdapterOperationContext) {
     const batch = await this.delegate.pull(request, context);
     assertCanonicalMeetingBatch(batch);
