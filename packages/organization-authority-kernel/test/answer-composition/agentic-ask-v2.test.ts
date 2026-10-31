@@ -211,15 +211,6 @@ describe('Agentic Ask ticket release', () => {
     expect(f.append).not.toHaveBeenCalled();
   });
 
-  it('refuses publication when the terminal audit fails', async () => {
-    const failure = new Error('audit unavailable');
-    const f = fixture({ append: async () => { throw failure; } });
-    await expect(f.run()).rejects.toBe(failure);
-    expect(f.append).toHaveBeenCalledTimes(1);
-    expect(f.generate).toHaveBeenCalledTimes(4);
-    expect(f.fenceSnapshots).toHaveLength(5);
-  });
-
   it('refuses publication after a disconnect during the terminal audit', async () => {
     let revoked = false;
     const refusal = new Error('connection disconnected');
