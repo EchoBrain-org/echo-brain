@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chooseFromAccountMenu, drop, emit, launch, type Launched } from './launch.js';
 
-// ADR-0049: Mine goes; Only me is a quiet link on Home, the list of everything only you can read, filed or not.
+// ADR-0049: Mine goes; Only me is a row in the sidebar, the list of everything only you can read, filed or not.
 let run: Launched;
 const folders: string[] = [];
 test.afterEach(async () => {
@@ -19,6 +19,7 @@ const lists = () => run.calls().filter(call => call.path === '/v1/person/list');
 const opens = () => run.calls().filter(call => call.path === '/v1/person/open');
 const notes = () => run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
 const log = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8');
+const hue = (of: Locator) => of.evaluate(element => getComputedStyle(element).color);
 
 type Rpc = (method: string, params?: unknown) => Promise<{ ok: boolean; failure?: { code: string } }>;
 
@@ -49,7 +50,6 @@ test('the sidebar\'s Only me opens what only you can read, filed or not, newest 
   await expect(rows.nth(2).getByTestId('only-me-tiles')).toHaveAttribute('title', 'Apollo');
   await expect(rows.nth(2).locator('.alt-tile')).toHaveText(['A']);
   await expect(rows.nth(2)).toHaveAttribute('aria-label', /^Note: Supplier call notes\. Filed in Apollo\. Added /);
-  const hue = (of: Locator) => of.evaluate(element => getComputedStyle(element).color);
   expect(await hue(rows.nth(2).locator('.alt-tile'))).toBe(await hue(page.getByTestId('sidebar-project').nth(0).locator('.dot')));
   await expect(page.getByTestId('only-me').locator('.alt-tile')).toHaveCount(1);
   // Every row is only yours: none carries a lock, nor any other word on who can read it.
@@ -112,7 +112,6 @@ test('a file filed in two projects shows a tile for each, in the sidebar\'s hues
   await expect(tiles).toHaveText(['A', 'B']);
   await expect(contract.getByTestId('only-me-tiles')).toHaveAttribute('title', 'Apollo, Beacon');
   await expect(contract).toHaveAttribute('aria-label', /^File: Supplier contract\. Filed in Apollo, Beacon\. Added /);
-  const hue = (of: Locator) => of.evaluate(element => getComputedStyle(element).color);
   const sidebar = page.getByTestId('sidebar-project');
   expect(await hue(tiles.nth(0))).toBe(await hue(sidebar.nth(0).locator('.dot')));
   expect(await hue(tiles.nth(1))).toBe(await hue(sidebar.nth(1).locator('.dot')));

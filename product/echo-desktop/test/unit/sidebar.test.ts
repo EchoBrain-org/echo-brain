@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { State } from '../../src/renderer/store.js';
 import type { UpdateState } from '../../src/shared/protocol.js';
-import { ACCOUNT, elements, project, render, text } from './harness.js';
+import { ACCOUNT, byTestId, elements, project, render, text } from './harness.js';
 
 const { loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome } = vi.hoisted(() => ({
   loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn(), openNewProject: vi.fn(), returnToAsk: vi.fn(), openOnlyMe: vi.fn(), openHome: vi.fn(),
@@ -120,7 +120,7 @@ describe('your follow-ups (F9) and Only me', () => {
 
   it('Follow-ups counts what others still owe you, in grey, and says so; nothing at none, or before Home is read', async () => {
     const row = find(rows(await signedIn({ page: 'home' }, 4)), 'sidebar-follow-ups')!;
-    const count = elements(row).find(node => node.props['data-testid'] === 'sidebar-follow-ups-count')!;
+    const count = byTestId(row, 'sidebar-follow-ups-count')[0]!;
     expect(text(count)).toBe('4');
     // Grey, never the orange badge: nothing here waits on you.
     expect(count.props.class).toBe('side-count');
@@ -129,7 +129,7 @@ describe('your follow-ups (F9) and Only me', () => {
     expect(row.props['aria-label']).toBe('Follow-ups, 4 waiting on others');
     for (const none of [0, null]) {
       const plain = find(rows(await signedIn({ page: 'home' }, none)), 'sidebar-follow-ups')!;
-      expect(elements(plain).some(node => node.props['data-testid'] === 'sidebar-follow-ups-count')).toBe(false);
+      expect(byTestId(plain, 'sidebar-follow-ups-count')).toHaveLength(0);
       expect(plain.props['aria-label']).toBeUndefined();
       expect(text(plain)).toBe('Follow-ups');
     }

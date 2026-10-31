@@ -26,7 +26,7 @@ const DAY = 86_400_000;
 const CLOCK: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
 
 /** How long ago something was added, short: the time today ("10:12"), days under a week ("3d"), then the day ("Sep 18"). */
-export function shortAge(iso: string, now = Date.now()): string {
+export function shortAge(iso: string, now: number): string {
   const time = Date.parse(iso);
   if (Number.isNaN(time)) return '';
   const today = startOfDay(now);
