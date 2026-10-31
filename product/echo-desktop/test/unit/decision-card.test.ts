@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PersonRunV1 } from '@echo-brain/organization-api';
 import type { DecisionState, State } from '../../src/renderer/store.js';
-import { byTestId, elements, plainHooks, render, text, type Node } from './harness.js';
+import { byTestId, elements, EMPTY_SUMMARY, plainHooks, render, text, type Node } from './harness.js';
 
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', original => plainHooks(original));
@@ -174,8 +174,7 @@ describe('the decision card', () => {
     const decided = { ...open, review: { ...review, status: 'approved' as const, decided_on: 'desktop' as const, records }, records,
       items: [{ ...items[0]!, project_ids: [THERM] }, { ...items[1]!, project_ids: null }, { ...items[2]!, owner: 'R. Moreno', owner_editable: false, project_ids: [] }] };
     const tree = await page(decision({ open: decided, runs: [run('41', records[0]!.approval_id, 'done'), run('42', records[1]!.approval_id, 'failed')],
-      lines: { 'run_00000000-0000-4000-8000-000000000041': { summary: { unsent: 2, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 1,
-        last_checked_at: null, by_decision: [] }, stage: null } } }));
+      lines: { 'run_00000000-0000-4000-8000-000000000041': { summary: { ...EMPTY_SUMMARY, unsent: 2, decisions: 1 }, stage: null } } }));
     const impacts = elements(tree).filter(node => node.props.class === 'impact');
     expect(impacts.map(node => node.props['aria-label'])).toEqual(['Impact · THERM', 'Impact · No project, only me']);
     expect(text(impacts[0])).toContain('Follow-ups');

@@ -45,13 +45,13 @@ function script(path: string, body: string): string {
 /** A command that writes its arguments, one per line, to `record`. */
 const recorder = (path: string, record: string) => script(path, `for argument in "$@"; do printf '%s\\n' "$argument"; done > '${record}'`);
 
-async function runScript(text: string, args: readonly string[], env: NodeJS.ProcessEnv = process.env): Promise<{ code: number | null; child: ChildProcess }> {
+async function runScript(text: string, args: readonly string[], env: NodeJS.ProcessEnv = process.env): Promise<{ code: number | null }> {
   const root = folder();
   const path = join(root, 'activate.sh');
   writeFileSync(path, text, { mode: 0o700 });
   const child = spawn('/bin/bash', [path, ...args], { stdio: 'ignore', env });
   const [code] = await once(child, 'exit') as [number | null];
-  return { code, child };
+  return { code };
 }
 const outcome = (path: string) => JSON.parse(readFileSync(path, 'utf8')) as unknown;
 const until = async (check: () => boolean) => { await expect.poll(check, { timeout: 10_000, interval: 50 }).toBe(true); };

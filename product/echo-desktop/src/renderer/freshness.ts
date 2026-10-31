@@ -15,7 +15,7 @@ import type { Expect, Failure, Notice, NoticeTarget, OpenItemView, ProjectSummar
 import { ACCOUNT_GONE, CHANGE_AREAS, NOTICE_ITEMS_MAX, NOTICE_TEXT_MAX, sameExpect } from '../shared/protocol.js';
 import { rpc } from './api.js';
 import { clip } from './format.js';
-import { firstName, followUpCount, itemTitle } from './needs.js';
+import { CLOSED_STATES, firstName, followUpCount, itemTitle } from './needs.js';
 
 /** The areas whose move re-reads what a page shows; projects re-read the sidebar. */
 export type ScreenArea = Exclude<PersonChangesAreaV1, 'projects'>;
@@ -35,10 +35,9 @@ export const NO_LONGER_SEEN: readonly string[] = ['not_found', 'forbidden'];
  * never this computer's. Nothing involving you was ever open, so there is little to read.
  */
 const SINCE_EVER = '1970-01-01T00:00:00.000Z';
-const CLOSED = ['done', 'not_relevant'] as const;
 
 /** What the store gives this module: who is signed in, its reads, and its quiet re-reads of what shows. */
-export interface Surfaces {
+interface Surfaces {
   account(): Expect | null;
   /** The window can be seen: on screen, and not covered by another app. */
   seen(): boolean;
@@ -380,7 +379,7 @@ async function followUpsMoved(run: Loop): Promise<FollowUpEvent[] | null> {
   const account = run.account;
   const before = run.followed;
   const closedSince = (since: string | null) =>
-    surfaces.readRows(account, { states: CLOSED, changed_since: new Date(since ?? SINCE_EVER).toISOString() });
+    surfaces.readRows(account, { states: CLOSED_STATES, changed_since: new Date(since ?? SINCE_EVER).toISOString() });
   const [open, closedNow] = await Promise.all([surfaces.readRows(account, { states: ['open'] }), before === null ? [] : closedSince(run.seenUpTo)]);
   if (loop !== run || open === null || closedNow === null) return null;
   const now = new Map(open.map(row => [row.item_id, row]));

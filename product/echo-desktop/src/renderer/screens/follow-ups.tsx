@@ -1,17 +1,19 @@
 import { Fragment } from 'preact';
 import { useEffect, useMemo, useRef } from 'preact/hooks';
-import type { Member, OpenItemView } from '../../shared/protocol.js';
+import type { Member, OpenItemView, ProjectSummary } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
 import {
-  ACTIVE_STATES, checkWords, CLOSED_STATES, followUpProgress, itemGroups, itemHistory, itemKind, itemNames, itemTitle, joined, liveFacts, matchesNow, monthDay,
-  ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES, summaryTotal,
+  checkWords, CLOSED_STATES, followUpAge, followUpHover, followUpMark, followUpOrder, followUpProgress, itemHistory, itemKind, itemNames, itemTitle,
+  lastChecked, liveFacts, markWords, monthDay, ownerLine, ownerRows, ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, STAGES,
+  summaryTotal, type OwnerFace,
 } from '../needs.js';
 import {
-  awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps,
-  openListDecision, ownerChoices, pickFollowUpOwner, retryFollowUp, retryFollowUps, sendable, sendFollowUp, sendTicked, setFollowUpState, shownItem, tickFollowUp,
-  toggleClosedGroup, toggleOwnerPicker, undoFollowUp, type FollowUpList, type ItemPage, type OwnerPicker as Picker, type Said, type State,
+  altitudeProjects, awaitingLive, checkNow, closeFollowUp, closeOwnerPicker, filterOwner, findOwner, listDecision, moreAfter, moreFollowUps, openFollowUp, openFollowUps,
+  openListDecision, ownerChoices, pickFollowUpOwner, retryFollowUp, retryFollowUps, sendable, sendFollowUp, sendTicked, setFollowUpState, shownItem, tickedRows,
+  tickFollowUp, toggleClosedGroup, toggleOwnerPicker, undoFollowUp, type FollowUpList, type ItemPage, type OwnerPicker as Picker, type Said, type State,
 } from '../store.js';
+import { FaceMark, KIND_ICON, Tile } from './altitude.js';
 import { OpenIn } from './ask.js';
 import { Face } from './card.js';
 import { within } from './change.js';
@@ -61,21 +63,29 @@ function useSaidFocus(shown: Said | null, said: { current: HTMLElement | null })
  * not sent and ECHO found no one, so it fell back to its approver: a dashed
  * button where you may pick, else plain faint words. Where you may change the
  * owner, it opens the people picker; while a change is on its way it does
- * nothing, and keeps the focus.
+ * nothing, and keeps the focus. On a list's row (`flat`, K) it is a face and
+ * a first name, dimmed while the item is not sent (it is not with them yet),
+ * and "Pick owner" is orange beside an empty circle where a face would be.
  */
-function Owner({ state, busy, picking, item, name }: { state: State; busy: boolean; picking: boolean; item: OpenItemView; name: string }) {
+function Owner({ state, busy, picking, item, name, flat = false }: { state: State; busy: boolean; picking: boolean; item: OpenItemView; name: string; flat?: boolean }) {
   const me = state.status?.account?.membership_id;
   const unmatched = ownerUnmatched(item);
   const label = ownerWords(item, me);
+  const person = flat ? (
+    <span class={`follow-up-owner${item.state === 'unsent' ? ' later' : ''}`}>
+      <FaceMark membership_id={item.owner.membership_id} name={item.owner.name} /><span class="follow-up-owner-name">{label}</span>
+    </span>
+  ) : <Chip person={item.owner} label={label} />;
+  const pick = (words: string) => (flat ? <span class="follow-up-owner"><span class="follow-up-none" aria-hidden="true" /><span class={words}>Pick owner</span></span> : 'Pick owner');
   if (!item.can.assign) {
-    return <span class="owner-slot">{unmatched ? <span class="faint">Pick owner</span> : <Chip person={item.owner} label={label} />}</span>;
+    return <span class="owner-slot">{unmatched ? (flat ? pick('faint') : <span class="faint">Pick owner</span>) : person}</span>;
   }
   return (
     <span class="owner-slot">
-      <button type="button" class={unmatched ? 'pick-button' : 'owner-button'} data-owner={item.item_id}
+      <button type="button" class={flat ? 'follow-up-owner-button' : unmatched ? 'pick-button' : 'owner-button'} data-owner={item.item_id}
         aria-label={unmatched ? `Pick owner: ${name}` : `Owner: ${label}. Change owner of ${name}`} aria-expanded={picking} aria-disabled={busy ? 'true' : undefined}
         onClick={() => toggleOwnerPicker(item.item_id)}>
-        {unmatched ? 'Pick owner' : <Chip person={item.owner} label={label} />}
+        {unmatched ? pick('follow-up-pick') : person}
       </button>
     </span>
   );
@@ -135,30 +145,97 @@ function CheckNow({ list }: { list: FollowUpList }) {
 }
 
 /**
- * One row: a tick when it is not sent and you may send it, its title, one
- * faint line (what it is; its meeting when the list spans meetings; "matches
- * now" when ECHO's last check found it so), and its owner. A click anywhere
- * else opens its page.
+ * A follow-up's state mark (K): a dashed ring not sent, a ring open, a tick
+ * done, a struck ring dismissed; orange when it needs attention, a solid disc
+ * once it waited over a week. Its words are its hover, and what a screen
+ * reader hears.
  */
-function Row({ state, list, item, label, name }: { state: State; list: FollowUpList; item: OpenItemView; label: string; name: string }) {
-  const sub = joined([itemKind(item, state.tools?.items), list.scope === 'record' ? null : item.decision?.title ?? null, matchesNow(item)]);
+function StateMark({ item, now }: { item: OpenItemView; now: number }) {
+  const { state, tone } = followUpMark(item, now);
+  const words = markWords(item, now);
+  return (
+    <span class="follow-up-state" role="img" aria-label={words} title={words} data-mark={state} data-tone={tone}>
+      <svg class={`follow-up-mark ${tone}`} width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+        {state === 'done' ? <path class="tick" d="M3 7.4 5.8 10.1 11 4.2" />
+          : tone === 'late' ? <circle class="fill" cx="7" cy="7" r="6.75" />
+          : <circle cx="7" cy="7" r="6" stroke-dasharray={state === 'unsent' ? '2.8 1.91' : undefined} />}
+        {state === 'not_relevant' && <path d="M3.4 10.6 10.6 3.4" />}
+      </svg>
+    </span>
+  );
+}
+
+/** Your projects you know by id (the sidebar's, every page Home read, and archived ones), in the order a row names them. */
+function projectsOf(state: State, ids: readonly string[]): ProjectSummary[] {
+  const known = [...altitudeProjects(state), ...state.archivedProjects.items];
+  return ids.flatMap(id => known.find(project => project.project_id === id) ?? []);
+}
+
+/**
+ * One row (K): a tick when it is not sent and you may send it, its state mark,
+ * its title (with a faint mark of what it is when it is not the meeting's own
+ * action), its owner, its project's tile and how long it has waited. What it
+ * is, its meeting and where it stands with whom are its hover. A click
+ * anywhere but its tick and its owner button opens its page.
+ */
+function Row({ state, list, item, label, name, now, ticking }: {
+  state: State; list: FollowUpList; item: OpenItemView; label: string; name: string; now: number; ticking: boolean;
+}) {
   // Read rows only first: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
   const reading = list.reading && awaitingLive(item);
+  const me = state.status?.account?.membership_id ?? null;
+  const projects = projectsOf(state, item.decision?.project_ids ?? []);
+  const age = followUpAge(item, now);
   return <>
-    <div class="follow-up-row" data-testid="follow-up-row" data-item={item.item_id} data-state={item.state}
-      onClick={event => { if (!within(event, '.send-box, .owner-slot')) void openFollowUp(item.item_id, item); }}>
-      {sendable(item) && (
+    <div class={`follow-up-row${ticking ? ' ticking' : ''}`} data-testid="follow-up-row" data-item={item.item_id} data-state={item.state}
+      title={followUpHover(item, me, now, state.tools?.items)}
+      onClick={event => { if (!within(event, '.send-box, .follow-up-owner-button')) void openFollowUp(item.item_id, item); }}>
+      {ticking && (sendable(item) ? (
         <input type="checkbox" class="send-box" aria-label={name} checked={list.ticks[item.item_id] === true} disabled={list.busy}
           onChange={() => tickFollowUp(item.item_id)} />
-      )}
+      ) : <span aria-hidden="true" />)}
+      <StateMark item={item} now={now} />
       <button type="button" class="follow-up-open" aria-busy={reading || undefined}>
         <span class={`follow-up-title${reading ? ' reading-title' : ''}`} data-reading={reading || undefined}>{label}</span>
-        <span class="follow-up-sub">{sub}</span>
+        {item.kind !== 'action' && <span class="follow-up-kind" title={itemKind(item, state.tools?.items)}>{KIND_ICON[item.kind]()}</span>}
       </button>
-      <Owner state={state} busy={list.busy} picking={list.picker?.item_id === item.item_id} item={item} name={name} />
+      <Owner state={state} busy={list.busy} picking={list.picker?.item_id === item.item_id} item={item} name={name} flat />
+      <span class="follow-up-tile" title={projects.length > 0 ? projects.map(project => project.name).join(', ') : undefined}>
+        {projects[0] && <Tile project={projects[0]} />}
+      </span>
+      <span class="follow-up-age" title={age.words}>{age.days}d</span>
     </div>
     {list.picker?.item_id === item.item_id && <OwnerPicker state={state} picker={list.picker} item={item} />}
   </>;
+}
+
+/**
+ * The owner line (K, F3): All, then a face for everyone who owns a row read,
+ * counted by what they hold open now, then No owner. A face shows only their
+ * rows; All, or the same face again, shows everyone's. Each button's hover,
+ * over its face too, says whose ("You" for you) and what a click does. Counts
+ * cover the rows read so far: they grow as More reads more.
+ */
+function Owners({ faces, shown, me }: { faces: readonly OwnerFace[]; shown: string | null; me: string | null }) {
+  const pick = (face: OwnerFace) => {
+    const who = face.key === me ? 'You' : face.name;
+    return (
+      <button key={face.key} type="button" class="follow-ups-owner" data-testid="follow-ups-owner" data-key={face.key} aria-pressed={shown === face.key}
+        aria-label={`${who}, ${face.key === 'none' ? face.count : `${face.count} open`}`}
+        title={face.key === 'none' ? `No owner yet · ${face.count} · show only those` : `${who} · ${face.count} open now · show only ${face.key === me ? 'yours' : 'theirs'}`}
+        onClick={() => filterOwner(face.key)}>
+        {face.key === 'none' ? <span class="follow-up-none" aria-hidden="true" /> : <FaceMark membership_id={face.key} name={face.name} titled={false} />}
+        {(face.key === 'none' || face.count > 0) && <span class="follow-ups-n">{face.count}</span>}
+      </button>
+    );
+  };
+  return (
+    <div class="follow-ups-owners" role="group" aria-label="Show follow-ups by owner">
+      <button type="button" class="follow-ups-owner all" data-testid="follow-ups-owner" data-key="" aria-pressed={shown === null} aria-label="All owners"
+        title="Show every follow-up" onClick={() => filterOwner(null)}>All</button>
+      {faces.map(pick)}
+    </div>
+  );
 }
 
 /**
@@ -176,8 +253,9 @@ function Head({ list }: { list: FollowUpList }) {
   const approved = list.scope !== 'record' || !day ? null
     : list.stage?.mine ? <button type="button" class="link-button inline faint-link" onClick={() => void openListDecision()}>Approved {day}</button> : <span>Approved {day}</span>;
   const count = progress && progress.total > 0 ? progressWords(progress) : null;
+  // Yours has no heading on the page (the title row names it), but for a screen reader, and to take the focus when it opens.
   return (
-    <header class="follow-ups-head">
+    <header class={`follow-ups-head${list.scope === 'involved' ? ' sr-only' : ''}`}>
       <h1 tabIndex={-1}>{heading}</h1>
       {(list.scope === 'record' || list.scope === 'project') && (
         <div class="follow-ups-sub">
@@ -191,14 +269,18 @@ function Head({ list }: { list: FollowUpList }) {
 }
 
 /**
- * A follow-ups list: a meeting's, a project's, or yours (everything you sent
- * or own), grouped Not sent, Open, Done and Dismissed, each counted over the
- * whole list. Current work comes first, with its own More; once it is read to
- * its end, each closed group, which opens and closes (yours and a project's
- * start closed), with its own. Send N and Dismiss N act on the ticked Not sent
- * rows, right under them (held at the window's foot while the list runs
- * past it); the list stays where it was, and the same foot says what
- * happened. Every row opens its page, and Back returns to that row.
+ * A follow-ups list (One place to look v1, K): a meeting's, a project's, a
+ * notification's, or yours (everything you sent or own), each the same. Its
+ * owner line, while two or more own its rows, shows one owner's rows at a
+ * time. Its current work is one list, what needs attention first, with its
+ * own More; once that is read to its end, each closed status folds at the
+ * end, counted over the whole list ("Done 12"), opening and closing (yours
+ * and a project's start closed) with its own More. Send N and Dismiss N act
+ * on the ticked Not sent rows that show, right under the current rows (held
+ * at the window's foot while the list runs past it); the list stays where it
+ * was, and the same foot says what happened. Every row opens its page, and
+ * Back returns to that row. Yours says faintly at its end when ECHO last
+ * checked.
  */
 export function FollowUps({ state, list }: { state: State; list: FollowUpList }) {
   const { column, returned } = useKeptPlace(`follow-ups:${list.seq}`);
@@ -216,39 +298,40 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
   // Each row as it shows, its live part laid over it, and its names, worked out once each time the rows change.
   const items = useMemo(() => list.items.map(item => shownItem(item, list.live)), [list.items, list.live]);
   const names = useMemo(() => itemNames(items), [items]);
-  const counts = list.summary;
-  const groups = itemGroups(items);
-  const ticked = items.filter(item => sendable(item) && list.ticks[item.item_id]).length;
+  const now = Date.now();
+  const me = state.status?.account?.membership_id ?? null;
+  const faces = ownerLine(items, now);
+  const owner = ownerShown(items, list.owner);
+  const rows = followUpOrder(ownerRows(items, list.owner), now);
+  const ticked = tickedRows(list).length;
+  // A tick's room in every row once one row has a tick (only current work is ever sent), so the marks stay in one column.
+  const ticking = rows.active.some(sendable);
   const mores = moreAfter(list);
-  const rowsOf = (status: OpenItemView['state']) => groups.find(entry => entry.state === status)?.items ?? [];
-  const rows = (entries: readonly OpenItemView[]) => (
-    <div class="follow-ups-rows">
-      {entries.map(item => <Row key={item.item_id} state={state} list={list} item={item} label={names.get(item.item_id)!.label} name={names.get(item.item_id)!.name} />)}
-    </div>
-  );
+  const counts = list.summary;
+  const listed = (entries: readonly OpenItemView[]) => entries.map(item => (
+    <Row key={item.item_id} state={state} list={list} item={item} label={names.get(item.item_id)!.label} name={names.get(item.item_id)!.name} now={now} ticking={ticking} />
+  ));
   const more = (part: 'active' | (typeof CLOSED_STATES)[number]) => mores.includes(part) && (
     <button type="button" class="link-button more" data-testid={part === 'active' ? 'follow-ups-more' : 'follow-ups-more-closed'} disabled={list.loading}
       onClick={() => void moreFollowUps(part)}>More</button>
   );
-  const group = (status: (typeof ACTIVE_STATES)[number]) => rowsOf(status).length > 0 && (
-    <section key={status} class="follow-ups-group" aria-label={STAGES[status]}>
-      <div class="section-label">{STAGES[status]} · {counts?.[status] ?? rowsOf(status).length}</div>
-      {rows(rowsOf(status))}
-    </section>
-  );
-  // Current work read to its end, each closed group shows, counted over the whole list ("Done · 12"); opened, its rows show.
+  // Current work read to its end, each closed status folds at the end, counted over the whole list ("Done 12"), or, under a
+  // filter, not counted (the counts are everyone's); opened, its rows show.
   const ended = list.reads.some(read => read.parts.includes('active') && read.next === null);
-  const closedGroup = (status: (typeof CLOSED_STATES)[number]) => {
-    const count = counts?.[status] ?? rowsOf(status).length;
+  const fold = (status: (typeof CLOSED_STATES)[number]) => {
+    const total = counts?.[status] ?? rows[status].length;
     if (!ended && !list.reads.some(read => read.parts.includes(status))) return null;
     const open = list.expanded[status] === true;
+    const count = owner === null ? total : null;
     return (
       <Fragment key={status}>
-        {(count > 0 || rowsOf(status).length > 0) && (
-          <section class="follow-ups-group" aria-label={STAGES[status]}>
-            <button type="button" class="section-label disclosure" aria-expanded={open}
-              onClick={() => toggleClosedGroup(status)}><Chevron /><span>{STAGES[status]} · {count}</span></button>
-            {open && rowsOf(status).length > 0 && rows(rowsOf(status))}
+        {(total > 0 || rows[status].length > 0) && (
+          <section class="follow-ups-fold" aria-label={STAGES[status]}>
+            <button type="button" class="follow-ups-fold-head" aria-expanded={open} aria-label={count === null ? STAGES[status] : `${STAGES[status]} · ${count}`}
+              onClick={() => toggleClosedGroup(status)}>
+              <span>{STAGES[status]}</span>{count !== null && <span class="follow-ups-n">{count}</span>}<Chevron />
+            </button>
+            {open && rows[status].length > 0 && <div class="follow-ups-rows">{listed(rows[status])}</div>}
           </section>
         )}
         {more(status)}
@@ -256,11 +339,14 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
     );
   };
   const foot = ticked > 0 || list.said !== null;
+  // Yours says when ECHO last checked: by its own read, which every read of it brings fresh, or Home's, when read since.
+  const checked = list.scope === 'involved' ? lastChecked([list.summary?.last_checked_at, state.home?.open?.last_checked_at], now) : null;
   return (
     <div class="column follow-ups" data-testid="follow-ups" ref={column} aria-busy={list.loading || list.busy}>
       <Head list={list} />
-      {group('unsent')}
-      {/* Under the Not sent rows it acts on. No tick and nothing said: it takes no room, and its status line stays where a screen reader hears it. */}
+      {faces.length > 1 && <Owners faces={faces} shown={owner} me={me} />}
+      {rows.active.length > 0 && <section class="follow-ups-rows" aria-label="Follow-ups not done yet">{listed(rows.active)}</section>}
+      {/* Under the rows it acts on. No tick and nothing said: it takes no room, and its status line stays where a screen reader hears it. */}
       <div class={foot ? 'follow-ups-foot' : 'sr-only'} data-testid="follow-ups-foot">
         {ticked > 0 && <>
           <button type="button" class="primary-button small" disabled={list.busy || list.loading} onClick={() => void sendTicked(true)}>Send {ticked}</button>
@@ -269,9 +355,8 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
         {list.busy && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
         <SaidLine said={list.said} testid="follow-ups-said" line={said} />
       </div>
-      {group('open')}
       {more('active')}
-      {CLOSED_STATES.map(closedGroup)}
+      {CLOSED_STATES.map(fold)}
       {list.loading && list.items.length === 0 && <span class="asking" aria-hidden="true"><i /><i /><i /></span>}
       {!list.loading && !list.failed && (list.summary ? summaryTotal(list.summary) : list.items.length) === 0 && <div class="notice">No follow-ups</div>}
       {list.failed && (
@@ -280,6 +365,7 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
           <button type="button" class="link-button" disabled={list.loading} onClick={() => void retryFollowUps()}>Try again</button>
         </div>
       )}
+      {checked !== null && <div class="follow-ups-checked" data-testid="follow-ups-checked">{checked}</div>}
     </div>
   );
 }

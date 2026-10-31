@@ -36,7 +36,7 @@ export function documentDetail(document: { type: 'pdf' | 'word' | 'markdown' | '
 }
 
 /** Midnight today, here. */
-function startOfDay(now: number): number {
+export function startOfDay(now: number): number {
   const today = new Date(now);
   return new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
 }
@@ -83,7 +83,7 @@ export function bytes(size: number): string {
 }
 
 /** A piece of a match's text, and whether it is one of the query's words. */
-export interface Marked { readonly text: string; readonly hit: boolean }
+interface Marked { readonly text: string; readonly hit: boolean }
 
 function wordsPattern(terms: readonly string[]): RegExp | null {
   if (terms.length === 0) return null;

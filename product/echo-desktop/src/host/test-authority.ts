@@ -128,8 +128,8 @@ interface SweepRun {
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
-const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-checked', 'granola-paged', 'granola-review', 'granola-review-assign-lost', 'granola-sweep',
-  'granola-alike', 'granola-routes', 'granola-extra-failed']);
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-checked', 'granola-paged', 'granola-review', 'granola-review-assign-lost', 'granola-review-paste',
+  'granola-sweep', 'granola-alike', 'granola-routes', 'granola-extra-failed']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 /** A project made long ago, that Ari is added to when a test says (`added-oldest`). */
@@ -151,12 +151,15 @@ const ATOM_PART_BYTES = 3 * 1024;
 
 /**
  * The modes where Ari has added notes, uploads and approved meetings of their own, some only Ari can read (ADR-0049);
- * `only-me-empty` has none yet.
+ * `only-me-empty` has none yet, and `only-me-filed` adds a file of Ari's own filed in two projects.
  */
-const ONLY_ME_MODES = new Set(['only-me', 'owner-only-me', 'only-me-empty', 'only-me-fails-once', 'only-me-meetings-held', 'only-me-unauthorized']);
+const ONLY_ME_MODES = new Set(['only-me', 'owner-only-me', 'only-me-empty', 'only-me-fails-once', 'only-me-meetings-held', 'only-me-unauthorized',
+  'only-me-filed']);
 const PRICING_REVIEW = `sha256:${'7'.repeat(64)}`;
 const BEACON_KICKOFF = `sha256:${'8'.repeat(64)}`;
 const PRICING_MEMO = `doc_${'9'.repeat(64)}`;
+/** Ari's own contract, filed in Apollo and Beacon under the Only me lock (`only-me-filed`). */
+const SUPPLIER_CONTRACT = `doc_${'4'.repeat(64)}`;
 const LAUNCH_CHECKLIST = `ctx_${'b'.repeat(64)}`;
 /** Ari's own notes on a supplier call, filed in Apollo under the Only me lock. */
 const SUPPLIER_CALL = `ctx_${'5'.repeat(64)}`;
@@ -297,7 +300,7 @@ export function layoutAnswer(question: string, scope: Record<string, unknown>, l
  * turn and its source check returns 404. Every mode serves project activity
  * (C2).
  */
-export const TIMELINE_MODES: ReadonlySet<string> = new Set(['ask-timeline', 'ask-timeline-changed']);
+const TIMELINE_MODES: ReadonlySet<string> = new Set(['ask-timeline', 'ask-timeline-changed']);
 /** An answer citation, as a V8 answer carries it. */
 type TimelineCitation = { kind: string; label: string; visibility: string; citation: Record<string, unknown>; ref?: string };
 /** What the timeline's answers cite: two THERM tickets (only yours), the DVT plan page (the team's), and a follow-up. */
@@ -337,7 +340,7 @@ function timelineV8(question: string, scope: Record<string, unknown>, citations:
  * a guess. Ask again answers the earlier question and says what is different
  * since.
  */
-export function timelineAnswer(question: string, scope: Record<string, unknown>, previous: Record<string, unknown> | undefined): Record<string, unknown> {
+function timelineAnswer(question: string, scope: Record<string, unknown>, previous: Record<string, unknown> | undefined): Record<string, unknown> {
   const owns = (asked: string, ticket: TimelineCitation) => timelineV8(asked, scope, [ticket], [cites([ticket], `Dev owns ${ticketKey(ticket)}, since Oct 21.`, [0])]);
   const alone = (asked: string) => {
     const named = [THERM_482, THERM_490].find(ticket => asked.includes(ticketKey(ticket)));
@@ -377,7 +380,7 @@ export function timelineAnswer(question: string, scope: Record<string, unknown>,
  * longer has). With `changed`, the DVT plan page changed and the follow-up is
  * no longer yours to read.
  */
-export function timelineCheck(items: readonly { citation: Record<string, unknown>; marker?: string }[], changed: boolean): Record<string, unknown> {
+function timelineCheck(items: readonly { citation: Record<string, unknown>; marker?: string }[], changed: boolean): Record<string, unknown> {
   return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(item => {
     const citation = item.citation;
     if (citation.kind === 'ticket') {
@@ -391,7 +394,7 @@ export function timelineCheck(items: readonly { citation: Record<string, unknown
 }
 
 /** Project activity (C2): every project you are in, with its newest arrival from someone else, or null. */
-export function projectActivityOf(projects: readonly { project_id: string }[], arrivals: ReadonlyMap<string, string>): Record<string, unknown> {
+function projectActivityOf(projects: readonly { project_id: string }[], arrivals: ReadonlyMap<string, string>): Record<string, unknown> {
   return { schema_version: 1, kind: 'echo-person-project-activity-v1', items: projects.map(project => ({ project_id: project.project_id, latest_at: arrivals.get(project.project_id) ?? null })) };
 }
 
@@ -409,9 +412,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting's first record: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
-  // The hand-in modes list Paste a meeting. Each meeting pasted, once per content: processed at once, it waits for review,
-  // its first line the decision and its second the action, each starting at the project it suggests.
-  const handIn = mode.startsWith('hand-in');
+  // The hand-in modes (and granola-review-paste, in place of Granola) list Paste a meeting. Each meeting pasted, once per
+  // content: processed at once, it waits for review, its first line the decision and its second the action, each starting at
+  // the project it suggests.
+  const handIn = mode.startsWith('hand-in') || mode === 'granola-review-paste';
   const pasted: { meeting_id: string; title: string; lines: readonly [string, string]; meeting_at: string | null; all_day: boolean; project_ids: string[] }[] = [];
   // The checks of its other records, one per further destination: they find nothing, but in granola-routes each finds the
   // actions sent there, and in granola-extra-failed each fails until Try again.
@@ -452,7 +456,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         access_expires_at: '2026-09-20T12:00:00.000Z', refresh_expires_at: '2026-09-21T00:00:00.000Z',
         hard_reauthentication_at: '2026-09-21T00:00:00.000Z',
       } : {}),
-      // The weekly sign-in is twelve hours away.
     });
     if (expired) {
       // What an older client's weekly expiry left behind: the session set aside under a claim.
@@ -527,6 +530,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       pages: [[{ ordinal: 0, anchor_kind: 'page', anchor_start: 1, text: 'Annual plans lead the price sheet.' }]],
     });
     ownDocuments.add(PRICING_MEMO);
+    if (mode === 'only-me-filed') {
+      documents.push({
+        document_id: SUPPLIER_CONTRACT, request_id: '00000000-0000-4000-8000-0000000000d4', filename: 'Supplier contract.pdf', title: 'Supplier contract',
+        original: '%PDF-1.4 Supplier contract\n', detected_media_type: 'application/pdf', audience: { kind: 'only_me' },
+        association_project_ids: [apollo, beacon], received_at: '2026-09-21T21:30:00.000Z', extraction_state: 'ready',
+        pages: [[{ ordinal: 0, anchor_kind: 'page', anchor_start: 1, text: 'Lead times are two weeks.' }]],
+      });
+      ownDocuments.add(SUPPLIER_CONTRACT);
+    }
     catalog.set(LAUNCH_CHECKLIST, {
       received_at: '2026-09-20T12:00:00.000Z', title: 'Launch checklist', text: 'Book the venue.\nSend the invites.\n', audience: { kind: 'team' },
     });
@@ -618,13 +630,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const from = cursor === SECOND_PAGE ? PAGE : 0;
     return { items: all.slice(from, from + PAGE), next_cursor: from + PAGE < all.length ? SECOND_PAGE : null };
   };
-  const sha = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
   // The fixture's documents were saved by someone else, so their request IDs stay private (ADR-0023);
   // only one Ari uploaded carries its own.
   const documentMetadata = (document: StoredDocument) => ({
     schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: ownDocuments.has(document.document_id) ? document.request_id : null,
     filename: document.filename,
-    title: document.title, content_length: Buffer.byteLength(document.original), sha256: sha(document.original), audience: document.audience,
+    title: document.title, content_length: Buffer.byteLength(document.original), sha256: digestOf(document.original), audience: document.audience,
     association_project_ids: document.association_project_ids, document_id: document.document_id,
     detected_media_type: document.detected_media_type, received_at: document.received_at, state: 'saved',
     extraction_state: document.extraction_state, extraction_detail: null, extractor: EXTRACTOR,
@@ -668,11 +679,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const listedNow = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
     // Created from another client after the desktop loaded an empty sidebar.
     if (mode === 'granola-project-added') return !elsewhere('project-created') ? [] : [
-      { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' },
+      { project_id: THERMOSTAT, name: 'Thermostat redesign', role: 'lead' },
     ];
     if (GRANOLA_PROJECTS.has(mode)) return [
-      { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' },
-      { project_id: 'prj_44444444-4444-4444-8444-444444444444', name: 'Supplier review', role: 'member' },
+      { project_id: THERMOSTAT, name: 'Thermostat redesign', role: 'lead' },
+      { project_id: SUPPLIER, name: 'Supplier review', role: 'member' },
     ];
     const numbered = (count: number, digit: string, name: (index: number) => string) => Array.from({ length: count }, (_, index) => ({
       project_id: `prj_${String(index + 1).padStart(8, '0')}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`,
@@ -775,7 +786,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
   // Ask progress (ADR-0039). The fixture answer's meeting is Tuesday sync, whose decision d1 an answer cites by its atom id.
   const TUESDAY = desktop.record.record_sha256;
-  const atomOf = (signal: string) => sha(JSON.stringify({ kind: 'echo-organization-record-atom', record_hash: TUESDAY, signal_id: signal }));
+  const atomOf = (signal: string) => digestOf(JSON.stringify({ kind: 'echo-organization-record-atom', record_hash: TUESDAY, signal_id: signal }));
   if (mode.startsWith('ask-progress')) {
     // The meeting opens by its ref too, on its own page. The decision Ask cites is its second.
     const brief = desktop.record.brief as unknown as { decisions: Record<string, unknown>[]; actions: { text: string }[]; rationales: { text: string }[] };
@@ -797,8 +808,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     return [
       { citation: { ...record!.citation, atom_id: atomOf('d1') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
       { ...passage!, kind: 'note', ref: `note:${desktop.notes[0]!.context_id}` },
-      { kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: { kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD,
-        ticket_id: '10007', permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: sha('ECHO-7: Jira launch') } },
+      thermTicket('ECHO-7', 'Jira launch', '10007'),
       { citation: { ...record!.citation, atom_id: atomOf('d0') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
     ];
   };
@@ -826,7 +836,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   /** What `ask-progress-listed` answers from Jira's 30 listed rows, none read in full: two of them, cited as rows. */
   const listedAnswer = (question: string, scope: Record<string, unknown>) => ({
     schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered',
-    citations: [ticket('APOLLO-1', 'Fixture work 1', '10101'), ticket('APOLLO-2', 'Fixture work 2', '10102')], parts: [{ question, status: 'answered', statements: [
+    citations: [thermTicket('APOLLO-1', 'Fixture work 1', '10101'), thermTicket('APOLLO-2', 'Fixture work 2', '10102')], parts: [{ question, status: 'answered', statements: [
       { text: '30 Jira tickets are open, APOLLO-1 and APOLLO-2 among them.', citation_indexes: [0, 1], private: true },
     ] }],
   });
@@ -896,16 +906,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // in the owner modes Mina has sent Ari items of hers already.
   const ARI = { membership_id: session.membership_id, name: 'Ari' };
   const PILOT_RUN = 'run_00000000-0000-4000-8000-000000000020';
-  const PILOT_RECORD = sha('record:Pilot planning');
-  const ticket = (key: string, title: string, id: string) => ({ kind: 'ticket', label: `${key} · ${title}`, visibility: 'only_me', citation: {
-    kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: id, permalink: `https://example.atlassian.net/browse/${key}`, text_sha256: sha(`${key}: ${title}`) } });
+  const PILOT_RECORD = digestOf('record:Pilot planning');
   const PRD_PAGE = { kind: 'page', label: 'Thermostat PRD · Pilot scope', visibility: 'only_me', citation: {
     kind: 'page', tool_id: 'confluence', external_scope_id: CONFLUENCE_CLOUD, page_id: '12345', section_id: 'pilot-scope', version: '7',
-    permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345', text_sha256: sha('Thermostat PRD: Pilot scope') } };
+    permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345', text_sha256: digestOf('Thermostat PRD: Pilot scope') } };
   /** A supplier page in a Confluence space Ari cannot open: its title never reaches Ari. */
   const SUPPLIER_BRIEF = { kind: 'page', label: 'Supplier brief · Lead time', visibility: 'only_me', citation: {
     kind: 'page', tool_id: 'confluence', external_scope_id: CONFLUENCE_CLOUD, page_id: '23456', section_id: 'lead-time', version: '3',
-    permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=23456', text_sha256: sha('Supplier brief: Lead time') } };
+    permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=23456', text_sha256: digestOf('Supplier brief: Lead time') } };
   const openItems: OpenItem[] = [];
   /** An item Mina sent, or has not sent yet; an owner she picked she picked as she sent it. */
   const minaSent = (item: Omit<OpenItem, 'approver' | 'state' | 'sent_at' | 'state_set_at' | 'state_set_by' | 'owner_set_at' | 'owner_set_by' | 'send_included' | 'check'>
@@ -920,9 +928,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   if (sentToAri || mode === 'granola-owner-later') {
     openItems.push(minaSent({
       item_id: 'itm_00000000-0000-4000-8000-000000000041', run_id: 'run_00000000-0000-4000-8000-000000000041', kind: 'ticket',
-      decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: sha('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
+      decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: digestOf('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
         first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T18:00:00.000Z', project_ids: [THERMOSTAT] },
-      readable: true, opens: true, live: { citation: ticket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
+      readable: true, opens: true, live: { citation: thermTicket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
         assignee: 'Ari', status: 'In Progress', due_at: '2026-10-30' },
       relation: 'conflicts', expected: 'launch next week', owner: { ...ARI, match: 'jira_account' }, created_at: '2026-10-06T18:05:00.000Z', sent_at: '2026-10-06T19:00:00.000Z',
     }));
@@ -931,10 +939,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (sentToAri) {
       openItems.push(minaSent({
         item_id: 'itm_00000000-0000-4000-8000-000000000044', run_id: 'run_00000000-0000-4000-8000-000000000041', kind: 'ticket',
-        decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: sha('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
+        decision: { approval_id: 'apr_' + 'c'.repeat(64), record_sha256: digestOf('record:Pilot planning, approved by Mina'), title: 'Pilot planning',
           first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T18:00:00.000Z', project_ids: [THERMOSTAT] },
         readable: true, opens: false,
-        live: { citation: ticket('ECHO-31', 'Trace sign-off', '10031'), says_now: 'The trace is signed off after the launch.',
+        live: { citation: thermTicket('ECHO-31', 'Trace sign-off', '10031'), says_now: 'The trace is signed off after the launch.',
           assignee: 'S. Okafor', status: 'Blocked', due_at: '2026-11-12' },
         relation: 'conflicts', expected: 'confirm the trace by Friday', owner: { ...ARI, match: 'picked' }, created_at: '2026-10-06T18:05:00.000Z',
         sent_at: '2026-10-06T19:00:00.000Z',
@@ -944,9 +952,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // granola-owner-later Mina sends it when the test asks.
     openItems.push(minaSent({
       item_id: 'itm_00000000-0000-4000-8000-000000000042', run_id: 'run_00000000-0000-4000-8000-000000000042', kind: 'ticket',
-      decision: { approval_id: 'apr_' + 'd'.repeat(64), record_sha256: sha('record:Vendor review'), title: 'Vendor review',
+      decision: { approval_id: 'apr_' + 'd'.repeat(64), record_sha256: digestOf('record:Vendor review'), title: 'Vendor review',
         first_line: 'Order with six weeks of lead time.', approved_at: '2026-10-05T15:00:00.000Z', project_ids: [SUPPLIER] },
-      readable: false, opens: false, live: { citation: ticket('ECHO-20', 'Vendor order', '10020'), says_now: 'The vendor order goes out in four weeks.',
+      readable: false, opens: false, live: { citation: thermTicket('ECHO-20', 'Vendor order', '10020'), says_now: 'The vendor order goes out in four weeks.',
         assignee: 'Rafael Moreno', status: 'To Do' },
       relation: 'conflicts', expected: 'order six weeks ahead', owner: { ...ARI, match: 'picked' },
       created_at: '2026-10-05T15:05:00.000Z', sent_at: sentToAri ? '2026-10-05T16:00:00.000Z' : null,
@@ -955,18 +963,41 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // granola-checked: Mina approved Kickoff review into Thermostat redesign and sent its three items to herself, Rafael and S.
   // Okafor; none is checked yet. Ari reads the decision, and none of its items involves Ari (canvas 9.7: "3 follow-ups" on its
   // row). granola-paged: the same, except that all three are done since, so the project's oldest follow-ups are closed ones.
+  // altitude (Home altitude v1): Apollo is off track (Mina's ticket open nine days, a follow-up ECHO found no owner for, Rafael's
+  // done), Beacon at risk (Rafael's page open four days, Ari's open since today). Times count back from now, as Home measures.
+  if (mode === 'altitude') {
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const fanCurve = { approval_id: 'apr_' + '6'.repeat(64), record_sha256: digestOf('record:Fan curve'), title: 'Fan curve', first_line: 'Peak at 60%.',
+      approved_at: ago(10), project_ids: [THERMOSTAT] };
+    const vendor = { approval_id: 'apr_' + '7'.repeat(64), record_sha256: digestOf('record:Vendor review'), title: 'Vendor review', first_line: 'Two suppliers.',
+      approved_at: ago(5), project_ids: [SUPPLIER] };
+    const item = (n: number, rest: Pick<OpenItem, 'kind' | 'decision' | 'owner' | 'state' | 'expected'> & { sent: number | null; made: number; set?: number }): OpenItem => ({
+      item_id: `itm_00000000-0000-4000-8000-0000000000${n}`, run_id: `run_00000000-0000-4000-8000-0000000000${n}`, readable: true, opens: true,
+      live: { citation: thermTicket(`ECHO-${n}`, rest.expected ?? 'Follow-up', `100${n}`), says_now: 'As it was.' }, relation: rest.kind === 'action' ? null : 'needs_updating',
+      approver: ARI, created_at: ago(rest.made), sent_at: rest.sent === null ? null : ago(rest.sent), state_set_at: rest.sent === null ? null : ago(rest.set ?? rest.sent),
+      state_set_by: rest.sent === null ? null : ARI, owner_set_at: null, owner_set_by: null, send_included: rest.sent === null ? null : true, check: null,
+      kind: rest.kind, decision: rest.decision, owner: rest.owner, state: rest.state, expected: rest.expected,
+    });
+    openItems.push(
+      item(61, { kind: 'ticket', decision: fanCurve, owner: { ...MINA, match: 'name' }, state: 'open', expected: 'Spec page says 60%', sent: 9, made: 9 }),
+      item(62, { kind: 'action', decision: fanCurve, owner: { ...ARI, match: 'approver' }, state: 'unsent', expected: 'Heat-sink sourcing', sent: null, made: 2 }),
+      item(63, { kind: 'action', decision: fanCurve, owner: { ...RAFAEL, match: 'name' }, state: 'done', expected: 'Soak test plan', sent: 6, made: 6, set: 1 }),
+      { ...item(64, { kind: 'page', decision: vendor, owner: { ...RAFAEL, match: 'name' }, state: 'open', expected: 'Lead time', sent: 4, made: 4 }), live: { citation: SUPPLIER_BRIEF, says_now: 'Four weeks.' } },
+      item(65, { kind: 'action', decision: vendor, owner: { ...ARI, match: 'name' }, state: 'open', expected: 'Order samples', sent: 0, made: 0 }),
+    );
+  }
   if (mode === 'granola-checked' || mode === 'granola-paged') {
-    const kickoff = { approval_id: 'apr_' + 'e'.repeat(64), record_sha256: sha('record:Kickoff review'), title: 'Kickoff review',
+    const kickoff = { approval_id: 'apr_' + 'e'.repeat(64), record_sha256: digestOf('record:Kickoff review'), title: 'Kickoff review',
       first_line: 'Freeze the firmware after the pilot.', approved_at: '2026-09-29T15:00:00.000Z', project_ids: [THERMOSTAT] };
     const sent = { run_id: 'run_00000000-0000-4000-8000-000000000045', kind: 'ticket' as const, decision: kickoff, readable: true, opens: true,
       relation: 'conflicts' as const, expected: 'freeze after the pilot', created_at: '2026-09-29T15:05:00.000Z', sent_at: '2026-09-29T16:00:00.000Z' };
     openItems.push(
       minaSent({ ...sent, item_id: 'itm_00000000-0000-4000-8000-000000000045', owner: { ...MINA, match: 'jira_account' },
-        live: { citation: ticket('ECHO-7', 'Firmware freeze', '10007'), says_now: 'The firmware freezes before the pilot.', assignee: 'Mina Patel', status: 'To Do', due_at: '2026-11-04' } }),
+        live: { citation: thermTicket('ECHO-7', 'Firmware freeze', '10007'), says_now: 'The firmware freezes before the pilot.', assignee: 'Mina Patel', status: 'To Do', due_at: '2026-11-04' } }),
       minaSent({ ...sent, item_id: 'itm_00000000-0000-4000-8000-000000000046', owner: { ...RAFAEL, match: 'name' },
-        live: { citation: ticket('ECHO-8', 'Pilot firmware build', '10008'), says_now: 'The pilot build uses the frozen firmware.', assignee: 'Rafael Moreno', status: 'To Do' } }),
+        live: { citation: thermTicket('ECHO-8', 'Pilot firmware build', '10008'), says_now: 'The pilot build uses the frozen firmware.', assignee: 'Rafael Moreno', status: 'To Do' } }),
       minaSent({ ...sent, item_id: 'itm_00000000-0000-4000-8000-000000000047', owner: { ...OKAFOR, match: 'picked' },
-        live: { citation: ticket('ECHO-9', 'Firmware sign-off', '10009'), says_now: 'Sign-off follows the freeze.', assignee: 'S. Okafor', status: 'Blocked' } }),
+        live: { citation: thermTicket('ECHO-9', 'Firmware sign-off', '10009'), says_now: 'Sign-off follows the freeze.', assignee: 'S. Okafor', status: 'Blocked' } }),
     );
     if (mode === 'granola-paged') {
       for (const item of openItems.filter(entry => entry.run_id === sent.run_id)) Object.assign(item, { state: 'done', state_set_at: '2026-10-01T09:00:00.000Z', state_set_by: MINA });
@@ -1000,7 +1031,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     };
     openItems.push(
       { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000031', kind: 'ticket', relation: 'conflicts', expected: 'launch next week',
-        opens: true, live: { citation: ticket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
+        opens: true, live: { citation: thermTicket('ECHO-12', 'Pilot launch', '10012'), says_now: 'The pilot launch is planned for the end of the month.',
           assignee: 'Mina Patel', status: 'In Progress', due_at: '2026-10-30' }, owner: { ...MINA, match: 'jira_account' } },
       { ...unsent, item_id: 'itm_00000000-0000-4000-8000-000000000032', kind: 'page', relation: 'needs_updating', expected: 'pilot starts next week',
         opens: true, live: { citation: PRD_PAGE, says_now: 'starts after freeze' }, owner: { ...ARI, match: 'approver' } },
@@ -1047,7 +1078,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
     }
     // A private group's id hashes `private` in, as the Authority's does, so it is never the id of the same projects shared.
-    return [...groups.values()].map(group => ({ approval_id: 'apr_' + sha(`route:${JSON.stringify(group.project_ids)}${group.private === true ? ':private' : ''}`).slice(7), ...group }));
+    return [...groups.values()].map(group => ({ approval_id: 'apr_' + digestOf(`route:${JSON.stringify(group.project_ids)}${group.private === true ? ':private' : ''}`).slice(7), ...group }));
   }
   /** Pilot planning, approved by Ari: in the projects it was approved into, where its record opens; for Ari alone when kept private there. */
   const pilotMeeting = (projectIds: string[], kept = false): Meeting => ({
@@ -1067,11 +1098,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // by Ari, and a supplier page Ari cannot open to Rafael. In granola-checked Mina's sweep checked them
   // two hours ago; granola-review is the same, except that ECHO-12, Mina's to update, changed and still
   // does not match (a Review row on Ari's Home); granola-review-assign-lost also loses the first assign's
-  // reply, once it is made. In the sweep modes none has been checked, so Home says a
-  // sweep is due. granola-alike: the
-  // check is done and nothing is sent yet; it also found items whose titles nothing tells apart: two
-  // supplier pages Ari cannot open, with the same expected phrase, and two tickets Jira did not answer
-  // for just now, not assessed (no expected phrase).
+  // reply, once it is made, and granola-review-paste has Paste a meeting in place of Granola. In the sweep
+  // modes none has been checked, so Home says a sweep is due. granola-alike: the check is done and nothing
+  // is sent yet; it also found items whose titles nothing tells apart: two supplier pages Ari cannot open,
+  // with the same expected phrase, and two tickets Jira did not answer for just now, not assessed (no
+  // expected phrase).
   if (mode === 'granola-checked' || mode === 'granola-paged' || mode.startsWith('granola-review') || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
     granolaReview = { action: 'approve', routes: routesTo([THERMOSTAT]), owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, owner: action.owner })) };
@@ -1082,7 +1113,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (mode === 'granola-alike') {
       const page = (id: string, label: string) => ({ kind: 'page', label: `Supplier brief · ${label}`, visibility: 'only_me', citation: {
         kind: 'page', tool_id: 'confluence', external_scope_id: CONFLUENCE_CLOUD, page_id: id, section_id: 'parts', version: '3',
-        permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: sha(`Supplier brief: ${label}`) } });
+        permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}`, text_sha256: digestOf(`Supplier brief: ${label}`) } });
       const theirs = { ...found, opens: false, owner: { ...ARI, match: 'approver' as const } };
       openItems.push(
         { ...theirs, item_id: 'itm_00000000-0000-4000-8000-000000000034', kind: 'page', expected: 'parts ordered for next week',
@@ -1090,9 +1121,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         { ...theirs, item_id: 'itm_00000000-0000-4000-8000-000000000035', kind: 'page', expected: 'parts ordered for next week',
           live: { citation: page('23458', 'Packaging'), says_now: 'Packaging is ordered with six weeks of lead time.' } },
         { ...theirs, item_id: 'itm_00000000-0000-4000-8000-000000000036', kind: 'ticket', relation: null, expected: null, outage: true,
-          live: { citation: ticket('ECHO-41', 'Tooling order', '10041'), says_now: 'The tooling order goes out in October.' } },
+          live: { citation: thermTicket('ECHO-41', 'Tooling order', '10041'), says_now: 'The tooling order goes out in October.' } },
         { ...theirs, item_id: 'itm_00000000-0000-4000-8000-000000000037', kind: 'ticket', relation: null, expected: null, outage: true,
-          live: { citation: ticket('ECHO-42', 'Pilot freight', '10042'), says_now: 'Freight is booked for November.' } },
+          live: { citation: thermTicket('ECHO-42', 'Pilot freight', '10042'), says_now: 'Freight is booked for November.' } },
       );
     } else {
       const sentAt = '2026-10-07T11:00:00.000Z';
@@ -1184,7 +1215,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
   const changeCheck = () => {
     followUpsElsewhere();
-    const digest = (rows: unknown) => sha(JSON.stringify(rows));
+    const digest = (rows: unknown) => digestOf(JSON.stringify(rows));
     const projectsNow = listed().map((project, index) => [project.project_id, project.name, projectStatus.get(project.project_id) ?? 'active',
       mode === 'role-changes' && elsewhere('role-changed') && index === 0 ? 'member' : project.role]);
     const followUps = openItems.filter(item => visible(item) && (involved(item) || item.owner_set_by?.membership_id === ARI.membership_id))
@@ -1244,7 +1275,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           slackLinked ? tool('slack', 'Slack', 'linked', 'T0123ABCD', 'U0123ABCD') : tool('slack', 'Slack', 'unlinked', 'T0123ABCD', null),
           tool('jira', 'Jira', jiraLinked ? 'linked' : mode === 'tools-revoked' ? 'revoked' : 'unlinked', JIRA_CLOUD, jiraLinked ? 'atlassian-account-1' : null),
           tool('confluence', 'Confluence', confluenceLinked ? 'linked' : 'unlinked', CONFLUENCE_CLOUD, confluenceLinked ? 'atlassian-account-1' : null),
-          mode.startsWith('granola') && !sentToAri ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
+          mode.startsWith('granola') && !sentToAri && !handIn ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
             external_scope_id: null, external_subject_id: null, organization_setup: null },
           ...(handIn ? [tool('hand-in', 'Paste a meeting', 'linked', null, 'hand-in')] : []),
         ],
@@ -1263,7 +1294,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const item = (signal_id: string, kind: 'decision' | 'action', text: string) => ({ signal_id, kind, text, subject: null, status: kind === 'decision' ? 'decided' : null,
           due_at: null, quotes: [text], owner: null, owner_editable: false, project_ids: entry.project_ids });
         const names = new Map(listed().map(project => [project.project_id, project.name]));
-        return json({ review: row(entry), snapshot_sha256: sha(`pasted:${entry.meeting_id}`), participants: [],
+        return json({ review: row(entry), snapshot_sha256: digestOf(`pasted:${entry.meeting_id}`), participants: [],
           items: [item('dec-1', 'decision', entry.lines[0]), item('act-1', 'action', entry.lines[1])], reasons: [],
           suggested_projects: entry.project_ids.flatMap(project_id => { const name = names.get(project_id); return name === undefined ? [] : [{ project_id, name }]; }), records: [] });
       }
@@ -1307,9 +1338,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           if (mode === 'granola-window-full' && body?.watch !== 'off') return failure('quota_exceeded', 409);
           granolaWatch = { watch: body?.watch as string, folder_id: body?.folder_id as string | null, project_id: body?.project_id as string | null }; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
-        // granola-routes: once approved, the meeting is past the newest reviews the list holds, so the list no longer names it.
-        case 'reviews': return json({ reviews: (granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added')
-          && !(mode === 'granola-routes' && granolaApproved) ? [review] : [] });
+        // granola-routes: once approved, the meeting is past the newest reviews the list holds, so the list no longer names it. While
+        // the test's `reviews-unavailable` file is there, the read fails, as an Authority that cannot answer just then.
+        case 'reviews':
+          if (elsewhere('reviews-unavailable')) return failure('unavailable', 503);
+          return json({ reviews: (granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added')
+            && !(mode === 'granola-routes' && granolaApproved) ? [review] : [] });
         case 'review_open': {
           // The proposal, by its own id or by one of its records' (whose proposal the Authority answers).
           if (body?.approval_id !== review.approval_id && !records.some(record => record.approval_id === body?.approval_id)) return failure('not_found', 404);
@@ -1337,7 +1371,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             granolaRun = { state: 'pending', error_code: null, retried: false };
             // A check per further destination, each of its own record.
             extraRuns = recordsOf(body).slice(1).map((record, index) => ({ run_id: `run_00000000-0000-4000-8000-0000000000${21 + index}`, record,
-              record_sha256: sha(`record:Pilot planning:${record.approval_id}`), state: 'pending' as const, error_code: null, retried: false }));
+              record_sha256: digestOf(`record:Pilot planning:${record.approval_id}`), state: 'pending' as const, error_code: null, retried: false }));
           }
           // The approved meeting's first record: in the projects it was sent to, where it opens; in granola-routes each other record too.
           if (body?.action === 'approve' && !meetings.some(meeting => meeting.record_sha256 === PILOT_RECORD)) {
@@ -1954,7 +1988,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (!stored) return failure('not_found', 404);
       if (document[2] === '/original') {
         return new Response(stored.original, { status: 200, headers: {
-          'content-type': stored.detected_media_type, 'x-echo-document-sha256': sha(stored.original),
+          'content-type': stored.detected_media_type, 'x-echo-document-sha256': digestOf(stored.original),
         } });
       }
       return json(documentMetadata(stored));
@@ -2104,10 +2138,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'ask-ticket') {
         const included = scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null);
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
-          citations: included ? [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
-            kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10007',
-            permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: sha('ECHO-7: Jira launch'),
-          } }] : [],
+          citations: included ? [thermTicket('ECHO-7', 'Jira launch', '10007')] : [],
           parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
             ? [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }]
             : [], ...(included ? {} : { gap: 'No accessible Jira ticket was found.' }) }],
@@ -2119,7 +2150,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
           citations: included ? [{ kind: 'page', label: 'EVT readiness · ECHO product', visibility: 'only_me', citation: {
             kind: 'page', tool_id: pageTool, external_scope_id: CONFLUENCE_CLOUD, page_id: '12345', section_id: 'evt-readiness', version: '7',
-            permalink: pageTool === 'confluence' ? 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345' : `https://${pageTool}.example.test/pages/12345?view=current`, text_sha256: sha('EVT readiness'),
+            permalink: pageTool === 'confluence' ? 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345' : `https://${pageTool}.example.test/pages/12345?view=current`, text_sha256: digestOf('EVT readiness'),
           } }] : [],
           parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
             ? [{ text: 'The Confluence EVT readiness page is current.', citation_indexes: [0], private: true }]
@@ -2137,7 +2168,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const [record, passage] = desktop.answer.citations as { label: string; citation: Record<string, unknown> }[];
         const label = 'Apollo-launch-plan-v2.md';
         const first = { ...passage!, label, citation: { ...passage!.citation, label } };
-        const second = { ...first, citation: { ...first.citation, anchor_sha256: sha('second passage') } };
+        const second = { ...first, citation: { ...first.citation, anchor_sha256: digestOf('second passage') } };
         return json({ ...answer, scope, citations: [record, first, second],
           parts: [{ question, status: 'answered', statements: [
             { text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0, 1], private: false },
@@ -2169,7 +2200,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const citation = body?.citation as Record<string, unknown>;
       // The second passage of ask-passages is markdown that starts with its file name, as real evidence can.
       const text = mode === 'long-evidence' ? 'x'.repeat(3_000)
-        : citation?.anchor_sha256 === sha('second passage') ? 'Apollo-launch-plan-v2.md ## Pricing\n\n- **Monthly** plans follow the launch.'
+        : citation?.anchor_sha256 === digestOf('second passage') ? 'Apollo-launch-plan-v2.md ## Pricing\n\n- **Monthly** plans follow the launch.'
           : desktop.evidence_text;
       return json({
         schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: body?.scope,

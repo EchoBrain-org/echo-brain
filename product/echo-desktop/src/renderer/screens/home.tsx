@@ -1,14 +1,32 @@
-import { useState } from 'preact/hooks';
 import { identity, initial, when } from '../format.js';
 import { message } from '../messages.js';
-import { actionCount, homeFooter, itemLine, itemNames, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
+import { actionCount, itemLine, itemNames, meetingSuffix, monthDay, shortNames, titleLine, toSend } from '../needs.js';
 import {
-  awaitingLive, homeRows, loadHome, openDecision, openFollowUp, openFollowUps, openNewProject, openOnlyMe, openYourFollowUps, type NeedRow, type State,
+  awaitingLive, categoryOf, homeCategories, homeRows, loadHome, needAt, needsCount, openCategory, openDecision, openFollowUp, openFollowUps, openNewProject,
+  type HomeCategory, type NeedCategory, type NeedRow, type State,
 } from '../store.js';
-import { KindMark, Lock, Plus } from './icons.js';
+import { Altitude, MyProjects } from './altitude.js';
+import { Chevron, KindMark, Plus } from './icons.js';
 
 /** The row's verb: what a click will ask of you. "Check" is never one: it is ECHO's re-read (R63). */
 const KIND: Record<NeedRow['kind'], string> = { approve: 'Approve', send: 'Send', update: 'Update', review: 'Review', failed: 'Retry', checking: 'Checking' };
+/** A kind's verb on Home's top, and the mark it shares with its rows. */
+const CATEGORY: Record<HomeCategory['category'], { verb: string; mark: NeedRow['kind'] }> = {
+  approve: { verb: 'Approve', mark: 'approve' }, retry: { verb: 'Retry', mark: 'failed' }, send: { verb: 'Send', mark: 'send' },
+  update: { verb: 'Update', mark: 'update' }, checking: { verb: 'Checking', mark: 'checking' },
+};
+
+/** Home's reads are on their way: what it shows may still change. */
+const busy = (home: State['home']) => (home ? home.loading || home.reading : true);
+
+/** How long ago, as Home's lines say it beside a kind: now, 5m, 2h, 3d; nothing with no time. */
+export function age(iso: string | null, now = Date.now()): string {
+  const minutes = iso === null ? Number.NaN : Math.floor(Math.max(0, now - Date.parse(iso)) / 60_000);
+  if (Number.isNaN(minutes)) return '';
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  return minutes < 1_440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1_440)}d`;
+}
 
 /** Projects by id, by name when Home knows them. */
 function projectNames(state: State, ids: readonly string[]): { id: string; name: string }[] {
@@ -63,7 +81,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
     const send = row.send;
     const owners = shortNames(send.owners);
     return (
-      <button type="button" class="need-row send" data-testid="need-row" data-kind="send"
+      <button type="button" class="need-row send" data-testid="need-row" data-kind="send" data-category="send" data-alt-nav={`send:${send.run_id}`}
         onClick={() => void openFollowUps('record', send.decision.record_sha256, send.decision.title)}>
         <span class="need-kind"><KindMark kind="send" />{KIND.send}</span>
         <span class="need-text">
@@ -79,7 +97,7 @@ function Row({ state, row }: { state: State; row: Exclude<NeedRow, { item: unkno
   const review = row.review;
   const run = row.kind === 'approve' ? undefined : row.run;
   return (
-    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} disabled={row.kind === 'checking'}
+    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-category={categoryOf(row)} data-alt-nav={`meeting:${review.approval_id}`} disabled={row.kind === 'checking'}
       onClick={() => void openDecision(review.approval_id, run ?? null)}>
       <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">
@@ -106,7 +124,7 @@ function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { 
   // Shown from ECHO's own fields at once: while ECHO reads it in its tool, its title says what it is and its meeting, faintly.
   const reading = state.home?.reading === true && awaitingLive(item);
   return (
-    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} aria-busy={reading || undefined}
+    <button type="button" class={`need-row ${row.kind}`} data-testid="need-row" data-kind={row.kind} data-category={categoryOf(row)} data-alt-nav={`item:${item.item_id}`} aria-busy={reading || undefined}
       onClick={() => void openFollowUp(item.item_id, item)}>
       <span class="need-kind"><KindMark kind={row.kind} />{KIND[row.kind]}</span>
       <span class="need-text">
@@ -120,130 +138,143 @@ function ItemRow({ state, row, label }: { state: State; row: Extract<NeedRow, { 
   );
 }
 
-/** Home's groups, once it is long, in its order. */
-export type HomeGroupName = 'decisions' | 'send' | 'follow-ups' | 'checking';
-const GROUPS: readonly { name: HomeGroupName; label: string; kinds: readonly NeedRow['kind'][] }[] = [
-  { name: 'decisions', label: 'Decisions', kinds: ['approve', 'failed'] },
-  { name: 'send', label: 'To send', kinds: ['send'] },
-  { name: 'follow-ups', label: 'Follow-ups', kinds: ['review', 'update'] },
-  { name: 'checking', label: 'Checking', kinds: ['checking'] },
-];
-/** More rows than this wait on you (Checking aside), and Home groups them. */
-export const FLAT_ROWS = 10;
-/** The rows a group shows before its "Show N more". */
-export const GROUP_ROWS = 5;
-
-export interface HomeGroup {
-  name: HomeGroupName;
-  label: string;
-  /** All its rows, shown or not. */
-  count: number;
-  rows: NeedRow[];
-  /** Its rows past the first five, until it is opened. */
-  hidden: number;
+/**
+ * Each of Home's rows, as Needs you shows it: a follow-up by its title, apart
+ * from any other on Home (R76: Home no longer repeats the meeting beneath
+ * every title, so actions from different meetings use their qualified name),
+ * and `name`, what a kind's line calls its newest: a follow-up's title, else
+ * its meeting.
+ */
+function needRowsOf(state: State, rows: readonly NeedRow[]) {
+  const names = itemNames(rows.flatMap(row => ('item' in row ? [row.item] : [])));
+  return {
+    shown: (row: NeedRow) => ('item' in row
+      ? <ItemRow key={row.item.item_id} state={state} row={row} label={names.get(row.item.item_id)!.name} />
+      : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />),
+    name: (row: NeedRow) => ('item' in row ? names.get(row.item.item_id)!.name : row.kind === 'send' ? row.send.decision.title : row.review.title),
+  };
 }
 
 /**
- * Home's rows as it shows them: one list while at most ten wait on you
- * (null); past that, grouped in Home's order, Decisions (Approve and Retry),
- * To send, Follow-ups and Checking, each counted and showing its first five
- * rows until it is opened (`open`).
+ * Two or more of one kind, as one line (One place to look v1): the verb and
+ * how many, in orange, the newest's name, how many more, faintly, and how
+ * long ago the newest came; a click opens the kind's list. Checks still on
+ * their way are one faint line that opens nothing: there is nothing to do yet.
  */
-export function homeGroups(rows: readonly NeedRow[], open: ReadonlySet<HomeGroupName>): HomeGroup[] | null {
-  if (rows.filter(row => row.kind !== 'checking').length <= FLAT_ROWS) return null;
-  return GROUPS.flatMap(({ name, label, kinds }) => {
-    const all = rows.filter(row => kinds.includes(row.kind));
-    const shown = open.has(name) ? all : all.slice(0, GROUP_ROWS);
-    return all.length === 0 ? [] : [{ name, label, count: all.length, rows: shown, hidden: all.length - shown.length }];
-  });
-}
-
-/**
- * Under the rows, and on an empty Home (F9): one line, its links first. "2
- * waiting on others" while anything waits on others, else "Follow-ups": it
- * opens Follow-ups (everything you sent, own or last handed on), so Home
- * keeps its own way there even with the sidebar hidden. Then Only me, with
- * its lock and no count: everything only you can read, filed in a project or
- * not (ADR-0049). Then when ECHO last checked.
- */
-export function Footer({ state }: { state: State }) {
-  const { link, checked } = homeFooter(state.home?.open ?? null);
+function CategoryLine({ category: { category, rows }, name }: { category: HomeCategory; name: string }) {
+  const { verb, mark } = CATEGORY[category];
+  const words = <>
+    <span class="need-kind"><KindMark kind={mark} />{verb}</span>
+    {category !== 'checking' && <span class="need-category-count">{rows.length}</span>}
+    <span class="need-category-name">{name}</span>
+    <span class="need-category-more">and {rows.length - 1} more</span>
+  </>;
+  if (category === 'checking') return <div class="need-category checking" data-testid="need-category" data-category={category}>{words}</div>;
   return (
-    <div class="needs-foot" data-testid="needs-foot">
-      <button type="button" class="link-button inline needs-foot-link" data-testid="your-follow-ups" onClick={() => void openYourFollowUps()}>{link}</button>
-      <span class="needs-foot-words">{' · '}</span>
-      <button type="button" class="link-button inline needs-foot-link" data-testid="home-only-me" onClick={() => void openOnlyMe()}><Lock />Only me</button>
-      {checked !== null && <span class="needs-foot-words">{` · ${checked}`}</span>}
+    <button type="button" class="need-category" data-testid="need-category" data-category={category} data-alt-nav={`category:${category}`} data-zoom={`category:${category}`}
+      title={`See all ${rows.length} to ${verb.toLowerCase()}`} onClick={() => openCategory(category)}>
+      {words}<span class="need-category-age">{age(needAt(rows[0]!))}</span><Chevron />
+    </button>
+  );
+}
+
+/**
+ * Home: zoomed out, its top (what needs you, then your projects) or one
+ * kind's list; zoomed in, one project or one person (Home altitude v1, One
+ * place to look v1). The stops are in the title row.
+ */
+export function Home({ state }: { state: State }) {
+  const { category } = state.altitude;
+  return (
+    <div class="home" data-testid="home">
+      <Altitude state={state} top={category === null ? <Top state={state} /> : <CategoryList state={state} category={category} />} />
     </div>
   );
 }
 
 /**
- * Home: only what waits on you. Decisions from meetings to approve, checks
- * to retry, meetings you approved with follow-ups to send, follow-ups that
- * wait on you, and checks still on their way; grouped once it is long.
- * Projects live in the sidebar.
+ * Home's top: what needs you, then your projects. With no projects and
+ * nothing waiting it is the first run, with New project alone.
  */
-export function Home({ state }: { state: State }) {
-  // Groups opened past their first five rows stay open while Home is on screen.
-  const [open, setOpen] = useState<ReadonlySet<HomeGroupName>>(new Set());
+function Top({ state }: { state: State }) {
   const home = state.home;
   const rows = homeRows(state);
   const noProjects = !state.projects.loading && !state.projects.failure && state.projects.items.length === 0 &&
     !state.archivedProjects.loading && !state.archivedProjects.failure && state.archivedProjects.items.length === 0;
-  if (home?.failure && rows.length === 0) {
+  if (noProjects && rows.length === 0 && !home?.loading && !home?.failure) {
     return (
-      <div class="column center" data-testid="home-error">
-        <div class="error">{message(home.failure)}</div>
-        <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button>
+      <div class="alt-level-body alt-empty" data-testid="home-empty">
+        <button type="button" class="empty-capture" data-testid="empty-new-project" onClick={openNewProject}>
+          <span class="ring" aria-hidden="true"><Plus /></span>
+          <span>New project</span>
+        </button>
       </div>
     );
   }
-  if (rows.length === 0) {
-    if (noProjects && !home?.loading) {
-      return (
-        <div class="column needs empty" data-testid="home-empty">
-          <div class="home-clear">
-            <button type="button" class="empty-capture" data-testid="empty-new-project" onClick={openNewProject}>
-              <span class="ring" aria-hidden="true"><Plus /></span>
-              <span>New project</span>
-            </button>
-          </div>
-          <Footer state={state} />
-        </div>
-      );
-    }
-    return (
-      <div class="column needs empty" data-testid="needs" aria-busy={home?.loading ?? true}>
-        <div class="home-clear" data-testid="home-clear">{home && !home.loading && <span>Nothing needs you</span>}</div>
-        <Footer state={state} />
-      </div>
-    );
-  }
-  const waiting = rows.filter(row => row.kind !== 'checking').length;
-  const names = itemNames(rows.flatMap(row => ('item' in row ? [row.item] : [])));
-  // Home no longer repeats the meeting beneath every title. Use the qualified
-  // name when titles collide, so actions from different meetings stay distinct.
-  const shown = (row: NeedRow) => ('item' in row
-    ? <ItemRow key={row.item.item_id} state={state} row={row} label={names.get(row.item.item_id)!.name} />
-    : <Row key={row.kind === 'send' ? row.send.run_id : row.review.approval_id} state={state} row={row} />);
-  const groups = homeGroups(rows, open);
   return (
-    <div class="column needs" data-testid="needs" aria-busy={home ? home.loading || home.reading : true}>
-      <h1 class="needs-head">Needs you{waiting > 0 && <> <span class="count">{waiting}</span></>}</h1>
-      {groups === null ? rows.map(shown) : groups.map(group => (
-        <section key={group.name} class="needs-group" data-testid="needs-group" aria-labelledby={`needs-group-${group.name}`}>
-          <h2 class="section-label needs-group-head" id={`needs-group-${group.name}`}>{group.label} · {group.count}</h2>
-          {group.rows.map(shown)}
-          {group.hidden > 0 && (
-            <button type="button" class="link-button needs-more" data-testid="needs-more" onClick={() => setOpen(new Set([...open, group.name]))}>
-              Show {group.hidden} more
-            </button>
-          )}
-        </section>
-      ))}
-      {home?.failure && <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>}
-      <Footer state={state} />
+    <div class="alt-level-body home-top">
+      <NeedsYou state={state} rows={rows} />
+      <MyProjects state={state} />
+    </div>
+  );
+}
+
+/** Why Home's last read failed, and Try again: under what needs you, on Home's top and in a kind's list alike. */
+function Failed({ home }: { home: State['home'] }) {
+  if (!home?.failure) return null;
+  return <div class="error more">{message(home.failure)} <button type="button" class="link-button" onClick={() => void loadHome()}>Try again</button></div>;
+}
+
+/**
+ * What needs you, at the top of Home, by kind (One place to look v1): meetings
+ * to approve, checks to retry, follow-ups to send, follow-ups to update (and
+ * to review), then checks still on their way. A kind with one row shows that
+ * row; with more, one line that opens its list. Its count is the sidebar's
+ * badge. With nothing waiting, one quiet line.
+ */
+function NeedsYou({ state, rows }: { state: State; rows: readonly NeedRow[] }) {
+  const home = state.home;
+  if (home?.failure && rows.length === 0) return <section class="needs-section" data-testid="home-error"><Failed home={home} /></section>;
+  if (rows.length === 0) {
+    return (
+      <section class="needs-section" data-testid="needs" aria-busy={busy(home)}>
+        <div class="home-clear" data-testid="home-clear">{home && !home.loading && 'Nothing needs you'}</div>
+      </section>
+    );
+  }
+  // The sidebar badge's own count: checks on their way are never counted.
+  const waiting = needsCount(state);
+  const { shown, name } = needRowsOf(state, rows);
+  return (
+    <section class="needs-section" data-testid="needs" aria-busy={busy(home)} aria-labelledby="needs-head">
+      <h2 class="home-label" id="needs-head" data-testid="needs-head">Needs you{waiting > 0 && <span class="n">{waiting}</span>}</h2>
+      {homeCategories(rows).map(category => (category.rows.length === 1 ? shown(category.rows[0]!)
+        : <CategoryLine key={category.category} category={category} name={name(category.rows[0]!)} />))}
+      <Failed home={home} />
+    </section>
+  );
+}
+
+/**
+ * One kind's list: Home zoomed into it (One place to look v1). Its verb and
+ * how many, then its rows exactly as Needs you shows them, the newest first,
+ * and, as there, why Home's last read failed, with Try again. The title row's
+ * Home, Escape, the stops and the sidebar's Home go back to the top; so does
+ * the store, by itself, once its last row is dealt with.
+ */
+function CategoryList({ state, category }: { state: State; category: NeedCategory }) {
+  const all = homeRows(state);
+  const rows = homeCategories(all).find(each => each.category === category)?.rows ?? [];
+  const { shown } = needRowsOf(state, all);
+  return (
+    <div class="alt-level-body">
+      <section class="needs-section" data-testid="needs" data-category={category} aria-busy={busy(state.home)} aria-labelledby="need-list-head">
+        <h2 class="need-list-head" id="need-list-head" data-testid="need-list-head">
+          <span class="need-list-verb">{CATEGORY[category].verb}</span><span class="need-category-count">{rows.length}</span>
+        </h2>
+        {rows.map(shown)}
+        <Failed home={state.home} />
+      </section>
     </div>
   );
 }

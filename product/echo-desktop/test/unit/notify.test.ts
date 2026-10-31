@@ -137,7 +137,6 @@ describe('what notifies (N2)', () => {
     let hold = false;
     const arrivals: ((value: unknown) => void)[] = [];
     rpc.mockImplementation(changesRpc({
-      'app.status': () => ok(account ? { signed_in: true, account } : { signed_in: false, account: null }),
       'projects.activity': () => (hold ? new Promise(resolve => { arrivals.push(resolve); }) : ok({ items: [] })),
     }));
     const store = await signedIn();
@@ -377,7 +376,6 @@ describe('what never notifies (N3)', () => {
     authority.active = Array.from({ length: 15 }, (_, index) => project(index + 2, 28 - index));
     let refuseMore = false;
     rpc.mockImplementation(changesRpc({
-      'app.status': () => ok({ signed_in: true, account: ACCOUNT }),
       'projects.list': params => (refuseMore && params.cursor ? fail('unavailable', { retryable: true }) : fixture['projects.list']!(params)),
     }));
     await startStore();
@@ -398,8 +396,9 @@ describe('what never notifies (N3)', () => {
     authority.archived = [project(50, 2, { status: 'archived' })];
     await signedIn();
     const reads = rpc.mock.calls.filter(([method]) => method === 'projects.list').map(([, params]) => `${params.status}${params.cursor ? ' more' : ''}`);
-    // Every page, once: the three active pages, which also fill the sidebar's first, and the archived one.
-    expect(reads.sort()).toEqual(['active', 'active more', 'active more', 'archived']);
+    // Every page, once: the three active pages, which also fill the sidebar's first, and the archived one. Home, which opens at its
+    // top with your projects, reads the three active pages once more itself, as it does for any list longer than the sidebar shows.
+    expect(reads.sort()).toEqual(['active', 'active', 'active more', 'active more', 'active more', 'active more', 'archived']);
     await nextCheck();
     expect(notices()).toEqual([]);
   });

@@ -99,6 +99,7 @@ describe('a passage reads as its document does', () => {
 
 // Answer layout v1 (ADR-0045): the fixture's THERM answer, as the host hands it to the page.
 const GLOBAL = { kind: 'global' } as const;
+const NOW = new Date(2026, 9, 23, 12).getTime();
 const QUESTION = 'Can DVT-R2 run on the reduced test scope?';
 const therm = (layout = true): Answer => answerView({ ok: true, result: layoutAnswer(QUESTION, GLOBAL, layout) }, GLOBAL);
 const THERM_NAMES = ['DVT failure review', 'Traceability', 'Gate reviews', 'TRACE-01 · Confirm TC-D-03 traces to MRD-01', 'HW-11 · Fix BUG-412 on the board',
@@ -125,7 +126,6 @@ describe('a laid-out answer\'s rows are sentences the pane can light', () => {
 });
 
 describe('a table\'s dates read as dates, and only your late row is marked', () => {
-  const NOW = new Date(2026, 9, 23, 12).getTime();
   const COLUMNS = ['Action', 'Owner', 'Due', 'Status'];
 
   it('shows an ISO date as "Oct 14", with its year when it is not this year\'s, and leaves any other text alone', () => {
@@ -235,7 +235,6 @@ describe('a table row shows the lock by its own citations', () => {
 });
 
 describe('a done row is never late, and only an owner column says whose a row is', () => {
-  const NOW = new Date(2026, 9, 23, 12).getTime();
   const late = (status: string, owner = 'Owner') => lateForYou(['Action', owner, 'Due', 'Status'], ['Confirm the trace', 'You', '2026-10-14', status], null, NOW);
 
   it('reads every status of finished work as done, in any case and with either apostrophe', () => {

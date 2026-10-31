@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenItemView } from '../../src/shared/protocol.js';
 import {
-  actionCount, activeTotal, checkWords, followUpCount, followUpProgress, followUpsWords, homeFooter, itemGroups, itemHistory, itemKind, itemLine, itemNames, itemTitle,
-  liveFacts, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
+  actionCount, activeTotal, checkWords, followUpAge, followUpCount, followUpHover, followUpMark, followUpOrder, followUpProgress, followUpsWords, homeFooter, itemHistory, itemKind,
+  itemLine, itemNames, itemTitle, lastChecked, liveFacts, markWords, matchesNow, meetingSuffix, monthDay, ownerAndStatus, ownerKey, ownerLine, ownerRows,
+  ownerShown, ownerUnmatched, ownerWords, progressWords, reopenLabel, saysNow, sendLabel, sentWords, shortNames, STAGES, stateCounts, titleLine, toSend,
 } from '../../src/renderer/needs.js';
+import { EMPTY_SUMMARY as summary } from './harness.js';
 
 const person = { membership_id: 'mem_00000000-0000-4000-8000-000000000001', name: 'Mina Patel', active: true };
 /** An item you opened carries what it says now; any other, why it does not (here, by default, that you can't open it). */
@@ -15,7 +17,6 @@ const item = (patch: Partial<OpenItemView> = {}): OpenItemView => ({
 });
 const ticket = { kind: 'ticket' as const, tool_id: 'jira', label: 'ECHO-12 · Pilot launch', permalink: 'https://example.atlassian.net/browse/ECHO-12' };
 const OKAFOR = { membership_id: 'mem_00000000-0000-4000-8000-000000000003', name: 'S. Okafor', active: true };
-const summary = { unsent: 0, open: 0, done: 0, not_relevant: 0, landed: 0, changed: 0, unreadable: 0, decisions: 0, last_checked_at: null, by_decision: [] };
 const pilot = { approval_id: 'apr_1', record_sha256: 'sha256:1', title: 'Pilot planning', first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T12:00:00.000Z', project_ids: [] };
 /** One of the meeting's own actions: its title is its words, and it is never read live. */
 const action = (patch: Partial<OpenItemView> = {}) => item({ kind: 'action', relation: 'needs_updating', expected: 'Send the revised quote', reach: 'not_read', decision: pilot, ...patch });
@@ -147,17 +148,113 @@ describe('one status vocabulary (F7)', () => {
     expect(followUpsWords(summary, { ...stage, state: 'done', error_code: null })).toBe('None');
   });
 
-  it('groups a list by status, in order, the meeting\'s actions first, then the oldest first', () => {
+  it('orders a list as one list of current work, what needs attention first, each part longest waiting first; then each closed status, oldest first', () => {
+    const now = Date.parse('2026-10-14T12:00:00.000Z');
+    const daysAgo = (count: number) => new Date(now - count * 86_400_000).toISOString();
     const items = [
-      item({ item_id: 'itm_00000001', state: 'done' }), item({ item_id: 'itm_00000002', state: 'unsent', created_at: '2026-10-07T10:06:00.000Z' }),
-      action({ item_id: 'itm_00000003', state: 'unsent', created_at: '2026-10-07T10:07:00.000Z' }), item({ item_id: 'itm_00000004', state: 'unsent' }),
-      item({ item_id: 'itm_00000005', state: 'not_relevant' }), action({ item_id: 'itm_00000006', state: 'open' }),
+      item({ item_id: 'itm_00000001', state: 'done', created_at: daysAgo(9) }), item({ item_id: 'itm_00000002', state: 'done', created_at: daysAgo(12) }),
+      // Open two days: nothing needs doing yet. Open five and nine days: past three, they need attention.
+      item({ item_id: 'itm_00000003', sent_at: daysAgo(2), state_set_at: daysAgo(2) }), item({ item_id: 'itm_00000004', sent_at: daysAgo(5), state_set_at: daysAgo(5) }),
+      item({ item_id: 'itm_00000005', sent_at: daysAgo(9), state_set_at: daysAgo(9) }),
+      // Not sent for half a day: not yet. With no owner, at once.
+      action({ item_id: 'itm_00000006', state: 'unsent', sent_at: null, state_set_at: null, created_at: daysAgo(0.5) }),
+      action({ item_id: 'itm_00000007', state: 'unsent', sent_at: null, state_set_at: null, created_at: daysAgo(0.2), owner: { ...person, match: 'approver' } }),
+      item({ item_id: 'itm_00000008', state: 'not_relevant' }),
     ];
-    expect(itemGroups(items).map(group => [group.state, group.items.map(entry => entry.item_id)])).toEqual([
-      ['unsent', ['itm_00000003', 'itm_00000004', 'itm_00000002']], ['open', ['itm_00000006']], ['done', ['itm_00000001']], ['not_relevant', ['itm_00000005']],
+    const order = followUpOrder(items, now);
+    expect(order.active.map(entry => entry.item_id)).toEqual(['itm_00000005', 'itm_00000004', 'itm_00000007', 'itm_00000003', 'itm_00000006']);
+    expect(order.done.map(entry => entry.item_id)).toEqual(['itm_00000002', 'itm_00000001']);
+    expect(order.not_relevant.map(entry => entry.item_id)).toEqual(['itm_00000008']);
+    expect(followUpOrder([], now)).toEqual({ active: [], done: [], not_relevant: [] });
+  });
+});
+
+describe('a follow-ups row and its owner line (One place to look v1, K)', () => {
+  const now = Date.parse('2026-10-14T12:00:00.000Z');
+  const daysAgo = (count: number) => new Date(now - count * 86_400_000).toISOString();
+  const RAFAEL = { membership_id: 'mem_00000000-0000-4000-8000-000000000002', name: 'Rafael Moreno', active: true };
+  const ME = { membership_id: 'mem_00000000-0000-4000-8000-000000000009', name: 'Ari', active: true };
+  const open = (days: number, patch: Partial<OpenItemView> = {}) => item({ sent_at: daysAgo(days), state_set_at: daysAgo(days), ...patch });
+  const notSent = (days: number, patch: Partial<OpenItemView> = {}) => item({ state: 'unsent', sent_at: null, state_set_at: null, created_at: daysAgo(days), ...patch });
+  const noOwner = { owner: { ...ME, match: 'approver' as const } };
+
+  it('files each row under its owner, or under No owner while it waits for one', () => {
+    expect(ownerKey(open(1))).toBe(person.membership_id);
+    expect(ownerKey(notSent(1, noOwner))).toBe('none');
+    // Once sent, its approver kept it: theirs.
+    expect(ownerKey(open(1, noOwner))).toBe(ME.membership_id);
+  });
+
+  it('counts each owner by what they hold open now, those needing attention first, then by name, No owner last', () => {
+    const items = [
+      open(1, { item_id: 'itm_00000001', owner: { ...ME, match: 'name' } }), open(1, { item_id: 'itm_00000002', owner: { ...ME, match: 'name' } }),
+      // Rafael's open page waited four days: it needs attention. His not sent one shows on its row, never in his count.
+      open(4, { item_id: 'itm_00000003', owner: { ...RAFAEL, match: 'name' } }), notSent(0.5, { item_id: 'itm_00000004', owner: { ...RAFAEL, match: 'name' } }),
+      // Mina's only one is done: she is on the line, holding nothing open.
+      open(9, { item_id: 'itm_00000005', state: 'done' }),
+      notSent(2, { item_id: 'itm_00000006', ...noOwner }), notSent(0.1, { item_id: 'itm_00000007', ...noOwner }),
+    ];
+    expect(ownerLine(items, now)).toEqual([
+      { key: RAFAEL.membership_id, name: 'Rafael Moreno', count: 1, needs: true },
+      { key: ME.membership_id, name: 'Ari', count: 2, needs: false },
+      { key: person.membership_id, name: 'Mina Patel', count: 0, needs: false },
+      { key: 'none', name: 'No owner', count: 2, needs: true },
     ]);
-    // Empty groups are left out.
-    expect(itemGroups([item()]).map(group => group.state)).toEqual(['open']);
+    expect(ownerLine([], now)).toEqual([]);
+  });
+
+  it('shows one owner\'s rows, open and closed, and everyone\'s again once none of the rows read is theirs', () => {
+    const items = [open(1, { item_id: 'itm_00000001' }), open(1, { item_id: 'itm_00000002', state: 'done' }), notSent(1, { item_id: 'itm_00000003', ...noOwner })];
+    expect(ownerRows(items, person.membership_id).map(entry => entry.item_id)).toEqual(['itm_00000001', 'itm_00000002']);
+    expect(ownerRows(items, 'none').map(entry => entry.item_id)).toEqual(['itm_00000003']);
+    expect([ownerShown(items, 'none'), ownerShown(items, undefined)]).toEqual(['none', null]);
+    // Rafael has no row any more: the filter falls back to everyone.
+    expect(ownerShown(items, RAFAEL.membership_id)).toBeNull();
+    expect(ownerRows(items, RAFAEL.membership_id)).toHaveLength(3);
+    expect(ownerRows(items, undefined)).toHaveLength(3);
+  });
+
+  it('marks a row by its status, in orange by Home\'s rule when it needs attention, solid once it waited over a week', () => {
+    expect([followUpMark(open(2), now), followUpMark(open(4), now), followUpMark(open(7.5), now)]).toEqual([
+      { state: 'open', tone: 'quiet' }, { state: 'open', tone: 'signal' }, { state: 'open', tone: 'late' },
+    ]);
+    // Over a week by the clock, not by whole days: seven days and an hour is late, seven days less an hour is not.
+    expect(followUpMark(open(7 + 1 / 24), now).tone).toBe('late');
+    expect(followUpMark(open(7 - 1 / 24), now).tone).toBe('signal');
+    expect([followUpMark(notSent(0.5), now), followUpMark(notSent(0.5, noOwner), now), followUpMark(notSent(1.5), now)]).toEqual([
+      { state: 'unsent', tone: 'quiet' }, { state: 'unsent', tone: 'signal' }, { state: 'unsent', tone: 'signal' },
+    ]);
+    // Closed: never orange, however old.
+    expect([followUpMark(open(30, { state: 'done' }), now), followUpMark(open(30, { state: 'not_relevant' }), now)]).toEqual([
+      { state: 'done', tone: 'quiet' }, { state: 'not_relevant', tone: 'quiet' },
+    ]);
+    expect([markWords(open(4), now), markWords(open(9), now), markWords(open(0.5), now)]).toEqual([
+      'Open · waiting 4 days · needs attention', 'Open · waiting 9 days · over a week', 'Open · waiting under a day',
+    ]);
+    expect([markWords(notSent(0.5), now), markWords(notSent(0.5, noOwner), now), markWords(open(3, { state: 'done' }), now)]).toEqual([
+      'Not sent yet', 'Not sent yet · no owner · needs attention', 'Done',
+    ]);
+  });
+
+  it('ages a row by the days it waited, or, closed, since it was made', () => {
+    expect(followUpAge(open(9.5), now)).toEqual({ days: 9, words: 'Waiting 9 days' });
+    expect(followUpAge(notSent(1.2), now)).toEqual({ days: 1, words: 'Not sent for 1 day' });
+    expect(followUpAge(open(0.2, { created_at: daysAgo(12), state: 'done' }), now)).toEqual({ days: 12, words: 'Made 12 days ago' });
+    expect(followUpAge(open(0.2, { created_at: daysAgo(0.2), state: 'not_relevant' }), now)).toEqual({ days: 0, words: 'Made today' });
+  });
+
+  it('says on hover what its marks leave out: what it is, its meeting, where it stands with whom, and a match', () => {
+    const landed = { verdict: 'landed' as const, checked_at: daysAgo(0.1), checked_by: 'Mina Patel' };
+    expect(followUpHover(open(4, { decision: pilot, check: landed }), ME.membership_id, now)).toBe('Jira ticket · from Pilot planning · Sent to Mina 4 days ago · matches now');
+    expect(followUpHover(open(0.5, { owner: { ...ME, match: 'name' } }), ME.membership_id, now)).toBe('Jira ticket · Sent to you today');
+    // Handed on since it was sent: whose it is now, not who it was sent to.
+    expect(followUpHover(open(4, { owner: { ...RAFAEL, match: 'reassigned' }, owner_set_at: daysAgo(1), owner_set_by: person }), ME.membership_id, now))
+      .toBe('Jira ticket · With Rafael');
+    expect(followUpHover(action({ state: 'unsent', sent_at: null, state_set_at: null }), ME.membership_id, now)).toBe('Meeting action · from Pilot planning · For Mina, not sent yet');
+    expect(followUpHover(action({ state: 'unsent', sent_at: null, state_set_at: null, ...noOwner }), ME.membership_id, now))
+      .toBe('Meeting action · from Pilot planning · No owner yet');
+    expect(followUpHover(open(2, { state: 'done', state_set_by: ME }), ME.membership_id, now)).toBe('Jira ticket · Done by you');
+    expect(followUpHover(open(2, { state: 'not_relevant' }), ME.membership_id, now)).toBe('Jira ticket · Dismissed');
   });
 });
 
@@ -195,6 +292,13 @@ describe('ECHO\'s re-reads, kept underneath', () => {
     expect(homeFooter({ waiting: 0, last_checked_at: ago(120) }, now)).toEqual({ link: 'Follow-ups', checked: 'ECHO checked 2 h ago' });
     expect(homeFooter({ waiting: 0, last_checked_at: null }, now)).toEqual({ link: 'Follow-ups', checked: null });
     expect(homeFooter(null, now)).toEqual({ link: 'Follow-ups', checked: null });
+  });
+
+  it('says on your Follow-ups when ECHO last checked by the latest time any read said, whichever was read last', () => {
+    expect(lastChecked([ago(5), ago(120)], now)).toBe('ECHO checked 5 min ago');
+    expect(lastChecked([ago(120), ago(5)], now)).toBe('ECHO checked 5 min ago');
+    expect(lastChecked([null, ago(120)], now)).toBe('ECHO checked 2 h ago');
+    expect(lastChecked([undefined, null], now)).toBeNull();
   });
 });
 

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,32 +22,41 @@ const log = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8'
 
 type Rpc = (method: string, params?: unknown) => Promise<{ ok: boolean; failure?: { code: string } }>;
 
-test('Home\'s footer opens Only me: what only you can read, filed or not, newest first, with no lock on any row; More reads the rest', async () => {
+test('the sidebar\'s Only me opens what only you can read, filed or not, newest first, with no lock on any row; More reads the rest', async () => {
   run = await launch('only-me');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  // Mine is gone: Home, Ask, Capture and Follow-ups, then your projects; Tools stays at the bottom.
-  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText(['Home', 'Ask', /Capture/, 'Follow-ups', 'Tools']);
-  // A quiet link after Follow-ups, with its lock and no count.
-  await expect(page.getByTestId('needs-foot')).toContainText('Follow-ups · Only me');
-  await expect(page.getByTestId('home-only-me')).toHaveText('Only me');
-  await page.getByTestId('home-only-me').click();
+  // Home, Ask, Capture, Follow-ups, then Only me under it with its lock and no count; then your projects; Tools stays at the bottom.
+  await expect(page.getByTestId('sidebar').locator('.side-row')).toHaveText(['Home', 'Ask', /Capture/, 'Follow-ups', 'Only me', 'Tools']);
+  await expect(page.getByTestId('needs-foot')).toHaveCount(0);
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('title')).toHaveText('Only me');
-  await expect(page.getByTestId('back')).toHaveText('Home');
-  await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+  // A place of its own: its row is lit, Home's is not, and there is no link back.
+  await expect(page.getByTestId('back')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar-only-me')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('sidebar-home')).not.toHaveAttribute('aria-current', 'page');
   const rows = page.getByTestId('only-me-row');
   await expect(rows).toHaveCount(10);
-  await expect(rows.nth(0)).toContainText('Pricing decision from Tuesday sync');
+  // One flat row each: a grey shape for its kind (named on hover), the title, and a short age; no boxed icon.
+  await expect(rows.nth(0).getByTestId('only-me-title')).toHaveText('Pricing decision from Tuesday sync');
+  await expect(rows.nth(0).getByTestId('only-me-kind')).toHaveAttribute('title', 'Note');
   await expect(rows.nth(1)).toHaveAttribute('data-kind', 'meeting');
-  await expect(rows.nth(1)).toContainText('Pricing review');
-  // Filed in Apollo under the lock: its row names the project. No other row is filed.
-  await expect(rows.nth(2)).toContainText('Supplier call notes');
-  await expect(rows.nth(2).getByTestId('item-projects')).toHaveText('Apollo');
-  await expect(page.getByTestId('item-projects')).toHaveCount(1);
+  await expect(rows.nth(1).getByTestId('only-me-title')).toHaveText('Pricing review');
+  await expect(rows.nth(1).getByTestId('only-me-kind')).toHaveAttribute('title', 'Meeting');
+  await expect(page.getByTestId('only-me').locator('.item-icon')).toHaveCount(0);
+  // Filed in Apollo under the lock: its row shows Apollo's tile, in the sidebar's hue, named on hover. No other row is filed.
+  await expect(rows.nth(2).getByTestId('only-me-title')).toHaveText('Supplier call notes');
+  await expect(rows.nth(2).getByTestId('only-me-tiles')).toHaveAttribute('title', 'Apollo');
+  await expect(rows.nth(2).locator('.alt-tile')).toHaveText(['A']);
+  await expect(rows.nth(2)).toHaveAttribute('aria-label', /^Note: Supplier call notes\. Filed in Apollo\. Added /);
+  const hue = (of: Locator) => of.evaluate(element => getComputedStyle(element).color);
+  expect(await hue(rows.nth(2).locator('.alt-tile'))).toBe(await hue(page.getByTestId('sidebar-project').nth(0).locator('.dot')));
+  await expect(page.getByTestId('only-me').locator('.alt-tile')).toHaveCount(1);
   // Every row is only yours: none carries a lock, nor any other word on who can read it.
   await expect(page.getByTestId('only-me').locator('.mark')).toHaveCount(0);
   await expect(page.getByTestId('only-me').getByLabel(/Only me|Organization/)).toHaveCount(0);
-  for (const at of [0, 1, 2, 3]) await expect(rows.nth(at).locator('.meta')).toHaveText(/^(now|\d+[mh]|Yesterday|[A-Z][a-z]{2}|[A-Z][a-z]{2} \d{1,2})$/);
+  // The time today, days under a week, then the day.
+  for (const at of [0, 1, 2, 3]) await expect(rows.nth(at).getByTestId('only-me-age')).toHaveText(/^(\d{2}:\d{2}|[1-6]d|[A-Z][a-z]{2} \d{1,2})$/);
   // What others can read is not here, even what Ari added; nor what is Maya's alone.
   for (const title of ['Launch checklist', 'Pricing memo', 'Beacon kickoff', 'Maya\'s draft']) await expect(rows.filter({ hasText: title })).toHaveCount(0);
   // Its bar is Home's: all context, no chip, and ⊕ captures.
@@ -61,15 +70,16 @@ test('Home\'s footer opens Only me: what only you can read, filed or not, newest
   await expect(page.getByTestId('only-me-more')).toHaveCount(0);
   expect(lists().map(call => call.body)).toEqual([{ schema_version: 1, only_me: true }, { schema_version: 1, only_me: true, cursor: expect.any(String) }]);
 
-  await page.getByTestId('back').click();
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
-  await expect(page.getByTestId('home-only-me')).toBeVisible();
+  // Escape goes Home.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
+  await expect(page.getByTestId('sidebar-only-me')).not.toHaveAttribute('aria-current', 'page');
 });
 
 test('a project renamed from Only me takes its new name in every row, and the rows More loaded stay', async () => {
   run = await launch('only-me');
   const { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   const rows = page.getByTestId('only-me-row');
   await expect(rows).toHaveCount(10);
   await page.getByTestId('only-me-more').click();
@@ -80,15 +90,54 @@ test('a project renamed from Only me takes its new name in every row, and the ro
   await page.getByTestId('project-rename-save').click();
   await expect(page.getByTestId('toast')).toHaveText('Renamed to Apollo 2');
   await expect(page.getByTestId('title')).toHaveText('Only me');
-  await expect(rows.nth(2).getByTestId('item-projects')).toHaveText('Apollo 2');
-  await expect(page.getByTestId('item-projects').filter({ hasText: /Apollo(?! 2)/ })).toHaveCount(0);
+  // The tile keeps Apollo's hue under its new name: it is still the one project of yours called that.
+  await expect(rows.nth(2).getByTestId('only-me-tiles')).toHaveAttribute('title', 'Apollo 2');
+  await expect(rows.nth(2).locator('.only-me-unplaced')).toHaveCount(0);
+  await expect(page.locator('[data-testid="only-me-tiles"][title="Apollo"]')).toHaveCount(0);
   await expect(rows).toHaveCount(11);
+});
+
+test('a file filed in two projects shows a tile for each, in the sidebar\'s hues, named on hover; an archived project\'s tile turns quiet', async () => {
+  run = await launch('only-me-filed');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('sidebar-only-me').click();
+  const contract = page.getByTestId('only-me-row').filter({ hasText: 'Supplier contract' });
+  // A file: its shape, with its type and size on hover, and no extension or size line in the row.
+  await expect(contract).toHaveAttribute('data-kind', 'document');
+  await expect(contract.getByTestId('only-me-kind')).toHaveAttribute('title', /^File · PDF · \d+ bytes$/);
+  await expect(contract.getByTestId('only-me-title')).toHaveText('Supplier contract');
+  await expect(contract.getByTestId('document-detail')).toHaveCount(0);
+  const tiles = contract.locator('.alt-tile');
+  await expect(tiles).toHaveText(['A', 'B']);
+  await expect(contract.getByTestId('only-me-tiles')).toHaveAttribute('title', 'Apollo, Beacon');
+  await expect(contract).toHaveAttribute('aria-label', /^File: Supplier contract\. Filed in Apollo, Beacon\. Added /);
+  const hue = (of: Locator) => of.evaluate(element => getComputedStyle(element).color);
+  const sidebar = page.getByTestId('sidebar-project');
+  expect(await hue(tiles.nth(0))).toBe(await hue(sidebar.nth(0).locator('.dot')));
+  expect(await hue(tiles.nth(1))).toBe(await hue(sidebar.nth(1).locator('.dot')));
+
+  // Archived, Apollo is no project Home can see: its tile turns quiet and is still named on hover; Beacon's keeps its hue.
+  await page.getByRole('button', { name: 'Actions for Apollo' }).click();
+  await page.getByTestId('project-archive').click();
+  await page.getByTestId('project-settings-confirm').click();
+  await expect(page.getByTestId('toast')).toHaveText('Archived Apollo');
+  await expect(page.getByTestId('title')).toHaveText('Only me');
+  await expect(tiles.nth(0)).toHaveClass(/only-me-unplaced/);
+  await expect(tiles.nth(1)).not.toHaveClass(/only-me-unplaced/);
+  expect(await hue(tiles.nth(1))).toBe(await hue(sidebar.nth(0).locator('.dot')));
+  await expect(contract.getByTestId('only-me-tiles')).toHaveAttribute('title', 'Apollo, Beacon');
+
+  // The row still opens the file.
+  await contract.click();
+  await expect(page.getByTestId('reader').locator('h1')).toHaveText('Supplier contract');
+  await expect(page.getByTestId('back')).toHaveText('Only me');
 });
 
 test('an item opened from Only me is read by its ref, Back returns to Only me, and it can be filed in another project but not removed', async () => {
   run = await launch('only-me');
   const { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   const rows = page.getByTestId('only-me-row');
   await expect(rows).toHaveCount(10);
   await rows.nth(0).click();
@@ -122,7 +171,7 @@ test('an item opened from Only me is read by its ref, Back returns to Only me, a
 test('signing out on Only me leaves it and clears what it read, and signing in again lands on Home', async () => {
   run = await launch('only-me');
   const { page, app, home } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await page.getByTestId('only-me-row').nth(0).click();
   await expect(page.getByTestId('reader-text')).not.toBeEmpty();
   // Signed out elsewhere, as the terminal's `person logout` does.
@@ -135,10 +184,10 @@ test('signing out on Only me leaves it and clears what it read, and signing in a
   await page.getByTestId('signin-url').fill('https://authority.example');
   await page.getByTestId('signin-button').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
   await expect(page.getByTestId('reader')).toHaveCount(0);
   await expect(page.getByTestId('only-me-row')).toHaveCount(0);
-  await expect(page.getByTestId('home-only-me')).toBeVisible();
+  await expect(page.getByTestId('sidebar-only-me')).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
 });
 
@@ -146,7 +195,7 @@ test('while meetings wait to be indexed, a save on Only me keeps the meetings sh
   run = await launch('only-me-meetings-held');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   const rows = page.getByTestId('only-me-row');
   await expect(rows.filter({ hasText: 'Pricing review' })).toHaveCount(1);
   // Saved from Only me, in no project: only you can read it, so Only me is read again.
@@ -173,7 +222,7 @@ test('while meetings wait to be indexed, a save on Only me keeps the meetings sh
 test('a meeting opened from Only me is its approved record: More reads the rest, and a long action\'s parts join into one', async () => {
   run = await launch('only-me');
   const { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await page.getByTestId('only-me-row').filter({ hasText: 'Pricing review' }).click();
   const record = page.getByTestId('record');
   // Headed like any item read from Only me: its title, and who can read it in the row's words, with when it was added.
@@ -243,7 +292,7 @@ test('Capture from Only me starts in no project; "Saved for you" opens Only me o
   await page.getByTestId('compose-send').click();
   await expect(toast).toHaveText('Saved to Apollo · only you');
   await expect(toast).toHaveJSProperty('tagName', 'DIV');
-  await expect(rows.filter({ hasText: 'Apollo pricing, privately' }).getByTestId('item-projects')).toHaveText('Apollo');
+  await expect(rows.filter({ hasText: 'Apollo pricing, privately' }).getByTestId('only-me-tiles')).toHaveAttribute('title', 'Apollo');
   expect(notes()[2]!.body).toMatchObject({ audience: { kind: 'only_me' }, association_project_ids: [APOLLO] });
 
   // For everyone: not only yours, so Only me is not read again, and its toast opens nothing either.
@@ -290,14 +339,14 @@ test('a note locked in a project lists there with the lock for its owner, never 
   await expect(page.getByTestId('back')).toHaveText('Apollo');
   // Only me holds it too, naming Apollo.
   await page.getByTestId('sidebar-home').click();
-  await page.getByTestId('home-only-me').click();
-  await expect(page.getByTestId('only-me-row').filter({ hasText: 'Private pricing notes' }).getByTestId('item-projects')).toHaveText('Apollo');
+  await page.getByTestId('sidebar-only-me').click();
+  await expect(page.getByTestId('only-me-row').filter({ hasText: 'Private pricing notes' }).getByTestId('only-me-tiles')).toHaveAttribute('title', 'Apollo');
 });
 
 test('with nothing only you can read Only me is blank, and a file dropped on it starts Capture in no project', async () => {
   run = await launch('only-me-empty');
   const { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('only-me')).toBeVisible();
   await expect(page.getByTestId('only-me')).toHaveAttribute('aria-busy', 'false');
   await expect(page.getByTestId('only-me-row')).toHaveCount(0);
@@ -316,7 +365,7 @@ test('with nothing only you can read Only me is blank, and a file dropped on it 
 test('Only me that could not be read says why and reads again; a project you were taken out of is no longer available, and you stay signed in', async () => {
   run = await launch('only-me-fails-once');
   let { page } = run;
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('only-me-error')).toContainText('ECHO is unavailable right now. Try again.');
   await page.getByTestId('only-me-retry').click();
   await expect(page.getByTestId('only-me-row')).toHaveCount(10);
@@ -343,7 +392,7 @@ test('Only me refused for the same account says your access changed, and reads s
   run = await launch('only-me-unauthorized');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('only-me-error')).toContainText('Your access changed. Sign in again.');
   const after = () => log().split('list.page unauthorized')[1] ?? '';
   await expect.poll(() => after().match(/app\.status/g)?.length ?? 0).toBe(1);
@@ -392,8 +441,8 @@ test('a project\'s page lists its approved meetings too, and an owner\'s Only me
   const rows = page.getByTestId('feed-row');
   await expect(rows.filter({ hasText: 'Beacon kickoff' })).toHaveAttribute('data-kind', 'meeting');
   await expect(rows.filter({ hasText: 'Launch checklist' })).toHaveCount(1);
-  // A project's rows do not repeat its name.
-  await expect(page.getByTestId('item-projects')).toHaveCount(0);
+  // A project's rows name no project, though Launch checklist is filed in Apollo too.
+  await expect(rows.filter({ hasText: 'Launch checklist' })).not.toContainText(/Apollo|Beacon/);
   expect(lists().map(call => call.body)).toEqual([{ schema_version: 1, project_id: 'prj_44444444-4444-4444-8444-444444444444' }]);
   await rows.filter({ hasText: 'Beacon kickoff' }).click();
   // A project members' meeting, like its row, has no readers word.
@@ -404,20 +453,21 @@ test('a project\'s page lists its approved meetings too, and an owner\'s Only me
   await expect(page.getByTestId('back')).toHaveText('Beacon');
 
   await page.getByTestId('sidebar-home').click();
-  await page.getByTestId('home-only-me').click();
+  await page.getByTestId('sidebar-only-me').click();
   await expect(page.getByTestId('title')).toHaveText('Only me');
   await expect(page.getByTestId('reader')).toHaveCount(0);
   await expect(page.getByTestId('only-me-row').filter({ hasText: 'Pricing review' })).toHaveCount(1);
   await expect(page.getByTestId('only-me-row').filter({ hasText: 'Beacon kickoff' })).toHaveCount(0);
 
-  // "Yesterday", the longest date a row shows, fits its place: nothing is cut, and the list never scrolls sideways.
-  const fit = await page.getByTestId('only-me-row').first().locator('.meta').evaluate((meta) => {
-    const other = meta.closest('.column')!.querySelectorAll('.item-row .meta')[1]!;
-    meta.textContent = 'Yesterday';
-    const column = meta.closest('.column')!;
+  // "Sep 30", the longest age a row shows, fits its place: nothing is cut, every age ends at the same edge, and the list
+  // never scrolls sideways.
+  const fit = await page.getByTestId('only-me-row').first().getByTestId('only-me-age').evaluate((age) => {
+    const column = age.closest('.column')!;
+    const other = column.querySelectorAll('[data-testid="only-me-age"]')[1]!;
+    age.textContent = 'Sep 30';
     return {
-      cut: meta.scrollWidth > meta.clientWidth, sideways: column.scrollWidth > column.clientWidth,
-      edges: meta.getBoundingClientRect().right - other.getBoundingClientRect().right,
+      cut: age.scrollWidth > age.clientWidth, sideways: column.scrollWidth > column.clientWidth,
+      edges: age.getBoundingClientRect().right - other.getBoundingClientRect().right,
     };
   });
   expect(fit).toEqual({ cut: false, sideways: false, edges: 0 });

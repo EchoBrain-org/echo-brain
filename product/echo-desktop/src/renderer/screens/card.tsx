@@ -4,7 +4,7 @@ import { identity, initials } from '../format.js';
 import { Chevron } from './icons.js';
 
 /** One decision, action or reason as the card shows it: the review's own structured fields. */
-export interface CardSignal {
+interface CardSignal {
   text: string;
   subject: string | null;
   /** A decision's: proposed, decided or unresolved. */
@@ -12,7 +12,7 @@ export interface CardSignal {
 }
 
 /** One line of a quote: "[09:01] Jonas Becker: …" when the meeting tool wrote it so, else the words alone. */
-export interface SaidLine {
+interface SaidLine {
   time: string | null;
   speaker: string | null;
   text: string;
@@ -89,7 +89,7 @@ const STATUS: Readonly<Record<string, string>> = { proposed: 'Proposed', unresol
 
 /**
  * One decision or action: its words and a tag for a status other than decided; `under` them what is chosen for it (where
- * it goes), so its controls never narrow its words; beside them only what is short (a due date, where it went).
+ * it goes, or went), so its controls never narrow its words; beside them only what is short (a due date).
  */
 export function SignalRow({ signal, number, under, children }: { signal: CardSignal; number?: number; under?: ComponentChildren; children?: ComponentChildren }) {
   const status = signal.status && signal.status !== 'decided' ? STATUS[signal.status] ?? signal.status : null;

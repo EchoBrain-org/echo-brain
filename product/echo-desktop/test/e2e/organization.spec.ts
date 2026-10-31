@@ -90,7 +90,7 @@ test('owners also reach People & invites from the tray, under Organization', asy
 
   // Chosen with another app in front, as a tray click is: it is there once ECHO is.
   await page.getByTestId('back').click();
-  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
   await emit(run.app, 'echo-test:conceal');
   await run.app.evaluate(() => {
     const menu = (globalThis as { echoTestTrayMenu?: Electron.Menu }).echoTestTrayMenu!;

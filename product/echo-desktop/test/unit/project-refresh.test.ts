@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from '../../src/shared/protocol.js';
-import { cover, flush, Held, keysetPage, moved, names, numbered, ok, ordered, project, rpcFor, show, startStore, storeLifecycle, uncover } from './harness.js';
+import { ACCOUNT, cover, fail, flush, Held, keysetPage, moved, names, numbered, ok, ordered, project, rpcFor, show, startStore, storeLifecycle, uncover } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -25,7 +25,7 @@ beforeEach(() => {
   held = new Held();
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
-    'app.status': () => ok({ signed_in: true, account: { authority: 'https://fixture.invalid', membership_id: membership, display_name: 'Fixture', role: 'employee' } }),
+    'app.status': () => ok({ signed_in: true, account: { ...ACCOUNT, membership_id: membership } }),
     'account.tools': () => ok({ tools: [{ tool_id: 'jira', status: 'linked' }, { tool_id: 'confluence', status: 'linked' }] }),
     'projects.jiraRead': () => ok({ revision: 'jira-1', mapping: { project_key: jira } }),
     'projects.confluenceRead': () => ok({ revision: 'confluence-1', mapping: { space_ids: [...spaces] } }),
@@ -110,7 +110,7 @@ describe('project tool-read replies', () => {
     store.openProjectTools(apollo);
     await flush();
     store.setProjectJira('NEW');
-    held.hold('projects.jiraSet')({ ok: false, failure: { code: 'timeout', retryable: true, mutation_outcome: 'unknown' } });
+    held.hold('projects.jiraSet')(fail('timeout', { retryable: true, mutation_outcome: 'unknown' }));
     jira = 'NEW';
     await store.saveProjectTools();
     expect(store.getState().projectSettings?.jira?.status).toBe('failed');
@@ -298,7 +298,7 @@ describe('project lists on foreground refresh', () => {
   it('keeps what is shown when the refresh cannot reach ECHO, and shows the list once it can', async () => {
     active = numbered(3);
     const store = await startStore();
-    held.hold('projects.list')({ ok: false, failure: { code: 'transport_failed', retryable: true } });
+    held.hold('projects.list')(fail('transport_failed', { retryable: true }));
     moved.projects += 1;
     await show(store);
     expect(names(store.getState().projects.items)).toEqual(names(numbered(3)));

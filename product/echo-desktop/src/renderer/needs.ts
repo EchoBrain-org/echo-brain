@@ -2,6 +2,7 @@ import type {
   PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1, PersonOpenItemVerdictV1,
 } from '@echo-brain/organization-api';
 import type { ConnectedTool, HomeView, OpenItemView } from '../shared/protocol.js';
+import { needsAttention, overdue, waitedDays, waitingSince } from './altitude.js';
 import { externalSourceProvider } from './answer.js';
 import { clip } from './format.js';
 
@@ -232,21 +233,114 @@ export function ownerAndStatus(item: OpenItemView, me: string | null | undefined
 
 /** A follow-ups list's current work, read and shown first: not sent yet, or open. */
 export const ACTIVE_STATES = ['unsent', 'open'] as const;
-/** Closed follow-ups: each status a group of its own, its rows read once it opens. */
+/** Closed follow-ups: each status folded at the end of its list, its rows read once it opens. */
 export const CLOSED_STATES = ['done', 'not_relevant'] as const;
-/** The order of a follow-ups list's groups. */
-const GROUPS: readonly PersonOpenItemStateV1[] = [...ACTIVE_STATES, ...CLOSED_STATES];
 
 /**
- * A follow-ups list's groups, in order (Not sent, Open, Done, Dismissed), the
- * empty ones left out; in each, the meeting's actions first, then documents,
- * then oldest first.
+ * A follow-ups list's rows in order (One place to look v1, F2): its current
+ * work (not sent and open) as one list, those that need attention first, and
+ * in each part the longest waiting first; then each closed status, oldest
+ * first.
  */
-export function itemGroups(items: readonly OpenItemView[]): { state: PersonOpenItemStateV1; items: OpenItemView[] }[] {
-  const rank = (item: OpenItemView) => (item.kind === 'action' ? 0 : 1);
-  return GROUPS.map(state => ({
-    state, items: items.filter(item => item.state === state).sort((left, right) => rank(left) - rank(right) || left.created_at.localeCompare(right.created_at)),
-  })).filter(group => group.items.length > 0);
+export function followUpOrder(items: readonly OpenItemView[], now: number): Record<'active' | (typeof CLOSED_STATES)[number], OpenItemView[]> {
+  const since = (item: OpenItemView) => Date.parse(waitingSince(item) ?? item.created_at);
+  const needs = (item: OpenItemView) => Number(needsAttention(item, now));
+  const closed = (state: (typeof CLOSED_STATES)[number]) => items.filter(item => item.state === state).sort((left, right) => left.created_at.localeCompare(right.created_at));
+  return {
+    active: items.filter(item => item.state === 'unsent' || item.state === 'open')
+      .sort((left, right) => needs(right) - needs(left) || since(left) - since(right) || left.created_at.localeCompare(right.created_at)),
+    done: closed('done'), not_relevant: closed('not_relevant'),
+  };
+}
+
+/** Whose a follow-ups row is, on its list's owner line: its owner's membership id, or "none" while it waits for one (Pick owner). */
+export function ownerKey(item: OpenItemView): string {
+  return ownerUnmatched(item) ? 'none' : item.owner.membership_id;
+}
+
+/** One face on a follow-ups list's owner line: whose (`key`, as ownerKey says), how many they hold open now, and whether one of theirs needs attention. */
+export interface OwnerFace { readonly key: string; readonly name: string; readonly count: number; readonly needs: boolean }
+
+/**
+ * A follow-ups list's owner line (K, F3), from the rows read: everyone who
+ * owns one, counted by what they hold open now (one not sent yet shows on its
+ * row, dimmed, never in a count); those with one needing attention first,
+ * then by name; then No owner, counted by the rows that wait for one.
+ */
+export function ownerLine(items: readonly OpenItemView[], now: number): OwnerFace[] {
+  const faces = new Map<string, { key: string; name: string; count: number; needs: boolean }>();
+  for (const item of items) {
+    const key = ownerKey(item);
+    const face = faces.get(key) ?? { key, name: key === 'none' ? 'No owner' : item.owner.name, count: 0, needs: false };
+    if (key === 'none' || item.state === 'open') face.count += 1;
+    face.needs ||= needsAttention(item, now);
+    faces.set(key, face);
+  }
+  const last = (face: OwnerFace) => Number(face.key === 'none');
+  return [...faces.values()].sort((a, b) => last(a) - last(b) || Number(b.needs) - Number(a.needs) || a.name.localeCompare(b.name));
+}
+
+/** The owner a list's filter shows: its own while one of the rows read is still theirs; else none, and the list shows everyone's again. */
+export function ownerShown(items: readonly OpenItemView[], owner: string | undefined): string | null {
+  return owner !== undefined && items.some(item => ownerKey(item) === owner) ? owner : null;
+}
+
+/** The rows a list shows under its owner filter: every one of that owner's, open or closed; everyone's with none. */
+export function ownerRows<Row extends OpenItemView>(items: readonly Row[], owner: string | undefined): readonly Row[] {
+  const shown = ownerShown(items, owner);
+  return shown === null ? items : items.filter(item => ownerKey(item) === shown);
+}
+
+/**
+ * A follow-ups row's state mark (K, F5): its status, which the mark draws by
+ * shape (a dashed ring not sent, a ring open, a tick done, a struck ring
+ * dismissed), and its tone: orange by Home's rule when it needs attention
+ * (`signal`), solid once it waited over a week (`late`). Closed, never orange.
+ */
+export function followUpMark(item: OpenItemView, now: number): { state: PersonOpenItemStateV1; tone: 'quiet' | 'signal' | 'late' } {
+  const tone = !needsAttention(item, now) ? 'quiet' : overdue(item, now) ? 'late' : 'signal';
+  return { state: item.state, tone };
+}
+
+const DAY_MS = 86_400_000;
+/** "under a day", "1 day", "4 days". */
+const days = (count: number) => (count === 0 ? 'under a day' : count === 1 ? '1 day' : `${count} days`);
+/** "today", "1 day ago", "4 days ago". */
+const daysAgo = (count: number) => (count === 0 ? 'today' : `${days(count)} ago`);
+/** Whole days since a time, never fewer than none. */
+const daysSince = (iso: string, now: number) => Math.floor(Math.max(0, now - Date.parse(iso)) / DAY_MS);
+
+/** What a follow-ups row's state mark says on hover and to a screen reader: "Open · waiting 4 days · needs attention". */
+export function markWords(item: OpenItemView, now: number): string {
+  const { tone } = followUpMark(item, now);
+  const status = item.state === 'unsent' ? (ownerUnmatched(item) ? 'Not sent yet · no owner' : 'Not sent yet')
+    : item.state === 'open' ? `Open · waiting ${days(waitedDays(item, now) ?? 0)}` : STAGES[item.state];
+  return joined([status, tone === 'late' ? 'over a week' : tone === 'signal' ? 'needs attention' : null]);
+}
+
+/** A follow-ups row's age (F5): whole days it has waited, or, closed, since it was made; and the same in words, for its hover. */
+export function followUpAge(item: OpenItemView, now: number): { days: number; words: string } {
+  const waited = waitedDays(item, now);
+  if (waited === null) {
+    const made = daysSince(item.created_at, now);
+    return { days: made, words: `Made ${daysAgo(made)}` };
+  }
+  return { days: waited, words: item.state === 'unsent' ? `Not sent for ${days(waited)}` : `Waiting ${days(waited)}` };
+}
+
+/**
+ * A follow-ups row's hover (K): the long words its marks leave out. What it
+ * is, the meeting it came from, where it stands and with whom ("Sent to Mina
+ * 4 days ago"; "With Rafael" once it was handed on since), and a match ECHO's
+ * last check found. The viewer is "you".
+ */
+export function followUpHover(item: OpenItemView, me: string | null, now: number, tools?: readonly ConnectedTool[] | null): string {
+  const who = (person: { membership_id: string; name: string }) => (person.membership_id === me ? 'you' : firstName(person.name));
+  const handedOn = item.owner_set_at !== null && item.sent_at !== null && Date.parse(item.owner_set_at) > Date.parse(item.sent_at);
+  const where = item.state === 'unsent' ? (ownerUnmatched(item) ? 'No owner yet' : `For ${who(item.owner)}, not sent yet`)
+    : item.state === 'open' ? (item.sent_at === null || handedOn ? `With ${who(item.owner)}` : `Sent to ${who(item.owner)} ${daysAgo(daysSince(item.sent_at, now))}`)
+    : item.state === 'done' ? `Done${item.state_set_by === null ? '' : ` by ${who(item.state_set_by)}`}` : STAGES.not_relevant;
+  return joined([itemKind(item, tools), item.decision ? `from ${item.decision.title}` : null, where, matchesNow(item)]);
 }
 
 /** Follow-ups not closed, as a total counts them (F7): not sent yet, or open. A check's verdict never takes one out. */
@@ -316,7 +410,7 @@ export function followUpsWords(summary: PersonOpenItemsSummaryV1, stage: PersonI
  * When ECHO last checked, as the canvas words it: "just now", "5 min ago",
  * "2 h ago", then for six hours or more the day: "today", "yesterday", "Oct 6".
  */
-function checkedAgo(iso: string, now = Date.now()): string {
+function checkedAgo(iso: string, now: number): string {
   const time = Date.parse(iso);
   if (Number.isNaN(time)) return '';
   const minutes = Math.max(0, Math.floor((now - time) / 60_000));
@@ -338,8 +432,18 @@ function checkedAgo(iso: string, now = Date.now()): string {
 export function homeFooter(open: Pick<HomeView, 'waiting' | 'last_checked_at'> | null, now = Date.now()): { link: string; checked: string | null } {
   return {
     link: open !== null && open.waiting > 0 ? `${open.waiting} waiting on others` : 'Follow-ups',
-    checked: open === null || open.last_checked_at === null ? null : `ECHO checked ${checkedAgo(open.last_checked_at, now)}`,
+    checked: lastChecked([open?.last_checked_at], now),
   };
+}
+
+/**
+ * When ECHO last checked one of yours, as "ECHO checked 2 h ago": the latest
+ * of the times reads said (your Follow-ups list's own, and Home's, whichever
+ * was read since); null when none knows of one.
+ */
+export function lastChecked(times: readonly (string | null | undefined)[], now = Date.now()): string | null {
+  const at = times.filter((time): time is string => typeof time === 'string').sort().at(-1);
+  return at === undefined ? null : `ECHO checked ${checkedAgo(at, now)}`;
 }
 
 /** One event of a follow-up's history. */

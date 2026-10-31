@@ -227,13 +227,14 @@ function ToolSection({ state, tool, onSave }: { state: State; tool: MappingTool;
   const settings = state.projectSettings!;
   const sheet = settings.tools!;
   const setting = settings[tool]!;
-  const name = projectToolEntry(settings, tool)?.name ?? NAMES[tool];
+  const entry = projectToolEntry(settings, tool);
+  const name = entry?.name ?? NAMES[tool];
   const lead = settings.project.role === 'lead';
   const usable = projectToolUsable(settings, tool);
   const connecting = sheet.connect?.tool.tool_id === tool;
   const failure = projectToolFailureWords(settings, tool, name);
-  const off = projectToolEntry(settings, tool)?.status === 'unavailable';
-  const mapped = Boolean(settings[tool]?.value?.mapping);
+  const off = entry?.status === 'unavailable';
+  const mapped = Boolean(setting.value?.mapping);
   const change = projectToolChange(settings, tool);
   return (
     <section class="tool-section" aria-label={name} data-testid={`project-${tool}`}>

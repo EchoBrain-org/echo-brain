@@ -17,7 +17,7 @@ import {
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
 import {
-  ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles,
+  ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, wake,
   type Node,
 } from './harness.js';
 
@@ -31,6 +31,7 @@ const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
 const sha = (text: string) => `sha256:${[...text].map(character => character.charCodeAt(0).toString(16)).join('').padEnd(64, '0').slice(0, 64)}` as const;
 const apollo = project(1, 30, { name: 'Apollo' });
+const inApollo = { kind: 'project' as const, project_id: apollo.project_id };
 /** The window's own key for the sidebar, which no account's sign-out touches. */
 const SIDEBAR = 'echo.sidebarOpen';
 
@@ -148,7 +149,6 @@ describe('the timeline\'s rules', () => {
   });
 
   it('shows each place its own thread, and each question once: a turn asked again, or asked again word for word there, folds away', () => {
-    const inApollo = { kind: 'project' as const, project_id: apollo.project_id };
     const first = turn('When do we ship?', 4 * DAY, status());
     const apolloTurn = turn('Who owns it?', 3 * DAY, status(), { scope: inApollo });
     const again = turn('When do we ship?', 2 * DAY, status(), { again_of: first.id });
@@ -961,7 +961,7 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
     vi.setSystemTime(NOW.getTime() + HOUR);
     latest = new Date(NOW.getTime() + HOUR - 60_000).toISOString();
     feed = [note('Launch checklist v2', latest), note('Pricing memo', at(2 * DAY))];
-    (await import('../../src/renderer/freshness.js')).woke();
+    await wake();
     await flush();
     expect([...store.getState().news]).toEqual([apollo.project_id]);
     const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
@@ -1087,7 +1087,6 @@ describe('the sidebar\'s dots, and a project\'s New rows (C2)', () => {
 });
 
 describe('one thread per place (ADR-0049)', () => {
-  const inApollo = { kind: 'project' as const, project_id: apollo.project_id };
   /** The opening checks: each asks about more than a new answer's own ticket. */
   const opening = () => calls('ask.check').filter(call => (call.items as unknown[]).length > 1).map(call => (call.items as { asked_at: string }[]).map(item => item.asked_at));
 
@@ -1280,7 +1279,6 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
   });
 
   it('opens the line when × widens Ask to Home\'s thread and puts the turn opened behind it, so a follow-up never continues one out of sight', async () => {
-    const inApollo = { kind: 'project' as const, project_id: apollo.project_id };
     const old = turn('What was Apollo\'s plan?', 20 * DAY, status(), { scope: inApollo });
     seed(old, ...Array.from({ length: 5 }, (_, at) => turn(`Home ${at}?`, (5 - at) * DAY, status())), turn('What is left in Apollo?', HOUR, status(), { scope: inApollo }));
     const store = await startStore();
@@ -1317,7 +1315,6 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
   });
 
   it('goes back to a project\'s Ask for a question asked there', async () => {
-    const inApollo = { kind: 'project' as const, project_id: apollo.project_id };
     seed(turn('What is left in Apollo?', DAY, status(), { scope: inApollo }));
     const store = await startStore();
     expect(store.returnToAsk()).toBe(true);
@@ -1348,7 +1345,6 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
   });
 
   it('narrows a widened bar back on the project\'s own page, without reading the page again', async () => {
-    const inApollo = { kind: 'project' as const, project_id: apollo.project_id };
     seed(turn('What did we agree?', 2 * DAY, status()), turn('What is left in Apollo?', DAY, status(), { scope: inApollo }));
     const store = await startStore();
     await store.openProject(apollo);

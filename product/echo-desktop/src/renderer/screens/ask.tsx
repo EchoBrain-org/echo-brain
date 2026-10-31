@@ -899,7 +899,7 @@ function Names({ state, places }: { state: State; places: readonly NamedPlace[] 
  * A decision, action or rationale, and the excerpts that support it. One an
  * answer cites is lit (`on`), and says so to a screen reader, not by colour alone.
  */
-function Item({ item, on = false }: { item: RecordItem; on?: boolean }) {
+function Item({ item, on }: { item: RecordItem; on: boolean }) {
   return (
     <div class={`record-item${on ? ' on' : ''}`} data-cited={on ? 'true' : undefined}>
       {on && <span class="sr-only">Cited: </span>}

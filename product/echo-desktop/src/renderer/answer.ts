@@ -1,4 +1,5 @@
 import type { Answer, AnswerBlock, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ConnectedTool, ExternalAnswerSource } from '../shared/protocol.js';
+import { startOfDay } from './format.js';
 import { sourceKey } from './openers.js';
 
 /** What the pane may show: at most 32 sources. */
@@ -108,7 +109,7 @@ export interface Inline {
 }
 
 /** A passage's text in the blocks its markdown means. Anything else stays as written, line by line. */
-export type Block =
+type Block =
   | { readonly kind: 'heading'; readonly text: readonly Inline[] }
   | { readonly kind: 'list'; readonly ordered: boolean; readonly items: readonly (readonly Inline[])[] }
   | { readonly kind: 'paragraph'; readonly text: readonly Inline[] };
@@ -223,8 +224,7 @@ export function lateForYou(columns: readonly string[], cells: readonly string[],
   const status = columns.findIndex(column => STATUS.test(column));
   if (due < 0 || !columns.some((column, at) => yoursIn(column, cells[at]!, me))) return false;
   const when = day(cells[due]!);
-  const today = new Date(now);
-  if (!when || when.getTime() >= new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) return false;
+  if (!when || when.getTime() >= startOfDay(now)) return false;
   return status < 0 || !OVER.has(plain(cells[status]!));
 }
 
@@ -267,7 +267,7 @@ export function partShows(part: AnswerPart, shows: Shows): boolean {
  * changed since" for an empty list, and nothing for one whose every item
  * cites what a check left out, as on the page.
  */
-export interface CopiedSince {
+interface CopiedSince {
   readonly statements: readonly AnswerStatement[];
   readonly when: string;
 }

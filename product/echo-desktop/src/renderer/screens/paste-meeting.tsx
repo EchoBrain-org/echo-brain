@@ -27,7 +27,11 @@ function update(patch: Partial<Draft>): void {
   draft = { ...draft, ...patch };
   shown?.();
 }
-onAccountGone(() => { draft = EMPTY; closings += 1; });
+function forget(): void {
+  draft = EMPTY;
+  closings += 1;
+}
+onAccountGone(forget);
 
 /** No time, a whole day, or a start in this computer's time zone; null for a start that is not a real time. */
 function when(date: string, time: string): Pick<PastedMeeting, 'date' | 'started_at'> | null {
@@ -72,7 +76,7 @@ export function PasteMeeting({ tool }: { tool: ConnectedTool }) {
       shown = null;
       // Covered, the sheet comes back as it was; closed, its draft goes.
       const sheet = getState().sheet;
-      if (sheet?.kind !== 'tool-manage' || sheet.tool.tool_id !== tool.tool_id) { draft = EMPTY; closings += 1; }
+      if (sheet?.kind !== 'tool-manage' || sheet.tool.tool_id !== tool.tool_id) forget();
     };
   }, []);
   const busy = draft.status === 'adding';
