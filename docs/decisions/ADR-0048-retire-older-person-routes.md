@@ -10,7 +10,7 @@ component_ids:
 created_at: 2026-10-25
 reviewed_at: 2026-10-27
 reviewed_ref: aa79d90c81dbcf8f0147ecb66bfbbe4edbf2c2ff
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -27,8 +27,9 @@ compatible with, and that clients update themselves
 ([ADR-0035](ADR-0035-desktop-updates-from-the-signed-feed.md)). Code that
 exists only so an older server or an older client keeps working should go.
 This record covers the Person routes outside Ask. The older Ask routes and the
-Ask client's fallbacks are retired separately. This record is proposed until
-the founder confirms the release.
+Ask client's fallbacks are retired separately. The founder accepted this
+record on 2026-10-31, as built in `494c62a`, which merged with #365
+(`aa79d90`). Acceptance does not mean the change is deployed or qualified.
 
 ## Context and options
 

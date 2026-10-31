@@ -10,7 +10,7 @@ component_ids:
 created_at: 2026-10-08
 reviewed_at: 2026-10-08
 reviewed_ref: 814470f928db81112ffec1bc8d5d7f28795b9d0f
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -18,6 +18,10 @@ updates:
 ---
 
 # ADR-0033: Open items are one shared row per affected item, seen by the decision's audience
+
+The founder accepted this record on 2026-10-31, as built in #300 (`a7f8df7`)
+and #303 (`264757c`). Acceptance does not mean the change is deployed or
+qualified.
 
 ## Context and options
 
