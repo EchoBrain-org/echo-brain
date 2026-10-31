@@ -1032,7 +1032,8 @@ export async function runPersonClientCli(
     if (action === "list" && scopeFlags.length !== 1) {
       throw new Error(scopeFlags.length === 0 ? "`echo-brain person list` needs --project or --only-me" : "--project and --only-me cannot be combined with `echo-brain person list`");
     }
-    // Only the streamed Ask checks a pinned account: on any other, a pin would be silently ignored.
+    // Ask's usage keeps the pin under --progress, so a plain Ask with one is a usage error; every other account-scoped
+    // command takes a pin on its own (accountPin).
     if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
       throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
     }
