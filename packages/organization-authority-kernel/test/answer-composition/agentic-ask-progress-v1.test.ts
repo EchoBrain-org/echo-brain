@@ -33,7 +33,7 @@ const CANARY = { query: "zebraquery", note: "NOTE-CANARY planner hunch", need: "
 const record = canonicalSha256("launch record");
 const launch: EvidenceDeskItemV2 = Object.freeze<EvidenceDeskItemV2>({
   id: "desk_launch", kind: "decision", text: `Launch is Tuesday. ${CANARY.body}`, label: "Launch review", visibility: "team",
-  citation: { kind: "approved_record", atom_id: canonicalSha256("launch atom"), record_sha256: record, policy_id: "organization-member-readable-person-v2" },
+  citation: { kind: "approved_record", atom_id: canonicalSha256("launch atom"), record_sha256: record, policy_id: "project-members-readable-person-v1" },
   receipt_sha256: canonicalSha256("launch receipt"), ref: `meeting:${record}`,
 });
 const documentId = `doc_${"a".repeat(64)}` as const;
@@ -338,7 +338,7 @@ describe("agentic Ask progress recorder", () => {
   ];
   const many = (count: number, label = (index: number) => `Decision ${index}`) => Array.from({ length: count }, (_, index): EvidenceDeskItemV2 => ({
     ...launch, id: `desk_${index}`, label: label(index),
-    citation: { kind: "approved_record", atom_id: canonicalSha256(`atom ${index}`), record_sha256: record, policy_id: "organization-member-readable-person-v2" },
+    citation: { kind: "approved_record", atom_id: canonicalSha256(`atom ${index}`), record_sha256: record, policy_id: "project-members-readable-person-v1" },
   }));
 
   it("names each item once, at most 100 in a run, in read events of at most 25, and keeps counting what it read", () => {

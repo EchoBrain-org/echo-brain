@@ -30,8 +30,9 @@ failure_pattern_ids:
 
 ## Rule and rationale
 
-A provider-observed human approve or reject action that can create a canonical
-ECHO human act MUST resolve through one complete, explicit identity chain:
+A provider-observed human approval that can create a canonical ECHO human act
+MUST resolve through one complete, explicit identity chain (a rejection
+creates no record):
 
 ```text
 Authority origin + authority_id + organization_id + state_lineage_id
@@ -41,10 +42,10 @@ Authority origin + authority_id + organization_id + state_lineage_id
   -> active external identity link
   -> exact ECHO principal + membership tenure
   -> explicit action capability and frozen policy consequence
-  -> observed human approve or reject intent
+  -> observed human approve intent
   -> domain-separated provider-action commitment + integration audit ID/hash
   -> exact Authority record-resolution reproof
-  -> canonical approve/reject record + append receipt
+  -> canonical approval record + append receipt
   -> approval-only append-atomic policy facts
 ```
 
@@ -119,14 +120,14 @@ source-custodian revocation.
 
 ## Record and read boundary
 
-At approval or rejection time, the Authority rechecks every mutable edge and
-binds the accepted provider actor to the exact current ECHO principal and
-membership tenure. The canonical record then freezes the human actor, policy,
+At approval time, the Authority rechecks every mutable edge and binds the
+accepted provider actor to the exact current ECHO principal and membership
+tenure. The canonical record then freezes the human actor, policy,
 provider/adapter authorization proof, presentation and semantic digests, and
 record identity. Append-atomic policy facts carry only the identity and policy
 material required for deterministic authorization; they do not contain a
-resolved reader list. Only an approved record appends eligibility/readable
-facts; a rejected record appends none.
+resolved reader list. Every record is an approval and appends its
+eligibility/readable facts; a rejection writes no record.
 
 The new lineage uses separate domain-separated provider-action and integration
 audit chain-entry versions. The action commitment binds the Authority,
@@ -157,10 +158,12 @@ MUST NOT become a new read grant. Layer 3 never infers a reader from a live
 Slack link, adapter binding, source owner, meeting participant, or model output.
 For the restricted-reviewer policy family, the current principal and exact
 membership tenure must equal the frozen reviewer tuple. For the
-organization-member-readable family, the caller must have a current active
-owner or employee membership in the same organization; the frozen approving
-actor is provenance, not the reader list. Contract versions may change the
-authentication mechanism, but they cannot silently change either reader set.
+project-members-readable family, the caller must have a current active
+membership in the same organization and a current grant to one of the
+projects frozen in the approval's audience, later members included; the
+frozen approving actor is provenance, not the reader list. Contract versions
+may change the authentication mechanism, but they cannot silently change
+either reader set.
 
 Person-bound provider read grants for live evidence are a separate edge
 governed by [shared connector contracts](../architecture/connector-contracts.md).
@@ -242,7 +245,7 @@ must add one end-to-end identity-chain suite covering:
   output attempting to stand in for the approving actor;
 - cross-Authority, cross-organization, mixed-lineage, and replayed provider
   evidence;
-- exact reviewer-tenure allow/deny and later-member organization-readable
+- exact reviewer-tenure allow/deny and later-member project-readable
   behavior; and
 - final-fence and audit failure releasing zero content bytes.
 

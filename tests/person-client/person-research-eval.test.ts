@@ -19,17 +19,11 @@ describe('staging research evaluation client calls', () => {
     expect(fetch.mock.calls[0]![1]!.headers).toMatchObject({ authorization: 'Bearer bearer' });
   });
 
-  it('sends a legacy Ask question as the envelope', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ schema_version: 1, kind: 'echo-person-research-eval-run-v1', run_id: runId, status: 'running' }));
-    const client = new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch });
-    await client.startResearchEval('bearer', { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Why is DVT on hold?' } as never);
-    expect(JSON.parse(String(fetch.mock.calls[0]![1]!.body))).toEqual({ schema_version: 1, trigger: 'ask', budget: 'live', input: { question: 'Why is DVT on hold?' } });
-  });
-
-  it('refuses an invalid start request before sending it', async () => {
+  it('refuses an invalid start request before sending it, Ask\'s retired question form included', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const client = new PersonAuthorityClient({ authority_origin: 'https://authority.example.test', fetch });
     await expect(client.startResearchEval('bearer', { schema_version: 1, trigger: 'approved_record', budget: 'live', record: { kind: 'ticket' } } as never)).rejects.toThrow();
+    await expect(client.startResearchEval('bearer', { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Why is DVT on hold?' } as never)).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
   });
 });

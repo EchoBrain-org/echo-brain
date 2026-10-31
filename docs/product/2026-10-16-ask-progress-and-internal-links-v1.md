@@ -2,7 +2,7 @@
 
 Date: 2026-10-16. Status: shipped in #330 (d2d03c6: progress and links) and
 #331 (6d9e597: follow-ups as an Ask source).
-[Ask progress: the quiet line v1](2026-10-19-ask-progress-quiet-line-v1.md)
+[Ask progress: the quiet line v1](../archive/2026-10-19-ask-progress-quiet-line-v1.md)
 (#338) later replaced what the person sees while Ask works and when the answer
 arrives.
 

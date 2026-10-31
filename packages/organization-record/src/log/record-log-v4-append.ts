@@ -6,22 +6,14 @@ import {
 import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import {
-  createPersonPolicyFactProjectorV2,
-} from "../application/person-policy-facts-v2.js";
-import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonPolicyFactProjectionV2,
 } from "../application/person-policy-fact-contracts-v2.js";
-import {
-  createRecordPolicyFactProjectorRegistryV1,
-  type RecordPolicyFactEnvelopeV1,
-  type RecordPolicyFactProjectorRegistryV1,
+import type {
+  RecordPolicyFactEnvelopeV1,
+  RecordPolicyFactProjectorRegistryV1,
 } from "../application/record-policy-fact-projection-v1.js";
-
-type Action = "approve" | "reject";
-type EventKind = "approved" | "rejected";
 
 function requiredText(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -61,15 +53,12 @@ export interface V4ReceiptFactory {
     readonly envelope: V4RecordEnvelopeView & JsonObject;
     readonly position: number;
     readonly issued_at: string;
-    readonly policy_fact_outcome:
-      | { readonly kind: "none" }
-      | {
-          readonly kind: "appended";
-          readonly policy_id:
-            | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
-            | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
-            | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
-        };
+    readonly policy_fact_outcome: {
+      readonly kind: "appended";
+      readonly policy_id:
+        | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
+        | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
+    };
   }): JsonObject;
   /** Signs a Receipt V2 wrapper for the exact committed seed. */
   sign(input: {
@@ -83,9 +72,10 @@ export interface V4ReceiptFactory {
   }): JsonObject;
 }
 
+/** Only an approval writes a record. */
 export interface AppendV4RecordInput {
   readonly approval_id: string;
-  readonly action: Action;
+  readonly action: "approve";
   readonly semantic_idempotency_key: Sha256Digest;
   readonly receipt_issued_at: string;
   /** Exact authorization evidence is interpreted only by the selected policy projector. */
@@ -106,9 +96,9 @@ export interface AppendedV4Record {
 interface StoredRecord {
   readonly position: number;
   readonly envelope_id: string;
-  readonly event_kind: EventKind;
+  readonly event_kind: "approved";
   readonly approval_id: string;
-  readonly action: Action;
+  readonly action: "approve";
   readonly semantic_idempotency_key: Sha256Digest;
   readonly canonical_envelope: string;
   readonly envelope_sha256: Sha256Digest;
@@ -132,10 +122,6 @@ function asObject(value: unknown, label: string): JsonObject {
   return value as JsonObject;
 }
 
-function eventForAction(action: Action): EventKind {
-  return action === "approve" ? "approved" : "rejected";
-}
-
 /**
  * V4 organization-record appender. Protocol validation/signing stays at
  * the Authority boundary; this module owns only log serialization, durable
@@ -151,10 +137,7 @@ export class OrganizationRecordAppenderV4 {
       readonly organization_id: string;
       readonly state_lineage_id: string;
     },
-    private readonly policyProjectors: RecordPolicyFactProjectorRegistryV1 =
-      createRecordPolicyFactProjectorRegistryV1([
-        createPersonPolicyFactProjectorV2(),
-      ]),
+    private readonly policyProjectors: RecordPolicyFactProjectorRegistryV1,
   ) {
     const metadata = database
       .prepare(
@@ -317,7 +300,7 @@ export class OrganizationRecordAppenderV4 {
       body.semantic_idempotency_key !== input.semantic_idempotency_key ||
       body.human_act_resolution_ref.approval_id !== input.approval_id ||
       body.human_act_resolution_ref.action !== input.action ||
-      body.event.kind !== eventForAction(input.action) ||
+      body.event.kind !== "approved" ||
       body.predecessor_position !== predecessor_position ||
       body.predecessor_record_sha256 !== predecessor_record_sha256 ||
       position < 1
@@ -404,19 +387,7 @@ export class OrganizationRecordAppenderV4 {
             fact.reviewer_principal_id,
             fact.reviewer_membership_id,
           );
-      } else if (fact.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID) {
-        this.database
-          .prepare(
-            `INSERT INTO organization_record_member_readable_person_fact (
-             authority_id, organization_id, state_lineage_id, approval_id, action,
-             policy_id, policy_contract_sha256, record_position, record_sha256,
-             atom_order, signal_id_sha256, atom_id, item_kind, audit_event_id,
-             audit_sequence, audit_entry_sha256, provider_action_sha256,
-             authorization_proof_sha256
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(...common);
-      } else {
+      } else if (fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) {
         this.database
           .prepare(
             `INSERT INTO organization_record_project_members_readable_person_fact (
@@ -428,6 +399,8 @@ export class OrganizationRecordAppenderV4 {
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(...common);
+      } else {
+        throw new Error("organization record Person fact policy is unsupported");
       }
     }
   }
@@ -444,7 +417,6 @@ export class OrganizationRecordAppenderV4 {
     envelope: V4RecordEnvelopeView,
     recordPosition: number,
   ): void {
-    if (envelope.body.event.kind !== "approved") return;
     const binding = this.policyProjectors.policyBinding(envelope);
     const reference = envelope.body.human_act_resolution_ref as RecordPolicyFactEnvelopeV1["body"]["human_act_resolution_ref"] & {
       readonly audience_project_ids?: unknown;
@@ -490,10 +462,9 @@ export class OrganizationRecordAppenderV4 {
         );
         this.insertAssociation(recordPosition, envelope.record_sha256, project_id);
       }
-    } else if (
-      audienceProjectIds.length !== 0 ||
-      (associationProjectIds.length !== 0 && binding.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID)
-    ) {
+    } else if (binding.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID) {
+      throw new Error("organization record policy is unsupported");
+    } else if (audienceProjectIds.length !== 0) {
       throw new Error("non-project record approval cannot select projects");
     } else {
       // Filed in projects with no audience fact, so the projects add no reader.

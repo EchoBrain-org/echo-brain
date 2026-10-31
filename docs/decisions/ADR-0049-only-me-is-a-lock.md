@@ -9,7 +9,7 @@ component_ids:
 created_at: 2026-10-26
 reviewed_at: 2026-10-27
 reviewed_ref: d06d3a8a327831f30635e1a22022873936ae1681
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -26,9 +26,10 @@ updates:
 The founder said on 2026-10-26 that the desktop Ask page is too noisy, then
 decided how private context and Ask's history are organised. The design is
 [Quieter Ask, one thread per place, and Only me as a lock](../product/2026-10-26-quieter-ask-and-only-me-v1.md)
-and the "Quieter Ask" canvas. This record is proposed until the founder
-confirms the result on the desktop. It does not mean the change is deployed
-or qualified.
+and the "Quieter Ask" canvas. The founder accepted this record on 2026-10-31,
+as built in #368 (`bb976f5`) and #369 (`d06d3a8`). #378 later moved the
+desktop's Only me link from Home's footer to the sidebar. Acceptance does not
+mean the change is deployed or qualified.
 
 ## Context and options
 
@@ -101,3 +102,9 @@ Adopt option 2, the founder's choice.
   while projects stay ticked and on for good with no project. Existing
   record logs (V5) are refused at startup, so this ships with a fresh-state
   reset.
+
+Update (2026-10-31): the Authority no longer keeps the mine scope for the CLI.
+`person ask` and `person list` refuse `--mine`, the Ask request refuses mine,
+and the shared answer scope (`PersonAnswerScopeV3`) and the research kernel
+know only global and one project. The person list takes exactly one of a
+project and Only me.

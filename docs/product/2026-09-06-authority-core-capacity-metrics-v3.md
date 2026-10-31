@@ -1,16 +1,17 @@
 # Authority core capacity metrics V3
 
 No capacity milestone has passed. The executable coordinates are
-[metrics.v3.json](../../tools/evals/authority-core/metrics.v3.json).
-`node tools/evals/authority-core/verify-contract.mjs` checks its definition and
-predecessor bytes, profile pins, and numeric invariants. That check is not a run
-and never passes a milestone.
+[metrics.v3.json](https://github.com/EchoBrain-org/echo-brain/blob/aa92138e4a7d8386b2ff51a95c7d2f82e86236be/tools/evals/authority-core/metrics.v3.json).
+Until the V2 and V3 contracts left the tree on 2026-10-31,
+`node tools/evals/authority-core/verify-contract.mjs` checked its definition and
+predecessor bytes, profile pins, and numeric invariants. That check was not a
+run and never passed a milestone.
 
 ## Normative V2 incorporation
 
 Except for the enumerated V3 amendments below, this profile incorporates the
 entire immutable [V2 definition](2026-09-05-authority-core-capacity-metrics-v2.md)
-and its executable [V2 contract](../../tools/evals/authority-core/metrics.v2.json)
+and its executable [V2 contract](https://github.com/EchoBrain-org/echo-brain/blob/aa92138e4a7d8386b2ff51a95c7d2f82e86236be/tools/evals/authority-core/metrics.v2.json)
 by reference. That includes every workload and gate, anti-shortcut rule,
 independent-evidence and run-integrity requirement, durability condition,
 hardware coordinate, and NOT-RUN limitation. V3 does not relax, replace, or

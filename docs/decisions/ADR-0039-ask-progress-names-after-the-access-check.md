@@ -339,3 +339,13 @@ still never streams
 On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) retired progress V1 and
 V2 with the clients' decoders for them, `/v5` and `/v6`, and the `--live` and
 `--tickets` options of `person ask`. Ask streams only progress V3, on `/v7`.
+
+Update (2026-10-31): the client no longer reads the route header
+`x-echo-person-ask-route`; a progress stream needs none, and a 404 from Ask is
+the Authority's own `not_found`. `/v7` keeps sending the header for one more
+release, because released clients refuse a progress stream without it; it goes
+once the update floor passes this release. The desktop's account pin now comes
+from the host's `forAccount`, which passes the page's account to every
+account-scoped command, Ask included, and maps the client's refusal; the host
+no longer runs its own account check around the call. `session-host.test.ts`,
+`person-account-pin.test.ts` and `account.spec.ts` cover it.

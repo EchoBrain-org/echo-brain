@@ -65,10 +65,10 @@ describe('Ask with follow-ups as evidence (ADR-0040)', () => {
     expect(JSON.stringify(releases)).not.toMatch(/Pilot planning|launch next week|Mina Patel|Kestrel|ECHO-12/);
   });
 
-  it('binds follow-ups only for an Ask outside Mine, and never for trigger research or open items', async () => {
+  it('binds follow-ups for an Ask, global or in a project, and never for trigger research or open items', async () => {
     const f = await sentFixture();
     const finish = [{ actions: [{ tool: 'finish', args: {} }] }];
-    for (const [request, expected] of [[{}, true], [{ project_id: f.projectA }, true], [{ mine: true }, false]] as const) {
+    for (const [request, expected] of [[{}, true], [{ project_id: f.projectA }, true]] as const) {
       const { model, catalog } = scripted(finish);
       await ask(routeOf(f, model).route, 'mina', request as Partial<PersonAnswerRequestV3>).catch(() => undefined);
       expect([request, catalog().includes('follow_ups')]).toEqual([request, expected]);

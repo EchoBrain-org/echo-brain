@@ -6,8 +6,8 @@ permission-aware Person reader, and the retrieval-source snapshot port.
 
 The V4 canonical envelope bytes and their authorization and provider-action
 proof digests are immutable contracts. Reads resolve current permissions for
-multi-person organizations and preserve member-readable and restricted-reviewer
-policy behavior.
+multi-person organizations and preserve restricted-reviewer and
+project-members policy behavior.
 
 Provider-neutral policy-fact and approver-projection contracts live in
 `application`. The approval-decision policy and approver projectors live in
@@ -15,9 +15,8 @@ Provider-neutral policy-fact and approver-projection contracts live in
 Composition selects the
 protocol decoder; the read route checks its coordinates and resolves a current
 display name. The approver port derives identity only from an already
-permission-filtered envelope. Unknown references and generic HumanAct
-references without an actor have no optional approver metadata. Derived
-metadata never changes canonical records.
+permission-filtered envelope. Unknown or unsupported references have no
+optional approver metadata. Derived metadata never changes canonical records.
 
 Fresh logs use the byte-pinned V6 baseline,
 `baselines/organization-record-log-baseline-v6.sql`, applied only to an empty

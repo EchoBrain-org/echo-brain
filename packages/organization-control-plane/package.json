@@ -20,10 +20,6 @@
     "./application/organization-secret-store-contracts": {
       "types": "./dist/application/organization-secret-store-contracts.d.ts",
       "import": "./dist/application/organization-secret-store-contracts.js"
-    },
-    "./canonical/canonical-json": {
-      "types": "./dist/canonical/canonical-json.d.ts",
-      "import": "./dist/canonical/canonical-json.js"
     }
   },
   "files": [

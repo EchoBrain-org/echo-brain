@@ -1,34 +1,24 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { realpathSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { afterEach, expect, it, vi } from 'vitest';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { readPrivateAuthorityCredential } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
+import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { runOrganizationAuthoritySetupCli } from '../src/composition/organization-authority-setup-cli.js';
-import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
-import { STAGING_CONNECTOR_REHEARSAL_POLICY_V3 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 import { readOrganizationAuthoritySetupManifest } from '../src/composition/organization-authority-setup-cli.js';
 import { readPersonOidcConfiguration } from '../src/composition/organization-authority-person-administration-cli.js';
 import { PERSON_ANSWER_PATH_V7 } from '@echo-brain/organization-api';
 import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
-import { FIXTURE_CLOUD, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
+import { FIXTURE_CLOUD, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/staging-connector-profile-fixture-v1.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllGlobals(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function selection() {
-  return { release_id: 'clean-v1-staging-connector', authority_host: 'authority-staging.echobrain.org', profile: {
-    schema_version: 3 as const, kind: 'echo-staging-connector-rehearsal-profile-v3' as const,
-    read_policy: STAGING_CONNECTOR_REHEARSAL_POLICY_V3 as typeof STAGING_CONNECTOR_REHEARSAL_POLICY_V3,
-    jira: { cloud_id: FIXTURE_CLOUD, integration_key: 'jira', project: 'ECHO' },
-  } };
-}
-
-it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for live Ask across restart', async () => {
+it('keeps staging Jira connections in the state directory and reuses each Person\'s own grant for live Ask across restart', async () => {
   const root = join(realpathSync(tmpdir()), `echo-staging-connector-${randomUUID()}`); roots.push(root);
   prepare(root);
   const config = configuration(root);
@@ -42,8 +32,6 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
   const seams = providerSeams();
   const originalFetch = globalThis.fetch;
   const slackReads: string[] = [];
-  let modelCalls = 0;
-  let modelRequests = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     if (url.origin === 'https://slack.com') {
@@ -52,14 +40,8 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
       throw new Error(`unexpected Slack read ${url.pathname}`);
     }
     if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') return originalFetch(input, init);
-    if (url.hostname === 'openrouter.ai') {
-      modelRequests += 1;
-      if (url.pathname.endsWith('/chat/completions')) modelCalls += 1;
-    }
     throw new Error(`unexpected remote endpoint ${url.origin}`);
   });
-  const selected = selection();
-  let jiraAskEnabled = false;
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const prompt = JSON.parse(input.user_prompt) as { question: string; source_catalog?: { tool_id?: string }[]; last_results?: { results?: string[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
@@ -70,17 +52,16 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }],
       actions: [hit === undefined ? { tool: 'search', args: { query: 'ship', source: 'tickets' } } : { tool: 'open', args: { id: hit } }] };
   });
-  const profile_sha256 = canonicalSha256(selected.profile);
-  privateFile(join(root, 'private', 'staging-connector-rehearsal.json'), JSON.stringify(selected.profile));
-  const open = async () => openStagingConnectorRehearsalService({
+  // The service CLI turns the fixed staging profile into exactly this ordinary Jira selection.
+  const open = async () => openOrganizationAuthorityService({
     state_directory: manifest.state_directory, authority_url: STAGING_AUTHORITY_ORIGIN_V1, host: '127.0.0.1', port: await port(), worker_interval_ms: 60_000,
     oidc: oidc.configuration, client_authentication: { method: 'none' }, pkce_key_file: manifest.pkce_key_file,
     nango: { secret_key: readPrivateAuthorityCredential(`file:${config.nango.secret_key_file}`), integration_key: 'slack' },
-    ...(jiraAskEnabled ? { jira_person_live: { enabled: true as const, cloud_id: FIXTURE_CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' } } : {}),
+    jira_person_live: { enabled: true, cloud_id: FIXTURE_CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' },
     openrouter_credential_file: manifest.llm_credential_file,
-  }, selected, { api: { oidc_provider: seams.oidc_provider,
+  }, { api: { oidc_provider: seams.oidc_provider,
     answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } },
-  }, slack: seams.slack, jira: seams.jira_person_live_seams });
+  }, slack: seams.slack, jira_person_live_seams: seams.jira_person_live_seams });
   let runtime = await open();
   let owner = '';
   let jiraAttempt = '';
@@ -88,20 +69,17 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     const response = await fetch(`http://127.0.0.1:${runtime.address.port}${path}`, { method: 'POST', headers: { ...(token === '' ? {} : { authorization: `Bearer ${token}` }), 'content-type': 'application/json' }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
-  const verifyRead = () => post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira' });
   try {
     owner = await signInOwner(`http://127.0.0.1:${runtime.address.port}`, seams, manifest.invitation_path);
-    const beforeUnconnected = seams.jiraFetch.mock.calls.length;
-    expect(await verifyRead()).toMatchObject({ status: 200, body: { action: 'verify-read', qualified: false, result: { status: 'refused', phase: 'connection', reason: 'connection_absent' } } });
-    expect(seams.jiraFetch).toHaveBeenCalledTimes(beforeUnconnected);
     const connect = await post('/v1/person/tools/jira/connect', { schema_version: 1 });
     expect(connect.status).toBe(201);
     seams.finishJira();
-    const attempt = connect.body.attempt as string; jiraAttempt = attempt;
-    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
-    const before = seams.jiraFetch.mock.calls.length;
-    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'granola', limit: 1 })).status).toBe(400);
-    expect(seams.jiraFetch).toHaveBeenCalledTimes(before);
+    jiraAttempt = connect.body.attempt as string;
+    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: jiraAttempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
+    // Staging keeps the grant where every Authority does; the rehearsal sidecar and route are retired.
+    expect(statSync(join(stateDirectory, 'jira-person-connections.sqlite')).mode & 0o777).toBe(0o600);
+    expect(existsSync(join(root, 'staging-connector-rehearsal-v1'))).toBe(false);
+    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 3, action: 'status' })).status).toBe(404);
     // A token from before the delivery-only manifest may still hold the two retired channel scopes.
     await connectSlackAndLinkOwner(post, seams, ['channels:history', 'channels:read', 'chat:write', 'im:history', 'im:write', 'users:read']);
   } finally { await runtime.close(); }
@@ -109,6 +87,7 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
   runtime = await open();
   try {
     expect(runtime.processing).toBe('active');
+    // The consent survives restart in the state directory.
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: jiraAttempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
     const custodyCounts = () => {
       const database = new Database(join(manifest.state_directory, 'authority.sqlite'), { readonly: true });
@@ -116,44 +95,6 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
         .map(table => database.prepare(`SELECT count(*) AS count FROM ${table}`).get()); }
       finally { database.close(); }
     };
-    const custodyBefore = custodyCounts();
-    const jiraStart = seams.jiraFetch.mock.calls.length;
-    const modelRequestsBefore = modelRequests;
-    const text = 'ECHO-1: Ship on Friday\n\nThe ticket body stays with Jira.';
-    const proof = await verifyRead();
-    expect(proof).toMatchObject({ status: 200, body: { action: 'verify-read', tool: 'jira', qualified: false, result: {
-      status: 'verified', source_coordinate_sha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-      text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}`, text_bytes: Buffer.byteLength(text),
-    } } });
-    expect(JSON.stringify(proof.body)).not.toContain(text);
-    const jiraReads = seams.jiraFetch.mock.calls.slice(jiraStart);
-    expect(jiraReads).toHaveLength(25);
-    expect(jiraReads.filter(([input]) => String(input).includes('/issue/10001'))).toHaveLength(1);
-    // The listed page's current read, then the release recheck.
-    const bulkReads = jiraReads.filter(([input]) => String(input).includes('/issue/bulkfetch'));
-    expect(bulkReads.map(([, init]) => JSON.parse(String(init?.body)).issueIdsOrKeys)).toEqual([['10001'], ['10001']]);
-    const searches = jiraReads.filter(([input]) => String(input).includes('/search/jql'));
-    expect(searches).toHaveLength(1);
-    expect(JSON.parse(String(searches[0]![1]?.body))).toMatchObject({ jql: 'project = 10000 ORDER BY created DESC, id DESC', maxResults: 1 });
-    expect(custodyCounts()).toEqual(custodyBefore);
-    expect(modelCalls).toBe(0);
-    expect(modelRequests).toBe(modelRequestsBefore);
-    // Slack has no verify-read: the bot never reads, and person reads are not built yet.
-    expect((await post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'slack' })).status).toBe(400);
-    const jiraBeforeMismatch = seams.jiraFetch.mock.calls.length;
-    for (const mismatch of [{ release_id: 'clean-v1-other-release' }, { profile_sha256: canonicalSha256('other') }]) {
-      expect((await post('/v1/staging/connector-rehearsal', { schema_version: 3, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira', ...mismatch })).status).toBe(503);
-    }
-    expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeMismatch);
-    // Local Ask remains available before Jira Ask is selected, without reading Jira.
-    const jiraBeforeLocalAsk = seams.jiraFetch.mock.calls.length;
-    expect(await post(PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'fixture' })).toMatchObject({ status: 200, body: { schema_version: 8, citations: [] } });
-    expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeLocalAsk);
-      await runtime.close();
-    jiraAskEnabled = true;
-    runtime = await open();
-    // Enabling Ask reuses the existing consent in the same profile-bound sidecar.
-    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: jiraAttempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
     const custodyBeforeAsk = custodyCounts();
     const tools = async (token = owner) => {
       const response = await fetch(`http://127.0.0.1:${runtime.address.port}/v4/person/tools`, { headers: { authorization: `Bearer ${token}` } });
@@ -191,6 +132,7 @@ it('exposes the Jira-only rehearsal protocol and reuses the owner Jira grant for
     expect(answerResponse.status).toBe(200);
     const answer = validatePersonAnswerResponseV8(answerResponse.body);
     expect(answer.citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'ticket', citation: expect.objectContaining({ ticket_id: '10001' }) })]));
+    // Global Ask follows the asker's own Jira access across the site, without a fixed project.
     const globalSearches = seams.jiraFetch.mock.calls.slice(globalReadStart).filter(([url]) => String(url).endsWith('/search/jql'));
     expect(globalSearches).toHaveLength(1);
     expect(JSON.parse(String(globalSearches[0]![1]?.body)).jql).not.toContain('project =');

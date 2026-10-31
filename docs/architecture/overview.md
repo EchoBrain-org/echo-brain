@@ -330,15 +330,18 @@ Owners: [deploy/organization-authority/README.md](../../deploy/organization-auth
 
 ## Beta limits and known debt
 
-- **Search ceiling.** One search generation admits at most 1,024 approved
-  items, 32 permission segments, 4,096 bytes of text per item and 17,408
-  postings, whichever binds first (`READABLE_SEARCH_ADMISSION_BUDGET_V1`).
-  Segments are one for the organization, one per approver with Only me items,
-  and one per distinct set of audience projects. Past any limit the rebuild
-  throws, and reads need a generation built for the record log's exact head,
-  so record search and lists become unavailable, Ask answers without approved
-  meetings and impact checks keep retrying; the next restart fails before the
-  API starts listening. See the
+- **Search ceiling.** One search generation admits at most 8,192 approved
+  items, 128 permission segments, 4,096 bytes of text per item and 204,800
+  postings, whichever binds first (`READABLE_SEARCH_ADMISSION_BUDGET_V1`):
+  about a year of approvals for a ten-person organization. Segments are one
+  per approver with Only me items and one per distinct set of audience
+  projects. Each approval rebuilds the whole generation in one synchronous
+  pass (about 3 s on a laptop at the ceiling) and deletes the generation it
+  replaced. From 75% of any limit the service logs a capacity warning. Past a
+  limit the rebuild is refused and logged by name, and reads need a generation
+  built for the record log's exact head, so record search and lists become
+  unavailable, Ask answers without approved meetings and impact checks keep
+  retrying; a restart still opens the API. See the
   [scaling decision guide](scaling-decision-guide.md).
 - **One process, one volume, no migrations.** A baseline change means fresh
   state.

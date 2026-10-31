@@ -8,7 +8,7 @@ import { main } from "../cli.mjs";
 import { datasetProblems, loadDataset, substitutePerson } from "../lib/dataset.mjs";
 import { itemMatches, satisfying, ticketKey } from "../lib/match.mjs";
 import { codeChecks, gradeSweep } from "../lib/checks.mjs";
-import { exportBindings } from "../lib/bindings.mjs";
+import { discoverMeetings, exportBindings } from "../lib/bindings.mjs";
 import { rejectedAtIngress, savedResult, startRequest } from "../lib/requests.mjs";
 import { aggregate, markdownReport, runScores } from "../lib/report.mjs";
 import { JUDGE_SYSTEM, judgeInput, parseJudge } from "../lib/judge.mjs";
@@ -23,7 +23,7 @@ const ticket = (key, options = {}) => ({ id: options.id ?? "E1", source: "ticket
   citation: { kind: "ticket", tool_id: "jira", external_scope_id: "cloud", ticket_id: "10046", permalink: `https://echobrain.atlassian.net/browse/${key}`, text_sha256: digest(`text-${key}`) },
   ...(options.owner === undefined ? {} : { attributes: { status: "To Do", owner: options.owner } }),
   read_in_full: options.read ?? true, opened: true, preloaded: false, cited_by_plan: options.cited ?? true, ...(options.text === undefined ? {} : { text: options.text }) });
-const recordCitation = id => ({ kind: "approved_record", atom_id: digest(`atom-${id}`), record_sha256: digest(`record-${id}`), policy_id: "organization-member-readable-person-v2" });
+const recordCitation = id => ({ kind: "approved_record", atom_id: digest(`atom-${id}`), record_sha256: digest(`record-${id}`), policy_id: "project-members-readable-person-v1" });
 const record = (meeting, kind, id) => ({ id, source: "meetings", kind, title: titleOf(meeting), citation: recordCitation(`${meeting}-${kind}`), text: "x", read_in_full: true, opened: true, preloaded: false, cited_by_plan: false });
 const bindings = { project_id: "prj_00000000-0000-4000-8000-000000000003", site: "https://echobrain.atlassian.net", cloud_id: "cloud-1",
   tickets: Object.fromEntries(["2", "18", "38", "40", "46", "47", "48", "50"].map(number => [`THERM-${number}`, `100${number.padStart(2, "0")}`])),
@@ -556,6 +556,39 @@ test("reports count sweep verdicts per case and over all sweep cases, among the 
 test("export bindings read the site, cloud id and THERM issue ids", () => {
   const bound = exportBindings({ site: "https://echobrain.atlassian.net/", cloudId: "cloud-9", jira_batches: [{ issues: [{ id: "10046", key: "THERM-46" }, { id: "1", key: "ECHO-1" }] }] });
   assert.deepEqual(bound, { site: "https://echobrain.atlassian.net", cloud_id: "cloud-9", tickets: { "THERM-46": "10046" } });
+});
+
+test("meeting bindings search each record kind within the evidence search cap, and skip the restricted project", async () => {
+  const { validatePersonEvidenceSearchRequestV1 } = await import("@echo-brain/organization-api");
+  const { additions } = loadDataset();
+  const requests = [];
+  const citation = (meeting, kind, index) => ({ kind: "approved_record", atom_id: `atom-${meeting}-${kind}-${index}`, record_sha256: `record-${meeting}` });
+  const client = {
+    async evidenceSearch(request) {
+      // As the Person client does: the request's own validator runs before anything is sent.
+      validatePersonEvidenceSearchRequestV1(request);
+      requests.push(request);
+      const meeting = additions.meetings.find(value => value.title === request.query);
+      const [kind] = request.kinds;
+      // M1 has eleven decisions, more than one search returns; M5 has nothing approved yet.
+      const count = meeting.id === "M5" ? 0 : meeting.id === "M1" && kind === "decision" ? 11 : 1;
+      const items = Array.from({ length: count }, (_, index) => ({ kind, label: `${meeting.title} · ${kind} ${index}`, citation: citation(meeting.id, kind, index) }));
+      return { items: [...items.slice(0, request.limit), { kind, label: "Another meeting", citation: citation("other", kind, 0) }] };
+    },
+  };
+  const { meetings, missing } = await discoverMeetings(client, additions, bindings.project_id);
+  const searched = additions.meetings.filter(meeting => meeting.project !== additions.restricted_project.name);
+  assert.equal(requests.length, searched.length * 3);
+  for (const request of requests) {
+    assert.equal(request.limit, 10);
+    assert.equal(request.project_id, bindings.project_id);
+    assert.equal(request.kinds.length, 1);
+  }
+  assert.ok(!requests.some(request => request.query === additions.meetings.find(meeting => meeting.project === additions.restricted_project.name).title));
+  assert.deepEqual(missing, ["M5"]);
+  assert.equal(meetings.M1.decision.length, 10);
+  assert.deepEqual(meetings.M1.action, [citation("M1", "action", 0)]);
+  assert.deepEqual(meetings.M2, { decision: [citation("M2", "decision", 0)], action: [citation("M2", "action", 0)], rationale: [citation("M2", "rationale", 0)] });
 });
 
 test("reports weigh cases equally and keep unknowns unknown", () => {

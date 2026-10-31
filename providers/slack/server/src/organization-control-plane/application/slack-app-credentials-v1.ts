@@ -2,10 +2,7 @@ import type {
   OrganizationSecretReference,
   OrganizationSecretStore,
 } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
-import {
-  canonicalJson,
-  canonicalSha256,
-} from "@echo-brain/organization-control-plane/canonical/canonical-json";
+import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 
 /**
  * One private secret bundles everything a per-organization private Slack app

@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_CAPABILITIES_PATH_V1,
-  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
-  validatePersonCapabilitiesV1,
   validatePersonEvidenceDeskResponseV1,
   validatePersonEvidenceOpenRequestV1,
   validatePersonEvidenceSearchRequestV1,
@@ -16,19 +13,15 @@ const citation = {
   kind: 'approved_record' as const,
   atom_id: `sha256:${'a'.repeat(64)}`,
   record_sha256: `sha256:${'b'.repeat(64)}`,
-  policy_id: 'organization-member-readable-person-v2' as const,
+  policy_id: 'project-members-readable-person-v1' as const,
 };
 const receipt_sha256 = `sha256:${'c'.repeat(64)}`;
 
 describe('Agentic Ask V1 public contracts', () => {
-  it('defines the desk and capability endpoints, and the Ask request', () => {
+  it('defines the desk endpoints and the Ask request', () => {
     expect(PERSON_EVIDENCE_SEARCH_PATH_V1).toBe('/v3/person/evidence/search');
-    expect(PERSON_EVIDENCE_OPEN_PATH_V1).toBe('/v3/person/evidence/open');
-    expect(PERSON_CAPABILITIES_PATH_V1).toBe('/v3/person/capabilities');
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What changed?', project_id }))
       .toEqual({ schema_version: 3, question: 'What changed?', project_id });
-    expect(validatePersonCapabilitiesV1({ schema_version: 1, kind: 'echo-person-capabilities-v1', agentic_ask_v1: false }))
-      .toEqual({ schema_version: 1, kind: 'echo-person-capabilities-v1', agentic_ask_v1: false });
   });
 
   it('accepts a structured answer with cited prose and bounded deterministic fallback records', () => {
@@ -60,6 +53,15 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(() => validatePersonAnswerResponseV8(response)).toThrow();
     response.parts[0]!.statements[0]!.citation_indexes = [];
     expect(() => validatePersonAnswerResponseV8(response)).toThrow();
+  });
+
+  it('refuses an approved-record citation under the retired organization-wide (Team) policy, which no record carries', () => {
+    const response = {
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
+      citations: [{ citation: { ...citation, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
+      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
+    };
+    expect(() => validatePersonAnswerResponseV8(response)).toThrow('policy_id is invalid');
   });
 
   it('distinguishes an inventory result from released text and validates fresh HTTP open coordinates', () => {
@@ -132,32 +134,31 @@ describe('Agentic Ask V1 public contracts', () => {
     }).items[0]?.label).toBe('🧪'.repeat(200));
   });
 
-  it('echoes a mine scope on answers and desk responses, but never a mine scope with a project', () => {
+  it('refuses the retired mine scope on answers and desk responses, alone or with a project', () => {
     const answer = (scope: unknown) => ({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
       parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
     });
     const desk = (scope: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope, truncated: false, items: [] });
-    expect(validatePersonAnswerResponseV8(answer({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
-    expect(validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
-    expect(() => validatePersonAnswerResponseV8(answer({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
-    expect(() => validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
+    for (const scope of [{ kind: 'mine' }, { kind: 'mine', project_id }]) {
+      expect(() => validatePersonAnswerResponseV8(answer(scope))).toThrow('Ask response scope is invalid');
+      expect(() => validatePersonEvidenceDeskResponseV1(desk(scope))).toThrow('Ask response scope is invalid');
+    }
+    expect(validatePersonEvidenceDeskResponseV1(desk({ kind: 'global' })).scope).toEqual({ kind: 'global' });
     expect(() => validatePersonAnswerResponseV8(answer({ kind: 'everyone' }))).toThrow('Ask response scope is invalid');
   });
 
-  it('asks with mine, but never mine with a project or mine other than true (ADR-0024)', () => {
-    expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine: true }))
-      .toEqual({ schema_version: 3, question: 'What did I decide?', mine: true });
-    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine: true, project_id })).toThrow('Ask request scope is invalid');
-    for (const mine of [false, 'true', 1, null]) {
-      expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine })).toThrow('Ask request scope is invalid');
+  it('refuses an Ask with mine, a retired scope, alone or with a project', () => {
+    for (const mine of [true, false, 'true', 1, null]) {
+      expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine })).toThrow('Ask request has an unexpected shape');
+      expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine, project_id })).toThrow('Ask request has an unexpected shape');
     }
   });
 
   it('carries a citation ref only when it names the cited item (ADR-0024)', () => {
     const answer = (value: Record<string, unknown>) => ({
-      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'mine' }, outcome: 'answered',
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
       citations: [{ kind: 'decision', label: 'Launch decision', visibility: 'team', ...value }],
       parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
     });
@@ -193,7 +194,7 @@ describe('Agentic Ask V1 public contracts', () => {
 
   it('keeps the evidence desk contract exact-key: a desk item never carries a ref', () => {
     const item = { id: 'desk-item-1', citation, kind: 'decision', label: 'Launch decision', visibility: 'team', receipt_sha256 };
-    const desk = (value: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'mine' }, truncated: false, items: [value] });
+    const desk = (value: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'global' }, truncated: false, items: [value] });
     expect(validatePersonEvidenceDeskResponseV1(desk(item)).items[0]).toEqual(item);
     expect(() => validatePersonEvidenceDeskResponseV1(desk({ ...item, ref: `meeting:${citation.record_sha256}` }))).toThrow('Evidence desk item has an unexpected shape');
   });

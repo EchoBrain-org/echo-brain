@@ -36,25 +36,12 @@ export interface ProjectContextItemV2 {
   readonly excerpt: string;
   readonly audience: PersonUploadAudienceV3;
 }
-export interface ProjectContextFeedV2 {
+export interface ProjectContextSearchResultV2 {
   readonly schema_version: 2;
-  readonly kind: 'echo-project-context-feed-v2';
+  readonly kind: 'echo-project-context-search-result-v2';
   readonly project_id: ProjectIdV1;
   readonly items: readonly ProjectContextItemV2[];
   readonly next_cursor: string | null;
-}
-export interface ProjectContextSearchResultV2 extends Omit<ProjectContextFeedV2, 'kind'> {
-  readonly kind: 'echo-project-context-search-result-v2';
-}
-export interface ProjectContextReadV2 {
-  readonly schema_version: 2;
-  readonly kind: 'echo-project-context-read-v2';
-  readonly project_id: ProjectIdV1;
-  readonly context_id: string;
-  readonly received_at: string;
-  readonly title: string;
-  readonly text: string;
-  readonly audience: PersonUploadAudienceV3;
 }
 
 function cursor(value: unknown, label: string): string {
@@ -93,22 +80,12 @@ function item(value: unknown): ProjectContextItemV2 {
   if ([...(record.excerpt as string)].length > 300) fail('Project context item excerpt is invalid');
   return { context_id: record.context_id as string, received_at: record.received_at as string, title: record.title as string, excerpt: record.excerpt as string, audience: validatePersonUploadAudienceV3(record.audience) };
 }
-function page(value: unknown, kind: ProjectContextFeedV2['kind'] | ProjectContextSearchResultV2['kind']): ProjectContextFeedV2 | ProjectContextSearchResultV2 {
+export function validateProjectContextSearchResultV2(value: unknown): ProjectContextSearchResultV2 {
   const record = object(value, 'Project context page');
   assertExactKeys(record, ['schema_version', 'kind', 'project_id', 'items', 'next_cursor'], 'Project context page');
-  if (record.schema_version !== 2 || record.kind !== kind || !Array.isArray(record.items) || record.items.length > PROJECT_PAGE_MAX_ITEMS) fail('Project context page is invalid');
+  if (record.schema_version !== 2 || record.kind !== 'echo-project-context-search-result-v2' || !Array.isArray(record.items) || record.items.length > PROJECT_PAGE_MAX_ITEMS) fail('Project context page is invalid');
   const items = record.items.map(item);
   if (new Set(items.map(entry => entry.context_id)).size !== items.length) fail('Project context page contains duplicates');
-  const response = { schema_version: 2 as const, kind, project_id: validateProjectIdV1(record.project_id, 'Project context page project_id'), items, next_cursor: record.next_cursor === null ? null : cursor(record.next_cursor, 'Project context page cursor') } as ProjectContextFeedV2 | ProjectContextSearchResultV2;
+  const response = { schema_version: 2 as const, kind: 'echo-project-context-search-result-v2' as const, project_id: validateProjectIdV1(record.project_id, 'Project context page project_id'), items, next_cursor: record.next_cursor === null ? null : cursor(record.next_cursor, 'Project context page cursor') };
   responseBound(response, 'Project context page'); return response;
-}
-export function validateProjectContextFeedV2(value: unknown): ProjectContextFeedV2 { return page(value, 'echo-project-context-feed-v2') as ProjectContextFeedV2; }
-export function validateProjectContextSearchResultV2(value: unknown): ProjectContextSearchResultV2 { return page(value, 'echo-project-context-search-result-v2') as ProjectContextSearchResultV2; }
-export function validateProjectContextReadV2(value: unknown): ProjectContextReadV2 {
-  const record = object(value, 'Project context read');
-  assertExactKeys(record, ['schema_version', 'kind', 'project_id', 'context_id', 'received_at', 'title', 'text', 'audience'], 'Project context read');
-  if (record.schema_version !== 2 || record.kind !== 'echo-project-context-read-v2') fail('Project context read version or kind is unsupported');
-  const response = { schema_version: 2 as const, kind: 'echo-project-context-read-v2' as const, project_id: validateProjectIdV1(record.project_id, 'Project context read project_id'), context_id: validatePersonUploadContextId(record.context_id), received_at: record.received_at as string, title: record.title as string, text: record.text as string, audience: validatePersonUploadAudienceV3(record.audience) };
-  assertTimestamp(response.received_at, 'Project context read received_at'); text(response.title, 'Project context read title', 200); text(response.text, 'Project context read text', 8 * 1024, true);
-  responseBound(response, 'Project context read'); return response;
 }

@@ -181,18 +181,19 @@ PY
   ACCEPTED_ENVIRONMENT=$snapshot
 }
 
+# The selected profile only chooses providers of the ordinary Authority, whose Jira
+# connections stay in the retained state directory. A leftover retired rehearsal
+# sidecar is ignored while the profile is selected.
 require_staging_connector_rehearsal_recovery_state() {
-  local selected sidecar
-  sidecar="$DATA_DIR/staging-connector-rehearsal-v1"
-  selected="$(python3 - "$ACCEPTED_ENVIRONMENT" "$SETUP_FILE" "$PRIVATE_DIR/staging-connector-rehearsal.json" "$STATE_DIR/onboarding/clean-founder-v1.json" "$sidecar" "$sidecar/binding.json" "$AUTHORITY_UID" "$AUTHORITY_GID" <<'PY'
+  local selected
+  selected="$(python3 - "$ACCEPTED_ENVIRONMENT" "$SETUP_FILE" "$PRIVATE_DIR/staging-connector-rehearsal.json" "$DATA_DIR/staging-connector-rehearsal-v1" <<'PY'
 import hashlib
 import json
 import pathlib
 import stat
 import sys
 
-environment, setup, profile_path, setup_manifest, sidecar, marker = map(pathlib.Path, sys.argv[1:7])
-authority_uid, authority_gid = map(int, sys.argv[7:])
+environment, setup, profile_path, sidecar = map(pathlib.Path, sys.argv[1:])
 
 def rows(path, key):
     return [line[len(key) + 1:] for line in path.read_text(encoding='utf-8').splitlines()
@@ -219,50 +220,11 @@ canonical = json.dumps(profile, sort_keys=True, separators=(',', ':'))
 digest = 'sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 if payload != canonical + '\n' or digests != [digest]:
     raise SystemExit(1)
-manifest_state = setup_manifest.lstat()
-sidecar_state = sidecar.lstat()
-if (not stat.S_ISDIR(sidecar_state.st_mode) or stat.S_ISLNK(sidecar_state.st_mode)
-        or stat.S_IMODE(sidecar_state.st_mode) != 0o700
-        or sidecar_state.st_uid != authority_uid or sidecar_state.st_gid != authority_gid):
-    raise SystemExit(1)
-marker_state = marker.lstat()
-if (not stat.S_ISREG(manifest_state.st_mode) or stat.S_ISLNK(manifest_state.st_mode)
-        or stat.S_IMODE(manifest_state.st_mode) != 0o600
-        or not stat.S_ISREG(marker_state.st_mode) or stat.S_ISLNK(marker_state.st_mode)
-        or stat.S_IMODE(marker_state.st_mode) != 0o600 or marker_state.st_nlink != 1
-        or marker_state.st_uid != authority_uid or marker_state.st_gid != authority_gid):
-    raise SystemExit(1)
-manifest = json.loads(setup_manifest.read_text(encoding='utf-8'))
-binding = json.loads(marker.read_text(encoding='utf-8'))
-expected = {
-    'schema_version': 1,
-    'kind': 'echo-staging-connector-rehearsal-sidecar-binding-v1',
-    'authority_id': manifest['authority_id'],
-    'organization_id': manifest['organization_id'],
-    'state_lineage_id': manifest['state_lineage_id'],
-    'principal_id': manifest['owner_principal_id'],
-    'membership_id': manifest['owner_membership_id'],
-    'profile_sha256': digest,
-}
-if not isinstance(binding, dict) or binding != expected:
-    raise SystemExit(1)
 print('enabled')
 PY
 )" || fail 'retained staging connector rehearsal selection is unsafe or drifted'
   [[ "$selected" == disabled || "$selected" == enabled ]] || \
     fail 'retained staging connector rehearsal selection is unsafe or drifted'
-  [[ "$selected" == enabled ]] || return 0
-
-  safe_directory "$sidecar" || \
-    fail 'retained staging connector rehearsal sidecar is missing or unsafe; do not reuse the Jira connection'
-  [[ $(stat -c '%u:%g:%a' "$sidecar") == "$AUTHORITY_UID:$AUTHORITY_GID:700" ]] || \
-    fail 'retained staging connector rehearsal sidecar has an unexpected Authority UID/GID or mode'
-  for path in "$sidecar/jira-person-connections.sqlite"; do
-    private_regular_file "$path" || \
-      fail 'retained staging connector rehearsal sidecar is incomplete or unsafe; do not reuse the Jira connection'
-    [[ $(stat -c '%u:%g' "$path") == "$AUTHORITY_UID:$AUTHORITY_GID" ]] || \
-      fail 'retained staging connector rehearsal sidecar has an unexpected Authority owner'
-  done
 }
 
 materialize_root_volume_files() {

@@ -8,14 +8,8 @@ import {
   validatePersonUpdateSubmitV3,
   type PersonUpdateSubmitV3, type PersonUploadAudienceV3, type ProjectIdV1,
 } from '@echo-brain/organization-api';
-import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
-import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { SqliteProjectContextRepositoryV1 } from '../../src/adapters/persistence/sqlite/project-context-v1.js';
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../../src/adapters/persistence/sqlite/project-upload-enrichment-v1.js';
-import type {
-  ProjectAuthorizationScopeV1, ProjectAuthorizationSnapshotV1,
-  ProjectContextReadTransactionV1, ProjectReadResponseV1,
-} from '../../src/application/ports/project-context-v1.js';
 import { addMembership, authorization, PROJECT_CONTEXT_NOW } from '../fixtures/project-context-sqlite.js';
 import { PEOPLE, SCENARIO } from '../../../../tests/fixtures/project-context-integration/scenario.js';
 
@@ -89,32 +83,16 @@ export class SyntheticProjectHarness {
     ));
   }
 
-  read<T extends ProjectReadResponseV1>(
-    actor: AuthorityPersonMembershipBinding,
-    scope: ProjectAuthorizationScopeV1,
-    select: (tx: ProjectContextReadTransactionV1, snapshot: ProjectAuthorizationSnapshotV1) => T,
-    beforeRelease: () => void = () => {},
-    currentActor: () => PersonAccessAuthorization = () => authorization(actor),
-  ): T {
-    return this.repository.withReadTransaction(tx => {
-      const snapshot = tx.captureAuthorization(authorization(actor), scope);
-      const selected = select(tx, snapshot);
-      beforeRelease();
-      return tx.revalidateAndAuditRelease(snapshot, currentActor(), selected);
-    });
-  }
-
-  original(actor: AuthorityPersonMembershipBinding, context_id: string, project_id?: ProjectIdV1) {
-    return project_id === undefined
-      ? this.read(actor, { operation: 'upload_read_v3', context_id }, (tx, scope) => tx.readUploadV3(scope, context_id))
-      : this.read(actor, { operation: 'context_read_v2', context_id, project_id }, (tx, scope) => tx.readContextV2(scope, project_id, context_id));
+  /** The original as the enrichment worker reads it: straight from custody, after eligibility capture. */
+  original(context_id: string): { readonly title: string; readonly text: string } {
+    return this.database.prepare('SELECT title, text FROM authority_person_updates_v2 WHERE context_id = ?').get(context_id) as { title: string; text: string };
   }
 
   /** Fault seam only: models PC-02's future atomic eligibility/commit binding. */
   async enrich(contextId: string, model: (source: { title: string; text: string }) => Promise<string>): Promise<'ready' | 'unavailable' | 'ineligible'> {
     const snapshot = this.eligibility.capture(contextId);
     if (!snapshot) return 'ineligible';
-    const source = this.original(snapshot.uploader, contextId);
+    const source = this.original(contextId);
     this.database.prepare("UPDATE authority_person_update_work_v2 SET state = 'processing', attempts = attempts + 1 WHERE context_id = ?").run(contextId);
     try {
       const hints = await model({ title: source.title, text: source.text });

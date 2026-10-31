@@ -19,7 +19,7 @@ const ticket = {
 };
 const record = `sha256:${'a'.repeat(64)}` as const;
 const decision = {
-  citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'organization-member-readable-person-v2' as const },
+  citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'project-members-readable-person-v1' as const },
   kind: 'decision' as const, label: 'DVT gate review: hold until THERM-482 is fixed', visibility: 'team' as const, ref: `meeting:${record}` as const,
 };
 const previous = (overrides: Record<string, unknown> = {}) => ({
@@ -37,7 +37,8 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What changed?' })).toEqual({ schema_version: 3, question: 'What changed?' });
     expect(Object.isFrozen(validatePersonAnswerRequestV3(ask(previous())).previous!.statements[0])).toBe(true);
     // Scope rides beside it as before.
-    expect(validatePersonAnswerRequestV3({ ...ask(previous()), mine: true })).toMatchObject({ mine: true, previous: previous() });
+    const project_id = 'prj_00000000-0000-4000-8000-000000000001';
+    expect(validatePersonAnswerRequestV3({ ...ask(previous()), project_id })).toMatchObject({ project_id, previous: previous() });
   });
 
   it('holds 8 sentences of 400 characters, 4 citations each, among 12 citations of its answer', () => {

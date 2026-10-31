@@ -3,7 +3,7 @@
 // <home>/calls.jsonl so tests can assert what the app actually sent.
 import * as organizationApi from '@echo-brain/organization-api';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const AUTHORITY = 'https://authority.example';
@@ -468,12 +468,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // No longer a lead of the first project, though the list said so.
   if (mode === 'demoted') members[desktop.projects[0]!.project_id] = members[desktop.projects[0]!.project_id]!.map(entry => ({ ...entry, role: entry.role === 'lead' ? 'member' : 'lead' }));
   const documents = structuredClone(desktop.documents);
-  const feedItem = fixture('projects-feed-v2').items as Record<string, unknown>[];
-  const readable = fixture('projects-read-context-v2');
+  const feedItem = fixture('projects-search-v2').items as Record<string, unknown>[];
   const catalog = new Map<string, { received_at: string; title: string; text: string; audience: Record<string, unknown> }>([
     [String(feedItem[0]!.context_id), { received_at: String(feedItem[0]!.received_at), title: String(feedItem[0]!.title),
       // Shared with several projects; a reader sees only the one it is read in (ADR-0023).
-      text: String(readable.text), audience: { kind: 'projects' } }],
+      text: 'We agreed to ship.\n', audience: { kind: 'projects' } }],
     ...desktop.notes.map(note => [note.context_id, note] as const),
   ]);
   const filed = new Map<string, string[]>(desktop.projects.map(project => [project.project_id, [String(feedItem[0]!.context_id)]]));
@@ -780,7 +779,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
   // Ask progress (ADR-0039). The fixture answer's meeting is Tuesday sync, whose decision d1 an answer cites by its atom id.
   const TUESDAY = desktop.record.record_sha256;
-  const atomOf = (signal: string) => digestOf(JSON.stringify({ kind: 'echo-organization-record-atom', record_hash: TUESDAY, signal_id: signal }));
+  const atomOf = (signal: string) => organizationApi.personRecordAtomIdV1(TUESDAY, signal);
   if (mode.startsWith('ask-progress')) {
     // The meeting opens by its ref too, on its own page. The decision Ask cites is its second.
     const brief = desktop.record.brief as unknown as { decisions: Record<string, unknown>[]; actions: { text: string }[]; rationales: { text: string }[] };
@@ -893,7 +892,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       },
       cancel() { cancelled = true; },
     });
-    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-echo-person-ask-route': '7' } });
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
   };
 
   // Open items. Ari's own check of Pilot planning finds two once it is done;
@@ -1235,6 +1234,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       ...(layout === null ? {} : { layout }) })}\n`);
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
+    // Kim signs in on this computer while the request named in `switch-on` is on its way; it is still answered.
+    if (elsewhere('switch-on') && readFileSync(join(home, 'switch-on'), 'utf8') === path) {
+      unlinkSync(join(home, 'switch-on'));
+      store.install(AUTHORITY, 'oau_00000000-0000-4000-8000-000000000001', { ...session, membership_id: 'mem_55555555-5555-4555-8555-555555555555', display_name: 'Kim' });
+    }
 
     if (method === 'GET' && path === '/v1/authority-descriptor') return json({ authority_descriptor: descriptor });
     if (method === 'POST' && path === '/v2/session/oidc/begin') {
@@ -2103,11 +2107,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
-      if (TIMELINE_MODES.has(mode)) {
-        const answered = json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
-        answered.headers.set('x-echo-person-ask-route', '7');
-        return answered;
-      }
+      if (TIMELINE_MODES.has(mode)) return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
       // Ask progress: a client that asks for it gets the Ask's steps as they happen, then its answer and receipt. Laid out only
       // for an Ask that asked for it.
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
@@ -2116,10 +2116,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return progressStream(question, scope, init?.signal ?? undefined, laidOut);
       }
       if (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed' || mode === 'ask-layout') {
-        const answered = json(mode === 'ask-progress-listed' ? listedAnswer(question, scope)
+        return json(mode === 'ask-progress-listed' ? listedAnswer(question, scope)
           : mode === 'ask-layout' ? layoutAnswer(question, scope, laidOut) : workspaceAnswer(question, scope));
-        answered.headers.set('x-echo-person-ask-route', '7');
-        return answered;
       }
       if (mode === 'ask-ticket') {
         const included = scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null);
@@ -2201,7 +2199,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (url.searchParams.get('record_sha256') !== digest || mode === 'record-gone') {
         return json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [] });
       }
-      const event = { kind: 'approved', policy_id: 'organization-member-readable-person-v2', approved_snapshot: { approved_payload: { brief } } };
+      const event = { kind: 'approved', policy_id: 'project-members-readable-person-v1', approved_snapshot: { approved_payload: { brief } } };
       return json({
         schema_version: 1, kind: 'echo-clean-person-record-list-v1',
         records: [{

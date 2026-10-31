@@ -186,7 +186,6 @@ function earlierAnswer(previous: PersonAnswerPreviousV1, timeZone: string): AskE
 function scopeText(scope: EvidenceDeskPortV2["scope"]): string {
   switch (scope.kind) {
     case "project": return "one project: meetings and documents are limited to it; live sources are limited to their saved project mappings. Only sources in source_catalog are available";
-    case "mine": return "only what the asker added: their own notes and uploaded documents, and meetings they approved; shared live sources and shared transcripts are not read";
     case "global": return "everything the asker can read";
     default: return unknownScope(scope);
   }
@@ -236,9 +235,8 @@ function createAgenticAskCore(options: CreateAgenticAskOptions) {
   // The HTTP boundary validates the time context, so its day always parses.
   const today = options.today ?? (() => temporal === undefined ? new Date().toISOString().slice(0, 10) : evidenceDayV1(temporal.now, temporal.time_zone)!);
   const askedBy = askerName(options.asker);
-  // Mine reads only what the asker added (ADR-0024): never a live tool, a follow-up (ADR-0040) or the workspace (research
-  // tool contract v1). Every other scope reads each live source the desk offers.
-  const liveCatalog: AgenticResearchSourceV1[] = options.desk.scope.kind === 'mine' ? [] : (options.desk.live_sources ?? []).map(descriptor => ({ ...descriptor, kinds: [descriptor.kind] }));
+  // Every scope reads each live source the desk offers.
+  const liveCatalog: AgenticResearchSourceV1[] = (options.desk.live_sources ?? []).map(descriptor => ({ ...descriptor, kinds: [descriptor.kind] }));
   const researchSources: readonly AgenticResearchSourceV1[] = Object.freeze([
     { source_id: 'meeting', selector: 'meetings', kinds: LOCAL_SOURCE_KINDS_V1.meeting, description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.', capabilities: MEETINGS_SOURCE_CAPABILITIES_V1 },
     { source_id: 'document', selector: 'documents', kinds: LOCAL_SOURCE_KINDS_V1.document, description: 'Uploaded document passages and notes.', capabilities: DOCUMENTS_SOURCE_CAPABILITIES_V1 },
@@ -413,7 +411,7 @@ function createAgenticAskCore(options: CreateAgenticAskOptions) {
             resolvedQuestion = resolution.question;
             researchBrief = Object.freeze({
               ...brief, goal: Object.freeze({ kind: "question" as const, question: resolution.question }),
-              starting: options.desk.openCitation === undefined ? [] : agenticFollowUpStartingV1(previous, resolution.about, options.desk.scope),
+              starting: options.desk.openCitation === undefined ? [] : agenticFollowUpStartingV1(previous, resolution.about),
             });
             if (runnableBrief(researchBrief) === null) throw new AgenticAskOutputErrorV1("question is invalid");
           }

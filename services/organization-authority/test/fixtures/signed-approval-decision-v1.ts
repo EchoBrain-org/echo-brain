@@ -1,8 +1,6 @@
 import { canonicalJson, sha256Digest, type JsonObject, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   APPROVAL_DECISION_SNAPSHOT_SURFACE_V1,
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type OrganizationRecordDecisionBriefV1,
 } from "@echo-brain/organization-protocol";
 import {
@@ -24,18 +22,15 @@ import {
 import type Database from "better-sqlite3";
 import {
   approvedDecisionSnapshotV2Sha256,
-  buildHumanActRecordInputV1,
   validateApprovedDecisionSnapshotV2,
-  type HumanActEventV1,
-} from "../../../../packages/organization-protocol/src/human-act-record-input-v1.js";
+} from "../../../../packages/organization-protocol/src/approved-decision-snapshot-v2.js";
 import {
   createOrganizationRecordEnvelopeV4,
   verifyOrganizationRecordEnvelopeV4,
 } from "../../../../packages/organization-protocol/src/record-envelope-v4.js";
 import {
   COORDINATES,
-  authorizationWitness,
-  humanAct,
+  approvedSnapshot,
   processorProvenance,
   receiptFactory,
   sourceProvenance,
@@ -48,7 +43,7 @@ import {
 } from "../../src/composition/authority-record-protocols-v1.js";
 import { readableSearchGenerationContractV1 } from "../../src/composition/readable-search-generation-composition.js";
 
-/** The Authority's record codecs (authority-record-protocols-v1.ts: generic human acts and approval decisions). */
+/** The Authority's record codecs (authority-record-protocols-v1.ts: approval decisions). */
 export const SIGNED_APPROVAL_CODECS = AUTHORITY_RECORD_INPUT_CODECS_V1;
 /** The Authority's policy projectors. */
 export const SIGNED_APPROVAL_PROJECTORS = authorityRecordPolicyProjectorsV1();
@@ -59,37 +54,34 @@ export const SIGNED_APPROVAL_PRIVATE_MARKER = "cmd-fixture";
 const SIGNED_APPROVAL_ISSUED_AT = "2026-08-21T12:02:00.000Z";
 
 export interface SignedApprovalInputV1 {
-  /** The proposal's approval id. An approval decision's record carries the id derived for its destination (approvalRecordIdV2);
-   *  any other record carries this one. */
+  /** The proposal's approval id; its record carries the id derived for its destination (approvalRecordIdV2). */
   readonly approval_id: string;
   readonly audit_sequence: number;
-  /** A project audience; [] is Only me (both an approval decision, every item routed there). "team" is the whole organization (a generic human act). */
-  readonly projects: readonly string[] | "team";
-  /** Every item kept for the approver alone inside `projects` (ADR-0049); an approval decision with projects only. */
+  /** A project audience; [] is Only me. Every item is routed there. */
+  readonly projects: readonly string[];
+  /** Every item kept for the approver alone inside `projects` (ADR-0049); with projects only. */
   readonly private?: true;
   readonly final_approver: { readonly principal_id: string; readonly membership_id: string };
   /** The receipt and envelope time; it is the meeting's list time. */
   readonly issued_at?: string;
-  /** A rejection is a generic human act. */
-  readonly action?: "approve" | "reject";
   /** Signal counts of the fixture brief (one decision by default). */
   readonly signals?: { readonly decisions?: number; readonly actions?: number; readonly rationales?: number };
   /** Reshapes the approved brief (title, time, participants, signals) before it is signed. */
   readonly brief?: (brief: OrganizationRecordDecisionBriefV1) => OrganizationRecordDecisionBriefV1;
-  /** Approver-confirmed owners (ADR-0021); approval decisions only. */
+  /** Approver-confirmed owners (ADR-0021). */
   readonly action_owners?: readonly { readonly signal_id: string; readonly owner: string }[];
-  /** The decision's surface (default desktop); approval decisions only. */
+  /** The decision's surface (default desktop). */
   readonly surface?: "desktop" | "slack";
+  /** The record log's coordinates (default the record fixture's). */
+  readonly coordinates?: { readonly authority_id: string; readonly organization_id: string; readonly state_lineage_id: string };
 }
 
 type SignedEnvelopeInput = Parameters<typeof createOrganizationRecordEnvelopeV4>[0]["human_act_record_input"];
 
 /**
- * One real signed record, appended through the record appender; returns the approval id it was appended under. An approval
- * with an array audience is an approval decision built by the production builder (buildApprovalDecisionRecordsV1) with every
- * item routed to that audience, so it is one record under its destination's derived id. A Team approval or a rejection is a
- * generic human act (HUMAN_ACT_RECORD_INPUT_CODEC_V1):
- * production writes neither for meetings, but the Authority still reads them.
+ * One real signed record, appended through the record appender; returns the approval id it was appended under: an approval
+ * decision built by the production builder (buildApprovalDecisionRecordsV1) with every item routed to `projects`, so it is
+ * one record under its destination's derived id. Production writes only approval decisions, and only approvals.
  */
 export async function appendSignedApprovalV1(
   app: OrganizationRecordAppenderV4,
@@ -97,81 +89,62 @@ export async function appendSignedApprovalV1(
   input: SignedApprovalInputV1,
 ): Promise<string> {
   const { approval_id, audit_sequence } = input;
+  const coordinates = input.coordinates ?? COORDINATES;
   const final_approver = { principal_id: input.final_approver.principal_id, membership_id: input.final_approver.membership_id };
   const issued_at = input.issued_at ?? SIGNED_APPROVAL_ISSUED_AT;
-  const action = input.action ?? "approve";
-  const decision = action === "approve" && input.projects !== "team";
   const transform = (snapshot: ReturnType<typeof validateApprovedDecisionSnapshotV2>, surface?: string) => validateApprovedDecisionSnapshotV2({
     ...snapshot, approved_payload: { ...snapshot.approved_payload, ...(surface === undefined ? {} : { surface }),
       brief: input.brief === undefined ? snapshot.approved_payload.brief : input.brief(snapshot.approved_payload.brief) },
   });
-  let human_act_record_input: SignedEnvelopeInput, semantic_idempotency_key: Sha256Digest, witness: unknown, appended_as = approval_id;
-  if (decision) {
-    const fixture = (humanAct(approval_id, "approve", RESTRICTED_REVIEWER_PERSON_POLICY_ID, 1, input.signals).event as Extract<HumanActEventV1, { kind: "approved" }>).approved_snapshot;
-    const shaped = transform(fixture, APPROVAL_DECISION_SNAPSHOT_SURFACE_V1);
-    // The fixture's reasons support nothing, and a destination group holds only reasons for its items (an unsupported one
-    // goes to Only me alone): each supports the first item, so every record keeps every signal it is given.
-    const first = [...shaped.approved_payload.brief.decisions, ...shaped.approved_payload.brief.actions][0]?.id;
-    const snapshot = validateApprovedDecisionSnapshotV2({ ...shaped, approved_payload: { ...shaped.approved_payload, brief: { ...shaped.approved_payload.brief,
-      rationales: shaped.approved_payload.brief.rationales.map((reason) => reason.supports_signal_ids.length > 0 || first === undefined ? reason : { ...reason, supports_signal_ids: [first] }) } } });
-    const brief = snapshot.approved_payload.brief;
-    if (brief.decisions.length + brief.actions.length === 0) {
-      throw new Error("an approval-decision record keeps at least one decision or action (production never stages a proposal without one)");
-    }
-    if (brief.actions.some((signal) => signal.owner !== null)) {
-      throw new Error("an approval-decision snapshot carries no owner; confirmed owners go in action_owners");
-    }
-    const surface = input.surface ?? "desktop";
-    const command_id = `${surface === "slack" ? "slack:" : ""}${SIGNED_APPROVAL_PRIVATE_MARKER}-${approval_id}`;
-    const projects = [...(input.projects as readonly string[])];
-    const body: ApprovalDecisionBodyV1 = {
-      request: { approval_id, command_id, snapshot_sha256: approvedDecisionSnapshotV2Sha256(snapshot), action: "approve",
-        routes: [...brief.decisions, ...brief.actions].map((signal) => ({ signal_id: signal.id, project_ids: projects, ...(input.private === true ? { private: true as const } : {}) })),
-        owners: input.action_owners ?? [] },
-      surface, actor: { organization_id: COORDINATES.organization_id, ...final_approver },
-      evidence: { kind: surface === "desktop" ? "person-session" : "slack-click", sha256: sha256Digest(`evidence-${approval_id}`) },
-      transcript_source: { source_id: `source-${approval_id}`, revision_id: "revision-1", source_sha256: sha256Digest(`source-${approval_id}`) },
-      decided_at: issued_at,
-    };
-    const [built] = buildApprovalDecisionRecordsV1({ coordinates: COORDINATES, decision: { sequence: audit_sequence, body },
-      candidate_sha256: sha256Digest(`candidate-${approval_id}`), approved_snapshot: snapshot });
-    human_act_record_input = built!.human_act_record_input as unknown as SignedEnvelopeInput;
-    semantic_idempotency_key = built!.semantic_idempotency_key;
-    witness = built!.authorization_witness;
-    appended_as = built!.approval_id;
-  } else {
-    if (input.action_owners !== undefined || input.surface !== undefined || input.private !== undefined) {
-      throw new Error("owners, surface and private need an approval-decision record");
-    }
-    const policy = input.projects === "team" ? ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID : RESTRICTED_REVIEWER_PERSON_POLICY_ID;
-    const fixture = humanAct(approval_id, action, policy, 1, input.signals);
-    const event = fixture.event;
-    const changed = event.kind === "approved"
-      ? (() => { const snapshot = transform(event.approved_snapshot); return { ...event, approved_snapshot: snapshot, approved_snapshot_sha256: approvedDecisionSnapshotV2Sha256(snapshot) }; })()
-      : event;
-    const human = buildHumanActRecordInputV1({ human_act_resolution_ref: { ...fixture.human_act_resolution_ref, audit_sequence }, event: changed });
-    human_act_record_input = { human_act_resolution_ref: human.human_act_resolution_ref, event: human.event, idempotency: human.idempotency } as unknown as SignedEnvelopeInput;
-    semantic_idempotency_key = human.semantic_idempotency_key;
-    witness = authorizationWitness(human, final_approver);
+  const shaped = transform(approvedSnapshot(approval_id, 1, input.signals), APPROVAL_DECISION_SNAPSHOT_SURFACE_V1);
+  // The fixture's reasons support nothing, and a destination group holds only reasons for its items (an unsupported one
+  // goes to Only me alone): each supports the first item, so every record keeps every signal it is given.
+  const first = [...shaped.approved_payload.brief.decisions, ...shaped.approved_payload.brief.actions][0]?.id;
+  const snapshot = validateApprovedDecisionSnapshotV2({ ...shaped, approved_payload: { ...shaped.approved_payload, brief: { ...shaped.approved_payload.brief,
+    rationales: shaped.approved_payload.brief.rationales.map((reason) => reason.supports_signal_ids.length > 0 || first === undefined ? reason : { ...reason, supports_signal_ids: [first] }) } } });
+  const brief = snapshot.approved_payload.brief;
+  if (brief.decisions.length + brief.actions.length === 0) {
+    throw new Error("an approval-decision record keeps at least one decision or action (production never stages a proposal without one)");
   }
+  if (brief.actions.some((signal) => signal.owner !== null)) {
+    throw new Error("an approval-decision snapshot carries no owner; confirmed owners go in action_owners");
+  }
+  const surface = input.surface ?? "desktop";
+  const command_id = `${surface === "slack" ? "slack:" : ""}${SIGNED_APPROVAL_PRIVATE_MARKER}-${approval_id}`;
+  const projects = [...input.projects];
+  const body: ApprovalDecisionBodyV1 = {
+    request: { approval_id, command_id, snapshot_sha256: approvedDecisionSnapshotV2Sha256(snapshot), action: "approve",
+      routes: [...brief.decisions, ...brief.actions].map((signal) => ({ signal_id: signal.id, project_ids: projects, ...(input.private === true ? { private: true as const } : {}) })),
+      owners: input.action_owners ?? [] },
+    surface, actor: { organization_id: coordinates.organization_id, ...final_approver },
+    evidence: { kind: surface === "desktop" ? "person-session" : "slack-click", sha256: sha256Digest(`evidence-${approval_id}`) },
+    transcript_source: { source_id: `source-${approval_id}`, revision_id: "revision-1", source_sha256: sha256Digest(`source-${approval_id}`) },
+    decided_at: issued_at,
+  };
+  const [built] = buildApprovalDecisionRecordsV1({ coordinates: { authority_id: coordinates.authority_id, organization_id: coordinates.organization_id,
+    state_lineage_id: coordinates.state_lineage_id }, decision: { sequence: audit_sequence, body },
+    candidate_sha256: sha256Digest(`candidate-${approval_id}`), approved_snapshot: snapshot });
+  const human_act_record_input = built!.human_act_record_input as unknown as SignedEnvelopeInput;
+  const lineage = { authority_id: coordinates.authority_id, organization_id: coordinates.organization_id, state_lineage_id: coordinates.state_lineage_id };
   await app.append({
-    approval_id: appended_as, action, semantic_idempotency_key,
-    receipt_issued_at: issued_at, authorization_witness: witness,
+    approval_id: built!.approval_id, action: "approve", semantic_idempotency_key: built!.semantic_idempotency_key,
+    receipt_issued_at: issued_at, authorization_witness: built!.authorization_witness,
     envelope_factory: {
       create: async (allocation) => createOrganizationRecordEnvelopeV4({
         envelope_id: `envelope-${approval_id}`, issued_at,
         predecessor_position: allocation.predecessor_position,
         predecessor_record_sha256: allocation.predecessor_record_sha256,
         human_act_record_input,
-        source_provenance: sourceProvenance(), processor_provenance: processorProvenance(),
-      }, authority.pinned, COORDINATES.state_lineage_id, authority.sign, SIGNED_APPROVAL_CODECS) as unknown as JsonObject,
+        source_provenance: { ...sourceProvenance(), ...lineage },
+        processor_provenance: { ...processorProvenance(), ...lineage },
+      }, authority.pinned, coordinates.state_lineage_id, authority.sign, SIGNED_APPROVAL_CODECS) as unknown as JsonObject,
       verify: (value) => verifyOrganizationRecordEnvelopeV4(
-        value, authority.pinned, COORDINATES.state_lineage_id, SIGNED_APPROVAL_CODECS,
+        value, authority.pinned, coordinates.state_lineage_id, SIGNED_APPROVAL_CODECS,
       ) as unknown as V4RecordEnvelopeView & JsonObject,
     },
-    receipt_factory: receiptFactory(authority, { sign_calls: { value: 0 } }, SIGNED_APPROVAL_CODECS),
+    receipt_factory: receiptFactory(authority, { sign_calls: { value: 0 }, state_lineage_id: coordinates.state_lineage_id }, SIGNED_APPROVAL_CODECS),
   });
-  return appended_as;
+  return built!.approval_id;
 }
 
 function plane(role: string, schema_sha256: Sha256Digest, database_schema_version: 1 | 2 | 3) {
@@ -209,7 +182,6 @@ export function generationFromRecordDatabase(input: {
     } },
     exact_head: { ...COORDINATES, position: head.position, record_sha256: head.record_sha256 },
     retrieval_contract_sha256: contract.retrieval_contract_sha256,
-    organization_member_policy_contract_sha256: contract.organization_member_policy_contract_sha256,
     restricted_reviewer_policy_contract_sha256: contract.restricted_reviewer_policy_contract_sha256,
     project_members_policy_contract_sha256: contract.project_members_policy_contract_sha256,
     analyzer: contract.analyzer, source_revision: contract.source_revision, builder_artifact_sha256: contract.builder_artifact_sha256,

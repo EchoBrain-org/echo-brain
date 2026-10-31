@@ -8,6 +8,7 @@ import {
 } from "@echo-brain/organization-api";
 import type { OrganizationRecordDecisionBriefV1, OrganizationRecordMeetingTimeV1 } from "@echo-brain/organization-protocol";
 import type { RecordApproverProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { READABLE_SEARCH_ADMISSION_BUDGET_V1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { boundedTextV1, releasableBodyV1 } from "../application/person-item-text-v1.js";
 
@@ -228,12 +229,13 @@ export interface RecordMetadataV1 {
   readonly envelope_sha256: Sha256Digest;
   /** The signed receipt's issue time, canonical. */
   readonly added_at?: string;
-  /** null: no approver projects, so the record is nobody's mine. */
+  /** null: no approver projects, so the record names no approver. */
   readonly approver?: RecordApproverTupleV1 | null;
   readonly presentation?: Readonly<{ title: string | null; meeting_date?: string }>;
 }
 
-const RECORD_METADATA_CACHE_ENTRIES = 1_024;
+/** A generation admits at most one record per atom, so every record a list can reach stays cached. */
+const RECORD_METADATA_CACHE_ENTRIES = READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms;
 
 /**
  * A bounded cache keyed by the immutable record digest. It decorates or

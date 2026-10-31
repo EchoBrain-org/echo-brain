@@ -10,7 +10,7 @@ component_ids:
 created_at: 2026-10-25
 reviewed_at: 2026-10-27
 reviewed_ref: aa79d90c81dbcf8f0147ecb66bfbbe4edbf2c2ff
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -27,8 +27,9 @@ compatible with, and that clients update themselves
 ([ADR-0035](ADR-0035-desktop-updates-from-the-signed-feed.md)). Code that
 exists only so an older server or an older client keeps working should go.
 This record covers the Person routes outside Ask. The older Ask routes and the
-Ask client's fallbacks are retired separately. This record is proposed until
-the founder confirms the release.
+Ask client's fallbacks are retired separately. The founder accepted this
+record on 2026-10-31, as built in `494c62a`, which merged with #365
+(`aa79d90`). Acceptance does not mean the change is deployed or qualified.
 
 ## Context and options
 
@@ -112,6 +113,26 @@ Retire them, and keep what reads stored data.
 - Not covered here: the older Ask routes and the Ask client's fallbacks, the
   Ask source check's `not_supported` and the desktop's handling of it, and
   `/v3/person/capabilities`.
+
+Update (2026-10-31): what this record left out is retired too.
+`GET /v3/person/capabilities` answers the ordinary 404 and stays reserved
+against provider adapters. The client no longer reads `x-echo-person-ask-route`
+and no longer turns a 404 from Ask or the Ask source check into
+`not_supported`: it is `not_found`, as from any other read (the desktop's own
+handling went with the Ask timeline, [ADR-0047](ADR-0047-ask-timeline.md)).
+`GET /v1/person/records` always carries `source_metadata`, so the client sends
+no `x-echo-person-record-version`. The CLI-only mine scope and the person
+list's global scope are retired
+([ADR-0024](ADR-0024-person-list-open-and-mine-scope.md)), and so are
+`POST /v3/person/evidence/open` and the `person evidence` commands;
+`POST /v3/person/evidence/search` stays for the research-loop evaluation.
+These ship in the release order below, the Authority first. `/v7` keeps
+sending `x-echo-person-ask-route` for one more release, because released
+clients refuse a progress stream without it and the desktop always asks with
+progress; it goes once the update floor passes this release. So a desktop that
+has not updated keeps working. Until it updates, an installed CLI is refused
+`person ask --mine` and a `person list` with neither `--project` nor
+`--only-me`, and its `person evidence open` gets `not_found`.
 
 ## Migration, rollback, and evidence
 

@@ -17,11 +17,6 @@ import { assertToolId, fail } from './validation.js';
  */
 export const PERSON_ANSWER_PATH_V7 = '/v7/person/ask';
 /**
- * Present, with the value `7`, on every response the `/v7` route gives, provider and application errors included, so a
- * client tells the route's own 404 from an Authority that has no `/v7`.
- */
-export const PERSON_ANSWER_ROUTE_HEADER_V5 = 'x-echo-person-ask-route';
-/**
  * Ticket citations, which the V5 answer added. That answer and its route, `/v4/person/ask`, were retired; an impact
  * card's V6 citations and the V8 answer's build on these.
  */
