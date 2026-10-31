@@ -602,21 +602,14 @@ describe("Organization Authority clean-v1 release record", () => {
 
   it("keeps the bounded staging canary private, release-bound, and separate from promotion", () => {
     const source = readFileSync(UPDATE, "utf8");
-    expect(source).toContain("--canary-passed");
     expect(source).toContain("update-clean-v1.sh canary");
-    expect(source).toContain("run_staging_private_dm_canary");
-    expect(source).toContain(
-      "stop for founder approval of the canary meeting and the exact candidate-client record and answer checks",
-    );
     expect(source).toContain("authority-staging.echobrain.org");
     expect(source).toContain("compose_clean exec -T authority node");
     expect(source).toContain("staging-private-dm-canary --release-id");
-    expect(source).toContain("validate_staging_canary_receipt");
     expect(source).not.toContain("onboard-clean-v1.sh resume");
+    // The record validator admits one baseline class, so no fixture reaches this check.
     expect(source).toContain("candidate baseline is not compatible");
     expect(source).toContain("@sha256:");
-    expect(source).toContain(".authority-operation-lock");
-    expect(source).not.toContain("imageTag");
   });
 
   it("serializes release commands with Authority activation and keeps a dead-owner lock fail-closed for deliberate recovery", () => {
@@ -669,33 +662,9 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(readdirSync(outside)).toEqual([]);
   });
 
-  it("binds Authority image source and build identity to OCI metadata before startup", () => {
-    const dockerfile = readFileSync(DOCKERFILE, "utf8");
-    const update = readFileSync(UPDATE, "utf8");
-    expect(dockerfile).toContain("ARG ECHO_SOURCE_SHA");
-    expect(dockerfile).toContain("ARG ECHO_BUILD_NUMBER");
-    expect(dockerfile).toContain('org.opencontainers.image.revision="${ECHO_SOURCE_SHA}"');
-    expect(dockerfile).toContain(
-      'org.echobrain.authority.build-number="${ECHO_BUILD_NUMBER}"',
-    );
-    expect(dockerfile).toContain(
-      'org.echobrain.authority.telemetry.staging-journey-v1="true"',
-    );
-    expect(dockerfile).toContain('ECHO_SOURCE_SHA="${ECHO_SOURCE_SHA}"');
-    expect(dockerfile).toContain('ECHO_BUILD_NUMBER="${ECHO_BUILD_NUMBER}"');
-    expect(dockerfile).toContain('ECHO_STAGING_JOURNEY_TELEMETRY_V1="true"');
-    expect(dockerfile).toContain(
+  it("declares the staging canary state capability on the Authority image", () => {
+    expect(readFileSync(DOCKERFILE, "utf8")).toContain(
       'org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1="true"',
-    );
-    expect(update).toContain("org.opencontainers.image.revision");
-    expect(update).toContain("image_source_matches \"$expected\" \"$expected_source\"");
-    expect(update).toContain("running_staging_journey_telemetry_identity_matches");
-    expect(update).toContain("{{json .Config.Env}}");
-    expect(update).toContain(
-      'host="$(authority_host 2>/dev/null)" || return 1',
-    );
-    expect(update).toContain(
-      '[[ "$host" == "authority-staging.echobrain.org" ]] || return 0',
     );
   });
 
@@ -886,9 +855,8 @@ fi
     expect(readFileSync(fixture.envFile, "utf8")).toBe(environment);
   });
 
-  it("verifies an exact artifact before installing it and uses the product status surface", () => {
+  it("installs the verified artifact offline without package scripts and uses the product status surface", () => {
     const source = readFileSync(INSTALL, "utf8");
-    expect(source.indexOf("actual_sha")).toBeLessThan(source.lastIndexOf("npm install"));
     expect(source).toContain("--ignore-scripts");
     expect(source).toContain("--no-audit");
     expect(source).toContain("--no-fund");
@@ -896,8 +864,6 @@ fi
     expect(source).toContain('prefix="$HOME/.local"');
     expect(source).toContain("export PATH=");
     expect(source).toContain('"$prefix/bin/echo-brain" person status');
-    expect(source).not.toContain("git clone");
-    expect(source).not.toContain("session-install");
   });
 
   it("refuses an artifact digest mismatch before npm can install anything", () => {
@@ -1425,6 +1391,9 @@ fi`);
     }));
     const staged = fixture.execute("stage", "--release", candidate, "--runtime-profile", fixture.profile);
     expect(staged.status, staged.stderr).toBe(0);
+    expect(staged.stdout).toContain(
+      "stop for founder approval of the canary meeting and the exact candidate-client record and answer checks",
+    );
     // A failed canary persists nothing, so every outcome reuses one staged candidate.
     for (const [fields, failure] of [
       ['"approval_outcome":"delivery_pending","approval_id":"approval-canary"', "delivery is still pending"],

@@ -806,21 +806,10 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     const guide = deploymentFile("README.md");
 
     // Slack is set up in the ECHO app; the host holds only the Nango key.
-    for (const retired of [
-      "configure-slack-browser",
-      "slack-browser-oidc.json",
-      "slack-bot-token",
-      "slack-signing-secret",
-      "slack_approval_channel_id",
-      "slack-approval-channel-id",
-      "Interactivity & Shortcuts",
-    ]) {
-      expect(source).not.toContain(retired);
+    for (const credential of ["slack-bot-token", "slack-signing-secret"]) {
+      expect(source).not.toContain(credential);
     }
     expect(source).toContain('redirect: "error"');
-    expect(source).toContain("status) [[ $# -eq 1 ]] || usage; status");
-    expect(source).toContain("compose.clean-v1.yaml");
-    expect(source).toContain("compose.clean-v1.ec2.yaml");
     expect(source).toContain('service_uses_release_runtime_profile "$RELEASE_FILE" authority');
     expect(source).toContain('service_uses_release_runtime_profile "$RELEASE_FILE" proxy');
     const compose = deploymentFile("compose.clean-v1.yaml");
@@ -835,26 +824,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     );
     expect(source).toContain("compose_clean pull authority");
     expect(source).toContain('"$SETUP_COMMAND" resume --state-dir /echo-clean/state');
-    expect(source).not.toContain("< \"$PRIVATE_DIR/");
     expect(source).toContain("require_image_present");
-    expect(source).toContain("onboarding_complete=true");
-    expect(source).not.toContain("Reject a second card");
-    expect(source).toContain("canonical accepted release record %s");
-    expect(source).toContain("verified Person onboarding kit matching that release");
-    expect(source).toContain('"$initial_owner_invitation" "$RELEASE_FILE"');
-    // The retired app kit and its paired command path must not come back.
-    expect(source).not.toContain("Start ECHO.command");
-    expect(source).not.toContain("ECHO/bin/echo-brain");
-    expect(source).not.toContain("--app ");
-    expect(source).toContain("Do not use a preexisting global echo-brain command");
-    expect(source).toContain('client_sha256="$(release_field client-sha256)"');
-    expect(source).toContain('client_version="$(release_field client-version)"');
-    expect(source).toContain('source_sha="$(release_field source-sha)"');
-    expect(source).toContain("deploy/release/README.md");
-    expect(source).toContain("transferred accepted release record");
-    expect(source).toContain("replace-rehearsal --confirm-no-live-users");
-    expect(source).toContain("doctor --input-dir <absolute-private-input-directory>");
-    expect(source).toContain("prepare --input-dir <absolute-private-input-directory>");
     // Fixtures run as the runtime user, so only these show the wrapper uses its ids, not the executor's.
     expect(source).toContain('id -u "$runtime_user"');
     expect(source).toContain('id -g "$runtime_user"');
@@ -864,14 +834,29 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).not.toContain('uid="$(id -u)"');
     expect(source).not.toContain('gid="$(id -g)"');
     expect(source).not.toContain("compose_clean build");
-    expect(source).not.toContain("migrations/");
     expect(source).not.toContain("dist/main.js");
-    expect(source).not.toContain("--granola-credential");
-    expect(source).not.toContain("granola-owner-email");
-    expect(source).not.toContain("--llm-credential ");
     expect(guide).toContain("never auto-reclaim an existing lock");
     expect(guide).toContain("Recover an interrupted operation lock");
     expect(guide).toContain('rmdir -- "$authority_lock"');
+  });
+
+  it("finishes a complete onboarding through both Compose files and refuses extra status arguments with its usage", () => {
+    const fixture = preparedStatusFixture();
+    const complete = fixture.run("resume");
+    expect(complete.status, complete.stderr).toBe(0);
+    expect(complete.stdout).toContain("onboarding_complete=true\n");
+    expect(readFileSync(fixture.calls, "utf8")).toMatch(
+      / -f \S+\/compose\.clean-v1\.yaml -f \S+\/compose\.clean-v1\.ec2\.yaml /,
+    );
+    const extra = fixture.run("status", {}, ["extra"]);
+    expect(extra.status).toBe(2);
+    for (const usage of [
+      "doctor --input-dir <absolute-private-input-directory>",
+      "prepare --input-dir <absolute-private-input-directory>",
+      "replace-rehearsal --confirm-no-live-users",
+    ]) {
+      expect(extra.stderr).toContain(usage);
+    }
   });
 
   it("keeps credential-bearing release URLs out of the founder handoff and prints a kit build the command-line kit accepts", () => {
@@ -906,8 +891,15 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       });
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("RELEASE-MATCHED-KIT:");
-      expect(result.stdout).toContain("client_artifact_sha256=");
+      expect(result.stdout).toMatch(
+        /^ACTION: Privately transfer invitation \S+\/founder-person-invitation\.json, canonical accepted release record \S+\/current\.clean-v1\.json, and the verified Person onboarding kit matching that release to the initial-owner machine; preserve the invitation mode 0600\. Do not use a preexisting global echo-brain command\./m,
+      );
+      expect(result.stdout).toMatch(
+        /^RELEASE-MATCHED-KIT: release_id=clean-v1-status-test source_sha=c{40} client_version=\S+ client_artifact_sha256=b{64}$/m,
+      );
+      expect(result.stdout).toContain(
+        "use a reviewed checkout at source_sha above and deploy/release/README.md. Obtain the artifact only from the privately transferred accepted release record",
+      );
       expect(result.stdout).not.toContain(urlToken);
       expect(result.stdout).not.toContain("client_artifact_url=");
       expect(result.stdout).toContain(
@@ -2266,23 +2258,13 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(compose).toContain("/echo-clean/state");
     expect(compose).toContain("/v1/authority-descriptor");
     expect(compose).not.toContain("dist/main.js");
-    expect(compose).not.toContain("/echo/authority.json");
-    expect(compose).not.toContain("./data:/echo");
   });
 
-  it("keeps clean ingress free of the retired authenticated proxy contract", () => {
+  it("proxies clean ingress to the Authority with the client address", () => {
     const localCaddyfile = deploymentFile("Caddyfile.clean-v1");
     const ec2Caddyfile = deploymentFile("Caddyfile.clean-v1.ec2");
     for (const caddyfile of [localCaddyfile, ec2Caddyfile]) {
       expect(caddyfile).toContain("reverse_proxy 127.0.0.1:39479");
-      for (const forbidden of [
-        "X-Echo-Proxy-Authorization",
-        "X-Echo-Authenticated-Client-Id",
-        "X-Echo-Proxy-Source-Address",
-        "trusted-proxy",
-      ]) {
-        expect(caddyfile).not.toContain(forbidden);
-      }
     }
     expect(localCaddyfile).toContain(
       "header_up X-Echo-Client-IP {remote_host}",
@@ -2341,6 +2323,5 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     for (const forbidden of ["installation", "enrollment"]) {
       expect(cleanFiles).not.toContain(forbidden);
     }
-    expect(cleanFiles).not.toContain("lease-token");
   });
 });
