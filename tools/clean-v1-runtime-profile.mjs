@@ -78,7 +78,7 @@ export function validateRuntimeProfile(value) {
 
 function regularFile(path, label, maxBytes) {
   const state = lstatSync(path);
-  if (state.isSymbolicLink() || !state.isFile() || state.size < 0 || state.size > maxBytes) {
+  if (state.isSymbolicLink() || !state.isFile() || state.size > maxBytes) {
     fail(`${label} must be a regular non-symlink file no larger than ${Math.floor(maxBytes / 1024)} KiB`);
   }
   return state;
