@@ -18,7 +18,7 @@ const brief = {
 };
 const list = (records: readonly Record<string, unknown>[]) => ({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records });
 const record = (envelope: Record<string, unknown> = { record_sha256: RECORD, body: { event: {
-  kind: 'approved', policy_id: 'organization-member-readable-person-v2', approved_snapshot: { approved_payload: { brief } },
+  kind: 'approved', policy_id: 'project-members-readable-person-v1', approved_snapshot: { approved_payload: { brief } },
 } } }) => ({ position: 3, approval_id: 'apr_1', record_sha256: RECORD, envelope, source_metadata: { record_approved_by: { display_name: 'Maya Chen' } } });
 
 const homes: string[] = [];
@@ -42,7 +42,7 @@ describe('one cited record, as Ask cites it', () => {
     const printed = JSON.parse(cited.stdout) as { ok: true; result: unknown };
     expect(printed.ok).toBe(true);
     expect(validatePersonCitedRecordV1(printed.result)).toMatchObject({
-      record_sha256: RECORD, policy_id: 'organization-member-readable-person-v2', title: 'Tuesday sync', approved_by: 'Maya Chen', participants: ['Maya Chen'],
+      record_sha256: RECORD, policy_id: 'project-members-readable-person-v1', title: 'Tuesday sync', approved_by: 'Maya Chen', participants: ['Maya Chen'],
       decisions: { items: [{ atom_id: personRecordAtomIdV1(RECORD, 'd1'), text: 'Ship annual plans first.', status: 'decided',
         quotes: [{ quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z' }] }], more: false },
       actions: { items: [{ atom_id: personRecordAtomIdV1(RECORD, 'a1'), text: 'Maya updates the pricing page.', quotes: [] }], more: false },

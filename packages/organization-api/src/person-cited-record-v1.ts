@@ -125,7 +125,7 @@ function section(raw: unknown, kind: Kind, recordSha256: string, owners: Readonl
 
 /**
  * One record `person records --record-sha256` listed, as Ask cites it: only an
- * approved record, its own digest, under one of the three record policies.
+ * approved record, its own digest, under one of the two record policies.
  */
 export function personCitedRecordV1(record: PersonRecordListItemV1): PersonCitedRecordV1 {
   const body = object(record.envelope.body);
