@@ -11,31 +11,50 @@ login session and sends authenticated requests to that Authority.
 
 ### Person machine
 
-The only shipped machine product is `@echo-brain/person-client` in
-`src/product/person-client`. The Electron desktop app in `product/echo-desktop`
-is its graphical interface on macOS arm64 and Linux x64: it runs this same
-client in process and keeps no other session (see
+Two kinds of client ship from one release, both carrying the same Person
+client, `@echo-brain/person-client` in `src/product/person-client`: the
+command-line kits for macOS arm64 and Linux x64, and the Electron desktop app
+in `product/echo-desktop` for the same platforms, which runs that client in
+process and keeps no other session (see
 [Person client architecture](docs/architecture/person-client-architecture.md)).
 The native Swift app is retired.
 
 It can:
 
 - begin Google OIDC login and install or refresh a Person session;
-- ask cited questions across approved records and authorized upload/document
-  evidence, globally, within one project, or over only what they added;
-- list the notes, documents and approved meetings they can read, newest
-  first (all of them, one project's, or only their own), and open any of them
-  by its ref;
+- connect the person's own Granola, Jira and Confluence accounts, link their
+  Slack identity, read tool link status, and let an owner set up the
+  organization's Slack app;
+- bring meetings in from the person's own Granola (one at a time, or by
+  watching their meetings or one folder) or by pasting one from any tool, then
+  review each meeting privately: route every decision and action to Only me,
+  to one to twenty of their projects (optionally kept for them alone), or
+  nowhere, and confirm action owners
+  ([ADR-0046](docs/decisions/ADR-0046-private-meetings-and-item-routing.md));
+- ask cited questions across approved records, authorized notes and
+  documents, follow-ups, their projects, people and tools, and their live Jira
+  and Confluence sources, globally or within one project (the CLI also over
+  only what they added), and ask a follow-up to the answer before;
+- list the notes, documents and meetings they can read, newest first (all of
+  them, one project's, only what they added, or everything only they can
+  read), and open any of them by its ref;
 - list and search approved records;
+- work the follow-ups of approved meetings: read each approval's impact check,
+  send its follow-ups to their owners, reassign them and set their state
+  ([ADR-0033](docs/decisions/ADR-0033-shared-open-items.md));
 - create projects and manage their members, settings and associated context;
 - upload text notes and documents with a chosen audience, then read or
   download them;
 - find people in the organization directory;
-- bind the signed-in identity to Slack and read organization tool link status;
 - let an owner list, invite, reissue or revoke employees; and
 - install signed updates from a configured feed: the CLI with
   `echo-brain update`, and the desktop app from its sidebar row
   ([ADR-0035](docs/decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)).
+
+The desktop app also starts queued impact checks and sweeps under the
+signed-in person's own session, checks for changes and shows system
+notifications, and keeps a device-only Ask timeline
+([ADR-0047](docs/decisions/ADR-0047-ask-timeline.md)).
 
 It does not run meeting processing, hold provider OAuth or Slack service
 credentials, keep a local product database, or receive fleet update
@@ -51,9 +70,14 @@ Tokens are never printed by successful commands.
 
 - external OIDC Person identity and rotating sessions;
 - organization authorization and audit;
-- meeting-source, decision-processing, and Slack presentation and identity
-  adapters, plus the per-person live Jira and Confluence readers;
-- the append-only organization record; and
+- each person's own meeting sources (Granola, pasted meetings, and a
+  staging-only synthetic source), decision processing, and Slack presentation
+  and identity adapters, plus the per-person live Jira and Confluence readers;
+- one approval core for every meeting proposal, decided from a Person client
+  or on the optional Slack DM copy;
+- the append-only organization record;
+- impact checks, shared follow-ups and sweeps for approved records, and the
+  change check the desktop polls; and
 - deterministic, permission-aware record reads and cited answers.
 
 The server starts only from six byte-pinned baseline schemas, one per state
@@ -63,10 +87,16 @@ Startup refuses older state instead of migrating it.
 Ask is the agentic research loop of
 [ADR-0019](docs/decisions/ADR-0019-agentic-ask-v1.md) as updated by
 [ADR-0022](docs/decisions/ADR-0022-agentic-ask-only.md): a bounded number of
-research rounds over read-only search, open and list tools, plus the asker's
-request-local live Jira and Confluence sources when they are configured, then
-a final answer call. Citations are limited to evidence that request released
-and audited, and the loop has no direct record or store access. The evidence
+research rounds over read-only search, open and list tools, the asker's
+follow-ups ([ADR-0040](docs/decisions/ADR-0040-follow-ups-as-ask-evidence.md))
+and their projects, people and tools
+([ADR-0042](docs/decisions/ADR-0042-research-tool-contract.md)), plus the
+asker's request-local live Jira and Confluence sources when they are
+configured, then a final answer call. A question may carry the asker's
+previous turn ([ADR-0047](docs/decisions/ADR-0047-ask-timeline.md)), and impact
+checks and sweeps run the same loop in the background with a larger budget.
+Citations are limited to evidence that request released and audited, and the
+loop has no direct record or store access. The evidence
 desk owns Person authorization and release audits; Person list and open read
 originals outside the answer-model gate.
 
@@ -74,7 +104,10 @@ originals outside the answer-model gate.
 
 ```text
 packages/                               Linked reusable modules and shared contracts
-packages/organization-authority-kernel/ Authority baselines, persistence and state lineage
+packages/federation-protocol/           Canonical JSON, digests and signature primitives
+packages/organization-protocol/         Authority pin, approval policy and signed-record contracts
+packages/organization-api/              Versioned Authority HTTP contracts and validators
+packages/organization-authority-kernel/ Authority baselines, persistence, state lineage, research loop, answer composition and live-evidence boundary
 packages/organization-processing/       Provider-neutral meeting processing
 packages/organization-control-plane/    Linked Authority control-plane module
 packages/organization-record/           Linked Authority record module
@@ -84,6 +117,10 @@ services/organization-authority/        Deployable Authority and processing serv
 src/product/person-client/              Standalone Person CLI package
 product/echo-desktop/                   Electron desktop app over the Person client
 deploy/organization-authority/          Container and EC2 deployment assets
+deploy/release/                         Release-record validation, Person kit builders and the release procedure
+deploy/client-updates/                  Signed client update feed hosting
+tools/                                  Build, check, staging, release, feed and evaluation tools
+demo/                                   Synthetic customer-value demo and its evaluator
 tests/                                  Cross-workspace architecture and Person tests
 ```
 
@@ -536,12 +573,9 @@ Do not reuse the operation ID until cleanup has proved absence.
 
 ## Design records
 
-- [Organization-operated server core](docs/decisions/ADR-0001-organization-operated-server-core.md)
-- [External OIDC Person sessions](docs/decisions/ADR-0002-external-oidc-person-sessions.md)
-- [ECHO-hosted Authority by default](docs/decisions/ADR-0008-echo-hosted-authority-by-default.md)
-- [Retained Authority data-volume boundary](docs/decisions/ADR-0009-retained-authority-data-volume-boundary.md)
-- [Workspace boundaries](docs/architecture/organization-workspace-boundaries.md)
-- [Person client architecture](docs/architecture/person-client-architecture.md)
+The [documentation index](docs/README.md) routes to the architecture maps,
+components and records, and the [decision index](docs/decisions/README.md)
+lists every ADR with its status.
 
 Typed ADR, RFC, invariant, and qualification evidence remains as design and
 verification history. Historical executable migrations are intentionally not
