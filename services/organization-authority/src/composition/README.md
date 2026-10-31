@@ -18,14 +18,11 @@ import a provider implementation.
   as live connectors only when the service CLI supplies their explicit
   configuration. Meetings come only from
   person-owned sources; there is no organization meeting source.
-- `organization-authority-service-cli.ts` instead opens
-  `staging-connector-rehearsal-runtime.ts` when the staging host selects a
-  connector rehearsal profile. That opt-in, staging-only root and its
-  protocol and selection modules (`staging-connector-rehearsal-*`) sit at the
-  top of this directory, not in `staging/`.
-- The connector rehearsal is a Jira-only, request-bound read verification.
-  The Slack bot reads nothing, and the rehearsal has no capture or storage
-  path.
+- `organization-authority-service-cli.ts` opens this one root on every
+  Authority. On staging, the fixed connector profile that
+  `staging-connector-rehearsal-selection.ts` reads only supplies the Jira and
+  Confluence configuration; Jira connections stay in the state directory, as
+  with explicit flags.
 - `organization-authority-runtime.ts` composes the provider-neutral runtime.
   `organization-authority-service-lifecycle.ts` owns startup, the worker,
   shutdown order and the writer gate. The gate covers only recovery and
@@ -121,8 +118,6 @@ known layering debt:
   `SqliteImpactItemsV1` and `SqliteOpenItemPeopleV1`);
 - `person-provider-state-v1.ts`: each person provider's own database, which
   it opens and binds to the Authority lineage (raw SQL);
-- `staging-connector-rehearsal-runtime.ts`: the staging connector rehearsal
-  root, which checks the initial owner's membership (raw SQL);
 - `staging/staging-synthetic-personal-canary-v1.ts`: the staging release
   canary (raw SQL on memberships, source progress, proposals and held
   extractions); and
