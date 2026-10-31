@@ -38,13 +38,12 @@ are configuration limits, not a tested maximum customer count.
   item rows. A 25-row research list page supports continuation and is not a
   total inventory limit.
 - **Record search:** one search generation admits at most 8,192 approved items
-  (atoms) organization-wide, 128 permission segments (one for the whole
-  organization, one per approver with Only me items, and one per distinct set
-  of audience projects), 4,096 bytes of text per item, and 204,800 index
-  postings (25 per item; approved items carry about 15 to 17). At about 9 items
-  per approved meeting and 0.35 approved meetings per person per workday, a
-  10-person organization reaches 8,192 items in about a year and a 25-person
-  one in about five months.
+  (atoms) organization-wide, 128 permission segments (one per approver with
+  Only me items and one per distinct set of audience projects), 4,096 bytes of
+  text per item, and 204,800 index postings (25 per item; approved items carry
+  about 15 to 17). At about 9 items per approved meeting and 0.35 approved
+  meetings per person per workday, a 10-person organization reaches 8,192
+  items in about a year and a 25-person one in about five months.
   Each publication rebuilds the whole generation synchronously, so the process
   pauses for roughly 0.13 ms per item plus 9 ms per segment. At the full
   ceiling that measured about 2.5 s to build and 0.5 s to prewarm on an

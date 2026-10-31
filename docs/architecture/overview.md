@@ -334,15 +334,15 @@ Owners: [deploy/organization-authority/README.md](../../deploy/organization-auth
   items, 128 permission segments, 4,096 bytes of text per item and 204,800
   postings, whichever binds first (`READABLE_SEARCH_ADMISSION_BUDGET_V1`):
   about a year of approvals for a ten-person organization. Segments are one
-  for the organization, one per approver with Only me items, and one per
-  distinct set of audience projects. Each approval rebuilds the whole
-  generation in one synchronous pass (about 3 s on a laptop at the ceiling)
-  and deletes the generation it replaced. From 75% of any limit the service
-  logs a capacity warning. Past a limit the rebuild is refused and logged by
-  name, and reads need a generation built for the record log's exact head, so
-  record search and lists become unavailable, Ask answers without approved
-  meetings and impact checks keep retrying; a restart still opens the API. See
-  the [scaling decision guide](scaling-decision-guide.md).
+  per approver with Only me items and one per distinct set of audience
+  projects. Each approval rebuilds the whole generation in one synchronous
+  pass (about 3 s on a laptop at the ceiling) and deletes the generation it
+  replaced. From 75% of any limit the service logs a capacity warning. Past a
+  limit the rebuild is refused and logged by name, and reads need a generation
+  built for the record log's exact head, so record search and lists become
+  unavailable, Ask answers without approved meetings and impact checks keep
+  retrying; a restart still opens the API. See the
+  [scaling decision guide](scaling-decision-guide.md).
 - **One process, one volume, no migrations.** A baseline change means fresh
   state.
 - **Impact checks need a client to start them.** The approver's desktop does
