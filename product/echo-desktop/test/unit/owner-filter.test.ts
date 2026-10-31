@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList } from '../../src/renderer/store.js';
 import type { OpenItemView } from '../../src/shared/protocol.js';
-import { followUp, ME, MINA, RAFAEL } from './changes-fixture.js';
+import { followUp, id, ME, MINA, RAFAEL, sent } from './changes-fixture.js';
 import { EMPTY_SUMMARY, fail, flush, Held, ok, rpcFor, startStore, storeLifecycle } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -62,7 +62,6 @@ beforeEach(() => {
 type Store = Awaited<ReturnType<typeof startStore>>;
 const list = (store: Store) => store.followUpShown() as FollowUpList;
 const ticked = (store: Store) => Object.keys(list(store).ticks).filter(id => list(store).ticks[id]).sort();
-const id = (n: number) => followUp(n).item_id;
 
 /** Signed in, on the meeting's follow-ups, every row ticked by its first read. */
 async function meeting(): Promise<Store> {
@@ -134,8 +133,7 @@ describe('a follow-ups list\'s owner filter', () => {
 
   it('falls back to everyone\'s for good once none of the rows read is that owner\'s: a later read bringing one back filters nothing', async () => {
     // Yours, its Done folded: Mina, Rafael and you each hold one open.
-    const open = (n: number, owner: typeof MINA) => followUp(n, { approver: ME, owner: { ...owner, match: 'name' } });
-    rows = [open(1, MINA), open(2, RAFAEL), open(3, ME)];
+    rows = [sent(1, MINA), sent(2, RAFAEL), sent(3, ME)];
     const store = await startStore();
     await store.openYourFollowUps();
     await flush();

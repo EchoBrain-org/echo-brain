@@ -20,6 +20,8 @@ const OKAFOR = { membership_id: 'mem_00000000-0000-4000-8000-000000000003', name
 const pilot = { approval_id: 'apr_1', record_sha256: 'sha256:1', title: 'Pilot planning', first_line: 'Launch the pilot next week.', approved_at: '2026-10-06T12:00:00.000Z', project_ids: [] };
 /** One of the meeting's own actions: its title is its words, and it is never read live. */
 const action = (patch: Partial<OpenItemView> = {}) => item({ kind: 'action', relation: 'needs_updating', expected: 'Send the revised quote', reach: 'not_read', decision: pilot, ...patch });
+const now = Date.parse('2026-10-14T12:00:00.000Z');
+const daysAgo = (count: number) => new Date(now - count * 86_400_000).toISOString();
 
 describe('the words Home and the follow-ups use', () => {
   it('names people by first name, keeping an initial or a shared first name whole', () => {
@@ -149,8 +151,6 @@ describe('one status vocabulary (F7)', () => {
   });
 
   it('orders a list as one list of current work, what needs attention first, each part longest waiting first; then each closed status, oldest first', () => {
-    const now = Date.parse('2026-10-14T12:00:00.000Z');
-    const daysAgo = (count: number) => new Date(now - count * 86_400_000).toISOString();
     const items = [
       item({ item_id: 'itm_00000001', state: 'done', created_at: daysAgo(9) }), item({ item_id: 'itm_00000002', state: 'done', created_at: daysAgo(12) }),
       // Open two days: nothing needs doing yet. Open five and nine days: past three, they need attention.
@@ -170,8 +170,6 @@ describe('one status vocabulary (F7)', () => {
 });
 
 describe('a follow-ups row and its owner line (One place to look v1, K)', () => {
-  const now = Date.parse('2026-10-14T12:00:00.000Z');
-  const daysAgo = (count: number) => new Date(now - count * 86_400_000).toISOString();
   const RAFAEL = { membership_id: 'mem_00000000-0000-4000-8000-000000000002', name: 'Rafael Moreno', active: true };
   const ME = { membership_id: 'mem_00000000-0000-4000-8000-000000000009', name: 'Ari', active: true };
   const open = (days: number, patch: Partial<OpenItemView> = {}) => item({ sent_at: daysAgo(days), state_set_at: daysAgo(days), ...patch });
