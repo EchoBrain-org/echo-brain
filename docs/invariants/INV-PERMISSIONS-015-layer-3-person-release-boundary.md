@@ -36,7 +36,7 @@ decision_ids:
   - ADR-0049
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the ADR-0034 person-bound Confluence live page path, the ADR-0030 imported meeting notes boundary as narrowed by ADR-0046 (their importer only), the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0024 Person list and open-by-reference paths with the ADR-0049 Only me list scope, the ADR-0026 person-bound Jira live evidence path, the ADR-0034 person-bound Confluence live page path, the ADR-0030 imported meeting notes boundary as narrowed by ADR-0046 (their importer only), the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0047 Ask source check and project activity (states and times only, no content), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -68,7 +68,8 @@ listing, Layer 2 search, and the composed Layer 4 `ask` path. ADR-0015 extends
 that bounded path to authorized Person originals and optional project scope;
 it does not grant generic raw-meeting access or permit a privileged model read.
 ADR-0024 adds model-free Person list and open-by-reference paths over the same
-readable set; their project and mine scopes only narrow it.
+readable set; the list's project and Only me
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)) scopes only narrow it.
 
 ADR-0010 once let an Authority-owned projector, while a fresh Layer 2
 generation was built, propose cross-record pairs from one visibility
@@ -133,12 +134,12 @@ connection. The exact ECHO project grant, mapping revision and stable Jira proje
 ID narrow every read; moved tickets, mapping edits/removal and lost membership
 invalidate in-flight evidence. A runtime project fence cannot be widened by a
 mapping. The mapping stores configuration coordinates only, never tool content.
-Mine and unmapped ECHO projects exclude Jira.
+Unmapped ECHO projects exclude Jira.
 
 Update, 2026-10-11: Confluence page evidence, added on `POST /v5/person/ask`
 (V6 answers) and read on `POST /v7/person/ask` now, runs through the same audited live-evidence
 path, under the asker's own Confluence grant and, in a project, only the
-lead-mapped spaces; Mine and unmapped projects exclude it. Its decision record,
+lead-mapped spaces; unmapped projects exclude it. Its decision record,
 [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md), was
 accepted on 2026-10-31, so this path meets the accepted-ADR requirement of the
 change procedure below. Its negative disclosure tests are
@@ -218,10 +219,11 @@ meeting snapshots never enter original-context search or Ask.
 
 ADR-0024's list and open paths call no model and are served outside the
 answer-model gate. The server binds principal and membership from the session;
-a request chooses only a joined project or mine, and a project it has not
-joined gets the same denial as project Ask before any store runs. Notes and
-documents are read from custody under the evidence desk's access rule, meetings
-from the pinned search generation (list) or the Layer 1 exact read (open). Each
+a list request chooses exactly one of a joined project and Only me, and a
+project it has not joined gets the same denial as project Ask before any store
+runs. Notes and documents are read from custody under the evidence desk's
+access rule, meetings from the pinned search generation (list) or the Layer 1
+exact read (open). Each
 store audits exactly the rows it released after its own fence; the route then
 revalidates every store release, the session and the grant set before one page
 audit and the response. Rows and open responses carry only allowlisted fields:
@@ -233,12 +235,11 @@ atom's `part.count`. A cursor holds only positions the caller already
 received and is bound to the operation, scope, organization and membership.
 An open of anything the caller cannot read is one fixed `not_found`, and list
 holds meetings only when a record the reader can read in that scope (under
-mine, one the reader approved) is waiting to be indexed.
+Only me, one kept for the reader alone) is waiting to be indexed, or when an
+Only me lag is longer than one probe reads.
 
-ADR-0024's mine scope, on `POST /v7/person/ask` now (it began on `/v3`), is a caller-selected narrowing
-of the same global readable set: the evidence desk pushes it into every store
-query, mine with a project is a 400, and mine without the composed approver
-projectors is a 503 rather than global. The answer audit and the per-store release audits are unchanged.
+ADR-0024's mine scope is retired from Ask and the list: a request that names
+it is a 400, and no answer, desk or cited-original read carries it.
 
 ## Verification and change procedure
 
@@ -247,8 +248,8 @@ integration tests verify the two policy branches, exact-caller scope, final
 fence, audit digest, metadata, rejection non-disclosure, model-free Layer 1
 and query-serving Layer 3 closures, desk opens bounded to the anchor's own
 record, bounded Layer 4 calls, one request snapshot,
-request-local citation subsets, list and open allowlists, mine and project
-subsets of global, cursor binding, and answer-audit rows. The source boundary
+request-local citation subsets, list and open allowlists, the project and
+Only me list scopes, cursor binding, and answer-audit rows. The source boundary
 keeps the Layer 4 root narrow and rejects direct lower-layer imports.
 The Jira connection, audited live-reader, Agentic Ask V2 and staging HTTP suites
 also cover stale grants, revocation at the terminal audit, unsupported scopes,
