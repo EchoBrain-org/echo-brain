@@ -892,7 +892,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       },
       cancel() { cancelled = true; },
     });
-    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-echo-person-ask-route': '7' } });
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
   };
 
   // Open items. Ari's own check of Pilot planning finds two once it is done;
@@ -2107,11 +2107,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
-      if (TIMELINE_MODES.has(mode)) {
-        const answered = json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
-        answered.headers.set('x-echo-person-ask-route', '7');
-        return answered;
-      }
+      if (TIMELINE_MODES.has(mode)) return json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
       // Ask progress: a client that asks for it gets the Ask's steps as they happen, then its answer and receipt. Laid out only
       // for an Ask that asked for it.
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
@@ -2120,10 +2116,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return progressStream(question, scope, init?.signal ?? undefined, laidOut);
       }
       if (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed' || mode === 'ask-layout') {
-        const answered = json(mode === 'ask-progress-listed' ? listedAnswer(question, scope)
+        return json(mode === 'ask-progress-listed' ? listedAnswer(question, scope)
           : mode === 'ask-layout' ? layoutAnswer(question, scope, laidOut) : workspaceAnswer(question, scope));
-        answered.headers.set('x-echo-person-ask-route', '7');
-        return answered;
       }
       if (mode === 'ask-ticket') {
         const included = scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null);
