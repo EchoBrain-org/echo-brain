@@ -7,7 +7,7 @@ import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-process
 import { createStagingSyntheticPersonalMeetingProviderV1, StagingSyntheticMeetingStoreV1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { createHandInPersonMeetingProviderV1, handInMeetingDocumentV1, readHandInCheckpointV1, writeHandInCheckpointV1, HAND_IN_SOURCE_ADAPTER_ID_V1 } from '../src/composition/hand-in-person-meeting-provider-v1.js';
-import { handInMeetingIdV1, SqlitePersonHandInMeetingsV1 } from '../src/adapters/persistence/sqlite/person-hand-in-meetings-v1.js';
+import { SqlitePersonHandInMeetingsV1 } from '../src/adapters/persistence/sqlite/person-hand-in-meetings-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
@@ -19,6 +19,8 @@ const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
 /** A fictional meeting, its text canonical as clients send it. */
 const meeting: PersonHandInMeetingV1 = { title: 'Supplier sync', notes: '# Decisions\nMove the pilot to Friday.\n\nAction: Mina sends the revised quote.',
   transcript: 'Mina Patel: I will send the revised quote.\nRafael Moreno: Thanks.\n\nRafael Moreno: Friday works for the pilot.', started_at: '2026-10-21T12:00:00.000Z', all_day: true };
+/** The id a handed-in meeting's canonical content derives: its payload digest. */
+const handInMeetingIdV1 = (value: PersonHandInMeetingV1) => `hand-in-${canonicalSha256(value).slice(7)}`;
 const ledgers: SqliteExtractionAttemptStoreV1[] = [];
 afterEach(() => { for (const ledger of ledgers.splice(0)) ledger.close(); });
 
@@ -79,7 +81,6 @@ describe('the hand-in meeting source', () => {
     f.grantProject(project, 'member');
     const submit = { operation: 'submit', meeting, project_id: project, retain: true } as const;
     const id = handInMeetingIdV1(meeting);
-    expect(id).toBe(`hand-in-${canonicalSha256(meeting).slice(7)}`);
     await expect(f.call(runtime, submit)).resolves.toEqual({ status: 'queued', meeting_id: id });
     // The same meeting again is the same meeting: no second payload, no second import.
     await expect(f.call(runtime, submit)).resolves.toEqual({ status: 'queued', meeting_id: id });
