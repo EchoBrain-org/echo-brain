@@ -37,7 +37,7 @@ export interface SlackOrganizationSetupOptionsV1 {
   readonly manifest_provider: SlackAppManifestProviderV1;
 }
 
-export interface SlackOrganizationSetupWorkflowOptionsV1 extends SlackOrganizationSetupOptionsV1 {
+interface SlackOrganizationSetupWorkflowOptionsV1 extends SlackOrganizationSetupOptionsV1 {
   readonly health: SlackConnectionHealthV1;
   readonly database: Database.Database;
   readonly secrets: OrganizationSecretStore;

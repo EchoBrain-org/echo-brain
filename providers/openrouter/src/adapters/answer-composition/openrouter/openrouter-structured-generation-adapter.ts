@@ -10,23 +10,23 @@ import {
   type StructuredGenerationUsageV1,
 } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 
-export const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
+const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
 
-export type OpenRouterFailureClass = StructuredGenerationFailureClassV1;
+type OpenRouterFailureClass = StructuredGenerationFailureClassV1;
 
-export type OpenRouterFinishReason =
+type OpenRouterFinishReason =
   "stop" | "length" | "content_filter" | "error" | "other";
 
 /**
  * Closed, safe-to-record failure metadata. It excludes request and response
  * content, provider error text, credentials, prompts, and reasoning.
  */
-export interface OpenRouterFailureDiagnostic extends StructuredGenerationFailureDiagnosticV1 {
+interface OpenRouterFailureDiagnostic extends StructuredGenerationFailureDiagnosticV1 {
   readonly adapter_id: "openrouter";
   readonly adapter_request_id: string | null;
 }
 
-export interface OpenRouterFailureGenerationObservation {
+interface OpenRouterFailureGenerationObservation {
   readonly usage: StructuredGenerationUsageV1;
   readonly provider_latency_ms: number | null;
   /** The upstream host that served the call, from a closed vocabulary ("other" when unlisted). */
@@ -36,7 +36,7 @@ export interface OpenRouterFailureGenerationObservation {
 }
 
 /** A successful call's observation, with the same routing identity as a failure's. */
-export interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 {
+interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 {
   readonly upstream_provider: string | null;
   readonly generation_id: string | null;
 }
@@ -102,7 +102,7 @@ export class OpenRouterStructuredGenerationError extends Error implements Struct
   }
 }
 
-export interface OpenRouterStructuredGenerationOptions {
+interface OpenRouterStructuredGenerationOptions {
   readonly credential_ref: string;
   readonly credential_resolver: (reference: string) => string | undefined;
   readonly fetch_impl?: typeof fetch;

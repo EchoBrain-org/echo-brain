@@ -6,7 +6,7 @@ import type { SlackApprovalTargetV1 } from "../../private-approval/slack-approva
 import { readActiveSlackConnectionV1, type SlackConnectionCoordinatesV1, type StoredSlackConnectionV1 } from "./sqlite-slack-active-connection-v1.js";
 
 /** Exact Slack external-human-link commitment for the assigned human. */
-export interface PrivateApprovalSlackIdentityLinkV1 {
+interface PrivateApprovalSlackIdentityLinkV1 {
   readonly provider: "slack";
   readonly external_identity_link_id: string;
   readonly external_identity_link_contract_sha256: ApprovalContractSha256;
@@ -15,7 +15,7 @@ export interface PrivateApprovalSlackIdentityLinkV1 {
 
 const SLACK_HUMAN_SUBJECT = /^[UW][A-Z0-9]{2,255}$/;
 
-export interface CurrentSlackDmApprovalReviewerV1 {
+interface CurrentSlackDmApprovalReviewerV1 {
   readonly principal_id: string;
   readonly membership_id: string;
   readonly membership_type: PersonMembershipType;
@@ -212,7 +212,7 @@ export function isCurrentSlackDmApprovalTargetV1(
 }
 
 /** A clicking Slack user resolved to one ECHO member and the identity link the click is checked against. */
-export interface SlackApprovalClickActorV1 {
+interface SlackApprovalClickActorV1 {
   readonly organization_id: string;
   readonly principal_id: string;
   readonly membership_id: string;

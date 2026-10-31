@@ -6,9 +6,9 @@ export const PERSON_CONFLUENCE_PROJECT_SET_PATH_V1 = '/v1/person/tools/confluenc
 export const PERSON_CONFLUENCE_PROJECT_LIST_PATH_V1 = '/v1/person/tools/confluence/project/list';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SPACE_ID = /^[1-9][0-9]{0,19}$/;
-export const CONFLUENCE_PROJECT_MAX_SPACES_V1 = 20;
+const CONFLUENCE_PROJECT_MAX_SPACES_V1 = 20;
 
-export interface ConfluenceProjectReadV1 { readonly schema_version: 1; readonly project_id: string }
+interface ConfluenceProjectReadV1 { readonly schema_version: 1; readonly project_id: string }
 export interface ConfluenceProjectSetV1 extends ConfluenceProjectReadV1 {
   readonly request_id: string;
   readonly expected_revision: string | null;
@@ -67,7 +67,7 @@ export function validateConfluenceProjectMappingsV1(value: unknown): ConfluenceP
 
 export const PERSON_CONFLUENCE_SPACES_LIST_PATH_V1 = '/v1/person/tools/confluence/spaces/list';
 export interface ConfluenceSpaceListV1 { readonly schema_version: 1; readonly cursor?: string }
-export interface ConfluenceSpaceV1 { readonly id: string; readonly key: string; readonly name: string }
+interface ConfluenceSpaceV1 { readonly id: string; readonly key: string; readonly name: string }
 export interface ConfluenceSpacesPageV1 { readonly schema_version: 1; readonly items: readonly ConfluenceSpaceV1[]; readonly next_cursor: string | null }
 const CURSOR = /^[A-Za-z0-9_-]{1,4096}$/;
 function spaceText(value: unknown, label: string): string {

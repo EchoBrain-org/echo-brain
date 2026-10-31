@@ -3,7 +3,7 @@ import { createLlmDecisionProcessor, llmProcessingVersion } from "@echo-brain/or
 import { nonEmptyString, type LlmCredentialResolver } from "@echo-brain/organization-processing/llm/llm-provider";
 import { OpenRouterClient } from "./openrouter-client.js";
 
-export function validateOpenRouterDecisionProcessorConfig(config: AdapterConfig): readonly string[] {
+function validateOpenRouterDecisionProcessorConfig(config: AdapterConfig): readonly string[] {
   const errors: string[] = [];
   const settings = new Set(['provider', 'model', 'request_timeout_ms', 'max_output_tokens']);
   for (const key of Object.keys(config.settings)) if (!settings.has(key)) errors.push(`settings.${key} is not supported`);

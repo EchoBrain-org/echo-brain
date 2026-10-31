@@ -9,7 +9,7 @@ export interface ConfluenceCloudRequestV1 {
 }
 
 /** Authorization is owned by the connection and revalidated for each request. */
-export type ConfluenceCloudAuthenticatedFetchV1 = PersonProviderAuthenticatedFetchV1;
+type ConfluenceCloudAuthenticatedFetchV1 = PersonProviderAuthenticatedFetchV1;
 export interface ConfluenceCloudTransportV1 {
   readonly binding: PersonConnectorReadBindingV1;
   request(input: ConfluenceCloudRequestV1): Promise<unknown>;
