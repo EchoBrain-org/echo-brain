@@ -220,7 +220,7 @@ function Owners({ faces, shown, me }: { faces: readonly OwnerFace[]; shown: stri
   const pick = (face: OwnerFace) => {
     const who = face.key === me ? 'You' : face.name;
     return (
-      <button key={face.key} type="button" class="follow-ups-owner" data-testid="follow-ups-owner" data-key={face.key} aria-pressed={shown === face.key}
+      <button key={face.key} type="button" class="follow-ups-owner" data-testid="follow-ups-owner" aria-pressed={shown === face.key}
         aria-label={`${who}, ${face.key === 'none' ? face.count : `${face.count} open`}`}
         title={face.key === 'none' ? `No owner yet · ${face.count} · show only those` : `${who} · ${face.count} open now · show only ${face.key === me ? 'yours' : 'theirs'}`}
         onClick={() => filterOwner(face.key)}>
@@ -231,7 +231,7 @@ function Owners({ faces, shown, me }: { faces: readonly OwnerFace[]; shown: stri
   };
   return (
     <div class="follow-ups-owners" role="group" aria-label="Show follow-ups by owner">
-      <button type="button" class="follow-ups-owner all" data-testid="follow-ups-owner" data-key="" aria-pressed={shown === null} aria-label="All owners"
+      <button type="button" class="follow-ups-owner all" data-testid="follow-ups-owner" aria-pressed={shown === null} aria-label="All owners"
         title="Show every follow-up" onClick={() => filterOwner(null)}>All</button>
       {faces.map(pick)}
     </div>
@@ -307,7 +307,6 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
   // A tick's room in every row once one row has a tick (only current work is ever sent), so the marks stay in one column.
   const ticking = rows.active.some(sendable);
   const mores = moreAfter(list);
-  const counts = list.summary;
   const listed = (entries: readonly OpenItemView[]) => entries.map(item => (
     <Row key={item.item_id} state={state} list={list} item={item} label={names.get(item.item_id)!.label} name={names.get(item.item_id)!.name} now={now} ticking={ticking} />
   ));
@@ -319,7 +318,7 @@ export function FollowUps({ state, list }: { state: State; list: FollowUpList })
   // filter, not counted (the counts are everyone's); opened, its rows show.
   const ended = list.reads.some(read => read.parts.includes('active') && read.next === null);
   const fold = (status: (typeof CLOSED_STATES)[number]) => {
-    const total = counts?.[status] ?? rows[status].length;
+    const total = list.summary?.[status] ?? rows[status].length;
     if (!ended && !list.reads.some(read => read.parts.includes(status))) return null;
     const open = list.expanded[status] === true;
     const count = owner === null ? total : null;

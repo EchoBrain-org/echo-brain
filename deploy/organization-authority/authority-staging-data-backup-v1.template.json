@@ -1,0 +1,379 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "AWS Backup protection for the retained clean-data EBS volume of the Authority staging slot. Only npm run authority:staging backup deploys it: that action reads the volume ID from the slot stack output and supplies the volume and KMS key only after proving the volume is the slot's encrypted clean-data volume and the key is enabled in the same account; this template cannot inspect either live resource. Amazon EBS recovery points inherit source-volume encryption and are not independently encrypted by the backup vault. Separate EBS-only backup and restore roles are emitted; an operator starting a job must have iam:PassRole for the exact applicable role. An alarm notifies the existing staging alert topic when the vault records no completed backup job for 30 hours.",
+  "Parameters": {
+    "DataVolumeId": {
+      "Type": "AWS::EC2::Volume::Id",
+      "ConstraintDescription": "must be the StagingDataVolumeId output of the staging slot stack, verified by authority:staging backup"
+    },
+    "DataVolumeKmsKeyArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:(aws|aws-us-gov|aws-cn):kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+$",
+      "ConstraintDescription": "must be the exact KMS key ARN reported by the verified encrypted clean-data volume"
+    },
+    "AlertTopicArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:aws[a-zA-Z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$",
+      "ConstraintDescription": "must be the existing same-account staging SNS alert topic ARN"
+    },
+    "BackupScheduleExpression": {
+      "Type": "String",
+      "Default": "cron(0 9 ? * * *)",
+      "AllowedPattern": "^cron\\(.+\\)$",
+      "ConstraintDescription": "must be an AWS Backup cron expression"
+    },
+    "RecoveryPointRetentionDays": {
+      "Type": "Number",
+      "Default": 35,
+      "MinValue": 1,
+      "MaxValue": 3650,
+      "ConstraintDescription": "must retain recovery points from 1 through 3650 days"
+    }
+  },
+  "Resources": {
+    "StagingDataBackupVault": {
+      "Type": "AWS::Backup::BackupVault",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BackupVaultName": {
+          "Ref": "AWS::StackName"
+        },
+        "BackupVaultTags": {
+          "Application": "echo-brain",
+          "Environment": "staging",
+          "Purpose": "authority-staging-data-backup"
+        }
+      }
+    },
+    "StagingDataBackupServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "Description": "AWS Backup service role for the Authority staging clean-data volume.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "backup.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "authority-staging-clean-data-ebs-backup-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "CreateSnapshotsOnlyFromSelectedVolume",
+                  "Effect": "Allow",
+                  "Action": "ec2:CreateSnapshot",
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${DataVolumeId}"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "DescribeEbsResources",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:DescribeVolumes",
+                    "ec2:DescribeSnapshots",
+                    "ec2:DescribeTags"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "ManageBackupSnapshots",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CopySnapshot",
+                    "ec2:CreateTags",
+                    "ec2:DeleteSnapshot"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                  }
+                },
+                {
+                  "Sid": "ManageTierOnlyForAwsBackupSnapshots",
+                  "Effect": "Allow",
+                  "Action": "ec2:ModifySnapshotTier",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                  },
+                  "Condition": {
+                    "Null": {
+                      "aws:ResourceTag/aws:backup:source-resource": "false"
+                    }
+                  }
+                },
+                {
+                  "Sid": "ReadExactRecoveryVault",
+                  "Effect": "Allow",
+                  "Action": [
+                    "backup:DescribeBackupVault",
+                    "backup:CopyIntoBackupVault"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": ["StagingDataBackupVault", "BackupVaultArn"]
+                  }
+                },
+                {
+                  "Sid": "ResolveSelectedBackupResources",
+                  "Effect": "Allow",
+                  "Action": "tag:GetResources",
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "StagingDataRestoreServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "Description": "AWS Backup restore-only service role for the Authority staging clean-data volume.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "backup.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "authority-staging-clean-data-ebs-restore-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "RestoreOnlyAnEbsSnapshotToAnUnattachedVolume",
+                  "Effect": "Allow",
+                  "Action": ["ec2:CreateVolume", "ec2:DeleteVolume"],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "DescribeEbsRestoreInputs",
+                  "Effect": "Allow",
+                  "Action": ["ec2:DescribeSnapshots", "ec2:DescribeVolumes"],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "DescribeOnlyTheSelectedEbsKey",
+                  "Effect": "Allow",
+                  "Action": "kms:DescribeKey",
+                  "Resource": {
+                    "Ref": "DataVolumeKmsKeyArn"
+                  }
+                },
+                {
+                  "Sid": "UseOnlyTheSelectedEbsKeyThroughEc2",
+                  "Effect": "Allow",
+                  "Action": [
+                    "kms:Decrypt",
+                    "kms:Encrypt",
+                    "kms:GenerateDataKey",
+                    "kms:GenerateDataKeyWithoutPlaintext",
+                    "kms:ReEncryptFrom",
+                    "kms:ReEncryptTo"
+                  ],
+                  "Resource": {
+                    "Ref": "DataVolumeKmsKeyArn"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "kms:ViaService": {
+                        "Fn::Sub": "ec2.${AWS::Region}.${AWS::URLSuffix}"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Sid": "GrantOnlyForAwsEbsRestoreOfSelectedKey",
+                  "Effect": "Allow",
+                  "Action": "kms:CreateGrant",
+                  "Resource": {
+                    "Ref": "DataVolumeKmsKeyArn"
+                  },
+                  "Condition": {
+                    "Bool": {
+                      "kms:GrantIsForAWSResource": "true"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "StagingDataBackupPlan": {
+      "Type": "AWS::Backup::BackupPlan",
+      "Properties": {
+        "BackupPlan": {
+          "BackupPlanName": {
+            "Ref": "AWS::StackName"
+          },
+          "BackupPlanRule": [
+            {
+              "RuleName": "authority-staging-clean-data",
+              "TargetBackupVault": {
+                "Ref": "StagingDataBackupVault"
+              },
+              "ScheduleExpression": {
+                "Ref": "BackupScheduleExpression"
+              },
+              "StartWindowMinutes": 60,
+              "CompletionWindowMinutes": 180,
+              "Lifecycle": {
+                "DeleteAfterDays": {
+                  "Ref": "RecoveryPointRetentionDays"
+                }
+              },
+              "RecoveryPointTags": {
+                "Application": "echo-brain",
+                "Environment": "staging",
+                "Purpose": "authority-staging-data-backup"
+              }
+            }
+          ]
+        },
+        "BackupPlanTags": {
+          "Application": "echo-brain",
+          "Environment": "staging",
+          "Purpose": "authority-staging-data-backup"
+        }
+      }
+    },
+    "StagingDataVolumeSelection": {
+      "Type": "AWS::Backup::BackupSelection",
+      "Properties": {
+        "BackupPlanId": {
+          "Ref": "StagingDataBackupPlan"
+        },
+        "BackupSelection": {
+          "SelectionName": "authority-staging-clean-data-volume-only",
+          "IamRoleArn": {
+            "Fn::GetAtt": ["StagingDataBackupServiceRole", "Arn"]
+          },
+          "Resources": [
+            {
+              "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${DataVolumeId}"
+            }
+          ]
+        }
+      }
+    },
+    "StagingDataBackupMissedAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "The Authority staging clean-data backup vault recorded no completed backup job in the last 30 hours.",
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ],
+        "Namespace": "AWS/Backup",
+        "MetricName": "NumberOfBackupJobsCompleted",
+        "Dimensions": [
+          {
+            "Name": "BackupVaultName",
+            "Value": {
+              "Ref": "StagingDataBackupVault"
+            }
+          }
+        ],
+        "Statistic": "Sum",
+        "Period": 3600,
+        "EvaluationPeriods": 30,
+        "DatapointsToAlarm": 30,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching"
+      }
+    }
+  },
+  "Outputs": {
+    "SelectedDataVolumeArn": {
+      "Description": "The exact clean-data EBS volume ARN selected by this backup plan.",
+      "Value": {
+        "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${DataVolumeId}"
+      }
+    },
+    "BackupVaultName": {
+      "Description": "Name of the retained AWS Backup vault for the clean-data volume.",
+      "Value": {
+        "Ref": "StagingDataBackupVault"
+      }
+    },
+    "BackupVaultArn": {
+      "Description": "ARN of the retained AWS Backup vault for the clean-data volume.",
+      "Value": {
+        "Fn::GetAtt": ["StagingDataBackupVault", "BackupVaultArn"]
+      }
+    },
+    "BackupPlanId": {
+      "Description": "AWS Backup plan ID to inspect for scheduled recovery points.",
+      "Value": {
+        "Ref": "StagingDataBackupPlan"
+      }
+    },
+    "BackupPlanArn": {
+      "Description": "AWS Backup plan ARN to inspect for scheduled recovery points.",
+      "Value": {
+        "Fn::GetAtt": ["StagingDataBackupPlan", "BackupPlanArn"]
+      }
+    },
+    "BackupSelectionId": {
+      "Description": "AWS Backup selection ID binding the plan to the one clean-data volume.",
+      "Value": {
+        "Ref": "StagingDataVolumeSelection"
+      }
+    },
+    "BackupServiceRoleArn": {
+      "Description": "AWS Backup service role used by the clean-data volume selection.",
+      "Value": {
+        "Fn::GetAtt": ["StagingDataBackupServiceRole", "Arn"]
+      }
+    },
+    "RestoreServiceRoleArn": {
+      "Description": "AWS Backup restore-only role. A restore caller must be authorized to iam:PassRole this exact ARN.",
+      "Value": {
+        "Fn::GetAtt": ["StagingDataRestoreServiceRole", "Arn"]
+      }
+    },
+    "MissedBackupAlarmName": {
+      "Description": "CloudWatch alarm that notifies the staging alert topic after 30 hours without a completed backup job in this vault.",
+      "Value": {
+        "Ref": "StagingDataBackupMissedAlarm"
+      }
+    }
+  }
+}

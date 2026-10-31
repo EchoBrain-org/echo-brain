@@ -20,6 +20,13 @@ root volume, and to prove that a restored copy can be inspected
 without becoming another Authority. Use it again after the Authority root
 volume, its backup configuration, or its on-host `clean-data/` layout changes.
 
+Scope: this runbook covers the pre-slot EC2 Authority host, whose `clean-data/`
+sits on its root volume. It does not reach the staging slot, which keeps
+`clean-data/` on its own retained data volume and replaces its root volume with
+each host. Use
+[RB-OPERATIONS-004](RB-OPERATIONS-004-authority-staging-data-volume-backup.md)
+to back up that volume and rehearse its restore.
+
 The outcome has two deliberately different parts:
 
 1. an AWS Backup plan selects exactly the deployed Authority root volume and,
