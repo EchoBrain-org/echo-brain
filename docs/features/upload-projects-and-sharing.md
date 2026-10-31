@@ -1,6 +1,7 @@
 # Upload projects and sharing
 
-Status: implementation candidate; exact release acceptance is separate.
+Status: source-tested. Release acceptance is a separate claim, and no
+[qualification record](../qualification/README.md) covers this feature yet.
 
 ## User flow
 

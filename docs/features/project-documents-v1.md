@@ -1,8 +1,8 @@
 # Project documents V1
 
-Status: implementation candidate; exact release acceptance is separate. This feature adds file custody and retrieval without approving document contents as decisions. The accepted extension to the earlier text-only scope is [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md). The subsequent [global/project Ask](global-project-ask-v1.md), authorized by ADR-0015, now answers from usable extracted document evidence with source citations.
+Status: source-tested. Release acceptance is a separate claim, and no [qualification record](../qualification/README.md) covers this feature yet. This feature adds file custody and retrieval without approving document contents as decisions. The accepted extension to the earlier text-only scope is [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md). The subsequent [global/project Ask](global-project-ask-v1.md), authorized by ADR-0015, now answers from usable extracted document evidence with source citations.
 
-The [upload projects and sharing candidate](upload-projects-and-sharing.md)
+The [upload projects and sharing](upload-projects-and-sharing.md) feature
 extends admission to several projects with a separate sharing page, V2 document
 reads and a V9 storage baseline. The V1 routes described here are retired
 ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)). Documents

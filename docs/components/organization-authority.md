@@ -95,18 +95,23 @@ under
 | Workspace                       | Owns                                                                                  |
 | ------------------------------- | ------------------------------------------------------------------------------------- |
 | `organization-authority`        | Organization identity, access, HTTP boundary, and composition                         |
-| `organization-authority-kernel` | Authority SQL baselines, persistence adapters, and state lineage                      |
+| `organization-authority-kernel` | Authority SQL baselines, persistence adapters, state lineage, and the research loop   |
 | `organization-processing`       | Provider-neutral meeting processing and admitted-meeting workflow                     |
 | `organization-control-plane`    | Verified provider connection and Person identity links; no approval state             |
 | `organization-record`           | Append-only approved record and deterministic append-side projections                 |
 | `organization-retrieval`        | Rebuildable permission-aware retrieval generations                                    |
+
+The kernel's research loop and answer composition serve Ask, impact checks
+and sweeps alike, and its `src/shared/` folder holds the audited live-evidence
+boundary.
 
 The rest of the closure is the shared `federation-protocol`,
 `organization-protocol` and `organization-api` contracts plus the composed
 providers: `providers/granola`, `providers/jira`, `providers/jira/client`,
 `providers/confluence`, `providers/confluence/client`,
 `providers/openrouter`, `providers/synthetic-demo`, `providers/slack/server`
-and `providers/slack/client`. Only `organization-authority` is a process entry
+and `providers/slack/client`, and the provider runtime they share,
+`providers/shared`. Only `organization-authority` is a process entry
 point; the others are libraries linked into the Authority runtime. The
 deployment also includes a separate reverse proxy.
 
@@ -202,20 +207,10 @@ the route binds the Person, desk, model and request audit. It receives no storag
 handle or provider-specific implementation. Architecture tests traverse its
 entire import closure to enforce that separation.
 
-Person list and open by ref are specified in
-[ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md).
-`POST /v1/person/list` returns the newest notes, documents, imported meetings
-and approved meetings the caller can read, 25 per page under an opaque cursor,
-in global, joined-project, mine or only-me scope; `POST /v1/person/open` reads
-one of them by its ref. Both are model-free and served outside the
-answer-model gate. The originals store lists custody rows under the evidence
-desk's access rule, and the records route lists meetings from the pinned search
-generation and opens them through the Layer 1 exact read; neither returns the
-envelope. Mine is the caller's own notes and uploads plus meetings they
-finally approved, and Ask accepts the same `mine` scope. Only me
-(`only_me: true`, [ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)) is
-a list-only scope: the caller's own only-me notes and uploads, filed in a
-project or not, approved meetings under the restricted reviewer policy, and
-the caller's imported meetings, each row naming the caller's projects it is
-filed in. Each store audits its released rows before the route revalidates
-and writes one page audit.
+Person list and open by ref
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md), with
+the list-only Only me scope of
+[ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)) are model-free and
+served outside the answer-model gate. Their enforcement and audits are in the
+[served-path table](permissions.md#served-paths), and their command contract
+under [Agents](../architecture/person-client-architecture.md#agents).
