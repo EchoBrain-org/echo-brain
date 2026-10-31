@@ -6,7 +6,7 @@ import { GRANOLA_ID_V1, GRANOLA_PERSON_PROVIDER_V1, GRANOLA_TIMESTAMP_V1, granol
 import { normalizeGranolaMeetingV1 } from './granola-meeting-normalizer-v1.js';
 
 /** What a personal Granola source watches: nothing, the meetings its person captured, or one folder. */
-export type GranolaWatchModeV1 = 'off' | 'mine' | 'folder';
+type GranolaWatchModeV1 = 'off' | 'mine' | 'folder';
 /** A watch as the Authority stores it; `folder_id` is set exactly for `folder`. */
 export interface GranolaWatchV1 { readonly watch: GranolaWatchModeV1; readonly folder_id: string | null }
 export interface GranolaCheckpointV1 {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { claudeAccountEnvironmentV1, type ClaudeAccountProfileV1 } from './account-profile.js';
 
-export interface ClaudeResearchRunV1 {
+interface ClaudeResearchRunV1 {
   readonly prompt: string;
   readonly system: string;
   readonly model: string;

@@ -3,13 +3,12 @@ import { createLlmDecisionProcessor, llmProcessingVersion } from "@echo-brain/or
 import { nonEmptyString, type LlmCredentialResolver } from "@echo-brain/organization-processing/llm/llm-provider";
 import { OpenRouterClient } from "./openrouter-client.js";
 
-export function validateOpenRouterDecisionProcessorConfig(config: AdapterConfig): readonly string[] {
+function validateOpenRouterDecisionProcessorConfig(config: AdapterConfig): readonly string[] {
   const errors: string[] = [];
   const settings = new Set(['provider', 'model', 'request_timeout_ms', 'max_output_tokens']);
   for (const key of Object.keys(config.settings)) if (!settings.has(key)) errors.push(`settings.${key} is not supported`);
   if (config.settings['provider'] !== undefined && config.settings['provider'] !== 'openrouter') errors.push('settings.provider must be openrouter');
   if (!nonEmptyString(config.credential_ref)) errors.push('credential_ref is required by the openrouter provider');
-  if (config.settings['base_url'] !== undefined) errors.push('settings.base_url is not supported by the OpenRouter provider');
   if (nonEmptyString(config.settings['model']) && !/^[^/\s]+\/[^/\s]+$/u.test(config.settings['model'])) errors.push('settings.model must use the author/model-slug form for OpenRouter');
   return errors;
 }

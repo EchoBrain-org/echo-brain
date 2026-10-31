@@ -7,7 +7,8 @@
   "source_root": "providers/jira/client/src",
   "package_json": "providers/jira/client/package.json",
   "entry_points": [
-    "providers/jira/client/src/person/jira-tool-provider.ts"
+    "providers/jira/client/src/person/jira-tool-provider.ts",
+    "providers/jira/client/src/organization-api/jira-project-mapping-v1.ts"
   ],
   "owned_source_paths": ["providers/jira/client/src/**"],
   "allowed_internal_paths": ["providers/jira/client/src/**"],

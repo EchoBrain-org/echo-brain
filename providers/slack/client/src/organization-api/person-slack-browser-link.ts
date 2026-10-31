@@ -16,7 +16,7 @@ export const ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH =
   '/v2/person/external-identities/slack/browser/callback';
 
 /** Starts a browser-mediated Slack identity proof for the current Person. */
-export interface OrganizationPersonSlackBrowserLinkBeginRequestV1 {
+interface OrganizationPersonSlackBrowserLinkBeginRequestV1 {
   request_id: string;
 }
 
@@ -28,7 +28,7 @@ export interface OrganizationPersonSlackBrowserLinkBeginResponseV1 {
   expires_at: string;
 }
 
-export type OrganizationPersonSlackBrowserLinkFailureReasonV1 =
+type OrganizationPersonSlackBrowserLinkFailureReasonV1 =
   | 'provider_rejected'
   | 'provider_unavailable'
   | 'identity_conflict'
@@ -43,7 +43,7 @@ export interface OrganizationPersonSlackBrowserLinkStatusResponseV1 {
   failure_reason: OrganizationPersonSlackBrowserLinkFailureReasonV1 | null;
 }
 
-export interface OrganizationPersonSlackBrowserLinkAttemptRequestV1 {
+interface OrganizationPersonSlackBrowserLinkAttemptRequestV1 {
   attempt_id: string;
 }
 

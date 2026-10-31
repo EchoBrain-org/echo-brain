@@ -10,23 +10,23 @@ import {
   type StructuredGenerationUsageV1,
 } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 
-export const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
+const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
 
-export type OpenRouterFailureClass = StructuredGenerationFailureClassV1;
+type OpenRouterFailureClass = StructuredGenerationFailureClassV1;
 
-export type OpenRouterFinishReason =
+type OpenRouterFinishReason =
   "stop" | "length" | "content_filter" | "error" | "other";
 
 /**
  * Closed, safe-to-record failure metadata. It excludes request and response
  * content, provider error text, credentials, prompts, and reasoning.
  */
-export interface OpenRouterFailureDiagnostic extends StructuredGenerationFailureDiagnosticV1 {
+interface OpenRouterFailureDiagnostic extends StructuredGenerationFailureDiagnosticV1 {
   readonly adapter_id: "openrouter";
   readonly adapter_request_id: string | null;
 }
 
-export interface OpenRouterFailureGenerationObservation {
+interface OpenRouterFailureGenerationObservation {
   readonly usage: StructuredGenerationUsageV1;
   readonly provider_latency_ms: number | null;
   /** The upstream host that served the call, from a closed vocabulary ("other" when unlisted). */
@@ -36,7 +36,7 @@ export interface OpenRouterFailureGenerationObservation {
 }
 
 /** A successful call's observation, with the same routing identity as a failure's. */
-export interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 {
+interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 {
   readonly upstream_provider: string | null;
   readonly generation_id: string | null;
 }
@@ -102,38 +102,17 @@ export class OpenRouterStructuredGenerationError extends Error implements Struct
   }
 }
 
-export interface OpenRouterStructuredGenerationOptions {
+interface OpenRouterStructuredGenerationOptions {
   readonly credential_ref: string;
   readonly credential_resolver: (reference: string) => string | undefined;
   readonly fetch_impl?: typeof fetch;
-  readonly endpoint?: string;
   readonly now_ms?: () => number;
 }
 
+const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
+
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function endpoint(value: string | undefined): string {
-  const selected = value ?? "https://openrouter.ai/api/v1/chat/completions";
-  let parsed: URL;
-  try {
-    parsed = new URL(selected);
-  } catch {
-    throw new OpenRouterStructuredGenerationError(
-      "OpenRouter endpoint is invalid",
-    );
-  }
-  if (
-    parsed.protocol !== "https:" ||
-    parsed.username !== "" ||
-    parsed.password !== ""
-  ) {
-    throw new OpenRouterStructuredGenerationError(
-      "OpenRouter endpoint is invalid",
-    );
-  }
-  return parsed.toString();
 }
 
 function model(value: string): void {
@@ -344,7 +323,6 @@ export function createOpenRouterStructuredGenerationAdapter(
       "OpenRouter credential reference is invalid",
     );
   }
-  const url = endpoint(options.endpoint);
   const fetchImpl = options.fetch_impl ?? fetch;
   const nowMs = options.now_ms ?? (() => performance.now());
   async function generateWithObservation(input: StructuredGenerationInput): Promise<OpenRouterObservedResult> {
@@ -423,7 +401,7 @@ export function createOpenRouterStructuredGenerationAdapter(
     const providerStartedAt = safeNow(nowMs);
     let response: Response;
     try {
-      response = await fetchImpl(url, request);
+      response = await fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, request);
     } catch (error) {
       fail("OpenRouter request failed", {
         // The call's own timeout can surface as an AbortError through

@@ -4,7 +4,7 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
 export const UPDATE_METADATA_LIMIT = 64 * 1024;
 export const UPDATE_ARTIFACT_LIMIT = 256 * 1024 * 1024;
 export const UPDATE_INTERVAL_MS = 60 * 60 * 1000;
-export type UpdateInstallation = 'cli-kit' | 'electron' | 'container';
+type UpdateInstallation = 'cli-kit' | 'electron' | 'container';
 export interface UpdatePlatform {
   platform: 'linux' | 'darwin' | 'win32';
   architecture: 'x64' | 'arm64';
@@ -53,7 +53,7 @@ export function updateObject(value: unknown, keys: readonly string[]): Record<st
 function matches(value: unknown, expression: RegExp): value is string {
   return typeof value === 'string' && expression.test(value);
 }
-export function updateHttpsUrl(value: unknown): string {
+function updateHttpsUrl(value: unknown): string {
   if (typeof value !== 'string' || value.length > 2048) rejectUpdate('invalid_url');
   let url: URL;
   try { url = new URL(value); } catch { return rejectUpdate('invalid_url'); }

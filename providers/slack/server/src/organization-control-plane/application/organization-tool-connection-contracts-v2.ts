@@ -12,11 +12,11 @@ import type { ApprovalContractSha256 } from "@echo-brain/organization-control-pl
 
 export type PersonMembershipType = "employee" | "owner";
 
-export const ORGANIZATION_TOOL_CONNECTION_KIND =
+const ORGANIZATION_TOOL_CONNECTION_KIND =
   "echo-organization-tool-connection-v2" as const;
-export const ORGANIZATION_TOOL_CONNECTION_STATE_KIND =
+const ORGANIZATION_TOOL_CONNECTION_STATE_KIND =
   "echo-organization-tool-connection-state-v2" as const;
-export const EXTERNAL_HUMAN_LINK_CONTRACT_KIND =
+const EXTERNAL_HUMAN_LINK_CONTRACT_KIND =
   "echo-external-human-link-contract-v2" as const;
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
@@ -230,7 +230,7 @@ export interface OrganizationToolConnectionContractV2
   readonly public_connection_configuration_sha256: ApprovalContractSha256;
 }
 
-export type OrganizationToolConnectionContractInputV2 = Omit<
+type OrganizationToolConnectionContractInputV2 = Omit<
   OrganizationToolConnectionContractV2,
   "kind" | "schema_version"
 >;
@@ -308,7 +308,7 @@ export interface OrganizationToolConnectionStateV2 extends ContractEnvelopeV2<
   readonly verified_at: string;
 }
 
-export type OrganizationToolConnectionStateInputV2 = Omit<
+type OrganizationToolConnectionStateInputV2 = Omit<
   OrganizationToolConnectionStateV2,
   "kind" | "schema_version"
 >;
@@ -393,7 +393,7 @@ export interface ExternalHumanIdentityLinkContractV2
   readonly verified_at: string;
 }
 
-export type ExternalHumanIdentityLinkContractInputV2 = Omit<
+type ExternalHumanIdentityLinkContractInputV2 = Omit<
   ExternalHumanIdentityLinkContractV2,
   "kind" | "schema_version"
 >;

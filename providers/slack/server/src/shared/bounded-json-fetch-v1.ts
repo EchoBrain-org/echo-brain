@@ -21,7 +21,7 @@ export interface BoundedJsonFetchResultV1 {
   readonly json: unknown;
 }
 
-export interface BoundedJsonFetchInputV1 {
+interface BoundedJsonFetchInputV1 {
   readonly url: string;
   readonly init: Pick<RequestInit, "method" | "headers" | "body">;
   readonly fetch: typeof fetch;

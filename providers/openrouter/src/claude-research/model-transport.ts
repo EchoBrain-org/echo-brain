@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { messageUsageObserverV1, type ClaudeMessageMetadataV1 } from './message-usage.js';
 import { observeCoreModelMetadataV1, observeCoreRuntimeV1, annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 
-export interface ClaudeModelForwardV1 {
+interface ClaudeModelForwardV1 {
   readonly req: IncomingMessage; readonly res: ServerResponse; readonly body: Buffer; readonly path: string; readonly signal: AbortSignal;
 }
 export type ClaudeModelForwarderV1 = (input: ClaudeModelForwardV1) => Promise<ClaudeMessageMetadataV1>;

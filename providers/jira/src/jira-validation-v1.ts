@@ -1,5 +1,5 @@
 import { boundUtf8V1, createPersonProviderValidationV1, type PersonProviderFailureCodeV1 } from '@echo-brain/provider-runtime/person-provider-v1';
-export const JIRA_CLOUD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const JIRA_CLOUD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const JIRA_ID = /^[1-9][0-9]{0,19}$/;
 export const JIRA_PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,63}$/;
 export const JIRA_TICKET_KEY = /^[A-Z][A-Z0-9_]{0,63}-[1-9][0-9]{0,19}$/;

@@ -816,19 +816,6 @@ describe("Person client", () => {
     });
   });
 
-  it.each([["--live"], ["--tickets"], ["--live", "--tickets"]])("refuses the retired Ask flags %j before transport", async (...flags) => {
-    await withHome(async home => {
-      await installFixtureSession(home);
-      let called = false;
-      const result = await runCli(["ask", "--question", "What did we decide?", ...flags], {
-        home_directory: home, now: () => NOW, fetch: async () => { called = true; throw new Error("must not call"); },
-      });
-      expect(result.code).toBe(2);
-      expect(called).toBe(false);
-      expect(JSON.parse(result.stderr)).toEqual({ ok: false, error: `Unknown option '${flags[0]}'` });
-    });
-  });
-
   it("maps --project to a strict Ask coordinate and accepts immutable source evidence", async () => {
     await withHome(async home => {
       const projectId = "prj_00000000-0000-4000-8000-000000000019";

@@ -33,7 +33,7 @@ Use --json for machine-readable output. Output is also JSON when piped.
 `;
 
 type UpdateCliMode = 'apply' | 'check' | 'status' | 'automatic' | 'configure';
-export interface ParsedClientUpdateCliArguments {
+interface ParsedClientUpdateCliArguments {
   mode: UpdateCliMode;
   json: boolean;
   file?: string;

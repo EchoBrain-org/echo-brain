@@ -7,7 +7,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const ID = /^[1-9][0-9]{0,19}$/;
 const KEY = /^[A-Z][A-Z0-9_]{0,63}$/;
 
-export interface JiraProjectReadV1 { readonly schema_version: 1; readonly project_id: string }
+interface JiraProjectReadV1 { readonly schema_version: 1; readonly project_id: string }
 export interface JiraProjectSetV1 extends JiraProjectReadV1 {
   readonly request_id: string;
   readonly expected_revision: string | null;

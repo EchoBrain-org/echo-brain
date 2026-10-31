@@ -5,15 +5,17 @@ import {
   validatePersonToolCommandV1,
   validatePersonToolConnectV1,
   validatePersonToolStateV1,
-} from "@echo-brain/organization-api";
+} from "../src/index.js";
 
-const contracts = ["Jira", "Confluence"].map(name => ({ name,
+// The display name only labels failures, so one tool covers every tool.
+const name = "Jira";
+const contract = {
   validatePersonCommandV1: (value: unknown) => validatePersonToolCommandV1(value, name),
   validatePersonAttemptV1: (value: unknown) => validatePersonToolAttemptV1(value, name),
   validatePersonConnectV1: (value: unknown) => validatePersonToolConnectV1(value, name),
   validatePersonAttemptStatusV1: (value: unknown) => validatePersonToolAttemptStatusV1(value, name),
   validatePersonStateV1: (value: unknown, connected: boolean) => validatePersonToolStateV1(value, connected, name),
-}));
+};
 
 const ATTEMPT = "11111111-1111-4111-8111-111111111111";
 const CONNECT = {
@@ -30,7 +32,7 @@ const PENDING = {
   failure_reason: null,
 };
 
-describe.each(contracts)("Person $name connection contract V1", contract => {
+describe("Person tool connection contract V1", () => {
   it("uses the documented closed shapes", () => {
     expect(contract.validatePersonCommandV1({ schema_version: 1 })).toEqual({
       schema_version: 1,

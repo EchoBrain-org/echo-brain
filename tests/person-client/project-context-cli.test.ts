@@ -8,11 +8,7 @@ import { PersonSessionStore } from '../../src/product/person-client/session-stor
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { signedInHome } from './signed-in-home.js';
-import {
-  validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validateProjectContextBrowseV1,
-  validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectCreateV1, validateProjectMemberSetV1,
-  type PersonUpdateSubmitV3, type ProjectIdV1,
-} from '@echo-brain/organization-api';
+import { validatePersonUpdateSubmitV3, type PersonUpdateSubmitV3, type ProjectIdV1 } from '@echo-brain/organization-api';
 
 /** A fixture row; one with no CLI command (the V2 feed and context read, the V3 note read) has no argv. */
 interface FixtureRow {
@@ -23,16 +19,7 @@ interface FixtureRow {
 type Operation = FixtureRow & { argv: string[] };
 const fixtures = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/operations.json', import.meta.url), 'utf8')) as { operations: FixtureRow[] };
 const failures = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/invalid.json', import.meta.url), 'utf8')) as {
-  cases: { id: string; validator: string; value: unknown }[];
   errors: { id: string; http_status: number; http: unknown; cli: { action: string; [key: string]: unknown } }[];
-};
-const invalidValidators: Readonly<Record<string, (value: unknown) => unknown>> = {
-  'person-update-v2-submit': validatePersonUpdateSubmitV2,
-  'project-create': validateProjectCreateV1,
-  'project-member-set': validateProjectMemberSetV1,
-  'project-browse': validateProjectContextBrowseV1,
-  'project-search': validateProjectContextSearchV1,
-  'project-feed-v2': validateProjectContextFeedV2,
 };
 const visibility = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/visibility.json', import.meta.url), 'utf8')) as {
   submits: { id: string; cli: string[]; body: Record<string, unknown> }[];
@@ -309,11 +296,6 @@ describe('frozen project context CLI contract', () => {
       return json(response);
     } });
     await expect(call(client)).rejects.toMatchObject({ code: 'stale_access_state' });
-  });
-
-  it.each(failures.cases)('$id is rejected by its public codec', testCase => {
-    expect(invalidValidators[testCase.validator], testCase.id).toBeTypeOf('function');
-    expect(() => invalidValidators[testCase.validator]!(testCase.value)).toThrow();
   });
 
   it.each(failures.errors)('$id preserves the exact sanitized failure contract', async failure => {

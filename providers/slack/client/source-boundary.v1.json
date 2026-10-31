@@ -11,7 +11,8 @@
     "providers/slack/client/src/organization-api/person-slack-browser-link.ts",
     "providers/slack/client/src/organization-api/person-tools.ts",
     "providers/slack/client/src/organization-api/organization-slack-setup-v1.ts",
-    "providers/slack/client/src/person/slack-tool-provider.ts"
+    "providers/slack/client/src/person/slack-tool-provider.ts",
+    "providers/slack/client/src/person/slack-person-client.ts"
   ],
   "owned_source_paths": [
     "providers/slack/client/src/**"

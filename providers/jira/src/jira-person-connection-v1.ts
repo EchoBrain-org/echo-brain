@@ -15,14 +15,14 @@ import { jiraProjectMatches, parseJiraProject, readJiraAssigneeAccountsV1, readJ
 export { jiraTicketMarkerV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, jiraFailure } from './jira-validation-v1.js';
 
-export type JiraPersonAuthorizationV1 = PersonConnectionAuthorizationV1;
+type JiraPersonAuthorizationV1 = PersonConnectionAuthorizationV1;
 /**
  * Trusted server-only handoff of this person's current connection, for the
  * staging rehearsal's read proof and the assignee lookup; Jira context capture
  * is disabled. Its transport closes over the provider-owned Nango reference;
  * callers receive no credential, locator, actor selector, or Jira site selector.
  */
-export interface JiraCurrentCaptureConnectionV1 {
+interface JiraCurrentCaptureConnectionV1 {
   readonly transport: JiraCloudTransportV1;
   /** Synchronous final Authority-runner fence over the same actor and grant. */
   require_current(): void;

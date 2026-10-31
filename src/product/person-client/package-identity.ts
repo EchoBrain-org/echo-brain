@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-export interface PackagedPersonClientBuildIdentityV1 {
+interface PackagedPersonClientBuildIdentityV1 {
   readonly schema_version: 1;
   readonly kind: "echo-packaged-build-identity";
   readonly product_version: string;

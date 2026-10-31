@@ -9,7 +9,7 @@ const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const HISTORY_PAGE_LIMIT = 200;
 const MAX_HISTORY_PAGES = 25;
 
-export type SlackApiErrorCode =
+type SlackApiErrorCode =
   "auth" | "rate_limited" | "transient" | "unknown_outcome" | "invalid";
 
 export class SlackApiError extends Error {
@@ -26,7 +26,7 @@ export class SlackApiError extends Error {
   }
 }
 
-export interface SlackPostMessageInput {
+interface SlackPostMessageInput {
   channel: string;
   text: string;
   blocks?: readonly unknown[];
@@ -43,7 +43,7 @@ export interface SlackPostMessageInput {
 }
 
 /** Input for changing the presentation of an existing bot-authored message. */
-export interface SlackUpdateMessageInput {
+interface SlackUpdateMessageInput {
   channel: string;
   ts: string;
   text: string;
@@ -56,20 +56,20 @@ export interface SlackUpdateMessageInput {
   mrkdwn?: boolean;
 }
 
-export interface SlackPostedMessage {
+interface SlackPostedMessage {
   channel: string;
   ts: string;
 }
 
 /** Provider evidence for one channel message during durable post recovery. */
-export interface SlackChannelMessage {
+interface SlackChannelMessage {
   ts: string;
   text: string;
   bot_id: string | null;
 }
 
 /** Stable provider identifiers proved across Slack's auth and bot APIs. */
-export interface SlackAuthIdentity {
+interface SlackAuthIdentity {
   team_id: string;
   enterprise_id: string | null;
   user_id: string;
@@ -77,7 +77,7 @@ export interface SlackAuthIdentity {
   app_id: string;
 }
 
-export interface SlackDirectMessage {
+interface SlackDirectMessage {
   channel_id: string;
   user_id: string;
 }

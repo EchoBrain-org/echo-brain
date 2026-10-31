@@ -36,7 +36,7 @@ interface BrowserAttempt {
   } | null;
 }
 
-export interface SlackPersonBrowserIdentityLinkWorkflowOptionsV1 {
+interface SlackPersonBrowserIdentityLinkWorkflowOptionsV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly authentication: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };

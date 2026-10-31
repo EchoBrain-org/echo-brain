@@ -10,7 +10,7 @@ import {
 } from "./slack-approval-card-v4.js";
 
 /** The largest Slack interactivity request this pure boundary will retain. */
-export const PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_BODY_BYTES = 64 * 1024;
+const PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 export const PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_AGE_SECONDS = 5 * 60;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
@@ -31,7 +31,7 @@ const evidence = new WeakMap<
   VerifiedEvidence
 >();
 
-export class VerifiedPrivateSlackApprovalRequestV1 {
+class VerifiedPrivateSlackApprovalRequestV1 {
   private constructor() {}
   static create() {
     return Object.freeze(new VerifiedPrivateSlackApprovalRequestV1());
@@ -43,7 +43,7 @@ export class PrivateSlackApprovalInteractionError extends Error {
     this.name = "PrivateSlackApprovalInteractionError";
   }
 }
-export interface VerifyPrivateSlackApprovalRequestInputV1 {
+interface VerifyPrivateSlackApprovalRequestInputV1 {
   readonly raw_body: Uint8Array;
   readonly signing_secret: string;
   readonly headers: {
@@ -52,7 +52,7 @@ export interface VerifyPrivateSlackApprovalRequestInputV1 {
   };
   readonly now_unix_seconds?: number;
 }
-export interface PrivateSlackApprovalLookupHintsV1 {
+interface PrivateSlackApprovalLookupHintsV1 {
   readonly api_app_id: string;
   readonly workspace_id: string;
   readonly slack_user_id: string;
@@ -81,12 +81,12 @@ export interface VerifiedSlackApprovalClickV1 {
   readonly provider_action_key_sha256: `sha256:${string}`;
   readonly lookup: PrivateSlackApprovalLookupHintsV1;
 }
-export interface PrivateSlackApprovalPresentationChangeV1 {
+interface PrivateSlackApprovalPresentationChangeV1 {
   readonly schema_version: 4;
   readonly disposition: "presentation_change";
   readonly lookup: PrivateSlackApprovalLookupHintsV1;
 }
-export type PrivateSlackApprovalInteractionV1 =
+type PrivateSlackApprovalInteractionV1 =
   VerifiedSlackApprovalClickV1 | PrivateSlackApprovalPresentationChangeV1;
 function invalid(): never {
   throw new PrivateSlackApprovalInteractionError();
