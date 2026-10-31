@@ -15,6 +15,8 @@ export const OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 =
 export const OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 = 60_000;
 /** Kept conservative so changing the model does not expand Ask's prompt-size contract. */
 export const OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 = 131_072;
+/** The native Anthropic model a member's own Claude account researches and writes with. */
+const CLAUDE_ACCOUNT_MODEL_V1 = 'claude-sonnet-5-5';
 
 /**
  * OpenRouter answer-composition adapter bundle. It is the only owner of the
@@ -33,11 +35,11 @@ export function createOpenRouterAnswerCompositionGenerationBundleV1(input: {
         ...(input.personal_claude_research === undefined ? {} : { personal_research: {
           membership_id: input.personal_claude_research.membership_id,
           generation: Object.freeze({ generation_adapter_id: 'claude-account-research-writer-v1',
-            planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5',
+            planner_model: CLAUDE_ACCOUNT_MODEL_V1, answer_model: CLAUDE_ACCOUNT_MODEL_V1,
             timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1, context_tokens: OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 }),
-          driver: createClaudeResearchDriverV1({ model: 'claude-sonnet-5-5',
-            account: input.personal_claude_research, forward: claudeAccountForwarderV1('claude-sonnet-5-5') }),
-          structured_output: createClaudeAccountStructuredGenerationV1({ model: 'claude-sonnet-5-5', account: input.personal_claude_research }),
+          driver: createClaudeResearchDriverV1({ model: CLAUDE_ACCOUNT_MODEL_V1,
+            account: input.personal_claude_research, forward: claudeAccountForwarderV1(CLAUDE_ACCOUNT_MODEL_V1) }),
+          structured_output: createClaudeAccountStructuredGenerationV1({ model: CLAUDE_ACCOUNT_MODEL_V1, account: input.personal_claude_research }),
         } }),
         ...(input.research_engine === 'claude-sdk' ? { research_driver: createClaudeResearchDriverV1({
           model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
