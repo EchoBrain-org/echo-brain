@@ -61,8 +61,8 @@ describe('Granola meeting normalization of MCP content', () => {
       'sha256:c94c1903e0a28bdf358da6473a9332736f1735e6fd5c7603e256b9025ec829a4', '881d5c118db4be6e746e315e7fe7c5bdf5e4e86f0db3ca423f79e94c99267eff'],
     ['empty notes, summary and transcript', { ...meeting, private_notes: '', summary: '' }, { ...transcript, text: ' ' },
       'sha256:cbdaa01f603dbe03a931b873b1cfa6a945f6ea0b45b850ab6c3a59d9af667903', 'c6f09d4a8f0fd799a476033224474273cd11ee54bad6e70ff5f66de7af359cd6'],
-    ['a list row with an unreadable date label', { id, title: 'Standup', date: 'Oct 6, 2026', url, known_participants: '' }, undefined,
-      'sha256:f5a42b954387b6c01bed9aaf83a3aa3c243355159784a97f28a27ebcd11abd99', '6b61f99ea694f33053dd6a46175f8cdcfc9b613997002ccfd3e04b4287e8484a'],
+    ['a list row with an unreadable date label', { id, title: 'Standup', date: 'Oct 6, 2026', url, known_participants: '' }, null,
+      'sha256:62b643bb7656db1f37f47ce018e2a95fc211387df8199e3247ac1328d38dbec5', 'da2c5c5245f2790be5681be33047fc8e2bc2cebb7521768dac86e5edf2537676'],
   ] as const)('keeps the revision and document digest of %s', (_name, value, text, revision, content) => {
     expect(digests(value, text)).toEqual([revision, content]);
   });
