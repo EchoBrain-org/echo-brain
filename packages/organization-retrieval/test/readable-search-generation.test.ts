@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -355,6 +355,64 @@ describe("immutable readable-search generation v1", () => {
     ).toThrow(dimension);
     expect(existsSync(join(directory, "record-retrieval"))).toBe(false);
   });
+
+  it("builds, warms and searches a generation exactly at its atom, segment and posting budget", () => {
+    const budget = READABLE_SEARCH_ADMISSION_BUDGET_V1;
+    const directory = tempDirectory();
+    // Tuple 0 is the member segment; tuples 1..31 are one reviewer segment each.
+    // Every decision atom has its content terms plus the controlled category posting.
+    const contentTerms = budget.maximum_postings / budget.maximum_atoms - 1;
+    const atoms = Array.from({ length: budget.maximum_atoms }, (_, index) => {
+      const tuple = index % budget.maximum_segments;
+      const text = [
+        "capacity",
+        `segment${tuple}`,
+        ...Array.from({ length: contentTerms - 2 }, (__, term) => `term${term}x${index}`),
+      ].join(" ");
+      return atomWith(`capacity-${index}`, {
+        atom_order: index,
+        text,
+        ...(tuple === 0
+          ? {}
+          : {
+              policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+              policy_contract_sha256: digest(`policy-${RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2}`),
+              reviewer_principal_id: `reviewer-${tuple}`,
+              reviewer_membership_id: `membership-${tuple}`,
+            }),
+      });
+    });
+    const built = buildReadableSearchGenerationV1(input(directory, atoms));
+    const counts = built.manifest.segments.map((segment) =>
+      JSON.parse(readFileSync(join(built.generation_directory, "segments", segment.segment_id, "segment-manifest.json"), "utf8")) as
+        { fact_count: number; posting_count: number });
+    expect(counts).toHaveLength(budget.maximum_segments);
+    expect(counts.reduce((sum, count) => sum + count.fact_count, 0)).toBe(budget.maximum_atoms);
+    expect(counts.reduce((sum, count) => sum + count.posting_count, 0)).toBe(budget.maximum_postings);
+
+    const active_generation = activeGeneration(built);
+    warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation });
+    const search = (tuple: number | null, query: string) =>
+      searchReadableSearchGenerationV1({
+        state_directory: directory,
+        active_generation,
+        reader: tuple === null
+          ? { principal_id: "prn_member", membership_id: "mem_member" }
+          : { principal_id: `reviewer-${tuple}`, membership_id: `membership-${tuple}` },
+        query,
+      });
+    // Equal scores fall back to atom order: a member reads the member segment alone,
+    // and the last reviewer reads it merged with their own segment.
+    const member = search(null, "capacity");
+    expect(member.items.map((item) => item.atom_order)).toEqual([0, 32, 64, 96, 128, 160, 192, 224, 256, 288]);
+    expect(member.truncated).toBe(true);
+    expect(search(31, "capacity").items.map((item) => item.atom_order)).toEqual([0, 31, 32, 63, 64, 95, 96, 127, 128, 159]);
+    // The last atom's own term reaches its reviewer and no one else.
+    expect(search(31, "term0x1023").items.map((item) => item.text)).toEqual([atoms[1023]!.text]);
+    expect(search(30, "term0x1023").items).toEqual([]);
+    expect(search(null, "term0x1023").items).toEqual([]);
+  });
+
   it("reuses the exact completed generation without rewriting it, and stamps every plane manifest without a migration ledger", () => {
     const directory = tempDirectory();
     const source = input(directory, [
