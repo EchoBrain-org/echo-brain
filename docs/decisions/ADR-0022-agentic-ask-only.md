@@ -138,3 +138,7 @@ and the `off_scope` outcome. `/v7` is the only Ask route.
 Update (2026-10-31): `GET /v3/person/capabilities` is retired. No client read
 it; it answers the ordinary 404 and stays reserved against provider adapters,
 as [ADR-0048](ADR-0048-retire-older-person-routes.md)'s retired routes do.
+
+Update (2026-10-31): the repository's git tags were deleted, including
+`ask-v2-final`. The last commit with the V1 and V2 Ask is `2aa0072` on `main`,
+as PR #236 records. A rollback would release that commit instead of the tag.
