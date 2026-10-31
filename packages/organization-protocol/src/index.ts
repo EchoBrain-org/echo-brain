@@ -63,8 +63,6 @@ export type {
   HumanActRecordInputV1,
   PersonContentPolicyIdV2,
 } from "./human-act-record-input-v1.js";
-
-
 export {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
