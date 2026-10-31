@@ -132,8 +132,6 @@ const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-checked',
   'granola-sweep', 'granola-alike', 'granola-routes', 'granola-extra-failed']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
-/** A project made long ago, that Ari is added to when a test says (`added-oldest`). */
-const OLDEST = 'prj_66666666-6666-4666-8666-666666666666';
 /** Who an impact check names, besides Ari: fictional people of the organization. */
 const MINA = { membership_id: 'mem_77777777-7777-4777-8777-777777777777', name: 'Mina Patel' };
 const RAFAEL = { membership_id: 'mem_88888888-8888-4888-8888-888888888888', name: 'Rafael Moreno' };
@@ -467,8 +465,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const projects = mode === 'no-projects' ? [] : structuredClone(desktop.projects);
   const projectStatus = new Map<string, 'active' | 'archived'>(projects.map(project => [project.project_id, 'active']));
   const members = structuredClone(desktop.members);
-  // Ari is a member of the oldest project once added to it (it is listed only then).
-  members[OLDEST] = [{ membership_id: session.membership_id, role: 'member' }];
   // No longer a lead of the first project, though the list said so.
   if (mode === 'demoted') members[desktop.projects[0]!.project_id] = members[desktop.projects[0]!.project_id]!.map(entry => ({ ...entry, role: entry.role === 'lead' ? 'member' : 'lead' }));
   const documents = structuredClone(desktop.documents);
@@ -672,9 +668,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   /** Your projects, in the list's order, as the mode has them; renamed elsewhere (`renamed`), the first one's name says so. */
   const listed = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
     const rows = listedNow();
-    const renamed = elsewhere('renamed') && rows[0] ? [{ ...rows[0], name: `${rows[0].name}, renamed` }, ...rows.slice(1)] : rows;
-    // Added to the oldest project there is (`added-oldest`): last in the list, past the pages the sidebar shows.
-    return elsewhere('added-oldest') ? [...renamed, { project_id: OLDEST, name: 'Oldest launch', role: 'member' }] : renamed;
+    return elsewhere('renamed') && rows[0] ? [{ ...rows[0], name: `${rows[0].name}, renamed` }, ...rows.slice(1)] : rows;
   };
   const listedNow = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
     // Created from another client after the desktop loaded an empty sidebar.

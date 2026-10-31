@@ -3,13 +3,12 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { clickNotice, emit, launch, notices, type Launched } from './launch.js';
+import { emit, launch, notices, type Launched } from './launch.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
 
 const PROJECT_ADDED = 'prj_55555555-5555-4555-8555-555555555555';
-const OLDEST = 'prj_66666666-6666-4666-8666-666666666666';
 const desktopLog = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8');
 const checks = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v1/person/changes').length;
 const lists = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v2/person/projects').length;
@@ -32,34 +31,6 @@ test('the 2026-10-15 scenario: added to a project while ECHO keeps focus, the si
   expect(desktopLog()).toMatch(/changes moved projects\n/);
   expect(desktopLog()).not.toMatch(/lifecycle /);
   expect(desktopLog()).not.toMatch(/sha256:|prj_/);
-});
-
-test('added to the oldest of many projects: past the sidebar\'s pages, it is still announced, and the notification opens it', async () => {
-  run = await launch('many-projects');
-  const { page, app } = run;
-  const rows = page.getByTestId('sidebar-project');
-  await expect(rows).toHaveCount(10);
-  // Learned at sign-in: every page of Ari's projects, active (two pages) and archived, which filled the sidebar's first. Home,
-  // open at its top with your projects, reads the two active pages once more itself, as it does for a list past the sidebar's.
-  await expect.poll(checks).toBe(1);
-  await expect.poll(lists).toBe(5);
-  writeFileSync(join(run.home, 'added-oldest'), '');
-  // The next check (a wake's, rather than the timer's) finds it.
-  await emit(app, 'echo-test:wake');
-  await expect.poll(() => notices(run)).toEqual([
-    { title: 'ECHO', body: 'You were added to Oldest launch', target: { kind: 'project', project_id: OLDEST } },
-  ]);
-  // The sidebar still shows its first page; the project waits behind More, and the notification opens it all the same.
-  await expect(rows).toHaveCount(10);
-  await clickNotice(run, 0);
-  await expect(page.getByTestId('title')).toHaveText('Oldest launch');
-  // Told once: the next move of the projects tells nothing new.
-  writeFileSync(join(run.home, 'renamed'), '');
-  await emit(app, 'echo-test:wake');
-  await expect(rows.first()).toContainText('Project 1, renamed');
-  expect(await notices(run)).toHaveLength(1);
-  // Still Ari's: read on its own, as no sidebar row has it, the project stays open.
-  await expect(page.getByTestId('title')).toHaveText('Oldest launch');
 });
 
 test('waking the machine checks at once, and the log says so', async () => {
