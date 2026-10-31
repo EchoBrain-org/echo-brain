@@ -105,7 +105,7 @@ const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
 const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
-export interface EmployeeInvitationV1 {
+interface EmployeeInvitationV1 {
   readonly login_grant: string;
   readonly expires_at: string;
 }
@@ -116,7 +116,7 @@ export interface EmployeeRosterV1 {
   readonly employees: readonly EmployeeRosterItemV1[];
 }
 
-export interface EmployeeRosterItemV1 {
+interface EmployeeRosterItemV1 {
   readonly email: string;
   readonly display_name: string;
   readonly membership_status: "active" | "revoked";

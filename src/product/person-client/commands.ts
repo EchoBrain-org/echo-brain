@@ -672,7 +672,7 @@ function optionalRecordLimit(
   return Number(value);
 }
 
-export interface BrowserOpenerOptions {
+interface BrowserOpenerOptions {
   readonly platform?: NodeJS.Platform;
   readonly spawn_sync?: typeof spawnSync;
 }
