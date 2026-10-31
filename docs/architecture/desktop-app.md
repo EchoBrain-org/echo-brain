@@ -125,7 +125,7 @@ unresolved.
 
 Unit tests (`test/unit`, Vitest) cover the pure rules and the host. The
 Playwright suite (`test/e2e`) launches the real app against a stateful fake
-Authority (`src/host/test-authority.ts`). The separate `desktop-app` CI job runs
+Authority (`test/fixtures/authority.ts`). The separate `desktop-app` CI job runs
 typecheck, unit tests, Playwright, packaging with its release leak check, and a
 packaged smoke test on macOS arm64 and Linux x64; the root `npm run check`
 does not reach the desktop.
