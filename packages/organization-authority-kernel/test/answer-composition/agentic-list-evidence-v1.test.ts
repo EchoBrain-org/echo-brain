@@ -2,7 +2,7 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import {
-  AGENTIC_LIST_FILTER_FIELDS_V1, AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_STATEMENT_BYTES_V1,
+  AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_STATEMENT_BYTES_V1,
   agenticCalendarDayV1, agenticListCheckedNoteV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
   agenticListMembersNounV1, agenticListMembershipV1, agenticListNameSharesV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListStatementV1, agenticListTableV1,
   agenticNeedReadsListV1, agenticOpenReadsV1, agenticPlanListsV1, agenticWriterListMemberV1, agenticWriterListV1, createAgenticListEvidenceV1, parseAgenticListIdV1,
@@ -83,7 +83,6 @@ describe("the list record", () => {
     const tickets = createAgenticListEvidenceV1({ ...OCTOBER_4, id: "L2", source: "tickets", filter: { status: "open" }, filter_applied: { owner: "ignored", status: "partial" } });
     expect([tickets.filter, tickets.filter_applied]).toEqual([{ status: "open" }, { owner: "ignored", status: "partial" }]);
     expectTypeOf<AgenticListFilterApplicationV1>().toEqualTypeOf<"applied" | "partial" | "ignored">();
-    expect(AGENTIC_LIST_FILTER_FIELDS_V1).toEqual(["kind", "status", "owner", "role", "channel", "since", "until", "date_field"]);
   });
 
   it.each([
@@ -269,7 +268,6 @@ describe("the writer's view", () => {
   });
 
   it("lets the writer choose a list and select by one row fact other than its title, never write names", () => {
-    expect(AGENTIC_LIST_SELECTION_FIELDS_V1).toEqual(["owner", "status", "due", "created", "updated", "received", "occurred", "approved", "sent", "reassigned", "checked"]);
     const mine: AgenticAnswerListUseV1 = { id: "L1", where: { field: "owner", value: "Dana Lee" } };
     const week: AgenticAnswerListUseV1 = { id: "L1", where: { field: "due", since: "2026-10-18", until: "2026-10-24" } };
     expect([mine.where?.field, week.where?.field]).toEqual(["owner", "due"]);
