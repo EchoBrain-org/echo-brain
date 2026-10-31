@@ -21,8 +21,8 @@ export const PERSON_OPEN_PATH_V1 = '/v1/person/open';
 export const PERSON_LIST_PAGE_SIZE_V1 = 25;
 export const PERSON_LIST_HEADER_PROJECTS_MAX_V1 = 50;
 /** Equals the association cap, so a row never hides a joined project. */
-export const PERSON_LIST_ROW_PROJECTS_MAX_V1 = 20;
-export const PERSON_LIST_CONNECTED_MAX_V1 = 32;
+const PERSON_LIST_ROW_PROJECTS_MAX_V1 = 20;
+const PERSON_LIST_CONNECTED_MAX_V1 = 32;
 export const PERSON_LIST_TEXT_MAX_BYTES_V1 = 200;
 export const PERSON_LIST_RESPONSE_MAX_BYTES_V1 = 320 * 1024;
 export const PERSON_OPEN_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
@@ -30,7 +30,7 @@ export const PERSON_OPEN_ATOMS_MAX_V1 = 25;
 /** Server page budget for the canonical JSON of one page's atoms array. */
 export const PERSON_OPEN_ATOMS_BUDGET_BYTES_V1 = 32 * 1024;
 export const PERSON_OPEN_ATOM_PART_MAX_BYTES_V1 = 3 * 1024;
-export const PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1 = 8;
+const PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1 = 8;
 export const PERSON_OPEN_PARTICIPANTS_MAX_V1 = 32;
 export const PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1 = 'meetings_unavailable';
 

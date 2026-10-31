@@ -4,12 +4,8 @@ export {
   verifyOrganizationAuthorityPin,
 } from "./authority-descriptor.js";
 export type { PinnedOrganizationAuthority } from "./authority-descriptor.js";
-export { MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES } from "./validation-support.js";
 export { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "./record-payload.js";
-export {
-  isOrganizationProtocolValidationError,
-  OrganizationProtocolValidationError,
-} from "./validation-error.js";
+export { isOrganizationProtocolValidationError } from "./validation-error.js";
 export type {
   OrganizationAuthorityDescriptorV1,
   OrganizationMembershipTypeV1,
@@ -63,8 +59,6 @@ export type {
   HumanActRecordInputV1,
   PersonContentPolicyIdV2,
 } from "./human-act-record-input-v1.js";
-
-
 export {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,

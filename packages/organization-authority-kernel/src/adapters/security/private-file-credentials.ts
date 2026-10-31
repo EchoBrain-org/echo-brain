@@ -13,16 +13,16 @@ import type { Stats } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 
 const MINIMUM_CREDENTIAL_BYTES = 32;
-export const MAXIMUM_CREDENTIAL_BYTES = 4096;
+const MAXIMUM_CREDENTIAL_BYTES = 4096;
 
 /** Every private credential failure carries the same prefix and no value bytes. */
-export function privateAuthorityCredentialFailure(message: string): never {
+function privateAuthorityCredentialFailure(message: string): never {
   throw new Error(`authority credential: ${message}`);
 }
 
 const fail = privateAuthorityCredentialFailure;
 
-export function authorityCredentialPath(reference: string): string {
+function authorityCredentialPath(reference: string): string {
   if (!reference.startsWith('file:')) {
     fail('reference must use the file: scheme');
   }
@@ -58,7 +58,7 @@ function assertPrivateCredentialFile(
 }
 
 /** A bounded visible-ASCII credential file; provider readers add their own format rules. */
-export function readPrivateAuthorityVisibleAsciiCredential(
+function readPrivateAuthorityVisibleAsciiCredential(
   reference: string,
   minimumBytes: number,
 ): string {

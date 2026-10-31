@@ -1,6 +1,6 @@
 import type { AdapterIdentity } from "./adapter.js";
 
-export const SOURCE_SCHEMA_VERSION_V1 = 1 as const;
+const SOURCE_SCHEMA_VERSION_V1 = 1 as const;
 
 /** meeting-source remains accepted while existing providers use the bridge. */
 export type SourceAdapterIdentityV1 = AdapterIdentity & {

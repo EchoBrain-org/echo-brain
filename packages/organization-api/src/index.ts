@@ -8,10 +8,8 @@ export type {
   OrganizationPersonSessionV2,
 } from './contracts.js';
 export {
-  MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_BODY_BYTES,
   isOrganizationApiValidationError,
-  OrganizationApiValidationError,
   validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse,
   validateOrganizationAuthorityOrigin,
@@ -31,11 +29,6 @@ export {
   validateOrganizationPersonSession,
   validateOrganizationPersonSessionRefreshRequest,
 } from './person-session.js';
-
-
-
-
-
 export { ORGANIZATION_API_PERSON_TOOLS_PATH_V4, validateOrganizationPersonToolsV4, type OrganizationPersonToolV4, type OrganizationPersonToolsV4, type OrganizationToolSetupStatusV4 } from './person-tools-v4.js';
 export type { PersonToolJsonRequestV1, PersonToolGetRequestV1, PersonToolTransportV1, PersonToolSessionV1, PersonToolHostV1, PersonToolVerbNameV1, PersonToolVerbContextV1, PersonToolVerbV1, PersonToolProviderV1 } from './person-tool-client.js';
 export { PersonToolOutcomeErrorV1, PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1 } from './person-tool-client.js';
@@ -62,9 +55,6 @@ export * from './person-connector-access-v1.js';
 export * from './person-ticket-citation-v1.js';
 export * from './person-page-citation-v1.js';
 
-export * from './person-answer-v5.js';
-export * from './person-answer-v6.js';
-export * from './person-answer-v7.js';
 export * from './person-answer-v8.js';
 export * from './person-answer-layout-v1.js';
 export * from './person-answer-previous-v1.js';

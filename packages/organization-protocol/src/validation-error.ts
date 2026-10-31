@@ -1,4 +1,4 @@
-export class OrganizationProtocolValidationError extends Error {
+class OrganizationProtocolValidationError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(`organization protocol: ${message}`, options);
     this.name = "OrganizationProtocolValidationError";

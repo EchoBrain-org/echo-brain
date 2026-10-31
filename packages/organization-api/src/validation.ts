@@ -8,7 +8,7 @@ import type {
 } from './contracts.js';
 
 export const MAX_ORGANIZATION_API_BODY_BYTES = 16 * 1024;
-export const MAX_ORGANIZATION_API_CURSOR_CHARACTERS = 512;
+const MAX_ORGANIZATION_API_CURSOR_CHARACTERS = 512;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -16,7 +16,7 @@ const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const TOOL_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 const PERMALINK_PATTERN = /^https:\/\/[a-zA-Z0-9.-]+(?::[0-9]{1,5})?\/[^\s\\\p{Cc}]*$/u;
 
-export class OrganizationApiValidationError extends Error {
+class OrganizationApiValidationError extends Error {
   constructor(detail: string, options?: { cause?: unknown }) {
     super(`organization API: ${detail}`, options);
     this.name = 'OrganizationApiValidationError';

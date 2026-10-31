@@ -413,9 +413,9 @@ function assertRationaleLinks(
 }
 
 /**
- * Restates the `DecisionBrief` shape core produces. Core imports no packages,
- * so this package owns its own validator, exercised by the test-only payload
- * conformance fixture.
+ * Restates the `DecisionBrief` shape processing core produces. Neither package
+ * may import the other, so this package owns its own validator, exercised by
+ * the test-only payload conformance fixture.
  */
 function assertOrganizationRecordDecisionBrief(
   value: unknown,

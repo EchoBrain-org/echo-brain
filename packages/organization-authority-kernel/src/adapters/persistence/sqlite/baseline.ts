@@ -10,7 +10,7 @@ export const AUTHORITY_BASELINE_APPLICATION_ID_V1 = 0x45434155;
 /** The only Authority schema; earlier baselines remain in Git history. */
 export const AUTHORITY_BASELINE_SCHEMA_VERSION = 15;
 
-export function authorityBaselineSql(): string {
+function authorityBaselineSql(): string {
   return readFileSync(new URL("../../../../baselines/authority-baseline-v15.sql", import.meta.url), "utf8");
 }
 

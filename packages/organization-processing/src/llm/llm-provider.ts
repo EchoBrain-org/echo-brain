@@ -117,7 +117,7 @@ export function optionalPositiveInteger(value: unknown): number | undefined {
     : undefined;
 }
 
-export function requiredCredential(
+function requiredCredential(
   provider: string,
   reference: string,
   resolver: LlmCredentialResolver,
@@ -195,7 +195,7 @@ function statusTaxonomy(status: number): {
 }
 
 /** A non-2xx reply: the provider refused the request before generating anything. */
-export class ProviderStatusError extends AdapterError {
+class ProviderStatusError extends AdapterError {
   constructor(provider: string, readonly http_status: number, unbilled = false) {
     super(
       statusTaxonomy(http_status).code,
