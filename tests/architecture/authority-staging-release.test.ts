@@ -294,6 +294,26 @@ describe('bounded staging release operator', () => {
     expect(f.state.submissions).toBe(1);
   });
 
+  // The host runner, the local CLI and its declarations each spell these lists.
+  it('keeps the host runner tools, actions and safe codes equal to the local CLI and its types', () => {
+    const quoted = (text: string) => [...text.matchAll(/'([^']+)'/g)].map(match => match[1]!).sort();
+    const host = readFileSync(join(REPO, 'tools/authority-staging-release-host.py'), 'utf8');
+    const local = readFileSync(join(REPO, 'tools/authority-staging-release.mjs'), 'utf8');
+    const types = readFileSync(join(REPO, 'tools/authority-staging-release.d.mts'), 'utf8');
+    const python = (name: string) => quoted(host.match(new RegExp(`^${name} = \\((.*)\\)$`, 'm'))![1]!);
+    const union = (name: string) => quoted(types.match(new RegExp(`export type ${name} =([^;]*);`))![1]!);
+    const toolFiles = local.match(/^const TOOL_FILES = Object\.freeze\(\{\n([\s\S]*?)\n\}\);$/m)![1]!;
+    const tools = [...toolFiles.matchAll(/^ {2}'([^']+)': /gm)].map(match => match[1]!).sort();
+    expect(python('TOOLS')).toEqual(tools);
+    expect(union('StagingReleaseTool')).toEqual(tools);
+    const actions = quoted(local.match(/^const ACTIONS = \[(.*)\];$/m)![1]!);
+    expect(python('ACTIONS')).toEqual(actions);
+    expect(union('StagingReleaseAction')).toEqual(actions);
+    const codes = quoted(local.match(/^ {2}const codes = \[(.*)\];$/m)![1]!);
+    expect(python('SAFE_CODES')).toEqual(codes);
+    expect(union('StagingReleaseCode')).toEqual(codes);
+  });
+
   it('persists installation-phase failures without retrying or accepting them for inspection', () => {
     const f = fixture(); planned(f, 'install');
     const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));

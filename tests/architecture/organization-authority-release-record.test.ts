@@ -557,6 +557,16 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(run("python3", [DEPLOY_RUNTIME_PROFILE_TOOL, "validate", profile]).status).toBe(1);
   });
 
+  it("keeps runtime-profile validators in parity for a duplicate JSON key", () => {
+    const profile = writeRuntimeProfile();
+    writeFileSync(profile, readFileSync(profile, "utf8").replace('"kind":', '"kind":"duplicate","kind":'));
+
+    expect(run(process.execPath, [RUNTIME_PROFILE_TOOL, "validate", profile]).status).toBe(1);
+    const python = run("python3", [DEPLOY_RUNTIME_PROFILE_TOOL, "validate", profile]);
+    expect(python.status).toBe(1);
+    expect(python.stderr).toContain("duplicate JSON key");
+  });
+
   it("keeps runtime-profile validators in parity for valid supplementary Unicode", () => {
     const profile = writeRuntimeProfile("a".repeat(40), "# valid emoji: 😀\n");
     const node = run(process.execPath, [RUNTIME_PROFILE_TOOL, "validate", profile]);
