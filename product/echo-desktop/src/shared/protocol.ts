@@ -848,14 +848,25 @@ export type Methods = HostMethods & MainMethods;
 export type MethodName = keyof Methods;
 export type HostMethodName = keyof HostMethods;
 
-export const HOST_METHODS: readonly HostMethodName[] = [
-  'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'changes.read', 'list.page', 'open.ref',
-  'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
-  'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
-  'projects.members', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
-  'employees.reissue', 'employees.revoke', 'tools.meetings', 'runs', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
-  'meetings.handIn', 'timeline.read', 'timeline.put', 'ask.check', 'projects.activity',
-];
+/**
+ * Each host method's limit in the host; the client enforces its own shorter network timeouts. Its keys are main's allowlist
+ * of host methods, so none can be left out. Plain numbers, so the page's bundle leaves the table out.
+ */
+export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
+  'app.status': 5_000, 'signin.begin': 660_000, 'signin.invitation': 660_000, 'projects.list': 45_000, 'changes.read': 15_000,
+  'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
+  'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
+  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
+  'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
+  'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
+  'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
+  'employees.reissue': 45_000, 'employees.revoke': 45_000,
+  'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
+  'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
+  'meetings.handIn': 90_000,
+  // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
+  'timeline.read': 15_000, 'timeline.put': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
+};
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
   'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show', 'update.status', 'update.install', 'notice.show', 'log.changes',
