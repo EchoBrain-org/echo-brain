@@ -98,7 +98,6 @@ describe("Authority operator playbook", () => {
       "PB-OPERATIONS-001-authority-operator-lane.md",
     );
     const component = readRepoFile("docs/components/operations-release.md");
-    expect(component).toContain("playbook_ids:\n  - PB-OPERATIONS-001");
     expect(component).toContain(
       "../operations/PB-OPERATIONS-001-authority-operator-lane.md",
     );

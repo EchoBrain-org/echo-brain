@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { checkOf } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
-import { layoutAnswer } from '../../src/host/test-authority.js';
+import { layoutAnswer } from '../fixtures/authority.js';
 
 /**
  * An approved item's id as the Authority derives it (organization-record's
@@ -290,8 +290,7 @@ describe('a list shows rows, and nothing else crosses', () => {
       row(`note:${NOTE}`, { visibility: 'team', added_at: '2026-09-20T12:00:00.000Z', projects: [] }),
     ], next_cursor: 'AnR3' }), { kind: 'only-me' });
     expect(view).toEqual({ next_cursor: 'AnR3', meetings_held: false, items: [
-      { ref: { kind: 'meeting', id: RECORD }, title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', visibility: 'only-me', projects: ['Apollo'],
-        meeting_date: '2026-09-21' },
+      { ref: { kind: 'meeting', id: RECORD }, title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', visibility: 'only-me', projects: ['Apollo'] },
       { ref: { kind: 'document', id: DOC }, title: 'Pricing review', added_at: '2026-09-21T18:00:00.000Z', visibility: 'project', projects: ['Apollo'],
         document: { type: 'pdf', size: 1_245_184, extraction: 'ready' } },
       { ref: { kind: 'note', id: NOTE }, title: 'Pricing review', added_at: '2026-09-20T12:00:00.000Z', visibility: 'team', projects: [] },
@@ -782,7 +781,7 @@ describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
     { read: 'only what it read', answer: v8([named]), receipt: { looked_through: 1, elapsed_ms: 1_000, rows: [{ type: 'read', items: [named] }] }, rows: [{ type: 'read', items: [namedSource] }] },
   ])('keeps the receipt of an answer that read $read as it came', ({ answer, receipt, rows }) => {
     expect(answerView({ ok: true, result: answer, receipt }, { kind: 'global' }).receipt)
-      .toEqual({ looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows });
+      .toEqual({ looked_through: receipt.looked_through, rows });
   });
 
   it('comes only with a streamed answer, and never with an answer from before V8, which no Ask asks now', () => {
@@ -799,7 +798,7 @@ describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
     const mine = { kind: 'mine' } as const;
     const answer = { ...v8([named]), scope: mine };
     expect(answerView({ ok: true, result: answer }, mine)).toMatchObject({ scope: mine, sources: [namedSource] });
-    expect(answerView({ ok: true, result: answer, receipt: meetings }, mine).receipt).toEqual({ looked_through: 14, elapsed_ms: 48_000, rows: namedMeeting });
+    expect(answerView({ ok: true, result: answer, receipt: meetings }, mine).receipt).toEqual({ looked_through: 14, rows: namedMeeting });
   });
 });
 

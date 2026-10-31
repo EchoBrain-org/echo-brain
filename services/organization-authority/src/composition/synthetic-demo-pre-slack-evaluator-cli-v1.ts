@@ -8,7 +8,7 @@ import { loadSyntheticDemoMeetingCorpusV1 } from "@echo-brain/provider-synthetic
 import { fixedOpenRouterDecisionProcessorConfigV1, OPENROUTER_DECISION_PROCESSOR_MODEL_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 
 import { evaluateNorthstarPreSlackExtractionV1, northstarExtractionFailureV1, northstarEvaluationWithFailureV1 } from "@echo-brain/provider-synthetic-demo/synthetic-demo-pre-slack-evaluator-v1";
-export const NORTHSTAR_PRE_SLACK_QUALIFICATION_MODEL_V1 =
+const NORTHSTAR_PRE_SLACK_QUALIFICATION_MODEL_V1 =
   OPENROUTER_DECISION_PROCESSOR_MODEL_V1;
 
 const USAGE =
@@ -27,7 +27,7 @@ export interface NorthstarPreSlackEvaluatorDependenciesV1 {
   readonly read_expectations?: (path: string) => Promise<unknown>;
 }
 
-export interface NorthstarPreSlackEvaluatorIoV1 {
+interface NorthstarPreSlackEvaluatorIoV1 {
   readonly stdout: (line: string) => void;
 }
 

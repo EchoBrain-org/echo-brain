@@ -7,7 +7,6 @@
  * secret value belongs in this archive.
  */
 
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -21,6 +20,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
 import { deterministicTarGz } from "./lib/deterministic-tar.mjs";
+import { sha256 } from "./lib/operator-io.mjs";
 import { sourceCheckout } from "./lib/source-checkout.mjs";
 
 const ARCHIVE_SUFFIX = ".tar.gz";
@@ -54,10 +54,6 @@ const REQUIRED_FILES = Object.freeze([
 
 function fail(message) {
   throw new Error(`authority staging host bundle: ${message}`);
-}
-
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 const { run, regularDirectory, regularFile, checkedCommit } =

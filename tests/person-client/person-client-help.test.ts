@@ -1,87 +1,78 @@
 import { runPersonClientCli } from "../../src/product/person-client/composition.js";
-import { mkdtempSync, rmSync } from "node:fs";
+import type { PersonToolProviderV1 } from "@echo-brain/organization-api";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import ts from "typescript";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 // Help and refusals never reach the store, but they still run against a home of their own.
 const home = mkdtempSync(join(tmpdir(), "echo-person-help-"));
 afterAll(() => rmSync(home, { recursive: true, force: true }));
 
-async function help(argv: readonly string[]): Promise<string> {
+async function run(argv: readonly string[], tool_providers?: readonly PersonToolProviderV1[]) {
   let stdout = "";
   let stderr = "";
-  await expect(
-    runPersonClientCli(argv, {
-      home_directory: home,
-      stdout: { write: (value) => ((stdout += String(value)), true) },
-      stderr: { write: (value) => ((stderr += String(value)), true) },
-    }),
-  ).resolves.toBe(0);
-  expect(stderr).toBe("");
+  const network = vi.fn();
+  const code = await runPersonClientCli(argv, {
+    home_directory: home,
+    fetch: network,
+    ...(tool_providers === undefined ? {} : { tool_providers }),
+    stdout: { write: (value) => ((stdout += String(value)), true) },
+    stderr: { write: (value) => ((stderr += String(value)), true) },
+  });
+  return { code, stdout, stderr, network };
+}
+
+async function help(argv: readonly string[]): Promise<string> {
+  const { code, stdout, stderr } = await run(argv);
+  expect({ code, stderr }, argv.join(" ")).toEqual({ code: 0, stderr: "" });
   return stdout;
 }
 
+/** Every action the CLI dispatches, read from its RULES, so that no command can go without help. */
+function dispatchedActions(): string[] {
+  const path = join(import.meta.dirname, "../../src/product/person-client/commands.ts");
+  const source = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest);
+  const rules = source.statements.filter(ts.isVariableStatement).flatMap((statement) => statement.declarationList.declarations)
+    .find((declaration) => declaration.name.getText(source) === "RULES")?.initializer;
+  if (rules === undefined || !ts.isObjectLiteralExpression(rules)) throw new Error("commands.ts no longer declares RULES");
+  return rules.properties.map((property) => (property.name as ts.Identifier | ts.StringLiteral).text);
+}
+const GROUPS = ["documents", "projects", "updates", "evidence", "employee"];
+/** `projects-read-v2` is typed `projects read-v2`; any other action is one word. */
+function command(action: string): string[] {
+  const group = GROUPS.find((name) => action.startsWith(`${name}-`));
+  return group === undefined ? [action] : [group, action.slice(group.length + 1)];
+}
+/** The commands a usage line names as `<one|two|three>`. */
+const named = (usage: string) => /<([a-z0-9|-]+)>/.exec(usage)?.[1]?.split("|").sort();
+/** The command each line under the top-level help's `Commands:` heading names. */
+const listed = (usage: string) => /\nCommands:\n((?: {2}\S.*\n)+)/.exec(usage)?.[1]?.trimEnd().split("\n").map((line) => line.trim().split(" ")[0]).sort();
+
 describe("Person client help", () => {
-  it.each([
-    [["tools", "connect", "--help"], "--tool jira [--no-wait]"],
-    [["tools", "status", "--help"], "--tool jira --attempt-id <value>"],
-    [["tools", "cancel", "--help"], "--tool jira --attempt-id <value>"],
-    [["tools", "disconnect", "--help"], "--tool jira"],
-    [["ask", "--help"], "An Authority without /v7 fails with code not_supported."],
-    [["tools", "--help"], "echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings|submit> --tool <tool>"],
-    [["tools", "submit", "--help"], "--tool hand-in --meeting-title <value> [--notes-file <value>] [--transcript-file <value>] [--started-at <value>] [--date <value>] [--echo-project <value>] --retain"],
-    [["tools", "setup", "--help"], "--tool slack [--reconnect] [--existing-app <value>] [--no-wait]"],
-    [["tools", "connect", "--help"], "--method dm-code --slack-user"],
-    [["tools", "status", "--help"], "--tool slack --attempt-id <value>"],
-    [["login", "--help"], "--invitation <path> | --authority-url <url>"],
-    [["records", "--help"], "[--limit <1-100>] [--query <text>]"],
-    [["status", "--help"], "echo-brain person status"],
-    [["logout", "--help"], "echo-brain person logout"],
-    [["ask", "--help"], "echo-brain person ask --question <text> [--project <project-id> | --mine] [--progress"],
-    // Every Ask asks /v7, the only Ask route.
-    [["ask", "--help"], "Ask asks POST /v7/person/ask"],
-    // A follow-up's ref is not one person open reads: its item page is the runs item read.
-    [["ask", "--help"], `except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}'`],
-    [["open", "--help"], "usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]"],
-    [["evidence", "search", "--help"], "echo-brain person evidence search [--query <text>]"],
-    [["evidence", "open", "--help"], "echo-brain person evidence open --item <citation-json>"],
-    [["ask-source", "--help"], "echo-brain person ask-source --source-id <source-id>"],
-    [["employee", "--help"], "<list|invite|reissue|revoke>"],
-    [["employee", "list", "--help"], "echo-brain person employee list"],
-    [["employee", "invite", "--help"], "--name <name> --email <email> --out <absolute-path>"],
-    [["employee", "reissue", "--help"], "--email <email> --out <absolute-path>"],
-    [["employee", "revoke", "--help"], "--email <email>"],
-    // Every versioned upload and project-context command documents itself without a session.
-    [["updates", "submit-v3", "--help"], "--association-project-ids-json"],
-    [["updates", "status-v3", "--help"], "--request-id <uuid>"],
-    [["updates", "search-v3", "--help"], "--query <text>"],
-    [["documents", "upload-v2", "--help"], "--audience-project-ids-json"],
-    [["documents", "status-v2", "--help"], "--request-id <uuid>"],
-    [["documents", "search-v2", "--help"], "--query <text>"],
-    [["documents", "download-v2", "--help"], "--document-id <id>"],
-    [["projects", "search-v2", "--help"], "--query <text>"],
-    [["updates", "--help"], "<submit-v3|status-v3|search|search-v3>"],
-    [["documents", "--help"], "<upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate>"],
-    [["projects", "--help"], "<list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2>"],
-    [["changes", "--help"], "usage: echo-brain person changes"],
-    [["changes", "--help"], "echo-person-changes-v1"],
-    [["--help"], "changes     Check what moved in your own view, with no content."],
-    [["runs", "--help"], "with scope mine, involved, run, record or project"],
-  ])("documents %j with %s", async (argv, needle) => {
-    await expect(help(argv)).resolves.toContain(needle);
+  it("documents every dispatched command, lists each top-level one, and each group names exactly its commands", async () => {
+    const actions = dispatchedActions();
+    expect(actions).toEqual(expect.arrayContaining(["login", "ask", "list", "projects-read-v2", "employee-invite"]));
+    const top = await help(["--help"]);
+    expect(top).toMatch(/^usage: echo-brain person <command> \[options\]\n/);
+    expect(listed(top)).toEqual([...new Set(actions.map((action) => command(action)[0]))].sort());
+    for (const action of actions) {
+      expect(await help([...command(action), "--help"]), action).toMatch(/^usage: echo-brain person /);
+    }
+    for (const group of GROUPS) {
+      expect(named(await help([group, "--help"])), group).toEqual(actions.filter((action) => action.startsWith(`${group}-`)).map((action) => command(action)[1]).sort());
+    }
   });
 
-  it("starts the Person help with usage, the model-free list, open and scoped ask", async () => {
-    const text = await help(["--help"]);
-    expect(text).toContain("usage: echo-brain person <command> [options]");
-    expect(text).toContain("employee");
-    expect(text).toContain("directory   Find people in your organization by name.");
-    expect(text.indexOf("Start here:")).toBeGreaterThan(-1);
-    expect(text.indexOf("Start here:")).toBeLessThan(text.indexOf("Commands:"));
-    expect(text).toContain("\nlist shows only what you can read now; next_cursor means more.\n");
-    expect(text).toContain("  open --ref <ref>  ");
-    expect(text).toContain("  ask --question <text> [--project <project-id> | --mine]  ");
+  it("builds each tool verb's help from the registered tools", async () => {
+    for (const verb of named(await help(["tools", "--help"])) ?? []) {
+      expect(await help(["tools", verb, "--help"])).toMatch(new RegExp(`^usage: echo-brain person tools ${verb} --tool <tool> \\[options\\]\\n`));
+    }
+    const tool: PersonToolProviderV1 = { tool_id: "fixture", verbs: { connect: { description: "Connects the fixture.", requires: ["account"],
+      options: { account: { type: "string" }, wait: { type: "boolean" } }, run: async () => undefined } } };
+    expect(await run(["tools", "connect", "--help"], [tool])).toMatchObject({ code: 0, stderr: "",
+      stdout: "usage: echo-brain person tools connect --tool <tool> [options]\n\n  --tool fixture --account <value> [--wait]\n      Connects the fixture.\n" });
   });
 
   it("documents the organization directory as a single command with no project", async () => {
@@ -100,25 +91,11 @@ describe("Person client help", () => {
     expect(listHelp).toContain("--only-me lists everything only you can read, filed in a project or not");
   });
 
-  it("refuses each retired command, and its help, as unknown before any session or network use", async () => {
-    const retired = [
-      ["documents", "upload"], ["documents", "status"], ["documents", "read"], ["documents", "read-v2"], ["documents", "search"], ["documents", "download"],
-      ["projects", "list"], ["projects", "read"], ["projects", "feed"], ["projects", "feed-v2"], ["projects", "search"], ["projects", "read-context"], ["projects", "read-context-v2"],
-      ["updates", "submit"], ["updates", "status"], ["updates", "read"], ["updates", "read-v3"],
-      ["slack-connect-cancel"], ["slack-link"], ["slack-connect-begin"], ["slack-connect-status"], ["slack-disconnect"],
-      ["jira"], ["jira", "connect"], ["jira", "complete"], ["jira", "disconnect"],
-      ["tools", "bogus"], ["readable-search"], ["transcript"],
-    ];
-    for (const argv of retired.flatMap(command => [command, [...command, "--help"]])) {
-      let stdout = "";
-      let stderr = "";
-      const network = vi.fn();
-      await expect(runPersonClientCli(argv, {
-        home_directory: home,
-        fetch: network,
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: (value) => ((stderr += String(value)), true) },
-      }), argv.join(" ")).resolves.toBe(2);
+  it("refuses an unknown command, group command or tool verb, and its help, before any session or network use", async () => {
+    // Retired commands are refused only because RULES no longer has them; these reach that refusal each way.
+    for (const argv of [["readable-search"], ["documents", "upload"], ["tools", "bogus"]].flatMap((name) => [name, [...name, "--help"]])) {
+      const { code, stdout, stderr, network } = await run(argv);
+      expect(code, argv.join(" ")).toBe(2);
       expect(stdout).toBe("");
       expect(JSON.parse(stderr)).toEqual({ ok: false, error: "usage: echo-brain person <command> [options]" });
       expect(network).not.toHaveBeenCalled();

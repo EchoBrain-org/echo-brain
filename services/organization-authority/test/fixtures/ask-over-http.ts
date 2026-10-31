@@ -9,7 +9,8 @@ import { SqlitePersonSessionRepository } from '../../src/adapters/persistence/sq
 import { JIRA_LIVE_CONNECTOR_V1 } from '../../src/composition/person-live-connector-registry-v1.js';
 import type { CreatePersonLiveAnswerRouteOptionsV1 } from '../../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../../src/composition/person-record-search-route.js';
-import { createOrganizationAuthorityHttpServer } from '../../src/presentation/organization-authority-http-server.js';
+import { createOrganizationAuthorityHttpServer, type OrganizationAuthorityHttpServerOptions } from '../../src/presentation/organization-authority-http-server.js';
+import { authorityHttpServerOptions } from './authority-http-server.js';
 import type { FixturePerson, OpenItemsFixtureV1 } from './open-items.js';
 
 /** The streamed Ask route over HTTP, behind the real server, over the open-items Authority state (ADR-0039, ADR-0040). */
@@ -80,8 +81,8 @@ export function myOpenTasksPlanner(probes: readonly (readonly unknown[])[] = [],
 }
 
 /** Serves the given person routes behind the real server; its origin. */
-export async function serveAsk(routes: Omit<Parameters<typeof createOrganizationAuthorityHttpServer>[0], 'descriptor' | 'sessions' | 'oidc_provider' | 'expected_issuer'>): Promise<string> {
-  const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example', ...routes });
+export async function serveAsk(routes: Partial<OrganizationAuthorityHttpServerOptions>): Promise<string> {
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions(routes));
   servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
   return `http://127.0.0.1:${address.port}`;
@@ -116,13 +117,6 @@ export async function expectJsonAskFallbacks(ask: ReturnType<typeof askClient>, 
   const unauthenticated = await ask(base, { token: 'stranger' });
   expect([unauthenticated.status, unauthenticated.headers.get('content-type'), unauthenticated.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)])
     .toEqual([401, 'application/json; charset=utf-8', route.header]);
-}
-
-/** The streamed Ask route, when the Authority did not compose its Ask, answers unavailable, still route-matched. */
-export async function expectAskRouteUnavailable(ask: ReturnType<typeof askClient>, base: string, header: string): Promise<void> {
-  const response = await ask(base);
-  expect([response.status, response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)]).toEqual([503, header]);
-  await expect(response.json()).resolves.toEqual({ error: { code: 'unavailable', message: 'request failed' } });
 }
 
 /** Every event of a whole progress stream. */

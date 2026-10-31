@@ -120,7 +120,7 @@ function memberProjects(database: Database.Database, person: AuthorityPersonMemb
 }
 
 /** The change check's read of one person's projects (desktop refresh and notifications v1, ADR-0036). */
-export interface ProjectChangeViewV1 {
+interface ProjectChangeViewV1 {
   /** Exactly the grants `captureAuthorization` gives this person. */
   readonly grants: readonly ProjectMembershipGrantV1[];
   /** Every project the V2 list pages through for this person, active and archived, newest first. */

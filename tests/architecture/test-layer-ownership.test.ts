@@ -8,7 +8,7 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
 const { collectModuleReferences } = await import(pathToFileURL(
   resolve(REPOSITORY_ROOT, 'tools/lib/module-references.mjs'),
 ).href) as {
-  collectModuleReferences: (source: ts.SourceFile, options: { includeTypeQueries: boolean }) =>
+  collectModuleReferences: (source: ts.SourceFile) =>
     Array<{ specifier: string | null; expression: string }>;
 };
 const workspaces: string[] = JSON.parse(readFileSync(resolve(REPOSITORY_ROOT, 'package.json'), 'utf8')).workspaces;
@@ -33,7 +33,7 @@ function sourceFiles(root: string): string[] {
 
 function repositoryImports(path: string, content = readFileSync(path, 'utf8')): string[] {
   const parsed = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
-  return collectModuleReferences(parsed, { includeTypeQueries: true }).flatMap(
+  return collectModuleReferences(parsed).flatMap(
     ({ specifier, expression }) => {
       if (specifier === null) return [`unbounded-import:${expression}`];
       if (!specifier.startsWith('.')) {

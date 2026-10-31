@@ -4,6 +4,7 @@ import type { OrganizationPersonToolV4, OrganizationToolSetupStatusV4 } from '@e
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { createOrganizationAuthorityHttpServer } from '../../src/presentation/organization-authority-http-server.js';
 import { createPersonToolsHttpApplicationV4 } from '../../src/presentation/person-tools-http-application.js';
+import { authorityHttpServerOptions } from '../fixtures/authority-http-server.js';
 
 const authorization: PersonAccessAuthorization = {
   organization_id: 'org_00000000-0000-4000-8000-000000000001', membership_id: 'mem_00000000-0000-4000-8000-000000000001',
@@ -41,8 +42,7 @@ describe('Person tools status authorization', () => {
     for (const path of ['/v2/person/tools', '/v3/person/tools', '/v3/person/tools/slack']) {
       const application = { routes: [{ route_id: 'collision', method: 'GET' as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
       for (const ingress of [{ person_tools: application }, { person_external_identity_link: application }, { person_tool_connections: [application] }]) {
-        expect(() => createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never,
-          expected_issuer: 'https://issuer.example', ...ingress })).toThrow('collides with Authority route');
+        expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions(ingress))).toThrow('collides with Authority route');
       }
     }
   });

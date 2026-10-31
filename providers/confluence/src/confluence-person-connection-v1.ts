@@ -17,7 +17,7 @@ import type { ConfluenceNangoV1 } from './confluence-nango-v1.js';
 import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
 import { CONFLUENCE_ID, CONFLUENCE_PERSON_PROVIDER_V1, confluenceArray, confluenceFailure, confluenceNextCursorV1, confluenceString, confluenceRecord } from './confluence-validation-v1.js';
 
-export type ConfluencePersonAuthorizationV1 = PersonConnectionAuthorizationV1;
+type ConfluencePersonAuthorizationV1 = PersonConnectionAuthorizationV1;
 export function createConfluencePersonConnectionV1(options: {
   readonly store: ConfluenceConnectionStoreV1;
   readonly nango: ConfluenceNangoV1;

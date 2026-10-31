@@ -99,7 +99,7 @@ const PROCESS_IO: CliIo = {
 };
 
 /** Slack is set up in the ECHO app, so the manifest names no Slack connection or channel. */
-export interface OrganizationAuthoritySetupManifestV3 {
+interface OrganizationAuthoritySetupManifestV3 {
   readonly schema_version: 3;
   readonly kind: "echo-clean-founder-onboarding-manifest-v3";
   readonly state_directory: string;

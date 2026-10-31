@@ -6,7 +6,7 @@ import {
   validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3, validatePersonRunsRequestV1, validatePersonRunsResultV1,
   type PersonAnswerCitationV8, type PersonAskProgressStepEventV3,
 } from '@echo-brain/organization-api';
-import { derivedAtomIdentity } from '@echo-brain/organization-record/application/atom-identity';
+import { derivedAtomIdentity } from '../../packages/organization-record/src/application/atom-identity.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import {

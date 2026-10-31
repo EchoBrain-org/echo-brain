@@ -104,6 +104,8 @@ identity no longer matches.
 - [Authority root-volume recovery-floor runbook](../operations/RB-OPERATIONS-002-authority-recovery-floor.md)
 - [Canonical source and immutable release runbook](../operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md)
 - [Qualification and evidence](../qualification/README.md)
+- [Client updates](../features/client-updates-v1.md) and the
+  [client update feed procedure](../../deploy/client-updates/README.md)
 - [`deploy/organization-authority/`](../../deploy/organization-authority)
 - [`tools/`](../../tools)
 - [GitHub workflows](../../.github/workflows)

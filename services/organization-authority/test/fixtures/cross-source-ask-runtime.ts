@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { expect, vi } from 'vitest';
 import { canonicalJson, canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import type Database from 'better-sqlite3';
-import { derivedAtomIdentity } from '@echo-brain/organization-record/application/atom-identity';
+import { derivedAtomIdentity } from '../../../../packages/organization-record/src/application/atom-identity.js';
 import { storableImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -49,7 +49,7 @@ export async function crossSourceAuthorityFixture(owned: string[]) {
 }
 
 /** The runtime's Authority database, as the proofs read its audit rows. */
-export interface CrossSourceAuthorityDatabaseV1 {
+interface CrossSourceAuthorityDatabaseV1 {
   prepare(sql: string): { all(...parameters: unknown[]): unknown[]; get(...parameters: unknown[]): unknown };
   close(): void;
 }

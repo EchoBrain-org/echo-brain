@@ -53,11 +53,19 @@ it.
 - `src/product/` contains shipped machine product. Its workspaces are the
   installable end-user artifacts and remain separate from server libraries and
   service lifecycle ownership.
+- `providers/<provider>/` contains one provider's edge: its transport,
+  credentials, persistence translations and model vocabulary. Where the Person
+  client needs a provider's commands, a separate `client/` workspace carries
+  them with no server dependency (Slack's server side is `server/`).
+  `providers/shared` holds the provider runtime the concrete providers reuse.
+- `product/` contains shipped applications that are not root workspaces: the
+  Electron desktop app in `product/echo-desktop`, its own npm project, which
+  packages the built Person client.
 
 Accordingly, `organization-control-plane`, `organization-record`, and
 `organization-retrieval` are linked packages. The Organization Authority is
-the process that composes and deploys them; the Person client is the shipped
-machine product.
+the process that composes and deploys them; the Person client and the desktop
+app that carries it are the shipped machine products.
 
 ## Guarded component indexes
 

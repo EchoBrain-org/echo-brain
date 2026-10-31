@@ -26,10 +26,7 @@ export function repositoryWorktree(root) {
       throw error;
     }
     if (!stat.isFile() || stat.isSymbolicLink()) continue;
-    files.set(path, {
-      mode: (stat.mode & 0o111) === 0 ? '100644' : '100755',
-      bytes: readFileSync(absolutePath),
-    });
+    files.set(path, { bytes: readFileSync(absolutePath) });
   }
   return files;
 }

@@ -15,7 +15,7 @@ type Page = PersonLiveEvidencePageV1<Citation>;
 export interface PersonToolContainerV1 { readonly id: string; readonly key: string; readonly name: string }
 
 /** Containers a tool returned, and how many of its rows were left out because they could not be shown. */
-export interface PersonToolContainerRowsV1 { readonly containers: readonly PersonToolContainerV1[]; readonly left_out: number }
+interface PersonToolContainerRowsV1 { readonly containers: readonly PersonToolContainerV1[]; readonly left_out: number }
 
 /** One tool's container reads, each made with the asker's own connection under the tool's current permissions. */
 export interface PersonToolContainerProviderV1 {

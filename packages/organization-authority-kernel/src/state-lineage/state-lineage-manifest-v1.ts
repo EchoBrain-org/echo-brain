@@ -24,7 +24,7 @@ import type {
  * Authority protocol messages.
  */
 
-export class StateLineageContractError extends Error {
+class StateLineageContractError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'StateLineageContractError';
@@ -44,7 +44,7 @@ export const STATE_LINEAGE_ROOT_MANIFEST_V2_KIND = 'echo-state-lineage-root-mani
  */
 export const STATE_LINEAGE_MANIFEST_TABLE =
   'echo_state_lineage_manifest' as const;
-export const STATE_LINEAGE_MANIFEST_ROW_KEYS = [
+const STATE_LINEAGE_MANIFEST_ROW_KEYS = [
   'singleton',
   'manifest_json',
   'manifest_sha256',

@@ -38,12 +38,12 @@ export interface PersonOnboardingInvitationV2 {
   expected_email: string;
 }
 
-export interface PersonOnboardingInvitationTarget {
+interface PersonOnboardingInvitationTarget {
   output_path: string;
   authority_url: string;
 }
 
-export interface ReservedPersonOnboardingInvitation extends PersonOnboardingInvitationTarget {
+interface ReservedPersonOnboardingInvitation extends PersonOnboardingInvitationTarget {
   descriptor: number | null;
   released: boolean;
 }

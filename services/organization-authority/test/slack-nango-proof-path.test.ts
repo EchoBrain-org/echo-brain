@@ -22,7 +22,7 @@ import {
   organizationPersonSlackIdentityLinkChallengeCodeSha256,
 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts";
-import { openOrganizationControlDatabase } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
+import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { slackApprovalActionIdV4, slackApprovalDestinationSha256V4 } from "@echo-brain/provider-slack-server/private-approval/slack-approval-card-v4";
 import {
   parseVerifiedPrivateSlackApprovalInteractionV1,

@@ -18,7 +18,7 @@ import {
  * path keeps its V2 name because installed clients open citations there.
  */
 export const PERSON_SOURCE_EVIDENCE_PATH_V1 = '/v2/person/ask/source';
-export const PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 = 3 * 1024;
+const PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 = 3 * 1024;
 
 export type PersonAnswerScopeV3 =
   | { readonly kind: 'global' }
@@ -79,7 +79,7 @@ export interface PersonSourceEvidenceV1 {
 }
 
 /** A cited original is read under global or project scope, never mine. */
-export function validatePersonSourceReadScopeV1(value: unknown, label = 'Ask response scope'): PersonSourceReadScopeV1 {
+function validatePersonSourceReadScopeV1(value: unknown, label = 'Ask response scope'): PersonSourceReadScopeV1 {
   if (object(value, label).kind === 'mine') fail(`${label} is invalid`);
   return validatePersonAnswerScopeV3(value, label) as PersonSourceReadScopeV1;
 }

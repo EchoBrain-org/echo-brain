@@ -30,7 +30,7 @@ import type { PersonDocumentUploadStagingV1 } from '../application/ports/documen
 import { createPersonDocumentsHttpHandlerV1, uniqueMemberJsonV1 } from './person-documents-http-route-v1.js';
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2 } from '@echo-brain/organization-api';
 import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
-import { validatePersonQueryText } from "@echo-brain/organization-api";
+import { PERSON_EMPLOYEES_PATH_V1, PERSON_RECORDS_PATH_V1, validatePersonRecordSearchRequestV2 } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
@@ -55,18 +55,9 @@ import {
 } from "../application/person-identity-sessions.js";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import type { ProviderHttpApplicationV1, ProviderHttpRouteV1, ProviderHttpResponseV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
-import {
-  PERSON_RECORDS_PATH_V1,
-  type PersonRecordReadHttpApplicationV1,
-} from "./person-record-read-http-application.js";
-import {
-  PERSON_RECORD_SEARCH_PATH_V1,
-  type PersonRecordSearchHttpApplicationV1,
-} from "./person-record-search-http-application.js";
-import {
-  PERSON_EMPLOYEES_PATH_V1,
-  type PersonEmployeeHttpApplication,
-} from "./person-employee-http-application.js";
+import type { PersonRecordReadHttpApplicationV1 } from "./person-record-read-http-application.js";
+import type { PersonRecordSearchHttpApplicationV1 } from "./person-record-search-http-application.js";
+import type { PersonEmployeeHttpApplication } from "./person-employee-http-application.js";
 import {
   PERSON_ANSWER_PATH_V7,
   PERSON_ANSWER_ROUTE_HEADER_V5,
@@ -131,7 +122,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `PUT ${PERSON_EMPLOYEES_PATH_V1}`,
   `DELETE ${PERSON_EMPLOYEES_PATH_V1}`,
   `GET ${PERSON_RECORDS_PATH_V1}`,
-  `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
+  `POST ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V7}`,
   `POST ${PERSON_ASK_CHECK_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
@@ -149,7 +140,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
 function routeKey(method: string, path: string): string {
   return `${method} ${path}`;
 }
-export interface AuthorityOidcAuthorizationUrlProvider {
+interface AuthorityOidcAuthorizationUrlProvider {
   buildAuthorizationUrl(
     input: ReturnType<PersonIdentitySessionApplication["beginOidcLogin"]>,
   ): string | Promise<string>;
@@ -166,44 +157,40 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: ProviderHttpApplicationV1;
   /** The Person tools list, `/v4/person/tools`. */
-  readonly person_tools?: ProviderHttpApplicationV1;
-  /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
-  readonly person_record_read?: PersonRecordReadHttpApplicationV1;
-  /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
-  readonly person_record_search?: PersonRecordSearchHttpApplicationV1;
+  readonly person_tools: ProviderHttpApplicationV1;
+  readonly person_record_read: PersonRecordReadHttpApplicationV1;
+  readonly person_record_search: PersonRecordSearchHttpApplicationV1;
   /** Owner-only employee invite, reissue, and revoke. */
-  readonly person_employees?: PersonEmployeeHttpApplication;
+  readonly person_employees: PersonEmployeeHttpApplication;
   /**
    * The evidence desk (`/v3/person/evidence/search` and `/open`, ADR-0022), composed with the answer model. Its Ask route,
    * `/v3/person/ask`, was retired with `/v4` to `/v6`: Ask is `person_answer_v7`.
    */
-  readonly person_answer_v3?: PersonAnswerV3HttpApplication;
+  readonly person_answer_v3: PersonAnswerV3HttpApplication;
   /**
-   * Ask (`/v7`, the V8 answer, research tool contract v1), optional until the runtime has a configured answer model: it may
-   * read and cite live tickets and pages, ECHO's shared follow-ups (ADR-0040), and the asker's projects, people, tools and
-   * their connected tools' containers.
+   * Ask (`/v7`, the V8 answer, research tool contract v1): it may read and cite live tickets and pages, ECHO's shared
+   * follow-ups (ADR-0040), and the asker's projects, people, tools and their connected tools' containers.
    */
-  readonly person_answer_v7?: PersonAnswerV7HttpApplication;
+  readonly person_answer_v7: PersonAnswerV7HttpApplication;
   /** The Ask source check (ADR-0047); it needs no answer model, and reads the database and the caller's own tool connections. */
-  readonly person_ask_check?: PersonAskCheckHttpApplicationV1;
+  readonly person_ask_check: PersonAskCheckHttpApplicationV1;
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
-  readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
+  readonly person_trigger_runs: PersonTriggerRunsHttpApplicationV1;
   readonly person_diagnostics?: PersonDiagnosticsHttpApplicationV1;
   /** Provider-owned routes (account connections and the Slack approval click), selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
-  readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
+  readonly person_source_evidence: PersonSourceEvidenceHttpApplicationV1;
   /** The person list and open by ref (ADR-0024); it needs no answer model. */
-  readonly person_list?: PersonListHttpApplicationV1;
+  readonly person_list: PersonListHttpApplicationV1;
   /** The change check (ADR-0036); it needs no answer model and reads only the database. */
-  readonly person_changes?: PersonChangesHttpApplicationV1;
+  readonly person_changes: PersonChangesHttpApplicationV1;
   /** Project activity (Ask timeline v1, C2); like the change check, it needs no answer model and reads only the database. */
-  readonly person_project_activity?: PersonProjectActivityHttpApplicationV1;
-  /** Mounted only when the project application and V2 worker binding are composed. */
-  readonly project_context?: ProjectContextApplicationV1;
-  readonly person_documents?: PersonDocumentApplicationV1;
-  readonly document_upload_staging?: PersonDocumentUploadStagingV1;
+  readonly person_project_activity: PersonProjectActivityHttpApplicationV1;
+  readonly project_context: ProjectContextApplicationV1;
+  readonly person_documents: PersonDocumentApplicationV1;
+  readonly document_upload_staging: PersonDocumentUploadStagingV1;
 }
 
 function providerIngressRoutes(
@@ -492,12 +479,11 @@ interface PersonReadGetApplication {
 
 /** Original-source reads validate the body before checking the bearer, then release synchronously. */
 function personSourcePost<Application, Request>(
-  application: Application | undefined,
+  application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: { readonly access_token: string; readonly request: Request }) => unknown,
 ): PersonPostHandler {
   return async (request, response) => {
-    if (application === undefined) { fail(response, 503, "unavailable"); return; }
     const requestBody = await personBody(request, validate);
     json(response, 200, read(application, {
       access_token: accessToken(request.headers.authorization), request: requestBody,
@@ -525,7 +511,7 @@ function askOptions(request: IncomingMessage): { readonly time_context?: PersonA
 
 /** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
 function personCancellablePost<Application, Request>(
-  application: Application | undefined,
+  application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: {
     readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: boolean; readonly signal: AbortSignal;
@@ -533,7 +519,6 @@ function personCancellablePost<Application, Request>(
   ask = false,
 ): PersonPostHandler {
   return async (request, response) => {
-    if (application === undefined) { fail(response, 503, "unavailable"); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
     try {
@@ -559,10 +544,10 @@ const streamedFailureStatus = new WeakMap<ServerResponse, number>();
  * request may carry the asker's previous turn (ADR-0047), streamed or not. A
  * disconnect still cancels the Ask, and nothing more is written.
  */
-function personAskV7Post(application: PersonAnswerV7HttpApplication | undefined): PersonPostHandler {
+function personAskV7Post(application: PersonAnswerV7HttpApplication): PersonPostHandler {
   const plain = personCancellablePost(application, validatePersonAnswerRequestV3, (served, input) => served.ask(input), true);
   return async (request, response) => {
-    if (application?.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V3) { await plain(request, response); return; }
+    if (application.askWithProgress === undefined || request.headers[PERSON_ASK_PROGRESS_HEADER_V1] !== PERSON_ASK_PROGRESS_HEADER_VALUE_V3) { await plain(request, response); return; }
     const access_token = accessToken(request.headers.authorization);
     const disconnect = disconnectSignal(request, response);
     let stream: PersonAskProgressStreamV1 | undefined;
@@ -649,30 +634,8 @@ function recordSearchInput(value: unknown): {
   readonly query: string;
   readonly limit?: number;
 } {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new AuthorityOperationError("invalid_request", "request is invalid");
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  let query: string;
-  try { query = validatePersonQueryText(record.query); }
+  try { return validatePersonRecordSearchRequestV2(value); }
   catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
-  if (
-    keys.length < 1 || keys.length > 2 || !keys.includes("query") ||
-    keys.some(key => key !== "query" && key !== "limit") ||
-    (record.limit !== undefined &&
-      (!Number.isSafeInteger(record.limit) ||
-        (record.limit as number) < 1 ||
-        (record.limit as number) > 10))
-  ) {
-    throw new AuthorityOperationError("invalid_request", "request is invalid");
-  }
-  return Object.freeze({
-    query,
-    ...(record.limit === undefined
-      ? {}
-      : { limit: record.limit as number }),
-  });
 }
 
 /** Validate transport input without exposing codec diagnostics to the caller. */
@@ -795,9 +758,8 @@ export function createOrganizationAuthorityHttpServer(
   options: OrganizationAuthorityHttpServerOptions,
 ): Server {
   const providerRoutes = providerIngressRoutes(options);
-  if ((options.person_documents === undefined) !== (options.document_upload_staging === undefined)) throw new Error('Document application and transfer staging must be composed together');
-  const documents = options.person_documents === undefined ? undefined : createPersonDocumentsHttpHandlerV1(
-    options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
+  const documents = createPersonDocumentsHttpHandlerV1(
+    options.person_documents, options.document_upload_staging, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
@@ -816,35 +778,33 @@ export function createOrganizationAuthorityHttpServer(
           : application.read({ ...common, request: input.request });
       })],
     ] as const),
-    ...(options.person_trigger_runs === undefined ? [] : [
-      [PERSON_RUNS_PATH_V1, personCancellablePost(options.person_trigger_runs, validatePersonRunsRequestV1, (application, input) => {
-        const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
-        const request = input.request;
-        switch (request.operation) {
-          case 'list': return application.list(common);
-          case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id, ...(request.capture_id === undefined ? {} : { capture_id: request.capture_id }) } });
-          case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
-          case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });
-          case 'home': return application.home({ ...common, request });
-          case 'items': return application.items({ ...common, request });
-          case 'item': return application.item({ ...common, request });
-          case 'send': return application.send({ ...common, request });
-          case 'set_state': return application.set_state({ ...common, request });
-          case 'assign': return application.assign({ ...common, request });
-          case 'sweep': return application.sweep({ ...common, request });
-          default: {
-            // Every operation the API knows is served: one added to the API does not compile here until it is.
-            const unserved: never = request;
-            throw new Error(`Runs operation is not served: ${(unserved as { readonly operation: string }).operation}`);
-          }
+    [PERSON_RUNS_PATH_V1, personCancellablePost(options.person_trigger_runs, validatePersonRunsRequestV1, (application, input) => {
+      const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
+      const request = input.request;
+      switch (request.operation) {
+        case 'list': return application.list(common);
+        case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id, ...(request.capture_id === undefined ? {} : { capture_id: request.capture_id }) } });
+        case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
+        case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });
+        case 'home': return application.home({ ...common, request });
+        case 'items': return application.items({ ...common, request });
+        case 'item': return application.item({ ...common, request });
+        case 'send': return application.send({ ...common, request });
+        case 'set_state': return application.set_state({ ...common, request });
+        case 'assign': return application.assign({ ...common, request });
+        case 'sweep': return application.sweep({ ...common, request });
+        default: {
+          // Every operation the API knows is served: one added to the API does not compile here until it is.
+          const unserved: never = request;
+          throw new Error(`Runs operation is not served: ${(unserved as { readonly operation: string }).operation}`);
         }
-      })],
-    ] as const),
+      }
+    })],
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
     [PERSON_LIST_PATH_V1, personCancellablePost(options.person_list, validatePersonListRequestV1, (application, input) => application.list(input))],
     [PERSON_OPEN_PATH_V1, personCancellablePost(options.person_list, validatePersonOpenRequestV1, (application, input) => application.open(input))],
   ]);
-  const personReadGets: ReadonlyMap<string, PersonReadGetApplication | undefined> = new Map<string, PersonReadGetApplication | undefined>([
+  const personReadGets: ReadonlyMap<string, PersonReadGetApplication> = new Map<string, PersonReadGetApplication>([
     [PERSON_CHANGES_ROUTE_V1, options.person_changes],
     [PERSON_PROJECT_ACTIVITY_PATH_V1, options.person_project_activity],
   ]);
@@ -1053,26 +1013,21 @@ export function createOrganizationAuthorityHttpServer(
         noContent(response);
         return;
       }
-      if (documents !== undefined) {
-        try { if (await documents(request, response, url)) return; }
-        catch (error) {
-          if (error instanceof AuthorityOperationError) throw error;
-          throw new AuthorityOperationError('unavailable', 'request failed');
-        }
+      try { if (await documents(request, response, url)) return; }
+      catch (error) {
+        if (error instanceof AuthorityOperationError) throw error;
+        throw new AuthorityOperationError('unavailable', 'request failed');
       }
-      if (options.project_context !== undefined) {
-        try {
-          const release = await projectRoute(request, url, options.project_context);
-          if (release !== undefined) { release(response); return; }
-        } catch (error) {
-          if (error instanceof AuthorityOperationError) throw error;
-          // Persistence/audit failures must keep the closed project error
-          // contract while withholding the response and private diagnostics.
-          throw new AuthorityOperationError('unavailable', 'request failed');
-        }
+      try {
+        const release = await projectRoute(request, url, options.project_context);
+        if (release !== undefined) { release(response); return; }
+      } catch (error) {
+        if (error instanceof AuthorityOperationError) throw error;
+        // Persistence/audit failures must keep the closed project error
+        // contract while withholding the response and private diagnostics.
+        throw new AuthorityOperationError('unavailable', 'request failed');
       }
       if (
-        options.person_employees !== undefined &&
         url.pathname === PERSON_EMPLOYEES_PATH_V1 &&
         url.search === ""
       ) {
@@ -1118,10 +1073,6 @@ export function createOrganizationAuthorityHttpServer(
         }
       }
       if (method === "GET" && url.pathname === PERSON_RECORDS_PATH_V1) {
-        if (options.person_record_read === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
         const exactRecord = recordSha256(url);
         const limit = exactRecord === undefined ? recordLimit(url) : undefined;
         json(
@@ -1141,13 +1092,9 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (
         method === "POST" &&
-        url.pathname === PERSON_RECORD_SEARCH_PATH_V1 &&
+        url.pathname === PERSON_RECORDS_PATH_V1 &&
         url.search === ""
       ) {
-        if (options.person_record_search === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
         const input = recordSearchInput(await body(request));
         json(
           response,
@@ -1171,17 +1118,13 @@ export function createOrganizationAuthorityHttpServer(
         json(response, 200, validatePersonCapabilitiesV1({
           schema_version: 1,
           kind: "echo-person-capabilities-v1",
-          // Kept for installed clients that still probe before asking; always true with an answer model.
-          agentic_ask_v1: options.person_answer_v3 !== undefined,
+          // Kept for installed clients that still probe before asking.
+          agentic_ask_v1: true,
         }));
         return;
       }
-      if (method === "GET" && personReadGets.has(url.pathname)) {
-        const personRead = personReadGets.get(url.pathname);
-        if (personRead === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
+      const personGet = method === "GET" ? personReadGets.get(url.pathname) : undefined;
+      if (personGet !== undefined) {
         // Authenticated first, as capabilities is; the read takes no query and no body.
         const access_token = accessToken(request.headers.authorization);
         options.sessions.authenticateAccess({ access_token });
@@ -1190,7 +1133,7 @@ export function createOrganizationAuthorityHttpServer(
         }
         const disconnect = disconnectSignal(request, response);
         try {
-          json(response, 200, await personRead.read({ access_token, signal: disconnect.signal }));
+          json(response, 200, await personGet.read({ access_token, signal: disconnect.signal }));
         } finally {
           disconnect.dispose();
         }

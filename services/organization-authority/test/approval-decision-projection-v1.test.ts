@@ -3,9 +3,8 @@ import { canonicalJson, canonicalSha256, type JsonValue } from '@echo-brain/fede
 import {
   APPROVAL_DECISION_FIELD_V2, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, createRecordEnvelopeFactoryV4, createRecordReceiptFactoryV2,
   organizationAuthorityPinSha256, organizationMemberReadablePersonPolicyContractSha256, projectMembersReadablePersonPolicyContractSha256, verifyOrganizationAuthorityPin,
-  validateApprovalDecisionRecordInputV2, approvalRecordIdV2, APPROVAL_DECISION_CONSEQUENCE_KIND_V1,
+  validateApprovalDecisionRecordInputV2, approvalRecordIdV2, APPROVAL_DECISION_CONSEQUENCE_KIND_V1, validateApprovedDecisionSnapshotV2,
 } from '@echo-brain/organization-protocol';
-import { validateApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
 import { approvalCoreFixture, type ApprovalCoreFixtureV1 } from './fixtures/approval-core.js';
 import type { ApprovalDecisionBodyV1, ApprovalRouteV1 } from '../src/composition/approval-core-v1.js';
 import {

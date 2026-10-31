@@ -3,7 +3,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { PersonDocumentApplicationV1, PersonDocumentRepositoryV1, DocumentReadRequestV1, PersonDocumentOriginalV2 } from './ports/document-v1.js';
 import { createPersonDocumentAssociationApplicationV1 } from './document-associations-v1.js';
-export interface PersonDocumentApplicationDependenciesV1 { readonly authenticate: (accessToken: string) => PersonAccessAuthorization; readonly repository: PersonDocumentRepositoryV1; readonly on_original_saved?: () => void }
+interface PersonDocumentApplicationDependenciesV1 { readonly authenticate: (accessToken: string) => PersonAccessAuthorization; readonly repository: PersonDocumentRepositoryV1; readonly on_original_saved?: () => void }
 function valid<T>(fn: () => T): T { try { return fn(); } catch { throw new AuthorityOperationError('invalid_request', 'Document request is invalid'); } }
 function projectScope(value: unknown): string | null { return value == null ? null : valid(() => validateProjectIdV1(value, 'project_id')); }
 export function createPersonDocumentApplicationV1(dependencies: PersonDocumentApplicationDependenciesV1): PersonDocumentApplicationV1 {

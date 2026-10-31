@@ -39,7 +39,7 @@ import type {
 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS } from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
-import { port as availablePort, syntheticOidcProvider } from "./fixtures/owner-session.js";
+import { UNUSED_ANSWER_MODEL, port as availablePort, syntheticOidcProvider } from "./fixtures/owner-session.js";
 
 const roots: string[] = [];
 
@@ -236,6 +236,7 @@ describe("Organization Authority API runtime", () => {
       },
       {
         oidc_provider: founderOidc(),
+        answer_composition_generation: UNUSED_ANSWER_MODEL,
         external_identity_runtime_bundle: {
           open(input): OpenedPersonExternalIdentityRuntimeV1 {
             opened.push(input);
@@ -766,6 +767,7 @@ describe("Organization Authority API runtime", () => {
     const REVIEW = `apr_${"a".repeat(64)}`;
     const apiDependencies = {
       oidc_provider: founderOidc(),
+      answer_composition_generation: UNUSED_ANSWER_MODEL,
       person_http_runtime_factory: () => ({ applications: [], close() {},
         reviewStatuses: async () => (person: { readonly membership_id: string }) =>
           person.membership_id === initialized.owner_membership_id ? [{ approval_id: REVIEW, status: "pending" as const }] : [] }),
@@ -876,16 +878,6 @@ describe("Organization Authority API runtime", () => {
       expect(session.membership_id).toBe(initialized.owner_membership_id);
       expect(session.display_name).toBe("Founder");
 
-      for (const operation of ["list", "home"]) {
-        const unavailableRuns = await fetch(`${origin}/v1/person/runs`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${session.access_token as string}`, "content-type": "application/json" },
-          body: JSON.stringify({ schema_version: 1, operation }),
-        });
-        expect(unavailableRuns.status).toBe(503);
-        expect(await json(unavailableRuns)).toMatchObject({ error: { code: "unavailable" } });
-      }
-
       const recoveryBegin = await fetch(`${origin}/v2/session/oidc/begin`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -980,8 +972,8 @@ describe("Organization Authority API runtime", () => {
       expect(await get(`/v3/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text });
       await post("/v1/person/projects/context/associate", { schema_version: 1, kind: "echo-project-context-associate-v1", request_id: "00000000-0000-4000-8000-000000000006", project_id, context_id });
       expect(await post("/v2/person/projects/context/feed", { project_id })).toEqual(feed);
-      // The composed Ask source check (ADR-0047) answers with no answer model: an unknown follow-up is unreadable, and with
-      // no tool connected a ticket is unknown.
+      // The composed Ask source check (ADR-0047) needs no answer model: an unknown follow-up is unreadable, and with no tool
+      // connected a ticket is unknown.
       expect(await post("/v1/person/ask/check", { schema_version: 1, kind: "echo-person-ask-check-request-v1", items: [
         { asked_at: "2026-10-20T09:00:00.000Z", citation: { kind: "follow_up", item_id: "itm_00000000-0000-4000-8000-000000000001" } },
         { asked_at: "2026-10-20T09:00:00.000Z", citation: { kind: "ticket", tool_id: "jira", external_scope_id: "00000000-0000-4000-8000-000000000007", ticket_id: "10012",
@@ -1025,7 +1017,7 @@ describe("Organization Authority API runtime", () => {
       expect(await post("/v3/person/updates", { ...upload, audience: { kind: "team" } }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
       expect(await get(`/v3/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text, audience: upload.audience });
 
-      // The person list and open serve without an answer model or a published generation (ADR-0024).
+      // The person list and open need no answer model or published generation (ADR-0024).
       expect(await post("/v1/person/list", { schema_version: 1 })).toEqual({
         schema_version: 1, kind: "echo-person-list-v1", scope: { kind: "global" },
         me: { display_name: "Founder", membership_type: "owner" }, connected: [],

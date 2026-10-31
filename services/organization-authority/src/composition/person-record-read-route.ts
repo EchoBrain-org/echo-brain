@@ -14,11 +14,8 @@ import { samePersonReleaseAuthorizationV1 } from "../application/person-release-
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { captureRecordProjectsV1, type CaptureRecordProjectsV1 } from "./person-record-project-scope-v1.js";
 import { approverDisplayNameV1, type ApproverMembershipsV1 } from "./person-meeting-items-v1.js";
-import type {
-  PersonRecordReadHttpApplicationV1,
-  PersonRecordReadResponseV1,
-  PersonRecordSourceMetadataV1,
-} from "../presentation/person-record-read-http-application.js";
+import type { PersonRecordListV1, PersonRecordSourceMetadataV1 } from "@echo-brain/organization-api";
+import type { PersonRecordReadHttpApplicationV1 } from "../presentation/person-record-read-http-application.js";
 
 interface CurrentPersonSessions {
   authenticateAccess(input: {
@@ -67,7 +64,7 @@ function assertExpectedOrganization(
 function asResponse(
   records: readonly PersonReadableRecordV1[],
   metadata?: (record: PersonReadableRecordV1) => PersonRecordSourceMetadataV1,
-): PersonRecordReadResponseV1 {
+): PersonRecordListV1 {
   return Object.freeze({
     schema_version: 1,
     kind: "echo-clean-person-record-list-v1",
@@ -99,7 +96,7 @@ export function createPersonRecordReadRouteV1(
       readonly limit?: number;
       readonly record_sha256?: Sha256Digest;
       readonly include_source_metadata?: boolean;
-    }): PersonRecordReadResponseV1 {
+    }): PersonRecordListV1 {
       const admitted = options.sessions.authenticateAccess({
         access_token: input.access_token,
       });

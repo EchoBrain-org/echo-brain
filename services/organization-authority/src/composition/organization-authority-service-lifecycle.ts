@@ -65,14 +65,14 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   setWorkerLifecycle?(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void;
 }
 
-export interface OrganizationAuthorityServiceLifecycleConfig {
+interface OrganizationAuthorityServiceLifecycleConfig {
   readonly api: OrganizationAuthorityApiRuntimeConfig;
   readonly worker_interval_ms?: number;
 }
 
 export interface OrganizationAuthorityServiceLifecycleDependencies {
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
-  readonly api?: OrganizationAuthorityApiRuntimeDependencies;
+  readonly api: OrganizationAuthorityApiRuntimeDependencies;
   readonly processing: OrganizationAuthorityProcessingCycleV1;
   readonly additional_processing?: OrganizationAuthorityProcessingCycleV1;
   readonly start_api_runtime?: (
@@ -237,7 +237,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
       false,
     );
     startup.signal.throwIfAborted();
-    api = await startApi(config.api, dependencies.api ?? {});
+    api = await startApi(config.api, dependencies.api);
     const startedApi = api;
     const reportError = (failure: unknown): void => {
       try {

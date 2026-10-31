@@ -9,6 +9,7 @@ component_ids:
   - CMP-MEETING-PROCESSING-CORE
   - CMP-PROCESSING-ADAPTERS
   - CMP-PERSON-CLIENT
+  - CMP-DESKTOP-APP
   - CMP-IDENTITY-ACCESS
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERMISSIONS
@@ -30,6 +31,7 @@ and qualification proof.
 | [Meeting processing core](meeting-processing-core.md) | `packages/organization-processing/src/core/` | Provider-neutral meeting processing rules and ports |
 | [Processing adapters](processing-adapters.md) | `providers/` | Provider-specific sources, processors, approval surfaces, and identity links |
 | [Person client](person-client.md) | `src/product/person-client/` | Thin Person CLI and private session state |
+| [Desktop app](desktop-app.md) | `product/echo-desktop/` | The Electron app people use; runs the Person client in-process |
 | [Identity and access](identity-access.md) | Person client plus Authority | Person sessions, membership, and revocation state |
 | [Organization Authority](organization-authority.md) | `services/organization-authority/`; `packages/organization-{control-plane,record,retrieval}/` | Organization identity, policy, record, retrieval, and API authority |
 | [Permissions](permissions.md) | cross-cutting | Approval, admission, visibility, and read authorization |

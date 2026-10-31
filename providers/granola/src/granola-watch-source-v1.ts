@@ -1,12 +1,12 @@
 import { canonicalJson } from '@echo-brain/federation-protocol';
-import type { AdapterConfig, AdapterOperationContext, MeetingDocument, MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
+import type { AdapterOperationContext, MeetingDocument, MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import type { GranolaPersonConnectionV1 } from './granola-person-connection-v1.js';
 import { GRANOLA_ID_V1, GRANOLA_PERSON_PROVIDER_V1, GRANOLA_TIMESTAMP_V1, granolaMcpMeetingContentV1, granolaMeetingUnreadableV1, granolaTranscriptPendingV1 } from './granola-mcp-v1.js';
 import { normalizeGranolaMeetingV1 } from './granola-meeting-normalizer-v1.js';
 
 /** What a personal Granola source watches: nothing, the meetings its person captured, or one folder. */
-export type GranolaWatchModeV1 = 'off' | 'mine' | 'folder';
+type GranolaWatchModeV1 = 'off' | 'mine' | 'folder';
 /** A watch as the Authority stores it; `folder_id` is set exactly for `folder`. */
 export interface GranolaWatchV1 { readonly watch: GranolaWatchModeV1; readonly folder_id: string | null }
 export interface GranolaCheckpointV1 {
@@ -100,15 +100,6 @@ export class GranolaWatchSourceV1 implements MeetingSourceAdapter {
     /** The clock that dates the window and settles meetings. */
     private readonly now: () => number = Date.now) {
     granolaWatchInitialCursorV1(watch);
-  }
-  validateConfig(config: AdapterConfig) {
-    const ok = config.adapter_id === this.identity.adapter_id && config.instance_id === this.identity.instance_id;
-    return { ok, errors: ok ? [] : ['Granola source identity differs'] };
-  }
-  async healthCheck(context?: AdapterOperationContext) {
-    const checked_at = new Date().toISOString();
-    try { this.requireMapping(); await this.open(context?.signal); return { status: 'healthy' as const, checked_at }; }
-    catch { return { status: 'unavailable' as const, checked_at, message: 'Granola connection needs attention' }; }
   }
   /** Called again by Authority inside the existing source-custody transaction. */
   requireCurrent(): void {

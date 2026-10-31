@@ -9,9 +9,9 @@ export const CASES_FILE = new URL("./cases.json", import.meta.url);
 /** Each group's number of cases, as pre-registered. */
 export const GROUPS = Object.freeze({ names_long_id: 6, plain: 4 });
 /** A lead may share at most this many consecutive words with the question (rule 1). */
-export const MAX_SHARED_WORDS = 4;
+const MAX_SHARED_WORDS = 4;
 /** Each rule passes when at least this share of trials passes it. */
-export const THRESHOLD = 0.9;
+const THRESHOLD = 0.9;
 const ITEM_KINDS = new Set(["follow_up", "decision", "ticket"]);
 
 /**

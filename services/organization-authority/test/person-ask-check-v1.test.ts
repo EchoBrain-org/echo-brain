@@ -24,6 +24,7 @@ import { createPersonAskCheckV1, type CreatePersonAskCheckV1Options, type Person
 import { PersonDocumentProcessingV1 } from '../src/composition/person-document-processing-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { CLOUD, assign, sentFixture, setState, type FixturePerson } from './fixtures/open-items.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 const GLOBAL = { kind: 'global' } as const;
 const SITE = 'https://echo-fixture.atlassian.net';
@@ -424,9 +425,8 @@ describe('Ask source check: cost', () => {
 describe('Ask source check HTTP route', () => {
   const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
   afterEach(async () => { for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; } });
-  async function origin(person_ask_check?: ReturnType<typeof createPersonAskCheckV1>) {
-    const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-      ...(person_ask_check === undefined ? {} : { person_ask_check }) });
+  async function origin(person_ask_check: ReturnType<typeof createPersonAskCheckV1>) {
+    const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_ask_check }));
     servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
     const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
     return `http://127.0.0.1:${address.port}`;
@@ -468,12 +468,8 @@ describe('Ask source check HTTP route', () => {
     expect((await fetch(`${base}${PERSON_ASK_CHECK_PATH_V1}`, { headers: { authorization: 'Bearer ari' } })).status).toBe(404);
   });
 
-  it('is reserved for the Authority, and unavailable when not composed', async () => {
-    expect(() => createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-      person_tools: { routes: [{ route_id: 'collision', method: 'POST', path: PERSON_ASK_CHECK_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) } })).toThrow('collides with Authority route');
-    const base = await origin();
-    const response = await fetch(`${base}${PERSON_ASK_CHECK_PATH_V1}`, { method: 'POST', headers: { authorization: 'Bearer ari', 'content-type': 'application/json' },
-      body: JSON.stringify({ schema_version: 1, kind: PERSON_ASK_CHECK_REQUEST_KIND_V1, items: [item({ kind: 'follow_up', item_id: 'itm_0000-0000' })] }) });
-    expect(response.status).toBe(503);
+  it('is reserved for the Authority', () => {
+    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
+      person_tools: { routes: [{ route_id: 'collision', method: 'POST', path: PERSON_ASK_CHECK_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) } }))).toThrow('collides with Authority route');
   });
 });

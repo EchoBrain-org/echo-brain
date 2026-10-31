@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { createConfluencePersonConnectionHttpApplicationV1 } from '@echo-brain/provider-confluence/confluence-person-connection-http-application-v1';
 import { validateConfluenceProjectMappingsV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 it('serves a maximum valid mapping collection through authenticated provider HTTP ingress', async () => {
   const uuid = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
@@ -16,8 +17,7 @@ it('serves a maximum valid mapping collection through authenticated provider HTT
     connect: vi.fn(), status: vi.fn(), cancel: vi.fn(), disconnect: vi.fn(),
     projectRead: vi.fn(), projectSet: vi.fn(), projectList,
   });
-  const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never,
-    expected_issuer: 'https://issuer.example.test', person_tool_connections: [application] });
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tool_connections: [application] }));
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1/person/tools/confluence/project/list`;
   try {

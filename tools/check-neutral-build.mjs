@@ -36,7 +36,7 @@ try {
     cwd: fixture, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
   });
   if (result.status !== 0) throw new Error(result.stdout + result.stderr);
-  process.stdout.write(JSON.stringify({ ok: true, neutral_workspaces: workspaces.length, provider_workspaces: 0, service_workspaces: 0, prebuilt_workspace_outputs: 0 }) + '\n');
+  process.stdout.write(JSON.stringify({ ok: true, neutral_workspaces: workspaces.length }) + '\n');
 } finally {
   rmSync(fixture, { recursive: true, force: true });
 }

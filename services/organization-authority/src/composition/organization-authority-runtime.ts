@@ -26,7 +26,6 @@ import { createReadableSearchGenerationReconcilerV1 } from "./readable-search-ge
 import type { ReadableSearchGenerationReconciliationV1 } from "./readable-search-generation-reconciler.js";
 import type { OrganizationAuthorityApiRuntimeConfig, OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 import { createModelCallLimiterV1, limitStructuredGenerationPortV1, limitResearchDriverV1, RESEARCH_SESSION_LIMITS_V1, type ModelCallLimiterV1, type ModelCallPriorityV1 } from "./model-call-limiter-v1.js";
 
 /** The staging release canary's outcome; the deploy receipt reads `approval_outcome = kind` and `approval_id`. */
@@ -98,9 +97,9 @@ function stagingSyntheticCanaryHook(
  * Narrow composition seams for deterministic local rehearsals. Production
  * callers leave this absent.
  */
-export interface OrganizationAuthorityRuntimeDependencies {
+interface OrganizationAuthorityRuntimeDependencies {
   /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
-  readonly api?: OrganizationAuthorityApiRuntimeDependencies;
+  readonly api?: Partial<OrganizationAuthorityApiRuntimeDependencies>;
 }
 
 interface ReadableSearchReconcilerV1 {
@@ -152,12 +151,11 @@ export async function openOrganizationAuthorityRuntime(
       `file:${config.pkce_key_file}`,
     ),
   };
-  const baseApiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
+  const baseApiDependencies: Partial<OrganizationAuthorityApiRuntimeDependencies> = {
     ...dependencies.api,
     record_input_codecs: config.record_input_codecs,
-    ...(config.staging_research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1
-      ? { research_eval_v1: true as const }
-      : {}),
+    // The API runtime composes it only for the staging Authority origin.
+    ...(config.staging_research_eval_v1 === true ? { research_eval_v1: true as const } : {}),
     ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
 
   };

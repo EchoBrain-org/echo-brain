@@ -46,7 +46,7 @@ import type {
   ProjectReadResponseV1,
 } from './ports/project-context-v1.js';
 
-export interface ProjectContextApplicationDependenciesV1 {
+interface ProjectContextApplicationDependenciesV1 {
   readonly authenticate: (accessToken: string) => PersonAccessAuthorization;
   readonly repository: ProjectContextRepositoryV1;
 }
@@ -55,7 +55,7 @@ export interface ProjectContextApplicationDependenciesV1 {
  * Authority-owned V1 application boundary.  It authenticates and validates
  * before creating a transaction-local scope; callers cannot supply either.
  */
-export class ProjectContextApplication implements ProjectContextApplicationV1 {
+class ProjectContextApplication implements ProjectContextApplicationV1 {
   constructor(private readonly dependencies: ProjectContextApplicationDependenciesV1) {}
 
   createProject(accessToken: string, value: unknown): ProjectCreateReceiptV1 {

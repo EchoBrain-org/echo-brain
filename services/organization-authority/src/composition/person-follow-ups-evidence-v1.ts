@@ -85,7 +85,7 @@ export interface PersonFollowUpsSourcesV1 {
   readonly on_live_failure?: OpenItemSourcesV1['on_live_failure'];
 }
 
-export interface CreatePersonFollowUpsEvidenceSourceV1Options {
+interface CreatePersonFollowUpsEvidenceSourceV1Options {
   readonly sources: PersonFollowUpsSourcesV1;
   /** The asker, as their session authorized them when the request's desk was bound. */
   readonly viewer: OpenItemViewerV1;

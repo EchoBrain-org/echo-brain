@@ -53,7 +53,7 @@ export interface PersonWorkspaceSourcesV1 {
   readonly tools: (access_token: string) => Promise<readonly OrganizationPersonToolV4[]>;
 }
 
-export interface CreatePersonWorkspaceEvidenceSourcesV1Options {
+interface CreatePersonWorkspaceEvidenceSourcesV1Options {
   readonly sources: PersonWorkspaceSourcesV1;
   /** The asker's access token: every read is made as them. */
   readonly access_token: string;
@@ -66,7 +66,7 @@ export interface CreatePersonWorkspaceEvidenceSourcesV1Options {
 }
 
 /** One workspace source; the request's desk dispatches to it by its selector. */
-export interface PersonWorkspaceEvidenceSourceV1 {
+interface PersonWorkspaceEvidenceSourceV1 {
   readonly descriptor: WorkspaceSourceDescriptorV1;
   search(input: EvidenceDateFilterV1 & { readonly query: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<EvidenceDeskResultV2>;
   list(input: EvidenceDeskListInputV2): Promise<EvidenceDeskResultV2>;
@@ -74,7 +74,7 @@ export interface PersonWorkspaceEvidenceSourceV1 {
   open(input: { readonly item: string; readonly signal?: AbortSignal }): Promise<EvidenceDeskResultV2>;
 }
 /** Projects and people: ECHO's own state, read synchronously, so the desk runs their checks with its final local ones. */
-export interface PersonWorkspaceLocalSourceV1 extends PersonWorkspaceEvidenceSourceV1 {
+interface PersonWorkspaceLocalSourceV1 extends PersonWorkspaceEvidenceSourceV1 {
   /**
    * Every item this source released since its last successful check (`incremental`), or every one (`full`, the default),
    * against the asker's grants and the organization's memberships now. Fails with `stale_access_state` when the session is
@@ -85,7 +85,7 @@ export interface PersonWorkspaceLocalSourceV1 extends PersonWorkspaceEvidenceSou
   revalidate(input: Pick<EvidenceDeskRevalidateInputV1, 'mode' | 'signal'>): void;
 }
 /** Tools: the person tools list is read through each tool's own store and fences, so the desk awaits its check. */
-export interface PersonWorkspaceToolsSourceV1 extends PersonWorkspaceEvidenceSourceV1 {
+interface PersonWorkspaceToolsSourceV1 extends PersonWorkspaceEvidenceSourceV1 {
   /**
    * As the local check, against the person tools list read again: fails with `stale_access_state` when a released tool's
    * connection changed (its status, availability, site or account) or the asker no longer sees the organization setup a
@@ -104,7 +104,7 @@ export interface PersonWorkspaceEvidenceSourcesV1 {
  * Per call: the hits one search returns, the rows one list page returns, the names one item's text names, the leads its
  * attribute names, and the items released beside one result.
  */
-export const PERSON_WORKSPACE_LIMITS_V1 = Object.freeze({ search_hits: 10, list_page: 20, names: 50, leads: 10, linked: 100 });
+const PERSON_WORKSPACE_LIMITS_V1 = Object.freeze({ search_hits: 10, list_page: 20, names: 50, leads: 10, linked: 100 });
 
 /** The asker's project grants as the project repository holds them now, in a read transaction of their own with no release. */
 export function personWorkspaceGrantsV1(repository: Pick<ProjectContextRepositoryV1, 'withReadTransaction'>): PersonWorkspaceSourcesV1['grants'] {

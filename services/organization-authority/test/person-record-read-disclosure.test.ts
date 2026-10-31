@@ -14,7 +14,7 @@ import {
 } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { createPersonRecordReadRouteV1 } from "../src/composition/person-record-read-route.js";
-import type { PersonRecordReadResponseV1 } from "../src/presentation/person-record-read-http-application.js";
+import type { PersonRecordListV1 } from "@echo-brain/organization-api";
 import { SIGNED_APPROVAL_PROJECTORS, appendSignedApprovalV1 } from "./fixtures/signed-approval-decision-v1.js";
 
 /**
@@ -60,7 +60,7 @@ function recordLogCoordinates(value: unknown, path = "$"): { readonly path: stri
 describe("Person Layer 1 record list disclosure", () => {
   const record = database();
   const authorityDatabase = openAuthorityDatabase(":memory:");
-  let response: PersonRecordReadResponseV1;
+  let response: PersonRecordListV1;
 
   beforeAll(async () => {
     applyAuthorityBaseline(authorityDatabase);

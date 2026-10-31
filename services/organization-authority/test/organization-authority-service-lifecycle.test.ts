@@ -72,12 +72,13 @@ function apiRuntime(events: string[]): RunningOrganizationAuthorityApiRuntime {
 
 function startLifecycle(
   worker_interval_ms: number,
-  dependencies: OrganizationAuthorityServiceLifecycleDependencies,
+  dependencies: Omit<OrganizationAuthorityServiceLifecycleDependencies, "api">,
   events: string[] = [],
 ) {
   return startOrganizationAuthorityServiceLifecycle(
     { api: apiConfig, worker_interval_ms },
-    { start_api_runtime: async () => apiRuntime(events), ...dependencies },
+    // The stand-in API runtime takes no dependencies.
+    { start_api_runtime: async () => apiRuntime(events), api: {} as never, ...dependencies },
   );
 }
 

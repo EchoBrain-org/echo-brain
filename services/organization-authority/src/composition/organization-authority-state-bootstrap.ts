@@ -52,7 +52,7 @@ import {
  * not write operator configuration, credentials, listener state, provider
  * configuration, installation state, enrollment state, or leases.
  */
-export interface BootstrapOrganizationAuthorityStateInput {
+interface BootstrapOrganizationAuthorityStateInput {
   readonly state_directory: string;
   readonly organization_display_name: string;
   readonly owner_display_name: string;
@@ -65,7 +65,7 @@ export interface BootstrapOrganizationAuthorityStateInput {
   readonly seed?: AuthorityStateSeedV1;
 }
 
-export interface AuthorityStateManifestEvidenceV1 {
+interface AuthorityStateManifestEvidenceV1 {
   readonly root_manifest_sha256: Sha256Digest;
   readonly database_manifests: Readonly<Record<string, Sha256Digest>>;
   readonly retrieval_present: false;

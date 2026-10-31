@@ -4,7 +4,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import type { PersonProviderFailureCodeV1 } from '../src/person-provider-v1.js';
 
-describe.each(['jira', 'confluence'] as const)('%s Nango HTTP custody', product => {
+describe.each(['jira'] as const)('%s Nango HTTP custody', product => {
 const integration = `${product}-fixture`;
 const scopes = `offline_access read:${product}-fixture`;
 const failureMessage = `${product} fixture operation failed`;

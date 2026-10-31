@@ -11,8 +11,8 @@ import {
 } from '../src/composition/approval-core-v1.js';
 
 const refusal = vi.hoisted(() => ({ next: 0 }));
-vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@echo-brain/organization-protocol/record-codec-support-v4')>();
+vi.mock('@echo-brain/organization-protocol', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@echo-brain/organization-protocol')>();
   return { ...original, validateApprovedDecisionSnapshotV2(value: unknown) {
     if (refusal.next > 0) { refusal.next--; throw new Error('snapshot refused by the record codec'); }
     return original.validateApprovedDecisionSnapshotV2(value);

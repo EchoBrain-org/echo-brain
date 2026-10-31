@@ -2,8 +2,8 @@
 
 Tests live beside the narrowest active component they exercise:
 
-- `adapters/` and `answer-composition/` cover the onboarding-invitation file
-  adapter and the answer-composition audit.
+- `adapters/` covers the onboarding-invitation file adapter and the Ask audit
+  adapter.
 - `composition/` covers concrete implementation selection, journey telemetry
   and staging tools.
 - `presentation/` and the `person-*` suites cover authenticated HTTP request

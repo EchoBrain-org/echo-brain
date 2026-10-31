@@ -16,9 +16,9 @@ export const syntheticDemoMeetingSourceIdentityV1 = Object.freeze({
   version: "1.0.0",
 });
 
-export const SYNTHETIC_DEMO_MEETING_COUNT_V1 = 4;
+const SYNTHETIC_DEMO_MEETING_COUNT_V1 = 4;
 const SYNTHETIC_DEMO_MAXIMUM_MEETING_BYTES = 256 * 1024;
-export const SYNTHETIC_DEMO_MEETING_FILENAMES_V1 = Object.freeze([
+const SYNTHETIC_DEMO_MEETING_FILENAMES_V1 = Object.freeze([
   "01-revenue-signal-calibration.json",
   "02-data-handling-review.json",
   "03-implementation-capacity-triage.json",
@@ -43,7 +43,7 @@ const SYNTHETIC_DEMO_MEETING_IDENTITIES_V1 = Object.freeze([
   },
 ] as const);
 
-export interface SyntheticDemoMeetingCorpusV1 {
+interface SyntheticDemoMeetingCorpusV1 {
   readonly meetings: readonly MeetingDocument[];
   /** SHA-256 over filename-ordered, canonical meeting documents. */
   readonly corpus_digest: Sha256Digest;

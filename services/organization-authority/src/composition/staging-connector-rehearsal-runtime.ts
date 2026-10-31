@@ -39,7 +39,7 @@ const SIDECAR_BINDING = 'binding.json';
 const SIDECAR_DATABASE = 'jira-person-connections.sqlite';
 const MAX_BINDING_BYTES = 8 * 1024;
 
-export interface StagingConnectorRehearsalSelection {
+interface StagingConnectorRehearsalSelection {
   readonly profile: StagingConnectorRehearsalProfileV3;
   readonly release_id: string;
   /** Exact public host that the staging candidate is configured to serve. */
@@ -48,7 +48,7 @@ export interface StagingConnectorRehearsalSelection {
 
 type PersonHttpRuntimeFactory = NonNullable<NonNullable<OrganizationAuthorityServiceDependencies['api']>['person_http_runtime_factory']>;
 
-export interface StagingConnectorRehearsalRuntimeDependenciesV1 extends OrganizationAuthorityServiceDependencies {
+interface StagingConnectorRehearsalRuntimeDependenciesV1 extends OrganizationAuthorityServiceDependencies {
   /** Test seams only. The wrapper always owns the sidecar SQLite handle. */
   readonly jira?: Omit<JiraPersonLiveRuntimeSeamsV1, 'database'>;
 }

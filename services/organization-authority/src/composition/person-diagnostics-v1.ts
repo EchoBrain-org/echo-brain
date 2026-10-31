@@ -8,10 +8,8 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonDiagnosticsHttpApplicationV1 } from '../presentation/person-diagnostics-http-application.js';
 import { createPersonDiagnosticTraceV1, type PersonDiagnosticTraceCollectorV1 } from './person-diagnostic-trace-v1.js';
-import { checkRetainedResultReleaseV1, retainedResultFailureV1, type RetainedResultFailureCodeV1, type RetainedResultFailureV1 } from './person-retained-result-v1.js';
+import { RETAINED_RESULT_REREAD_MS_V1, RETAINED_RESULT_TTL_MS_V1, checkRetainedResultReleaseV1, retainedResultFailureV1, type RetainedResultFailureCodeV1, type RetainedResultFailureV1 } from './person-retained-result-v1.js';
 
-export const PERSON_DIAGNOSTICS_RESULT_TTL_MS_V1 = 15 * 60_000;
-export const PERSON_DIAGNOSTICS_REREAD_MS_V1 = 60_000;
 const PURGE_INTERVAL_MS = 60_000;
 type Actor = Pick<PersonAccessAuthorization, 'organization_id' | 'principal_id' | 'membership_id'>;
 type Target = PersonDiagnosticPrepareRequestV1['target'];
@@ -88,8 +86,8 @@ export function createPersonDiagnosticsV1(options: CreatePersonDiagnosticsOption
   const now = options.now ?? Date.now;
   const maximum = positive(options.limits?.max_captures ?? 8, 'global capacity');
   const perActor = positive(options.limits?.max_captures_per_actor ?? 2, 'actor capacity');
-  const ttl = positive(options.limits?.ttl_ms ?? PERSON_DIAGNOSTICS_RESULT_TTL_MS_V1, 'expiry');
-  const reread = positive(options.limits?.reread_ms ?? PERSON_DIAGNOSTICS_REREAD_MS_V1, 'reread expiry');
+  const ttl = positive(options.limits?.ttl_ms ?? RETAINED_RESULT_TTL_MS_V1, 'expiry');
+  const reread = positive(options.limits?.reread_ms ?? RETAINED_RESULT_REREAD_MS_V1, 'reread expiry');
   const captures = new Map<string, Capture>();
   let closed = false;
   const ownerOf = (actor: Actor) => `${actor.organization_id}\u0000${actor.principal_id}\u0000${actor.membership_id}`;

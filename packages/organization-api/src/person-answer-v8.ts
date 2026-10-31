@@ -1,7 +1,10 @@
 import type { PersonAnswerScopeV3 } from './person-answer-v3.js';
-import type { PersonAnswerCitationV4, PersonAnswerPartV4, PersonAnswerStatementV4 } from './person-answer-v4.js';
+import type { PersonAnswerCitationV4, PersonAnswerEvidenceCitationV4, PersonAnswerPartV4, PersonAnswerStatementV4, PersonEvidenceKindV1 } from './person-answer-v4.js';
 import type { PersonAnswerChoiceV1, PersonAnswerSinceV1 } from './person-answer-previous-v1.js';
-import type { PersonAnswerEvidenceCitationV7, PersonAnswerOpenRefV7, PersonEvidenceKindV4 } from './person-answer-v7.js';
+import type { PersonFollowUpCitationV1, PersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
+import type { PersonItemRefV1 } from './person-list-v1.js';
+import type { PersonPageCitationV1 } from './person-page-citation-v1.js';
+import type { PersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validateProjectIdV1 } from './project-context-v1.js';
 import type { PersonProjectCitationV1, PersonToolCitationV1, PersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
 import { assertToolId, fail } from './validation.js';
@@ -18,6 +21,35 @@ export const PERSON_ANSWER_PATH_V7 = '/v7/person/ask';
  * client tells the route's own 404 from an Authority that has no `/v7`.
  */
 export const PERSON_ANSWER_ROUTE_HEADER_V5 = 'x-echo-person-ask-route';
+/**
+ * Ticket citations, which the V5 answer added. That answer and its route, `/v4/person/ask`, were retired; an impact
+ * card's V6 citations and the V8 answer's build on these.
+ */
+export type PersonEvidenceKindV2 = PersonEvidenceKindV1 | 'ticket';
+export type PersonAnswerEvidenceCitationV5 = PersonAnswerEvidenceCitationV4 | PersonTicketCitationV1;
+/**
+ * Live page citations, which the V6 answer added. That answer and its route, `/v5/person/ask`, were retired; a V6
+ * citation is what an impact card cites (person-impact-card-v1.ts), and the V8 answer's citations build on it.
+ */
+export type PersonEvidenceKindV3 = PersonEvidenceKindV2 | 'page';
+export type PersonAnswerEvidenceCitationV6 = PersonAnswerEvidenceCitationV5 | PersonPageCitationV1;
+export interface PersonAnswerCitationV6 extends Omit<PersonAnswerCitationV4, 'citation' | 'kind'> {
+  readonly citation: PersonAnswerEvidenceCitationV6;
+  readonly kind: PersonEvidenceKindV3;
+}
+/**
+ * Follow-up citations (ADR-0040), which the V7 answer added. That answer and its route, `/v6/person/ask`, were retired;
+ * the V8 answer's citations build on these.
+ */
+export type PersonEvidenceKindV4 = PersonEvidenceKindV3 | 'follow_up';
+export type PersonAnswerEvidenceCitationV7 = PersonAnswerEvidenceCitationV6 | PersonFollowUpCitationV1;
+/** A follow-up citation always carries its follow-up ref; every other kind keeps the person-open refs of V4. */
+export type PersonAnswerOpenRefV7 = PersonItemRefV1 | PersonFollowUpRefV1;
+export interface PersonAnswerCitationV7 extends Omit<PersonAnswerCitationV4, 'citation' | 'kind' | 'ref'> {
+  readonly citation: PersonAnswerEvidenceCitationV7;
+  readonly kind: PersonEvidenceKindV4;
+  readonly ref?: PersonAnswerOpenRefV7;
+}
 export type PersonEvidenceKindV5 = PersonEvidenceKindV4 | 'project' | 'person' | 'tool' | 'tool_container';
 export type PersonAnswerEvidenceCitationV8 = PersonAnswerEvidenceCitationV7 | PersonWorkspaceCitationV1;
 /**

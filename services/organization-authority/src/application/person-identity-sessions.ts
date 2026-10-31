@@ -64,7 +64,7 @@ export interface IssuedPersonLoginGrant extends AuthorityPersonMembershipBinding
   expires_at: string;
 }
 
-export type BeginPersonOidcLoginInput =
+type BeginPersonOidcLoginInput =
   | {
       kind: "identity_bootstrap";
       login_grant: string;

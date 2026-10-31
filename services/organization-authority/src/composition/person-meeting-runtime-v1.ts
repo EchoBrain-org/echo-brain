@@ -75,7 +75,7 @@ type ProcessorCommitmentsV1 = (instance_id: string) => AdmittedMeetingProcessing
  * The one source rule: a source per person and tool account, with a processor instance per person.
  * Projects never enter the source, so one meeting is extracted and reviewed once whatever projects it suggests.
  */
-export function ensurePersonMeetingSourceV1(intake: SqlitePersonMeetingIntakeV1, input: {
+function ensurePersonMeetingSourceV1(intake: SqlitePersonMeetingIntakeV1, input: {
   readonly provider: Pick<PersonMeetingProviderV1, 'normalizer_version' | 'custodian_assurance'>; readonly person: MeetingIntakePersonV1;
   readonly session: { readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown };
   readonly commitments: ProcessorCommitmentsV1; readonly current: () => void;
@@ -499,7 +499,7 @@ export function createPersonMeetingRuntimeV1(options: {
           currentProject();
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
           const providerIntake = ownerOf(provider.cursor.policy.source_adapter_id).intake;
-          const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, session, commitments: id => processor.current_commitments?.(id), current: currentProject });
+          const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, session, commitments: id => processor.current_commitments(id), current: currentProject });
           // A submitted meeting is kept here, so its payload and its queued import commit together or not at all.
           const submitted = input.operation === 'submit' ? session.submit!(input.meeting, setting) : null;
           // A watch's or an import's project is only a suggestion; neither changes the source.
@@ -518,7 +518,7 @@ export function createPersonMeetingRuntimeV1(options: {
   async function queue(input: { readonly person: MeetingIntakePersonV1; readonly tool_id: string; readonly meeting_ids: readonly string[]; readonly signal?: AbortSignal }) {
     const provider = providers.find(p => p.id === input.tool_id);
     if (!provider) throw new AuthorityOperationError('not_found', 'Meeting tool unavailable');
-    const setting = await queuePersonMeetingsV1({ database: db, provider, person: input.person, meeting_ids: input.meeting_ids, commitments: id => processor.current_commitments?.(id),
+    const setting = await queuePersonMeetingsV1({ database: db, provider, person: input.person, meeting_ids: input.meeting_ids, commitments: id => processor.current_commitments(id),
       ...(input.signal === undefined ? {} : { signal: input.signal }) });
     observed.delete(setting.source_key);
     return setting;

@@ -11,7 +11,7 @@ import { slackConnectionVerificationEvidenceSha256V1 } from '../../../../provide
 import { FIXTURE_JIRA_CLOUD_V1, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fake-jira-v1.js';
 import { port, signInHttp, syntheticOidcProvider } from './owner-session.js';
 export { port };
-export const FIXTURE_EMAIL = 'founder@example.test';
+const FIXTURE_EMAIL = 'founder@example.test';
 export const FIXTURE_CLOUD = FIXTURE_JIRA_CLOUD_V1;
 
 export function privateFile(path: string, value: string): void {

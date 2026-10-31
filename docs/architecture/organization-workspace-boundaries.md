@@ -29,7 +29,9 @@ modules; ordinary source modules still obey their narrower layer rules.
 - `organization-processing` owns processing contracts, the bounded cycle, generic
   LLM prompt/grounding behavior, and processing state.
 - `organization-authority-kernel` owns reusable Authority contracts, rules,
-  telemetry, state verification, SQLite baseline access, and bundle ports.
+  telemetry, state verification, SQLite baseline access, and bundle ports,
+  plus the agentic research loop and answer composition that Ask, impact
+  checks and sweeps share, and the audited live-evidence boundary.
 - Federation/API/protocol, control-plane, record and retrieval retain their
   existing responsibilities. Record has no runtime dependency on protocol.
 - The Authority and Person composition modules select provider implementations.
@@ -94,7 +96,7 @@ independently identified tools without imposing a provider's identity grammar.
 
 `product/source-boundary.v1.json` declares bootstrap modules, provider folders,
 source assemblies and retired roots. The legacy machine runtime remains absent.
-Its former product graph fields must remain empty: active products are checked
+Its former product graph fields are refused: active products are checked
 through their registered workspace boundaries. The gate retains source
 tombstones and provider ownership without maintaining a second graph walker
 for the retired runtime.

@@ -82,7 +82,7 @@ export class SlackAppManifestProviderErrorV1 extends Error {
   }
 }
 
-export interface CreatedSlackAppV1 {
+interface CreatedSlackAppV1 {
   readonly app_id: string;
   readonly client_id: string;
   readonly client_secret: string;

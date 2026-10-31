@@ -1,7 +1,6 @@
+import type { EmployeeInvitationV1, EmployeeRosterV1 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
-
-export const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
 
 function exactObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -21,24 +20,9 @@ function exactObject(value: unknown, keys: readonly string[]): Record<string, un
 }
 
 export interface PersonEmployeeHttpApplication {
-  list(input: { access_token: string }): {
-    schema_version: 1;
-    kind: "echo-clean-person-employee-roster-v1";
-    employees: readonly {
-      email: string;
-      display_name: string;
-      membership_status: "active" | "revoked";
-      invitation_state: "pending" | "expired" | "redeemed" | "none";
-    }[];
-  };
-  invite(input: { access_token: string; body: unknown }): {
-    login_grant: string;
-    expires_at: string;
-  };
-  reissue(input: { access_token: string; body: unknown }): {
-    login_grant: string;
-    expires_at: string;
-  };
+  list(input: { access_token: string }): EmployeeRosterV1;
+  invite(input: { access_token: string; body: unknown }): EmployeeInvitationV1;
+  reissue(input: { access_token: string; body: unknown }): EmployeeInvitationV1;
   revoke(input: { access_token: string; body: unknown }): void;
 }
 

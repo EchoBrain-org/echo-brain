@@ -18,6 +18,7 @@ import { createPersonChangesV1, type CreatePersonChangesV1Options, type PersonCh
 import { openItemViewerV1, visiblePersonalOpenItemsV1 } from '../src/composition/person-open-items-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { CLOUD, assign, openItemsFixture, sendAll, sentFixture, setState, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 const PEOPLE: readonly FixturePerson[] = ['ari', 'mina', 'rafael', 'okafor'];
 type Areas = Readonly<Record<PersonChangesAreaV1, string>>;
@@ -417,9 +418,8 @@ describe('change check: cost', () => {
 describe('change check HTTP route', () => {
   const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
   afterEach(async () => { for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; } });
-  async function origin(person_changes?: ReturnType<typeof createPersonChangesV1>, sessions: unknown = {}) {
-    const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: sessions as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-      ...(person_changes === undefined ? {} : { person_changes }) });
+  async function origin(person_changes: ReturnType<typeof createPersonChangesV1>, sessions: unknown) {
+    const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ sessions: sessions as never, person_changes }));
     servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
     const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
     return `http://127.0.0.1:${address.port}`;
@@ -456,10 +456,8 @@ describe('change check HTTP route', () => {
     expect((await fetch(`${base}${PERSON_CHANGES_ROUTE_V1}`, { method: 'POST', headers: { authorization: 'Bearer mina', 'content-type': 'application/json' }, body: '{}' })).status).toBe(404);
   });
 
-  it('is reserved for the Authority, and unavailable when not composed', async () => {
-    expect(() => createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-      person_tools: { routes: [{ route_id: 'collision', method: 'GET', path: PERSON_CHANGES_ROUTE_V1 }], accept: async () => ({ status: 200, body: {} }) } })).toThrow('collides with Authority route');
-    const base = await origin();
-    expect((await fetch(`${base}${PERSON_CHANGES_ROUTE_V1}`, { headers: { authorization: 'Bearer mina' } })).status).toBe(503);
+  it('is reserved for the Authority', () => {
+    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
+      person_tools: { routes: [{ route_id: 'collision', method: 'GET', path: PERSON_CHANGES_ROUTE_V1 }], accept: async () => ({ status: 200, body: {} }) } }))).toThrow('collides with Authority route');
   });
 });

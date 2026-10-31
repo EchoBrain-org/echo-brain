@@ -16,7 +16,7 @@ export interface SlackApprovalTargetV1 {
   readonly api_app_id: string;
 }
 
-export type SlackApprovalPosterV1 = Pick<PrivateSlackApprovalCardPosterV1, "openDirectMessage" | "postMarker" | "reconcileMarker" | "publish">;
+type SlackApprovalPosterV1 = Pick<PrivateSlackApprovalCardPosterV1, "openDirectMessage" | "postMarker" | "reconcileMarker" | "publish">;
 
 function matchesTarget(connection: StoredSlackConnectionV1, target: SlackApprovalTargetV1): boolean {
   return connection.connection.connection_id === target.connection_id &&

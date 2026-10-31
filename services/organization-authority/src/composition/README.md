@@ -63,11 +63,10 @@ import a provider implementation.
 - `organization-authority-state-bootstrap.ts`, `organization-authority-setup-cli.ts`
   and `organization-authority-reset-cli.ts` own stopped-state setup and reset.
 - The `person-*` modules wire Person routes and upload processing, the
-  `readable-search-*` modules own search generations, the `*-journey-*`
-  modules record Ask journeys, `staging/` holds the staging synthetic meeting
-  source selection and personal provider and the release canary with its
-  private socket control and client, and `synthetic-demo-*` is the no-write
-  demo extraction evaluator.
+  `readable-search-*` modules own search generations, `staging/` holds the
+  staging synthetic meeting source selection and personal provider and the
+  release canary with its private socket control and client, and
+  `synthetic-demo-*` is the no-write demo extraction evaluator.
 - `observability/` holds the journey metrics and telemetry transport and the
   optional staging LangSmith trace exporter (`langsmith-observer-v1.ts`,
   `langsmith-runtime-v1.ts`), which `organization-authority-service-cli.ts`
@@ -110,12 +109,20 @@ known layering debt:
 - `person-project-activity-v1.ts`: project activity (Ask timeline v1, C2),
   which opens its one read transaction the same way and also reads through
   `SqlitePersonProjectActivityV1`;
+- `person-ask-check-v1.ts`: the Ask source check (ADR-0047), which opens its
+  one read transaction the same way and is typed against
+  `SqliteProjectContextRepositoryV1`, `SqlitePersonOriginalContextRetrievalV1`,
+  `SqliteImpactItemsV1` and `SqliteOpenItemPeopleV1`;
 - `person-record-search-route.ts`: record list, search and open (raw SQL on
   record-log tables), with `person-record-read-route.ts` and
   `person-answer-v3-route.ts` (concrete SQLite audit adapters);
 - `person-follow-ups-evidence-v1.ts` and `person-workspace-evidence-v1.ts`:
   the follow-ups and workspace research sources (typed against
   `SqliteImpactItemsV1` and `SqliteOpenItemPeopleV1`);
+- `person-provider-state-v1.ts`: each person provider's own database, which
+  it opens and binds to the Authority lineage (raw SQL);
+- `staging-connector-rehearsal-runtime.ts`: the staging connector rehearsal
+  root, which checks the initial owner's membership (raw SQL);
 - `staging/staging-synthetic-personal-canary-v1.ts`: the staging release
   canary (raw SQL on memberships, source progress, proposals and held
   extractions); and
@@ -124,7 +131,10 @@ known layering debt:
 
 The composition root itself also runs three raw-SQL lookups for the Slack
 approval click and presenter: the organization's active memberships, one
-reviewer's membership type and the reviewer's active projects.
+reviewer's membership type and the reviewer's active projects. The
+stopped-state roots run raw SQL too: `organization-authority-state-bootstrap.ts`,
+`organization-authority-setup-cli.ts` (with `person-onboarding-service.ts`) and
+the operator's `organization-authority-extraction-attempt-cli.ts`.
 
 A new module must not join this list quietly: add it here in the same change,
 or put its logic behind an application port.

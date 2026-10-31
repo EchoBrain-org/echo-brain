@@ -3,11 +3,9 @@ import { request as httpRequest } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PERSON_LIST_PATH_V1, PERSON_OPEN_PATH_V1, type PersonListResponseV1, type PersonOpenResponseV1 } from "@echo-brain/organization-api";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import {
-  createOrganizationAuthorityHttpServer,
-  type OrganizationAuthorityHttpServerOptions,
-} from "../src/presentation/organization-authority-http-server.js";
+import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonListHttpApplicationV1 } from "../src/presentation/person-list-http-application-v1.js";
+import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
 const NOTE_REF = `note:ctx_${"a".repeat(64)}` as const;
 const listed: PersonListResponseV1 = {
@@ -29,16 +27,8 @@ afterEach(async () => {
   }
 });
 
-function options(application: PersonListHttpApplicationV1 | undefined): OrganizationAuthorityHttpServerOptions {
-  // No person_answer_v3: listing and opening never wait for an answer model.
-  return {
-    descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: "https://issuer.example",
-    ...(application === undefined ? {} : { person_list: application }),
-  };
-}
-
-async function start(application: PersonListHttpApplicationV1 | undefined): Promise<string> {
-  const server = createOrganizationAuthorityHttpServer(options(application));
+async function start(application: PersonListHttpApplicationV1): Promise<string> {
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_list: application }));
   servers.push(server);
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -80,12 +70,6 @@ describe("person list and open HTTP transport", () => {
     expect(open.status).toBe(200);
     expect(await open.json()).toEqual(opened);
     expect(application.open).toHaveBeenCalledWith({ access_token: "fixture-token", request: { schema_version: 1, ref: NOTE_REF }, signal: expect.any(AbortSignal) });
-  });
-
-  it("answers unavailable when the list is not composed", async () => {
-    const origin = await start(undefined);
-    await failure(await post(origin, PERSON_LIST_PATH_V1, { schema_version: 1 }), 503, "unavailable");
-    await failure(await post(origin, PERSON_OPEN_PATH_V1, { schema_version: 1, ref: NOTE_REF }), 503, "unavailable");
   });
 
   it("refuses a malformed body or a missing bearer before the application runs", async () => {
@@ -132,7 +116,7 @@ describe("person list and open HTTP transport", () => {
     for (const path of [PERSON_LIST_PATH_V1, PERSON_OPEN_PATH_V1]) {
       const application = { routes: [{ route_id: "collision", method: "POST" as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
       for (const ingress of [{ person_tool_connections: [application] }, { person_external_identity_link: application }, { person_tools: application }]) {
-        expect(() => createOrganizationAuthorityHttpServer({ ...options(undefined), ...ingress })).toThrow("collides with Authority route");
+        expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions(ingress))).toThrow("collides with Authority route");
       }
     }
   });

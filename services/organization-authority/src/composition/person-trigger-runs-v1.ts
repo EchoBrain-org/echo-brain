@@ -16,7 +16,8 @@ import { matchImpactOwnersV1, type ImpactOwnerCandidateV1, type ImpactOwnerPeopl
 import {
   PersonRecordSearchIndexLagV1, personRecordRunScopeV1, type PersonReadableDecisionsV1, type PersonRecordActionsV1, type PersonRecordActionV1, type PersonRecordAnchorV1, type PersonRecordIndexReadinessV1, type PersonRecordProjectsV1,
 } from './person-record-search-route.js';
-import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
+import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
+import type { AgenticAskAuditRequestContextV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { PersonEvidenceDeskExclusionsV1 } from './person-evidence-desk-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, currentCoreRuntimeDetailV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
@@ -36,7 +37,7 @@ type DeskScope = Parameters<typeof bindPersonLiveEvidenceDeskV1>[2]['scope'];
  */
 type RunOutput = { readonly result: object; readonly writes?: () => (transaction: Database.Database) => void };
 
-export interface CreatePersonTriggerRunsV1Options {
+interface CreatePersonTriggerRunsV1Options {
   readonly runs: SqliteTriggerRunsV1;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   /** `recordIndexLags` holds a pending run (impact or sweep) unclaimed while the index lags; without it a start claims as before and the anchor refuses. */
@@ -51,7 +52,7 @@ export interface CreatePersonTriggerRunsV1Options {
   readonly bindDesk: typeof bindPersonLiveEvidenceDeskV1;
   readonly bind_options: BoundOptions;
   readonly live_sources?: BoundOptions['live_sources'];
-  readonly research: (input: { readonly desk: Desk; readonly context: PersonLiveRequestContextV1 }) => RunResearch;
+  readonly research: (input: { readonly desk: Desk; readonly context: AgenticAskAuditRequestContextV1 }) => RunResearch;
   readonly lease_ms?: number;
   /** How many runs this process researches at once; a start past it answers `busy`. */
   readonly max_running?: number;
@@ -130,7 +131,7 @@ function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Di
 }
 
 /** The runs themselves; the open items a finished run found are served by `createPersonOpenItemsV1`. */
-export type PersonTriggerRunsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'list' | 'start' | 'retry' | 'view' | 'close'>;
+type PersonTriggerRunsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'list' | 'start' | 'retry' | 'view' | 'close'>;
 
 export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Options): PersonTriggerRunsApplicationV1 {
   const lease = options.lease_ms ?? LEASE_MS;
@@ -139,7 +140,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
   const controllers = new Set<AbortController>();
   let closing = false;
   const compatible = taskLiveSourcesV1(options.live_sources);
-  const context = (authorization: PersonAccessAuthorization): PersonLiveRequestContextV1 => ({
+  const context = (authorization: PersonAccessAuthorization): AgenticAskAuditRequestContextV1 => ({
     authority_id: options.bind_options.authority_id, organization_id: authorization.organization_id, state_lineage_id: options.bind_options.state_lineage_id,
     principal_id: authorization.principal_id, membership_id: authorization.membership_id, session_family_id: authorization.session_family_id, request_id: `trigger_run_${randomUUID()}`,
   });

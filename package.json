@@ -33,7 +33,6 @@
     "npm": "10.9.4"
   },
   "scripts": {
-    "clean": "node tools/build.mjs --clean",
     "build:authority-image": "node tools/build-authority-image.mjs",
     "bundle:authority-staging-host": "node tools/build-authority-staging-host-bundle.mjs",
     "authority:local": "node tools/authority-local.mjs",
@@ -50,7 +49,6 @@
     "kit:person-onboarding": "node deploy/release/create-person-onboarding-kit.mjs",
     "build": "node tools/build.mjs",
     "build:workspaces": "tsc -b tsconfig.workspaces.json",
-    "typecheck": "npm run build:workspaces && tsc --noEmit -p tsconfig.json",
     "lint": "eslint . --max-warnings 0",
     "test": "npm run build && vitest run --config vitest.config.ts",
     "test:architecture": "npm run build:workspaces && vitest run --config vitest.config.ts tests/architecture",

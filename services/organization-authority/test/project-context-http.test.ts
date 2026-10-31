@@ -12,6 +12,7 @@ import {
   createOrganizationAuthorityHttpServer,
   type OrganizationAuthorityHttpServerOptions,
 } from '../src/presentation/organization-authority-http-server.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 type Operation = keyof ProjectContextApplicationV1;
 interface Fixture {
@@ -42,13 +43,10 @@ function fake(overrides: Partial<ProjectContextApplicationV1> = {}): ProjectCont
     ...overrides,
   } as ProjectContextApplicationV1;
 }
-const options = (): OrganizationAuthorityHttpServerOptions => ({
-  descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-});
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of closers.splice(0)) await close(); calls.length = 0; });
-async function start(application: ProjectContextApplicationV1 | undefined = fake(), extra: Partial<OrganizationAuthorityHttpServerOptions> = {}) {
-  const server = createOrganizationAuthorityHttpServer({ ...options(), ...(application === undefined ? {} : { project_context: application }), ...extra });
+async function start(application: ProjectContextApplicationV1 = fake(), extra: Partial<OrganizationAuthorityHttpServerOptions> = {}) {
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ project_context: application, ...extra }));
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('missing fixture address');
@@ -193,7 +191,7 @@ describe('frozen project/V2 HTTP transport', () => {
     expect(calls).toEqual([]);
   });
 
-  it('keeps unsupported methods/routes and capability absence non-disclosing', async () => {
+  it('keeps unsupported methods and routes non-disclosing', async () => {
     const origin = await start();
     for (const row of fixtures) {
       await failure(await send(origin, row, { method: 'PUT', body: '{}' }), 404, 'not_found');
@@ -211,8 +209,6 @@ describe('frozen project/V2 HTTP transport', () => {
       await failure(await fetch(origin + path, { method: 'POST', headers, body: '{}' }), 404, 'not_found');
     }
     expect(calls).toEqual([]);
-    const disabled = await start(fake(), { project_context: undefined });
-    for (const row of fixtures) await failure(await send(disabled, row), 404, 'not_found');
     const hidden = await start(fake({ readProjectV2() { throw new AuthorityOperationError('not_found', 'private project'); } }));
     expect((await fetch(`${hidden}/v2/person/projects`, { headers })).status).toBe(200);
     await failure(await send(hidden, fixture('projects-read-v2')), 404, 'not_found');
@@ -258,7 +254,7 @@ describe('frozen project/V2 HTTP transport', () => {
     for (const path of ['/v1/person/projects', fixture('projects-read-context-v2').http.path, '/v2/person/updates', '/v2/person/updates/search', '/v3/person/updates', '/v1/person/directory', '/v1/person/directory/next']) {
       const application = { routes: [{ route_id: 'collision', method: 'POST' as const, path }], accept: async () => ({ status: 200 as const, body: {} }) };
       for (const ingress of [{ person_tool_connections: [application] }, { person_external_identity_link: application }, { person_tools: application }]) {
-        expect(() => createOrganizationAuthorityHttpServer({ ...options(), ...ingress })).toThrow('collides with Authority route');
+        expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions(ingress))).toThrow('collides with Authority route');
       }
     }
   });

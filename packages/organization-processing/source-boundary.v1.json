@@ -7,6 +7,7 @@
   "source_root": "packages/organization-processing/src",
   "package_json": "packages/organization-processing/package.json",
   "entry_points": [
+    "packages/organization-processing/src/admitted-meeting-processing/extraction-attempt-store-v1.ts",
     "packages/organization-processing/src/core/ports/adapters.ts",
     "packages/organization-processing/src/core/contracts/adapter.ts",
     "packages/organization-processing/src/core/contracts/decision.ts",
@@ -16,7 +17,18 @@
     "packages/organization-processing/src/llm/llm-decision-processor.ts",
     "packages/organization-processing/src/core/contracts/validation.ts",
     "packages/organization-processing/src/core/index.ts",
-    "packages/organization-processing/src/llm/llm-provider.ts"
+    "packages/organization-processing/src/llm/llm-provider.ts",
+    "packages/organization-processing/src/admitted-meeting-processing/serialized-meeting-processing-worker.ts",
+    "packages/organization-processing/src/admitted-meeting-processing/meeting-processing-worker-lifecycle.ts",
+    "packages/organization-processing/src/admitted-meeting-processing/approval-workflow-state-v1.ts",
+    "packages/organization-processing/src/admitted-meeting-processing/meeting-processing-cycle-v1.ts",
+    "packages/organization-processing/src/admitted-meeting-processing/admitted-meeting-processing-commitments.ts",
+    "packages/organization-processing/src/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.ts",
+    "packages/organization-processing/src/ports/approval-workflow-bundle-v1.ts",
+    "packages/organization-processing/src/ports/decision-processor-bundle-v1.ts",
+    "packages/organization-processing/src/admitted-meeting-processing/decision-processor-admission-commitment.ts",
+    "packages/organization-processing/src/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.ts",
+    "packages/organization-processing/src/adapters/persistence/sqlite-extraction-attempt-store-v1.ts"
   ],
   "owned_source_paths": [
     "packages/organization-processing/src/**"

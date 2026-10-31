@@ -4,7 +4,7 @@ import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer
 import type { StructuredGenerationPort } from "./structured-generation-v1.js";
 import type { EvidenceDeskPortV2, EvidenceDeskSourceV2 } from "../shared/evidence-desk-v2.js";
 import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_SOURCE_ID_V1 } from "../shared/follow-up-evidence-v1.js";
-import { DOCUMENTS_SOURCE_CAPABILITIES_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } from "../shared/source-capabilities-v1.js";
+import { DOCUMENTS_SOURCE_CAPABILITIES_V1, LOCAL_SOURCE_KINDS_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } from "../shared/source-capabilities-v1.js";
 import { evidenceDayV1 } from "../shared/temporal-query-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1 } from "../shared/core-runtime-observation-v1.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
@@ -84,7 +84,7 @@ export function agenticAskContextBudgetBytesV1(contextTokens: number | undefined
   return Math.max(16 * 1024, usable * BYTES_PER_TOKEN);
 }
 
-export interface CreateAgenticAskV2Options {
+export interface CreateAgenticAskOptions {
   /** Operator-injected research harness; absent keeps the existing engine. */
   readonly research_driver?: AgenticResearchDriverV1;
   readonly desk: EvidenceDeskPortV2;
@@ -210,7 +210,7 @@ const LIST_SOURCES: Readonly<Record<string, EvidenceDeskSourceV2>> = Object.free
  * is rendered by Ask's writer, as the V8 answer; a task brief is research only,
  * or its trigger's renderer.
  */
-export function createAgenticResearchV1(options: CreateAgenticAskV2Options) {
+export function createAgenticResearchV1(options: CreateAgenticAskOptions) {
   return createAgenticAskCore(options) as unknown as {
     answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV8>>;
     research(input: AgenticResearchInputV1): Promise<AgenticResearchResultV1>;
@@ -222,7 +222,7 @@ export function createAgenticResearchV1(options: CreateAgenticAskV2Options) {
  * follow-ups (ADR-0040), and the asker's projects, the people in their organization, their tools, and the containers of
  * their connected tools. Progress streams in V3. The cores of the V4 to V7 answers were retired with their routes.
  */
-export function createAgenticAskV5(options: CreateAgenticAskV2Options) {
+export function createAgenticAskV5(options: CreateAgenticAskOptions) {
   return createAgenticAskCore(options) as unknown as {
     /** `previous`: the asker's previous turn (ADR-0047). */
     answer(input: { readonly question: string; readonly signal?: AbortSignal; readonly previous?: PersonAnswerPreviousV1 }): Promise<PersonAnswerResponseV8>;
@@ -230,7 +230,7 @@ export function createAgenticAskV5(options: CreateAgenticAskV2Options) {
     answerWithResearch(input: { readonly question: string; readonly signal?: AbortSignal; readonly budget?: AgenticResearchBudgetV1 }): Promise<AgenticAskWithResearchV1<PersonAnswerResponseV8>>;
   };
 }
-function createAgenticAskCore(options: CreateAgenticAskV2Options) {
+function createAgenticAskCore(options: CreateAgenticAskOptions) {
   const now = options.now_ms ?? (() => performance.now());
   const temporal = options.time_context;
   // The HTTP boundary validates the time context, so its day always parses.
@@ -240,8 +240,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options) {
   // tool contract v1). Every other scope reads each live source the desk offers.
   const liveCatalog: AgenticResearchSourceV1[] = options.desk.scope.kind === 'mine' ? [] : (options.desk.live_sources ?? []).map(descriptor => ({ ...descriptor, kinds: [descriptor.kind] }));
   const researchSources: readonly AgenticResearchSourceV1[] = Object.freeze([
-    { source_id: 'meeting', selector: 'meetings', kinds: ['imported_meeting', 'decision', 'action', 'rationale', 'note'], description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.', capabilities: MEETINGS_SOURCE_CAPABILITIES_V1 },
-    { source_id: 'document', selector: 'documents', kinds: ['note', 'document_passage'], description: 'Uploaded document passages and notes.', capabilities: DOCUMENTS_SOURCE_CAPABILITIES_V1 },
+    { source_id: 'meeting', selector: 'meetings', kinds: LOCAL_SOURCE_KINDS_V1.meeting, description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.', capabilities: MEETINGS_SOURCE_CAPABILITIES_V1 },
+    { source_id: 'document', selector: 'documents', kinds: LOCAL_SOURCE_KINDS_V1.document, description: 'Uploaded document passages and notes.', capabilities: DOCUMENTS_SOURCE_CAPABILITIES_V1 },
     ...liveCatalog,
   ]);
   const sourcesById = new Map(researchSources.map(source => [source.source_id, source]));

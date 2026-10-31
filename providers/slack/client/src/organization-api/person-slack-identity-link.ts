@@ -2,7 +2,7 @@ import {
   sha256Digest,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
-import type { OrganizationApiSha256Digest } from "@echo-brain/organization-api/contracts";
+import type { OrganizationApiSha256Digest } from "@echo-brain/organization-api";
 import {
   asRecord,
   assertDigest,

@@ -11,7 +11,7 @@ export interface DecisionProcessorBundleV1 {
   /** The only decision-processor adapter identity this bundle can construct. */
   readonly processor_adapter_id: string;
   /** Current non-secret configuration for a newly authorized personal source. */
-  current_commitments?(instance_id: string): AdmittedMeetingProcessingCommitmentsV1['processor'];
+  current_commitments(instance_id: string): AdmittedMeetingProcessingCommitmentsV1['processor'];
   /**
    * Proves local, provider-owned configuration still matches the immutable
    * admission before the bundle reads any private credential.

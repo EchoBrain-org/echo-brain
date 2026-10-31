@@ -43,7 +43,7 @@ export function parseAgenticListIdV1(value: unknown): AgenticListIdV1 | null {
 // ---- the record -------------------------------------------------------
 
 /** The filter fields a list request can name (the research protocol's list args other than source). */
-export const AGENTIC_LIST_FILTER_FIELDS_V1 = Object.freeze(["kind", "status", "owner", "role", "channel", "since", "until", "date_field"] as const);
+const AGENTIC_LIST_FILTER_FIELDS_V1 = Object.freeze(["kind", "status", "owner", "role", "channel", "since", "until", "date_field"] as const);
 export type AgenticListFilterFieldV1 = (typeof AGENTIC_LIST_FILTER_FIELDS_V1)[number];
 
 /**

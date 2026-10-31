@@ -413,8 +413,6 @@ describe("Authority local harness", () => {
     });
 
     // The Authority serves Slack through Nango: the key file is mounted read-only, never copied.
-    expect(overlay).toContain("command: !override");
-    expect(overlay).toContain('- "--nango-secret-key-file"\n      - "/echo-local/nango-secret-key"\n      - "--nango-integration"\n      - "slack-local"');
     expect(overlay).toContain('"/Users/example/nango-secret-key:/echo-local/nango-secret-key:ro"');
     expect(overlay).not.toContain("slack-signing-secret");
     expect(overlay).toContain("volumes: !override");

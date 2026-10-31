@@ -14,16 +14,16 @@ const SLACK_DIRECT_MESSAGE_CHANNEL = /^D[A-Z0-9]{2,255}$/;
 const TOKEN_UNAVAILABLE = Symbol("Slack bot token unavailable");
 
 /** How long Slack's Retry-After still holds, when it does: the caller's next try waits at least this long. */
-export interface PrivateSlackRetryAfterV1 {
+interface PrivateSlackRetryAfterV1 {
   readonly retry_after_ms?: number;
 }
 
-export type PrivateSlackApprovalPostOutcomeV1 =
+type PrivateSlackApprovalPostOutcomeV1 =
   | { readonly kind: "posted"; readonly provider_message_ts: string }
   | ({ readonly kind: "retry_allowed" } & PrivateSlackRetryAfterV1)
   | ({ readonly kind: "uncertain" } & PrivateSlackRetryAfterV1);
 
-export type PrivateSlackDirectMessageOutcomeV1 =
+type PrivateSlackDirectMessageOutcomeV1 =
   | {
       readonly kind: "opened";
       readonly channel_id: string;
@@ -31,7 +31,7 @@ export type PrivateSlackDirectMessageOutcomeV1 =
     }
   | ({ readonly kind: "retry_allowed" } & PrivateSlackRetryAfterV1);
 
-export type PrivateSlackApprovalUpdateOutcomeV1 =
+type PrivateSlackApprovalUpdateOutcomeV1 =
   | { readonly kind: "done" }
   | ({ readonly kind: "uncertain" } & PrivateSlackRetryAfterV1);
 

@@ -8,20 +8,20 @@ import { createPersonDocumentApplicationV1 } from '../src/application/document-v
 import { extractDocument } from '../src/adapters/documents/document-extraction.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertStoredDocumentV1, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertStoredDocumentV1, projectContextDatabase, revokeMembership, seedProject, seedProjectMember } from './fixtures/project-context-sqlite.js';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 const databases: Database.Database[]=[];
 afterEach(()=>databases.splice(0).forEach(d=>d.close()));
 function setup(){
  const db=projectContextDatabase();databases.push(db);
- for(const project of [PROJECT_ALPHA,PROJECT_BETA]){db.prepare(`INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)`).run(project,OWNER.organization_id,project,PROJECT_CONTEXT_NOW,OWNER.principal_id,OWNER.membership_id,OWNER.membership_type);grant(db,project,OWNER);}
+ for(const project of [PROJECT_ALPHA,PROJECT_BETA]){seedProject(db,project,OWNER);grant(db,project,OWNER);}
  grant(db,PROJECT_ALPHA,MEMBER);
  let time=PROJECT_CONTEXT_NOW;
  const repository=new SqlitePersonDocumentRepositoryV1(db,()=>time);
  const app=createPersonDocumentApplicationV1({repository,authenticate:token=>authorization(token==='member'?MEMBER:token==='returned'?RETURNED_MEMBER:OWNER)});
  return {db,repository,app,setTime:(value:string)=>{time=value;}};
 }
-function grant(db:Database.Database,project:string,actor:AuthorityPersonMembershipBinding){db.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at) VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`,project,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,actor===OWNER?'lead':'member',PROJECT_CONTEXT_NOW);}
+function grant(db:Database.Database,project:string,actor:AuthorityPersonMembershipBinding){seedProjectMember(db,project,actor,actor===OWNER?'lead':'member');}
 function input(bytes:Uint8Array,changes:Partial<PersonDocumentUploadMetadataV2>={}):PersonDocumentUploadMetadataV2{return {schema_version:2,kind:'echo-person-document-upload-v2',request_id:randomUUID(),filename:'SCOUT-PRD.md',title:'SCOUT product requirements',content_length:bytes.byteLength,sha256:sha256Digest(bytes),audience:{kind:'team'},association_project_ids:[PROJECT_ALPHA],...changes};}
 /** A document the retired V1 upload stored (ADR-0048): by default a team document whose single project link is Alpha. */
 function storedV1(db:Database.Database,actor:AuthorityPersonMembershipBinding,bytes:Uint8Array,changes:Partial<Parameters<typeof insertStoredDocumentV1>[2]>={}){return insertStoredDocumentV1(db,actor,{filename:'SCOUT-PRD.md',title:'SCOUT product requirements',audience:{kind:'team'},project_id:PROJECT_ALPHA,...changes},bytes);}

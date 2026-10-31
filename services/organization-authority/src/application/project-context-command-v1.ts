@@ -14,7 +14,7 @@ import {
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 import type { ProjectMutationV1 } from './ports/project-context-v1.js';
 
-export interface ProjectCommandIdentityV1 {
+interface ProjectCommandIdentityV1 {
   readonly organization_id: string;
   readonly membership_id: string;
   readonly request_id: string;

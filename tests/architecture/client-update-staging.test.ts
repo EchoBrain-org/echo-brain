@@ -83,30 +83,6 @@ function archivedCloudFrontReceipt(receipt: string, state: 'planning' | 'planned
 afterEach(() => { for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('client update staging feed operator', () => {
-  it('plans only the two dedicated S3 resources by default and requires the exact approved change set before execution', () => {
-    const f = fixture();
-    const planned = planClientUpdateStaging({ output: f.receipt }, f.dependencies);
-    expect(planned).toMatchObject({ state: 'planned', change_set_id: S3_CHANGE_SET, feed_url: null });
-    expect(f.calls.some(args => args.includes('execute-change-set'))).toBe(false);
-    expect(f.calls.flat().some(value => /^(s3api|iam|ssm|secretsmanager)$/.test(value))).toBe(false);
-    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: `${S3_CHANGE_SET}x` }, f.dependencies)).toThrow('exact_change_set_approval_required');
-    expect(f.state.executes).toBe(0);
-    expect(executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies).state).toBe('executing');
-    expect(f.state.executes).toBe(1);
-    expect(JSON.parse(readFileSync(f.receipt, 'utf8'))).toMatchObject({ source_sha: COMMIT, change_set_id: S3_CHANGE_SET, state: 'executing' });
-  });
-
-  it('never repeats an uncertain execution and records only validated outputs after the stack completes', () => {
-    const f = fixture();
-    planClientUpdateStaging({ output: f.receipt }, f.dependencies);
-    executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies);
-    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies)).not.toThrow();
-    expect(f.state.executes).toBe(1);
-    f.state.complete = true;
-    expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies)).toMatchObject({ state: 'succeeded', feed_url: S3_FEED_URL });
-    expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies).state).toBe('succeeded');
-  });
-
   it('persists the planning intent before creating a change set and resumes it without a duplicate create', () => {
     const f = fixture();
     f.state.changeSetReady = false;
@@ -181,6 +157,9 @@ describe('direct S3 client update staging feed operator', () => {
     expect(creation).toContain('echo-client-update-staging-s3-v1');
     expect(creation?.find(value => value.startsWith('file://'))).toMatch(/\/deploy\/client-updates\/staging-feed-s3-v1\.template\.json$/);
     expect(f.calls.find(args => args[0] === 's3control')).toEqual(['s3control', 'get-public-access-block', '--account-id', '904560150024']);
+    expect(f.calls.some(args => args.includes('execute-change-set'))).toBe(false);
+    expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: `${S3_CHANGE_SET}x` }, f.dependencies)).toThrow('exact_change_set_approval_required');
+    expect(f.state.executes).toBe(0);
     expect(executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies).state).toBe('executing');
     expect(executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: S3_CHANGE_SET }, f.dependencies).state).toBe('executing');
     expect(f.state.executes).toBe(1);
@@ -190,6 +169,7 @@ describe('direct S3 client update staging feed operator', () => {
     expect(JSON.parse(readFileSync(f.receipt, 'utf8')).outputs).toEqual({ bucket_name: 'echo-feed-staging-123', distribution_id: null, feed_url: S3_FEED_URL });
     expect(statusClientUpdateStaging({ receipt: f.receipt }, f.dependencies).state).toBe('succeeded');
     expect(f.calls.flat()).not.toContain('echo-client-update-staging-v1');
+    expect(f.calls.flat().some(value => /^(s3api|iam|ssm|secretsmanager)$/.test(value))).toBe(false);
     expect(f.calls.filter(args => args[0] === 's3control').every(args => args[1] === 'get-public-access-block')).toBe(true);
   });
 
@@ -325,9 +305,10 @@ describe('retired CloudFront staging lane', () => {
     expect(existsSync(f.receipt)).toBe(false);
   });
 
-  it.each(['planned', 'executing', 'unconfirmed'] as const)('refuses execution of an archived %s receipt without changing it', state => {
+  // Execution refuses the lane before it reads the receipt state.
+  it('refuses execution of an archived receipt without changing it', () => {
     const f = fixture('cloudfront');
-    archivedCloudFrontReceipt(f.receipt, state);
+    archivedCloudFrontReceipt(f.receipt, 'executing');
     const original = readFileSync(f.receipt);
     f.dependencies.runtime = () => { throw new Error('runtime must not run'); };
     expect(() => executeClientUpdateStaging({ receipt: f.receipt, approveChangeSet: CHANGE_SET }, f.dependencies)).toThrow('hosting_retired');

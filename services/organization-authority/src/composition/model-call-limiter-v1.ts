@@ -3,7 +3,7 @@ import type { AgenticResearchDriverV1 } from '@echo-brain/organization-authority
 
 export type ModelCallPriorityV1 = "interactive" | "background";
 /** Runs one model call when a slot is free. Provider code receives only this, never the limiter. */
-export type ModelCallLimitV1 = <T>(signal: AbortSignal | undefined, op: () => Promise<T>) => Promise<T>;
+type ModelCallLimitV1 = <T>(signal: AbortSignal | undefined, op: () => Promise<T>) => Promise<T>;
 export interface ModelCallLimiterV1 {
   run<T>(priority: ModelCallPriorityV1, signal: AbortSignal | undefined, op: () => Promise<T>): Promise<T>;
 }

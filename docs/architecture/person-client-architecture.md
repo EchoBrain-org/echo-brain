@@ -50,15 +50,17 @@ while one is running join it, with at most one follow-up load. A release
 package carries the release's exact Person-client tarball; other packages carry
 one packed from `HEAD` by `tools/pack-person-client.mjs`.
 
-Home's footer links to **Only me**
-([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)), a page that reads
-`person list --only-me`: everything only the person can read, filed in a
+The sidebar's **Only me** row
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)) opens a page that
+reads `person list --only-me`: everything only the person can read, filed in a
 project or not (their only-me notes and uploads, the meetings they imported,
-and approved meetings kept for them alone), newest first, a filed row with the
-names of their projects it is in, no row with a lock, and More for the next
-page. A project page reads `person list --project`, and the reader opens every
-list row and live match with `person open --ref`, joining a meeting's split
-parts across pages; Ask's sources still read as described under Ask below.
+and approved meetings kept for them alone), newest first, one flat row each (a
+shape for its kind, its title, a tile for each project it is filed in, named
+on hover, and how long ago it was added), no row with a lock, and More for the
+next page. A project page reads `person list --project`, and the reader opens
+every list row and live match with `person open --ref`, joining a meeting's
+split parts across pages; Ask's sources still read as described under Ask
+below.
 Only me's bar is Home's (all context); its ⊕, and a file dropped on it, start
 Capture in no project, and a "Saved for you" toast opens it. The desktop has no
 Mine page or Mine scope any more; `--mine`
@@ -310,11 +312,14 @@ person who runs them; an agent has no membership of its own
 
 - `person status` says who is signed in, from local state only.
 - `person list` is the map: the newest notes, documents and approved meetings
-  the person can read now, 25 per page, with no text and no counts. Its first
-  page names the person, their connected tools and their projects.
-  `--project <project-id>` narrows it to one joined project, `--mine` to
-  what the person added or approved, and `--only-me` to everything only the
-  person can read, filed in a project or not.
+  the person can read now, 25 per page, with no text and no counts; each row
+  carries a ref, title, time, who can read it and the person's projects it is
+  filed in. Its first page names the person, their connected tools and their
+  projects. `--project <project-id>` narrows it to one joined project, `--mine`
+  to what the person added or approved, and `--only-me` to everything only the
+  person can read, filed in a project or not. The three flags are exclusive,
+  and a list or open request is validated before any session or network use
+  ([`person-list-cli.test.ts`](../../tests/person-client/person-list-cli.test.ts)).
 - Pass `next_cursor` back as `--cursor` with the same scope; `null` is the end.
 - `notice: "meetings_unavailable"` means meetings are still being indexed and
   come on a later page. A first page with no items and that notice is not the
@@ -330,7 +335,8 @@ person who runs them; an agent has no membership of its own
   ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)).
   Documents, imported meetings and approved meetings page with `--cursor` and
   the same ref. Anything the person cannot read is `not_found`.
-- `person ask --question <text>` answers with citations in the same scopes.
+- `person ask --question <text>` answers with citations in the same scopes,
+  except `--only-me`, which only `list` takes.
 - With a valid session, a 401 on `--project` means the person is not a member
   or the project does not exist.
 
@@ -348,15 +354,22 @@ container workflow.
 
 ## Deployment boundary
 
-This repository currently produces two independently operated artifacts:
+This repository produces these independently operated artifacts:
 
-- the single-organization Authority container, whose hosting and custody model
-  is defined by
-  [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md); and
-- the thin Person CLI tarball.
+- the single-organization Authority container image, whose hosting and
+  custody model is defined by
+  [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md), and
+  the staging host bundle (`npm run bundle:authority-staging-host`) that
+  carries the host's bootstrap, onboarding, update, backup and restore tools;
+- the thin Person CLI tarball;
+- the macOS arm64 and Linux x64 Person command-line kits, each with a pinned
+  Node runtime and that tarball; and
+- the desktop app's macOS arm64 `ECHO.app` ZIP and Linux x64 `.deb`, built
+  from the same release record and tarball.
 
-This list describes the Authority and Person-client release boundary, not
-every current or future machine interface.
+The signed client feed carries the two kits and the two desktop packages
+together. The [release procedure](../../deploy/release/README.md) builds and
+publishes them.
 
 The repository root is workspace orchestration only. It is private and has no
 runtime export or executable.

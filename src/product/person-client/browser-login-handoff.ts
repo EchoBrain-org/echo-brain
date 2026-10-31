@@ -7,18 +7,18 @@ import { TextDecoder } from "node:util";
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const MAXIMUM_SESSION_BYTES = 48 * 1024;
 
-export interface PersonLoopbackHandoff {
+interface PersonLoopbackHandoff {
   readonly url: string;
   readonly token: string;
   wait(): Promise<PersonLoopbackHandoffResult>;
   close(): Promise<void>;
 }
 
-export type PersonLoopbackHandoffErrorCode =
+type PersonLoopbackHandoffErrorCode =
   | "identity_not_bound"
   | "retryable";
 
-export type PersonLoopbackHandoffResult =
+type PersonLoopbackHandoffResult =
   | { readonly kind: "session"; readonly session: unknown }
   | {
       readonly kind: "error";

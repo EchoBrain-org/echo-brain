@@ -12,8 +12,8 @@ export interface AfterApprovedRecordEventV1 {
 }
 export type AfterApprovedRecordHookV1 = (transaction: Database.Database, event: AfterApprovedRecordEventV1) => void;
 
-export type TriggerRunStateV1 = 'pending' | 'running' | 'done' | 'failed';
-export type TriggerRunErrorV1 = 'no_access' | 'unavailable' | 'timed_out' | 'research_failed';
+type TriggerRunStateV1 = 'pending' | 'running' | 'done' | 'failed';
+type TriggerRunErrorV1 = 'no_access' | 'unavailable' | 'timed_out' | 'research_failed';
 /** What a sweep re-checks: the caller's own open items, or those of one decision or one project. */
 export type TriggerRunScopeV1 =
   | { readonly kind: 'mine' }

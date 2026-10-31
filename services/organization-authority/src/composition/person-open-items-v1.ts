@@ -26,10 +26,11 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import { AuthorityOperationError, type AuthorityErrorCode } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { ImpactItemRowV1, ImpactItemStateV1, SqliteImpactItemsV1 } from '../adapters/persistence/sqlite/impact-items-v1.js';
 import type { SqliteOpenItemPeopleV1 } from '../adapters/persistence/sqlite/open-item-people-v1.js';
+import type { AgenticAskAuditRequestContextV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import { triggerRunStateAtV1, type SqliteTriggerRunsV1, type TriggerRunRowV1, type TriggerRunScopeV1 } from '../adapters/persistence/sqlite/trigger-runs-v1.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../presentation/person-trigger-runs-http-application.js';
 import { openItemAccessV1, openItemDecisionAccessV1, openItemSendAccessV1, type OpenItemAccessV1, type OpenItemFactsV1 } from './open-items-policy-v1.js';
-import type { bindPersonLiveEvidenceDeskV1, CreatePersonLiveAnswerRouteOptionsV1, PersonLiveRequestContextV1 } from './person-live-answer-route-v1.js';
+import type { bindPersonLiveEvidenceDeskV1, CreatePersonLiveAnswerRouteOptionsV1 } from './person-live-answer-route-v1.js';
 import type { RecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
 import type { PersonReadableDecisionProjectsV1, PersonReadableDecisionV1, PersonReadableDecisionsV1 } from './person-record-search-route.js';
 import { readStoredImpactCardV1 } from './person-stored-impact-card-v1.js';
@@ -55,7 +56,7 @@ import type { SweepCountsV1 } from './person-sweep-runs-v1.js';
  * scope, and `home` says when one is due (section 6); the sweep run itself
  * reads the same items through `sweepScopeOpenItemsV1`.
  */
-export interface CreatePersonOpenItemsV1Options extends OpenItemSourcesV1 {
+interface CreatePersonOpenItemsV1Options extends OpenItemSourcesV1 {
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   readonly runs: SqliteTriggerRunsV1;
   readonly items: SqliteImpactItemsV1;
@@ -92,7 +93,7 @@ export interface OpenItemsLiveFailureV1 {
   readonly reason: 'bind' | 'open' | 'fence' | 'first_line' | 'connection';
   readonly code: string;
 }
-export type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign' | 'sweep'>;
+type PersonOpenItemsApplicationV1 = Pick<PersonTriggerRunsHttpApplicationV1, 'home' | 'items' | 'item' | 'send' | 'set_state' | 'assign' | 'sweep'>;
 
 /** The signed-in person an open-items read is for. */
 export interface OpenItemViewerV1 { readonly token: string; readonly authorization: PersonAccessAuthorization; readonly organization: string; readonly principal: string; readonly membership: string }
@@ -523,7 +524,7 @@ export function createPersonOpenItemsV1(options: CreatePersonOpenItemsV1Options)
   /** The run was made for the viewer: they approved its decision. */
   const runFor = (run: TriggerRunRowV1, viewer: Viewer) => run.actor.membership_id === viewer.membership && run.actor.principal_id === viewer.principal;
   const actorOf = (viewer: Viewer) => ({ organization_id: viewer.organization, principal_id: viewer.principal, membership_id: viewer.membership });
-  const requestContext = (viewer: Viewer): PersonLiveRequestContextV1 => ({
+  const requestContext = (viewer: Viewer): AgenticAskAuditRequestContextV1 => ({
     authority_id: options.bind_options.authority_id, organization_id: viewer.organization, state_lineage_id: options.bind_options.state_lineage_id,
     principal_id: viewer.principal, membership_id: viewer.membership, session_family_id: viewer.authorization.session_family_id, request_id: `open_items_${randomUUID()}`,
   });

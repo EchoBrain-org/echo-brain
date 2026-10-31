@@ -3,9 +3,10 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import type { EvidenceDeskPortV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { PersonLiveConnectorSourceV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
-import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1, type PersonLiveRequestContextV1 } from '../src/composition/person-live-answer-route-v1.js';
+import type { AgenticAskAuditRequestContextV1 } from '../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
+import { bindPersonLiveEvidenceDeskV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 
-const context: PersonLiveRequestContextV1 = Object.freeze({ authority_id: 'authority-fixture', organization_id: 'org-fixture', state_lineage_id: 'lineage-fixture',
+const context: AgenticAskAuditRequestContextV1 = Object.freeze({ authority_id: 'authority-fixture', organization_id: 'org-fixture', state_lineage_id: 'lineage-fixture',
   principal_id: 'person-fixture', membership_id: 'membership-fixture', session_family_id: 'session-fixture', request_id: 'ask_fixture' });
 const empty = { items: [], truncated: false, receipt_digests: [] };
 const sourceIds = (desk: EvidenceDeskPortV2) => (desk.live_sources ?? []).map(source => source.source_id);

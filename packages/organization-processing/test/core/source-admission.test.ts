@@ -29,8 +29,6 @@ function sourceEnvelope(id = "doc-1"): SourceEnvelopeV1 {
 function adapter(sources: readonly SourceEnvelopeV1[]): SourceAdapterV1 {
   return {
     identity,
-    validateConfig: () => ({ ok: true, errors: [] }),
-    healthCheck: async () => ({ status: "healthy", checked_at: at }),
     pull: vi.fn(async () => ({ sources, next_cursor: "next" })),
   };
 }
@@ -122,7 +120,7 @@ describe("common source admission", () => {
     expect(first.revision.captured_at).not.toBe(later.revision.captured_at);
     expect(meetingFromSourceEnvelopeV1(first)).toEqual(observed);
     const admitSourceRevision = vi.fn(async () => "admitted" as const);
-    const source = new MeetingSourceBridgeV1({ identity: observed.provenance.source, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: "healthy", checked_at: at }), pull: async () => ({ meetings: [observed], next_cursor: "meeting-next" }) });
+    const source = new MeetingSourceBridgeV1({ identity: observed.provenance.source, pull: async () => ({ meetings: [observed], next_cursor: "meeting-next" }) });
     const result = await pullAndAdmitSourceBatchV1({ source, request: { limit: 1 }, admission: { scope: { ...scope, analysis_policy: "automatic" }, store: { admitSourceRevision } } });
     expect(result.admissions).toEqual(["admitted"]);
     expect(meetingFromSourceEnvelopeV1(result.sources[0]!)).toEqual(observed);

@@ -9,8 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStagingSyntheticPersonalMeetingProviderV1, StagingSyntheticMeetingStoreV1 } from '@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1';
 const refusal = vi.hoisted(() => ({ next: 0 }));
-vi.mock('@echo-brain/organization-protocol/record-codec-support-v4', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@echo-brain/organization-protocol/record-codec-support-v4')>();
+vi.mock('@echo-brain/organization-protocol', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@echo-brain/organization-protocol')>();
   return { ...original, validateApprovedDecisionSnapshotV2(value: unknown) {
     if (refusal.next > 0) { refusal.next--; throw new Error('snapshot refused by the record codec'); }
     return original.validateApprovedDecisionSnapshotV2(value);
@@ -80,7 +80,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
     source(setting, guard) {
       sources.push({ tool_id, source_key: setting.source_key });
       const identity = { kind: 'meeting-source' as const, adapter_id: setting.source_adapter_id, instance_id: setting.source_adapter_instance_id, version: setting.source_adapter_version };
-      return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
+      return { identity,
         requireCurrent() { guard(); current(); },
         async pull(input) {
           pulls++; guard(); current(); const cursor = readGranolaCheckpointV1(input.cursor!);

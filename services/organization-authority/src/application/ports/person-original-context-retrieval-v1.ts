@@ -13,7 +13,7 @@ export type PersonAskScopeV2 =
   | Readonly<{ readonly kind: "project"; readonly project_id: string }>
   | Readonly<{ readonly kind: "mine" }>;
 
-export interface OriginalContextAuthorizationV1 {
+interface OriginalContextAuthorizationV1 {
   readonly principal_id: string;
   readonly membership_id: string;
   readonly session_family_id: string;
@@ -51,8 +51,8 @@ export interface PersonOriginalContextRetrievalPortV1 {
 
 /** Desk-only, request-bound original evidence release.  Callers of the
  * PersonOriginalContextRetrievalPortV1 cannot invoke these methods. */
-export type OriginalContextDeskKindV1 = "note" | "document_passage" | "imported_meeting";
-export type OriginalContextDeskVisibilityV1 = "only_me" | "team" | "project" | "projects";
+type OriginalContextDeskKindV1 = "note" | "document_passage" | "imported_meeting";
+type OriginalContextDeskVisibilityV1 = "only_me" | "team" | "project" | "projects";
 
 export interface OriginalContextDeskItemV1 {
   readonly dates?: EvidenceDatesV1;
