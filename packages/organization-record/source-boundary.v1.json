@@ -7,7 +7,8 @@
   "source_root": "packages/organization-record/src",
   "package_json": "packages/organization-record/package.json",
   "entry_points": [
-    "packages/organization-record/src/organization-record-api-v1.ts"
+    "packages/organization-record/src/organization-record-api-v1.ts",
+    "packages/organization-record/src/application/atom-identity.ts"
   ],
   "owned_source_paths": [
     "packages/organization-record/src/**"
