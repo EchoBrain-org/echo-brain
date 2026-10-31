@@ -53,8 +53,7 @@ describe("Person client help", () => {
     const actions = dispatchedActions();
     expect(actions).toEqual(expect.arrayContaining(["login", "ask", "list", "projects-read-v2", "employee-invite"]));
     expect(await help(["--help"])).toMatch(/^usage: echo-brain person <command> \[options\]\n/);
-    // session-refresh is the desktop's own call, not a command a person types.
-    for (const action of actions.filter((action) => action !== "session-refresh")) {
+    for (const action of actions) {
       expect(await help([...command(action), "--help"]), action).toMatch(/^usage: echo-brain person /);
     }
     for (const group of GROUPS) {

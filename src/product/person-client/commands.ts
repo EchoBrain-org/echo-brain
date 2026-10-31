@@ -188,12 +188,15 @@ list shows only what you can read now; next_cursor means more.
 Commands:
   login       Sign in with an invitation or existing Authority identity.
   status      Show client build identity and sign-in state.
+  session-refresh  Renew the local session with the Authority.
   logout      Remove the local session.
   list        List the newest notes, documents, imported meetings and approved meetings you can read.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
   ask-check   Check whether what earlier answers cited changed, with no content.
+  ask-source  Read one source-evidence packet an Ask citation names.
   evidence    Search or open released Ask evidence.
+  runs        Read and act on impact runs, their open items, and sweeps.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
   projects    Create projects, manage members, and browse permitted context.
@@ -214,6 +217,10 @@ Provide exactly one identity option. --open-browser opens the handoff automatica
 
 Shows installed_version, client_build source_sha/source_kind, sign-in state, membership type, and Authority origin.
 Client provenance does not identify the Authority build serving requests. Status is local and makes no network request.
+`,
+  "session-refresh": `usage: echo-brain person session-refresh
+
+Renews the local session's access with the Authority and prints the account with its new access_expires_at and hard_reauthentication_at. The desktop runs it; other commands refresh on their own when access expires. A refresh past hard_reauthentication_at, or one that fails after leaving this machine, ends the session: sign in again with person login.
 `,
   tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings|submit> --tool <tool> [options]]
 
