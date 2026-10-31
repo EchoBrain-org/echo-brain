@@ -628,7 +628,7 @@ button.ask-line-toggle:hover { color: var(--muted); background: var(--hover); }
 .only-me-tiles .alt-tile { width: 16px; height: 16px; font-size: 9px; border-radius: 4px; }
 .only-me-unplaced { color: var(--faint); background: var(--tag); }
 .only-me-tiles-more { font-family: var(--mono); font-size: 11px; color: var(--faint); }
-/* Wide enough for "Sep 30", the longest age, so every age ends at the same edge. */
+/* Right-aligned in the row's 44px column, wide enough for "Sep 30", the longest age, so every age ends at the same edge. */
 .only-me-age { font-family: var(--mono); font-size: 11.5px; color: var(--faint); text-align: right; white-space: nowrap; }
 /* More sits where the next row would, its caret in the kind's column; the word darkens with it. */
 .only-me-more { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; column-gap: 12px; width: 100%; height: 40px; flex-shrink: 0;
