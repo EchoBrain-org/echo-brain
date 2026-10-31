@@ -41,9 +41,11 @@ host, an Electron utility process, loads this client's `composition.js` and
 runs the same commands in process, as the terminal CLI would. The host is the
 only process that reads the session or holds a token. It sends the app window
 token-free view models and failure codes, never a sign-in URL, grant, or
-provider body. Each account-scoped call is fenced: the host reads status before
-and after the command and refuses the result if the account changed, reporting
-a write's outcome as unknown. Before a network call, the host refreshes the
+provider body. Each account-scoped call runs once, pinned: the host passes the
+page's account with the command, and the client sends nothing for another
+account, or none, and withholds a result if the account changed while it ran.
+A write refused before it went out was not submitted; one refused after it
+went out has an unknown outcome. Before a network call, the host refreshes the
 sign-in when less than that call's own timeout plus one minute remains, so a
 long upload never starts on a token that lapses mid-call. Home loads asked for
 while one is running join it, with at most one follow-up load. A release
@@ -186,10 +188,14 @@ coordinates and a fresh authorized read.
 - **Flag rules.** Without `--progress`, the output is the plain Ask's.
   `--live` and `--tickets` are retired: the client refuses them as unknown
   options.
-- **Pinned account.** Paired `--expected-membership-id` and
-  `--expected-authority` (only with `--progress`) bind the Ask to the
-  caller's account, as the desktop sends them: signed in as another, the
-  client sends nothing and prints no step.
+- **Pinned account.** Every command but `login`, `status`, `session-refresh`
+  and `logout` takes paired `--expected-membership-id` and
+  `--expected-authority`, the account it is for, as the desktop sends them;
+  Ask takes them only with `--progress`. Signed out or signed in as another,
+  the client sends nothing and prints no step; if the account changes while
+  it runs, its output is not for that account. Either way it fails with
+  `account_changed`, `signed_out`, `reauthentication_required` or
+  `sign_in_required`, and `sent` says whether its request went out.
 
 The desktop runs this command, as `person ask --progress`, for every
 Ask. Its host forwards
@@ -232,7 +238,9 @@ successful canonical insufficient-evidence response. Malformed output is never
 converted to null or retried automatically.
 
 Ask retains validated citations, groups them by record digest, and loads source
-cards through `person records --record-sha256 <digest>` while the app is shown.
+cards through `person records --record-sha256 <digest> --brief`, which prints
+the record as Ask cites it (organization-api's `person-cited-record-v1.ts`),
+while the app is shown.
 Each readable card appears as its read completes; a failed or missing read does
 not discard other readable cards. Citations also carry a `ref` for
 `person open`, but the source cards still read `person records` until a
@@ -425,8 +433,8 @@ open through a fresh permission-aware read. The document extension below adds
 persistent, bounded original snapshots and recovery commands. Neither path
 silently uploads files or runs a background uploader.
 
-Each operation passes the host's account fence before and after the client
-call. Account changes clear fetched content. A save that is still running, or
+Each operation runs once, pinned to the page's account. Account changes clear
+fetched content. A save that is still running, or
 whose outcome is unknown, holds sign-out until it settles. Provider diagnostics
 and credentials never reach the app window.
 
