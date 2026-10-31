@@ -17,7 +17,7 @@ import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { EmployeeMutationError, PersonClient } from "./client.js";
 import { PersonAuthorityClientError, PersonContextMutationError } from "./authority-client.js";
-import { PersonClientSessionUnavailableError } from "./session-store.js";
+import { PersonClientSessionUnavailableError, type PersonSessionEndedCode } from "./session-store.js";
 import { startPersonLoopbackHandoff } from "./browser-login-handoff.js";
 import {
   readPersonOnboardingInvitation,
@@ -208,6 +208,8 @@ Commands:
   project-activity  When each of your projects last had something new from someone else, with no content.
 
 Run \`echo-brain person <command> --help\` for command options.
+
+Every command but login, status, session-refresh and logout takes paired --expected-membership-id <id> --expected-authority <origin>, the account it is for. Signed out or signed in as anyone else, it sends nothing; if the account changes while it runs, its output is not for that account. Either way it fails with code account_changed, signed_out, reauthentication_required or sign_in_required, and "sent" says whether its request went out.
 `,
   login: `usage: echo-brain person login (--invitation <path> | --authority-url <url>) [--open-browser]
 
@@ -579,6 +581,58 @@ function expectedAccount(values: Record<Option, string | boolean | undefined>) {
   };
 }
 
+/** These act on the session itself; every other command acts for one account, and takes a pin. */
+const SESSION_ACTIONS: ReadonlySet<string> = new Set(["login", "status", "session-refresh", "logout"]);
+const PIN_OPTIONS: readonly Option[] = ["expected-membership-id", "expected-authority"];
+
+/** The account a pinned run is for: paired --expected-membership-id and --expected-authority. */
+interface AccountPin { readonly membership_id: string; readonly authority: string }
+
+function accountPin(values: Record<Option, string | boolean | undefined>): AccountPin | undefined {
+  const membership = values["expected-membership-id"];
+  const authority = values["expected-authority"];
+  if (membership === undefined && authority === undefined) return undefined;
+  if (typeof membership !== "string" || typeof authority !== "string") throw new Error("--expected-membership-id and --expected-authority must be given together");
+  return { membership_id: membership, authority };
+}
+
+/** Why a pinned run cannot run, or stand, as its account: no one is signed in (and why, when a refresh ended the session), or someone else is. */
+type PinRefusal = "account_changed" | "signed_out" | PersonSessionEndedCode;
+
+function pinRefusal(client: PersonClient, pin: AccountPin): PinRefusal | null {
+  let signedIn: { readonly authority_origin: string; readonly membership_id: string };
+  try {
+    signedIn = client.sessionSummary();
+  } catch (error) {
+    // A session that cannot be read at all cannot be shown to be the pinned one.
+    return error instanceof PersonClientSessionUnavailableError ? client.sessionEnded()?.reason ?? "signed_out" : "account_changed";
+  }
+  return signedIn.authority_origin === pin.authority && signedIn.membership_id === pin.membership_id ? null : "account_changed";
+}
+
+/** A pinned run that ended under another account, or none: what it printed is not for its account. */
+class AccountPinError extends Error {
+  constructor(readonly code: PinRefusal) {
+    super("The signed-in account changed during the request");
+    this.name = "AccountPinError";
+  }
+}
+
+/** Throws when the pin no longer holds. */
+function assertPinned(client: PersonClient, pin: AccountPin | undefined): void {
+  const refused = pin === undefined ? null : pinRefusal(client, pin);
+  if (refused !== null) throw new AccountPinError(refused);
+}
+
+/** A refused pinned run: nothing went out (`sent` false), or the account changed while it ran. */
+function pinRefused(action: string, code: PinRefusal, sent: boolean) {
+  return {
+    ok: false, action, code, sent,
+    error: sent ? "The signed-in account changed during the request; its output is not for the expected account."
+      : "Not signed in as the expected account; nothing was sent.",
+  };
+}
+
 function optionalProject(values: Record<Option, string | boolean | undefined>) {
   return values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
 }
@@ -896,6 +950,7 @@ export async function runPersonClientCli(
     let askCheckRequest: PersonAskCheckRequestV1 | undefined;
     let askPrevious: PersonAnswerPreviousV1 | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
+  let pin: AccountPin | undefined;
   try {
     const args = argv.slice(subcommandAction === undefined ? 1 : 2);
     // Accept a negative integer as a limit value so the existing bounds explain
@@ -926,7 +981,7 @@ export async function runPersonClientCli(
         seen.add(token.name);
       }
     }
-    const accepted = new Set(rule.accepts ?? []);
+    const accepted = new Set([...(rule.accepts ?? []), ...(SESSION_ACTIONS.has(action) ? [] : PIN_OPTIONS)]);
     for (const [name, value] of Object.entries(values)) {
       if (value !== undefined && value !== false && !accepted.has(name as Option)) {
         throw new Error(
@@ -948,7 +1003,7 @@ export async function runPersonClientCli(
       if (toolVerbDefinition === undefined) throw new Error(usage());
       const command = `echo-brain person tools ${verbName} --tool ${tool}`;
       for (const [name, value] of Object.entries(values)) {
-        if (value !== undefined && value !== false && name !== 'tool' && !Object.hasOwn(toolVerbDefinition.options, name)) {
+        if (value !== undefined && value !== false && name !== 'tool' && !PIN_OPTIONS.includes(name) && !Object.hasOwn(toolVerbDefinition.options, name)) {
           throw new Error(`--${name} is not valid with \`${command}\``);
         }
       }
@@ -987,6 +1042,7 @@ export async function runPersonClientCli(
     if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
       throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
     }
+    pin = accountPin(values);
     // The previous turn (ADR-0047) is validated with the whole request, its 16 KiB bound included, before any network or
     // session use.
     if (action === "ask" && values.previous !== undefined) askPrevious = askPreviousOf(values);
@@ -1047,6 +1103,12 @@ export async function runPersonClientCli(
       : { random_uuid: dependencies.random_uuid }),
   });
   const readInteractiveLine = dependencies.read_input ?? readBoundedStdinLine;
+  // A pinned run is for its account alone: signed out, or as anyone else, it sends nothing.
+  const refusedBefore = pin === undefined ? null : pinRefusal(client, pin);
+  if (refusedBefore !== null) {
+    print(stderr, pinRefused(action, refusedBefore, false));
+    return 1;
+  }
 
   try {
     if (toolVerbDefinition !== undefined) {
@@ -1061,6 +1123,7 @@ export async function runPersonClientCli(
           await (dependencies.sleep ?? ((delay: number) => new Promise<void>(resolve => setTimeout(resolve, delay))))(ms);
           dependencies.abort_signal?.throwIfAborted();
         } });
+      assertPinned(client, pin);
       return 0;
     }
     switch (action) {
@@ -1373,8 +1436,16 @@ export async function runPersonClientCli(
         print(stdout, { ok: true, revoked: true });
         break;
     }
+    // A pinned run ends as it began, for its account; otherwise what it printed is not for it.
+    assertPinned(client, pin);
     return 0;
   } catch (error) {
+    // Under another account by now, or none, that is the failure, whatever else went wrong: the request may have gone out.
+    const refused = pin === undefined ? null : error instanceof AccountPinError ? error.code : pinRefusal(client, pin);
+    if (refused !== null) {
+      print(stderr, pinRefused(action, refused, true));
+      return 1;
+    }
     if (isContextAction(action)) {
       print(stderr, contextCliFailure(action, error, values));
       return 1;
