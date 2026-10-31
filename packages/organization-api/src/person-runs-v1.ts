@@ -1,5 +1,5 @@
 import { validatePersonAnswerCitationV6 } from './person-answer-v4.js';
-import type { PersonAnswerCitationV6 } from './person-answer-v6.js';
+import type { PersonAnswerCitationV6 } from './person-answer-v8.js';
 import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 } from './person-diagnostics-v1.js';
 import { PERSON_IMPACT_CARD_LIMITS_V1, validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
 import { PERSON_UPLOAD_PROJECT_SET_MAX } from './person-upload-audience-v3.js';

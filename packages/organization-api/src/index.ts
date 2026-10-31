@@ -62,9 +62,6 @@ export * from './person-connector-access-v1.js';
 export * from './person-ticket-citation-v1.js';
 export * from './person-page-citation-v1.js';
 
-export * from './person-answer-v5.js';
-export * from './person-answer-v6.js';
-export * from './person-answer-v7.js';
 export * from './person-answer-v8.js';
 export * from './person-answer-layout-v1.js';
 export * from './person-answer-previous-v1.js';

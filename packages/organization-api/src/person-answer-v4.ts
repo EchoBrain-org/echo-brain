@@ -1,10 +1,9 @@
 import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 } from './person-diagnostics-v1.js';
 import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validatePersonPageCitationV1 } from './person-page-citation-v1.js';
-import type { PersonAnswerCitationV6 } from './person-answer-v6.js';
 import {
   PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
-  type PersonEvidenceKindV5,
+  type PersonAnswerCitationV6, type PersonEvidenceKindV5,
 } from './person-answer-v8.js';
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
 import { PERSON_WORKSPACE_CITATION_KINDS_V1, validatePersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
