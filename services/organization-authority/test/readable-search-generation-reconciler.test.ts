@@ -210,6 +210,20 @@ describe("readable-search generation reconciliation", () => {
     expect(retire).toHaveBeenCalledOnce();
   });
 
+  it("keeps a publication when deleting the generations it replaced fails, and reports the failure", async () => {
+    const authority = database();
+    const failures: string[] = [];
+    const value = reconciler(authority, head(2), {
+      retire_generations: () => {
+        throw new Error("disk refused the deletion");
+      },
+      on_retire_failure: (error) => failures.push((error as Error).message),
+    });
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published" });
+    expect(active(authority, "generation_id")).toBe(GENERATION);
+    expect(failures).toEqual(["disk refused the deletion"]);
+  });
+
   it("does not publish a completed generation when its captured head was superseded", async () => {
     const authority = database();
     const captured = head(2);

@@ -242,7 +242,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
       // down. The refused build touched nothing, record reads treat the
       // published generation as a lag, and the search task reports the
       // overflow on every later cycle, as it does once running.
-      if (startup.signal.aborted || readableSearchExceededLimitV1(error) === undefined) throw error;
+      if (readableSearchExceededLimitV1(error) === undefined) throw error;
       try { dependencies.on_worker_error?.(error as Error); } catch { /* observational only */ }
     }
     startup.signal.throwIfAborted();

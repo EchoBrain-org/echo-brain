@@ -50,7 +50,8 @@ are configuration limits, not a tested maximum customer count.
   ceiling that measured about 2.5 s to build and 0.5 s to prewarm on an
   Apple-silicon laptop; expect roughly twice that on a `t4g.small`. The warm
   generation holds about 10 KB per item in memory. Each publication then
-  deletes every generation it replaced.
+  deletes every generation it replaced; a failed deletion is logged as a
+  worker failure and retried at the next publication.
   After a publication at 75% or more of any limit, the service logs
   `echo-clean-live-search-capacity-v1` with `status` `near` and the counts. A
   build past a limit is refused: on every worker cycle the service logs the

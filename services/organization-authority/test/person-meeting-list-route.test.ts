@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
+import { clearReadableSearchActiveGenerationV1, READABLE_SEARCH_ADMISSION_BUDGET_V1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PersonItemPositionV1, PersonListStoreScopeV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
@@ -281,12 +281,15 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(w.audits("person_list")).toHaveLength(1);
   });
 
-  // ADR-0024's cost measurement for its 50 ms warm / 3 s cold-mine revisit thresholds. Opt-in, as seeding takes about a minute:
+  // ADR-0024's cost measurement for its 50 ms warm / 3 s cold-mine revisit thresholds, at the admission ceiling. Opt-in, as
+  // seeding takes about a minute per thousand records:
   // ECHO_RUN_BENCHMARKS=1 npx vitest run --config vitest.config.ts services/organization-authority/test/person-meeting-list-route.test.ts
-  it.runIf(process.env.ECHO_RUN_BENCHMARKS === "1")("benchmarks page 1 over 1,024 single-atom records, cold and warm, global and mine", { timeout: 300_000 }, async () => {
+  it.runIf(process.env.ECHO_RUN_BENCHMARKS === "1")("benchmarks page 1 over a ceiling of single-atom records, cold and warm, global and mine", { timeout: 1_800_000 }, async () => {
+    const records = READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms;
     const w = await world();
     const started = performance.now();
-    for (let index = 0; index < 1_017; index += 1) {
+    // The world already holds seven approved records.
+    for (let index = 0; index < records - 7; index += 1) {
       const at = new Date(Date.parse(T(10)) + index * 60_000).toISOString();
       // Even: EMP_A's approval decisions (Only me or SHARED, both readable and Mine for emp_a). Odd: generic Team records, nobody's Mine.
       await w.approve(index % 2 === 0
@@ -309,6 +312,6 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
       mine_cold_ms: timed(page(mineRoute, MINE)), mine_warm_ms: timed(page(mineRoute, MINE)),
     };
     console.info(`person meetings list benchmark ${JSON.stringify(result)}`);
-    expect(result.records).toBe(1_024);
+    expect(result.records).toBe(records);
   });
 });

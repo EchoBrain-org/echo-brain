@@ -244,6 +244,7 @@ export async function openOrganizationAuthorityRuntime(
       signer,
       policy_projectors: config.record_policy_fact_projectors,
       record_input_codecs: config.record_input_codecs,
+      on_retire_failure: (error) => config.on_worker_error?.(error instanceof Error ? error : new Error(String(error))),
     });
     const runtime = await startOrganizationAuthorityServiceLifecycle(
       { api, worker_interval_ms: config.worker_interval_ms },

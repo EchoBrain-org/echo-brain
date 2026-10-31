@@ -1123,6 +1123,10 @@ export function retireReadableSearchGenerationsV1(input: {
     assertWithin(debris, root, "retired readable-search generation");
     rmSync(debris, { recursive: true, force: false });
   };
+  // The pointer naming the kept generation was committed in a database in the
+  // state directory. Flush the directory, so that commit cannot roll back
+  // after the generations it replaced are gone.
+  fsyncPath(input.state_directory);
   for (const name of readdirSync(root))
     if (RETIRED_GENERATION.test(name)) remove(join(root, name));
   let retired = 0;

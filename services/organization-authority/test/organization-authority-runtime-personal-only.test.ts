@@ -141,7 +141,8 @@ describe('Organization Authority runtime without an organization source lane', (
       return capacity;
     };
     expect(await notices({ atoms: 6_143, segments: 95, postings: 153_599 })).toEqual([]);
-    expect(await notices({ atoms: 6_144, segments: 1, postings: 0 })).toEqual([{ status: 'near', atoms: 6_144, segments: 1, postings: 0 }]);
+    for (const usage of [{ atoms: 6_144, segments: 1, postings: 0 }, { atoms: 0, segments: 96, postings: 0 }, { atoms: 0, segments: 1, postings: 153_600 }])
+      expect(await notices(usage)).toEqual([{ status: 'near', ...usage }]);
   });
 
   it('starts the deployable service before any personal source without reading provider credentials', async () => {
