@@ -7,6 +7,7 @@ import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/orga
 import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
+import { personCitedRecordV1, type PersonCitedRecordV1 } from '@echo-brain/organization-api';
 import { validatePersonAskCheckRequestV1, type PersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
 import { validatePersonAnswerRequestV3, type PersonAnswerPreviousV1 } from '@echo-brain/organization-api';
@@ -84,6 +85,7 @@ const OPTIONS = {
   limit: { type: "string" },
   "open-browser": { type: "boolean" },
   "record-sha256": { type: "string" },
+  brief: { type: "boolean" },
   kind: { type: "string" },
   item: { type: "string" },
   neighbours: { type: "string" },
@@ -153,7 +155,7 @@ const RULES: Readonly<
     requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
   },
   "ask-check": { accepts: ["request"], requires: ["request"] },
-  records: { accepts: ["limit", "query", "record-sha256"] },
+  records: { accepts: ["limit", "query", "record-sha256", "brief"] },
   "tools": {},
   "employee-invite": {
     accepts: ["name", "email", "out"],
@@ -302,9 +304,10 @@ Checks whether the sources earlier answers cited changed, with no content. The r
 
 Lists active people in your organization by name, or narrows the list with a name search. Any signed-in member may use it; no project is needed. Shows names and membership IDs only. Pass next_cursor as --cursor with the same --query and --limit for the next page.
 `,
-  records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex>]
+  records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex> [--brief]]
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
+--brief prints that one record as Ask cites it (echo-person-cited-record-v1) in place of its signed envelope: the meeting, its approver, participants and policy, and up to 32 decisions, actions and rationales, each with the atom id Ask citations carry and up to 3 quotes. A record you cannot read fails with not_found.
 `,
   documents: `usage: echo-brain person documents <upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate> [options]
 
@@ -733,6 +736,18 @@ function optionalRecordLimit(
   return Number(value);
 }
 
+/** --brief: the one record asked for, as Ask cites it. None readable is not_found; anything else is not a record Ask cites. */
+function citedRecord(listed: Awaited<ReturnType<PersonClient["records"]>>, recordSha256: string): PersonCitedRecordV1 {
+  const records = listed.kind === "echo-clean-person-record-list-v1" ? listed.records : [];
+  if (records.length === 0) throw new PersonAuthorityClientError("not_found", null, "No record you can read has that digest");
+  try {
+    if (records.length !== 1 || records[0]!.record_sha256 !== recordSha256) throw new Error("Another record came back");
+    return personCitedRecordV1(records[0]!);
+  } catch {
+    throw new PersonAuthorityClientError("invalid_response", null, "Person Authority returned a record Ask cannot cite");
+  }
+}
+
 interface BrowserOpenerOptions {
   readonly platform?: NodeJS.Platform;
   readonly spawn_sync?: typeof spawnSync;
@@ -1032,6 +1047,7 @@ export async function runPersonClientCli(
       ) {
         throw new Error("--record-sha256 must be sha256 followed by 64 lowercase hex characters");
       }
+      if (values.brief === true && values["record-sha256"] === undefined) throw new Error("--brief requires --record-sha256");
     }
     // At most one scope. Only list accepts --only-me; ask has already refused it as not valid.
     const scopeFlags = ["project", "mine", "only-me"].filter((name) => values[name] !== undefined && values[name] !== false).map((name) => `--${name}`);
@@ -1396,14 +1412,12 @@ export async function runPersonClientCli(
         const query = values.query;
         const recordSha256 = values["record-sha256"];
         if (query !== undefined) validatePersonQueryText(query);
-        print(stdout, {
-          ok: true,
-          result: await client.records(
-            optionalRecordLimit(values, query === undefined ? 100 : 10),
-            typeof query === "string" ? query : undefined,
-            typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
-          ),
-        });
+        const records = await client.records(
+          optionalRecordLimit(values, query === undefined ? 100 : 10),
+          typeof query === "string" ? query : undefined,
+          typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
+        );
+        print(stdout, { ok: true, result: values.brief === true ? citedRecord(records, String(recordSha256)) : records });
         break;
       }
       case "tools":
