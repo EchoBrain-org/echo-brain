@@ -11,13 +11,12 @@
  * explicitly supplies --run and --credential-file. The bundle reads the
  * credential file; this runner only checks that it is a private file.
  */
-import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAgenticFollowUpOnceV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { assertExplicitRun, boundedInteger, json, readFlags, sha256, usage } from "../shared/runner.mjs";
+import { assertExplicitRun, boundedInteger, codeIdentity, json, outputDirectory, readFlags, safeError, sha256, usage } from "../shared/runner.mjs";
 import { CASES_FILE, GROUPS, gradeTrial, loadCases, summarizeRules } from "./grade.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -28,18 +27,6 @@ const ALL_CASES = Object.values(GROUPS).reduce((total, count) => total + count, 
 const MAX_TOTAL_MODEL_CALLS = ALL_CASES * MAX_TRIALS * 2;
 const MIN_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 85_000;
-
-/** What a failure may keep: its class and status, never its message, payload or credential. */
-function safeError(error) {
-  const detail = error !== null && typeof error === "object" && !Array.isArray(error) ? error : null;
-  const diagnostic = detail?.diagnostic !== null && typeof detail?.diagnostic === "object" ? detail.diagnostic : null;
-  return Object.freeze({
-    name: error instanceof Error ? error.name : "Error",
-    failure_class: typeof diagnostic?.failure_class === "string" ? diagnostic.failure_class : null,
-    http_status: Number.isSafeInteger(diagnostic?.http_status) ? diagnostic.http_status : null,
-    finish_reason: typeof diagnostic?.finish_reason === "string" ? diagnostic.finish_reason : null,
-  });
-}
 
 export function help() {
   return [
@@ -63,17 +50,6 @@ export function help() {
   ].join("\n");
 }
 
-/** Where the report goes: an absolute, private directory outside the repository, created when missing. */
-function outputDirectory(value) {
-  if (typeof value !== "string" || !isAbsolute(value)) throw new Error("--out must be an absolute private directory outside the repository");
-  mkdirSync(value, { recursive: true, mode: 0o700 });
-  const directory = realpathSync(value);
-  const repository = realpathSync(ROOT);
-  if (directory === repository || directory.startsWith(`${repository}${sep}`)) throw new Error("--out must be outside the repository");
-  if ((statSync(directory).mode & 0o077) !== 0) throw new Error("--out must not be readable by group or other users");
-  return directory;
-}
-
 export function parseArgs(argv) {
   const options = { run: false, credentialFile: null, out: null, caseIds: null, trials: MAX_TRIALS, timeoutMs: 60_000 };
   if (readFlags(argv, options, {
@@ -89,29 +65,22 @@ export function parseArgs(argv) {
   const known = new Set(loadCases().cases.map((entry) => entry.id));
   if (options.caseIds !== null && (options.caseIds.length === 0 || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases");
   if ((options.caseIds?.length ?? known.size) * options.trials * 2 > MAX_TOTAL_MODEL_CALLS) throw new Error(`requested model-call budget exceeds ${MAX_TOTAL_MODEL_CALLS}`);
-  options.out = outputDirectory(options.out);
+  options.out = outputDirectory(ROOT, options.out);
   return Object.freeze(options);
 }
 
-function codeIdentity() {
-  const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim();
-  const files = [
-    "tools/evals/ask-follow-up/run.mjs",
-    "tools/evals/shared/runner.mjs",
-    "tools/evals/ask-follow-up/grade.mjs",
-    "tools/evals/ask-follow-up/cases.json",
-    "packages/organization-authority-kernel/dist/answer-composition/agentic-follow-up-resolver-v1.js",
-    "packages/organization-authority-kernel/dist/answer-composition/agentic-model-gate-v1.js",
-    "packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js",
-    "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
-    "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
-  ];
-  return Object.freeze({
-    source_sha: git(["rev-parse", "HEAD"]),
-    tracked_patch_sha256: sha256(execFileSync("git", ["diff", "--binary"], { cwd: ROOT })),
-    files_sha256: Object.freeze(Object.fromEntries(files.map((file) => [file, sha256(readFileSync(join(ROOT, file)))]))),
-  });
-}
+/** The files a report fingerprints, beside the commit and its uncommitted changes. */
+const CODE_FILES = Object.freeze([
+  "tools/evals/ask-follow-up/run.mjs",
+  "tools/evals/shared/runner.mjs",
+  "tools/evals/ask-follow-up/grade.mjs",
+  "tools/evals/ask-follow-up/cases.json",
+  "packages/organization-authority-kernel/dist/answer-composition/agentic-follow-up-resolver-v1.js",
+  "packages/organization-authority-kernel/dist/answer-composition/agentic-model-gate-v1.js",
+  "packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js",
+  "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
+  "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
+]);
 
 /**
  * One trial: the kernel's resolver on one case, through `structuredOutput` (the production adapter, or a test's), with
@@ -170,7 +139,7 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
 export async function run(options, dependencies = {}) {
   const document = loadCases();
   const selected = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
-  const identityBefore = codeIdentity();
+  const identityBefore = codeIdentity(ROOT, CODE_FILES);
   const loaded = dependencies.loaded ?? createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: options.credentialFile }).load();
   const results = [];
   for (const caseDefinition of selected) {
@@ -180,7 +149,7 @@ export async function run(options, dependencies = {}) {
       (dependencies.progress ?? ((line) => process.stderr.write(line)))(`${JSON.stringify({ kind: "echo-ask-follow-up-evaluation-progress-v1", case_id: result.case_id, trial, resolution: result.resolution, passed: result.passed })}\n`);
     }
   }
-  const identityAfter = codeIdentity();
+  const identityAfter = codeIdentity(ROOT, CODE_FILES);
   const summary = summarizeRules(results);
   const report = Object.freeze({
     kind: "echo-ask-follow-up-evaluation-v1",

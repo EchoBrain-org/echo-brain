@@ -16,7 +16,7 @@ import { readPrivateAuthorityCredential } from "@echo-brain/organization-authori
 import { createAgenticAskV5 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createOpenRouterStructuredGenerationAdapter } from "../../../providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
-import { assertExplicitRun, boundedInteger, json, readFlags, sha256, usage } from "../shared/runner.mjs";
+import { assertExplicitRun, boundedInteger, codeIdentity as sharedCodeIdentity, json, readFlags, safeError as sharedSafeError, sha256, usage } from "../shared/runner.mjs";
 import { CASES, createFixtureDesk, fixtureSha256, sourceForCitation } from "./fixtures.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -28,20 +28,6 @@ const MAX_TOTAL_MODEL_CALLS = 72;
 const MIN_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 85_000;
 const PROVIDER_ROUTE_NAMES = Object.freeze({ friendli: "Friendli", baidu: "Baidu" });
-
-function safeError(error) {
-  const detail = error !== null && typeof error === "object" && !Array.isArray(error) ? error : null;
-  const diagnostic = detail?.diagnostic;
-  const generationObservation = detail?.generation_observation;
-  return Object.freeze({
-    name: error instanceof Error ? error.name : "Error",
-    failure_class: diagnostic !== null && typeof diagnostic === "object" && typeof diagnostic.failure_class === "string" ? diagnostic.failure_class : null,
-    http_status: diagnostic !== null && typeof diagnostic === "object" && Number.isSafeInteger(diagnostic.http_status) ? diagnostic.http_status : null,
-    finish_reason: diagnostic !== null && typeof diagnostic === "object" && typeof diagnostic.finish_reason === "string" ? diagnostic.finish_reason : null,
-    usage: usage(generationObservation?.usage),
-    provider_latency_ms: typeof generationObservation?.provider_latency_ms === "number" && Number.isSafeInteger(generationObservation.provider_latency_ms) && generationObservation.provider_latency_ms >= 0 ? generationObservation.provider_latency_ms : null,
-  });
-}
 
 function help() {
   return [
@@ -142,19 +128,20 @@ function codeIdentity() {
     "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
     "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
   ];
-  const trackedPatch = sha256(execFileSync("git", ["diff", "--binary"], { cwd: ROOT }));
+  const { source_sha, tracked_patch_sha256, files_sha256 } = sharedCodeIdentity(ROOT, files);
   const untracked = git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean).sort();
   const untrackedFiles = Object.freeze(Object.fromEntries(untracked.map((file) => [file, sha256(readFileSync(join(ROOT, file)))])));
   return Object.freeze({
-    source_sha: git(["rev-parse", "HEAD"]),
-    patch_sha256: sha256(JSON.stringify({ tracked_patch_sha256: trackedPatch, untracked_files_sha256: untrackedFiles })),
-    tracked_patch_sha256: trackedPatch,
+    source_sha,
+    patch_sha256: sha256(JSON.stringify({ tracked_patch_sha256, untracked_files_sha256: untrackedFiles })),
+    tracked_patch_sha256,
     untracked_files_sha256: untrackedFiles,
-    files_sha256: Object.freeze(Object.fromEntries(files.map((file) => {
-      return [file, sha256(readFileSync(join(ROOT, file)))];
-    }))),
+    files_sha256,
   });
 }
+
+/** A failure keeps its generation's usage and latency here, beside the shared safe fields. */
+const safeError = (error) => sharedSafeError(error, { withUsage: true });
 
 /** Synthetic final-answer summary for human review. Planner and provider replies stay omitted. */
 function renderedAnswer(answer) {
