@@ -110,7 +110,7 @@ the profile is present:
   person's Jira permissions across the connected site. ECHO project Ask
   requires a lead-configured Jira mapping and the asker's own connection. The
   mapping filters discovery before tickets are read and remains checked on open
-  and revalidation. Mine and unmapped projects exclude Jira. With the profile,
+  and revalidation. Unmapped projects exclude Jira. With the profile,
   explicit Jira flags must match its site and integration, and Nango must be
   Nango Cloud. The profile's `jira.project` is not read.
 - `ECHO_STAGING_CONFLUENCE_ASK_V1=true` selects live Confluence Ask with only

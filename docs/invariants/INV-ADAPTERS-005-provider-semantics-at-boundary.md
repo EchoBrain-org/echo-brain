@@ -44,8 +44,8 @@ entrypoints. The opt-in context capture integration is gone: its selectors
 removed in `0f759417`, and its intake (`context-source-intake-v1.ts`) and the
 capture foundation on 2026-10-19. Jira constructs a reader from the
 asker's current connection and permissions: global scope has no additional
-project allowlist, project scope requires its saved mapping, and Mine excludes
-Jira. Its provider data is request-only and is never admitted into canonical
+project allowlist, and project scope requires its saved mapping. Its provider
+data is request-only and is never admitted into canonical
 Authority storage. Classification, API parsing and cursor grammar stay in
 providers; Authority fixes organization, disposition and custody policy
 independently of returned data, and provider credentials or opaque author

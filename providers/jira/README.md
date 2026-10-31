@@ -253,7 +253,7 @@ organization, grant or site selector in model arguments or connection commands.
    desktop's Ask asks the same route in every scope
    ([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), as the
    [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
-   describes; Mine reads no Jira. The desktop validates V8 answers, with a
+   describes. The desktop validates V8 answers, with a
    safe direct-link opener. The `/v4` ticket route, `--tickets` and `--live`
    are retired ([ADR-0047](../../docs/decisions/ADR-0047-ask-timeline.md)).
 5. `echo-brain person tools disconnect --tool jira` calls
@@ -300,7 +300,7 @@ requires a saved mapping set by a current ECHO project lead. The desktop project
 Jira project ID and key. Members can read the setting; leads can change or remove
 it. Each asker uses their own OAuth connection and Jira permissions. Global Ask
 has no additional project allowlist; project Ask applies the saved mapping before
-discovery and checks it again on open and revalidation. Mine and unmapped projects exclude Jira and
+discovery and checks it again on open and revalidation. Unmapped projects exclude Jira and
 never fall back to global Jira; explicit ticket inventory in an unsupported scope
 is refused. There is no persistent ticket-open API, sync or index, and no Jira
 capture. See

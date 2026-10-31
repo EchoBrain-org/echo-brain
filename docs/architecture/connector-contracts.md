@@ -251,17 +251,17 @@ and Confluence spaces (ADR-0042), with the durable live-read audit. The Ask
 routes before it, which carried tickets from `/v4` and pages from `/v5`, are
 retired (ADR-0047). The Authority mounts the route whenever an answer model is bound; ticket or page evidence
 appears only when the matching Jira or Confluence live runtime is selected.
-[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted
-and [ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md) is
-proposed; the CLI requires explicit Jira or Confluence configuration. The
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) and
+[ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md) are
+accepted; the CLI requires explicit Jira or Confluence configuration. The
 [service guide](../../services/organization-authority/README.md#staging-connector-rehearsal)
 owns the staging selection: each Person reads under their own grant, without
 tool capture. Jira (tickets, and Jira projects for V8) and Confluence (pages, and spaces
 for V8) are the live readers. Ask reads no Slack, and read status is not
 exposed to clients.
 
-The dispatcher must preserve [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)
-scope rules: `mine` excludes live external reads. Provider selection and
+The dispatcher must preserve the [global and project Ask](../features/global-project-ask-v1.md)
+scope rules: an unmapped project excludes live external reads. Provider selection and
 bindings are server-owned. Project/channel mappings and any provider-specific
 retention rules require their own implementation decisions rather than being
 inferred from this generic interface.

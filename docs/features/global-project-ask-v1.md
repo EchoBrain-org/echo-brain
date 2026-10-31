@@ -21,19 +21,13 @@ associated with that project. This is the initial definition of related personal
 context. Other people's private material, unassociated personal context, and
 unrelated organization or other-project material remain excluded.
 
-Choosing **Mine** narrows Ask to what the person added: the notes they saved
-and the documents they uploaded under their current membership, and the
-meetings they approved as final approver, while each is still readable to them
-([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). Mine
-excludes live external sources. It is
-a narrowing of global scope, never another view: a teammate's item is excluded
-even when the person can read it. "My" in a question is only a search hint; it
-does not select Mine. Its citations carry a `ref`, which `person open` reads
-under global scope. The desktop no longer offers Mine
-([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)): the sidebar's
-**Only me** row opens every item only the person can read, filed in a project
-or not (`person list --only-me`), and Ask from Home covers it. The CLI keeps
-`--mine`.
+Ask has no **Mine** scope any more
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md) added
+it). The desktop dropped it first
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)), and the CLI and the
+Authority have retired it too: the sidebar's **Only me** row opens every item
+only the person can read, filed in a project or not (`person list --only-me`),
+and Ask from Home covers it. "My" in a question is only a search hint.
 
 The separate Find saved context entry is removed. File browsing is not a
 prerequisite for asking. Owner administration is **People & invites**, under
@@ -79,9 +73,9 @@ commits the original and its project links once. See
 Supported originals include saved editor text and usable extracted text from
 the existing text/Markdown, PDF, and DOCX upload path, and a person's imported
 meeting notes. Imported notes carry the `imported_meeting` kind and an
-unapproved label. Only their importer reads them, in global and Mine scope,
-never in project scope: a project suggested for the meeting grants its members
-nothing
+unapproved label. Only their importer reads them, in global scope and their
+Only me list, never in project scope: a project suggested for the meeting
+grants its members nothing
 ([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md), which
 reverses
 [ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md)'s
@@ -176,13 +170,12 @@ evidence still requires current access when opened.
 This version shipped as `POST /v2/person/ask` (request schema 2, response
 schema 3), beside the approved-record-only `/v1/person/ask`. Both were retired
 by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md). Every Ask, the
-CLI's in every scope, Mine included, and the desktop's, asks
+CLI's and the desktop's, asks
 `POST /v7/person/ask`, the only Ask route since
 [ADR-0047](../decisions/ADR-0047-ask-timeline.md) retired the ones before it,
 and the scope rules here apply to it. The CLI accepts
-`person ask --question <text> [--project <project-id> | --mine] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]`;
-`--project` and `--mine` are exclusive. The client does not silently
-downgrade a project or mine request to global Ask.
+`person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]`.
+The client does not silently downgrade a project request to global Ask.
 
 The
 [Person client architecture](../architecture/person-client-architecture.md#account-and-answer-sources)
@@ -194,17 +187,16 @@ Jira tickets and Confluence pages read under the asker's own connections.
 Global scope reads what those connections can access; a project reads only its
 lead-configured [Jira mapping](project-settings-v1.md#jira-project-mapping) and
 [Confluence spaces](project-settings-v1.md#confluence-space-mapping), and its
-workspace is that project, its roster and the containers its lead mapped. Mine
-and unmapped projects exclude live tools, and Mine excludes follow-ups and the
-workspace. The desktop shows every question's progress, and no longer asks in
-Mine (ADR-0049).
+workspace is that project, its roster and the containers its lead mapped.
+Unmapped projects exclude live tools. The desktop shows every question's
+progress.
 Permission failures never fall back, and the receipt counts every item
 research looked through
 ([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)).
 
 Cited original evidence is read through `POST /v2/person/ask/source` or
-`person ask-source`, using the answer's project scope (global for a global or
-Mine answer, since global contains mine) and exact source, revision,
+`person ask-source`, using the answer's scope (global, or its project) and
+exact source, revision,
 representation, and anchor coordinates. The response is a bounded evidence
 excerpt, not a new browsing interface.
 

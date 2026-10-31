@@ -63,9 +63,9 @@ split parts across pages; Ask's sources still read as described under Ask
 below.
 Only me's bar is Home's (all context); its ⊕, and a file dropped on it, start
 Capture in no project, and a "Saved for you" toast opens it. The desktop has no
-Mine page or Mine scope any more; `--mine`
-([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)) stays
-for the CLI. A 401 on a project's list means the person is no longer a member:
+Mine page or Mine scope any more, and the CLI's `--mine`
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)) is
+retired too. A 401 on a project's list means the person is no longer a member:
 the page says "This is no longer available to you." and status and projects
 are read again once per visit, without signing out. Signing out leaves Only me
 and clears it.
@@ -146,16 +146,16 @@ not claim that the employee is currently online or has a live device session.
 Ask uses the agentic route ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md));
 every Ask route before `/v7` is retired
 ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)). Every Ask, the CLI's
-`person ask` in every scope (Mine included) and the desktop's, uses
+`person ask` and the desktop's, uses
 `/v7/person/ask` with V8 answers so the person's connected Jira and Confluence
 accounts can contribute live evidence when the Authority configures those
 sources, with ECHO's shared follow-ups
 ([ADR-0040](../decisions/ADR-0040-follow-ups-as-ask-evidence.md)) and the
 person's workspace: their projects, the people in their organization, their
 tools, and their connected tools' Jira projects and Confluence spaces
-([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). Mine reads none
-of these. The client asks no other route: an Authority without `/v7` answers
-404 without the route header, and the Ask fails with `not_supported`. A cited follow-up opens its item page, a project its project page and a
+([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). The client asks
+no other route, and a 404 from it is the Authority's own `not_found`, as from
+any other read. A cited follow-up opens its item page, a project its project page and a
 tool the Tools screen; a person opens nothing. Ticket and page citations, and
 cited Jira projects and Confluence spaces, open directly in Jira or
 Confluence; they are not retained originals. Project leads configure one Jira project from the project settings menu;
@@ -206,11 +206,10 @@ audits continue to use server clocks. Older clients receive an explicit UTC
 server-time reference. Older Authorities ignore the optional headers, so this
 addition preserves the client-first transition in the release guide.
 
-With `--mine`, Ask reads only the person's own notes and uploads and the
-meetings they approved, and no live tool, follow-up or workspace. The desktop no
-longer asks it ([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)): its
-bar asks all context or one project. A cited original from a Mine answer is
-read under global scope, which contains mine.
+Ask has no Mine scope any more. The desktop dropped it first
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)): its bar asks all
+context or one project. `person ask` now refuses `--mine` as an unknown
+option, and the Authority refuses a request that names it.
 
 The desktop app's **Account** menu uses the same Person client and session
 store. An existing member can sign in through Google without another
@@ -250,16 +249,16 @@ absent metadata is omitted. Participants are source observations, not confirmed
 attendance. No email or opaque participant ID substitutes for a missing name.
 An ECHO record approval does not establish who authorized its business decision.
 
-The client requests optional source metadata with
-`X-Echo-Person-Record-Version: 2`. Each readable record may then include
+The record list always carries optional source metadata; no request header
+selects it. Each readable record may include
 `source_metadata.record_approved_by.display_name`, resolved from the approval
 core's recorded approver (the record approver projector): its exact
 organization, principal, and membership tuple. The lookup
 uses the current directory display name, including historical revoked tenures
 when they remain available; it supplies no job title, email, or authorization.
 Participants continue to come from the approved brief. The signed envelope and
-record schema are unchanged. Older clients receive the original response shape,
-and newer clients accept older servers that omit the optional metadata.
+record schema are unchanged, and the client still accepts a record without the
+optional metadata.
 
 Current membership and record visibility are checked again before releasing
 the enriched response, whose digest is included in the existing read audit.
@@ -312,13 +311,13 @@ person who runs them; an agent has no membership of its own
 
 - `person status` says who is signed in, from local state only.
 - `person list` is the map: the newest notes, documents and approved meetings
-  the person can read now, 25 per page, with no text and no counts; each row
-  carries a ref, title, time, who can read it and the person's projects it is
-  filed in. Its first page names the person, their connected tools and their
-  projects. `--project <project-id>` narrows it to one joined project, `--mine`
-  to what the person added or approved, and `--only-me` to everything only the
-  person can read, filed in a project or not. The three flags are exclusive,
-  and a list or open request is validated before any session or network use
+  the person can read now in one scope, 25 per page, with no text and no
+  counts; each row carries a ref, title, time, who can read it and the person's
+  projects it is filed in. It needs exactly one scope:
+  `--project <project-id>`, one joined project, whose first page names that
+  project, or `--only-me`, everything only the person can read, filed in a
+  project or not.
+  A list or open request is validated before any session or network use
   ([`person-list-cli.test.ts`](../../tests/person-client/person-list-cli.test.ts)).
 - Pass `next_cursor` back as `--cursor` with the same scope; `null` is the end.
 - `notice: "meetings_unavailable"` means meetings are still being indexed and
@@ -335,8 +334,9 @@ person who runs them; an agent has no membership of its own
   ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)).
   Documents, imported meetings and approved meetings page with `--cursor` and
   the same ref. Anything the person cannot read is `not_found`.
-- `person ask --question <text>` answers with citations in the same scopes,
-  except `--only-me`, which only `list` takes.
+- `person ask --question <text>` answers with citations from everything the
+  person can read, or with `--project` from one joined project; `--only-me` is
+  a `list` scope only.
 - With a valid session, a 401 on `--project` means the person is not a member
   or the project does not exist.
 
@@ -411,12 +411,11 @@ Generic source admission alone grants no access to raw meeting snapshots or
 pending approvals. See the
 [historical upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
-`person list --mine` lists these uploads from custody as soon as they are
-saved, in every extraction state, before Ask can find them, and `person list
---only-me` lists the ones only the person can read the same way, so they
-appear in the desktop's Only me at once. Both are bound to the uploading
-membership: after a person is provisioned again, earlier uploads stay readable
-wherever their audience allows but no longer appear in either.
+`person list --only-me` lists the uploads only the person can read from
+custody as soon as they are saved, in every extraction state, before Ask can
+find them, so they appear in the desktop's Only me at once. It is bound to the
+uploading membership: after a person is provisioned again, earlier uploads stay
+readable wherever their audience allows but no longer appear in it.
 
 In the desktop app, **Capture** wraps these commands through the Person
 client. Owners and employees write a note or choose a file, choose where it
