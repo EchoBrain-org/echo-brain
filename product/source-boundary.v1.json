@@ -1,8 +1,5 @@
 {
   "boundary_version": 1,
-  "entry_points": [],
-  "allowed_internal_paths": [],
-  "forbidden_internal_roots": [],
   "removed_internal_roots": [
     "src/adapters/",
     "src/infrastructure/",
@@ -14,9 +11,6 @@
     "src/product/update/",
     "src/util/"
   ],
-  "allowed_external_runtime_packages": [],
-  "runtime_assets": [],
-  "layer_rules": [],
   "adapter_architecture": {
     "ownership_version": 1,
     "provider_roots": [
@@ -49,6 +43,5 @@
       "services/organization-authority/src/composition/observability/langsmith-runtime-v1.ts",
       "services/organization-authority/src/composition/observability/langsmith-observer-v1.ts"
     ]
-  },
-  "child_process_owner": null
+  }
 }

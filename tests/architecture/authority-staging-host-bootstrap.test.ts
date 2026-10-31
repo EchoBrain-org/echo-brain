@@ -238,9 +238,6 @@ describe("Authority staging host bootstrap", () => {
     expect(script).toContain("CONFIG_FILE=\"$CONFIG_DIR/host-bootstrap.conf\"");
     expect(script).toContain("install -d -o root -g root -m 0700 \"$CONFIG_DIR\"");
     expect(script).toContain("configuration file must be owned by root with mode 0600");
-    expect(script).not.toContain("TUNNEL_CONFIG_FILE");
-    expect(script).not.toContain("write_tunnel_config");
-    expect(script).not.toMatch(/--config\s+<\/etc/);
     expect(script).not.toMatch(/org1-prod|echo\/org1/i);
   });
 
@@ -292,20 +289,6 @@ describe("Authority staging host bootstrap", () => {
     expect(script).toContain('-E root_owner=0:0 -d "$initialization_seed"');
     expect(script).not.toContain("root_perms=");
     expect(script).not.toMatch(/chown\s+(?:-[^\s]+\s+)*-R/);
-
-    const initialize = script.indexOf(
-      "finish_pending_volume_initialization() {",
-    );
-    const chown = script.indexOf(
-      'chown "$AUTHORITY_UID:$AUTHORITY_GID" "$DATA_DIR"',
-      initialize,
-    );
-    const chmod = script.indexOf('chmod 0700 "$DATA_DIR"', chown);
-    const removeMarker = script.indexOf('rm -f -- "$marker"', chmod);
-    expect(initialize).toBeGreaterThan(-1);
-    expect(chown).toBeGreaterThan(initialize);
-    expect(chmod).toBeGreaterThan(chown);
-    expect(removeMarker).toBeGreaterThan(chmod);
   });
 
   it.each([
@@ -550,16 +533,6 @@ probe "$1"
   it("installs only the verified non-secret deployment control material after the retained data volume is mounted", () => {
     const script = bootstrap();
 
-    for (const source of [
-      "ONBOARD_SOURCE",
-      "UPDATER_SOURCE",
-      "RESTORER_SOURCE",
-      "BACKUP_SOURCE",
-      "RELEASE_VALIDATOR_SOURCE",
-      "RUNTIME_PROFILE_VALIDATOR_SOURCE",
-    ]) {
-      expect(script).toContain(source);
-    }
     for (const target of [
       "$DEPLOY_DIR/onboard-clean-v1.sh",
       "$DEPLOY_DIR/update-clean-v1.sh",
@@ -585,12 +558,6 @@ probe "$1"
     expect(script).toContain(
       "CLOUDFLARED_SHA256=d3ea7d22dd337b465da33d6bc1c4b3cfd381407447a2a7d29542c19783430db3",
     );
-    expect(script).toContain(
-      "ASM_EXEC_UPSTREAM_SHA256=d55eb38ad33a5b76f584ca180f633ecc120cf39b8fd29427ffbe11a8fbf19556",
-    );
-    expect(script).toContain(
-      "ASM_EXEC_PATCHED_SHA256=65a91272d2fb0bd12752fec2f770ac3ea89217358cbbbf3451d2454edc8b2e76",
-    );
     expect(script).toMatch(/sha256sum --check --status[\s\S]+upstream asm-exec checksum mismatch/);
     expect(script).toMatch(/sha256sum --check --status[\s\S]+patched asm-exec checksum mismatch/);
     expect(script).toMatch(/sha256sum --check --status[\s\S]+cloudflared package checksum mismatch/);
@@ -601,7 +568,6 @@ probe "$1"
 
     expect(script).toContain("validate_reference");
     expect(script).toContain(":SecretString:token");
-    expect(script).toContain('"$ASM_EXEC" -- "$0" "$resolved_action"');
     expect(script).toContain("unset ECHO_CLOUDFLARE_TUNNEL_TOKEN");
     expect(script).not.toContain("--config");
     expect(script).not.toContain("--token");

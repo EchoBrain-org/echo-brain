@@ -139,9 +139,11 @@ describe('local approved release signer', () => {
     if (change === 'deb') writeFileSync(join(f.prepared, 'artifacts', `${manifest.artifacts[3].sha256}.deb`), 'tampered');
     if (change === 'release') { manifest.source_sha = 'c'.repeat(40); save(manifestPath, manifest); f.options.approveManifest = updateDigest(readFileSync(manifestPath)); }
     if (change === 'expired') { manifest.issued_at = '2020-01-01T00:00:00.000Z'; manifest.expires_at = '2020-01-02T00:00:00.000Z'; save(manifestPath, manifest); f.options.approveManifest = updateDigest(readFileSync(manifestPath)); }
-    if (change === 'pin') { const other = initializeClientUpdateSigner({ directory: join(f.root, 'other-signer') }); save(join(f.prepared, 'bootstrap-config.json'), { ...f.config, public_key_spki: other.public_key_spki }); }
+    // A consistent feed pinned to another signer, so only the signer check can refuse it.
+    if (change === 'pin') { f.options.directory = join(f.root, 'other-signer'); initializeClientUpdateSigner({ directory: f.options.directory }); }
     if (change === 'metadata') save(join(f.signer, 'signer.json'), { ...f.metadata, public_key_sha256: '0'.repeat(64) });
-    expect(() => signClientUpdateFeed(f.options)).toThrow();
+    if (change === 'pin') expect(() => signClientUpdateFeed(f.options)).toThrow('signer_pin_mismatch');
+    else expect(() => signClientUpdateFeed(f.options)).toThrow();
     expect(existsSync(f.signaturePath)).toBe(false);
   });
 

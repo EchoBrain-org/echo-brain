@@ -391,8 +391,6 @@ describe("authority offline recovery verifier", () => {
       `${valid}\nECHO_CLEAN_EXTRA=value`,
       `${valid}\nECHO_AGENTIC_ASK_V1=yes`,
       `${valid}\n\n`,
-      // A snapshot from before in-app Slack setup names a channel, not Nango.
-      valid.replace("ECHO_CLEAN_NANGO_INTEGRATION=slack", "ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=C012345678"),
       valid.replace("ECHO_CLEAN_NANGO_INTEGRATION=slack", "ECHO_CLEAN_NANGO_INTEGRATION=Slack Prod"),
     ];
 

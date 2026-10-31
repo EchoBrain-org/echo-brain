@@ -11,16 +11,15 @@
  * credential file; this runner only checks that it is a private file.
  */
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { validatePersonFollowUpEvidenceV1 } from "@echo-brain/organization-api";
 import { createAgenticAskV5 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from "@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { assertExplicitRun, boundedInteger, json, readFlags, sha256, usage } from "../shared/runner.mjs";
+import { assertExplicitRun, boundedInteger, codeIdentity, json, outputDirectory, readFlags, safeError, sha256, usage } from "../shared/runner.mjs";
 import { CASES_FILE, GROUPS, gradeTrial, loadCases, summarizeRules } from "./grade.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -39,18 +38,6 @@ const WRITER_PROMPT = "You write Echo's final answer";
 const TICKETS_SOURCE = Object.freeze({
   source_id: "jira", kind: "ticket", selector: "tickets", description: "Jira issues the asker can read through their own connection.", metadata_only_list: true, tool_id: "jira",
 });
-
-/** What a failure may keep: its class and status, never its message, payload or credential. */
-function safeError(error) {
-  const detail = error !== null && typeof error === "object" && !Array.isArray(error) ? error : null;
-  const diagnostic = detail?.diagnostic !== null && typeof detail?.diagnostic === "object" ? detail.diagnostic : null;
-  return Object.freeze({
-    name: error instanceof Error ? error.name : "Error",
-    failure_class: typeof diagnostic?.failure_class === "string" ? diagnostic.failure_class : null,
-    http_status: Number.isSafeInteger(diagnostic?.http_status) ? diagnostic.http_status : null,
-    finish_reason: typeof diagnostic?.finish_reason === "string" ? diagnostic.finish_reason : null,
-  });
-}
 
 export function help() {
   return [
@@ -75,17 +62,6 @@ export function help() {
   ].join("\n");
 }
 
-/** Where the report goes: an absolute, private directory outside the repository, created when missing. */
-function outputDirectory(value) {
-  if (typeof value !== "string" || !isAbsolute(value)) throw new Error("--out must be an absolute private directory outside the repository");
-  mkdirSync(value, { recursive: true, mode: 0o700 });
-  const directory = realpathSync(value);
-  const repository = realpathSync(ROOT);
-  if (directory === repository || directory.startsWith(`${repository}${sep}`)) throw new Error("--out must be outside the repository");
-  if ((statSync(directory).mode & 0o077) !== 0) throw new Error("--out must not be readable by group or other users");
-  return directory;
-}
-
 export function parseArgs(argv) {
   const options = { run: false, credentialFile: null, out: null, caseIds: null, trials: MAX_TRIALS, timeoutMs: 60_000 };
   if (readFlags(argv, options, {
@@ -101,31 +77,24 @@ export function parseArgs(argv) {
   const known = new Set(loadCases().cases.map((entry) => entry.id));
   if (options.caseIds !== null && (options.caseIds.length === 0 || new Set(options.caseIds).size < options.caseIds.length || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases, each once");
   if ((options.caseIds?.length ?? known.size) * options.trials * 2 > MAX_TOTAL_MODEL_CALLS) throw new Error(`requested model-call budget exceeds ${MAX_TOTAL_MODEL_CALLS}`);
-  options.out = outputDirectory(options.out);
+  options.out = outputDirectory(ROOT, options.out);
   return Object.freeze(options);
 }
 
-function codeIdentity() {
-  const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim();
-  const composition = "packages/organization-authority-kernel/dist/answer-composition";
-  const files = [
-    "tools/evals/ask-wording/run.mjs",
-    "tools/evals/ask-wording/grade.mjs",
-    "tools/evals/ask-wording/cases.json",
-    "tools/evals/shared/runner.mjs",
-    `${composition}/agentic-ask-v1-model-protocol.js`,
-    `${composition}/agentic-ask-v1.js`,
-    `${composition}/renderers/ask-renderer-v1.js`,
-    `${composition}/renderers/ask-layout-v1.js`,
-    "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
-    "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
-  ];
-  return Object.freeze({
-    source_sha: git(["rev-parse", "HEAD"]),
-    tracked_patch_sha256: sha256(execFileSync("git", ["diff", "--binary"], { cwd: ROOT })),
-    files_sha256: Object.freeze(Object.fromEntries(files.map((file) => [file, sha256(readFileSync(join(ROOT, file)))]))),
-  });
-}
+const COMPOSITION = "packages/organization-authority-kernel/dist/answer-composition";
+/** The files a report fingerprints, beside the commit and its uncommitted changes. */
+const CODE_FILES = Object.freeze([
+  "tools/evals/ask-wording/run.mjs",
+  "tools/evals/ask-wording/grade.mjs",
+  "tools/evals/ask-wording/cases.json",
+  "tools/evals/shared/runner.mjs",
+  `${COMPOSITION}/agentic-ask-v1-model-protocol.js`,
+  `${COMPOSITION}/agentic-ask-v1.js`,
+  `${COMPOSITION}/renderers/ask-renderer-v1.js`,
+  `${COMPOSITION}/renderers/ask-layout-v1.js`,
+  "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
+  "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
+]);
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const fields = (item, names) => Object.fromEntries(names.filter((name) => Object.hasOwn(item, name)).map((name) => [name, item[name]]));
@@ -251,7 +220,7 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
 export async function run(options, dependencies = {}) {
   const document = loadCases();
   const selected = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
-  const identityBefore = codeIdentity();
+  const identityBefore = codeIdentity(ROOT, CODE_FILES);
   const loaded = dependencies.loaded ?? createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: options.credentialFile }).load();
   const results = [];
   for (const caseDefinition of selected) {
@@ -261,7 +230,7 @@ export async function run(options, dependencies = {}) {
       (dependencies.progress ?? ((line) => process.stderr.write(line)))(`${JSON.stringify({ kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial, outcome: result.outcome, rules: result.grade.rules })}\n`);
     }
   }
-  const identityAfter = codeIdentity();
+  const identityAfter = codeIdentity(ROOT, CODE_FILES);
   // Only the whole pre-registered set, each case once and three trials each, decides whether the wording ships.
   const complete = new Set(selected.map((entry) => entry.id)).size === ALL_CASES && options.trials === MAX_TRIALS;
   const summary = summarizeRules(results);

@@ -174,10 +174,9 @@ function historicalReceipt(f: ReturnType<typeof fixture>, replacement: boolean, 
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('bounded first S3 client update publication', () => {
-  const reduced: Array<[string, Artifact[]]> = [['macOS-kit', ['macos-kit']], ['Linux-kit', ['linux-kit']], ['two-CLI-kit', ['macos-kit', 'linux-kit']],
-    ['app-less', ['macos-kit', 'linux-kit', 'linux-deb']], ['deb-less', ['macos-kit', 'linux-kit', 'macos-app']]];
-  it.each(reduced)('rejects a new %s publication before creating a receipt or writing objects', async (_, targets) => {
-    const f = fixture({ targets });
+  // client-update-feed.test.ts covers each reduction of the shared target check.
+  it('rejects a new deb-less publication before creating a receipt or writing objects', async () => {
+    const f = fixture({ targets: ['macos-kit', 'linux-kit', 'macos-app'] });
     await expect(f.plan()).rejects.toThrow('all_release_targets_required');
     expect(existsSync(f.receipt)).toBe(false);
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
@@ -410,8 +409,8 @@ describe('bounded first S3 client update publication', () => {
 });
 
 describe('bounded conditional S3 feed replacement', () => {
-  it.each([['two-CLI-kit', ['macos-kit', 'linux-kit']], ['deb-less', ['macos-kit', 'linux-kit', 'macos-app']]] as Array<[string, Artifact[]]>)('rejects a new %s replacement before creating a receipt or writing objects', async (_, targets) => {
-    const f = fixture({ targets, previousSequence: 1, sequence: 2 });
+  it('rejects a new deb-less replacement before creating a receipt or writing objects', async () => {
+    const f = fixture({ targets: ['macos-kit', 'linux-kit', 'macos-app'], previousSequence: 1, sequence: 2 });
     await expect(f.replacePlan()).rejects.toThrow('all_release_targets_required');
     expect(existsSync(f.receipt)).toBe(false);
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
@@ -540,7 +539,8 @@ describe('bounded conditional S3 feed replacement', () => {
 
 
 describe.each([{ label: 'first-publication', replacement: false }, { label: 'replacement', replacement: true }])('paired release enforcement for $label receipts', ({ replacement }) => {
-  it.each([['macOS-kit', ['macos-kit']], ['Linux-kit', ['linux-kit']], ['two-CLI-kit', ['macos-kit', 'linux-kit']]] as Array<[string, Artifact[]]>)('refuses new writes from an old %s receipt, while status still inspects it', async (_, targets) => {
+  it('refuses new writes from an old two-CLI-kit receipt, while status still inspects it', async () => {
+    const targets: Artifact[] = ['macos-kit', 'linux-kit'];
     const f = fixture({ targets, ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
     historicalReceipt(f, replacement, 'none');
     const status = replacement ? f.replaceStatus : f.status;

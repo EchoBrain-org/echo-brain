@@ -218,7 +218,7 @@ async function mergedPullRequest(api, repository, sha, sleep) {
   return undefined;
 }
 
-export async function verifyMainPush({ event, sha, repository, api, sleep }) {
+async function verifyMainPush({ event, sha, repository, api, sleep }) {
   const before = event?.before ?? '';
   if (event?.ref !== 'refs/heads/main' || event.forced !== false || event.after !== sha ||
       !FULL_SHA.test(sha ?? '') || !FULL_SHA.test(before) || /^0+$/.test(before)) {

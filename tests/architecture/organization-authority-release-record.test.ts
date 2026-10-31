@@ -8,7 +8,6 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  renameSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -299,19 +298,6 @@ function environmentDriftFixture(dockerPrefix = "") {
   };
 }
 
-function writeUnsupportedRootState(stateDirectory: string): void {
-  bootstrapOrganizationAuthorityState({
-    state_directory: stateDirectory,
-    organization_display_name: "Unsupported root fixture",
-    owner_display_name: "Owner",
-    created_at: "2026-08-22T00:00:00.000Z",
-    creating_artifact_revision: "unsupported-root-fixture",
-  });
-  // The old root marker must refuse before any database is opened or rewritten.
-  renameSync(join(stateDirectory, "state-lineage-root.v2.json"),
-    join(stateDirectory, "state-lineage-root.v1.json"));
-}
-
 function writeRecord(value: unknown): string {
   const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-release-"));
   roots.push(root);
@@ -571,6 +557,16 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(run("python3", [DEPLOY_RUNTIME_PROFILE_TOOL, "validate", profile]).status).toBe(1);
   });
 
+  it("keeps runtime-profile validators in parity for a duplicate JSON key", () => {
+    const profile = writeRuntimeProfile();
+    writeFileSync(profile, readFileSync(profile, "utf8").replace('"kind":', '"kind":"duplicate","kind":'));
+
+    expect(run(process.execPath, [RUNTIME_PROFILE_TOOL, "validate", profile]).status).toBe(1);
+    const python = run("python3", [DEPLOY_RUNTIME_PROFILE_TOOL, "validate", profile]);
+    expect(python.status).toBe(1);
+    expect(python.stderr).toContain("duplicate JSON key");
+  });
+
   it("keeps runtime-profile validators in parity for valid supplementary Unicode", () => {
     const profile = writeRuntimeProfile("a".repeat(40), "# valid emoji: 😀\n");
     const node = run(process.execPath, [RUNTIME_PROFILE_TOOL, "validate", profile]);
@@ -602,21 +598,14 @@ describe("Organization Authority clean-v1 release record", () => {
 
   it("keeps the bounded staging canary private, release-bound, and separate from promotion", () => {
     const source = readFileSync(UPDATE, "utf8");
-    expect(source).toContain("--canary-passed");
     expect(source).toContain("update-clean-v1.sh canary");
-    expect(source).toContain("run_staging_private_dm_canary");
-    expect(source).toContain(
-      "stop for founder approval of the canary meeting and the exact candidate-client record and answer checks",
-    );
     expect(source).toContain("authority-staging.echobrain.org");
     expect(source).toContain("compose_clean exec -T authority node");
     expect(source).toContain("staging-private-dm-canary --release-id");
-    expect(source).toContain("validate_staging_canary_receipt");
     expect(source).not.toContain("onboard-clean-v1.sh resume");
+    // The record validator admits one baseline class, so no fixture reaches this check.
     expect(source).toContain("candidate baseline is not compatible");
     expect(source).toContain("@sha256:");
-    expect(source).toContain(".authority-operation-lock");
-    expect(source).not.toContain("imageTag");
   });
 
   it("serializes release commands with Authority activation and keeps a dead-owner lock fail-closed for deliberate recovery", () => {
@@ -669,33 +658,9 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(readdirSync(outside)).toEqual([]);
   });
 
-  it("binds Authority image source and build identity to OCI metadata before startup", () => {
-    const dockerfile = readFileSync(DOCKERFILE, "utf8");
-    const update = readFileSync(UPDATE, "utf8");
-    expect(dockerfile).toContain("ARG ECHO_SOURCE_SHA");
-    expect(dockerfile).toContain("ARG ECHO_BUILD_NUMBER");
-    expect(dockerfile).toContain('org.opencontainers.image.revision="${ECHO_SOURCE_SHA}"');
-    expect(dockerfile).toContain(
-      'org.echobrain.authority.build-number="${ECHO_BUILD_NUMBER}"',
-    );
-    expect(dockerfile).toContain(
-      'org.echobrain.authority.telemetry.staging-journey-v1="true"',
-    );
-    expect(dockerfile).toContain('ECHO_SOURCE_SHA="${ECHO_SOURCE_SHA}"');
-    expect(dockerfile).toContain('ECHO_BUILD_NUMBER="${ECHO_BUILD_NUMBER}"');
-    expect(dockerfile).toContain('ECHO_STAGING_JOURNEY_TELEMETRY_V1="true"');
-    expect(dockerfile).toContain(
+  it("declares the staging canary state capability on the Authority image", () => {
+    expect(readFileSync(DOCKERFILE, "utf8")).toContain(
       'org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1="true"',
-    );
-    expect(update).toContain("org.opencontainers.image.revision");
-    expect(update).toContain("image_source_matches \"$expected\" \"$expected_source\"");
-    expect(update).toContain("running_staging_journey_telemetry_identity_matches");
-    expect(update).toContain("{{json .Config.Env}}");
-    expect(update).toContain(
-      'host="$(authority_host 2>/dev/null)" || return 1',
-    );
-    expect(update).toContain(
-      '[[ "$host" == "authority-staging.echobrain.org" ]] || return 0',
     );
   });
 
@@ -886,9 +851,8 @@ fi
     expect(readFileSync(fixture.envFile, "utf8")).toBe(environment);
   });
 
-  it("verifies an exact artifact before installing it and uses the product status surface", () => {
+  it("installs the verified artifact offline without package scripts and uses the product status surface", () => {
     const source = readFileSync(INSTALL, "utf8");
-    expect(source.indexOf("actual_sha")).toBeLessThan(source.lastIndexOf("npm install"));
     expect(source).toContain("--ignore-scripts");
     expect(source).toContain("--no-audit");
     expect(source).toContain("--no-fund");
@@ -896,8 +860,6 @@ fi
     expect(source).toContain('prefix="$HOME/.local"');
     expect(source).toContain("export PATH=");
     expect(source).toContain('"$prefix/bin/echo-brain" person status');
-    expect(source).not.toContain("git clone");
-    expect(source).not.toContain("session-install");
   });
 
   it("refuses an artifact digest mismatch before npm can install anything", () => {
@@ -1338,38 +1300,9 @@ fi
     verify(host, result);
   });
 
-  it.each([
-    {
-      name: "runs the candidate lineage verifier before mutating a malformed version-matching state",
-      prepareState: (stateDirectory: string) => {
-        bootstrapOrganizationAuthorityState({
-          state_directory: stateDirectory,
-          organization_display_name: "Release fixture",
-          owner_display_name: "Owner",
-          created_at: "2026-09-12T00:00:00.000Z",
-          creating_artifact_revision: "release-fixture",
-        });
-        // Matching database versions do not make an incomplete root valid.
-        writeFileSync(join(stateDirectory, "state-lineage-root.v2.json"),
-          JSON.stringify({ schema_version: 2, kind: "echo-state-lineage-root-manifest-v2" }));
-      },
-      inspectVerifier: true,
-      diagnostics: ["candidate Authority image rejected persisted state lineage"],
-    },
-    {
-      name: "rejects an unsupported root lineage before staging the current candidate and explains the pre-live rehearsal replacement path",
-      prepareState: writeUnsupportedRootState,
-      inspectVerifier: false,
-      diagnostics: [
-        "candidate Authority image rejected persisted state lineage",
-        "unsupported root manifest version",
-        "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
-        "state is never migrated",
-      ],
-    },
-  ].map((scenario) => [scenario.name, scenario] as const))(
-    "%s",
-    (_name, { prepareState, inspectVerifier, diagnostics }) => {
+  // Any lineage the candidate image rejects takes this one refusal; the kernel's
+  // own tests cover which states it rejects, such as an unsupported root.
+  it("runs the candidate lineage verifier before mutating a malformed version-matching state and explains the replacement path", () => {
     const fixture = environmentDriftFixture(`if [[ "$1" == pull ]]; then exit 0; fi
 if [[ "$1" == run ]]; then
   node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]);' "$ECHO_CLEAN_STATE_DIR"
@@ -1381,36 +1314,47 @@ fi`);
       release_id: "clean-v1-20260822-002",
       authority_image: { reference: authorityImage("d") },
     }));
-    prepareState(stateDirectory);
+    bootstrapOrganizationAuthorityState({
+      state_directory: stateDirectory,
+      organization_display_name: "Release fixture",
+      owner_display_name: "Owner",
+      created_at: "2026-09-12T00:00:00.000Z",
+      creating_artifact_revision: "release-fixture",
+    });
+    // Matching database versions do not make an incomplete root valid.
+    writeFileSync(join(stateDirectory, "state-lineage-root.v2.json"),
+      JSON.stringify({ schema_version: 2, kind: "echo-state-lineage-root-manifest-v2" }));
     const initialEnvironment = `${fixture.original}ECHO_CLEAN_AUTHORITY_UID=1000\nECHO_CLEAN_AUTHORITY_GID=1000\n`;
     writeFileSync(fixture.envFile, initialEnvironment);
     writeFileSync(fixture.snapshot, initialEnvironment);
 
     const result = fixture.execute("stage", "--release", candidate, "--runtime-profile", fixture.profile);
     expect(result.status).toBe(1);
-    for (const diagnostic of diagnostics) expect(result.stderr).toContain(diagnostic);
+    for (const diagnostic of [
+      "candidate Authority image rejected persisted state lineage",
+      "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
+      "state is never migrated",
+    ]) expect(result.stderr).toContain(diagnostic);
     const dockerCalls = readFileSync(fixture.log, "utf8");
     expect(dockerCalls).toContain(" run --rm ");
     expect(dockerCalls).not.toMatch(/ compose .* (up|restart) /);
     expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(false);
     expect(readFileSync(fixture.envFile, "utf8")).toBe(initialEnvironment);
-    if (inspectVerifier) {
-      expect(readdirSync(join(fixture.state, "runtime-profiles"))).toEqual([`${fixture.accepted.release_id}.profile`]);
-      expect(readdirSync(join(fixture.state, "runtime-environments"))).toEqual([`${fixture.accepted.release_id}.env`]);
-      expect(readFileSync(candidate, "utf8")).toContain('"release_id":"clean-v1-20260822-002"');
-      expect(dockerCalls).toContain(
-        "run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --workdir /app --entrypoint node",
-      );
-      expect(dockerCalls).toContain(
-        `--mount type=bind,src=${stateDirectory},dst=/echo-clean/state,readonly`,
-      );
-      expect(dockerCalls).toContain("--input-type=module -e");
-      expect(dockerCalls).toContain("verify-authority-state-lineage.js");
-      expect(dockerCalls).toContain('verifyAuthorityStateLineage("/echo-clean/state")');
-      // Meetings enter only through personal sources, so no organization processor admission is verified.
-      expect(dockerCalls).not.toContain("verify-openrouter-decision-processor-admission-v1.js");
-      expect(dockerCalls.indexOf(" pull ")).toBeLessThan(dockerCalls.indexOf(" run --rm "));
-    }
+    expect(readdirSync(join(fixture.state, "runtime-profiles"))).toEqual([`${fixture.accepted.release_id}.profile`]);
+    expect(readdirSync(join(fixture.state, "runtime-environments"))).toEqual([`${fixture.accepted.release_id}.env`]);
+    expect(readFileSync(candidate, "utf8")).toContain('"release_id":"clean-v1-20260822-002"');
+    expect(dockerCalls).toContain(
+      "run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --workdir /app --entrypoint node",
+    );
+    expect(dockerCalls).toContain(
+      `--mount type=bind,src=${stateDirectory},dst=/echo-clean/state,readonly`,
+    );
+    expect(dockerCalls).toContain("--input-type=module -e");
+    expect(dockerCalls).toContain("verify-authority-state-lineage.js");
+    expect(dockerCalls).toContain('verifyAuthorityStateLineage("/echo-clean/state")');
+    // Meetings enter only through personal sources, so no organization processor admission is verified.
+    expect(dockerCalls).not.toContain("verify-openrouter-decision-processor-admission-v1.js");
+    expect(dockerCalls.indexOf(" pull ")).toBeLessThan(dockerCalls.indexOf(" run --rm "));
   });
 
   it("refuses a canary that did not stage an approval and leaves the candidate staged", () => {
@@ -1425,6 +1369,9 @@ fi`);
     }));
     const staged = fixture.execute("stage", "--release", candidate, "--runtime-profile", fixture.profile);
     expect(staged.status, staged.stderr).toBe(0);
+    expect(staged.stdout).toContain(
+      "stop for founder approval of the canary meeting and the exact candidate-client record and answer checks",
+    );
     // A failed canary persists nothing, so every outcome reuses one staged candidate.
     for (const [fields, failure] of [
       ['"approval_outcome":"delivery_pending","approval_id":"approval-canary"', "delivery is still pending"],

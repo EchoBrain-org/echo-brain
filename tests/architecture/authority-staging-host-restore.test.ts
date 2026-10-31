@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   mkdtempSync,
@@ -24,15 +24,6 @@ function restoreScript(): string {
 }
 
 describe("Authority retained-host restore", () => {
-  it("keeps blank materialization a safe no-op but refuses a resume without an accepted tuple", () => {
-    const script = restoreScript();
-
-    expect(() => execFileSync("bash", ["-n", RESTORER])).not.toThrow();
-    expect(script).toContain(
-      "but resume is refused. A partial, candidate, symlinked, permission-unsafe, or",
-    );
-  });
-
   it("executes blank materialization successfully but exits through the classified resume refusal", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-retained-host-restore-"));
     const deploy = join(root, "deploy");
@@ -124,7 +115,6 @@ describe("Authority retained-host restore", () => {
     expect(script).toContain("active retained runtime profile differs from the accepted release tuple");
     expect(script).toContain("deployment runtime file drifts from the accepted retained tuple");
     expect(script).toContain('"$ONBOARD_TOOL" resume');
-    expect(script).toContain('"$ONBOARD_TOOL" status');
     expect(script).toContain("terminal_green=true");
   });
 

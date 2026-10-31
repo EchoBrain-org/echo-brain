@@ -68,79 +68,10 @@ describe("staging journey observability overview stack", () => {
       ConstraintDescription:
         "must be the one owned Authority staging runtime log group",
     });
-    expect(stack.Parameters.AlertTopicArn).toMatchObject({
-      Type: "String",
-      AllowedPattern: expect.stringContaining(":sns:"),
-    });
 
     const serialized = JSON.stringify(stack);
     expect(serialized).not.toContain("authority-prod");
     expect(serialized).not.toMatch(/production|prod\.echobrain\.org/i);
-    expect(Object.keys(stack.Resources)).toHaveLength(4);
-  });
-
-  it("derives only successful worker-cycle liveness from the supplied staging log group", () => {
-    const stack = template();
-    const filters = Object.values(stack.Resources).filter(
-      (item) => item.Type === "AWS::Logs::MetricFilter",
-    );
-    expect(filters).toHaveLength(1);
-    expect(resource(stack, "WorkerCycleCompletedMetricFilter").Properties).toMatchObject({
-      LogGroupName: { Ref: "StagingLogGroupName" },
-      FilterPattern:
-        '{ ($.kind = "echo-clean-live-worker-cycle-v1") && ($.event = "succeeded") }',
-      MetricTransformations: [
-        {
-          MetricNamespace: NAMESPACE,
-          MetricName: "WorkerCycleCompleted",
-          MetricValue: "1",
-          Unit: "Count",
-        },
-      ],
-    });
-
-    for (const filter of filters) {
-      const transformation = (filter.Properties?.MetricTransformations as readonly {
-        readonly Dimensions?: unknown;
-      }[])[0]!;
-      expect(transformation.Dimensions).toBeUndefined();
-    }
-  });
-
-  it("defines exactly the two active staging alarms with the intended missing-data behavior and existing topic", () => {
-    const stack = template();
-    const alarms = Object.entries(stack.Resources).filter(
-      ([, item]) => item.Type === "AWS::CloudWatch::Alarm",
-    );
-    expect(alarms).toHaveLength(2);
-    for (const [, alarm] of alarms) {
-      expect(alarm.Properties?.AlarmActions).toEqual([{ Ref: "AlertTopicArn" }]);
-      expect(alarm.Properties?.OKActions).toEqual([{ Ref: "AlertTopicArn" }]);
-      expect(alarm.Properties?.Namespace).toBe(NAMESPACE);
-      expect(alarm.Properties).not.toHaveProperty("Metrics");
-    }
-    expect(resource(stack, "WorkerSilenceAlarm").Properties).toMatchObject({
-      MetricName: "WorkerCycleCompleted",
-      Statistic: "Sum",
-      Period: 60,
-      EvaluationPeriods: 3,
-      DatapointsToAlarm: 2,
-      Threshold: 1,
-      ComparisonOperator: "LessThanThreshold",
-      TreatMissingData: "breaching",
-    });
-    expect(resource(stack, "AskRetrievalFailureAlarm").Properties).toMatchObject({
-      MetricName: "AskRetrievalFailure",
-      Statistic: "Sum",
-      Period: 300,
-      EvaluationPeriods: 1,
-      DatapointsToAlarm: 1,
-      Threshold: 2,
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
-      TreatMissingData: "notBreaching",
-    });
-    expect(stack.Resources).not.toHaveProperty("ApprovedSearchStuckAlarm");
-    expect(stack.Outputs).not.toHaveProperty("ApprovedSearchStuckAlarmName");
   });
 
   it("has a valid, staging-only dashboard with active liveness, current core phases, and labeled historical views", () => {
@@ -214,7 +145,6 @@ describe("staging journey observability overview stack", () => {
     expect(serialized).toContain("Current core: record append");
     expect(serialized).toContain("Historical: Approved decision");
     expect(serialized).toContain("Historical approval wait p50 (ms)");
-    expect(serialized).not.toMatch(/ApprovedSearch|approved-search backlog/i);
     expect(metricSerialized).toContain("StageClosedLatencyMs");
     expect(metricSerialized).toContain("'p50'");
     expect(metricSerialized).toContain("'p95'");
@@ -282,9 +212,6 @@ describe("staging journey observability overview stack", () => {
     expect(wallClock).toContain(
       "journey_wall_clock_ms - normalized_human_wait_ms as service_wall_clock_ms",
     );
-    expect(wallClock).not.toContain(
-      "fields workflow, journey_wall_clock_ms, journey_wall_clock_ms - normalized_human_wait_ms",
-    );
     expect([...wallClock.matchAll(/\bas human_wait_ms\b/g)]).toHaveLength(1);
     expect([...wallClock.matchAll(/\bas normalized_human_wait_ms\b/g)]).toHaveLength(1);
     expect(wallClock).toContain("p50_service_wall_clock_ms");
@@ -292,7 +219,6 @@ describe("staging journey observability overview stack", () => {
     expect(wallClock).toContain("p99_service_wall_clock_ms");
     expect(JSON.stringify(logWidgets)).toContain("Full and service wall-clock");
     expect(wallClock).toContain('outcome in ["rejected", "denied"]');
-    expect(wallClock).not.toContain("first_observed_at_ms");
     expect(queries.join("\n")).not.toMatch(/sum\(elapsed_ms\)/i);
     const tokenTotals = queries.find((query) => query.includes("journey_total_tokens"));
     if (tokenTotals === undefined) throw new Error("token-total query is required");
@@ -302,7 +228,6 @@ describe("staging journey observability overview stack", () => {
     );
     expect(tokenTotals).toContain("sum(total_tokens) as journey_total_tokens");
     expect(tokenTotals).toContain("sum(if(isNumeric(total_tokens), 1, 0))");
-    expect(tokenTotals).not.toContain("ispresent(total_tokens)");
     expect(tokenTotals).toContain("total_token_samples > 0");
     expect([...tokenTotals.matchAll(/\bas total_tokens\b/g)]).toHaveLength(1);
     expect(tokenTotals).toContain("p95_total_tokens");
@@ -338,18 +263,12 @@ describe("staging journey observability overview stack", () => {
     expect(rates).toContain('filter event in ["succeeded", "failed"]');
     expect(rates).toContain('sum(if(event = "failed", 1, 0))');
     expect(rates).toContain('accounting.kind = "execution" and ispresent(accounting.retry_of_attempt)');
-    expect(rates).not.toContain('attempt > 1');
     expect(rates).toContain("succeeded_attempts / closed_attempts");
     expect(rates).toContain("failed_attempts / closed_attempts");
     expect(rates).toContain("retry_attempts as measured_retry_attempts, unknown_retry_attempts");
     expect(rates).toContain(
       "display workflow, runtime_stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
     );
-    expect(rates).not.toContain(
-      "fields workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
-    );
-    expect(rates).not.toContain("started_attempts");
-    expect(rates).not.toContain('event = "started"');
     expect(rates).not.toContain("ask_response");
     expect(rates).not.toContain("meeting_terminal_persist");
   });

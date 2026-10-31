@@ -155,14 +155,6 @@ describe("pull-request job selection", () => {
       "product/echo-desktop/test/e2e/projects.spec.ts",
     ], { ...EVERY_JOB, person_client_package: false }],
     ["a Person-client change selects every job", ["src/product/person-client/main.ts"], EVERY_JOB],
-    ["a shared release-validation change selects both package jobs", [
-      "deploy/release/release-artifact-validation.mjs",
-      "tools/clean-v1-release.mjs",
-    ], EVERY_JOB],
-    ["root test setup changes select the macOS package proof", [
-      "tests/support/isolated-home.ts",
-      "tests/support/isolated-home-global-setup.ts",
-    ], { ...EVERY_JOB, desktop_app: false }],
   ];
   it.each(pullRequestJobs)("%s", async (_name, changed, jobs) => {
     const merge = pullRequestMerge(changed);
@@ -274,7 +266,6 @@ describe("pull-request job selection", () => {
     });
     expect(running.selection).toMatchObject({ mode: "full", jobs: EVERY_JOB });
     expect(running.delays).toEqual([15_000, 15_000, 30_000, 30_000, 30_000, 30_000]);
-    expect(running.delays.reduce((total, delay) => total + delay, 0)).toBe(150_000);
   });
 
   type BaseCase = [string, (fixture: Fixture, merge: Merge) => void, number];

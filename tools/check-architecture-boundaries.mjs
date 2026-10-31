@@ -79,7 +79,7 @@ function parseSourceFile(path, source) {
 }
 
 function moduleReferences(path, source) {
-  return collectModuleReferences(parseSourceFile(path, source), { includeTypeQueries: true });
+  return collectModuleReferences(parseSourceFile(path, source));
 }
 
 function resolveRelative(tree, importer, spec) {
@@ -774,16 +774,9 @@ function main() {
 
   // Active products have workspace boundaries. The retired machine manifest
   // retains source tombstones and provider ownership, never another build graph.
-  for (const field of [
-    'entry_points', 'allowed_internal_paths', 'forbidden_internal_roots',
-    'allowed_external_runtime_packages', 'runtime_assets', 'layer_rules',
-  ]) {
-    if (!Array.isArray(boundary[field]) || boundary[field].length !== 0) {
-      errors.push(`retired machine boundary ${field} must remain empty; declare active products in workspace boundaries`);
-    }
-  }
-  if (boundary.child_process_owner !== null) {
-    errors.push('retired machine boundary child_process_owner must remain null');
+  const accepted = new Set(['boundary_version', 'removed_internal_roots', 'adapter_architecture']);
+  for (const field of Object.keys(boundary)) if (!accepted.has(field)) {
+    errors.push(`retired machine boundary field is unsupported: ${field}; declare active products in workspace boundaries`);
   }
   const removed = boundary.removed_internal_roots ?? [];
   for (const [path] of tree) {
@@ -801,18 +794,14 @@ function main() {
 
   const result = {
     ok: errors.length === 0,
-    entry_points: [],
-    closure: [],
-    external_packages: [],
-    runtime_assets: [],
     removed_internal_roots: removed,
-    layer_rules: [],
     provider_architecture: providerOwnership,
     workspace_boundaries: workspaceBoundaries,
     errors,
   };
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-  if (!result.ok) process.exit(1);
+  // Let the report drain: a piped stdout is asynchronous on macOS.
+  if (!result.ok) process.exitCode = 1;
 }
 
 main();

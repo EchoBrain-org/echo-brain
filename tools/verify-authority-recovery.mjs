@@ -9,6 +9,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
@@ -335,21 +336,8 @@ function requirePython3() {
   return "python3";
 }
 
-function sha256(python3, path) {
-  const result = spawnSync(
-    python3,
-    [
-      "-c",
-      "import hashlib, pathlib, sys\nprint(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())",
-      path,
-    ],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0 || !/^[0-9a-f]{64}\n$/.test(result.stdout)) fail();
-  return result.stdout.trim();
+function sha256(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function verifyEnvironmentSnapshot(python3, path, release) {
@@ -551,9 +539,9 @@ export async function verifyAuthorityRecovery({
     fail();
   }
   if (
-    sha256(python3, activeProfilePath) !==
+    sha256(activeProfilePath) !==
       release.runtime_profile.artifact_sha256 ||
-    sha256(python3, storedProfilePath) !==
+    sha256(storedProfilePath) !==
       release.runtime_profile.artifact_sha256 ||
     activeProfile.source_sha !== release.source_sha ||
     storedProfile.source_sha !== release.source_sha

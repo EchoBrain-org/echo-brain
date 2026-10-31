@@ -34,5 +34,3 @@ export function validateStateDirectory(
 ): string;
 
 export function localOverlay(input: LocalOverlayInput): string;
-
-export function main(argv?: readonly string[]): void;

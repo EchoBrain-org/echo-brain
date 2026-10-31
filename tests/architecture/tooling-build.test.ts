@@ -157,3 +157,14 @@ describe('tools/build.mjs', () => {
     ).toMatchObject({ source_kind: 'materialized-commit' });
   });
 });
+
+// tools/build.mjs reads package.json; npm run build:workspaces compiles a second, hand-kept copy of the list.
+describe('tsconfig.workspaces.json', () => {
+  it('references exactly the declared workspaces', () => {
+    const declared = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).workspaces as string[];
+    const { references } = JSON.parse(readFileSync(join(REPO, 'tsconfig.workspaces.json'), 'utf8')) as {
+      references: { path: string }[];
+    };
+    expect(references.map(({ path }) => path.replace(/^\.\//, '')).sort()).toEqual([...declared].sort());
+  });
+});

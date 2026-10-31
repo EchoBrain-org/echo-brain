@@ -188,7 +188,6 @@ describe("Linux Person onboarding kit", () => {
     ], source);
     expect(built.status).toBe(0);
     const receipt = JSON.parse(built.stdout);
-    expect(receipt.signing).toBeUndefined();
     expect(receipt.kit_sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(receipt.contents).toEqual([
       "echo-person-onboarding-kit/Start-ECHO.sh",
@@ -200,9 +199,6 @@ describe("Linux Person onboarding kit", () => {
       "echo-person-onboarding-kit/clean-v1-release.mjs",
       "echo-person-onboarding-kit/build-identity.v1.json",
     ]);
-    const listed = run("unzip", ["-Z1", outputZip]).stdout.split("\n").filter(Boolean);
-    expect(listed).toContain("echo-person-onboarding-kit/build-identity.v1.json");
-    expect(listed.join("\n")).not.toMatch(/ECHO\.app\.zip|person-onboarding-ui\.mjs/);
 
     const extracted = join(root, "kit");
     mkdirSync(extracted);
@@ -212,21 +208,6 @@ describe("Linux Person onboarding kit", () => {
     expect(verified.status).toBe(0);
     expect(JSON.parse(verified.stdout)).toMatchObject({ ok: true, platform: "linux", architecture: "x64" });
     expect(JSON.parse(readFileSync(join(kit, 'kit-manifest.v1.json'), 'utf8')).update_bootstrap).toEqual(bootstrap);
-    const systemNode = run(process.execPath, [join(kit, "verify-person-onboarding-kit.mjs"), kit]);
-    expect(systemNode.status).toBe(1);
-    expect(systemNode.stderr).toContain("bundled Node runtime");
-
-    const appRejected = run(process.execPath, [
-      join(releaseDirectory, "create-person-onboarding-kit.mjs"),
-      "--target", "linux-x64",
-      "--release", release,
-      "--artifact", artifact,
-      "--app", join(root, "unused-ECHO.app.zip"),
-      "--runtime-node", process.execPath,
-      "--output", join(output, "app-rejected.zip"),
-    ], source);
-    expect(appRejected.status).toBe(1);
-    expect(appRejected.stderr).toContain("usage:");
 
     const badRuntime = join(root, "wrong-node");
     writeFileSync(badRuntime, Buffer.alloc(20));

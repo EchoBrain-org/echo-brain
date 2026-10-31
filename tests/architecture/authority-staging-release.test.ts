@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
+import { executeStagingRelease, planStagingRelease, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
 import type { StagingReleasePlanOptions } from '../../tools/authority-staging-release.mjs';
 import { cleanReleaseRecord, cleanRuntimeProfile, deployRuntimeProfileFiles } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
@@ -141,12 +141,6 @@ describe('bounded staging release operator', () => {
     expectTypeOf<Paths & { action: 'install' | 'inspect-install' }>().toMatchTypeOf<StagingReleasePlanOptions>();
   });
 
-  it('does not accept arbitrary commands or a production operation', () => {
-    expect(() => releaseAction('shell')).toThrow('action_invalid');
-    expect(() => releaseAction('onboard')).toThrow('action_invalid');
-    expect(releaseAction('inspect-install')).toBe('inspect-install');
-  });
-
   it('requires a validated request before rendering any remote command', () => {
     expect(() => releaseSsmParameters({ action: 'status' })).toThrow();
   });
@@ -174,7 +168,7 @@ describe('bounded staging release operator', () => {
     expect(new Set(rendered)).toEqual(new Set([rendered[0]]));
   });
 
-  it.each(['shell', 'onboard', 'restore', 'down', 'stage-v7-to-v9', 'stage-v8-to-v10', 'stage-v9-to-v10'])('rejects unsupported action %s before AWS', action => {
+  it.each(['shell', 'onboard', 'restore', 'down'])('rejects unsupported action %s before AWS', action => {
     const f = fixture();
     // @ts-expect-error Untrusted JS/CLI callers still require runtime rejection.
     expect(() => planStagingRelease({ ...f.options, action }, f.dependencies)).toThrow('action_invalid');
@@ -298,6 +292,26 @@ describe('bounded staging release operator', () => {
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
     expect(f.state.submissions).toBe(1);
+  });
+
+  // The host runner, the local CLI and its declarations each spell these lists.
+  it('keeps the host runner tools, actions and safe codes equal to the local CLI and its types', () => {
+    const quoted = (text: string) => [...text.matchAll(/'([^']+)'/g)].map(match => match[1]!).sort();
+    const host = readFileSync(join(REPO, 'tools/authority-staging-release-host.py'), 'utf8');
+    const local = readFileSync(join(REPO, 'tools/authority-staging-release.mjs'), 'utf8');
+    const types = readFileSync(join(REPO, 'tools/authority-staging-release.d.mts'), 'utf8');
+    const python = (name: string) => quoted(host.match(new RegExp(`^${name} = \\((.*)\\)$`, 'm'))![1]!);
+    const union = (name: string) => quoted(types.match(new RegExp(`export type ${name} =([^;]*);`))![1]!);
+    const toolFiles = local.match(/^const TOOL_FILES = Object\.freeze\(\{\n([\s\S]*?)\n\}\);$/m)![1]!;
+    const tools = [...toolFiles.matchAll(/^ {2}'([^']+)': /gm)].map(match => match[1]!).sort();
+    expect(python('TOOLS')).toEqual(tools);
+    expect(union('StagingReleaseTool')).toEqual(tools);
+    const actions = quoted(local.match(/^const ACTIONS = \[(.*)\];$/m)![1]!);
+    expect(python('ACTIONS')).toEqual(actions);
+    expect(union('StagingReleaseAction')).toEqual(actions);
+    const codes = quoted(local.match(/^ {2}const codes = \[(.*)\];$/m)![1]!);
+    expect(python('SAFE_CODES')).toEqual(codes);
+    expect(union('StagingReleaseCode')).toEqual(codes);
   });
 
   it('persists installation-phase failures without retrying or accepting them for inspection', () => {
