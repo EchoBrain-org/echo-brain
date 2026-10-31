@@ -33,8 +33,12 @@ final decision on a candidate release.
 Reuse valid sessions and completed setup evidence. Ask for login only when
 authentication is missing or expired. Recheck evidence when its target, release,
 record head, search generation or relevant configuration changes. A completed
-Slack setup or SNS confirmation is not a new handoff on every round. Fresh
-runtime and journey evidence is still required for each run.
+Slack setup or SNS confirmation is not a new handoff on every round. A new
+alert subscription is: re-creating an observability stack or its subscription
+sends a new confirmation email, and SNS deletes the subscription if it is not
+confirmed within 48 hours
+([RB-OPERATIONS-001](RB-OPERATIONS-001-authority-observability.md#2-execute-and-verify-the-stack)).
+Fresh runtime and journey evidence is still required for each run.
 
 For staging resets, reuse the designated existing Slack app. Retain its app ID
 in the operator handoff. When host `resume` reaches `connect_slack_in_app`, the
