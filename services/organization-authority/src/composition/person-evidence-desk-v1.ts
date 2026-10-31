@@ -22,6 +22,7 @@ import type {
   PersonAskScopeV2,
   PersonOriginalContextEvidenceDeskPortV1,
 } from "../application/ports/person-original-context-retrieval-v1.js";
+import { LOCAL_SOURCE_KINDS_V1 } from "@echo-brain/organization-authority-kernel/shared/source-capabilities-v1";
 import { PERSON_DOCUMENT_DATE_FIELDS_V1, PERSON_MEETING_DATE_FIELDS_V1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { personUnknownScopeV1 } from "../adapters/persistence/sqlite/person-original-access-v1.js";
 import { mergeUncheckedV1 } from "../application/evidence-unchecked-v1.js";
@@ -295,7 +296,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     input.signal?.throwIfAborted();
     initialize();
     const limit = Math.min(50, Math.max(1, input.limit ?? 50));
-    const kinds = input.kinds ?? (input.source === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : ['note', 'document_passage'] as const);
+    const kinds = input.kinds ?? (input.source === 'meeting' ? LOCAL_SOURCE_KINDS_V1.meeting : LOCAL_SOURCE_KINDS_V1.document);
     const page = await search({ ...evidenceDateFilterV1(input), source: input.source, kinds, limit, ...(input.signal === undefined ? {} : { signal: input.signal }) });
     // The inventory reads one row past its limit and says truncated when more exist, so its end is confirmed (ADR-0041).
     return Object.freeze({ ...page, page_full: false });

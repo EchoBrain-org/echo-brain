@@ -6,6 +6,12 @@ import type { EvidenceSourceCapabilitiesV1 } from './evidence-desk-v2.js';
  * beside their descriptors.
  */
 
+/** The evidence kinds each built-in source holds, by its source id. */
+export const LOCAL_SOURCE_KINDS_V1 = Object.freeze({
+  meeting: Object.freeze(['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const),
+  document: Object.freeze(['note', 'document_passage'] as const),
+});
+
 /** Imported meeting notes, approved decisions, actions and rationale, and shared transcripts. */
 export const MEETINGS_SOURCE_CAPABILITIES_V1: EvidenceSourceCapabilitiesV1 = Object.freeze({
   filters: Object.freeze({ kind: Object.freeze(['decision', 'action', 'rationale']), status: Object.freeze(['open', 'done']), owner: 'name' as const }),

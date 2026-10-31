@@ -4,7 +4,7 @@ import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer
 import type { StructuredGenerationPort } from "./structured-generation-v1.js";
 import type { EvidenceDeskPortV2, EvidenceDeskSourceV2 } from "../shared/evidence-desk-v2.js";
 import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_SOURCE_ID_V1 } from "../shared/follow-up-evidence-v1.js";
-import { DOCUMENTS_SOURCE_CAPABILITIES_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } from "../shared/source-capabilities-v1.js";
+import { DOCUMENTS_SOURCE_CAPABILITIES_V1, LOCAL_SOURCE_KINDS_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } from "../shared/source-capabilities-v1.js";
 import { evidenceDayV1 } from "../shared/temporal-query-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1 } from "../shared/core-runtime-observation-v1.js";
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
@@ -240,8 +240,8 @@ function createAgenticAskCore(options: CreateAgenticAskOptions) {
   // tool contract v1). Every other scope reads each live source the desk offers.
   const liveCatalog: AgenticResearchSourceV1[] = options.desk.scope.kind === 'mine' ? [] : (options.desk.live_sources ?? []).map(descriptor => ({ ...descriptor, kinds: [descriptor.kind] }));
   const researchSources: readonly AgenticResearchSourceV1[] = Object.freeze([
-    { source_id: 'meeting', selector: 'meetings', kinds: ['imported_meeting', 'decision', 'action', 'rationale', 'note'], description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.', capabilities: MEETINGS_SOURCE_CAPABILITIES_V1 },
-    { source_id: 'document', selector: 'documents', kinds: ['note', 'document_passage'], description: 'Uploaded document passages and notes.', capabilities: DOCUMENTS_SOURCE_CAPABILITIES_V1 },
+    { source_id: 'meeting', selector: 'meetings', kinds: LOCAL_SOURCE_KINDS_V1.meeting, description: 'Imported meeting notes (unapproved), approved meeting decisions, and explicitly shared transcripts. Keep imported notes distinct from approved decisions.', capabilities: MEETINGS_SOURCE_CAPABILITIES_V1 },
+    { source_id: 'document', selector: 'documents', kinds: LOCAL_SOURCE_KINDS_V1.document, description: 'Uploaded document passages and notes.', capabilities: DOCUMENTS_SOURCE_CAPABILITIES_V1 },
     ...liveCatalog,
   ]);
   const sourcesById = new Map(researchSources.map(source => [source.source_id, source]));
