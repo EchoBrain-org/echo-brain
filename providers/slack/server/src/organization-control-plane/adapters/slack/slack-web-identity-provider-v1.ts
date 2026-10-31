@@ -1,10 +1,8 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { BoundedJsonResponseErrorV1 } from "@echo-brain/provider-runtime/bounded-json-response-v1";
-import { boundedJsonFetchV1, type BoundedJsonFetchResultV1 } from "../../../shared/bounded-json-fetch-v1.js";
+import { callSlackWebApiV1, SlackWebApiTransportErrorV1, slackOAuthScopesV1, type SlackWebApiAnswerV1 } from "../../../shared/slack-web-api-v1.js";
 import type { ObservedSlackIdentityLinkChallenge, ObserveSlackIdentityLinkChallengeInput, PostedSlackIdentityLinkChallenge, PostSlackIdentityLinkChallengeInput, SlackIntegrationProvider, VerifiedSlackConnection, VerifiedSlackHuman } from "../../application/slack-integration-contracts.js";
 import { slackConnectionVerificationEvidenceSha256V1 } from "../../application/slack-connection-verification-evidence-v1.js";
 
-const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const TIMEOUT_MS = 15_000;
 const SLACK_ID = /^[A-Z][A-Z0-9]{2,}$/;
 const SLACK_USER_ID = /^[UW][A-Z0-9]{2,}$/;
@@ -205,24 +203,17 @@ function verifyChallengeBlocks(
   }
 }
 
-function normalizedScopes(header: string | null): readonly string[] {
-  if (header === null)
-    throw new Error("Slack did not report the granted OAuth scopes");
-  const scopes = [...new Set(header.split(",").map((item) => item.trim()))]
-    .filter((item) => item.length > 0)
-    .sort();
-  if (
-    scopes.length === 0 ||
-    scopes.some((scope) => !/^[a-z][a-z0-9:_-]{0,127}$/.test(scope))
-  ) {
-    throw new Error("Slack reported invalid OAuth scopes");
-  }
-  return Object.freeze(scopes);
+function normalizedScopes(header: string): readonly string[] {
+  const scopes = slackOAuthScopesV1(header);
+  if (scopes === undefined) throw new Error("Slack reported invalid OAuth scopes");
+  return scopes;
 }
 
 /**
- * Slack web identity provider. It deliberately omits reaction verification
- * and therefore never loads retained installation/lease policy grammars.
+ * Slack web identity provider: the identity side of the one Slack Web API
+ * client (`shared/slack-web-api-v1.ts`), with this provider's outcome
+ * vocabulary. It deliberately omits reaction verification and therefore never
+ * loads retained installation/lease policy grammars.
  */
 export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
   private readonly fetchImpl: typeof fetch;
@@ -246,26 +237,19 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
         "unauthorized",
       );
     }
-    let result: BoundedJsonFetchResultV1;
+    let answer: SlackWebApiAnswerV1;
     try {
-      result = await boundedJsonFetchV1({
-        url: `https://slack.com/api/${method}`,
-        init: {
-          method: "POST",
-          headers: {
-            accept: "application/json",
-            authorization: `Bearer ${token}`,
-            "content-type": "application/x-www-form-urlencoded",
-          },
-          body: new URLSearchParams(parameters),
-        },
+      answer = await callSlackWebApiV1({
+        token,
+        method,
+        parameters,
+        encoding: "form",
+        timeout_ms: TIMEOUT_MS,
         fetch: this.fetchImpl,
-        timeoutMs: TIMEOUT_MS,
         signal,
-        maxBytes: MAXIMUM_RESPONSE_BYTES,
       });
     } catch (error) {
-      if (!(error instanceof BoundedJsonResponseErrorV1)) throw error;
+      if (!(error instanceof SlackWebApiTransportErrorV1)) throw error;
       throw error.code === "transport"
         ? new SlackIdentityProviderErrorV1(
             "Slack integration verification is unavailable",
@@ -276,51 +260,54 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
             "invalid_response",
           );
     }
-    if (!result.ok) {
-      throw new SlackIdentityProviderErrorV1(
-        "Slack integration verification failed",
-        result.status === 401 ? "unauthorized" : "unavailable",
-        result.status === 401,
-      );
+    switch (answer.kind) {
+      case "http_error":
+        throw new SlackIdentityProviderErrorV1(
+          "Slack integration verification failed",
+          answer.status === 401 ? "unauthorized" : "unavailable",
+          answer.status === 401,
+        );
+      case "empty":
+        throw new SlackIdentityProviderErrorV1(
+          "Slack returned an empty verification response",
+          "invalid_response",
+        );
+      case "not_object":
+        throw new Error(`Slack ${method} response is invalid`);
+      case "slack_error": {
+        const error = answer.error;
+        const unauthorized =
+          error === "invalid_auth" ||
+          error === "not_authed" ||
+          error === "account_inactive" ||
+          error === "token_expired" ||
+          error === "token_revoked" ||
+          error === "missing_scope";
+        const notObserved =
+          error === "access_denied" ||
+          error === "channel_is_limited_access" ||
+          error === "channel_not_found" ||
+          error === "no_permission" ||
+          error === "not_in_channel" ||
+          error === "team_access_not_granted";
+        throw new SlackIdentityProviderErrorV1(
+          "Slack rejected the integration verification request",
+          unauthorized
+            ? "unauthorized"
+            : notObserved
+              ? "not_observed"
+              : "unavailable",
+          unauthorized,
+        );
+      }
+      case "ok": {
+        const scopesHeader = answer.headers.get("x-oauth-scopes");
+        return {
+          value: answer.body,
+          scopes: scopesHeader === null ? null : normalizedScopes(scopesHeader),
+        };
+      }
     }
-    if (result.json === undefined) {
-      throw new SlackIdentityProviderErrorV1(
-        "Slack returned an empty verification response",
-        "invalid_response",
-      );
-    }
-    const value = record(result.json, method);
-    if (value.ok !== true) {
-      const error = value.error;
-      const unauthorized =
-        error === "invalid_auth" ||
-        error === "not_authed" ||
-        error === "account_inactive" ||
-        error === "token_expired" ||
-        error === "token_revoked" ||
-        error === "missing_scope";
-      const notObserved =
-        error === "access_denied" ||
-        error === "channel_is_limited_access" ||
-        error === "channel_not_found" ||
-        error === "no_permission" ||
-        error === "not_in_channel" ||
-        error === "team_access_not_granted";
-      throw new SlackIdentityProviderErrorV1(
-        "Slack rejected the integration verification request",
-        unauthorized
-          ? "unauthorized"
-          : notObserved
-            ? "not_observed"
-            : "unavailable",
-        unauthorized,
-      );
-    }
-    const scopesHeader = result.headers.get("x-oauth-scopes");
-    return {
-      value,
-      scopes: scopesHeader === null ? null : normalizedScopes(scopesHeader),
-    };
   }
 
   async verifyConnection(
