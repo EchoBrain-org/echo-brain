@@ -18,13 +18,13 @@ import type { PersonDocumentApplicationV1 } from '../src/application/ports/docum
 import type { PersonDocumentUploadStagingV1 } from '../src/application/ports/document-upload-staging-v1.js';
 import { createOrganizationAuthorityHttpServer, type OrganizationAuthorityHttpServerOptions } from '../src/presentation/organization-authority-http-server.js';
 import { addMembership, authorization, PROJECT_CONTEXT_NOW, PROJECT_ALPHA, PROJECT_BETA } from './fixtures/project-context-sqlite.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 import { PersonDocumentProcessingV1 } from '../src/composition/person-document-processing-v1.js';
 import { pdf, zip, entries } from './document-extraction-fixtures.js';
 import { PEOPLE } from '../../../tests/fixtures/project-context-integration/scenario.js';
 const token='A'.repeat(43);const memberToken='B'.repeat(43);
 const closers:(()=>Promise<void>)[]=[];
 afterEach(async()=>{for(const close of closers.splice(0).reverse())await close();});
-const options=():OrganizationAuthorityHttpServerOptions=>({descriptor:{} as never,sessions:{} as never,oidc_provider:{} as never,expected_issuer:'https://issuer.example'});
 function input(bytes:Uint8Array,overrides:Partial<PersonDocumentUploadMetadataV2>={}):PersonDocumentUploadMetadataV2{return {schema_version:2,kind:'echo-person-document-upload-v2',request_id:randomUUID(),filename:'机器人-PRD.md',title:'SCOUT requirements',content_length:bytes.byteLength,sha256:sha256Digest(bytes),audience:{kind:'team'},association_project_ids:[PROJECT_ALPHA],...overrides};}
 function headers(value:PersonDocumentUploadMetadataV2,bearer=token){return {authorization:`Bearer ${bearer}`,'content-type':'application/octet-stream','content-length':String(value.content_length),'x-echo-document-metadata':Buffer.from(canonicalJson(value)).toString('base64url')};}
 async function fixture(extra:{decorate?:(app:PersonDocumentApplicationV1)=>PersonDocumentApplicationV1;closing?:()=>boolean;staging?:PersonDocumentUploadStagingV1;server?:Partial<OrganizationAuthorityHttpServerOptions>}={}){
@@ -36,7 +36,7 @@ async function fixture(extra:{decorate?:(app:PersonDocumentApplicationV1)=>Perso
  for(const actor of [PEOPLE.alice,PEOPLE.bob])db.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at) VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`,PROJECT_ALPHA,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,actor===PEOPLE.alice?'lead':'member',PROJECT_CONTEXT_NOW);
  const repository=new SqlitePersonDocumentRepositoryV1(db,()=>PROJECT_CONTEXT_NOW);const app=createPersonDocumentApplicationV1({repository,authenticate:value=>{if(value!==token&&value!==memberToken)throw new AuthorityOperationError('unauthorized','fixture secret');return authorization(value===token?PEOPLE.alice:PEOPLE.bob);}});
  const staging=extra.staging??createPersonDocumentUploadStagingV1({temporaryDirectory:directory});
- const server=createOrganizationAuthorityHttpServer({...options(),person_documents:extra.decorate?.(app)??app,document_upload_staging:staging,...(extra.closing?{is_closing:extra.closing}:{}),...extra.server});server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();if(!address||typeof address==='string')throw new Error('address unavailable');
+ const server=createOrganizationAuthorityHttpServer(authorityHttpServerOptions({person_documents:extra.decorate?.(app)??app,document_upload_staging:staging,...(extra.closing?{is_closing:extra.closing}:{}),...extra.server}));server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();if(!address||typeof address==='string')throw new Error('address unavailable');
  closers.push(async()=>{const closed=once(server,'close');server.close();server.closeAllConnections();await closed;await new Promise(resolve=>setImmediate(resolve));db.close();rmSync(directory,{recursive:true,force:true});});
  return {directory,db,app,repository,server,origin:`http://127.0.0.1:${address.port}`};
 }
@@ -193,9 +193,8 @@ describe('document binary HTTP boundary and real service integration',()=>{
   for(const path of ['/search',`/${receipt.document_id}/associate`])await failure(await fetch(v1+path,{method:'POST',headers:{...auth,'content-type':'application/json'},body:'{}'}),404,'not_found');
   expect(h.db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:1});
  });
- it('reserves the entire document family from provider ingress and requires paired staging composition',()=>{
-  for(const path of ['/v1/person/documents','/v1/person/documents/search','/v1/person/documents/arbitrary/original','/v2/person/documents/search','/v2/person/documents/arbitrary/original']){const application={routes:[{route_id:'collision',method:'POST' as const,path}],accept:async()=>({status:200 as const,body:{}})};for(const ingress of [{person_tool_connections:[application]},{person_external_identity_link:application},{person_tools:application}])expect(()=>createOrganizationAuthorityHttpServer({...options(),...ingress})).toThrow('collides with Authority route');}
-  expect(()=>createOrganizationAuthorityHttpServer({...options(),person_documents:{} as never})).toThrow('composed together');
+ it('reserves the entire document family from provider ingress',()=>{
+  for(const path of ['/v1/person/documents','/v1/person/documents/search','/v1/person/documents/arbitrary/original','/v2/person/documents/search','/v2/person/documents/arbitrary/original']){const application={routes:[{route_id:'collision',method:'POST' as const,path}],accept:async()=>({status:200 as const,body:{}})};for(const ingress of [{person_tool_connections:[application]},{person_external_identity_link:application},{person_tools:application}])expect(()=>createOrganizationAuthorityHttpServer(authorityHttpServerOptions(ingress))).toThrow('collides with Authority route');}
  });
  it('preserves the legacy 16KiB JSON request cap while admitting larger binary documents',async()=>{
   let calls=0;const h=await fixture({server:{project_context:{createProject(){calls++;return {schema_version:1,kind:'echo-project-create-receipt-v1',request_id:'00000000-0000-4000-8000-000000000001',project_id:PROJECT_ALPHA,name:'SCOUT',created_at:PROJECT_CONTEXT_NOW,role:'lead'};}} as never}});

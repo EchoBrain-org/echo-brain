@@ -31,6 +31,7 @@ import { decodePersonListCursorV1, encodePersonListCursorV1, type PersonListPosi
 import { createPersonListRouteV1 } from "../src/composition/person-list-v1-route.js";
 import { personMeetingReleaseOptionsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
+import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, STANDARD_RECORDS, T, UNJOINED, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
 import { addMembership, authorization } from "./fixtures/project-context-sqlite.js";
 import { SIGNED_APPROVAL_APPROVER, SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
@@ -195,8 +196,7 @@ async function disclosureWorld() {
       return { parts: part("found", (prompt.opened ?? []).map((entry) => entry.id).slice(0, 12)), actions: [{ tool: "finish", args: {} }] };
     },
   };
-  const server = createOrganizationAuthorityHttpServer({
-    descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: "https://issuer.example",
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
     person_list: createPersonListRouteV1({
       organization_id: org, sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(w.authority),
       originals: items, meetings,
@@ -207,7 +207,7 @@ async function disclosureWorld() {
       generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
       audit: new SqlitePersonAgenticAskAuditV1(w.authority),
     }),
-  });
+  }));
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   cleanups.push(async () => { const closed = once(server, "close"); server.close(); server.closeAllConnections(); await closed; });

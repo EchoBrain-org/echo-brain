@@ -166,13 +166,11 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: ProviderHttpApplicationV1;
   /** The Person tools list, `/v4/person/tools`. */
-  readonly person_tools?: ProviderHttpApplicationV1;
-  /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
-  readonly person_record_read?: PersonRecordReadHttpApplicationV1;
-  /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
-  readonly person_record_search?: PersonRecordSearchHttpApplicationV1;
+  readonly person_tools: ProviderHttpApplicationV1;
+  readonly person_record_read: PersonRecordReadHttpApplicationV1;
+  readonly person_record_search: PersonRecordSearchHttpApplicationV1;
   /** Owner-only employee invite, reissue, and revoke. */
-  readonly person_employees?: PersonEmployeeHttpApplication;
+  readonly person_employees: PersonEmployeeHttpApplication;
   /**
    * The evidence desk (`/v3/person/evidence/search` and `/open`, ADR-0022), composed with the answer model. Its Ask route,
    * `/v3/person/ask`, was retired with `/v4` to `/v6`: Ask is `person_answer_v7`.
@@ -185,25 +183,24 @@ export interface OrganizationAuthorityHttpServerOptions {
    */
   readonly person_answer_v7?: PersonAnswerV7HttpApplication;
   /** The Ask source check (ADR-0047); it needs no answer model, and reads the database and the caller's own tool connections. */
-  readonly person_ask_check?: PersonAskCheckHttpApplicationV1;
+  readonly person_ask_check: PersonAskCheckHttpApplicationV1;
   /** Staging-only research evaluation; its routes do not exist unless composed. */
   readonly person_research_eval?: PersonResearchEvalHttpApplicationV1;
-  readonly person_trigger_runs?: PersonTriggerRunsHttpApplicationV1;
+  readonly person_trigger_runs: PersonTriggerRunsHttpApplicationV1;
   readonly person_diagnostics?: PersonDiagnosticsHttpApplicationV1;
   /** Provider-owned routes (account connections and the Slack approval click), selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
-  readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
+  readonly person_source_evidence: PersonSourceEvidenceHttpApplicationV1;
   /** The person list and open by ref (ADR-0024); it needs no answer model. */
-  readonly person_list?: PersonListHttpApplicationV1;
+  readonly person_list: PersonListHttpApplicationV1;
   /** The change check (ADR-0036); it needs no answer model and reads only the database. */
-  readonly person_changes?: PersonChangesHttpApplicationV1;
+  readonly person_changes: PersonChangesHttpApplicationV1;
   /** Project activity (Ask timeline v1, C2); like the change check, it needs no answer model and reads only the database. */
-  readonly person_project_activity?: PersonProjectActivityHttpApplicationV1;
-  /** Mounted only when the project application and V2 worker binding are composed. */
-  readonly project_context?: ProjectContextApplicationV1;
-  readonly person_documents?: PersonDocumentApplicationV1;
-  readonly document_upload_staging?: PersonDocumentUploadStagingV1;
+  readonly person_project_activity: PersonProjectActivityHttpApplicationV1;
+  readonly project_context: ProjectContextApplicationV1;
+  readonly person_documents: PersonDocumentApplicationV1;
+  readonly document_upload_staging: PersonDocumentUploadStagingV1;
 }
 
 function providerIngressRoutes(
@@ -492,12 +489,11 @@ interface PersonReadGetApplication {
 
 /** Original-source reads validate the body before checking the bearer, then release synchronously. */
 function personSourcePost<Application, Request>(
-  application: Application | undefined,
+  application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: { readonly access_token: string; readonly request: Request }) => unknown,
 ): PersonPostHandler {
   return async (request, response) => {
-    if (application === undefined) { fail(response, 503, "unavailable"); return; }
     const requestBody = await personBody(request, validate);
     json(response, 200, read(application, {
       access_token: accessToken(request.headers.authorization), request: requestBody,
@@ -795,9 +791,8 @@ export function createOrganizationAuthorityHttpServer(
   options: OrganizationAuthorityHttpServerOptions,
 ): Server {
   const providerRoutes = providerIngressRoutes(options);
-  if ((options.person_documents === undefined) !== (options.document_upload_staging === undefined)) throw new Error('Document application and transfer staging must be composed together');
-  const documents = options.person_documents === undefined ? undefined : createPersonDocumentsHttpHandlerV1(
-    options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
+  const documents = createPersonDocumentsHttpHandlerV1(
+    options.person_documents, options.document_upload_staging, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
@@ -816,35 +811,33 @@ export function createOrganizationAuthorityHttpServer(
           : application.read({ ...common, request: input.request });
       })],
     ] as const),
-    ...(options.person_trigger_runs === undefined ? [] : [
-      [PERSON_RUNS_PATH_V1, personCancellablePost(options.person_trigger_runs, validatePersonRunsRequestV1, (application, input) => {
-        const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
-        const request = input.request;
-        switch (request.operation) {
-          case 'list': return application.list(common);
-          case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id, ...(request.capture_id === undefined ? {} : { capture_id: request.capture_id }) } });
-          case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
-          case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });
-          case 'home': return application.home({ ...common, request });
-          case 'items': return application.items({ ...common, request });
-          case 'item': return application.item({ ...common, request });
-          case 'send': return application.send({ ...common, request });
-          case 'set_state': return application.set_state({ ...common, request });
-          case 'assign': return application.assign({ ...common, request });
-          case 'sweep': return application.sweep({ ...common, request });
-          default: {
-            // Every operation the API knows is served: one added to the API does not compile here until it is.
-            const unserved: never = request;
-            throw new Error(`Runs operation is not served: ${(unserved as { readonly operation: string }).operation}`);
-          }
+    [PERSON_RUNS_PATH_V1, personCancellablePost(options.person_trigger_runs, validatePersonRunsRequestV1, (application, input) => {
+      const common = { access_token: input.access_token, ...(input.signal === undefined ? {} : { signal: input.signal }) };
+      const request = input.request;
+      switch (request.operation) {
+        case 'list': return application.list(common);
+        case 'start': return application.start({ ...common, request: { schema_version: 1, operation: 'start', run_id: request.run_id, ...(request.capture_id === undefined ? {} : { capture_id: request.capture_id }) } });
+        case 'retry': return application.retry({ ...common, request: { schema_version: 1, operation: 'retry', run_id: request.run_id } });
+        case 'view': return application.view({ ...common, request: { schema_version: 1, operation: 'view', run_id: request.run_id } });
+        case 'home': return application.home({ ...common, request });
+        case 'items': return application.items({ ...common, request });
+        case 'item': return application.item({ ...common, request });
+        case 'send': return application.send({ ...common, request });
+        case 'set_state': return application.set_state({ ...common, request });
+        case 'assign': return application.assign({ ...common, request });
+        case 'sweep': return application.sweep({ ...common, request });
+        default: {
+          // Every operation the API knows is served: one added to the API does not compile here until it is.
+          const unserved: never = request;
+          throw new Error(`Runs operation is not served: ${(unserved as { readonly operation: string }).operation}`);
         }
-      })],
-    ] as const),
+      }
+    })],
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
     [PERSON_LIST_PATH_V1, personCancellablePost(options.person_list, validatePersonListRequestV1, (application, input) => application.list(input))],
     [PERSON_OPEN_PATH_V1, personCancellablePost(options.person_list, validatePersonOpenRequestV1, (application, input) => application.open(input))],
   ]);
-  const personReadGets: ReadonlyMap<string, PersonReadGetApplication | undefined> = new Map<string, PersonReadGetApplication | undefined>([
+  const personReadGets: ReadonlyMap<string, PersonReadGetApplication> = new Map<string, PersonReadGetApplication>([
     [PERSON_CHANGES_ROUTE_V1, options.person_changes],
     [PERSON_PROJECT_ACTIVITY_PATH_V1, options.person_project_activity],
   ]);
@@ -1053,26 +1046,21 @@ export function createOrganizationAuthorityHttpServer(
         noContent(response);
         return;
       }
-      if (documents !== undefined) {
-        try { if (await documents(request, response, url)) return; }
-        catch (error) {
-          if (error instanceof AuthorityOperationError) throw error;
-          throw new AuthorityOperationError('unavailable', 'request failed');
-        }
+      try { if (await documents(request, response, url)) return; }
+      catch (error) {
+        if (error instanceof AuthorityOperationError) throw error;
+        throw new AuthorityOperationError('unavailable', 'request failed');
       }
-      if (options.project_context !== undefined) {
-        try {
-          const release = await projectRoute(request, url, options.project_context);
-          if (release !== undefined) { release(response); return; }
-        } catch (error) {
-          if (error instanceof AuthorityOperationError) throw error;
-          // Persistence/audit failures must keep the closed project error
-          // contract while withholding the response and private diagnostics.
-          throw new AuthorityOperationError('unavailable', 'request failed');
-        }
+      try {
+        const release = await projectRoute(request, url, options.project_context);
+        if (release !== undefined) { release(response); return; }
+      } catch (error) {
+        if (error instanceof AuthorityOperationError) throw error;
+        // Persistence/audit failures must keep the closed project error
+        // contract while withholding the response and private diagnostics.
+        throw new AuthorityOperationError('unavailable', 'request failed');
       }
       if (
-        options.person_employees !== undefined &&
         url.pathname === PERSON_EMPLOYEES_PATH_V1 &&
         url.search === ""
       ) {
@@ -1118,10 +1106,6 @@ export function createOrganizationAuthorityHttpServer(
         }
       }
       if (method === "GET" && url.pathname === PERSON_RECORDS_PATH_V1) {
-        if (options.person_record_read === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
         const exactRecord = recordSha256(url);
         const limit = exactRecord === undefined ? recordLimit(url) : undefined;
         json(
@@ -1144,10 +1128,6 @@ export function createOrganizationAuthorityHttpServer(
         url.pathname === PERSON_RECORD_SEARCH_PATH_V1 &&
         url.search === ""
       ) {
-        if (options.person_record_search === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
         const input = recordSearchInput(await body(request));
         json(
           response,
@@ -1176,12 +1156,8 @@ export function createOrganizationAuthorityHttpServer(
         }));
         return;
       }
-      if (method === "GET" && personReadGets.has(url.pathname)) {
-        const personRead = personReadGets.get(url.pathname);
-        if (personRead === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
+      const personGet = method === "GET" ? personReadGets.get(url.pathname) : undefined;
+      if (personGet !== undefined) {
         // Authenticated first, as capabilities is; the read takes no query and no body.
         const access_token = accessToken(request.headers.authorization);
         options.sessions.authenticateAccess({ access_token });
@@ -1190,7 +1166,7 @@ export function createOrganizationAuthorityHttpServer(
         }
         const disconnect = disconnectSignal(request, response);
         try {
-          json(response, 200, await personRead.read({ access_token, signal: disconnect.signal }));
+          json(response, 200, await personGet.read({ access_token, signal: disconnect.signal }));
         } finally {
           disconnect.dispose();
         }

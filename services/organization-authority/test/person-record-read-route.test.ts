@@ -9,6 +9,7 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import { createPersonRecordReadRouteV1, type CreatePersonRecordReadRouteV1Options } from "../src/composition/person-record-read-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonRecordReadHttpApplicationV1 } from "../src/presentation/person-record-read-http-application.js";
+import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 const databases: ReturnType<typeof openAuthorityDatabase>[] = [];
@@ -272,13 +273,7 @@ describe("Person V4 record read route", () => {
 });
 
 async function startRecordServer(application: PersonRecordReadHttpApplicationV1) {
-  const server = createOrganizationAuthorityHttpServer({
-    descriptor: {} as never,
-    sessions: {} as never,
-    oidc_provider: {} as never,
-    expected_issuer: "https://issuer.example",
-    person_record_read: application,
-  });
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_record_read: application }));
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();

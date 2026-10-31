@@ -11,6 +11,7 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { createPersonDocumentUploadStagingV1 } from '../src/adapters/files/document-upload-staging-v1.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertStoredDocumentV1, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
@@ -93,7 +94,7 @@ describe('document project associations', () => {
 
   it('exposes bounded HTTP association commands with response identity checks and no audience mutation', async () => {
     const { app, upload } = setup(); const saved = upload();
-    const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example', person_documents: app, document_upload_staging: createPersonDocumentUploadStagingV1() });
+    const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_documents: app, document_upload_staging: createPersonDocumentUploadStagingV1() }));
     servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const address = server.address(); if (!address || typeof address === 'string') throw new Error('No test address');
     const origin = `http://127.0.0.1:${address.port}`;
     const request = associate(saved.document_id);

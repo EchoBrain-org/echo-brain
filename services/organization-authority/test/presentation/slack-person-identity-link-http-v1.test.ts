@@ -6,18 +6,13 @@ import { createSlackExternalIdentityHttpApplicationV1 } from "../../../../provid
 import { SlackPersonBrowserIdentityLinkWorkflowV1 } from "../../../../providers/slack/server/src/person-identity/slack-person-browser-identity-link-workflow-v1.js";
 import { AUTHORITY_ID, authorization, beginRequest, MEMBERSHIP_ID, NOW, ORGANIZATION_ID, setup, tokenAccess, workflowOptions } from "../../../../providers/slack/server/test/person-identity/fixtures.js";
 import { createOrganizationAuthorityHttpServer } from "../../src/presentation/organization-authority-http-server.js";
+import { authorityHttpServerOptions } from "../fixtures/authority-http-server.js";
 
 /** Serves the Person HTTP routes on a loopback port. */
 async function listening(
   person_external_identity_link: Parameters<typeof createOrganizationAuthorityHttpServer>[0]["person_external_identity_link"],
 ): Promise<{ readonly baseUrl: string; readonly close: () => Promise<void> }> {
-  const server = createOrganizationAuthorityHttpServer({
-    descriptor: {} as never,
-    sessions: {} as never,
-    oidc_provider: {} as never,
-    expected_issuer: "https://issuer.example",
-    person_external_identity_link,
-  });
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_external_identity_link }));
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();

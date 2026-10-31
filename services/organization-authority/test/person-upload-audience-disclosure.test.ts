@@ -14,6 +14,7 @@ import { createPersonDocumentApplicationV1 } from "../src/application/document-v
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
+import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
 /**
  * ADR-0023: a released upload names only the reader's current projects, and
@@ -184,7 +185,7 @@ describe("a note's V3 status applies the document receipt-visibility check", () 
 describe("the served V3 note routes release only the reader's view", () => {
   it("serves a collapsed audience to a non-member and a saved-only status to a departed uploader", async () => {
     const f = fixture();
-    const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: "https://issuer.example", project_context: f.updates });
+    const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ project_context: f.updates }));
     servers.push(server); server.listen(0, "127.0.0.1"); await once(server, "listening");
     const address = server.address(); if (address === null || typeof address === "string") throw new Error("missing test address");
     const get = async (path: string, token: string) => {

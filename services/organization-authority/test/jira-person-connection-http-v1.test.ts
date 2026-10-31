@@ -10,6 +10,7 @@ import { createJiraPersonConnectionHttpApplicationV1, type JiraPersonConnectionH
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { fakeJiraCloudFetchV1, FIXTURE_JIRA_CLOUD_V1, FIXTURE_JIRA_SITE_V1 } from './fixtures/fake-jira-v1.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 const ATTEMPT = '00000000-0000-4000-8000-000000000001';
 const EXPIRES_AT = '2026-10-01T00:10:00.000Z';
@@ -19,11 +20,7 @@ function state(status: 'pending' | 'complete' | 'cancelled' | 'expired' | 'faile
 }
 
 async function server(application?: ProviderHttpApplicationV1) {
-  const instance = createOrganizationAuthorityHttpServer({
-    descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never,
-    expected_issuer: 'https://issuer.example.test',
-    ...(application === undefined ? {} : { person_tool_connections: [application] }),
-  });
+  const instance = createOrganizationAuthorityHttpServer(authorityHttpServerOptions(application === undefined ? {} : { person_tool_connections: [application] }));
   instance.listen(0, '127.0.0.1'); await once(instance, 'listening');
   return {
     origin: `http://127.0.0.1:${(instance.address() as { port: number }).port}`,

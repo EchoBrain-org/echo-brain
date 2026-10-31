@@ -24,16 +24,16 @@ import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV3HttpApplication } from "../src/presentation/person-answer-v3-http-application.js";
 import type { PersonAnswerV7HttpApplication } from "../src/presentation/person-live-answer-http-application.js";
+import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
 /** The evidence desk (`application`) and Ask on `/v7` (`ask`) behind the real HTTP server. */
 async function server(input: { readonly application?: PersonAnswerV3HttpApplication; readonly ask?: PersonAnswerV7HttpApplication }) {
   const sessions = { authenticateAccess: vi.fn(() => ({})) };
-  const instance = createOrganizationAuthorityHttpServer({
-    descriptor: {} as never, sessions: sessions as never, oidc_provider: {} as never,
-    expected_issuer: "https://issuer.example",
+  const instance = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
+    sessions: sessions as never,
     ...(input.application === undefined ? {} : { person_answer_v3: input.application }),
     ...(input.ask === undefined ? {} : { person_answer_v7: input.ask }),
-  });
+  }));
   instance.listen(0, "127.0.0.1");
   await once(instance, "listening");
   const address = instance.address();

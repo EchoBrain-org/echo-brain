@@ -5,6 +5,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { unavailablePersonTriggerRunsV1 } from '../src/composition/organization-authority-api-runtime.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../src/presentation/person-trigger-runs-http-application.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 const ITEM = 'itm_00000000-0000-4000-8000-000000000001';
 const RUN = 'run_00000000-0000-4000-8000-000000000001';
@@ -25,7 +26,7 @@ const unavailable = async () => { throw new AuthorityOperationError('unavailable
 
 const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
 afterEach(async () => { for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; } });
-async function origin(app: PersonTriggerRunsHttpApplicationV1) { const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example', person_trigger_runs: app }); servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable'); return `http://127.0.0.1:${address.port}`; }
+async function origin(app: PersonTriggerRunsHttpApplicationV1) { const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_trigger_runs: app })); servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable'); return `http://127.0.0.1:${address.port}`; }
 const post = (base: string, body: unknown, authorization: string | null = 'Bearer fixture') => fetch(`${base}${PERSON_RUNS_PATH_V1}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(authorization === null ? {} : { authorization }) }, body: JSON.stringify(body) });
 
 describe('person runs HTTP transport', () => {
@@ -36,7 +37,7 @@ describe('person runs HTTP transport', () => {
     const response = await post(base, { schema_version: 1, operation: 'list' });
     expect(response.status).toBe(200); expect(await response.json()).toEqual({ runs: [] });
     expect(app.list).toHaveBeenCalledWith({ access_token: 'fixture', signal: expect.any(AbortSignal) });
-    expect(() => createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example', person_tools: { routes: [{ route_id: 'collision', method: 'POST', path: PERSON_RUNS_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) } })).toThrow('collides with Authority route');
+    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tools: { routes: [{ route_id: 'collision', method: 'POST', path: PERSON_RUNS_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) } }))).toThrow('collides with Authority route');
   });
 
   it('surfaces a composed no-model application as unavailable', async () => {
