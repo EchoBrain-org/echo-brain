@@ -1,8 +1,7 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { createPersonConnectionLifecycleV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
 import type { ConnectedPersonV1 } from '@echo-brain/provider-runtime/person-connection-store-v1';
-import { createGranolaMcpV1, GRANOLA_PERSON_PROVIDER_V1, granolaMcpMeetingContentV1 } from './granola-mcp-v1.js';
-import { normalizeGranolaMeetingV1 } from './granola-meeting-normalizer-v1.js';
+import { createGranolaMcpV1, GRANOLA_PERSON_PROVIDER_V1 } from './granola-mcp-v1.js';
 import { granolaWatchWindowV1, type GranolaWatchV1 } from './granola-watch-source-v1.js';
 const fail: typeof GRANOLA_PERSON_PROVIDER_V1.failure = GRANOLA_PERSON_PROVIDER_V1.failure;
 
@@ -41,12 +40,6 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
       return meetings;
     }
     return Object.freeze({ ...session, api, account, identity, verify, window: windowed,
-      async read(meetingId: string) {
-        const detail = await api.meeting(meetingId, signal);
-        const transcript = await api.transcript(meetingId, signal);
-        await verify();
-        return normalizeGranolaMeetingV1(granolaMcpMeetingContentV1(detail, transcript), identity, new Date().toISOString());
-      },
       /** The newest meetings, at most 50: the ones the person captured, or one of their listed folders'. */
       async recent(folderId: string | null) {
         if (folderId !== null && !(await api.folders(signal)).some(folder => folder.id === folderId)) fail('not_found');
@@ -66,10 +59,6 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
       },
     });
   }
-  async function request(accessToken: string, signal?: AbortSignal) {
-    const actor = shared.actor(accessToken);
-    return open(actor.person, actor.requirePerson, signal);
-  }
-  return Object.freeze({ ...shared.application, open, request });
+  return Object.freeze({ ...shared.application, open });
 }
 export type GranolaPersonConnectionV1 = ReturnType<typeof createGranolaPersonConnectionV1>;
