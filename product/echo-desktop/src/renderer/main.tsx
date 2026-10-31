@@ -170,7 +170,7 @@ function App() {
   const covered = pageCovered(state);
   // Home itself, nothing over it: the title row holds its stops where a page's name would be (One place to look v1). Never under
   // the cover, since a stop names a project or a person.
-  const homeShows = !covered && !state.ask && !view && !listDecision && !state.reader && state.route.page === 'home';
+  const homeShows = !covered && !state.ask && !view && !state.reader && state.route.page === 'home';
   const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : onlyMe ? 'Only me' : decision ? 'Decision'
     : state.route.page === 'follow-ups' ? 'Follow-ups' : null;
   // A follow-ups view names itself: Follow-ups, the meeting or the project; an item; a decision.

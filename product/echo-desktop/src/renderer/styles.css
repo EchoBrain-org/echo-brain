@@ -1153,15 +1153,15 @@ button.items-line:hover { background: var(--raise); }
 button.impact-follow-ups:hover { color: var(--text); }
 .impact-follow-ups b { font-weight: 500; }
 
-/* Home's altitudes (Home altitude v1): the stops, then one row for every altitude. A ring fills as work finishes; orange only
-   for what needs attention. */
+/* Home's altitudes (Home altitude v1, One place to look v1): the stops in the title bar, your projects one row each, then one row for
+   every follow-up in a project or for a person. A ring fills as work finishes; orange only for what needs attention. */
 :root { --ring-muted: var(--control); --ring-done: var(--done); --ring-signal: var(--signal); --ring-faint: var(--line-strong); }
 .home { width: var(--ask-width); max-width: calc(100% - 48px); height: 100%; min-height: 0; display: flex; flex-direction: column; }
 /* On Home the title bar holds the stops in place of a name (One place to look v1): the sides share what is left, so the stops stay
    centred and whole however narrow the window, and their focus rings are not cut off. */
 .titlebar:has(> .alt-title) .side { width: auto; flex: 1 1 0; min-width: 0; }
-.title.alt-title { flex: none; display: flex; justify-content: center; overflow: visible; }
-.alt-stops { flex-shrink: 0; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.title.alt-title { flex: none; display: flex; overflow: visible; }
+.alt-stops { display: flex; }
 .alt-pill { display: flex; align-items: center; padding: 3px; border: 1px solid var(--line-strong); border-radius: 999px;
   background: color-mix(in srgb, var(--panel) 72%, transparent); -webkit-backdrop-filter: blur(14px) saturate(150%); backdrop-filter: blur(14px) saturate(150%);
   box-shadow: var(--bar-shadow); }
@@ -1187,7 +1187,6 @@ button.impact-follow-ups:hover { color: var(--text); }
 .alt-projects > .empty-capture { align-self: center; margin-top: 8px; }
 .alt-project-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) 64px 40px; align-items: center; column-gap: 12px; width: 100%; height: 40px;
   flex-shrink: 0; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; text-align: left; font-size: 14px; color: var(--text); }
-.alt-project-row:hover, .alt-project-row:focus-visible { background: var(--hover); }
 .alt-project-row.faint { color: var(--faint); }
 .alt-what { display: flex; align-items: center; gap: 10px; min-width: 0; white-space: nowrap; }
 .alt-project-name { flex-shrink: 0; max-width: 60%; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
@@ -1213,8 +1212,7 @@ button.alt-group-head:hover, button.alt-group-head:focus-visible { color: var(--
 .alt-group-head .alt-tile { width: 18px; height: 18px; font-size: 9.5px; border-radius: 5px; }
 .alt-row { display: grid; grid-template-columns: 16px 22px minmax(0, 1fr) 40px 104px 64px 44px; align-items: center; column-gap: 12px; width: 100%; height: 40px;
   flex-shrink: 0; padding: 0 14px; border: 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; font-size: 13.5px; color: var(--text); }
-.alt-row:hover, .alt-row:focus-visible { background: var(--hover); }
-.alt-row.faint { color: var(--faint); }
+.alt-row:hover, .alt-row:focus-visible, .alt-project-row:hover, .alt-project-row:focus-visible { background: var(--hover); }
 .alt-mark, .alt-who { display: inline-flex; align-items: center; justify-content: center; }
 .alt-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alt-needs, .alt-people, .alt-progress, .alt-date { display: flex; align-items: center; justify-content: flex-end; gap: 4px; font-family: var(--mono); font-size: 11.5px;
@@ -1228,7 +1226,6 @@ button.alt-group-head:hover, button.alt-group-head:focus-visible { color: var(--
 .alt-kind.approve { color: var(--approve); }
 .alt-unread { padding: 18px 14px; color: var(--faint); font-size: 13px; }
 .alt-chip.faint { color: var(--faint); }
-.alt-head-mark { display: inline-flex; color: var(--muted); }
 .alt-head > :not(h2) { flex-shrink: 0; }
 .alt-group-head > * { flex-shrink: 0; }
 .alt-group-head .alt-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
