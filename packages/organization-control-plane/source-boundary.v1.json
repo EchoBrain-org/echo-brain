@@ -10,8 +10,7 @@
     "packages/organization-control-plane/src/organization-control-database-v1.ts",
     "packages/organization-control-plane/src/record-visibility-policy-contracts-v1.ts",
     "packages/organization-control-plane/src/security/file-secret-store.ts",
-    "packages/organization-control-plane/src/application/organization-secret-store-contracts.ts",
-    "packages/organization-control-plane/src/canonical/canonical-json.ts"
+    "packages/organization-control-plane/src/application/organization-secret-store-contracts.ts"
   ],
   "owned_source_paths": [
     "packages/organization-control-plane/src/**"
@@ -81,7 +80,8 @@
       "packages/organization-control-plane/src/application/slack/private-approval-policy-resolution-v1.ts",
       "packages/organization-control-plane/src/application/slack-integration-contracts.ts",
       "packages/organization-control-plane/src/composition/slack-connection-setup-cli.ts",
-      "packages/organization-control-plane/src/adapters/slack/slack-web-identity-provider-v1.ts"
+      "packages/organization-control-plane/src/adapters/slack/slack-web-identity-provider-v1.ts",
+      "packages/organization-control-plane/src/canonical/canonical-json.ts"
     ]
   },
   "layer_rules": [
@@ -106,23 +106,10 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "control-plane-canonical-json-is-self-contained",
-      "from": "packages/organization-control-plane/src/canonical/**",
-      "allowed_imports": [
-        "packages/organization-control-plane/src/canonical/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": [
-        "crypto"
-      ]
-    },
-    {
       "name": "control-plane-persistence-depends-on-contracts",
       "from": "packages/organization-control-plane/src/persistence/**",
       "allowed_imports": [
         "packages/organization-control-plane/src/application/**",
-        "packages/organization-control-plane/src/canonical/**",
         "packages/organization-control-plane/src/persistence/**"
       ],
       "allowed_workspace_packages": [],

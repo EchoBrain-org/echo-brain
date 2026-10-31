@@ -1,4 +1,4 @@
-import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { BoundedJsonResponseErrorV1 } from "@echo-brain/provider-runtime/bounded-json-response-v1";
 import { boundedJsonFetchV1, type BoundedJsonFetchResultV1 } from "../../../shared/bounded-json-fetch-v1.js";
 import type { ObservedSlackIdentityLinkChallenge, ObserveSlackIdentityLinkChallengeInput, PostedSlackIdentityLinkChallenge, PostSlackIdentityLinkChallengeInput, SlackIntegrationProvider, VerifiedSlackConnection, VerifiedSlackHuman } from "../../application/slack-integration-contracts.js";
