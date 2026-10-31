@@ -82,22 +82,17 @@ function fixture(previousKeys: readonly string[] = []) {
 describe('Nango-backed personal Jira connection', () => {
   it('reports only the current local binding without provider work, mutation or reconnect', async () => {
     const f = fixture(); try {
-      expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: false });
       expect(f.service.tool({ access_token: f.token })).toEqual({ tool_id: 'jira', display_name: 'Jira', availability: 'enabled', personal_status: 'unlinked', external_scope_id: null, external_subject_id: null, organization_setup: null });
       expect(f.nango.connect).not.toHaveBeenCalled(); expect(f.transport).not.toHaveBeenCalled();
       await f.connected(); const before = f.store.current(person);
       vi.mocked(f.nango.connect).mockClear(); vi.mocked(f.nango.connection).mockClear();
       vi.mocked(f.nango.find).mockClear(); vi.mocked(f.nango.disconnect).mockClear(); f.transport.mockClear();
-      expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: true });
       expect(f.service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'linked', external_scope_id: cloud, external_subject_id: 'synthetic-account' });
-      expect(f.service.captureStatus({ access_token: 'synthetic-person-two' })).toEqual({ connected: false });
       expect(f.service.tool({ access_token: 'synthetic-person-two' })).toMatchObject({ personal_status: 'unlinked', external_scope_id: null, external_subject_id: null });
       expect(f.store.current(person)).toEqual(before);
       f.store.revoke(person);
-      expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: false });
       expect(f.service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'revoked', external_scope_id: null, external_subject_id: null });
       f.setActive(false);
-      expect(() => f.service.captureStatus({ access_token: f.token })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
       expect(() => f.service.tool({ access_token: f.token })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
       for (const operation of Object.values(f.nango)) expect(operation).not.toHaveBeenCalled();
       expect(f.transport).not.toHaveBeenCalled();
@@ -151,40 +146,22 @@ describe('Nango-backed personal Jira connection', () => {
     } finally { f.database.close(); }
   });
 
-  it('derives a trusted capture handoff from only the current person connection', async () => {
+  it('reads tickets in bulk only through the current person connection, never without it or for another actor', async () => {
     const f = fixture(); try {
-      await f.connected(); const stored = f.store.current(person)!;
-      const capability = await f.service.captureConnection({ access_token: f.token });
-      expect(Object.keys(capability).sort()).toEqual(['require_current', 'transport']);
-      expect(capability.transport.binding).toEqual(stored.binding);
-      expect(JSON.stringify(capability)).not.toContain(stored.reference);
-      capability.require_current();
-      await capability.transport.request({ path: '/oauth/token/accessible-resources' });
+      for (const read of [f.service.assigneeAccounts, f.service.ticketMarkers]) {
+        await expect(read({ access_token: f.token, ticket_ids: ['10001'] })).rejects.toMatchObject({ code: 'unauthorized' });
+      }
+      expect(f.nango.connection).not.toHaveBeenCalled();
+      await f.connected(); const stored = f.store.current(person)!; f.transport.mockClear();
+      for (const read of [f.service.assigneeAccounts, f.service.ticketMarkers]) {
+        await expect(read({ access_token: 'synthetic-person-two', ticket_ids: ['10001'] })).rejects.toMatchObject({ code: 'unauthorized' });
+      }
+      expect(f.transport).not.toHaveBeenCalled();
+      await f.service.ticketMarkers({ access_token: f.token, ticket_ids: ['10001'] });
       expect(f.nango.connection).toHaveBeenLastCalledWith(stored.reference, expect.any(AbortSignal));
-      expect(f.transport).toHaveBeenLastCalledWith('https://api.atlassian.com/oauth/token/accessible-resources', expect.objectContaining({
+      expect(f.transport).toHaveBeenLastCalledWith(`https://api.atlassian.com/ex/jira/${cloud}/rest/api/3/issue/bulkfetch`, expect.objectContaining({
         redirect: 'error', headers: expect.any(Headers),
       }));
-    } finally { f.database.close(); }
-  });
-
-  it('does not create a capture handoff without the current person grant or for another actor', async () => {
-    const f = fixture(); try {
-      await expect(f.service.captureConnection({ access_token: f.token })).rejects.toMatchObject({ code: 'unauthorized' });
-      expect(f.nango.connection).not.toHaveBeenCalled();
-      await f.connected();
-      await expect(f.service.captureConnection({ access_token: 'synthetic-person-two' })).rejects.toMatchObject({ code: 'unauthorized' });
-    } finally { f.database.close(); }
-  });
-
-  it.each(['disconnect', 'reconnect'])('revokes a capture handoff on %s before its transport can obtain another Jira credential', async revoke => {
-    const f = fixture(); try {
-      await f.connected(); const capability = await f.service.captureConnection({ access_token: f.token });
-      const calls = vi.mocked(f.nango.connection).mock.calls.length;
-      if (revoke === 'disconnect') await f.service.disconnect({ access_token: f.token });
-      else await f.service.connect({ access_token: f.token });
-      expect(() => capability.require_current()).toThrow(expect.objectContaining({ code: 'stale_access_state' }));
-      await expect(capability.transport.request({ path: '/oauth/token/accessible-resources' })).rejects.toMatchObject({ code: 'stale_access_state' });
-      expect(f.nango.connection).toHaveBeenCalledTimes(calls);
     } finally { f.database.close(); }
   });
 
@@ -201,10 +178,13 @@ describe('Nango-backed personal Jira connection', () => {
     } finally { f.database.close(); }
   });
 
-  it('refuses a capture handoff after the authenticated membership is revoked', async () => {
+  it('refuses bulk ticket reads after the authenticated membership is revoked', async () => {
     const f = fixture(); try {
-      await f.connected(); f.setActive(false);
-      await expect(f.service.captureConnection({ access_token: f.token })).rejects.toMatchObject({ code: 'unauthorized' });
+      await f.connected(); f.setActive(false); f.transport.mockClear();
+      for (const read of [f.service.assigneeAccounts, f.service.ticketMarkers]) {
+        await expect(read({ access_token: f.token, ticket_ids: ['10001'] })).rejects.toMatchObject({ code: 'unauthorized' });
+      }
+      expect(f.transport).not.toHaveBeenCalled();
     } finally { f.database.close(); }
   });
 

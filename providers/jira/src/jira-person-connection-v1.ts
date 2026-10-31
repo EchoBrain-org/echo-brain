@@ -16,17 +16,6 @@ export { jiraTicketMarkerV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, jiraFailure } from './jira-validation-v1.js';
 
 type JiraPersonAuthorizationV1 = PersonConnectionAuthorizationV1;
-/**
- * Trusted server-only handoff of this person's current connection, for the
- * staging rehearsal's read proof and the assignee lookup; Jira context capture
- * is disabled. Its transport closes over the provider-owned Nango reference;
- * callers receive no credential, locator, actor selector, or Jira site selector.
- */
-interface JiraCurrentCaptureConnectionV1 {
-  readonly transport: JiraCloudTransportV1;
-  /** Synchronous final Authority-runner fence over the same actor and grant. */
-  require_current(): void;
-}
 export function createJiraPersonConnectionV1(options: {
   readonly store: JiraConnectionStoreV1;
   readonly nango: JiraNangoV1;
@@ -47,23 +36,22 @@ export function createJiraPersonConnectionV1(options: {
   const { actor, tags, authenticated } = shared;
   const access = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
   const { projectAccess, mappingInput, projectScope } = access;
-  async function captureConnection(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<JiraCurrentCaptureConnectionV1> {
+  /** This person's current connection as a transport, fenced on the same actor and grant before every request. */
+  function openTransport(input: { readonly access_token: string; readonly signal?: AbortSignal }): JiraCloudTransportV1 {
     const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
     const stored = options.store.current(person);
     if (stored === undefined || !stored.active) jiraFailure('unauthorized');
     const binding = copyJiraBindingV1(stored.binding);
     const current = () => { requirePerson(); options.store.requireCurrent(binding); };
     current(); input.signal?.throwIfAborted();
-    const transport = createJiraCloudTransportV1(authenticated(binding, stored.reference, tags(person, stored.attempt), current));
-    return Object.freeze({ transport, require_current: current });
+    return createJiraCloudTransportV1(authenticated(binding, stored.reference, tags(person, stored.attempt), current));
   }
   /** A bulk issue read with this person's own connection, of the distinct valid issue ids among `ticket_ids`; none reads nothing. */
   async function readTickets<T>(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal },
     read: (transport: JiraCloudTransportV1, request: { readonly cloud_id: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }) => Promise<ReadonlyMap<string, T>>): Promise<ReadonlyMap<string, T>> {
     const ticket_ids = [...new Set(input.ticket_ids)].filter(id => JIRA_ID.test(id));
     if (ticket_ids.length === 0) return new Map();
-    const { transport } = await captureConnection(input);
-    return read(transport, { cloud_id: cloud, ticket_ids, signal: input.signal });
+    return read(openTransport(input), { cloud_id: cloud, ticket_ids, signal: input.signal });
   }
   return Object.freeze({
     ...shared.application,
@@ -102,15 +90,6 @@ export function createJiraPersonConnectionV1(options: {
       // No asynchronous work between the final grant check and the atomic CAS.
       return access.store.set(person.organization_id, request.project_id, request.expected_revision, command, mapping);
     },
-    /** Local-only preflight. Never starts consent, refreshes a token or changes the binding. */
-    captureStatus(input: { readonly access_token: string }): Readonly<{ connected: boolean }> {
-      const { person, requirePerson } = actor(input.access_token);
-      const stored = options.store.current(person);
-      if (stored !== undefined && stored.active) options.store.requireCurrent(stored.binding);
-      requirePerson();
-      return Object.freeze({ connected: stored?.active === true });
-    },
-    captureConnection,
     /** Assignee account ids by ticket id, read in bulk with this person's own connection. */
     assigneeAccounts(input: { readonly access_token: string; readonly ticket_ids: readonly string[]; readonly signal?: AbortSignal }): Promise<ReadonlyMap<string, string>> {
       return readTickets(input, readJiraAssigneeAccountsV1);

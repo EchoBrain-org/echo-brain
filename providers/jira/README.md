@@ -302,8 +302,8 @@ it. Each asker uses their own OAuth connection and Jira permissions. Global Ask
 has no additional project allowlist; project Ask applies the saved mapping before
 discovery and checks it again on open and revalidation. Mine and unmapped projects exclude Jira and
 never fall back to global Jira; explicit ticket inventory in an unsupported scope
-is refused. There is no persistent ticket-open API, sync or index. Jira capture
-is disabled, including in the staging rehearsal. See
+is refused. There is no persistent ticket-open API, sync or index, and no Jira
+capture. See
 [project settings](../../docs/features/project-settings-v1.md#jira-project-mapping)
 for the setting's CLI and revision checks.
 
