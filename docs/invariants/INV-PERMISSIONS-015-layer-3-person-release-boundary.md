@@ -203,10 +203,10 @@ a note or document with an `only_me` audience, or a meeting item its reviewer
 kept privately under the restricted reviewer policy (its record shape is under
 [Current composition](../architecture/meeting-processing-core-and-adapters.md#current-composition));
 it is admitted to its owner alone and then narrowed by association like any
-other item, so no other member of the project lists, finds or cites it. Revalidate all evidence
-supplied to the answerer, including uncited sources, before response release. A
-revision or representation reference is provenance, not continuing permission
-to read it.
+other item, so no other member of the project lists, finds or cites it.
+Revalidate all evidence supplied to the answerer, including uncited sources,
+before response release. A revision or representation reference is
+provenance, not continuing permission to read it.
 
 ADR-0017 once extended this boundary to the meeting transcripts an approver
 explicitly released.
