@@ -47,7 +47,7 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
   const originals = {
     deskAuthorize: vi.fn(check), revalidateDeskRelease: vi.fn(revalidate),
     deskSearch: vi.fn(() => ({ items: attempt === 0 ? [note] : [note, later], truncated: false, receipt: canonicalSha256('note release'),
-      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
+      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'global' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
     })),
   };
   // Searches once, finishes on what it found, then writes one sentence.
@@ -81,7 +81,7 @@ function fixture(options: { readonly writer?: (attempt: number, written: () => u
 function origin(f: ReturnType<typeof fixture>, observer?: CoreRuntimeObserverV1) {
   return serveAsk({ person_answer_v7: f.route, ...(observer === undefined ? {} : { core_runtime_observation: { observer } }) });
 }
-const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: 'Is the PVT fixture ready?', token: 'owner', mine: true });
+const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: 'Is the PVT fixture ready?', token: 'owner' });
 const decode = (text: string): readonly PersonAskProgressEventV3[] => decodeAll(createPersonAskProgressDecoderV3(), text);
 
 describe('Ask progress over HTTP', () => {

@@ -136,7 +136,7 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(f.prompts.join("\n")).not.toContain("SCOUT confidential review");
     for (const citation of answer.citations) {
       if (citation.citation.kind !== "source_revision") throw new Error("wrong citation kind");
-      expect(f.originals.read({ access_token: "member", scope: answer.scope, citation: citation.citation }).atom.text).toMatch(/SCOUT (Software|Hardware) Review/);
+      expect(f.originals.read({ access_token: "member", scope: { kind: "global" }, citation: citation.citation }).atom.text).toMatch(/SCOUT (Software|Hardware) Review/);
     }
     const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
     expect(body).toMatchObject({ principal_id: MEMBER.principal_id, outcome: "answered" });
@@ -153,7 +153,8 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(answer.citations).toHaveLength(1);
     const citation = answer.citations[0]!.citation;
     if (citation.kind !== "source_revision") throw new Error("wrong citation kind");
-    expect(f.originals.read({ access_token: "owner", scope: answer.scope, citation }).atom.text).toBe("Atlas plan.md\nThe launch window is October.");
+    expect(answer.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
+    expect(f.originals.read({ access_token: "owner", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation }).atom.text).toBe("Atlas plan.md\nThe launch window is October.");
     const found = await f.route.searchEvidence({ access_token: "owner", request: { schema_version: 1, query: "launch window", project_id: PROJECT_ALPHA } });
     expect(found.items.map(item => item.citation)).toContainEqual(citation);
     for (const item of found.items) for (const key of ["dates", "date_kind"]) expect(item).not.toHaveProperty(key);

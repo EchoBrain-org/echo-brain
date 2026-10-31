@@ -78,16 +78,15 @@ const ANSWERED_V3: PersonAskProgressEventV3 = { type: 'answer', response: answer
 const framesV3 = (events: readonly PersonAskProgressEventV3[]) => events.map(event => formatPersonAskProgressEventV3(event)).join('');
 const STREAM_V3 = `${framesV3(STEPS_V3.slice(0, 2))}${PERSON_ASK_PROGRESS_HEARTBEAT_V1}${framesV3(STEPS_V3.slice(2))}${framesV3([ANSWERED_V3])}`;
 
-// A Mine Ask's stream, in any version: only what the asker added, so meetings and documents, and never a live tool, a
-// follow-up or the workspace.
-const SEARCHED_MINE = { type: 'searched' as const, sources: [{ kind: 'meetings' as const }, { kind: 'documents' as const }], found: 1 };
-const READ_MINE = { type: 'read' as const, items: [decision] };
-const STEPS_MINE: readonly PersonAskProgressStepEventV3[] = [
-  { type: 'stage', stage: 'searching' }, SEARCHED_MINE, { type: 'stage', stage: 'reading', pending: 1 }, READ_MINE,
+// A project Ask's stream: here only the project's meetings and documents.
+const SEARCHED_PROJECT = { type: 'searched' as const, sources: [{ kind: 'meetings' as const }, { kind: 'documents' as const }], found: 1 };
+const READ_PROJECT = { type: 'read' as const, items: [decision] };
+const STEPS_PROJECT: readonly PersonAskProgressStepEventV3[] = [
+  { type: 'stage', stage: 'searching' }, SEARCHED_PROJECT, { type: 'stage', stage: 'reading', pending: 1 }, READ_PROJECT,
   { type: 'stage', stage: 'writing' }, { type: 'stage', stage: 'checking_access' },
 ];
-const receiptMine = () => ({ looked_through: 1, elapsed_ms: 12_000, rows: [SEARCHED_MINE, READ_MINE] });
-const answerMineV8 = () => answer({ kind: 'mine' });
+const receiptProject = () => ({ looked_through: 1, elapsed_ms: 12_000, rows: [SEARCHED_PROJECT, READ_PROJECT] });
+const answerProjectV8 = () => answer({ kind: 'project', project_id: projectId });
 
 const encoder = new TextEncoder();
 const STREAM_HEADERS = { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' };
@@ -446,10 +445,10 @@ describe('person ask --progress', () => {
     expect(lines(plain.stdout)).toEqual([{ ok: true, result: answerV8() }]);
   });
 
-  it('sends no opt-in header and prints one line without --progress, on /v7 in every scope, Mine included', async () => {
+  it('sends no opt-in header and prints one line without --progress, on /v7 in every scope', async () => {
     for (const [argv, body] of [
       [['ask', '--question', 'What did we decide?'], answerV8()],
-      [['ask', '--question', 'What did we decide?', '--mine'], answerMineV8()],
+      [['ask', '--question', 'What did we decide?', '--project', projectId], answerProjectV8()],
     ] as const) {
       const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body));
       const { output, run } = cli(sessionHome(), fetch);
@@ -461,15 +460,15 @@ describe('person ask --progress', () => {
     }
   });
 
-  // Mine streams as every scope does, in progress V3 on /v7.
-  it('streams a Mine Ask with --progress', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(frames([...STEPS_MINE, { type: 'answer', response: answerMineV8(), receipt: receiptMine() }]), 7));
+  // A project Ask streams its steps as every scope does, in progress V3 on /v7.
+  it('streams a project Ask with --progress, step by step', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(frames([...STEPS_PROJECT, { type: 'answer', response: answerProjectV8(), receipt: receiptProject() }]), 7));
     const { output, run } = cli(sessionHome(), fetch);
-    await expect(run(['ask', '--question', 'What did we decide?', '--progress', '--mine'])).resolves.toBe(0);
+    await expect(run(['ask', '--question', 'What did we decide?', '--progress', '--project', projectId])).resolves.toBe(0);
     expect(output.stderr).toBe('');
     expect(fetch.mock.calls.map(([url, init]) => [pathOf(url), headersOf(init).get(PERSON_ASK_PROGRESS_HEADER_V1), JSON.parse(String(init?.body))]))
-      .toEqual([['/v7/person/ask', '3', { schema_version: 3, question: 'What did we decide?', mine: true }]]);
-    expect(lines(output.stdout)).toEqual([...STEPS_MINE.map(progress => ({ ok: true, progress })), { ok: true, result: answerMineV8(), receipt: receiptMine() }]);
+      .toEqual([['/v7/person/ask', '3', { schema_version: 3, question: 'What did we decide?', project_id: projectId }]]);
+    expect(lines(output.stdout)).toEqual([...STEPS_PROJECT.map(progress => ({ ok: true, progress })), { ok: true, result: answerProjectV8(), receipt: receiptProject() }]);
   });
 
   it('pins the streamed Ask to the expected account: another one signed in prints no step and sends nothing', async () => {

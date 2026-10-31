@@ -84,7 +84,6 @@ const OPTIONS = {
   limit: { type: "string" },
   "open-browser": { type: "boolean" },
   "record-sha256": { type: "string" },
-  mine: { type: "boolean" },
   "only-me": { type: "boolean" },
   ref: { type: "string" },
 } as const;
@@ -135,10 +134,10 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "mine", "progress", "expected-membership-id", "expected-authority", "previous"],
+    accepts: ["question", "project", "progress", "expected-membership-id", "expected-authority", "previous"],
     requires: ["question"],
   },
-  list: { accepts: ["project", "mine", "only-me", "cursor"] },
+  list: { accepts: ["project", "only-me", "cursor"] },
   open: { accepts: ["ref", "cursor"], requires: ["ref"] },
   runs: { accepts: ["request"], requires: ["request"] },
   changes: {},
@@ -174,10 +173,9 @@ const HELP: Readonly<Record<string, string>> = {
 
 Start here:
   status                                      Who you are on this machine (no network).
-  list                                        The newest notes, documents, imported meetings and approved meetings you can read, 25 at a time.
-  list --project <project-id> | --mine | --only-me   Only one of your projects, what you added, or what only you can read.
+  list --project <project-id> | --only-me     The newest items in one of your projects, or of what only you can read, 25 at a time.
   open --ref <ref>                            Read one item from list or from an ask citation.
-  ask --question <text> [--project <project-id> | --mine]   Answer with citations.
+  ask --question <text> [--project <project-id>]   Answer with citations.
 list shows only what you can read now; next_cursor means more.
 
 Commands:
@@ -185,7 +183,7 @@ Commands:
   status      Show client build identity and sign-in state.
   session-refresh  Renew the local session with the Authority.
   logout      Remove the local session.
-  list        List the newest notes, documents, imported meetings and approved meetings you can read.
+  list        List the newest notes, documents, imported meetings and approved meetings in one project, or only yours.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
   ask-check   Check whether what earlier answers cited changed, with no content.
@@ -227,21 +225,20 @@ Run \`echo-brain person tools <verb> --help\` for each tool's options.
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
 
-Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
+Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
-Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools, follow-ups and the workspace.
+Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings.
 
 --progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 
 --previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with at most 8 sentences of at most 400 characters each and at most 12 of that answer's citations, as it carried them. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request.
 `,
-  list: `usage: echo-brain person list [--project <project-id> | --mine | --only-me] [--cursor <next_cursor>]
+  list: `usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]
 
 Lists the newest things you can read now, 25 per page: notes, documents, imported meetings and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
-Without a scope flag the list covers the notes, documents, imported meetings and approved meetings ask can read; the first page also shows who you are, your connected tools and your projects.
---project lists one project you belong to. --mine lists only what you added: notes you saved, documents you uploaded and meetings you imported or approved (approved means you were the approver, not an attendee or action owner). --only-me lists everything only you can read, filed in a project or not: your only-me notes and documents, meetings you imported, and approved meetings kept for you alone; a filed row names its projects.
+Give exactly one scope. --project lists one project you belong to, as ask can read it there; its first page also shows the project. --only-me lists everything only you can read, filed in a project or not: your only-me notes and documents, meetings you imported, and approved meetings kept for you alone; a filed row names its projects.
 Pass next_cursor as --cursor with the same scope for the next page; null means the end.
 notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A first page with no items and that notice is not the end: follow its next_cursor later. A later page that could only wait for meetings fails with unavailable (503): retry the same --cursor later.
 `,
@@ -623,7 +620,7 @@ function askPreviousOf(values: Record<Option, string | boolean | undefined>): Pe
   try {
     return validatePersonAnswerRequestV3({
       schema_version: 3, question: values.question,
-      ...(typeof values.project === "string" ? { project_id: values.project } : values.mine === true ? { mine: true } : {}), previous,
+      ...(typeof values.project === "string" ? { project_id: values.project } : {}), previous,
     }).previous!;
   } catch (error) {
     throw new AskPreviousError(`Ask previous is invalid: ${(error as Error).message}`);
@@ -959,10 +956,10 @@ export async function runPersonClientCli(
         throw new Error("--record-sha256 must be sha256 followed by 64 lowercase hex characters");
       }
     }
-    // At most one scope. Only list accepts --only-me; ask has already refused it as not valid.
-    const scopeFlags = ["project", "mine", "only-me"].filter((name) => values[name] !== undefined && values[name] !== false).map((name) => `--${name}`);
-    if ((action === "ask" || action === "list") && scopeFlags.length > 1) {
-      throw new Error(`${scopeFlags.slice(0, -1).join(", ")} and ${scopeFlags.at(-1)} cannot be combined with \`echo-brain person ${action}\``);
+    // A list takes exactly one scope: a project or --only-me.
+    const scopeFlags = ["project", "only-me"].filter((name) => values[name] !== undefined && values[name] !== false).map((name) => `--${name}`);
+    if (action === "list" && scopeFlags.length !== 1) {
+      throw new Error(scopeFlags.length === 0 ? "`echo-brain person list` needs --project or --only-me" : "--project and --only-me cannot be combined with `echo-brain person list`");
     }
     // Only the streamed Ask checks a pinned account: on any other, a pin would be silently ignored.
     if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
@@ -976,7 +973,6 @@ export async function runPersonClientCli(
       listRequest = validatePersonListRequestV1({
         schema_version: 1,
         ...(values.project === undefined ? {} : { project_id: values.project }),
-        ...(values.mine === true ? { mine: true } : {}),
         ...(values["only-me"] === true ? { only_me: true } : {}),
         ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
       });
@@ -1229,9 +1225,7 @@ export async function runPersonClientCli(
       case "ask": {
         validatePersonQueryText(values.question);
         const question = requiredText(values, "question");
-        const scope = values.project !== undefined
-          ? validateProjectIdV1(requiredText(values, "project"))
-          : values.mine === true ? { mine: true } as const : undefined;
+        const scope = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project"));
         if (values.progress === true) {
           // One line per step event as it arrives; the last line is the answer's, with the receipt when the Authority streamed.
           // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.

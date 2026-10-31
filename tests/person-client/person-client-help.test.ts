@@ -85,10 +85,13 @@ describe("Person client help", () => {
   it("documents list without overstating what it covers", async () => {
     // An agent reads this help: it must not overstate what list covers, and must say how a waiting page fails.
     const listHelp = await help(["list", "--help"]);
-    expect(listHelp).toContain("the notes, documents, imported meetings and approved meetings ask can read;");
+    expect(listHelp).toContain("--project lists one project you belong to, as ask can read it there;");
     expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
-    expect(listHelp).toContain("usage: echo-brain person list [--project <project-id> | --mine | --only-me] [--cursor <next_cursor>]");
+    expect(listHelp).toContain("usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]");
+    expect(listHelp).toContain("Give exactly one scope.");
     expect(listHelp).toContain("--only-me lists everything only you can read, filed in a project or not");
+    // The retired scopes are not offered: no --mine, and no list of everything.
+    expect(listHelp).not.toContain("--mine");
   });
 
   it("refuses an unknown command, group command or tool verb, and its help, before any session or network use", async () => {

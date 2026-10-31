@@ -122,17 +122,17 @@ describe('one runtime without live connectors', () => {
   afterAll(async () => { await runtime?.close(); shared.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
   beforeEach(() => { generate.mockClear(); });
 
-  // Ask is mounted with the runtime's follow-up and workspace sources: outside Mine its catalog lists them (ADR-0040).
-  it.each([{ mine: false }, { mine: true }])('serves Ask with no live connectors (mine=$mine)', async ({ mine }) => {
+  // Ask is mounted with the runtime's follow-up and workspace sources: its catalog lists them (ADR-0040).
+  it('serves Ask with no live connectors', async () => {
     const response = await fetch(`${origin}/v7/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ schema_version: 3, question: 'What changed?', ...(mine ? { mine: true } : {}) }),
+      body: JSON.stringify({ schema_version: 3, question: 'What changed?' }),
     });
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ schema_version: 8, scope: { kind: mine ? 'mine' : 'global' }, citations: [] });
+    expect(await response.json()).toMatchObject({ schema_version: 8, scope: { kind: 'global' }, citations: [] });
     expect(generate).toHaveBeenCalled();
     const [prompt] = generate.mock.calls[0] as unknown as [{ readonly user_prompt: string }];
     const catalog = (JSON.parse(prompt.user_prompt) as { source_catalog?: { source: string }[] }).source_catalog?.map(entry => entry.source) ?? [];
-    for (const source of ['follow_ups', 'projects', 'people', 'tools']) expect([source, catalog.includes(source)]).toEqual([source, !mine]);
+    for (const source of ['follow_ups', 'projects', 'people', 'tools']) expect([source, catalog.includes(source)]).toEqual([source, true]);
   });
 });
 

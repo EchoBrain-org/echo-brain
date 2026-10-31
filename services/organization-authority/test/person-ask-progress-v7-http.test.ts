@@ -118,18 +118,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').at(-1)).toMatchObject({ outcome: 'answered', named_citation_digests: expect.arrayContaining([canonicalSha256(project.citation)]) });
   });
 
-  it('never binds the workspace in Mine, which reads only what the asker added: no projects, people or tools are offered, read or audited', async () => {
-    const f = await sentFixture();
-    const planner = leadsAndTasks();
-    const base = await origin(f, planner.model);
-    const response = await ask(base, { progress: null, mine: true });
-    expect(response.status).toBe(200);
-    const answer = validatePersonAnswerResponseV8(await response.json());
-    for (const source of ['projects', 'people', 'tools', 'follow_ups']) expect(planner.catalogs.flat()).not.toContain(source);
-    expect(answer.citations.map(citation => citation.kind)).not.toContain('project');
-    expect(audits(f, 'echo-person-workspace-release-audit-v1')).toEqual([]);
-  });
-
   it('asks the V8 Ask for its layout exactly when the client sends the layout header, streamed or not, and refuses any other value before the Ask runs', async () => {
     const f = await sentFixture();
     const planner = leadsAndTasks();

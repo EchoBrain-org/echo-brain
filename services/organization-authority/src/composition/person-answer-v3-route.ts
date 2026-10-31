@@ -69,11 +69,9 @@ export function askerOf(
   return Object.freeze({ display_name: membership.display_name });
 }
 
-/** Every request shape maps to exactly one scope; mine with a project is refused, never widened. */
-export function scopeOf(request: { readonly project_id?: string; readonly mine?: true }): PersonAskScopeV2 {
-  if (request.mine !== undefined && (request.mine !== true || request.project_id !== undefined)) throw new AuthorityOperationError("invalid_request", "Ask scope is invalid");
-  if (request.project_id !== undefined) return Object.freeze({ kind: "project" as const, project_id: request.project_id });
-  return request.mine === true ? Object.freeze({ kind: "mine" as const }) : Object.freeze({ kind: "global" as const });
+/** Every request shape maps to exactly one scope: its project, or global. */
+export function scopeOf(request: { readonly project_id?: string }): PersonAskScopeV2 {
+  return request.project_id === undefined ? Object.freeze({ kind: "global" as const }) : Object.freeze({ kind: "project" as const, project_id: request.project_id });
 }
 
 /** The context an Ask's audits bind: this Authority's coordinates and the asker's session. */
@@ -124,7 +122,7 @@ export async function runPersonAskV1<T>(
   }
 }
 
-function deskFor(options: CreatePersonAnswerV3RouteOptions, access_token: string, request: { readonly project_id?: string; readonly mine?: true }) {
+function deskFor(options: CreatePersonAnswerV3RouteOptions, access_token: string, request: { readonly project_id?: string }) {
   return createPersonEvidenceDeskV1({
     access_token,
     scope: scopeOf(request),

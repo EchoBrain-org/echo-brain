@@ -784,16 +784,14 @@ describe("Person client", () => {
     });
   });
 
-  // Ask is one route, /v7, in every scope, Mine included: its 404 is not_found, as any other read's, and no other route is
-  // asked.
+  // Ask is one route, /v7, in every scope: its 404 is not_found, as any other read's, and no other route is asked.
   it.each([
     { argv: [], body: {} },
-    { argv: ["--mine"], body: { mine: true } },
     { argv: ["--project", "prj_00000000-0000-4000-8000-000000000019"], body: { project_id: "prj_00000000-0000-4000-8000-000000000019" } },
   ])("asks $argv on /v7 alone, and fails its 404 as not_found", async ({ argv, body }) => {
     await withHome(async home => {
       await installFixtureSession(home);
-      const scope = "mine" in body ? { kind: "mine" } : "project_id" in body ? { kind: "project", project_id: body.project_id } : { kind: "global" };
+      const scope = "project_id" in body ? { kind: "project", project_id: body.project_id } : { kind: "global" };
       const answer = v8PageAnswer({ scope });
       for (const served of [true, false]) {
         const asked: unknown[] = [];

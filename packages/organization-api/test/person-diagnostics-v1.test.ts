@@ -57,7 +57,8 @@ describe('ordinary request diagnostic captures', () => {
   it('carries a capture on an ordinary Ask and only on the start operation of an approved run', () => {
     const ask = { schema_version: 3, question: 'Why is Thermo DVT on hold?', capture_id };
     expect(validatePersonAnswerRequestV3(ask)).toEqual(ask);
-    expect(validatePersonAnswerRequestV3({ ...ask, mine: true })).toEqual({ ...ask, mine: true });
+    const project_id = 'prj_00000000-0000-4000-8000-000000000003';
+    expect(validatePersonAnswerRequestV3({ ...ask, project_id })).toEqual({ ...ask, project_id });
     expect(validatePersonRunsRequestV1({ schema_version: 1, operation: 'start', run_id, capture_id })).toEqual({ schema_version: 1, operation: 'start', run_id, capture_id });
     for (const operation of ['retry', 'view', 'list']) expect(() => validatePersonRunsRequestV1({ schema_version: 1, operation, ...(operation === 'list' ? {} : { run_id }), capture_id })).toThrow();
     for (const invalid of [null, undefined, 'cap_guess']) {

@@ -28,7 +28,6 @@ export interface PersonResearchEvalStartRequestV1 {
   /** Overrides the trigger's own budget profile. */
   readonly budget?: PersonResearchEvalBudgetV1;
   readonly project_id?: ProjectIdV1;
-  readonly mine?: true;
 }
 
 export interface PersonResearchEvalStartReceiptV1 {
@@ -110,7 +109,7 @@ function jsonValue(value: unknown, depth: number, maximumDepth = MAX_INPUT_DEPTH
 
 export function validatePersonResearchEvalStartRequestV1(value: unknown): PersonResearchEvalStartRequestV1 {
   const request = asEnumerableRecord(value, 'Research evaluation start request');
-  exactKeys(request, ['schema_version', 'trigger', 'input'], ['budget', 'project_id', 'mine'], 'Research evaluation start request');
+  exactKeys(request, ['schema_version', 'trigger', 'input'], ['budget', 'project_id'], 'Research evaluation start request');
   if (request.schema_version !== 1) fail('Research evaluation start request version is invalid');
   const trigger = request.trigger;
   if (typeof trigger !== 'string' || !TRIGGER.test(trigger)) fail('Research evaluation trigger is invalid');
@@ -118,12 +117,10 @@ export function validatePersonResearchEvalStartRequestV1(value: unknown): Person
   jsonValue(input, 0);
   if (utf8ByteLength(JSON.stringify(input)) > MAX_ORGANIZATION_API_BODY_BYTES) fail('Research evaluation input is too large');
   if (Object.hasOwn(request, 'budget') && request.budget !== 'live' && request.budget !== 'background') fail('Research evaluation budget is invalid');
-  if (Object.hasOwn(request, 'mine') && (request.mine !== true || Object.hasOwn(request, 'project_id'))) fail('Research evaluation scope is invalid');
   return Object.freeze({
     schema_version: 1 as const, trigger, input,
     ...(Object.hasOwn(request, 'budget') ? { budget: request.budget as PersonResearchEvalBudgetV1 } : {}),
     ...(Object.hasOwn(request, 'project_id') ? { project_id: validateProjectIdV1(request.project_id, 'Research evaluation project_id') } : {}),
-    ...(request.mine === true ? { mine: true as const } : {}),
   });
 }
 

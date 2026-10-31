@@ -166,13 +166,6 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(validatePersonAnswerResponseV8(unmapped.body).citations).toHaveLength(0);
     expect(jiraFetch).not.toHaveBeenCalled();
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'unavailable' }) })]));
-    telemetry.length = 0;
-    const jiraCalls = jiraFetch.mock.calls.length;
-    expect((await post('/v7/person/ask', { schema_version: 3, question: 'What are my tickets?', mine: true })).body).toMatchObject({
-      outcome: 'not_found', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't find this in the sources you can access." })],
-    });
-    expect(jiraFetch).toHaveBeenCalledTimes(jiraCalls);
-    expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'out_of_scope' }) })]));
     const connectedFetch = jiraFetch.getMockImplementation()!;
     for (const status of [200, 429]) {
       telemetry.length = 0;

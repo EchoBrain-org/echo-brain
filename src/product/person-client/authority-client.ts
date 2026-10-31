@@ -374,12 +374,12 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
   return terminal!;
 }
 
-type AskScope = ProjectIdV1 | { readonly mine: true } | undefined;
+type AskScope = ProjectIdV1 | undefined;
 
 /** The Ask's V3 request, which may carry the asker's previous turn (ADR-0047). */
 function askRequest(question: string, scope: AskScope, captureId: PersonDiagnosticCaptureIdV1 | undefined, previous?: PersonAnswerPreviousV1) {
   return validatePersonAnswerRequestV3({ schema_version: 3, question,
-    ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }),
+    ...(scope === undefined ? {} : { project_id: scope }), ...(captureId === undefined ? {} : { capture_id: captureId }),
     ...(previous === undefined ? {} : { previous }) });
 }
 
@@ -394,7 +394,7 @@ function askHeaders(): Readonly<Record<string, string>> {
  * question, say what is different since or ask which one (ADR-0047).
  */
 function inAskScope<T extends { readonly scope: unknown }>(response: T, scope: AskScope, previous?: PersonAnswerPreviousV1): T {
-  const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
+  const expectedScope = scope === undefined ? { kind: 'global' } : { kind: 'project', project_id: scope };
   if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
   }
@@ -1064,12 +1064,11 @@ export class PersonAuthorityClient {
   }
 
   /**
-   * Ask (`/v7`, the V8 answer, research tool contract v1): global by default, a supplied project ID is a strict
-   * project-only scope, and mine is only what the asker added. The answer may cite live tickets and pages, follow-ups,
-   * and the asker's projects, people, tools and tool containers, and must echo the requested scope. The request may
-   * carry the asker's previous turn (ADR-0047).
+   * Ask (`/v7`, the V8 answer, research tool contract v1): global by default, and a supplied project ID is a strict
+   * project-only scope. The answer may cite live tickets and pages, follow-ups, and the asker's projects, people, tools
+   * and tool containers, and must echo the requested scope. The request may carry the asker's previous turn (ADR-0047).
    */
-  async askV7(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
+  async askV7(accessToken: string, question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
     const response = await this.json({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
       validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV8,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
@@ -1084,7 +1083,7 @@ export class PersonAuthorityClient {
    * inside the stream is the error its JSON response would have had. The ask
    * timeout and the caller's signal bound the whole stream.
    */
-  async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
+  async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
     const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, undefined, previous), validate_request: validatePersonAnswerRequestV3,
@@ -1160,12 +1159,10 @@ export class PersonAuthorityClient {
     const response = await this.json({ path: PERSON_LIST_PATH_V1, body: request,
       validate_request: validatePersonListRequestV1, validate_response: validatePersonListResponseV1,
       access_token: accessToken, maximum_response_bytes: PERSON_LIST_RESPONSE_MAX_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal });
-    const expectedScope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id }
-      : request.mine === true ? { kind: 'mine' } : request.only_me === true ? { kind: 'only_me' } : { kind: 'global' };
+    const expectedScope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : { kind: 'only_me' };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different list scope');
-    // Global page 1 carries me; project page 1 carries project; mine, only_me and cursor pages carry no header.
-    const hasHeader = response.me !== undefined || response.project !== undefined;
-    if (hasHeader !== (request.cursor === undefined && (expectedScope.kind === 'global' || expectedScope.kind === 'project'))) {
+    // Project page 1 carries project; only_me and cursor pages carry no header.
+    if ((response.project !== undefined) !== (request.cursor === undefined && expectedScope.kind === 'project')) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a list header on the wrong page');
     }
     return response;

@@ -61,7 +61,7 @@ describe('binding live sources for one request', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('leaves out unlinked sources and binds nothing for the mine scope', async () => {
+  it('leaves out unlinked sources and binds nothing for a scope a source does not read', async () => {
     vi.useFakeTimers();
     try {
       const ticket = connector('ticket', 10, 'unlinked'); const page = connector('page', 20);
@@ -69,10 +69,10 @@ describe('binding live sources for one request', () => {
       expect(sourceIds(desk)).toEqual(['page']);
       expect(page.source).toHaveBeenCalledWith(expect.objectContaining({ project_id: 'project-fixture' }));
 
-      const mine = connector('ticket', 10);
-      const none = await settle(bindPersonLiveEvidenceDeskV1(options().value, [mine.value], { access_token: 'token-fixture', scope: { kind: 'mine' } }, context));
+      const globalOnly = connector('ticket', 10);
+      const none = await settle(bindPersonLiveEvidenceDeskV1(options().value, [{ ...globalOnly.value, scopes: ['global'] }], { access_token: 'token-fixture', scope: { kind: 'project', project_id: 'project-fixture' } }, context));
       expect(sourceIds(none)).toEqual([]);
-      expect(mine.source).not.toHaveBeenCalled();
+      expect(globalOnly.source).not.toHaveBeenCalled();
     } finally { vi.useRealTimers(); }
   });
 

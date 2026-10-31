@@ -24,6 +24,7 @@ import type {
   PersonStoreNoteRowV1,
   PersonStoreReleaseV1,
 } from "../../../application/ports/person-list-v1.js";
+import type { PersonAskScopeV2 } from "../../../application/ports/person-original-context-retrieval-v1.js";
 import {
   PERSON_ORIGINAL_NOTE_CUSTODY_V1,
   PERSON_ORIGINAL_NOTE_NOT_QUARANTINED_V1,
@@ -44,7 +45,7 @@ const MAXIMUM_OPEN_CANONICAL_BYTES = 20 * 1024;
 const MAXIMUM_ORDINAL = 65_535;
 const NOTE_ID = /^(?:ctx|cap)_[0-9a-f]{64}$/;
 const DOCUMENT_ID = /^doc_[0-9a-f]{64}$/;
-const GLOBAL: PersonListStoreScopeV1 = Object.freeze({ kind: "global" });
+const GLOBAL: PersonAskScopeV2 = Object.freeze({ kind: "global" });
 
 type DocumentCustodyRow = {
   readonly document_id: string;
@@ -62,7 +63,8 @@ type Grants = { readonly ids: readonly string[]; readonly sha256: Sha256Digest }
 type Selection = { readonly after: PersonItemPositionV1 | null; readonly limit: number } | { readonly ids: readonly string[] };
 type Witness = {
   readonly tuple: string;
-  readonly scope: PersonListStoreScopeV1;
+  /** A list page's scope, or global for an open. */
+  readonly scope: PersonAskScopeV2 | PersonListStoreScopeV1;
   readonly grants_sha256: Sha256Digest;
   readonly notes: readonly PersonStoreNoteRowV1[];
   readonly documents: readonly PersonStoreDocumentRowV1[];
@@ -253,8 +255,6 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
       case "project":
         if (!grants.ids.includes(scope.project_id)) denied();
         return;
-      case "global":
-      case "mine":
       case "only_me":
         return;
       default:
@@ -269,7 +269,7 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     return actor;
   }
 
-  private notes(actor: PersonAccessAuthorization, scope: PersonListStoreScopeV1, grants: Grants, selection: Selection): readonly { readonly row: PersonStoreNoteRowV1; readonly text: string }[] {
+  private notes(actor: PersonAccessAuthorization, scope: PersonAskScopeV2 | PersonListStoreScopeV1, grants: Grants, selection: Selection): readonly { readonly row: PersonStoreNoteRowV1; readonly text: string }[] {
     const acl = personOriginalAclV1("u", actor, grants.ids);
     const scoped = personOriginalScopeFilterV1("u", actor, scope);
     const tail = "ids" in selection
@@ -301,7 +301,7 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     return [...notes, ...imported].sort((a, b) => b.row.added_at.localeCompare(a.row.added_at) || a.row.id.localeCompare(b.row.id)).slice(0, 'ids' in selection ? selection.ids.length : selection.limit);
   }
 
-  private documents(actor: PersonAccessAuthorization, scope: PersonListStoreScopeV1, grants: Grants, selection: Selection): readonly { readonly row: PersonStoreDocumentRowV1; readonly filename: string }[] {
+  private documents(actor: PersonAccessAuthorization, scope: PersonAskScopeV2 | PersonListStoreScopeV1, grants: Grants, selection: Selection): readonly { readonly row: PersonStoreDocumentRowV1; readonly filename: string }[] {
     const acl = personOriginalAclV1("d", actor, grants.ids);
     const scoped = personOriginalScopeFilterV1("d", actor, scope);
     const tail = "ids" in selection

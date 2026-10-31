@@ -198,9 +198,9 @@ function invitationOutputPath(path: string): string {
 }
 
 /** Preserve the public query error type before transport schema validation. */
-function validateAskInput(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined): void {
+function validateAskInput(question: string, scope: ProjectIdV1 | undefined): void {
   validatePersonQueryText(question);
-  if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+  if (scope !== undefined) validateProjectIdV1(scope, 'Ask project_id');
 }
 
 /** A refreshed session is the same account; another sign-in is not. */
@@ -696,7 +696,7 @@ export class PersonClient {
    * (research tool contract v1). It may carry the asker's previous turn
    * (ADR-0047).
    */
-  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
+  async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
     previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
     validateAskInput(question, scope);
     return this.withReadSession((authority, token) => authority.askV7(token, question, scope, signal, captureId, previous));
@@ -717,7 +717,7 @@ export class PersonClient {
    * asked for as another: a session another sign-in installed first is
    * refused before anything is sent, so no step of that account reaches it.
    */
-  async askWithLiveProgress(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
+  async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {},
     previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);

@@ -120,9 +120,10 @@ describe('person ask --previous (ADR-0047)', () => {
     expect(bodyOf(streamed.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
     const plain = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer));
     const once = cli(plain);
-    expect(await once.run(['ask', `--question=${PREVIOUS.question}`, '--mine', `--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })}`])).toBe(1);
-    // A Mine Ask is answered in its own scope; this answer's global scope is refused, but the request carried the turn and the scope.
-    expect(bodyOf(plain.mock.calls[0]![1])).toEqual({ schema_version: 3, question: PREVIOUS.question, mine: true, previous: { ...PREVIOUS, purpose: 'ask_again' } });
+    const project_id = 'prj_00000000-0000-4000-8000-000000000001';
+    expect(await once.run(['ask', `--question=${PREVIOUS.question}`, '--project', project_id, `--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })}`])).toBe(1);
+    // A project Ask is answered in its own scope; this answer's global scope is refused, but the request carried the turn and the scope.
+    expect(bodyOf(plain.mock.calls[0]![1])).toEqual({ schema_version: 3, question: PREVIOUS.question, project_id, previous: { ...PREVIOUS, purpose: 'ask_again' } });
   });
 
   it('refuses a turn it cannot send before anything is sent, as invalid_request, so a caller can ask without it', async () => {
