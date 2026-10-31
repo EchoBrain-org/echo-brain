@@ -1,0 +1,184 @@
+# CloudFormation Guard 3.2.1 policy for the staging clean-data volume backup.
+# These rules intentionally bind the small stack to its reviewed exact shape.
+
+let all_resources = Resources.*
+let backup_plans = Resources.*[ Type == 'AWS::Backup::BackupPlan' ]
+let backup_selections = Resources.*[ Type == 'AWS::Backup::BackupSelection' ]
+let backup_vaults = Resources.*[ Type == 'AWS::Backup::BackupVault' ]
+let iam_roles = Resources.*[ Type == 'AWS::IAM::Role' ]
+let alarms = Resources.*[ Type == 'AWS::CloudWatch::Alarm' ]
+
+rule exact_resource_inventory {
+    let resource_count = count(%all_resources)
+    let plan_count = count(%backup_plans)
+    let selection_count = count(%backup_selections)
+    let vault_count = count(%backup_vaults)
+    let role_count = count(%iam_roles)
+    let alarm_count = count(%alarms)
+
+    %resource_count == 6
+    %plan_count == 1
+    %selection_count == 1
+    %vault_count == 1
+    %role_count == 2
+    %alarm_count == 1
+}
+
+rule retained_data_backup_vault {
+    Resources.StagingDataBackupVault.Type == 'AWS::Backup::BackupVault'
+    Resources.StagingDataBackupVault.DeletionPolicy == 'Retain'
+    Resources.StagingDataBackupVault.UpdateReplacePolicy == 'Retain'
+    Resources.StagingDataBackupVault.Properties.BackupVaultName == { "Ref": "AWS::StackName" }
+    Resources.StagingDataBackupVault.Properties.EncryptionKeyArn not exists
+    Resources.StagingDataBackupVault.Properties.LockConfiguration not exists
+}
+
+rule exact_data_volume_selection {
+    Resources.StagingDataVolumeSelection.Type == 'AWS::Backup::BackupSelection'
+    Resources.StagingDataVolumeSelection.Properties.BackupPlanId == { "Ref": "StagingDataBackupPlan" }
+    Resources.StagingDataVolumeSelection.Properties.BackupSelection.SelectionName == 'authority-staging-clean-data-volume-only'
+    Resources.StagingDataVolumeSelection.Properties.BackupSelection.IamRoleArn == { "Fn::GetAtt": [ "StagingDataBackupServiceRole", "Arn" ] }
+    Resources.StagingDataVolumeSelection.Properties.BackupSelection.Resources == [ { "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${DataVolumeId}" } ]
+    Resources.StagingDataVolumeSelection.Properties.BackupSelection.Conditions not exists
+    Resources.StagingDataVolumeSelection.Properties.BackupSelection.ListOfTags not exists
+    Resources.StagingDataVolumeSelection.Properties.BackupSelection.NotResources not exists
+}
+
+rule exact_backup_and_restore_roles {
+    Resources.StagingDataBackupServiceRole.Type == 'AWS::IAM::Role'
+    Resources.StagingDataBackupServiceRole.Properties.RoleName not exists
+    Resources.StagingDataBackupServiceRole.Properties.ManagedPolicyArns not exists
+    Resources.StagingDataBackupServiceRole.Properties.AssumeRolePolicyDocument.Statement == [ { "Effect": "Allow", "Principal": { "Service": "backup.amazonaws.com" }, "Action": "sts:AssumeRole" } ]
+    Resources.StagingDataBackupServiceRole.Properties.Policies == [ {
+        "PolicyName": "authority-staging-clean-data-ebs-backup-only",
+        "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "CreateSnapshotsOnlyFromSelectedVolume",
+                    "Effect": "Allow",
+                    "Action": "ec2:CreateSnapshot",
+                    "Resource": [
+                        { "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${DataVolumeId}" },
+                        { "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*" }
+                    ]
+                },
+                {
+                    "Sid": "DescribeEbsResources",
+                    "Effect": "Allow",
+                    "Action": [ "ec2:DescribeVolumes", "ec2:DescribeSnapshots", "ec2:DescribeTags" ],
+                    "Resource": "*"
+                },
+                {
+                    "Sid": "ManageBackupSnapshots",
+                    "Effect": "Allow",
+                    "Action": [ "ec2:CopySnapshot", "ec2:CreateTags", "ec2:DeleteSnapshot" ],
+                    "Resource": { "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*" }
+                },
+                {
+                    "Sid": "ManageTierOnlyForAwsBackupSnapshots",
+                    "Effect": "Allow",
+                    "Action": "ec2:ModifySnapshotTier",
+                    "Resource": { "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*" },
+                    "Condition": { "Null": { "aws:ResourceTag/aws:backup:source-resource": "false" } }
+                },
+                {
+                    "Sid": "ReadExactRecoveryVault",
+                    "Effect": "Allow",
+                    "Action": [ "backup:DescribeBackupVault", "backup:CopyIntoBackupVault" ],
+                    "Resource": { "Fn::GetAtt": [ "StagingDataBackupVault", "BackupVaultArn" ] }
+                },
+                {
+                    "Sid": "ResolveSelectedBackupResources",
+                    "Effect": "Allow",
+                    "Action": "tag:GetResources",
+                    "Resource": "*"
+                }
+            ]
+        }
+    } ]
+
+    Resources.StagingDataRestoreServiceRole.Type == 'AWS::IAM::Role'
+    Resources.StagingDataRestoreServiceRole.Properties.RoleName not exists
+    Resources.StagingDataRestoreServiceRole.Properties.ManagedPolicyArns not exists
+    Resources.StagingDataRestoreServiceRole.Properties.AssumeRolePolicyDocument.Statement == [ { "Effect": "Allow", "Principal": { "Service": "backup.amazonaws.com" }, "Action": "sts:AssumeRole" } ]
+    Resources.StagingDataRestoreServiceRole.Properties.Policies == [ {
+        "PolicyName": "authority-staging-clean-data-ebs-restore-only",
+        "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "RestoreOnlyAnEbsSnapshotToAnUnattachedVolume",
+                    "Effect": "Allow",
+                    "Action": [ "ec2:CreateVolume", "ec2:DeleteVolume" ],
+                    "Resource": [
+                        { "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*" },
+                        { "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*" }
+                    ]
+                },
+                {
+                    "Sid": "DescribeEbsRestoreInputs",
+                    "Effect": "Allow",
+                    "Action": [ "ec2:DescribeSnapshots", "ec2:DescribeVolumes" ],
+                    "Resource": "*"
+                },
+                {
+                    "Sid": "DescribeOnlyTheSelectedEbsKey",
+                    "Effect": "Allow",
+                    "Action": "kms:DescribeKey",
+                    "Resource": { "Ref": "DataVolumeKmsKeyArn" }
+                },
+                {
+                    "Sid": "UseOnlyTheSelectedEbsKeyThroughEc2",
+                    "Effect": "Allow",
+                    "Action": [
+                        "kms:Decrypt",
+                        "kms:Encrypt",
+                        "kms:GenerateDataKey",
+                        "kms:GenerateDataKeyWithoutPlaintext",
+                        "kms:ReEncryptFrom",
+                        "kms:ReEncryptTo"
+                    ],
+                    "Resource": { "Ref": "DataVolumeKmsKeyArn" },
+                    "Condition": { "StringEquals": { "kms:ViaService": { "Fn::Sub": "ec2.${AWS::Region}.${AWS::URLSuffix}" } } }
+                },
+                {
+                    "Sid": "GrantOnlyForAwsEbsRestoreOfSelectedKey",
+                    "Effect": "Allow",
+                    "Action": "kms:CreateGrant",
+                    "Resource": { "Ref": "DataVolumeKmsKeyArn" },
+                    "Condition": { "Bool": { "kms:GrantIsForAWSResource": "true" } }
+                }
+            ]
+        }
+    } ]
+}
+
+rule bounded_schedule_and_retention {
+    Resources.StagingDataBackupPlan.Type == 'AWS::Backup::BackupPlan'
+    Resources.StagingDataBackupPlan.Properties.BackupPlan.BackupPlanRule == [ {
+        "RuleName": "authority-staging-clean-data",
+        "TargetBackupVault": { "Ref": "StagingDataBackupVault" },
+        "ScheduleExpression": { "Ref": "BackupScheduleExpression" },
+        "StartWindowMinutes": 60,
+        "CompletionWindowMinutes": 180,
+        "Lifecycle": { "DeleteAfterDays": { "Ref": "RecoveryPointRetentionDays" } },
+        "RecoveryPointTags": { "Application": "echo-brain", "Environment": "staging", "Purpose": "authority-staging-data-backup" }
+    } ]
+}
+
+rule missed_backup_alarm {
+    Resources.StagingDataBackupMissedAlarm.Type == 'AWS::CloudWatch::Alarm'
+    Resources.StagingDataBackupMissedAlarm.Properties.Namespace == 'AWS/Backup'
+    Resources.StagingDataBackupMissedAlarm.Properties.MetricName == 'NumberOfBackupJobsCompleted'
+    Resources.StagingDataBackupMissedAlarm.Properties.Dimensions == [ { "Name": "BackupVaultName", "Value": { "Ref": "StagingDataBackupVault" } } ]
+    Resources.StagingDataBackupMissedAlarm.Properties.Statistic == 'Sum'
+    Resources.StagingDataBackupMissedAlarm.Properties.Period == 3600
+    Resources.StagingDataBackupMissedAlarm.Properties.EvaluationPeriods == 30
+    Resources.StagingDataBackupMissedAlarm.Properties.DatapointsToAlarm == 30
+    Resources.StagingDataBackupMissedAlarm.Properties.Threshold == 1
+    Resources.StagingDataBackupMissedAlarm.Properties.ComparisonOperator == 'LessThanThreshold'
+    Resources.StagingDataBackupMissedAlarm.Properties.TreatMissingData == 'breaching'
+    Resources.StagingDataBackupMissedAlarm.Properties.AlarmActions == [ { "Ref": "AlertTopicArn" } ]
+    Resources.StagingDataBackupMissedAlarm.Properties.OKActions == [ { "Ref": "AlertTopicArn" } ]
+}

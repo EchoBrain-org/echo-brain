@@ -35,6 +35,7 @@ link to the maintained procedure.
 - [RB-OPERATIONS-001: Deploy and rehearse minimal Authority observability](RB-OPERATIONS-001-authority-observability.md)
 - [RB-OPERATIONS-002: Establish and rehearse the Authority root-volume recovery floor](RB-OPERATIONS-002-authority-recovery-floor.md)
 - [RB-OPERATIONS-003: Protect canonical source and immutable releases](RB-OPERATIONS-003-protect-canonical-source-and-releases.md)
+- [RB-OPERATIONS-004: Back up the staging clean-data volume and rehearse its restore](RB-OPERATIONS-004-authority-staging-data-volume-backup.md)
 
 Existing Authority procedures remain under
 [`deploy/organization-authority/`](../../deploy/organization-authority). They

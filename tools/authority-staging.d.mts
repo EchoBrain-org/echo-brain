@@ -21,6 +21,8 @@ export type StagingLifecycleInput = Readonly<{
   /** Independently trusted `sha256:` pin for accepted Authority recovery. */
   authorityPinSha256?: string;
   hostSetup?: Readonly<{ path: string; key: string; sha256: string }>;
+  /** Required by `backup`: the existing same-account staging alert topic. */
+  backup?: Readonly<{ alertTopicArn: string }>;
 }>;
 
 export type StackStatus =
@@ -48,6 +50,8 @@ export type ChangeSetRequest = Readonly<{
     zone_id: string;
   }>;
   onStackFailure?: "DO_NOTHING";
+  /** Present only for the data-backup stack, whose template has its own vector. */
+  parameterKeys?: readonly string[];
   templatePath: string;
   templateSha256: string;
   capabilities: readonly ["CAPABILITY_IAM"];
@@ -98,7 +102,7 @@ export type CloudFormationAdapter = Readonly<{
 export type StagingLifecycleReceipt = Readonly<{
   schema_version: 1;
   kind: "echo-authority-staging-lifecycle-v1";
-  action: "slot-init" | "up" | "down" | "status";
+  action: "slot-init" | "up" | "down" | "status" | "backup";
   state:
     | "planned"
     | "ready"
@@ -150,6 +154,38 @@ export type LifecycleDependencies = Readonly<{
         rootDeviceName: string;
         rootDeviceType: string;
         state: string;
+      }>
+    >;
+    /** Required by `backup` only. */
+    describeVolume?(
+      input: Readonly<{ region: string; volumeId: string }>,
+    ): Promise<
+      Readonly<{
+        volumeId: string;
+        availabilityZone: string;
+        state: string;
+        encrypted: boolean;
+        kmsKeyId?: string;
+        tags: Readonly<Record<string, string>>;
+      }>
+    >;
+  }>;
+  sns?: Readonly<{
+    describeTopic(
+      input: Readonly<{ region: string; topicArn: string }>,
+    ): Promise<Readonly<{ topicArn: string; subscriptionsConfirmed: number }>>;
+  }>;
+  kms?: Readonly<{
+    describeKey(
+      input: Readonly<{ region: string; keyId: string }>,
+    ): Promise<
+      Readonly<{
+        arn: string;
+        accountId: string;
+        keyManager: string;
+        keyState: string;
+        enabled: boolean;
+        keyUsage: string;
       }>
     >;
   }>;
@@ -234,7 +270,7 @@ export function awsJson(
   }>,
 ): Promise<unknown>;
 export function runAuthorityStaging(
-  action: "slot-init" | "up" | "down" | "status",
+  action: "slot-init" | "up" | "down" | "status" | "backup",
   input: unknown,
   dependencies?: LifecycleDependencies,
 ): Promise<StagingLifecycleReceipt>;
