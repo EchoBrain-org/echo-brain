@@ -1,10 +1,10 @@
 // Test hook only (compiled out of release bundles): a synthetic session and a
 // fixture Authority behind the real person client. Every request is logged to
 // <home>/calls.jsonl so tests can assert what the app actually sent.
+import * as organizationApi from '@echo-brain/organization-api';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const AUTHORITY = 'https://authority.example';
 const IDENTITY_PROVIDER = 'https://accounts.example';
@@ -43,7 +43,7 @@ const SECOND_PAGE = 'cGFnZTI';
 const PAGE = 10;
 const EXTRACTOR = 'fixture-extractor-v1';
 
-/** The requests and responses the fixture checks with the contract's own validators. */
+/** The requests and responses the fixture checks with the contract's own validators, typed as loosely as it reads them. */
 interface Contract {
   validateOrganizationDirectorySearchV1(value: unknown): { query?: string; limit?: number; cursor?: string };
   validateOrganizationDirectoryV1(value: unknown): unknown;
@@ -72,6 +72,7 @@ interface Contract {
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1: string;
   PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1: string;
 }
+const api = organizationApi as unknown as Contract;
 
 /** A runs request, as the contract's validator returns it. */
 interface RunsRequest {
@@ -402,7 +403,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     operations: Operation[];
   }).operations;
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
-  const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<Contract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   let granolaImported = false, granolaApproved = false, granolaBaselineHomeReads = 0;
   // The automatic import granola-preparing saved: what it watches and the project it suggests.
@@ -849,7 +849,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * THERM's pages and tickets and answers at once, laid out when the Ask asked
    * for it (`layout`).
    */
-  const progressStream = (api: Contract, question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, layout = false): Response => {
+  const progressStream = (question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, layout = false): Response => {
     const format = api.formatPersonAskProgressEventV3;
     const listed = mode === 'ask-progress-listed';
     const laid = mode === 'ask-layout';
@@ -1293,7 +1293,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           suggested_projects: entry.project_ids.flatMap(project_id => { const name = names.get(project_id); return name === undefined ? [] : [{ project_id, name }]; }), records: [] });
       }
       if (body.operation !== 'submit') return failure('not_found', 404);
-      const request = (await contract()).validatePersonMeetingRequestV2(body);
+      const request = api.validatePersonMeetingRequestV2(body);
       const meeting = request.meeting as { title: string; notes: string; transcript: string; started_at?: string; all_day?: true };
       const meeting_id = `hand-in-${createHash('sha256').update(JSON.stringify(meeting, Object.keys(meeting).sort())).digest('hex')}`;
       if (!pasted.some(entry => entry.meeting_id === meeting_id)) {
@@ -1387,7 +1387,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // Home reads exist even when the meeting provider is unavailable.
     if (method === 'GET' && path === '/v1/person/changes') return json(changeCheck());
     if (method === 'POST' && path === '/v1/person/runs') {
-      const api = await contract();
       let request: RunsRequest;
       try {
         request = api.validatePersonRunsRequestV1(body);
@@ -1691,7 +1690,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     // Only me, or one project's page: the desktop never lists all you may read, nor Mine any more (ADR-0049).
     if (method === 'POST' && path === '/v1/person/list') {
-      const api = await contract();
       let request: ReturnType<Contract['validatePersonListRequestV1']>;
       try {
         request = api.validatePersonListRequestV1(body);
@@ -1729,7 +1727,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     // One item by its ref, under your access: anything you cannot read is one not_found.
     if (method === 'POST' && path === '/v1/person/open') {
-      const api = await contract();
       let request: ReturnType<Contract['validatePersonOpenRequestV1']>;
       try {
         request = api.validatePersonOpenRequestV1(body);
@@ -1922,7 +1919,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     // Everyone in your organization, for any member and with no project (ADR-0016).
     if (method === 'POST' && path === '/v1/person/directory') {
-      const api = await contract();
       let request: ReturnType<Contract['validateOrganizationDirectorySearchV1']>;
       try {
         request = api.validateOrganizationDirectorySearchV1(body);
@@ -2076,7 +2072,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // The Ask timeline's reads (ADR-0047): the source check, by citation, and what arrived in your projects. Each is checked
     // by the contract's validator; other modes return 404 for the source check.
     if (method === 'POST' && path === '/v1/person/ask/check' && TIMELINE_MODES.has(mode)) {
-      const api = await contract();
       let items: ReturnType<Contract['validatePersonAskCheckRequestV1']>['items'];
       try {
         ({ items } = api.validatePersonAskCheckRequestV1(body));
@@ -2088,7 +2083,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return json(checked);
     }
     if (method === 'GET' && path === '/v1/person/project-activity') {
-      const api = await contract();
       arrive();
       const activity = projectActivityOf(listed(), arrivals);
       api.validatePersonProjectActivityV1(activity);
@@ -2098,7 +2092,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (method === 'POST' && path === '/v7/person/ask') {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
-        request = (await contract()).validatePersonAnswerRequestV3(body);
+        request = api.validatePersonAnswerRequestV3(body);
       } catch {
         return failure('invalid_request', 400);
       }
@@ -2108,7 +2102,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : { kind: 'global' };
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
-      const api = await contract();
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
       if (TIMELINE_MODES.has(mode)) {
         const answered = json(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
@@ -2120,7 +2113,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
       const laidOut = new Headers(init?.headers).get(api.PERSON_ASK_ANSWER_LAYOUT_HEADER_V1) === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1;
       if ((mode.startsWith('ask-progress') || mode === 'ask-layout') && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {
-        return progressStream(api, question, scope, init?.signal ?? undefined, laidOut);
+        return progressStream(question, scope, init?.signal ?? undefined, laidOut);
       }
       if (mode === 'ask-progress-workspace' || mode === 'ask-progress-listed' || mode === 'ask-layout') {
         const answered = json(mode === 'ask-progress-listed' ? listedAnswer(question, scope)
