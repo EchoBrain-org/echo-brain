@@ -98,16 +98,6 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
 }));
 
 vi.mock(
-  "../src/composition/staging-connector-rehearsal-runtime.js",
-  () => ({
-    async openStagingConnectorRehearsalService(config: unknown) {
-      const { openOrganizationAuthorityService } = await import("../src/composition/organization-authority-composition-root.js");
-      return openOrganizationAuthorityService(config as Parameters<typeof openOrganizationAuthorityService>[0]);
-    },
-  }),
-);
-
-vi.mock(
   "../src/composition/observability/journey-telemetry-transport-v1.js",
   async (importOriginal) => {
     const actual =
@@ -405,6 +395,34 @@ describe("admitted runtime CLI events", () => {
       "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack", ...flags,
     ])).toBe(1);
     expect(runtimeState.worker_error).toBeUndefined();
+  });
+
+  it.each([
+    ["--nango-base-url", "https://nango.example"],
+    ["--jira-cloud-id", "22222222-2222-4222-8222-222222222222", "--jira-nango-integration", "jira"],
+    ["--jira-cloud-id", "11111111-1111-4111-8111-111111111111", "--jira-nango-integration", "other-jira"],
+  ])("refuses a Nango or explicit Jira selection that conflicts with the staging profile, with or without its switches (%s)", async (...flags) => {
+    const directory = stagingProfileDirectory();
+    expect(await start({ stderr: () => undefined }, directory, [
+      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack", ...flags,
+    ])).toBe(1);
+    expect(runtimeState.worker_error).toBeUndefined();
+  });
+
+  it("selects staging Jira from explicit flags that match the staging profile", async () => {
+    const directory = stagingProfileDirectory();
+    const errors: string[] = [];
+    const running = start({ stderr: value => errors.push(value) }, directory, [
+      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack",
+      "--jira-cloud-id", "11111111-1111-4111-8111-111111111111", "--jira-nango-integration", "jira",
+    ]);
+    try {
+      await vi.waitFor(() => expect(runtimeState.jira_person_live).toMatchObject({
+        enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "jira",
+      }));
+      expect(runtimeState.confluence_person_live).toBeUndefined();
+    } finally { process.emit("SIGTERM"); await running; }
+    expect(await running, errors.join("")).toBe(0);
   });
 
   it("serves agentic Ask whatever the retired switches say, and refuses a switched-on small-scope shortcut", async () => {

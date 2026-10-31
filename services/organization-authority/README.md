@@ -85,99 +85,75 @@ run reset into a directory that already contains state.
 
 ## Staging connector rehearsal
 
-This opt-in profile reuses the staging Authority's HTTPS endpoint and Google
-sign-in. First deploy the matching server, host tooling and Person client through
-the [operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
-The [host guide](../../deploy/organization-authority/README.md#optional-staging-connector-rehearsal)
+The fixed staging connector profile is a staging-only input to the ordinary
+Authority: there is no separate rehearsal root, runner or route. The
+[host guide](../../deploy/organization-authority/README.md#optional-staging-connector-rehearsal)
 owns preparing the nonsecret `staging_connector_rehearsal` onboarding field and
-its private profile file. A checkout build alone does not enable a running
-Authority.
+its private profile file. First deploy the matching server, host tooling and
+Person client through the
+[operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
+A checkout build alone does not enable a running Authority.
 
-Save an exact copy of that profile object as a local nonsecret JSON file. Use
-the release-matched Person client to sign in. The runner reads only Jira: run
-`person tools connect --tool jira` when the owner's Jira connection is absent.
-Organization Slack setup belongs to onboarding, not to this runner. If the
-organization Slack connection is absent after a staging reset, follow the host
-`resume --existing-slack-app <app-id>` handoff and the
-[existing-app procedure](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection):
-`person tools setup --tool slack --existing-app <app-id>`, or `--reconnect`
-when that app's credentials are already saved (never both). Then run
-`person tools connect --tool slack`.
-Slack setup asks only for the bot's four delivery scopes; human Slack consent is still required. Without live Jira Ask enabled, the diagnostic profile admits Jira connection commands only for its initial owner. Enabling live Jira Ask lets each Person connect their own account. Organization Granola capture is retired.
+The service CLI reads the profile only at its fixed path, for
+`https://authority-staging.echobrain.org` under its own release identity, and
+never together with the four synthetic-meeting input. It then opens the same
+composition root as every Authority. The profile only selects providers and
+switches inside it, and the EC2 Compose overlay sets each switch below whenever
+the profile is present:
 
-After `npm run build`, the owner Mac can run:
+- `ECHO_STAGING_JIRA_ASK_V1=true` selects live Jira Ask with the profile's
+  Atlassian Cloud ID and Jira integration key, exactly as `--jira-cloud-id` and
+  `--jira-nango-integration` would. Each Person connects their own Jira account
+  through Tools (`person tools connect --tool jira`). Connections live in
+  `jira-person-connections.sqlite` in the Authority state directory, as on
+  every Authority, and survive ordinary restarts. Global Ask follows that
+  person's Jira permissions across the connected site. ECHO project Ask
+  requires a lead-configured Jira mapping and the asker's own connection. The
+  mapping filters discovery before tickets are read and remains checked on open
+  and revalidation. Unmapped projects exclude Jira. With the profile,
+  explicit Jira flags must match its site and integration, and Nango must be
+  Nango Cloud. The profile's `jira.project` is not read.
+- `ECHO_STAGING_CONFLUENCE_ASK_V1=true` selects live Confluence Ask with only
+  the profile's Atlassian Cloud ID and a separately configured Nango Cloud
+  integration named `confluence`. It uses each Person's own Confluence grant
+  and no Jira project restriction. Global Ask follows the person's Confluence
+  access; project Ask filters discovery through the project's Confluence space
+  mapping. Conflicting explicit Confluence flags refuse startup. Without the
+  staging switch or both explicit Confluence flags, the Confluence source
+  remains unconfigured. Configure the `confluence` integration and its
+  documented OAuth scopes before staging the release, then connect Confluence
+  through Tools with browser consent.
+- `ECHO_STAGING_CLAUDE_RESEARCH_V1=true` selects the Claude Agent SDK research
+  engine. The service rejects enabling it outside
+  `https://authority-staging.echobrain.org`; an absent or false switch keeps
+  the existing engine. Ordinary Ask and trigger research share the native ECHO
+  evidence desk, permissions, progress and writer. Planner-disabled sweeps
+  remain unchanged. SDK requests use the existing OpenRouter service binding
+  and the process-wide model queue; no developer CLI sign-in is needed by the
+  host. See the [service adapter and synthetic package proof](../../tools/evals/headless-research/README.md#staging-service-adapter)
+  for the implementation boundary and remaining live qualification.
+- `ECHO_STAGING_RESEARCH_EVAL_V1=true` serves the staging research evaluation
+  (`npm run eval:research-loop`).
 
-```sh
-npm run authority:staging-connector-rehearsal -- status \
-  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json
-npm run authority:staging-connector-rehearsal -- verify-read \
-  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
-  --tool jira
-```
+### Reconnect Jira after the rehearsal root was retired
 
-The runner uses the installed Person session in the current user's home. That
-session must name the staging Authority and an active initial owner. The
-release ID and profile digest must match the running server. No token is accepted on the
-command line or printed. The diagnostic makes one bounded attempt and does not
-retry provider work automatically.
-
-`verify-read` is a separate, manually selected read proof: one inventory item,
-one exact open, and final provider and local authorization checks within 15
-seconds. It follows no cursor, retries nothing, calls no model, and retains no
-body. Only Jira supports it: the Slack bot delivers approvals and reads no
-channel. Jira reads
-normalized issue text (key, summary and available description); it does not
-claim a nonempty description. A verified receipt contains only source-coordinate
-and text hashes plus a positive UTF-8 byte count, bounded to 3 KiB. Empty results
-refuse. Refused receipts contain a finite phase/reason and the runner exits 1.
-`connection_absent` means the local connection is absent; `unauthorized` or
-`stale_access_state` does not mean reconnect is required. Inspect the refusal
-before initiating a new consent flow, which can replace an existing connection.
-
-Receipts contain hashes and counts, never source contents, cursors, provider
-account IDs or credentials. The V3 protocol supports status and Jira
-`verify-read` only. All capture requests are rejected before provider I/O, and no
-tool pointers, metadata or bodies enter Layer 1. Organization Granola polling is
-removed. Approval tests use the existing synthetic release canary and
-human approval, with separate evidence. The diagnostic profile alone does not
-enable Ask. See the
-[scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal).
-Connection bindings remain stable across ordinary restarts with the same
-profile.
-
-The EC2 Compose overlay additionally selects `ECHO_STAGING_JIRA_ASK_V1=true`
-when the fixed connector profile is present. The CLI validates that profile and
-reuses the existing connection sidecar for each Person's own Jira grant. Global
-Ask follows that person's Jira permissions across the connected site, without a
-fixed-project or initial-owner restriction. The profile digest and sidecar remain
-unchanged. Without that switch, the diagnostic-only behavior remains available.
-Explicit Jira flags must match the selected profile's site and integration.
-ECHO project Ask requires a lead-configured Jira mapping and the asker's own
-connection. The mapping filters discovery before tickets are read and remains
-checked on open and revalidation. The rehearsal's fixed project applies only to
-its diagnostic reads. Mine and unmapped projects exclude Jira.
-
-The same EC2 overlay selects `ECHO_STAGING_CONFLUENCE_ASK_V1=true` when the
-fixed connector profile is present. Confluence uses only that profile's
-Atlassian Cloud ID, with a separately configured Nango Cloud integration named
-`confluence`. It uses each Person's own Confluence grant and no Jira project
-restriction. Global Ask follows the person's Confluence access;
-project Ask filters discovery through the project's Confluence space mapping.
-Conflicting explicit Confluence flags refuse startup. Without the staging switch
-or both explicit Confluence flags, the Confluence source remains unconfigured.
-Configure the `confluence` integration and its documented OAuth scopes before
-staging the release, then connect Confluence through Tools with browser consent.
-No existing Jira connection or fixed profile needs to be rewritten.
-
-The fixed staging connector rehearsal selects the Claude Agent SDK research
-engine through `ECHO_STAGING_CLAUDE_RESEARCH_V1`. The service rejects enabling it
-outside `https://authority-staging.echobrain.org`; an absent or false switch
-keeps the existing engine. Ordinary Ask and trigger research share the native
-ECHO evidence desk, permissions, progress and writer. Planner-disabled sweeps
-remain unchanged. SDK requests use the existing OpenRouter service binding and
-the process-wide model queue; no developer CLI sign-in is needed by the host.
-See the [service adapter and synthetic package proof](../../tools/evals/headless-research/README.md#staging-service-adapter)
-for the implementation boundary and remaining live qualification.
+Until the release that retired the rehearsal root, staging Jira connections
+lived in a separate sidecar, `clean-data/staging-connector-rehearsal-v1/`,
+which nothing reads any more. After that release, every staging member who used
+Jira connects it again through Tools or `person tools connect --tool jira`;
+until then their Ask has no Jira source. Reconnecting creates a new Nango
+connection and leaves the old one, which still holds a Jira refresh token. A
+member can disconnect Jira before the release to remove it. After the release,
+a human deletes the old connections in Nango's dashboard, with no host access:
+the Jira connections created for the staging organization before that release,
+under the profile's Jira integration and tagged with the staging
+organization's `organization_id`. A member's new connection is created after
+the release, so it is never one of them. Keeping or removing the old sidecar
+directory does not change startup or host restore while the profile is
+selected. The owner-only `status` and `verify-read` runner
+(`npm run authority:staging-connector-rehearsal`) and its
+`/v1/staging/connector-rehearsal` route are gone; check Jira with an ordinary
+Ask instead.
 
 ## Initial-owner setup internals
 

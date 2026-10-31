@@ -16,7 +16,6 @@ import {
 import {
   buildReadableSearchGenerationV1,
   searchReadableSearchGenerationV1,
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
   READABLE_SEARCH_CONTENT_BASELINE_V2,
   READABLE_SEARCH_FACTS_BASELINE_V3,
@@ -42,7 +41,8 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { addMembership, seedProjectMember } from "./fixtures/project-context-sqlite.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
-import { EMP_A, EMP_B, OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
+import { EMP_A, EVERYONE, OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
+import { SIGNED_APPROVAL_CODECS } from "./fixtures/signed-approval-decision-v1.js";
 
 import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
@@ -153,9 +153,9 @@ function realGenerationInput(
     },
     exact_head,
     retrieval_contract_sha256: RETRIEVAL_CONTRACT,
-    organization_member_policy_contract_sha256: sha256Digest("member-policy"),
     restricted_reviewer_policy_contract_sha256:
       sha256Digest("restricted-policy"),
+    project_members_policy_contract_sha256: sha256Digest("member-policy"),
     analyzer: {
       analyzer_contract_sha256: sha256Digest("analyzer-contract"),
       analyzer_source_sha256: sha256Digest("analyzer-source"),
@@ -169,6 +169,13 @@ function realGenerationInput(
     atoms,
   };
 }
+
+/**
+ * The project every reader of these hand-built generations holds (createRoute grants it): what a shared "member" atom is
+ * filed in and readable by.
+ */
+const SHARED_PROJECT = "prj_00000000-0000-4000-8000-0000000000aa";
+const sharedProjectGrants = () => ({ project_ids: [SHARED_PROJECT], grants_sha256: canonicalSha256([SHARED_PROJECT]) });
 
 function policyAtom(input: {
   readonly id: "member" | "restricted";
@@ -198,6 +205,7 @@ function policyAtom(input: {
     authorization_proof_sha256: sha256Digest(`${input.id}-proof`),
     reviewer_principal_id: reviewer ? "principal_owner" : null,
     reviewer_membership_id: reviewer ? "membership_owner" : null,
+    ...(reviewer ? {} : { audience_project_ids: [SHARED_PROJECT], association_project_ids: [SHARED_PROJECT] }),
   };
 }
 
@@ -215,7 +223,7 @@ function benchmarkAtom(index: number): ReadableSearchAtomV1 {
       id: reviewer ? "restricted" : "member",
       policy_id: reviewer
         ? RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
-        : ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+        : PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
     }),
     record_position: 1,
     record_sha256: sha256Digest(`benchmark-record-${index}`),
@@ -292,7 +300,7 @@ function createRoute(value: ReturnType<typeof setup>, overrides: Partial<CreateP
     state_directory: value.state_directory, authority_id: "oau_clean", organization_id: "org_clean",
     state_lineage_id: "lineage_clean", retrieval_contract_sha256: RETRIEVAL_CONTRACT,
     sessions: { authenticateAccess: () => authorization() }, authority: value.authority, record: value.record,
-    audit: new SqlitePersonRecordReadAuditV1(value.authority), ...overrides,
+    audit: new SqlitePersonRecordReadAuditV1(value.authority), record_input_codecs: SIGNED_APPROVAL_CODECS, capture_projects: sharedProjectGrants, ...overrides,
   });
 }
 
@@ -386,7 +394,7 @@ describe("Person Layer 2 route", () => {
     const atoms = independentRecordCoverageFixture.records.flatMap((source, index) =>
       source.items.map((item, order): ReadableSearchAtomV1 => ({
         ...policyAtom({ id: index === 3 ? "restricted" : "member", policy_id: index === 3
-          ? RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 : ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 }),
+          ? RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 : PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 }),
         record_position: index + 1,
         record_sha256: sha256Digest(source.title),
         envelope_sha256: sha256Digest(`envelope-${source.title}`),
@@ -435,7 +443,7 @@ describe("Person Layer 2 route", () => {
       // One read per query above.
       expect(search.mock.calls.map(([call]) => call.query)).toEqual([...independentRecordCoverageFixture.queries]);
       for (const [call] of search.mock.calls) {
-        expect(call.reader).toEqual({ principal_id: reader.principal_id, membership_id: reader.membership_id });
+        expect(call.reader).toEqual({ principal_id: reader.principal_id, membership_id: reader.membership_id, project_ids: [SHARED_PROJECT] });
         expect(call.active_generation).toEqual(active_generation);
       }
       const privateAtoms = atoms.filter(atom => atom.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
@@ -444,7 +452,7 @@ describe("Person Layer 2 route", () => {
       } else {
         // Owner role alone also cannot grant the exact reviewer's private scope.
         const observed = [...perQuery.flat(), ...released];
-        expect(observed.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
+        expect(observed.every(item => item.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1)).toBe(true);
         for (const atom of privateAtoms) expect(released.map(item => item.text)).not.toContain(atom.text);
       }
     } finally {
@@ -459,7 +467,7 @@ describe("Person Layer 2 route", () => {
     const record = recordLog();
     const atoms = rolloutCoverageFixture.records.flatMap((source, index) =>
       source.items.map((item, order): ReadableSearchAtomV1 => ({
-        ...policyAtom({ id: "member", policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 }),
+        ...policyAtom({ id: "member", policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 }),
         record_position: 3 - index,
         record_sha256: sha256Digest(source.title),
         envelope_sha256: sha256Digest(`envelope-${source.title}`),
@@ -507,7 +515,7 @@ describe("Person Layer 2 route", () => {
       }
       const items = responses.flatMap(response => response.items);
       expect(items.map(item => item.text).join("\n")).not.toContain(privateText);
-      expect(items.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
+      expect(items.every(item => item.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1)).toBe(true);
       expect(items.every(item => atoms.some(atom => atom.atom_id === item.atom_id && atom.text === item.text && atom.record_sha256 === item.record_sha256))).toBe(true);
       expect(read()).toEqual(responses);
       const factual = route.search({ access_token: "fixture-reader", query: "revised data-processing addendum Leah September 5" });
@@ -531,7 +539,7 @@ describe("Person Layer 2 route", () => {
         envelope_sha256: digest("envelope"),
         item_kind: "decision" as const,
         text: "Choose the lean path.",
-        policy_id: "organization-member-readable-person-v2" as const,
+        policy_id: "project-members-readable-person-v1" as const,
       },
     ]));
     try {
@@ -550,7 +558,7 @@ describe("Person Layer 2 route", () => {
             record_sha256: digest("record"),
             kind: "decision",
             text: "Choose the lean path.",
-            policy_id: "organization-member-readable-person-v2",
+            policy_id: "project-members-readable-person-v1",
           },
         ],
       });
@@ -560,6 +568,7 @@ describe("Person Layer 2 route", () => {
           reader: {
             principal_id: "principal_reader",
             membership_id: "membership_reader",
+            project_ids: [SHARED_PROJECT],
           },
           query: "unlogged-query-phrase",
         }),
@@ -598,7 +607,7 @@ describe("Person Layer 2 route", () => {
       realGenerationInput(value.state_directory, [
         policyAtom({
           id: "member",
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+          policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
         }),
         policyAtom({
           id: "restricted",
@@ -662,7 +671,7 @@ describe("Person Layer 2 route", () => {
         benchmark.response.items.every(
           (item) =>
             item.policy_id ===
-            ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+            PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
         ),
       ).toBe(true);
       expect(Object.keys(owner).sort()).toEqual(["items", "kind", "schema_version"]);
@@ -671,7 +680,7 @@ describe("Person Layer 2 route", () => {
           expect.objectContaining({
             atom_id: sha256Digest("member-atom"),
             record_sha256: sha256Digest("member-record"),
-            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+            policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
           }),
           expect.objectContaining({
             atom_id: sha256Digest("restricted-atom"),
@@ -696,7 +705,7 @@ describe("Person Layer 2 route", () => {
         expect.objectContaining({
           atom_id: sha256Digest("member-atom"),
           record_sha256: sha256Digest("member-record"),
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+          policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
         }),
       ]);
 
@@ -716,7 +725,7 @@ describe("Person Layer 2 route", () => {
         expect.objectContaining({
           atom_id: sha256Digest("member-atom"),
           record_sha256: sha256Digest("member-record"),
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+          policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
         }),
       ]);
     } finally {
@@ -758,7 +767,7 @@ describe("Person Layer 2 route", () => {
       readonly envelope_sha256: Sha256Digest;
       readonly item_kind: "decision";
       readonly text: string;
-      readonly policy_id: "organization-member-readable-person-v2";
+      readonly policy_id: "project-members-readable-person-v1";
     } => ({
       atom_id: digest(`atom-${name}`),
       record_position: 1,
@@ -766,7 +775,7 @@ describe("Person Layer 2 route", () => {
       envelope_sha256: digest(`envelope-${name}`),
       item_kind: "decision",
       text: `evidence ${name}`,
-      policy_id: "organization-member-readable-person-v2",
+      policy_id: "project-members-readable-person-v1",
     });
     const search = vi.fn((_input: { readonly query: string }) => fakeResult([item("original"), item("shared")]));
     let authenticateCount = 0;
@@ -837,7 +846,7 @@ describe("Person Layer 2 route", () => {
       envelope_sha256: digest("expansion-envelope"),
       item_kind: "decision" as const,
       text: "expansion anchor",
-      policy_id: "organization-member-readable-person-v2" as const,
+      policy_id: "project-members-readable-person-v1" as const,
     };
     try {
       const route = createRoute(value, { search_generation: () => fakeResult([item], { generation_id, position }) });
@@ -1005,7 +1014,7 @@ describe("Person Layer 2 route", () => {
               envelope_sha256: digest("envelope"),
               item_kind: "decision" as const,
               text: "must not leave the Authority",
-              policy_id: "organization-member-readable-person-v2" as const,
+              policy_id: "project-members-readable-person-v1" as const,
             },
           ]),
         });
@@ -1023,48 +1032,41 @@ describe("Person Layer 2 route", () => {
   );
 });
 
-describe("Person Layer 2 route: mine narrows to the caller's own approvals (ADR-0024)", () => {
-  it("searches, lists and opens only records whose final approver is the caller", async () => {
+describe("Person Layer 2 route: a project narrows the desk to its own records (ADR-0024)", () => {
+  it("searches, lists and opens only records filed in the project, and its release opens nothing outside it", async () => {
     const w = await meetingWorld();
     try {
       const route = w.route();
       const records = (result: { readonly response: { readonly items: readonly { readonly record_sha256: Sha256Digest }[] } }) =>
         [...new Set(result.response.items.map((item) => item.record_sha256))].sort();
+      const filed = [w.digest("r3"), w.digest("r4")].sort();
       const global = route.searchBatch({ access_token: "emp_a", query: "Decision", desk: true });
       expect(records(global)).toEqual([w.digest("r1"), w.digest("r3"), w.digest("r4"), w.digest("r7a"), w.digest("r7b")].sort());
-      const mine = route.searchBatch({ access_token: "emp_a", query: "Decision", desk: true, mine: true });
-      expect(records(mine)).toEqual([w.digest("r4")]);
-      expect(mine.release.mine).toBe(true);
-      expect(global.release).not.toHaveProperty("mine");
-      expect(records(route.searchBatch({ access_token: "owner", query: "Decision", mine: true }))).toEqual([w.digest("r2"), w.digest("r3")].sort());
-      expect(route.searchBatch({ access_token: "emp_c", query: "Decision", mine: true }).response.items).toEqual([]);
-      const listed = route.listDeskBatch({ access_token: "emp_a", mine: true });
-      expect(records(listed)).toEqual([w.digest("r4")]);
-      expect(listed.release.mine).toBe(true);
-      expect(route.initializeDesk({ access_token: "emp_a", mine: true }).release.mine).toBe(true);
-      route.revalidateBatchRelease({ access_token: "emp_a", release: mine.release });
+      const shared = route.searchBatch({ access_token: "emp_a", query: "Decision", desk: true, project_id: SHARED });
+      expect(records(shared)).toEqual(filed);
+      expect(shared.release.project_id).toBe(SHARED);
+      expect(global.release).not.toHaveProperty("project_id");
+      expect(records(route.searchBatch({ access_token: "owner", query: "Decision", project_id: SHARED }))).toEqual(filed);
+      // A project the reader does not hold is the Ask denial, before any read.
+      expect(() => route.searchBatch({ access_token: "emp_c", query: "Decision", project_id: SHARED })).toThrow(expect.objectContaining({ code: "unauthorized" }));
+      const listed = route.listDeskBatch({ access_token: "emp_a", project_id: SHARED });
+      expect(records(listed)).toEqual(filed);
+      expect(listed.release.project_id).toBe(SHARED);
+      expect(route.initializeDesk({ access_token: "emp_a", project_id: SHARED }).release.project_id).toBe(SHARED);
+      route.revalidateBatchRelease({ access_token: "emp_a", release: shared.release });
 
-      // A citation to someone else's approval does not open under mine; the caller's own does.
+      // A citation to a record outside the project does not open in it; one filed there does.
       const other = global.desk_items!.find((item) => item.record_sha256 === w.digest("r1"))!;
-      const own = mine.desk_items![0]!;
+      const own = shared.desk_items!.find((item) => item.record_sha256 === w.digest("r4"))!;
       const cite = (item: typeof own) => ({ access_token: "emp_a", atom_id: item.atom_id, record_sha256: item.record_sha256, policy_id: item.policy_id });
-      expect(() => route.openDeskCitation({ ...cite(other), mine: true })).toThrow(expect.objectContaining({ code: "not_found" }));
+      expect(() => route.openDeskCitation({ ...cite(other), project_id: SHARED })).toThrow(expect.objectContaining({ code: "not_found" }));
       expect(records(route.openDeskCitation(cite(other)))).toEqual([w.digest("r1")]);
-      const opened = route.openDeskCitation({ ...cite(own), mine: true });
+      const opened = route.openDeskCitation({ ...cite(own), project_id: SHARED });
       expect(records(opened)).toEqual([w.digest("r4")]);
-      expect(opened.release.mine).toBe(true);
-      // A mine release cannot open, or expand into, a record outside mine.
-      expect(() => route.openDeskBatch({ access_token: "emp_a", release: mine.release, anchor: other })).toThrow(expect.objectContaining({ code: "unavailable" }));
-      expect(records(route.openDeskBatch({ access_token: "emp_a", release: mine.release, anchor: own }))).toEqual([w.digest("r4")]);
-
-      const invalid = expect.objectContaining({ code: "invalid_request" });
-      expect(() => route.searchBatch({ access_token: "emp_a", query: "Decision", mine: true, project_id: SHARED })).toThrow(invalid);
-      expect(() => route.searchBatch({ access_token: "emp_a", query: "Decision", mine: false as unknown as true })).toThrow(invalid);
-      expect(() => route.listDeskBatch({ access_token: "emp_a", mine: true, project_id: SHARED })).toThrow(invalid);
-      expect(() => route.initializeDesk({ access_token: "emp_a", mine: true, project_id: SHARED })).toThrow(invalid);
-      expect(() => route.openDeskCitation({ ...cite(own), mine: true, project_id: SHARED })).toThrow(invalid);
-      // Without the approver projectors mine is unavailable, never global.
-      expect(() => w.route({ record_approver: undefined }).searchBatch({ access_token: "emp_a", query: "Decision", mine: true })).toThrow(expect.objectContaining({ code: "unavailable" }));
+      expect(opened.release.project_id).toBe(SHARED);
+      // A project release cannot open, or expand into, a record outside the project.
+      expect(() => route.openDeskBatch({ access_token: "emp_a", release: shared.release, anchor: other })).toThrow(expect.objectContaining({ code: "unavailable" }));
+      expect(records(route.openDeskBatch({ access_token: "emp_a", release: shared.release, anchor: own }))).toEqual([w.digest("r4")]);
     } finally { w.close(); }
   });
 });
@@ -1127,8 +1129,8 @@ describe("Person Layer 2 route: an approved record's projects (research trigger 
       expect(projects("emp_a", "r4")).toEqual([SHARED]);
       // r3 is also in a project the owner never joined; that project's id never leaves the route.
       expect(projects("owner", "r3")).toEqual([SHARED]);
-      // A team record is in no project.
-      expect(projects("owner", "r1")).toEqual([]);
+      // A record shared with everyone is in their project.
+      expect(projects("owner", "r1")).toEqual([EVERYONE]);
       w.grant(UNJOINED, OWNER);
       expect(projects("owner", "r3")).toEqual([SHARED, UNJOINED]);
       const notFound = expect.objectContaining({ code: "not_found" });
@@ -1152,7 +1154,7 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
       // r6 is in a project emp_a left; a missing or malformed digest is the same miss.
       expect([...found.keys()].sort()).toEqual([w.digest("r1"), w.digest("r3"), w.digest("r4")].sort());
       expect(found.get(w.digest("r4"))).toEqual({ approval_id: approvalRecordIdV2("apr_r4", [SHARED]), record_sha256: w.digest("r4"), title: "Pricing review", approved_at: expect.any(String), project_ids: [SHARED], visibility: "project" });
-      expect(found.get(w.digest("r1"))).toMatchObject({ approval_id: "apr_r1", title: "Weekly sync", project_ids: [], visibility: "team" });
+      expect(found.get(w.digest("r1"))).toMatchObject({ approval_id: approvalRecordIdV2("apr_r1", [EVERYONE]), title: "Weekly sync", project_ids: [EVERYONE], visibility: "project" });
       // r3 is also in a project emp_a never joined; that project's id never leaves the route, though its audience counts both.
       expect(found.get(w.digest("r3"))).toMatchObject({ project_ids: [SHARED], visibility: "projects" });
       // A meeting with no title reads as the person list names it.
@@ -1201,8 +1203,12 @@ describe("Person Layer 2 route: readable decisions for open items (open items an
       const audits = () => [auditCount(w.authority), w.authority.prepare("SELECT count(*) FROM authority_project_read_audit_v1").pluck().get()];
       const before = audits();
       const view = w.authority.transaction(() => repository.personChangeView(w.sessions.authenticateAccess({ access_token: "owner" }))).deferred();
-      expect(view.projects).toEqual(listed);
-      expect(view.projects).toEqual([{ project_id: SHARED, name: "Shared launch", status: "archived", role: "lead" }]);
+      expect(view.projects).toHaveLength(listed.length);
+      expect(view.projects).toEqual(expect.arrayContaining(listed));
+      expect(view.projects).toEqual([
+        { project_id: SHARED, name: "Shared launch", status: "archived", role: "lead" },
+        { project_id: EVERYONE, name: "Everyone", status: "active", role: "lead" },
+      ]);
       expect(audits()).toEqual(before);
       // The list itself is audited, as ever.
       projects.listProjectsV2("owner", { limit: 10, status: "archived" });
@@ -1249,11 +1255,10 @@ describe("Person Layer 2 route: an approved meeting's actions (follow-ups thread
       // A meeting that decided no action has none.
       expect(route.recordActions({ access_token: "emp_a", record_sha256: w.digest("r4") })).toEqual([]);
       const notFound = expect.objectContaining({ code: "not_found" });
-      // No grant on its project, no such record, a malformed digest and a rejection are the same miss.
+      // No grant on its project, no such record and a malformed digest are the same miss.
       expect(() => route.recordActions({ access_token: "emp_c", record_sha256: w.digest("r9") })).toThrow(notFound);
       expect(() => route.recordActions({ access_token: "owner", record_sha256: canonicalSha256("missing") })).toThrow(notFound);
       expect(() => route.recordActions({ access_token: "owner", record_sha256: "sha256:nope" as Sha256Digest })).toThrow(notFound);
-      expect(() => route.recordActions({ access_token: "owner", record_sha256: w.digest("r5") })).toThrow(notFound);
       expect(() => route.recordActions({ access_token: "nobody", record_sha256: w.digest("r9") })).toThrow(expect.objectContaining({ code: "unauthorized" }));
       expect(auditCount(w.authority)).toBe(before);
       // Current grants decide.
@@ -1288,9 +1293,9 @@ describe("Person Layer 2 route: an approved record's anchor (runs store v1)", ()
       expect([...new Set(opened.response.items.map((item) => item.record_sha256))]).toEqual([w.digest("r4")]);
       expect(trigger.parseEvent({ record: anchor })).toEqual({ record: anchor });
 
-      // The same record anchors the same way for another reader who can read it, and a team record anchors too.
+      // The same record anchors the same way for another reader who can read it, and a record shared with everyone anchors too.
       expect(route.recordAnchor({ access_token: "owner", record_sha256: w.digest("r4") })).toEqual(anchor);
-      expect(route.recordAnchor({ access_token: "emp_c", record_sha256: w.digest("r1") })).toMatchObject({ kind: "approved_record", record_sha256: w.digest("r1"), policy_id: "organization-member-readable-person-v2" });
+      expect(route.recordAnchor({ access_token: "emp_c", record_sha256: w.digest("r1") })).toMatchObject({ kind: "approved_record", record_sha256: w.digest("r1"), policy_id: "project-members-readable-person-v1" });
     } finally { w.close(); }
   });
 
@@ -1346,8 +1351,6 @@ describe("Person Layer 2 route: an approved record's anchor (runs store v1)", ()
       // A record that does not exist, and a malformed digest, are the same miss.
       expect(() => route.recordAnchor({ access_token: "owner", record_sha256: canonicalSha256("missing") })).toThrow(notFound);
       expect(() => route.recordAnchor({ access_token: "owner", record_sha256: "sha256:nope" as Sha256Digest })).toThrow(notFound);
-      // A rejected approval writes no readable record.
-      expect(() => route.recordAnchor({ access_token: "owner", record_sha256: w.digest("r5") })).toThrow(notFound);
       expect(() => route.recordAnchor({ access_token: "nobody", record_sha256: w.digest("r4") })).toThrow(expect.objectContaining({ code: "unauthorized" }));
 
       // Not seeing a record outranks its index lag: nothing about it leaks.
@@ -1423,8 +1426,9 @@ describe("Person Layer 2 route: approved records carry their dates and their mee
         brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, title: "THERM DVT sync", time: { actual_start_at: "2026-10-04T16:00:00.000Z" },
           participants: [{ id: "ari", display_name: "Ari Employee", identities: [{ kind: "email", value: "ari-identity@example.test" }] }, { id: "maya", display_name: "Maya Chen" }, { id: "maya-again", display_name: "Maya Chen" }, { id: "unnamed" }] },
           actions: brief.actions.map((signal) => ({ ...signal, due_at: "2026-10-09T17:00:00.000Z" })) }) },
-      // A Team approval is a generic human act, which names no approver; forty participants are more than open releases.
-      { name: "crowd", approval_id: "apr_crowd", projects: "team", final_approver: EMP_B, issued_at: T(10), brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, participants: people(40) } }) },
+      // Its approver has left, so the directory names none; forty participants are more than open releases.
+      { name: "crowd", approval_id: "apr_crowd", projects: [EVERYONE], final_approver: { principal_id: "prn_departed", membership_id: "mem_departed" }, issued_at: T(10),
+        brief: (brief) => ({ ...brief, meeting: { ...brief.meeting, participants: people(40) } }) },
     ] });
     try {
       const route = w.route();
@@ -1502,8 +1506,8 @@ describe("Person Layer 2 route: approved records carry their dates and their mee
       // The count is the release's: audited with it.
       const listed = route.listDeskBatch({ access_token: "emp_a", ...day("2026-10-16") });
       expect(w.audits("layer2").at(-1)!.response_sha256).toBe(canonicalSha256(JSON.parse(canonicalJson({ response: listed.response, desk_items: listed.desk_items, unchecked: listed.unchecked })) as never));
-      // Mine counts only the caller's own approvals, which all record their meetings' times.
-      expect(route.listDeskBatch({ access_token: "emp_a", mine: true, ...day("2026-10-16") })).not.toHaveProperty("unchecked");
+      // A project counts only its own records: SHARED's undated r3, never the team's r7a and r7b.
+      expect(route.listDeskBatch({ access_token: "emp_a", project_id: SHARED, ...day("2026-10-16") })).toMatchObject({ desk_items: [], unchecked: { count: 1, dates: ["approved"] } });
       // A field no meetings item records is refused, naming those it records.
       for (const date_field of ["created", "updated", "sent", "checked"]) {
         expect(() => route.listDeskBatch({ access_token: "emp_a", ...day("2026-10-16"), date_field: date_field as never })).toThrow("This source supports date_field: occurred, due, received, approved, any");

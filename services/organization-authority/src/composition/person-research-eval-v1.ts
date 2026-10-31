@@ -107,9 +107,8 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       const defined = definition.brief(event, { kind: 'global' });
       // Ask's writer runs Ask's own brief, rebuilt from the question: anything more in a question brief would be dropped, so it is refused.
       if (defined.goal.kind === 'question' && defined.starting.length > 0) throw new AuthorityOperationError('invalid_request', 'Research evaluation brief is invalid');
-      // Only a person's question reads their own additions alone; a task's starting items are shared evidence.
       // A record's run reads where the record is, so its request names no scope.
-      if ((request.mine === true && defined.goal.kind !== 'question') || (definition.scope === 'record_project' && (request.mine === true || request.project_id !== undefined))) {
+      if (definition.scope === 'record_project' && request.project_id !== undefined) {
         throw new AuthorityOperationError('invalid_request', 'Research evaluation scope is invalid');
       }
       purge();

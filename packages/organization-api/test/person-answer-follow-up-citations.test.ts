@@ -18,7 +18,7 @@ const followUp = { kind: 'follow_up' as const, item_id: itemId };
 const ref = `follow_up:${itemId}` as const;
 const cited = { citation: followUp, kind: 'follow_up' as const, label: 'THERM-48 Fan curve v2', visibility: 'team' as const, ref };
 const record = `sha256:${'a'.repeat(64)}` as const;
-const meeting = { citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'organization-member-readable-person-v2' as const }, kind: 'decision' as const, label: 'Ship fan curve v2', visibility: 'team' as const, ref: `meeting:${record}` as const };
+const meeting = { citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'project-members-readable-person-v1' as const }, kind: 'decision' as const, label: 'Ship fan curve v2', visibility: 'team' as const, ref: `meeting:${record}` as const };
 const response = (citations: readonly unknown[] = [cited]) => ({
   schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const, citations,
   parts: [{ question: 'What are my open tasks?', status: 'answered' as const, statements: [{ text: 'Mara owns the fan curve follow-up.', citation_indexes: [0], private: false }] }],

@@ -109,7 +109,7 @@
               "kind": "approved_record",
               "atom_id": "sha256:0a556e8d44a18a16b5ecff5a66f27724fe28fc8a40e06648af5901cd5f56273c",
               "record_sha256": "sha256:8e1dc7630571eb31a458aaa5ad981dd045c93238ca93e936b443f2c56e6aab20",
-              "policy_id": "organization-member-readable-person-v2"
+              "policy_id": "project-members-readable-person-v1"
             },
             "kind": "decision",
             "label": "DVT readiness review (Oct 23): DVT build starts Nov 3 with 40 units",
@@ -600,7 +600,7 @@
               "kind": "approved_record",
               "atom_id": "sha256:0a556e8d44a18a16b5ecff5a66f27724fe28fc8a40e06648af5901cd5f56273c",
               "record_sha256": "sha256:8e1dc7630571eb31a458aaa5ad981dd045c93238ca93e936b443f2c56e6aab20",
-              "policy_id": "organization-member-readable-person-v2"
+              "policy_id": "project-members-readable-person-v1"
             },
             "kind": "decision",
             "label": "DVT readiness review (Oct 23): DVT build starts Nov 3 with 40 units",
@@ -612,7 +612,7 @@
               "kind": "approved_record",
               "atom_id": "sha256:f85a68a75ea42a507619199a7ac0b5b11ea23f968a532d4b754fc80e81e955cb",
               "record_sha256": "sha256:f6efe22ecbd04c6bc1df7f61747aa356b499f11966a62c157f38ca610587bee1",
-              "policy_id": "organization-member-readable-person-v2"
+              "policy_id": "project-members-readable-person-v1"
             },
             "kind": "decision",
             "label": "DVT readiness review (Oct 23): two-layer heatsink on every DVT unit",
@@ -1017,7 +1017,7 @@
               "kind": "approved_record",
               "atom_id": "sha256:77afd291a0f0f91608efdfad0083fd2b5ee7dea6a0bc04d9a5610b647c9c255e",
               "record_sha256": "sha256:6e35952756ce3f2ef53928ab842e1f69bb5db25887c9fecc857eece03b5a8861",
-              "policy_id": "organization-member-readable-person-v2"
+              "policy_id": "project-members-readable-person-v1"
             },
             "kind": "decision",
             "label": "Design review (Oct 14): polycarbonate enclosure",
@@ -1029,7 +1029,7 @@
               "kind": "approved_record",
               "atom_id": "sha256:39c6b6d6eef2691eaf4242b793dc33fb783f953c3705dfb5a2e4b905aa33d74d",
               "record_sha256": "sha256:3cee0b3f7b0adf3c2aa968918d61b08b77b2a0e348c38e7664416b268b9887cb",
-              "policy_id": "organization-member-readable-person-v2"
+              "policy_id": "project-members-readable-person-v1"
             },
             "kind": "decision",
             "label": "Battery review (Oct 16): switch to the 2,800 mAh cell",
@@ -1371,7 +1371,7 @@
               "kind": "approved_record",
               "atom_id": "sha256:0a556e8d44a18a16b5ecff5a66f27724fe28fc8a40e06648af5901cd5f56273c",
               "record_sha256": "sha256:8e1dc7630571eb31a458aaa5ad981dd045c93238ca93e936b443f2c56e6aab20",
-              "policy_id": "organization-member-readable-person-v2"
+              "policy_id": "project-members-readable-person-v1"
             },
             "kind": "decision",
             "label": "DVT readiness review (Oct 23): DVT build starts Nov 3 with 40 units",

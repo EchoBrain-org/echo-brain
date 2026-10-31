@@ -153,10 +153,9 @@ The server uses separate databases with explicit responsibilities:
   - `confluence-person-connections.sqlite` holds the gated Confluence
     live-evidence connections. Offline recovery verification refuses a backup
     that contains it; the operator revokes and reconnects after a restore.
-  - When selected, the gated Jira runtime and the staging connector rehearsal
-    keep provider-owned Jira connection state in
-    `jira-person-connections.sqlite`; the staging restore wrapper retains the
-    rehearsal copy. As with every person provider's file, the Authority
+  - When selected, the gated Jira runtime keeps provider-owned Jira connection
+    state in `jira-person-connections.sqlite`, on staging as on every
+    Authority. As with every person provider's file, the Authority
     creates it private (0600) and will not start with one other users can
     read.
   - `extraction-attempts.sqlite` is the paid-extraction ledger and durable

@@ -397,3 +397,9 @@ Mine still binds no workspace or container
 On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) made `/v7` the only Ask
 route, with no fallback. `person ask` now refuses `--live` as an unknown
 option.
+
+Update (2026-10-31): the client no longer reads `x-echo-person-ask-route`; a
+404 from Ask is the Authority's own `not_found`. `/v7` keeps sending the header
+on every response for one more release, because released clients refuse a
+progress stream without it. The mine scope named above is retired
+([ADR-0024](ADR-0024-person-list-open-and-mine-scope.md)).

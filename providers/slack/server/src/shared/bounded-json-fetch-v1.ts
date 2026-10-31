@@ -1,8 +1,11 @@
 import { abortableProviderOperationV1, BoundedJsonResponseErrorV1, disposeProviderResponseV1, readBoundedJsonResponseV1 } from '@echo-brain/provider-runtime/bounded-json-response-v1';
 
 /**
- * Provider-neutral transport shared by every Slack setup client that needs a
- * bounded, timed-out JSON fetch: `redirect: "error"`, a combined timeout +
+ * Provider-neutral transport shared by the Slack setup clients that do not
+ * send the bot token (the app-manifest client, with its configuration token,
+ * and the Nango client; bot-token Web API calls go through
+ * `slack-web-api-v1.ts`), for a bounded, timed-out JSON fetch:
+ * `redirect: "error"`, a combined timeout +
  * caller signal, a response-size cap enforced both from the declared
  * `content-length` and while streaming, and strict JSON parsing. HTTP status
  * comes first: a non-2xx response is returned without reading its body, so a

@@ -66,6 +66,22 @@ Explorer template is regenerated normally. This does not address meeting-title
 retrieval/indexing, qualify the model live, deploy it, or change the meeting
 decision-extraction model.
 
+## Amendment (2026-10-31)
+
+Measured-bad-host skipping was removed after Ask moved to Claude Sonnet 5.5.
+No caller passes `deepseek/deepseek-v3.2`, or any model but the shared
+bundle's `anthropic/claude-sonnet-5.5`, to the structured-generation adapter,
+so the per-model `provider.ignore` list and the legacy `temperature: 0` output
+settings could no longer run. The adapter now sends every call Sonnet 5.5's
+settings described above: no temperature, medium reasoning effort, 4,096 tokens
+of reasoning headroom and the Claude-compatible schema. It sends no
+`provider.ignore`. Sonnet requests are byte-identical to before. Throughput
+sorting, `require_parameters: true`, `data_collection: "deny"`, strict
+structured output and the recorded serving host are unchanged. A future model
+change must measure its hosts and choose its sampling settings again; the
+2026-09-30 DeepSeek V3.2 evidence below does not carry over. The meeting
+decision extractor is unaffected.
+
 ## Context and options
 
 Every research call (planner, judge and writer) goes through the OpenRouter

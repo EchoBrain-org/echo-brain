@@ -6,7 +6,7 @@ import { sourceKey } from '../../src/renderer/openers.js';
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 const coordinates = (anchor: string) => ({ source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha(anchor) });
 const decision = (atom: string, label = 'Tuesday sync'): AnswerSource =>
-  ({ kind: 'record', label, record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha(atom) });
+  ({ kind: 'record', label, record: { record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' }, atom_id: sha(atom) });
 const ticket = (key: string): AnswerSource => ({ kind: 'ticket', tool_id: 'jira', label: key, permalink: `https://example.atlassian.net/browse/${key}` });
 
 describe('one key for each item Ask cites', () => {

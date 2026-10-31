@@ -74,9 +74,9 @@ describe('person Ask source check client (ADR-0047)', () => {
     expect(String(answered.mock.calls[0]![1]!.body).length).toBeGreaterThan(16 * 1024);
   });
 
-  it('reports an Authority without the route as not_supported, never not_found, and keeps other failures', async () => {
-    const older = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
-    await expect(client(older).askCheck('bearer', REQUEST as never)).rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'not_supported', status: 404 });
+  it('reports a 404 as not_found, as any other read, and keeps other failures', async () => {
+    const missing = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
+    await expect(client(missing).askCheck('bearer', REQUEST as never)).rejects.toMatchObject({ name: 'PersonAuthorityClientError', code: 'not_found', status: 404 });
     const signedOut = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'unauthorized', message: 'request failed' } }, 401));
     await expect(client(signedOut).askCheck('bearer', REQUEST as never)).rejects.toMatchObject({ code: 'unauthorized', status: 401 });
     const invalid = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'invalid_request', message: 'request failed' } }, 400));
@@ -94,12 +94,12 @@ describe('person Ask source check client (ADR-0047)', () => {
     expect(JSON.parse(String(fetch.mock.calls[0]![1]!.body))).toEqual(REQUEST);
   });
 
-  it('fails the ask-check command with code not_supported on 404, as other commands report their codes', async () => {
+  it('fails the ask-check command with code not_found on 404, as other commands report their codes', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'not_found', message: 'request failed' } }, 404));
     const { output, run } = cli(sessionHome(), fetch);
     expect(await run(['ask-check', '--request', JSON.stringify(REQUEST)])).toBe(1);
     expect(output.stdout).toBe('');
-    expect(lastLine(output.stderr)).toEqual({ ok: false, action: 'ask-check', error: 'This Authority has no Ask source check', code: 'not_supported', status: 404 });
+    expect(lastLine(output.stderr)).toEqual({ ok: false, action: 'ask-check', error: 'Person Authority rejected the request', code: 'not_found', status: 404 });
   });
 
   it('needs a valid --request and a signed-in session before any request', async () => {
@@ -133,7 +133,7 @@ describe('person Ask source check client (ADR-0047)', () => {
     expect(await run(['ask-check', '--help'])).toBe(0);
     expect(output.stdout).toContain('usage: echo-brain person ask-check --request <json>');
     expect(output.stdout).toContain('echo-person-ask-check-request-v1');
-    expect(output.stdout).toContain('not_supported');
+    expect(output.stdout).not.toContain('not_supported');
     output.stdout = '';
     expect(await run(['--help'])).toBe(0);
     expect(output.stdout).toContain('ask-check   Check whether what earlier answers cited changed, with no content.');

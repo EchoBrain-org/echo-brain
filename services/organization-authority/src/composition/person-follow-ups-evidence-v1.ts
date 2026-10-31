@@ -91,7 +91,6 @@ interface CreatePersonFollowUpsEvidenceSourceV1Options {
   readonly viewer: OpenItemViewerV1;
   /** The asker's session now; every call and check reads it again. */
   readonly authenticate: () => PersonAccessAuthorization;
-  /** Never Mine: Mine reads only what the asker added. */
   readonly scope: { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
   /**
    * The request's own desk. A follow-up's tool item opens through the tool

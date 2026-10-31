@@ -87,12 +87,6 @@ describe('follow-ups in research and the Ask writer (ADR-0040)', () => {
     expect(withoutPrompt).toBe(toolsPrompt.slice(0, -`\n\n${FOLLOW_UPS_STEP_GUIDANCE}`.length));
     expect(withoutPrompt).not.toContain('follow_ups');
     expect(listSources(without.steps()[0]!)).toEqual(['meetings', 'documents', 'tickets']);
-
-    // Mine reads only what the asker added, so an answer there binds no follow-ups either.
-    const mine = scripted([step('open', [{ tool: 'finish', args: {} }])]);
-    await createAgenticAskV5({ desk: { ...deskWith([FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]), scope: { kind: 'mine' } }, model: mine.model, audit: { append: () => undefined }, generation }).answer({ question }).catch(() => undefined);
-    expect(mine.steps()[0]!.system_prompt).toBe(ASK_STEP_PROMPT);
-    expect(listSources(mine.steps()[0]!)).toEqual(['meetings', 'documents']);
   });
 
   it('lists follow-ups by owner and status at the desk, and the writer and answer see each as a follow-up', async () => {

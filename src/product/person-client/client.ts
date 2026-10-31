@@ -36,7 +36,6 @@ import {
   type EmployeeRosterV1,
   type PersonAnswerV8,
   type PersonEvidenceDeskV1,
-  type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
   type PersonAskSourceEvidenceV1,
   type PersonAskProgressSinkV3,
@@ -199,9 +198,9 @@ function invitationOutputPath(path: string): string {
 }
 
 /** Preserve the public query error type before transport schema validation. */
-function validateAskInput(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined): void {
+function validateAskInput(question: string, scope: ProjectIdV1 | undefined): void {
   validatePersonQueryText(question);
-  if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+  if (scope !== undefined) validateProjectIdV1(scope, 'Ask project_id');
 }
 
 /** A refreshed session is the same account; another sign-in is not. */
@@ -695,9 +694,9 @@ export class PersonClient {
    * request-advertised live evidence sources, ECHO's shared follow-ups
    * (ADR-0040), and the asker's projects, people, tools and tool containers
    * (research tool contract v1). It may carry the asker's previous turn
-   * (ADR-0047). An Authority without `/v7` fails with `not_supported`.
+   * (ADR-0047).
    */
-  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
+  async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1,
     previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
     validateAskInput(question, scope);
     return this.withReadSession((authority, token) => authority.askV7(token, question, scope, signal, captureId, previous));
@@ -718,7 +717,7 @@ export class PersonClient {
    * asked for as another: a session another sign-in installed first is
    * refused before anything is sent, so no step of that account reaches it.
    */
-  async askWithLiveProgress(question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
+  async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, expected: { readonly expected_authority?: string; readonly expected_membership_id?: string } = {},
     previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
@@ -771,19 +770,17 @@ export class PersonClient {
     return this.withReadSession((authority, token) => authority.runs(token, value, signal));
   }
 
-  /** Whether each source old answers cited is the same, changed, unreadable or unknown now (ADR-0047); `not_supported` from an older Authority. */
+  /** Whether each source old answers cited is the same, changed, unreadable or unknown now (ADR-0047). */
   async askCheck(value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
     return this.withReadSession((authority, token) => authority.askCheck(token, value, signal));
   }
 
-  /** Each evidence invocation creates a new authenticated, scope-bound desk request. */
+  /**
+   * One evidence desk search under a new authenticated, scope-bound request. No command runs it: the research-loop
+   * evaluation finds approved meetings' record citations with it (tools/evals/research-loop/lib/bindings.mjs).
+   */
   async evidenceSearch(value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
     return this.withReadSession((authority, token) => authority.evidenceSearch(token, value, signal));
-  }
-
-  /** Opens only the supplied server-owned citation under a fresh authorized request. */
-  async evidenceOpen(value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.withReadSession((authority, token) => authority.evidenceOpen(token, value, signal));
   }
 
   /** One model-free list page under a fresh authenticated read (ADR-0024). */

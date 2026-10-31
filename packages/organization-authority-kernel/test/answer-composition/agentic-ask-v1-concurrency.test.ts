@@ -9,7 +9,7 @@ import { deferred } from './fixtures/deferred.js';
 function item(id: string, text = `Evidence ${id}.`): EvidenceDeskItemV1 {
   return {
     id: `desk_${id}`,
-    citation: { kind: 'approved_record', atom_id: canonicalSha256({ id }), record_sha256: canonicalSha256({ id, record: true }), policy_id: 'organization-member-readable-person-v2' },
+    citation: { kind: 'approved_record', atom_id: canonicalSha256({ id }), record_sha256: canonicalSha256({ id, record: true }), policy_id: 'project-members-readable-person-v1' },
     kind: 'decision', text, label: id, visibility: 'team', receipt_sha256: canonicalSha256({ receipt: id }),
   };
 }

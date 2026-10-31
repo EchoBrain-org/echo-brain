@@ -1,8 +1,8 @@
 # Ask: older questions behind one line, and Ask in the sidebar (v1)
 
 Date: 2026-10-27. Status: building; the founder validates the result on the
-desktop. Builds on [Ask timeline v1](2026-10-25-ask-timeline-v1.md) and
-[Quieter Ask v1](2026-10-26-quieter-ask-and-only-me-v1.md). Design canvas:
+desktop. Builds on [Ask timeline v1](../product/2026-10-25-ask-timeline-v1.md) and
+[Quieter Ask v1](../product/2026-10-26-quieter-ask-and-only-me-v1.md). Design canvas:
 "Quieter Ask", page "Ask history and the way back".
 
 ## What the founder asked for

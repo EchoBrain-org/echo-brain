@@ -260,7 +260,7 @@ export function createApprovalDecisionPolicyProjectorV1(): RecordPolicyFactProje
   });
 }
 
-/** Derived identity only (display and "mine"); any parse failure or coordinate mismatch omits it. The approval id is the record's own. */
+/** Derived identity only (the approver a meeting names); any parse failure or coordinate mismatch omits it. The approval id is the record's own. */
 export const projectApprovalDecisionApproverV1: RecordApproverProjectorV1 = (envelope: JsonObject) => {
   try {
     const body = envelope.body as JsonObject;

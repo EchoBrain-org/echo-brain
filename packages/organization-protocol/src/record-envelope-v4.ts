@@ -1,4 +1,4 @@
-import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecRegistryV4, type RecordResolutionRefV4, type RecordHumanActEventV4 } from "./record-input-codec-v4.js";
+import type { RecordInputCodecRegistryV4, RecordResolutionRefV4, RecordHumanActEventV4 } from "./record-input-codec-v4.js";
 import { Buffer } from "node:buffer";
 import {
   assertP256LowS,
@@ -375,35 +375,25 @@ function assertEventProvenanceJoins(
   source: MeetingSourceProvenanceV1,
   processor: DecisionProcessorProvenanceV1,
 ): void {
-  if (event.kind === "approved") {
-    const payload = event.approved_snapshot.approved_payload;
-    assertSourceLocatorJoin(payload.source, source, "Approved record source");
-    if (payload.brief.provenance.meeting_revision !== source.canonical_revision) {
-      fail("Approved record meeting revision does not match source provenance");
-    }
-    const actual = payload.brief.provenance.processor;
-    if (
-      actual.kind !== processor.processor_adapter_kind ||
-      actual.adapter_id !== processor.processor_adapter_id ||
-      actual.instance_id !== processor.processor_adapter_instance_id ||
-      actual.version !== processor.processor_adapter_version
-    ) {
-      fail("Approved record processor identity does not match processor provenance");
-    }
-    return;
+  const payload = event.approved_snapshot.approved_payload;
+  assertSourceLocatorJoin(payload.source, source, "Approved record source");
+  if (payload.brief.provenance.meeting_revision !== source.canonical_revision) {
+    fail("Approved record meeting revision does not match source provenance");
   }
-  if ("rejection_payload" in event) {
-    assertSourceLocatorJoin(
-      event.rejection_payload.source,
-      source,
-      "Rejected record source",
-    );
+  const actual = payload.brief.provenance.processor;
+  if (
+    actual.kind !== processor.processor_adapter_kind ||
+    actual.adapter_id !== processor.processor_adapter_id ||
+    actual.instance_id !== processor.processor_adapter_instance_id ||
+    actual.version !== processor.processor_adapter_version
+  ) {
+    fail("Approved record processor identity does not match processor provenance");
   }
 }
 
 export function validateOrganizationRecordEnvelopeBodyV4(
   value: unknown,
-  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+  codecs: RecordInputCodecRegistryV4,
 ): OrganizationRecordEnvelopeBodyV4 {
   const body = exactObject(value, RECORD_BODY_KEYS, "Record envelope body v4", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   if (
@@ -486,7 +476,7 @@ export function validateOrganizationRecordEnvelopeBodyV4(
 
 export function organizationRecordEnvelopeBodyV4Sha256(
   value: OrganizationRecordEnvelopeBodyV4,
-  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+  codecs: RecordInputCodecRegistryV4,
 ): Sha256Digest {
   return canonicalSha256(validateOrganizationRecordEnvelopeBodyV4(value, codecs));
 }
@@ -521,7 +511,7 @@ export function validateOrganizationRecordSignatureInputV4(
 export function buildOrganizationRecordSignatureInputV4(
   body: OrganizationRecordEnvelopeBodyV4,
   signingKeyId: Sha256Digest,
-  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+  codecs: RecordInputCodecRegistryV4,
 ): OrganizationRecordSignatureInputV4 {
   const validatedBody = validateOrganizationRecordEnvelopeBodyV4(body, codecs);
   assertDigest(signingKeyId, "Record signature input v4 signing_key_id");
@@ -619,7 +609,7 @@ export function signerRecordSignature(
 
 export function validateOrganizationRecordEnvelopeV4(
   value: unknown,
-  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+  codecs: RecordInputCodecRegistryV4,
 ): OrganizationRecordEnvelopeV4 {
   const wrapper = exactObject(value, RECORD_WRAPPER_KEYS, "Record envelope v4", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   const body = validateOrganizationRecordEnvelopeBodyV4(wrapper.body, codecs);
@@ -644,7 +634,7 @@ export function verifyOrganizationRecordEnvelopeV4(
   value: unknown,
   pinnedAuthority: PinnedOrganizationAuthority,
   expectedStateLineageId: string,
-  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+  codecs: RecordInputCodecRegistryV4,
 ): OrganizationRecordEnvelopeV4 {
   const envelope = validateOrganizationRecordEnvelopeV4(value, codecs);
   const publicKey = assertPinnedRecordSigner(
@@ -678,7 +668,7 @@ export async function createOrganizationRecordEnvelopeV4(
   pinnedAuthority: PinnedOrganizationAuthority,
   expectedStateLineageId: string,
   sign: AuthorityDetachedSigner,
-  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+  codecs: RecordInputCodecRegistryV4,
 ): Promise<OrganizationRecordEnvelopeV4> {
   const input = exactObject(value, CREATE_INPUT_KEYS, "Create record envelope v4 input", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   assertText(input.envelope_id, "Create record envelope v4 envelope_id");

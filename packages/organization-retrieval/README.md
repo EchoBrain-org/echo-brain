@@ -17,9 +17,8 @@ The process keeps exactly one fully validated active-generation handle. A
 reconciler validates every manifest, root, row binding, permission tuple, and
 uniqueness constraint before publishing a pointer or reporting an existing
 pointer current. Requests never warm it. They fail bounded-unavailable on a
-miss and inspect only the member segment, the caller's exact reviewer segment,
-and project segments whose audience names one of the caller's current
-projects.
+miss and inspect only the caller's exact reviewer segment and project segments
+whose audience names one of the caller's current projects.
 
 The acceptance target, defined for the admitted maximum before timing
 evidence is considered, is **50 ms** for a real Layer 3 batch of four queries

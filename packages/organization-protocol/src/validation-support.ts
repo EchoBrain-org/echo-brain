@@ -159,8 +159,8 @@ export function canonicalSnapshot<T>(
 
 /**
  * Rejects every value that cannot be represented as inert, plain JSON data.
- * Human act record input v1 passes `requireFiniteNumbers = false`: it has
- * always accepted any number here and left NaN and Infinity for
+ * The approved decision snapshot v2 passes `requireFiniteNumbers = false`: it
+ * has always accepted any number here and left NaN and Infinity for
  * canonicalSnapshot to reject.
  */
 export function assertPlainJsonData(

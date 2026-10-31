@@ -16,7 +16,7 @@
           "kind": "approved_record",
           "atom_id": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
           "record_sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-          "policy_id": "organization-member-readable-person-v2"
+          "policy_id": "project-members-readable-person-v1"
         },
         "kind": "decision",
         "label": "Approved record 1",

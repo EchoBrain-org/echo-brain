@@ -39,7 +39,7 @@ design; most rules below are consequences of it.
 - Rows carry provenance and approved visibility-policy facts, not a cached
   answer-time reader list. Effective access is computed by the current Person
   record reader against current membership.
-- Restricted-reviewer and organization-member policies must remain distinct.
+- Restricted-reviewer and project-members policies must remain distinct.
   A new record or retrieval surface must prove that it cannot release a
   restricted record to another member.
 

@@ -2,27 +2,29 @@
 
 No capacity milestone has passed. The executable coordinates are
 [metrics.v4.json](../../tools/evals/authority-core/metrics.v4.json).
-`node tools/evals/authority-core/verify-contract.mjs` checks its definition and
-predecessor bytes, profile pins, analyzer pin, and numeric invariants. That
-check is not a run and never passes a milestone.
+`node tools/evals/authority-core/verify-contract.mjs` checks its definition
+bytes, profile pin, analyzer pin, and numeric invariants. That check is not a
+run and never passes a milestone.
 
 ## Normative V3 incorporation
 
 Except for the enumerated V4 amendments below, this profile incorporates the
 entire immutable [V3 definition](2026-09-06-authority-core-capacity-metrics-v3.md)
-and its executable [V3 contract](../../tools/evals/authority-core/metrics.v3.json)
+and its executable [V3 contract](https://github.com/EchoBrain-org/echo-brain/blob/aa92138e4a7d8386b2ff51a95c7d2f82e86236be/tools/evals/authority-core/metrics.v3.json)
 by reference, and through V3 the entire immutable
 [V2 definition](2026-09-05-authority-core-capacity-metrics-v2.md). That
 includes every workload and gate, anti-shortcut rule, independent-evidence and
 run-integrity requirement, durability condition, hardware coordinate, and
 NOT-RUN limitation. V4 does not relax, replace, or omit any of them.
 
-V4 verifies the raw V3 definition digest
+V4 records the raw V3 definition digest
 `df7cee016b4ed58251db5e6618daa79e3b250e781f128f3d3ea50562e30a382f`, the
-raw V3 contract digest recorded in `metrics.v4.json`, and the V3 profile
-digest `63377b3809575957218bbecee34ea51f32e3d2f963976bf33ac949d5729857e5`.
-V3 remains historical and immutable. Its baseline was NOT-RUN, so V4 carries
-no baseline, capacity result, or performance comparison forward.
+raw V3 contract digest, and the V3 profile digest
+`63377b3809575957218bbecee34ea51f32e3d2f963976bf33ac949d5729857e5` in
+`metrics.v4.json`. They name the V3 bytes at commit `aa92138`. The V2 and V3
+contracts, and the verifier's checks of their bytes, left the tree on
+2026-10-31. V3 remains historical and immutable. Its baseline was NOT-RUN, so
+V4 carries no baseline, capacity result, or performance comparison forward.
 
 ## V4 amendments only
 
