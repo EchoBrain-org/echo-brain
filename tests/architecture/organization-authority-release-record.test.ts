@@ -8,7 +8,6 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  renameSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -297,19 +296,6 @@ function environmentDriftFixture(dockerPrefix = "") {
     runtimeConfig, log, environment,
     execute: (...args: string[]) => run("bash", [UPDATE, ...args], environment),
   };
-}
-
-function writeUnsupportedRootState(stateDirectory: string): void {
-  bootstrapOrganizationAuthorityState({
-    state_directory: stateDirectory,
-    organization_display_name: "Unsupported root fixture",
-    owner_display_name: "Owner",
-    created_at: "2026-08-22T00:00:00.000Z",
-    creating_artifact_revision: "unsupported-root-fixture",
-  });
-  // The old root marker must refuse before any database is opened or rewritten.
-  renameSync(join(stateDirectory, "state-lineage-root.v2.json"),
-    join(stateDirectory, "state-lineage-root.v1.json"));
 }
 
 function writeRecord(value: unknown): string {
@@ -1304,38 +1290,9 @@ fi
     verify(host, result);
   });
 
-  it.each([
-    {
-      name: "runs the candidate lineage verifier before mutating a malformed version-matching state",
-      prepareState: (stateDirectory: string) => {
-        bootstrapOrganizationAuthorityState({
-          state_directory: stateDirectory,
-          organization_display_name: "Release fixture",
-          owner_display_name: "Owner",
-          created_at: "2026-09-12T00:00:00.000Z",
-          creating_artifact_revision: "release-fixture",
-        });
-        // Matching database versions do not make an incomplete root valid.
-        writeFileSync(join(stateDirectory, "state-lineage-root.v2.json"),
-          JSON.stringify({ schema_version: 2, kind: "echo-state-lineage-root-manifest-v2" }));
-      },
-      inspectVerifier: true,
-      diagnostics: ["candidate Authority image rejected persisted state lineage"],
-    },
-    {
-      name: "rejects an unsupported root lineage before staging the current candidate and explains the pre-live rehearsal replacement path",
-      prepareState: writeUnsupportedRootState,
-      inspectVerifier: false,
-      diagnostics: [
-        "candidate Authority image rejected persisted state lineage",
-        "unsupported root manifest version",
-        "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
-        "state is never migrated",
-      ],
-    },
-  ].map((scenario) => [scenario.name, scenario] as const))(
-    "%s",
-    (_name, { prepareState, inspectVerifier, diagnostics }) => {
+  // Any lineage the candidate image rejects takes this one refusal; the kernel's
+  // own tests cover which states it rejects, such as an unsupported root.
+  it("runs the candidate lineage verifier before mutating a malformed version-matching state and explains the replacement path", () => {
     const fixture = environmentDriftFixture(`if [[ "$1" == pull ]]; then exit 0; fi
 if [[ "$1" == run ]]; then
   node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]);' "$ECHO_CLEAN_STATE_DIR"
@@ -1347,36 +1304,47 @@ fi`);
       release_id: "clean-v1-20260822-002",
       authority_image: { reference: authorityImage("d") },
     }));
-    prepareState(stateDirectory);
+    bootstrapOrganizationAuthorityState({
+      state_directory: stateDirectory,
+      organization_display_name: "Release fixture",
+      owner_display_name: "Owner",
+      created_at: "2026-09-12T00:00:00.000Z",
+      creating_artifact_revision: "release-fixture",
+    });
+    // Matching database versions do not make an incomplete root valid.
+    writeFileSync(join(stateDirectory, "state-lineage-root.v2.json"),
+      JSON.stringify({ schema_version: 2, kind: "echo-state-lineage-root-manifest-v2" }));
     const initialEnvironment = `${fixture.original}ECHO_CLEAN_AUTHORITY_UID=1000\nECHO_CLEAN_AUTHORITY_GID=1000\n`;
     writeFileSync(fixture.envFile, initialEnvironment);
     writeFileSync(fixture.snapshot, initialEnvironment);
 
     const result = fixture.execute("stage", "--release", candidate, "--runtime-profile", fixture.profile);
     expect(result.status).toBe(1);
-    for (const diagnostic of diagnostics) expect(result.stderr).toContain(diagnostic);
+    for (const diagnostic of [
+      "candidate Authority image rejected persisted state lineage",
+      "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
+      "state is never migrated",
+    ]) expect(result.stderr).toContain(diagnostic);
     const dockerCalls = readFileSync(fixture.log, "utf8");
     expect(dockerCalls).toContain(" run --rm ");
     expect(dockerCalls).not.toMatch(/ compose .* (up|restart) /);
     expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(false);
     expect(readFileSync(fixture.envFile, "utf8")).toBe(initialEnvironment);
-    if (inspectVerifier) {
-      expect(readdirSync(join(fixture.state, "runtime-profiles"))).toEqual([`${fixture.accepted.release_id}.profile`]);
-      expect(readdirSync(join(fixture.state, "runtime-environments"))).toEqual([`${fixture.accepted.release_id}.env`]);
-      expect(readFileSync(candidate, "utf8")).toContain('"release_id":"clean-v1-20260822-002"');
-      expect(dockerCalls).toContain(
-        "run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --workdir /app --entrypoint node",
-      );
-      expect(dockerCalls).toContain(
-        `--mount type=bind,src=${stateDirectory},dst=/echo-clean/state,readonly`,
-      );
-      expect(dockerCalls).toContain("--input-type=module -e");
-      expect(dockerCalls).toContain("verify-authority-state-lineage.js");
-      expect(dockerCalls).toContain('verifyAuthorityStateLineage("/echo-clean/state")');
-      // Meetings enter only through personal sources, so no organization processor admission is verified.
-      expect(dockerCalls).not.toContain("verify-openrouter-decision-processor-admission-v1.js");
-      expect(dockerCalls.indexOf(" pull ")).toBeLessThan(dockerCalls.indexOf(" run --rm "));
-    }
+    expect(readdirSync(join(fixture.state, "runtime-profiles"))).toEqual([`${fixture.accepted.release_id}.profile`]);
+    expect(readdirSync(join(fixture.state, "runtime-environments"))).toEqual([`${fixture.accepted.release_id}.env`]);
+    expect(readFileSync(candidate, "utf8")).toContain('"release_id":"clean-v1-20260822-002"');
+    expect(dockerCalls).toContain(
+      "run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --workdir /app --entrypoint node",
+    );
+    expect(dockerCalls).toContain(
+      `--mount type=bind,src=${stateDirectory},dst=/echo-clean/state,readonly`,
+    );
+    expect(dockerCalls).toContain("--input-type=module -e");
+    expect(dockerCalls).toContain("verify-authority-state-lineage.js");
+    expect(dockerCalls).toContain('verifyAuthorityStateLineage("/echo-clean/state")');
+    // Meetings enter only through personal sources, so no organization processor admission is verified.
+    expect(dockerCalls).not.toContain("verify-openrouter-decision-processor-admission-v1.js");
+    expect(dockerCalls.indexOf(" pull ")).toBeLessThan(dockerCalls.indexOf(" run --rm "));
   });
 
   it("refuses a canary that did not stage an approval and leaves the candidate staged", () => {

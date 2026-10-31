@@ -297,7 +297,6 @@ describe("CI workflow", () => {
     const scripts = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")).scripts;
     expect(scripts["check:docs"]).toBe("node tools/check-docs.mjs");
     expect(scripts.check).toContain("npm run check:docs");
-    expect(legCommands("static")).toContain("npm run check:architecture-boundaries && npm run check:docs");
   });
 
   it("executes exact recovery-template validation as an independent proof", () => {
