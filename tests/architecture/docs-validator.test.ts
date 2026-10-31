@@ -338,12 +338,36 @@ describe("documentation validator", () => {
       "qualification_ids has stale backlink QUAL-20260813-120000-001; QUAL-20260813-120000-001 does not reference CMP-TEST",
     ],
     [
+      "a missing playbook backlink",
+      (root: string) =>
+        edit(root, "docs/components/test.md", (source) =>
+          source.replace("playbook_ids:\n  - PB-TEST-001\n", ""),
+        ),
+      "CMP-TEST is missing playbook_ids backlink PB-TEST-001",
+    ],
+    [
+      "a stale playbook backlink",
+      (root: string) =>
+        edit(root, "docs/operations/PB-TEST-001.md", (source) =>
+          source.replace("component_ids:\n  - CMP-TEST", "component_ids: []"),
+        ),
+      "playbook_ids has stale backlink PB-TEST-001; PB-TEST-001 does not reference CMP-TEST",
+    ],
+    [
       "malformed relation component_ids: null without crashing",
       (root: string) =>
         edit(root, "docs/components/test.md", (source) =>
           source.replace("component_ids:\n  - CMP-TEST", "component_ids: null"),
         ),
       "component_ids must be an array",
+    ],
+    [
+      "malformed relation invariant_ids: 1 without crashing",
+      (root: string) =>
+        edit(root, "docs/components/test.md", (source) =>
+          source.replace("reviewed_at: 2026-08-13", "invariant_ids: 1\nreviewed_at: 2026-08-13"),
+        ),
+      "invariant_ids must be an array",
     ],
     [
       "qualification assertion set",
