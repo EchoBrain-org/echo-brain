@@ -47,12 +47,16 @@ function command(action: string): string[] {
 }
 /** The commands a usage line names as `<one|two|three>`. */
 const named = (usage: string) => /<([a-z0-9|-]+)>/.exec(usage)?.[1]?.split("|").sort();
+/** The command each line under the top-level help's `Commands:` heading names. */
+const listed = (usage: string) => /\nCommands:\n((?: {2}\S.*\n)+)/.exec(usage)?.[1]?.trimEnd().split("\n").map((line) => line.trim().split(" ")[0]).sort();
 
 describe("Person client help", () => {
-  it("documents every dispatched command, and each group names exactly its commands", async () => {
+  it("documents every dispatched command, lists each top-level one, and each group names exactly its commands", async () => {
     const actions = dispatchedActions();
     expect(actions).toEqual(expect.arrayContaining(["login", "ask", "list", "projects-read-v2", "employee-invite"]));
-    expect(await help(["--help"])).toMatch(/^usage: echo-brain person <command> \[options\]\n/);
+    const top = await help(["--help"]);
+    expect(top).toMatch(/^usage: echo-brain person <command> \[options\]\n/);
+    expect(listed(top)).toEqual([...new Set(actions.map((action) => command(action)[0]))].sort());
     for (const action of actions) {
       expect(await help([...command(action), "--help"]), action).toMatch(/^usage: echo-brain person /);
     }
