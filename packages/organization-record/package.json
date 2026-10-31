@@ -8,10 +8,6 @@
     "./organization-record-api-v1": {
       "types": "./dist/organization-record-api-v1.d.ts",
       "import": "./dist/organization-record-api-v1.js"
-    },
-    "./application/atom-identity": {
-      "types": "./dist/application/atom-identity.d.ts",
-      "import": "./dist/application/atom-identity.js"
     }
   },
   "files": [
