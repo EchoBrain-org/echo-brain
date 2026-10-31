@@ -164,8 +164,9 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
     const run = runs.impactRunsFor([record_sha256])[0]!;
     const claim = runs.claim(owner, run.run_id, 60_000);
     if (claim.kind !== 'claimed') throw new Error(`The impact check was not claimed: ${claim.kind}`);
-    const decision = { citation: { kind: 'approved_record' as const, atom_id: derivedAtomIdentity(record_sha256, 'd1') as Sha256Digest, record_sha256, policy_id: 'organization-member-readable-person-v2' as const },
-      kind: 'decision' as const, label: 'Launchscope', visibility: 'team' as const };
+    // The seeded record is the owner's own (Only me).
+    const decision = { citation: { kind: 'approved_record' as const, atom_id: derivedAtomIdentity(record_sha256, 'd1') as Sha256Digest, record_sha256, policy_id: 'restricted-reviewer-person-v2' as const },
+      kind: 'decision' as const, label: 'Launchscope', visibility: 'approver_only' as const };
     const card = storableImpactCardV1({ status: 'assessed', decided: [{ text: 'Launchscope rolls out to the pilot group first.', citation_index: 0 }], affected: [], unconfirmed: [], people: [], citations: [decision] }, []);
     const pointer = { kind: 'meeting_action', record_sha256, signal_id: 'a1' };
     const finished = runs.finish(run.run_id, claim.lease_token, { json: canonicalJson(card), sha256: canonicalSha256(card) }, transaction => items.insertForRun(transaction, run, [{

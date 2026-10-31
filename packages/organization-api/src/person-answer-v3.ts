@@ -33,7 +33,6 @@ export type PersonAnswerCitationV3 =
       readonly atom_id: `sha256:${string}`;
       readonly record_sha256: `sha256:${string}`;
       readonly policy_id:
-        | 'organization-member-readable-person-v2'
         | 'restricted-reviewer-person-v2'
         | 'project-members-readable-person-v1';
     }

@@ -23,7 +23,7 @@ const ticket = (key, options = {}) => ({ id: options.id ?? "E1", source: "ticket
   citation: { kind: "ticket", tool_id: "jira", external_scope_id: "cloud", ticket_id: "10046", permalink: `https://echobrain.atlassian.net/browse/${key}`, text_sha256: digest(`text-${key}`) },
   ...(options.owner === undefined ? {} : { attributes: { status: "To Do", owner: options.owner } }),
   read_in_full: options.read ?? true, opened: true, preloaded: false, cited_by_plan: options.cited ?? true, ...(options.text === undefined ? {} : { text: options.text }) });
-const recordCitation = id => ({ kind: "approved_record", atom_id: digest(`atom-${id}`), record_sha256: digest(`record-${id}`), policy_id: "organization-member-readable-person-v2" });
+const recordCitation = id => ({ kind: "approved_record", atom_id: digest(`atom-${id}`), record_sha256: digest(`record-${id}`), policy_id: "project-members-readable-person-v1" });
 const record = (meeting, kind, id) => ({ id, source: "meetings", kind, title: titleOf(meeting), citation: recordCitation(`${meeting}-${kind}`), text: "x", read_in_full: true, opened: true, preloaded: false, cited_by_plan: false });
 const bindings = { project_id: "prj_00000000-0000-4000-8000-000000000003", site: "https://echobrain.atlassian.net", cloud_id: "cloud-1",
   tickets: Object.fromEntries(["2", "18", "38", "40", "46", "47", "48", "50"].map(number => [`THERM-${number}`, `100${number.padStart(2, "0")}`])),

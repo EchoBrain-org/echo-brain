@@ -14,7 +14,6 @@ import {
 } from "./authority-descriptor.js";
 import type { PinnedOrganizationAuthority } from "./authority-descriptor.js";
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "./person-content-policy-v2.js";
@@ -86,7 +85,6 @@ const CREATE_INPUT_KEYS = ["envelope", "record_position", "issued_at"] as const;
 
 type RecordPolicyIdV2 =
   | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
-  | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
   | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
 
 /** Every record is an approval, so every receipt names the policy whose facts its append wrote. */
@@ -153,7 +151,6 @@ function assertPolicyId(
 ): asserts value is RecordPolicyIdV2 {
   if (
     value !== RESTRICTED_REVIEWER_PERSON_POLICY_ID &&
-    value !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID &&
     value !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID
   ) {
     fail(`${label} has an unsupported Person policy`);

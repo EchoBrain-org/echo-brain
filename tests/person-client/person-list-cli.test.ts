@@ -278,7 +278,7 @@ describe('person open CLI', () => {
 
 describe('person ask --mine', () => {
   const citation = {
-    citation: { kind: 'approved_record', atom_id: `sha256:${'f'.repeat(64)}`, record_sha256: `sha256:${record}`, policy_id: 'organization-member-readable-person-v2' },
+    citation: { kind: 'approved_record', atom_id: `sha256:${'f'.repeat(64)}`, record_sha256: `sha256:${record}`, policy_id: 'project-members-readable-person-v1' },
     kind: 'decision', label: 'Pricing review', visibility: 'team', ref: MEETING,
   };
   function answer(scope: unknown) {

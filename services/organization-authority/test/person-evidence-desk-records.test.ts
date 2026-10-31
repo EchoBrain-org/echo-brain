@@ -83,7 +83,7 @@ function generation(state_directory: string, atoms: readonly ReadableSearchAtomV
       content: plane('retrieval-content', READABLE_SEARCH_CONTENT_BASELINE_V2, 2), lexical: plane('retrieval-lexical', READABLE_SEARCH_LEXICAL_BASELINE_V2, 2),
     } },
     exact_head: { ...COORDINATES, position: 1, record_sha256: atoms[0]!.record_sha256 },
-    retrieval_contract_sha256: RETRIEVAL_CONTRACT, organization_member_policy_contract_sha256: sha256Digest('member-policy'), restricted_reviewer_policy_contract_sha256: sha256Digest('restricted-policy'),
+    retrieval_contract_sha256: RETRIEVAL_CONTRACT, restricted_reviewer_policy_contract_sha256: sha256Digest('restricted-policy'),
     analyzer: { analyzer_contract_sha256: sha256Digest('analyzer-contract'), analyzer_source_sha256: sha256Digest('analyzer-source'), node_version: '22.22.1', unicode_version: '16.0', icu_version: '76.1' },
     source_revision: 'test', builder_artifact_sha256: sha256Digest('builder'), sqlite_version: '3.50.4', atoms,
   };

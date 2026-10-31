@@ -10,13 +10,12 @@ import {
   createOrganizationRecordReceiptV2
 } from "../../../packages/organization-protocol/src/organization-record-receipt-v2.js";
 import {
-  organizationMemberReadablePersonPolicyContractSha256
+  restrictedReviewerPersonPolicyContractSha256
 } from "../../../packages/organization-protocol/src/person-content-policy-v2.js";
 import {
   verifyOrganizationRecordEnvelopeV4
 } from "../../../packages/organization-protocol/src/record-envelope-v4.js";
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID
 } from "../src/application/person-policy-fact-contracts-v2.js";
@@ -151,7 +150,7 @@ describe("V4 organization-record append", () => {
     } finally { db.close(); }
   });
 
-  it("files a record its approver alone reads in projects with association facts only (ADR-0049), and refuses one that names an audience or another policy", async () => {
+  it("files a record its approver alone reads in projects with association facts only (ADR-0049), and refuses one that names an audience or an unsupported policy", async () => {
     const db = database();
     try {
       const approver = { principal_id: "principal-approver", membership_id: "membership-approver" };
@@ -173,7 +172,9 @@ describe("V4 organization-record append", () => {
           event: { kind: "approved", approved_snapshot: { approved_payload: { brief: { decisions: [{ id: signal, kind: "decision", text: "Keep the supplier reserve." }], actions: [], rationales: [] } } } },
         },
       }) as unknown as V4RecordEnvelopeView & JsonObject;
-      const projectors = (policy_id: typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID) => createRecordPolicyFactProjectorRegistryV1([{
+      /** The retired organization-wide (Team) policy, which no record can carry. */
+      const TEAM_POLICY_ID = "organization-member-readable-person-v2";
+      const projectors = (policy_id: string) => createRecordPolicyFactProjectorRegistryV1([{
         id: "test-private-action-v1",
         matches: () => true,
         // The reviewer facts are written after the association rows, so the baseline binds those rows through the envelope.
@@ -190,9 +191,9 @@ describe("V4 organization-record append", () => {
             }],
           } as never;
         },
-        policyBinding: () => ({ policy_id, policy_contract_sha256: restrictedContract }),
+        policyBinding: () => ({ policy_id, policy_contract_sha256: restrictedContract }) as never,
       }]);
-      const append = (envelope: V4RecordEnvelopeView & JsonObject, policy_id: Parameters<typeof projectors>[0] = RESTRICTED_REVIEWER_PERSON_POLICY_ID) =>
+      const append = (envelope: V4RecordEnvelopeView & JsonObject, policy_id: string = RESTRICTED_REVIEWER_PERSON_POLICY_ID) =>
         new OrganizationRecordAppenderV4(db, COORDINATES, projectors(policy_id)).append({
           approval_id: envelope.body.human_act_resolution_ref.approval_id, action: "approve", semantic_idempotency_key: envelope.body.semantic_idempotency_key,
           receipt_issued_at: "2026-08-21T12:02:00.000Z", authorization_witness: {},
@@ -206,9 +207,9 @@ describe("V4 organization-record append", () => {
           },
         });
       const records = () => db.prepare("SELECT count(*) FROM organization_record_log").pluck().get();
-      // An approver-only record that names an audience project, or a member-readable one filed in a project, is refused whole.
+      // An approver-only record that names an audience project, or one under the retired Team policy filed in a project, is refused whole.
       await expect(append(envelopeOf("audience", RESTRICTED_REVIEWER_PERSON_POLICY_ID, ["prj_alpha"], ["prj_alpha"]))).rejects.toThrow("cannot select projects");
-      await expect(append(envelopeOf("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, [], ["prj_alpha"]), ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID)).rejects.toThrow("cannot select projects");
+      await expect(append(envelopeOf("member", TEAM_POLICY_ID, [], ["prj_alpha"]), TEAM_POLICY_ID)).rejects.toThrow("policy is unsupported");
       expect(records()).toBe(0);
       const kept = await append(envelopeOf("private", RESTRICTED_REVIEWER_PERSON_POLICY_ID, [], ["prj_alpha", "prj_beta"]));
       expect(db.prepare("SELECT project_id FROM organization_record_project_association_v1 WHERE record_position = 1 ORDER BY project_id").pluck().all()).toEqual(["prj_alpha", "prj_beta"]);
@@ -229,9 +230,9 @@ describe("V4 organization-record append", () => {
       const snapshot = new RecordRetrievalSourceSnapshotPortV1(db).snapshot({ ...COORDINATES, policy_projectors: projectors(RESTRICTED_REVIEWER_PERSON_POLICY_ID),
         verify_envelope: (value) => value as RecordRetrievalSourceVerifiedEnvelopeV1 });
       expect(snapshot.atoms).toMatchObject([{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID, reviewer_principal_id: approver.principal_id, audience_project_ids: [], association_project_ids: ["prj_alpha", "prj_beta"] }]);
-      // A member-readable record is never filed in a project it has no audience in.
-      const member = await append(envelopeOf("member-unfiled", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, [], []), ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID);
-      expect(() => insert(2, member.record_sha256, "prj_alpha")).toThrow("project association is not bound to its approved project audience or approver");
+      // A project record is never filed in a project it has no audience in.
+      const project = await append(envelopeOf("project-filed", PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, ["prj_alpha"], ["prj_alpha"]), PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID);
+      expect(() => insert(2, project.record_sha256, "prj_gamma")).toThrow("project association is not bound to its approved project audience or approver");
     } finally { db.close(); }
   });
 
@@ -282,13 +283,13 @@ describe("V4 organization-record append", () => {
           facts: [],
           policy_fact_outcome: {
             kind: "appended",
-            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+            policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
           },
         }),
         policyBinding: () => ({
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
           policy_contract_sha256:
-            organizationMemberReadablePersonPolicyContractSha256(),
+            restrictedReviewerPersonPolicyContractSha256(),
         }),
       };
       const projectors = createRecordPolicyFactProjectorRegistryV1([
@@ -342,7 +343,7 @@ describe("V4 organization-record append", () => {
       });
       expect(snapshot.rows[0]?.classification).toEqual({
         kind: "approved",
-        policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+        policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
         atom_count: 0,
       });
     } finally {

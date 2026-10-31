@@ -217,7 +217,7 @@ function citation(value: unknown): PersonAnswerCitationV3 {
     assertExactKeys(input, ['kind', 'atom_id', 'record_sha256', 'policy_id'], 'Ask citation');
     assertDigest(input.atom_id, 'Ask approved-record citation atom_id');
     assertDigest(input.record_sha256, 'Ask approved-record citation record_sha256');
-    if (!['organization-member-readable-person-v2', 'restricted-reviewer-person-v2', 'project-members-readable-person-v1'].includes(input.policy_id as string)) fail('Ask approved-record citation policy_id is invalid');
+    if (!['restricted-reviewer-person-v2', 'project-members-readable-person-v1'].includes(input.policy_id as string)) fail('Ask approved-record citation policy_id is invalid');
     return Object.freeze({ kind: 'approved_record', atom_id: input.atom_id as `sha256:${string}`, record_sha256: input.record_sha256 as `sha256:${string}`, policy_id: input.policy_id as ApprovedRecordPolicyV3 });
   }
   if (input.kind === 'source_revision') return validatePersonSourceRevisionCitationV1(input, 'optional');

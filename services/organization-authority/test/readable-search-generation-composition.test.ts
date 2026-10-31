@@ -162,10 +162,11 @@ describe("readable-search generation composition", () => {
       const restartVerification = verifyAuthorityStateLineage(
         initialized.state_directory,
       );
+      // A log with no approved atom publishes a generation with no segment.
       expect(restartVerification.retrieval).toEqual({
         present: true,
         generation_count: 1,
-        segment_count: 1,
+        segment_count: 0,
       });
     } finally {
       record.close();

@@ -16,7 +16,7 @@ const citation = {
   kind: 'approved_record' as const,
   atom_id: `sha256:${'a'.repeat(64)}`,
   record_sha256: `sha256:${'b'.repeat(64)}`,
-  policy_id: 'organization-member-readable-person-v2' as const,
+  policy_id: 'project-members-readable-person-v1' as const,
 };
 const receipt_sha256 = `sha256:${'c'.repeat(64)}`;
 
@@ -60,6 +60,15 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(() => validatePersonAnswerResponseV8(response)).toThrow();
     response.parts[0]!.statements[0]!.citation_indexes = [];
     expect(() => validatePersonAnswerResponseV8(response)).toThrow();
+  });
+
+  it('refuses an approved-record citation under the retired organization-wide (Team) policy, which no record carries', () => {
+    const response = {
+      schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
+      citations: [{ citation: { ...citation, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
+      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
+    };
+    expect(() => validatePersonAnswerResponseV8(response)).toThrow('policy_id is invalid');
   });
 
   it('distinguishes an inventory result from released text and validates fresh HTTP open coordinates', () => {

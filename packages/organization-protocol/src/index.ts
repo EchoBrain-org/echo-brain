@@ -52,10 +52,6 @@ export type {
 export { validateApprovedDecisionSnapshotV2 } from "./approved-decision-snapshot-v2.js";
 export type { ApprovedDecisionSnapshotV2 } from "./approved-decision-snapshot-v2.js";
 export {
-  ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-  organizationMemberReadablePersonConsequenceSha256,
-  organizationMemberReadablePersonPolicyContractSha256,
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   restrictedReviewerPersonConsequenceSha256,

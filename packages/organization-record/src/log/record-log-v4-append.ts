@@ -6,7 +6,6 @@ import {
 import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonPolicyFactProjectionV2,
@@ -58,7 +57,6 @@ export interface V4ReceiptFactory {
       readonly kind: "appended";
       readonly policy_id:
         | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
-        | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
         | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
     };
   }): JsonObject;
@@ -389,19 +387,7 @@ export class OrganizationRecordAppenderV4 {
             fact.reviewer_principal_id,
             fact.reviewer_membership_id,
           );
-      } else if (fact.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID) {
-        this.database
-          .prepare(
-            `INSERT INTO organization_record_member_readable_person_fact (
-             authority_id, organization_id, state_lineage_id, approval_id, action,
-             policy_id, policy_contract_sha256, record_position, record_sha256,
-             atom_order, signal_id_sha256, atom_id, item_kind, audit_event_id,
-             audit_sequence, audit_entry_sha256, provider_action_sha256,
-             authorization_proof_sha256
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(...common);
-      } else {
+      } else if (fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) {
         this.database
           .prepare(
             `INSERT INTO organization_record_project_members_readable_person_fact (
@@ -413,6 +399,8 @@ export class OrganizationRecordAppenderV4 {
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(...common);
+      } else {
+        throw new Error("organization record Person fact policy is unsupported");
       }
     }
   }
@@ -474,10 +462,9 @@ export class OrganizationRecordAppenderV4 {
         );
         this.insertAssociation(recordPosition, envelope.record_sha256, project_id);
       }
-    } else if (
-      audienceProjectIds.length !== 0 ||
-      (associationProjectIds.length !== 0 && binding.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID)
-    ) {
+    } else if (binding.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID) {
+      throw new Error("organization record policy is unsupported");
+    } else if (audienceProjectIds.length !== 0) {
       throw new Error("non-project record approval cannot select projects");
     } else {
       // Filed in projects with no audience fact, so the projects add no reader.

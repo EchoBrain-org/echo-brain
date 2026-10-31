@@ -636,8 +636,9 @@ function deskListLabel(text: string, title: string | undefined, time: DeskMeetin
 
 /** Store-raw: only the list route collapses these tokens (ADR-0024). */
 function recordVisibility(policy_id: ReadableSearchResultItemV1["policy_id"], audience_project_count: number): Exclude<PersonStoreVisibilityV1, "only_me"> {
-  if (policy_id === "project-members-readable-person-v1" && audience_project_count < 1) metadataUnavailable();
-  return policy_id === "restricted-reviewer-person-v2" ? "approver_only" : policy_id === "project-members-readable-person-v1" ? (audience_project_count === 1 ? "project" : "projects") : "team";
+  if (policy_id === "restricted-reviewer-person-v2") return "approver_only";
+  if (audience_project_count < 1) metadataUnavailable();
+  return audience_project_count === 1 ? "project" : "projects";
 }
 
 /** The approval's decided_at: the record envelope's issue time (approval-publisher-v1.ts), canonical. */
@@ -848,7 +849,7 @@ function newestFirst(left: PersonItemPositionV1, right: PersonItemPositionV1): n
 }
 
 function isRecordPolicy(value: unknown): value is ReadableSearchResultItemV1["policy_id"] {
-  return value === "restricted-reviewer-person-v2" || value === "organization-member-readable-person-v2" || value === "project-members-readable-person-v1";
+  return value === "restricted-reviewer-person-v2" || value === "project-members-readable-person-v1";
 }
 
 /**

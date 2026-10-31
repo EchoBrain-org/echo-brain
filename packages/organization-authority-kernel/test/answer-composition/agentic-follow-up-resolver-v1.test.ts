@@ -28,7 +28,7 @@ const ticket = (key: string, id: string): PersonAnswerCitationV8 => ({
 });
 const record = `sha256:${"a".repeat(64)}` as const;
 const decision: PersonAnswerCitationV8 = {
-  citation: { kind: "approved_record", atom_id: `sha256:${"b".repeat(64)}`, record_sha256: record, policy_id: "organization-member-readable-person-v2" },
+  citation: { kind: "approved_record", atom_id: `sha256:${"b".repeat(64)}`, record_sha256: record, policy_id: "project-members-readable-person-v1" },
   kind: "decision", label: "DVT gate review: hold until THERM-482 is fixed", visibility: "team", ref: `meeting:${record}`,
 };
 const followUp: PersonAnswerCitationV8 = { citation: { kind: "follow_up", item_id: "itm_launch-1" }, kind: "follow_up", label: "Send the gasket spec", visibility: "team", ref: "follow_up:itm_launch-1" };

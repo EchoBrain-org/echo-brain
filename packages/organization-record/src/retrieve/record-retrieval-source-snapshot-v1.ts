@@ -6,6 +6,7 @@ import {
 import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import {
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonPolicyFactItemKindV2,
   type PersonPolicyIdV2,
@@ -137,7 +138,7 @@ interface StoredRecordRow {
 }
 
 interface StoredFactRow {
-  readonly fact_family: "member" | "reviewer" | "project";
+  readonly fact_family: "reviewer" | "project";
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -294,16 +295,7 @@ function materialize(database: Database.Database): MaterializedSnapshot {
       .all() as StoredRecordRow[];
     const facts = database
       .prepare(
-        `SELECT 'member' AS fact_family,
-                authority_id, organization_id, state_lineage_id, approval_id,
-                action, policy_id, policy_contract_sha256, record_position,
-                record_sha256, atom_order, signal_id_sha256, atom_id, item_kind,
-                audit_event_id, audit_sequence, audit_entry_sha256,
-                provider_action_sha256, authorization_proof_sha256,
-                NULL AS reviewer_principal_id, NULL AS reviewer_membership_id
-           FROM organization_record_member_readable_person_fact
-         UNION ALL
-         SELECT 'reviewer' AS fact_family,
+        `SELECT 'reviewer' AS fact_family,
                 authority_id, organization_id, state_lineage_id, approval_id,
                 action, policy_id, policy_contract_sha256, record_position,
                 record_sha256, atom_order, signal_id_sha256, atom_id, item_kind,
@@ -526,17 +518,17 @@ export class RecordRetrievalSourceSnapshotPortV1 {
       const expectedFamily =
         binding.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
           ? "reviewer"
-          : binding.policy_id === "project-members-readable-person-v1"
+          : binding.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID
             ? "project"
-            : "member";
+            : invalid("record policy is unsupported");
       const audience_project_ids = audienceProjectsByPosition.get(position) ?? Object.freeze([]);
       const association_project_ids = associationProjectsByPosition.get(position) ?? Object.freeze([]);
       if (expectedFamily === "project") {
         if (audience_project_ids.length === 0 || association_project_ids.length === 0) {
           invalid("project-readable record lacks immutable audience or association facts");
         }
-      } else if (audience_project_ids.length !== 0 || (expectedFamily === "member" && association_project_ids.length !== 0)) {
-        // A record its approver alone reads may be filed in projects (ADR-0049); no other record is.
+      } else if (audience_project_ids.length !== 0) {
+        // A record its approver alone reads may be filed in projects (ADR-0049), but names no audience project.
         invalid("non-project record has project audience or association facts");
       }
       let reviewerPrincipal: string | null = null;
@@ -660,7 +652,7 @@ export class RecordRetrievalSourceSnapshotPortV1 {
           fact.reviewer_principal_id !== null ||
           fact.reviewer_membership_id !== null
         ) {
-          invalid("member-readable fact must not carry a reviewer tuple");
+          invalid("project-readable fact must not carry a reviewer tuple");
         }
         atoms.push(
           Object.freeze({

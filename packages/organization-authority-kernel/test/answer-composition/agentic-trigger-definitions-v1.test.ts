@@ -8,7 +8,7 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1, AGENTIC_TRIGGER_NAMES_V1 } from "../../
 import { IMPACT_CARD_RENDERER_V1 } from "../../src/answer-composition/renderers/impact-card-renderer-v1.js";
 import { SWEEP_RENDERER_V1 } from "../../src/answer-composition/renderers/sweep-renderer-v1.js";
 
-const record = { kind: "approved_record", atom_id: canonicalSha256("atom"), record_sha256: canonicalSha256("record"), policy_id: "organization-member-readable-person-v2" };
+const record = { kind: "approved_record", atom_id: canonicalSha256("atom"), record_sha256: canonicalSha256("record"), policy_id: "project-members-readable-person-v1" };
 const ticket = { kind: "ticket", tool_id: "jira", external_scope_id: "cloud-1", ticket_id: "10046", permalink: "https://therm.example.test/browse/THERM-46", text_sha256: canonicalSha256("ticket") };
 const page = { kind: "page", tool_id: "confluence", external_scope_id: "cloud-1", page_id: "1441793", section_id: "s1", version: "3", permalink: "https://therm.example.test/wiki/pages/viewpage.action?pageId=1441793", text_sha256: canonicalSha256("page") };
 

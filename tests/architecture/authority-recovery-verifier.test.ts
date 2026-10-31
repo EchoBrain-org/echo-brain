@@ -17,11 +17,14 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
+import { openOrganizationRecordDatabase, OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/file-organization-authority-signer.js";
 import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from "../../services/organization-authority/src/composition/authority-record-protocols-v1.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/readable-search-generation-composition.js";
+import { appendSignedApprovalV1 } from "../../services/organization-authority/test/fixtures/signed-approval-decision-v1.js";
+// The fixture signs with the protocol source, so the pin must come from the same module.
+import { organizationAuthorityPinSha256, verifyOrganizationAuthorityPin } from "../../packages/organization-protocol/src/index.js";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import {
@@ -95,16 +98,26 @@ async function buildTemplate(cleanData: string): Promise<string> {
     },
   );
   try {
+    const signer = FileOrganizationAuthoritySigner.openExisting({
+      directory: join(stateDirectory, "keys"),
+      authority_id: initialized.authority_id,
+      organization_id: initialized.organization_id,
+    });
+    // One approved record, so the published generation has a segment and its retrieval databases.
+    const descriptor = signer.inspectSync();
+    const coordinates = { authority_id: lineage.root.authority_id, organization_id: lineage.root.organization_id, state_lineage_id: lineage.root.state_lineage_id };
+    await appendSignedApprovalV1(
+      new OrganizationRecordAppenderV4(record, coordinates, authorityRecordPolicyProjectorsV1()),
+      { pinned: verifyOrganizationAuthorityPin(descriptor, organizationAuthorityPinSha256(descriptor)), sign: signer.sign.bind(signer) },
+      { approval_id: "apr_recovery", audit_sequence: 1, projects: [], issued_at: "2026-08-25T12:00:30.000Z", coordinates,
+        final_approver: { principal_id: initialized.owner_principal_id, membership_id: initialized.owner_membership_id } },
+    );
     const reconciler = createReadableSearchGenerationReconcilerV1({
       state_directory: stateDirectory,
       root: lineage.root,
       authority,
       record,
-      signer: FileOrganizationAuthoritySigner.openExisting({
-        directory: join(stateDirectory, "keys"),
-        authority_id: initialized.authority_id,
-        organization_id: initialized.organization_id,
-      }),
+      signer,
       policy_projectors: authorityRecordPolicyProjectorsV1(),
       record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
       now: () => "2026-08-25T12:01:00.000Z",

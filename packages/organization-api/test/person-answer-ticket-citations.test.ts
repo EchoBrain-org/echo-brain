@@ -32,7 +32,7 @@ describe('Ticket citations', () => {
 
   it('accepts existing approved-record citations together with tickets', () => {
     const packet = response();
-    const record = { citation: { kind: 'approved_record', atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Launch approval', visibility: 'team' };
+    const record = { citation: { kind: 'approved_record', atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'project-members-readable-person-v1' }, kind: 'decision', label: 'Launch approval', visibility: 'team' };
     expect(validatePersonAnswerResponseV8({ ...packet, citations: [cited, record] }).citations).toHaveLength(2);
   });
 

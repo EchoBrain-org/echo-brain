@@ -182,7 +182,6 @@ export function generationFromRecordDatabase(input: {
     } },
     exact_head: { ...COORDINATES, position: head.position, record_sha256: head.record_sha256 },
     retrieval_contract_sha256: contract.retrieval_contract_sha256,
-    organization_member_policy_contract_sha256: contract.organization_member_policy_contract_sha256,
     restricted_reviewer_policy_contract_sha256: contract.restricted_reviewer_policy_contract_sha256,
     project_members_policy_contract_sha256: contract.project_members_policy_contract_sha256,
     analyzer: contract.analyzer, source_revision: contract.source_revision, builder_artifact_sha256: contract.builder_artifact_sha256,

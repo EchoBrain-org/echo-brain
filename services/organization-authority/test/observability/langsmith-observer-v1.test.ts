@@ -177,7 +177,7 @@ describe('LangSmith projection of the shared observer', () => {
 
   it('carries the serving host and generation id from the real OpenRouter adapter through the model gate onto each model run', async () => {
     const item: EvidenceDeskItemV1 = Object.freeze({ id: 'desk_launch', kind: 'decision' as const, text: 'Launch is Tuesday.', label: 'Launch decision', visibility: 'team' as const,
-      citation: Object.freeze({ kind: 'approved_record' as const, atom_id: canonicalSha256({ atom: 'launch' }), record_sha256: canonicalSha256({ record: 'launch' }), policy_id: 'organization-member-readable-person-v2' as const }),
+      citation: Object.freeze({ kind: 'approved_record' as const, atom_id: canonicalSha256({ atom: 'launch' }), record_sha256: canonicalSha256({ record: 'launch' }), policy_id: 'project-members-readable-person-v1' as const }),
       receipt_sha256: canonicalSha256({ receipt: 'launch' }) });
     const found = Object.freeze({ items: Object.freeze([item]), truncated: false, receipt_digests: Object.freeze([canonicalSha256({ receipt: 1 })]) });
     const desk: EvidenceDeskPortV1 = Object.freeze({ scope: Object.freeze({ kind: 'global' as const }), search: async () => found, open: async () => found,
