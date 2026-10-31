@@ -52,9 +52,11 @@ export type {
 } from "./organization-record-receipt-v2.js";
 export {
   buildHumanActRecordInputV1,
+  validateApprovedDecisionSnapshotV2,
   validateHumanActRecordInputV1,
 } from "./human-act-record-input-v1.js";
 export type {
+  ApprovedDecisionSnapshotV2,
   HumanActEventV1,
   HumanActRecordInputV1,
   PersonContentPolicyIdV2,

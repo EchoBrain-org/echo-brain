@@ -7,8 +7,7 @@
   "source_root": "packages/organization-protocol/src",
   "package_json": "packages/organization-protocol/package.json",
   "entry_points": [
-    "packages/organization-protocol/src/index.ts",
-    "packages/organization-protocol/src/record-codec-support-v4.ts"
+    "packages/organization-protocol/src/index.ts"
   ],
   "owned_source_paths": [
     "packages/organization-protocol/src/**"

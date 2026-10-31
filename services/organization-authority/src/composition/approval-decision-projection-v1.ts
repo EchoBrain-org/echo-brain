@@ -3,9 +3,8 @@ import {
   APPROVAL_DECISION_CONSEQUENCE_KIND_V1, APPROVAL_DECISION_FIELD_V2, APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2, APPROVAL_DECISION_REF_KIND_V2,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, approvalDecisionSubsetSnapshotV2, approvalRecordIdV2, isPrivateApprovalRecordV2,
   projectMembersReadablePersonPolicyContractSha256, restrictedReviewerPersonPolicyContractSha256, validateApprovalDecisionRecordInputV2,
-  type ApprovalDecisionRecordInputV2, type ApprovalDecisionRefV2,
+  validateApprovedDecisionSnapshotV2, type ApprovalDecisionRecordInputV2, type ApprovalDecisionRefV2, type ApprovedDecisionSnapshotV2,
 } from '@echo-brain/organization-protocol';
-import { validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
 import {
   projectApprovedMeetingPolicyFactsV1, type RecordApproverProjectorV1, type RecordPolicyFactEnvelopeV1, type RecordPolicyFactProjectorV1,
 } from '@echo-brain/organization-record/organization-record-api-v1';

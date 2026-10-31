@@ -10,7 +10,7 @@ const { approvalReviewV1 } = await built('services/organization-authority/dist/c
   approvalReviewV1(snapshotJson: string): Review };
 const { compileDecisionBrief } = await built('packages/organization-processing/dist/core/processing/brief.js') as {
   compileDecisionBrief(id: string, meeting: unknown, decisions: unknown): Brief };
-const { validateApprovedDecisionSnapshotV2 } = await built('packages/organization-protocol/dist/record-codec-support-v4.js') as { validateApprovedDecisionSnapshotV2(snapshot: unknown): unknown };
+const { validateApprovedDecisionSnapshotV2 } = await built('packages/organization-protocol/dist/index.js') as { validateApprovedDecisionSnapshotV2(snapshot: unknown): unknown };
 const { LlmDecisionProcessor } = await built('packages/organization-processing/dist/llm/llm-decision-processor.js') as { LlmDecisionProcessor: new (config: unknown, options: unknown) => {
   identity: { version: string }; extract(meeting: unknown, context: { processor_version: string; input_fingerprint: string }): Promise<unknown> } };
 
