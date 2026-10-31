@@ -141,11 +141,16 @@ Until the release that retired the rehearsal root, staging Jira connections
 lived in a separate sidecar, `clean-data/staging-connector-rehearsal-v1/`,
 which nothing reads any more. After that release, every staging member who used
 Jira connects it again through Tools or `person tools connect --tool jira`;
-until then their Ask has no Jira source. The old grant's Nango connection is not deleted for them: a
-member can disconnect Jira before the release to remove it, or an operator
-deletes it in Nango afterwards. Keeping or removing the old sidecar directory
-does not change startup or host restore while the profile is selected. The
-owner-only `status` and `verify-read` runner
+until then their Ask has no Jira source. Reconnecting creates a new Nango
+connection and leaves the old one, which still holds a Jira refresh token. A
+member can disconnect Jira before the release to remove it. After the release,
+a human deletes the old connections in Nango's dashboard, with no host access:
+the Jira connections created for the staging organization before that release,
+under the profile's Jira integration and tagged with the staging
+organization's `organization_id`. A member's new connection is created after
+the release, so it is never one of them. Keeping or removing the old sidecar
+directory does not change startup or host restore while the profile is
+selected. The owner-only `status` and `verify-read` runner
 (`npm run authority:staging-connector-rehearsal`) and its
 `/v1/staging/connector-rehearsal` route are gone; check Jira with an ordinary
 Ask instead.
