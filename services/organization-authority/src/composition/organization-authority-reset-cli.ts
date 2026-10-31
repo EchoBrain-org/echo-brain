@@ -1,7 +1,7 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { bootstrapOrganizationAuthorityState } from "./organization-authority-state-bootstrap.js";
 
-export interface OrganizationAuthorityResetCliIo {
+interface OrganizationAuthorityResetCliIo {
   stdout(value: string): void;
   stderr(value: string): void;
 }

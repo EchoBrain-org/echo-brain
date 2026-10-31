@@ -54,7 +54,7 @@ export function meetingDateV1(time: OrganizationRecordMeetingTimeV1 | undefined)
 }
 
 /** Code-point-safe parts of at most 3,072 bytes; the parts join to the exact text. */
-export function splitAtomTextV1(text: string): readonly string[] {
+function splitAtomTextV1(text: string): readonly string[] {
   const parts: string[] = [];
   let current = "";
   let bytes = 0;
@@ -92,7 +92,7 @@ export function confirmedOwners(reference: unknown): ReadonlyMap<string, string>
 }
 
 /** One part of one approved signal, at its place in the brief's atom order. */
-export interface MeetingAtomPartV1 {
+interface MeetingAtomPartV1 {
   readonly atom_order: number;
   /** 1-based. */
   readonly part_index: number;
@@ -156,13 +156,13 @@ export function meetingDetailV1(brief: OrganizationRecordDecisionBriefV1, approv
   });
 }
 
-export interface RecordCoordinatesV1 {
+interface RecordCoordinatesV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
 }
 
-export interface RecordApproverTupleV1 {
+interface RecordApproverTupleV1 {
   readonly principal_id: string;
   readonly membership_id: string;
 }

@@ -108,7 +108,7 @@ export interface OrganizationAuthorityServiceConfig extends Omit<
 
 export interface OrganizationAuthorityServiceDependencies {
   /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
-  readonly api?: OrganizationAuthorityApiRuntimeDependencies;
+  readonly api?: Partial<OrganizationAuthorityApiRuntimeDependencies>;
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
   /** Provider-only test seams; production reads every page through the asker's Nango grant. */
   readonly confluence_person_live_seams?: ConfluencePersonLiveRuntimeSeamsV1;
@@ -211,7 +211,7 @@ export async function openOrganizationAuthorityService(
         signal: AbortSignal,
       ) => ReturnType<typeof runStagingSyntheticPersonalCanaryV1>)
     | undefined;
-  const apiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
+  const apiDependencies: Partial<OrganizationAuthorityApiRuntimeDependencies> = {
     ...dependencies.api,
     person_http_runtime_factory: (sessions, resources) => {
       const existing = dependencies.api?.person_http_runtime_factory?.(
@@ -471,7 +471,7 @@ export async function openOrganizationAuthorityService(
       answer_composition_generation_bundle:
         createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
-          ...(sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && sharedConfig.personal_claude_research !== undefined ? { personal_claude_research: sharedConfig.personal_claude_research } : {}),
+          ...(sharedConfig.personal_claude_research === undefined ? {} : { personal_claude_research: sharedConfig.personal_claude_research }),
           ...(sharedConfig.staging_claude_research_v1 === true && sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? { research_engine: 'claude-sdk' as const } : {}),
         }),
       model_call_limiter: modelCalls,

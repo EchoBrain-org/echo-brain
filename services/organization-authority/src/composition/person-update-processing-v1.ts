@@ -63,7 +63,7 @@ export class PersonUpdateProcessingV1 {
   }
   private async generate(title: string, text: string, signal: AbortSignal): Promise<string> {
     return hints(await this.generation.structured_output.generate({
-      model: this.generation.generation.planner_model,
+      model: this.generation.generation.answer_model,
       system_prompt: PROMPT,
       user_prompt: JSON.stringify({ title, text }),
       schema: SCHEMA,
@@ -73,7 +73,7 @@ export class PersonUpdateProcessingV1 {
     }));
   }
   private release() {
-    return canonicalSha256({ prompt: PROMPT, schema: SCHEMA, adapter: this.generation.generation.generation_adapter_id, model: this.generation.generation.planner_model });
+    return canonicalSha256({ prompt: PROMPT, schema: SCHEMA, adapter: this.generation.generation.generation_adapter_id, model: this.generation.generation.answer_model });
   }
 }
 

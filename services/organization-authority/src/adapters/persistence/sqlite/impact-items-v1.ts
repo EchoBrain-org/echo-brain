@@ -6,7 +6,7 @@ import type { TriggerRunRowV1 } from './trigger-runs-v1.js';
 
 export type ImpactItemStateV1 = 'unsent' | 'open' | 'done' | 'not_relevant';
 export type ImpactItemVerdictV1 = 'landed' | 'still_open' | 'changed' | 'unreadable';
-export type ImpactOwnerMatchV1 = 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned';
+type ImpactOwnerMatchV1 = 'jira_account' | 'name' | 'picked' | 'approver' | 'reassigned';
 /** One item an impact run found (an affected item or one of the meeting's own actions), as its finishing transaction stores it. */
 export interface ImpactItemDraftV1 {
   readonly item_key: Sha256Digest;
@@ -34,7 +34,7 @@ export interface ImpactItemRowV1 {
 }
 export interface ImpactSendChoiceV1 { readonly item_id: string; readonly include: boolean; readonly owner_membership_id?: string }
 /** What a committed send command answers when it is asked again: its own counts, or `stale` when it is asked for other items. */
-export type ImpactSendReplayV1 = { readonly kind: 'replayed'; readonly sent: number; readonly not_relevant: number } | { readonly kind: 'stale' };
+type ImpactSendReplayV1 = { readonly kind: 'replayed'; readonly sent: number; readonly not_relevant: number } | { readonly kind: 'stale' };
 
 interface StoredItemV1 {
   readonly item_id: string; readonly run_id: string; readonly item_key: Sha256Digest; readonly pointer_json: string;

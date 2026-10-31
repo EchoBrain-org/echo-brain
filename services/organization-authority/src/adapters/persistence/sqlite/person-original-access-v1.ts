@@ -8,7 +8,7 @@ import type { PersonListStoreScopeV1 } from "../../../application/ports/person-l
  * (ADR-0024) so the two can never disagree about who may read a note or a
  * document. `u` is a note custody row, `d` a document custody row.
  */
-export type PersonOriginalPrefixV1 = "u" | "d";
+type PersonOriginalPrefixV1 = "u" | "d";
 
 /** The caller's active project grants, as the ACL reads them. */
 export function personOriginalGrantedProjectIdsV1(database: Database.Database, actor: PersonAccessAuthorization): readonly string[] {

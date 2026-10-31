@@ -11,7 +11,7 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from '../src/composition/person-workspace-evidence-v1.js';
-import { askClient, auditBodies as audits, closeAskServers, decodeAll, expectAskRouteUnavailable, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
+import { askClient, auditBodies as audits, closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
 import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
@@ -69,14 +69,14 @@ const tools = async (access_token: string): Promise<readonly OrganizationPersonT
 }];
 
 /** The `/v7` route as the runtime composes it, the asker's workspace beside the follow-up sources. */
-function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mount: { readonly v7?: boolean } = {}) {
+function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort) {
   const sessions = f.openItemsOptions.sessions;
   const projects = new SqliteProjectContextRepositoryV1(f.db);
   const options: CreatePersonLiveAnswerRouteOptionsV1 = { ...liveAskOptions(f, model), workspace: {
     projects: createProjectContextApplicationV1({ authenticate: access_token => sessions.authenticateAccess({ access_token }), repository: projects }),
     grants: personWorkspaceGrantsV1(projects), people: f.directory, tools,
   } };
-  return serveAsk(mount.v7 === false ? {} : { person_answer_v7: createPersonLiveAnswerRouteV1(options) });
+  return serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(options) });
 }
 const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: QUESTION });
 const decode = (text: string) => decodeAll(createPersonAskProgressDecoderV3(), text);
@@ -161,9 +161,5 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(created).toHaveBeenCalledTimes(4);
     expect(planner.catalogs.length).toBe(planned);
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').length).toBe(asked);
-  });
-
-  it('answers /v7 as unavailable, still route-matched, on an Authority composed without the V8 Ask', async () => {
-    await expectAskRouteUnavailable(ask, await origin(await sentFixture(), leadsAndTasks().model, { v7: false }), '7');
   });
 });

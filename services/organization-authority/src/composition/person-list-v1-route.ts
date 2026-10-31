@@ -47,6 +47,7 @@ import {
   type PersonOpenPositionV1,
 } from "./person-list-cursor-v1.js";
 import { isCanonicalUtcMillisTimestampV1 } from "../application/canonical-utc-timestamp-v1.js";
+import { personUnknownScopeV1 } from "../adapters/persistence/sqlite/person-original-access-v1.js";
 
 /** One page of 25 plus the row that proves another page exists. */
 const COLLECT_LIMIT = PERSON_LIST_PAGE_SIZE_V1 + 1;
@@ -66,7 +67,7 @@ type Opened =
   | Extract<ReturnType<PersonOriginalItemsPortV1["open"]>, { readonly kind: "document" }>
   | (ReturnType<PersonMeetingItemsPortV1["openMeeting"]> & { readonly kind: "meeting" });
 
-export interface CreatePersonListRouteV1Options {
+interface CreatePersonListRouteV1Options {
   readonly organization_id: string;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   /** The caller's connected tools; only each tool id and status leave. */
@@ -90,9 +91,6 @@ function invalidOutput(): never {
 }
 function unavailable(): never {
   throw new AuthorityOperationError("unavailable", "person list is unavailable");
-}
-function unknownScope(scope: never): never {
-  throw new AuthorityOperationError("invalid_request", `scope ${String((scope as { readonly kind?: unknown }).kind)} is invalid`);
 }
 
 function scopeOf(request: PersonListRequestV1): PersonListScopeV1 {
@@ -232,7 +230,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
         case "only_me":
           break;
         default:
-          unknownScope(scope);
+          personUnknownScopeV1(scope);
       }
       signal?.throwIfAborted();
     }

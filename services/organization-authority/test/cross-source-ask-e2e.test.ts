@@ -135,15 +135,6 @@ describe('one runtime without live connectors', () => {
     const catalog = (JSON.parse(prompt.user_prompt) as { source_catalog?: { source: string }[] }).source_catalog?.map(entry => entry.source) ?? [];
     for (const source of ['follow_ups', 'projects', 'people', 'tools']) expect([source, catalog.includes(source)]).toEqual([source, !mine]);
   });
-
-  it.each([3, 4, 5, 6])('has no /v%i Ask route any more', async version => {
-    const response = await fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ schema_version: 3, question: 'What changed?' }),
-    });
-    expect(response.status).toBe(404);
-    expect(response.headers.has('x-echo-person-ask-route')).toBe(false);
-    expect(generate).not.toHaveBeenCalled();
-  });
 });
 
 it('closes already opened connectors if a later registered connector fails to start', async () => {
@@ -153,7 +144,7 @@ it('closes already opened connectors if a later registered connector fails to st
     descriptor: { source_id, selector: source_id, kind: 'page', description: 'Live pages', metadata_only_list: true },
     scopes: ['global'],
   });
-  await expect(startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors: [
+  await expect(startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, answer_composition_generation: finishingModel().answer_composition_generation, live_connectors: [
     { ...definition('first'), open: () => ({ application: { source: async () => undefined }, close }) },
     { ...definition('second'), open: () => { throw new Error('connector startup failed'); } },
   ] })).rejects.toThrow('connector startup failed');

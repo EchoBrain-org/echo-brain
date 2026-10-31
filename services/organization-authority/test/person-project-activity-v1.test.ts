@@ -24,6 +24,7 @@ import { readableSearchGenerationContractV1 } from '../src/composition/readable-
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { CLOUD, assign, openItemsFixture, sendAll, setState, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 import { OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from './fixtures/person-meeting-world.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 /**
  * Project activity over the open-items fixture's Authority and its real record log: Ari approved a meeting into project A,
@@ -522,9 +523,8 @@ describe('project activity: cost', () => {
 describe('project activity HTTP route', () => {
   const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
   afterEach(async () => { for (const server of servers.splice(0)) { const closed = once(server, 'close'); server.close(); server.closeAllConnections(); await closed; } });
-  async function origin(person_project_activity?: ReturnType<typeof createPersonProjectActivityV1>, sessions: unknown = {}) {
-    const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: sessions as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-      ...(person_project_activity === undefined ? {} : { person_project_activity }) });
+  async function origin(person_project_activity: ReturnType<typeof createPersonProjectActivityV1>, sessions: unknown) {
+    const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ sessions: sessions as never, person_project_activity }));
     servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
     const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
     return `http://127.0.0.1:${address.port}`;
@@ -561,11 +561,9 @@ describe('project activity HTTP route', () => {
     expect((await fetch(`${base}${PERSON_PROJECT_ACTIVITY_PATH_V1}`, { method: 'POST', headers: { authorization: 'Bearer mina', 'content-type': 'application/json' }, body: '{}' })).status).toBe(404);
   });
 
-  it('is reserved for the Authority, and unavailable when not composed', async () => {
-    expect(() => createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
-      person_tools: { routes: [{ route_id: 'collision', method: 'GET', path: PERSON_PROJECT_ACTIVITY_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) } })).toThrow('collides with Authority route');
-    const base = await origin();
-    expect((await fetch(`${base}${PERSON_PROJECT_ACTIVITY_PATH_V1}`, { headers: { authorization: 'Bearer mina' } })).status).toBe(503);
+  it('is reserved for the Authority', () => {
+    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
+      person_tools: { routes: [{ route_id: 'collision', method: 'GET', path: PERSON_PROJECT_ACTIVITY_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) } }))).toThrow('collides with Authority route');
   });
 });
 

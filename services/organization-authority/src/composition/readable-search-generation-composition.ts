@@ -57,7 +57,7 @@ import {
   type StateLineageRootManifestV2,
 } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 
-export const READABLE_SEARCH_SOURCE_REVISION_V1 =
+const READABLE_SEARCH_SOURCE_REVISION_V1 =
   "organization-authority-clean-readable-search-v2" as const;
 
 const READABLE_SEARCH_ANALYZER_RELEASE_V4 = Object.freeze({
@@ -109,7 +109,7 @@ const READABLE_SEARCH_BUILDER_RELEASE_V1 = Object.freeze({
   reader_behavior: READABLE_SEARCH_READER_BEHAVIOR_V1,
 });
 
-export interface ReadableSearchGenerationContractV1 {
+interface ReadableSearchGenerationContractV1 {
   readonly retrieval_contract_sha256: Sha256Digest;
   readonly organization_member_policy_contract_sha256: Sha256Digest;
   readonly restricted_reviewer_policy_contract_sha256: Sha256Digest;

@@ -6,15 +6,15 @@ import type { PersonTextSourceInboxV1, PersonTextSourceFailureObservationV1 } fr
 
 type ExtractionRepository = Pick<PersonDocumentRepositoryV1, 'claimExtraction' | 'completeExtraction' | 'sourceAdmission'>;
 type Extract = (input: DocumentExtractionInput, signal?: AbortSignal) => Promise<DocumentExtractionResult>;
-export type PersonDocumentProcessingWorkStateV1 = 'idle' | 'skipped' | 'admitted' | 'busy';
-export type PersonDocumentProcessingFailureObservationV1 = PersonTextSourceFailureObservationV1 | {
+type PersonDocumentProcessingWorkStateV1 = 'idle' | 'skipped' | 'admitted' | 'busy';
+type PersonDocumentProcessingFailureObservationV1 = PersonTextSourceFailureObservationV1 | {
   readonly stage: 'source_admission'; readonly error_code: 'source_admission_failed';
 } | {
   readonly stage: 'document_extraction'; readonly error_code: 'document_extraction_failed';
 } | {
   readonly stage: 'document_completion'; readonly error_code: 'document_completion_failed';
 };
-export interface PersonDocumentProcessingOptionsV1 {
+interface PersonDocumentProcessingOptionsV1 {
   readonly on_failure?: (event: PersonDocumentProcessingFailureObservationV1) => void;
 }
 type ProcessingFailureStageV1 = 'source_admission' | 'document_extraction' | 'document_completion';

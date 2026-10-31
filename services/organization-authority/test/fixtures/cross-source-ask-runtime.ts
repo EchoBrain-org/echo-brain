@@ -49,7 +49,7 @@ export async function crossSourceAuthorityFixture(owned: string[]) {
 }
 
 /** The runtime's Authority database, as the proofs read its audit rows. */
-export interface CrossSourceAuthorityDatabaseV1 {
+interface CrossSourceAuthorityDatabaseV1 {
   prepare(sql: string): { all(...parameters: unknown[]): unknown[]; get(...parameters: unknown[]): unknown };
   close(): void;
 }

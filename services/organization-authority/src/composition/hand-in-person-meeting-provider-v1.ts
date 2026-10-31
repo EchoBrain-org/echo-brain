@@ -21,7 +21,7 @@ const MAXIMUM_PENDING = 50;
 const MAXIMUM_TRANSCRIPT_BLOCKS = 1_000;
 
 /** A hand-in source's checkpoint: only the handed-in meetings waiting to be processed. It never watches anything. */
-export type HandInCheckpointV1 = PersonalMeetingCheckpointV1;
+type HandInCheckpointV1 = PersonalMeetingCheckpointV1;
 
 function invalidCursor(): never {
   throw new AuthorityOperationError('invalid_request', 'Hand-in meeting checkpoint is invalid');

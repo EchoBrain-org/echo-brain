@@ -4,7 +4,8 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { describe, expect, it, vi } from 'vitest';
-import { createPersonResearchEvalV1, PERSON_RESEARCH_EVAL_REREAD_MS_V1, PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 } from '../src/composition/person-research-eval-v1.js';
+import { createPersonResearchEvalV1 } from '../src/composition/person-research-eval-v1.js';
+import { RETAINED_RESULT_REREAD_MS_V1, RETAINED_RESULT_TTL_MS_V1 } from '../src/composition/person-retained-result-v1.js';
 import type { CreatePersonResearchEvalOptionsV1 } from '../src/composition/person-research-eval-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
@@ -104,7 +105,7 @@ describe('staging research evaluation runs', () => {
     expect(result).toMatchObject({ status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'ask', stop: { reason: 'unusable_step' } }, ask: { writer_evidence: [], response: { schema_version: 8 } } });
     expect(result).not.toHaveProperty('rendered');
     expect((await h.read('token-a', receipt.run_id)).status).toBe('completed');
-    h.advance(PERSON_RESEARCH_EVAL_REREAD_MS_V1 + 1);
+    h.advance(RETAINED_RESULT_REREAD_MS_V1 + 1);
     await expect(h.read('token-a', receipt.run_id)).rejects.toMatchObject({ code: 'not_found' });
     // The only durable trace is the loop's content-free audit.
     expect(h.audits).toHaveLength(1);
@@ -182,7 +183,7 @@ describe('staging research evaluation runs', () => {
     const run = await h.application.start({ access_token: 'token-a', request: ask('Later?') });
     await vi.waitFor(() => expect(h.generate).toHaveBeenCalled());
     await new Promise(resolve => setTimeout(resolve, 20));
-    h.advance(PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 + 1);
+    h.advance(RETAINED_RESULT_TTL_MS_V1 + 1);
     await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
   });
 

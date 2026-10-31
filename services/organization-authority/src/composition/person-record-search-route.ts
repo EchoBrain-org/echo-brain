@@ -74,6 +74,8 @@ import type {
 } from "../application/ports/person-list-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { PERSON_MEETING_DATE_FIELDS_V1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
+import { personUnknownScopeV1 } from "../adapters/persistence/sqlite/person-original-access-v1.js";
+import { isCanonicalUtcMillisTimestampV1 } from "../application/canonical-utc-timestamp-v1.js";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { samePersonReleaseAuthorizationV1 } from "../application/person-release-authorization-v1.js";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -116,7 +118,7 @@ export class PersonRecordSearchSnapshotChangedV1 extends EvidenceDeskSnapshotCha
  * bearer remains server-side while the query runs under one reader tuple and
  * one exact snapshot.
  */
-export interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
+interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
   readonly access_token: string;
   readonly query: string;
   /** Authority-checked project scope; association never replaces audience. */
@@ -139,12 +141,12 @@ export interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
 }
 
 /** What a desk read leaves out before its limit: records by digest, and every record only its approver may read. */
-export interface PersonRecordDeskExclusionV1 {
+interface PersonRecordDeskExclusionV1 {
   readonly record_sha256s: readonly Sha256Digest[];
   readonly approver_only: boolean;
 }
 
-export type PersonRecordSearchReleaseAuthorizationV1 =
+type PersonRecordSearchReleaseAuthorizationV1 =
   Readonly<PersonAccessAuthorization>;
 
 export interface PersonRecordSearchReleasePointerV1 {
@@ -173,7 +175,7 @@ export interface PersonRecordSearchBatchReleaseV1 {
   readonly mine?: true;
 }
 
-export interface PersonRecordSearchBatchResultV1 {
+interface PersonRecordSearchBatchResultV1 {
   readonly response: PersonRecordSearchResponseV2;
   readonly release: PersonRecordSearchBatchReleaseV1;
   /** Private desk projection of immutable V4 meeting metadata. */
@@ -189,7 +191,7 @@ export interface PersonRecordSearchBatchResultV1 {
   readonly unchecked?: EvidenceDeskUncheckedV1;
 }
 
-export interface PersonRecordDeskItemV1 {
+interface PersonRecordDeskItemV1 {
   readonly atom_id: Sha256Digest;
   readonly record_sha256: Sha256Digest;
   readonly item_kind: ReadableSearchResultItemV1["item_kind"];
@@ -213,7 +215,7 @@ export interface PersonRecordDeskItemV1 {
   readonly dates?: EvidenceDatesV1;
 }
 
-export interface PersonRecordSearchBatchApplicationV1 {
+interface PersonRecordSearchBatchApplicationV1 {
   searchBatch(
     input: PersonRecordSearchBatchInputV1,
   ): PersonRecordSearchBatchResultV1;
@@ -482,7 +484,7 @@ function isVerifiedIndexLag(
  * of another organization or contract is not lag; the anchor answers it as
  * unavailable.
  */
-export function personRecordSearchIndexLagsV1(
+function personRecordSearchIndexLagsV1(
   options: Pick<CreatePersonRecordSearchRouteV1Options, "authority" | "record" | "organization_id" | "retrieval_contract_sha256">,
 ): boolean {
   const head = recordHead(options.record);
@@ -767,7 +769,6 @@ const PROJECT_RECORDS_MAX = 500;
 const PROJECT_RECORDS_PAGE = 100;
 /** The newest filed records project activity lists, and looks through for a meeting from someone else (Ask timeline v1, C2). */
 const PROJECT_ACTIVITY_SCAN_MAX = 500;
-const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 type MeetingCollectionState = {
   readonly authorization: PersonRecordSearchReleaseAuthorizationV1;
@@ -814,11 +815,6 @@ function metadataUnavailable(): never {
   throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
 }
 
-/** A compile error when a scope kind is added; a closed failure at run time. */
-function unknownScope(scope: never): never {
-  throw new AuthorityOperationError("invalid_request", `scope ${String((scope as { readonly kind?: unknown }).kind)} is invalid`);
-}
-
 /**
  * The records half of a list scope: mine is the caller's own approvals, and
  * only_me the records kept for the caller alone (ADR-0049); neither is ever global.
@@ -829,14 +825,13 @@ function meetingScope(scope: PersonListStoreScopeV1): Readonly<{ project_id?: st
     case "project": return { project_id: scope.project_id, mine: false, only_me: false };
     case "mine": return { mine: true, only_me: false };
     case "only_me": return { mine: false, only_me: true };
-    default: return unknownScope(scope);
+    default: return personUnknownScopeV1(scope);
   }
 }
 
 function meetingPosition(value: PersonItemPositionV1 | null | undefined): PersonItemPositionV1 | null {
   if (value === null) return null;
-  if (value === undefined || typeof value !== "object" || typeof value.added_at !== "string" || !CANONICAL_TIME.test(value.added_at) ||
-    !Number.isFinite(Date.parse(value.added_at)) || new Date(value.added_at).toISOString() !== value.added_at ||
+  if (value === undefined || typeof value !== "object" || !isCanonicalUtcMillisTimestampV1(value.added_at) ||
     typeof value.id !== "string" || !RECORD_SHA256.test(value.id)) invalidRequest();
   return Object.freeze({ added_at: value.added_at, id: value.id });
 }

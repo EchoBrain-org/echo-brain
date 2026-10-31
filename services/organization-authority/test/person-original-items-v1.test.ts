@@ -15,7 +15,7 @@ import type { PersonAskScopeV2 } from "../src/application/ports/person-original-
 import type { PersonUploadAudienceV2, ProjectIdV1 } from "@echo-brain/organization-api";
 import {
   MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, RETURNED_MEMBER,
-  addMembership, authorization, insertStoredDocumentV1, insertStoredNoteV2, projectContextDatabase, revokeMembership,
+  addMembership, authorization, insertStoredDocumentV1, insertStoredNoteV2, projectContextDatabase, revokeMembership, seedProject, seedProjectMember,
 } from "./fixtures/project-context-sqlite.js";
 import { failure } from "./authority-failure.js";
 
@@ -33,12 +33,6 @@ const AUDIT_KIND = "echo-person-original-item-release-audit-v1";
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
 
-function grant(database: Database.Database, projectId: string, actor: Actor, role: "lead" | "member"): void {
-  database.prepare(`INSERT INTO authority_project_memberships_v1
-    (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-    VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`, projectId, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, role, PROJECT_CONTEXT_NOW);
-}
-
 function revokeGrant(database: Database.Database, projectId: string, actor: Actor): void {
   database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'").run(PROJECT_CONTEXT_NOW, projectId, actor.membership_id);
 }
@@ -53,12 +47,10 @@ function fixture() {
   const database = projectContextDatabase();
   databases.push(database);
   for (const [projectId, name] of [[PROJECT_ALPHA, "Alpha"], [PROJECT_BETA, "Beta"]] as const) {
-    database.prepare(`INSERT INTO authority_projects_v1
-      (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
-      VALUES (?,?,?,?,?,?,?)`).run(projectId, OWNER.organization_id, name, PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type);
-    grant(database, projectId, OWNER, "lead");
+    seedProject(database, projectId, OWNER, { name });
+    seedProjectMember(database, projectId, OWNER, "lead");
   }
-  grant(database, PROJECT_ALPHA, MEMBER, "member");
+  seedProjectMember(database, PROJECT_ALPHA, MEMBER, "member");
   let clock = Date.parse(PROJECT_CONTEXT_NOW);
   const time = { pinned: undefined as string | undefined };
   const now = () => time.pinned ?? new Date(clock += 1_000).toISOString();
@@ -219,7 +211,7 @@ describe("person original items store", () => {
 
     revokeMembership(f.database, MEMBER);
     addMembership(f.database, RETURNED_MEMBER, "Returned", "member@example.test");
-    grant(f.database, PROJECT_ALPHA, RETURNED_MEMBER, "member");
+    seedProjectMember(f.database, PROJECT_ALPHA, RETURNED_MEMBER, "member");
     const returnedNote = f.note("returned", { kind: "team" });
     const returned = check("returned", RETURNED_MEMBER);
     // The same person's earlier tenure is global context, never "mine".
@@ -499,7 +491,7 @@ describe("person original items store", () => {
     expect(failure(() => f.items.revalidate({ access_token: "member", release })).code).toBe("unauthorized");
     f.session.state = "fixture session";
     const beforeGrant = all();
-    grant(f.database, PROJECT_BETA, MEMBER, "member");
+    seedProjectMember(f.database, PROJECT_BETA, MEMBER, "member");
     expect(failure(() => f.items.commit({ access_token: "member", handle: beforeGrant.handle, notes: 1, documents: 0 })).code).toBe("unauthorized");
     expect(f.audits()).toHaveLength(1);
 

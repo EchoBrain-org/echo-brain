@@ -31,7 +31,7 @@ const CURSOR_PREFIX = 'fixture-source:v1:live:';
 type FixtureCheckpointV1 = PersonalMeetingCheckpointV1 & { readonly folder: string | null; readonly baseline: boolean };
 const write = (value: FixtureCheckpointV1): string => CURSOR_PREFIX + JSON.stringify({ folder: value.folder, baseline: value.baseline, manual: value.manual });
 /** The fixture source's live cursor carries a personal checkpoint; the admitted initial cursor reads as empty. */
-export const fixtureCheckpointCodec: PersonalMeetingCheckpointCodecV1 = {
+const fixtureCheckpointCodec: PersonalMeetingCheckpointCodecV1 = {
   read(value: string): FixtureCheckpointV1 {
     if (!value.startsWith(CURSOR_PREFIX)) throw new Error('fixture cursor must be live');
     const body = value.slice(CURSOR_PREFIX.length);
@@ -51,7 +51,7 @@ const NOW = '2026-10-07T09:00:00.000Z';
 
 export interface ApprovalFixtureActorV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string; readonly authorization_sha256: Sha256Digest }
 
-export interface ApprovalContextFixtureV1 {
+interface ApprovalContextFixtureV1 {
   readonly db: Database.Database; readonly record: Database.Database; readonly actor: ApprovalFixtureActorV1; readonly context: ApprovalWorkflowContextV1;
   readonly state: SqliteAuthorityMeetingProcessingStateV1; readonly path: string | undefined;
   /** Verifies a stored canonical envelope with the production record codecs. */
@@ -88,7 +88,7 @@ export async function approvalContextFixture(options: { readonly path?: string }
   return { db, record, actor, context, state, path, verify };
 }
 
-export interface ApprovalCoreFixtureOptionsV1 {
+interface ApprovalCoreFixtureOptionsV1 {
   /** Proposed owners by action signal id (act-1, act-2). */
   readonly owners?: Readonly<Record<string, string>>;
   /** Replaces the two default action signals. */

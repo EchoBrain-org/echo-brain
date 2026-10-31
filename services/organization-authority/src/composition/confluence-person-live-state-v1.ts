@@ -5,7 +5,7 @@ import { bindPersonProviderStateV1 } from './person-provider-state-v1.js';
 const CLOUD_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const INTEGRATION = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
-export interface ConfluencePersonLiveStateBindingV1 {
+interface ConfluencePersonLiveStateBindingV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-confluence-person-live-state-binding-v1';
   readonly authority_id: string;

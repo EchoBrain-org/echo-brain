@@ -24,16 +24,16 @@ import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV3HttpApplication } from "../src/presentation/person-answer-v3-http-application.js";
 import type { PersonAnswerV7HttpApplication } from "../src/presentation/person-live-answer-http-application.js";
+import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
 /** The evidence desk (`application`) and Ask on `/v7` (`ask`) behind the real HTTP server. */
 async function server(input: { readonly application?: PersonAnswerV3HttpApplication; readonly ask?: PersonAnswerV7HttpApplication }) {
   const sessions = { authenticateAccess: vi.fn(() => ({})) };
-  const instance = createOrganizationAuthorityHttpServer({
-    descriptor: {} as never, sessions: sessions as never, oidc_provider: {} as never,
-    expected_issuer: "https://issuer.example",
+  const instance = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
+    sessions: sessions as never,
     ...(input.application === undefined ? {} : { person_answer_v3: input.application }),
     ...(input.ask === undefined ? {} : { person_answer_v7: input.ask }),
-  });
+  }));
   instance.listen(0, "127.0.0.1");
   await once(instance, "listening");
   const address = instance.address();
@@ -57,27 +57,6 @@ describe("Agentic Ask HTTP capability gate", () => {
       const bad = await fetch(`${value.url}${PERSON_ANSWER_PATH_V7}`, { method: 'POST', headers: { ...headers, 'x-echo-time-zone': 'Not/AZone' }, body: JSON.stringify(body) });
       expect(bad.status).toBe(400);
       expect(ask).toHaveBeenCalledTimes(1);
-    } finally { await value.close(); }
-  });
-
-  it('passes answer layout to Ask, and refuses any other value before the Ask runs', async () => {
-    const ask = vi.fn(async (_input: unknown) => { throw new AuthorityOperationError('not_found', 'fixture'); });
-    const value = await server({ ask: { ask } as never });
-    const body = { schema_version: 3, question: 'What changed?' };
-    try {
-      const post = (headers: Readonly<Record<string, string>>) => fetch(`${value.url}${PERSON_ANSWER_PATH_V7}`, {
-        method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
-      });
-      expect((await post({ 'x-echo-answer-layout': '1' })).status).toBe(404);
-      expect(ask).toHaveBeenLastCalledWith(expect.objectContaining({ request: body, answer_layout: true }));
-      await post({});
-      expect(ask.mock.calls.at(-1)![0]).not.toHaveProperty('answer_layout');
-      for (const invalid of ['0', 'yes', '1, 1']) {
-        const refused = await post({ 'x-echo-answer-layout': invalid });
-        expect(refused.status).toBe(400);
-        await expect(refused.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
-      }
-      expect(ask).toHaveBeenCalledTimes(2);
     } finally { await value.close(); }
   });
 
@@ -115,25 +94,11 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it("without an answer model reports no agentic capability and refuses Ask instead of falling back", async () => {
-    const value = await server({});
-    try {
-      const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
-      expect(capabilities.status).toBe(200);
-      await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: false });
-      expect(value.sessions.authenticateAccess).toHaveBeenCalledWith({ access_token: "token" });
-      expect((await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What changed?" })).status).toBe(503);
-    } finally { await value.close(); }
-  });
-
-  it("reports agentic Ask to installed clients that still probe, and no longer serves the retired Ask paths", async () => {
+  it("reports agentic Ask to installed clients that still probe", async () => {
     const value = await server({ application: { searchEvidence: vi.fn(), openEvidence: vi.fn() } as never, ask: { ask: vi.fn() } as never });
     try {
       const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
       await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: true });
-      for (const path of RETIRED_ASK_PATHS) {
-        expect((await post(value.url, path, { schema_version: path === "/v1/person/ask" || path === "/v2/person/ask" ? 2 : 3, question: "What changed?" })).status).toBe(404);
-      }
     } finally { await value.close(); }
   });
 

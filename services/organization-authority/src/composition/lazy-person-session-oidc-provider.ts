@@ -8,7 +8,7 @@ export interface PersonSessionOidcAuthorizationProvider extends PersonSessionOid
   buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string;
 }
 
-export type PersonSessionOidcProviderDiscovery =
+type PersonSessionOidcProviderDiscovery =
   () => Promise<PersonSessionOidcAuthorizationProvider>;
 
 /** Caches successful discovery while allowing a later request to retry failure. */

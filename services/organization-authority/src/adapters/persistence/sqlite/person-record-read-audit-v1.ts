@@ -2,7 +2,7 @@ import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import { appendAuditRowV1 } from "./audit-row-v1.js";
 
-export interface PersonRecordReadAuditEntryV1 {
+interface PersonRecordReadAuditEntryV1 {
   readonly read_mode: "layer1" | "layer2" | "person_list" | "person_open";
   readonly authority_id: string;
   readonly organization_id: string;

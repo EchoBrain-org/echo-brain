@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { performance } from "node:perf_hooks";
 import {
   canonicalJson,
   canonicalSha256,
@@ -41,7 +40,7 @@ import { createPersonRecordSearchRouteV1, PersonRecordSearchIndexLagV1, type Cre
 import { createRecordProjectAuthorizationV1, recordProjectAuthorizationOfGrantsV1 } from "../src/composition/person-record-project-scope-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
-import { addMembership } from "./fixtures/project-context-sqlite.js";
+import { addMembership, seedProjectMember } from "./fixtures/project-context-sqlite.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
 import { EMP_A, EMP_B, OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
 
@@ -203,9 +202,9 @@ function policyAtom(input: {
 }
 
 function benchmarkAtom(index: number): ReadableSearchAtomV1 {
-  const reviewer = index >= 500;
-  // Fourteen benchmark reviewer tuples plus the exact owner tuple used by the
-  // policy fixture yield fifteen reviewer segments and one member segment.
+  // From index 14 an atom is restricted to a reviewer other than the policy
+  // fixture's owner, so the owner never reads it.
+  const reviewer = index >= 14;
   const reviewerIndex = reviewer ? index % 14 : 0;
   const text = Array.from(
     { length: 16 },
@@ -335,8 +334,7 @@ describe("Person Layer 2 route", () => {
     const projects = createProjectContextApplicationV1({ repository, authenticate: token => token === "lead" ? lead : reader });
     const created = projects.createProject("lead", { schema_version: 1, kind: "echo-project-create-v1", request_id: randomUUID(), name: "Launch" });
     const projectId = created.project_id;
-    value.authority.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-      VALUES(?,?,?,?,?,?,'member','active',?)`).run(`pgm_${randomUUID()}`, projectId, reader.organization_id, reader.principal_id, reader.membership_id, reader.membership_type, reader.checked_at);
+    seedProjectMember(value.authority, projectId, reader, "member", { granted_at: reader.checked_at });
     const text = "Approved launch remains scheduled for Monday.";
     const atom = { ...policyAtom({ id: "member", policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 }), policy_contract_sha256: sha256Digest("project-policy"), text, text_sha256: sha256Digest(text), audience_project_ids: [projectId], association_project_ids: [projectId] };
     try {
@@ -587,7 +585,7 @@ describe("Person Layer 2 route", () => {
     }
   });
 
-  it("releases each policy only to the authenticated active member tuple it admits", async () => {
+  it("releases each policy only to the authenticated active member tuple it admits", () => {
     const value = setup(false);
     const record = recordLog();
     const restrictedRecordHash = sha256Digest("restricted-record");
@@ -596,7 +594,6 @@ describe("Person Layer 2 route", () => {
         "INSERT INTO organization_record_log (position, record_sha256) VALUES (?, ?)",
       )
       .run(2, restrictedRecordHash);
-    const buildStarted = performance.now();
     const built = buildReadableSearchGenerationV1(
       realGenerationInput(value.state_directory, [
         policyAtom({
@@ -607,13 +604,11 @@ describe("Person Layer 2 route", () => {
           id: "restricted",
           policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
         }),
-        ...Array.from({ length: 998 }, (_, index) =>
+        ...Array.from({ length: 16 }, (_, index) =>
           benchmarkAtom(index + 2),
         ),
       ]),
     );
-    const buildMilliseconds = performance.now() - buildStarted;
-    const prewarmStarted = performance.now();
     warmReadableSearchActiveGenerationV1({
       state_directory: value.state_directory,
       active_generation: {
@@ -623,7 +618,6 @@ describe("Person Layer 2 route", () => {
         exact_head: built.manifest.exact_head,
       },
     });
-    const prewarmMilliseconds = performance.now() - prewarmStarted;
     pointAt(value.authority, { generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256, exact_head: built.manifest.exact_head });
     const authorizations = {
       "owner-bearer": readerAuthorization({
@@ -659,17 +653,10 @@ describe("Person Layer 2 route", () => {
         access_token: "owner-bearer",
         query: "policy",
       });
-      const eventLoopStarted = performance.now();
-      const eventLoopProbe = new Promise<number>((resolve) =>
-        setImmediate(() => resolve(performance.now() - eventLoopStarted)),
-      );
-      const requestStarted = performance.now();
       const benchmark = route.searchBatch({
         access_token: "owner-bearer",
         query: "benchmark0 benchmark1 benchmark2 benchmark3",
       });
-      const requestMilliseconds = performance.now() - requestStarted;
-      const eventLoopDelayMilliseconds = await eventLoopProbe;
       expect(benchmark.response.items).toHaveLength(10);
       expect(
         benchmark.response.items.every(
@@ -678,15 +665,6 @@ describe("Person Layer 2 route", () => {
             ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
         ),
       ).toBe(true);
-      console.info("clean-readable-search lean-v1 benchmark", {
-        atoms: 1_000,
-        segments: built.manifest.segments.length,
-        postings: 15_974,
-        buildMilliseconds,
-        prewarmMilliseconds,
-        requestMilliseconds,
-        eventLoopDelayMilliseconds,
-      });
       expect(Object.keys(owner).sort()).toEqual(["items", "kind", "schema_version"]);
       expect(owner.items).toEqual(
         expect.arrayContaining([

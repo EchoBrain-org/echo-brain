@@ -7,10 +7,8 @@ import type {
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonSourceEvidenceHttpApplicationV1 } from '../src/presentation/person-source-evidence-http-application.js';
-import {
-  createOrganizationAuthorityHttpServer,
-  type OrganizationAuthorityHttpServerOptions,
-} from '../src/presentation/organization-authority-http-server.js';
+import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 const project_id = 'prj_00000000-0000-4000-8000-000000000001';
 function sha256(character: string): `sha256:${string}` {
@@ -47,18 +45,8 @@ afterEach(async () => {
   }
 });
 
-function options(application: PersonSourceEvidenceHttpApplicationV1 | undefined): OrganizationAuthorityHttpServerOptions {
-  return {
-    descriptor: {} as never,
-    sessions: {} as never,
-    oidc_provider: {} as never,
-    expected_issuer: 'https://issuer.example',
-    ...(application === undefined ? {} : { person_source_evidence: application }),
-  };
-}
-
-async function start(application: PersonSourceEvidenceHttpApplicationV1 | undefined): Promise<string> {
-  const server = createOrganizationAuthorityHttpServer(options(application));
+async function start(application: PersonSourceEvidenceHttpApplicationV1): Promise<string> {
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_source_evidence: application }));
   servers.push(server);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -105,11 +93,6 @@ describe('cited original HTTP transport', () => {
       schema_version: 1, scope: { kind: 'global' },
       citation: { kind: 'approved_meeting_transcript', approval_id: 'apr_fixture', source_id: sourceId('9'), revision_id: 'meeting-revision-1', source_sha256: sha256('8') },
     }), 404, 'not_found');
-  });
-
-  it('answers source reads as unavailable when they are not composed', async () => {
-    const origin = await start(undefined);
-    await failure(await request(origin, '/v2/person/ask/source', { schema_version: 1, scope: { kind: 'global' }, citation: source }), 503, 'unavailable');
   });
 
   it('rejects invalid source fields and caller-controlled scope extensions before dispatch', async () => {

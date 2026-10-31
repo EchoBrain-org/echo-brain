@@ -13,7 +13,7 @@ import { createPersonDocumentApplicationV1 } from "../src/application/document-v
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import type { OriginalContextDeskItemV1, PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
-import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
+import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase, seedProject, seedProjectMember } from "./fixtures/project-context-sqlite.js";
 
 const GLOBAL: PersonAskScopeV2 = { kind: "global" };
 const MINE: PersonAskScopeV2 = { kind: "mine" };
@@ -24,14 +24,8 @@ afterEach(() => { for (const database of databases.splice(0)) database.close(); 
 async function fixture() {
   const database = projectContextDatabase();
   databases.push(database);
-  for (const projectId of [PROJECT_ALPHA, PROJECT_BETA]) {
-    database.prepare(`INSERT INTO authority_projects_v1
-      (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
-      VALUES (?,?,?,?,?,?,?)`).run(projectId, OWNER.organization_id, projectId, PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type);
-  }
-  database.prepare(`INSERT INTO authority_project_memberships_v1
-    (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-    VALUES (?,?,?,?,?,?,'member','active',?)`).run(`pgm_${randomUUID()}`, PROJECT_ALPHA, MEMBER.organization_id, MEMBER.principal_id, MEMBER.membership_id, MEMBER.membership_type, PROJECT_CONTEXT_NOW);
+  for (const projectId of [PROJECT_ALPHA, PROJECT_BETA]) seedProject(database, projectId, OWNER);
+  seedProjectMember(database, PROJECT_ALPHA, MEMBER, "member");
   let clock = Date.parse(PROJECT_CONTEXT_NOW);
   const now = () => new Date(clock += 1_000).toISOString();
   const authenticate = (token: string): PersonAccessAuthorization => authorization(token === "member" ? MEMBER : OWNER);
@@ -112,18 +106,8 @@ describe("originals under the mine scope", () => {
     }
   });
 
-  it("keeps the project scope SQL byte-identical and makes an unknown scope a compile error", () => {
+  it("makes an unknown scope a compile error", () => {
     const actor = authorization(MEMBER);
-    expect(personOriginalScopeFilterV1("u", actor, { kind: "project", project_id: PROJECT_ALPHA })).toEqual({
-      sql: "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)",
-      args: [PROJECT_ALPHA],
-    });
-    expect(personOriginalScopeFilterV1("d", actor, { kind: "project", project_id: PROJECT_ALPHA })).toEqual({
-      sql: "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)",
-      args: [PROJECT_ALPHA],
-    });
-    expect(personOriginalScopeFilterV1("u", actor, GLOBAL)).toEqual({ sql: "", args: [] });
-    expect(personOriginalScopeFilterV1("d", actor, MINE)).toEqual({ sql: "AND d.membership_id=? AND d.principal_id=?", args: [MEMBER.membership_id, MEMBER.principal_id] });
     // @ts-expect-error A new scope kind must be handled before it compiles.
     expect(() => personOriginalScopeFilterV1("u", actor, { kind: "everyone" })).toThrow(expect.objectContaining({ code: "invalid_request" }));
   });

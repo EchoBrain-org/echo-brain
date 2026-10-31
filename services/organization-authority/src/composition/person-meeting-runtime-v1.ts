@@ -75,7 +75,7 @@ type ProcessorCommitmentsV1 = (instance_id: string) => AdmittedMeetingProcessing
  * The one source rule: a source per person and tool account, with a processor instance per person.
  * Projects never enter the source, so one meeting is extracted and reviewed once whatever projects it suggests.
  */
-export function ensurePersonMeetingSourceV1(intake: SqlitePersonMeetingIntakeV1, input: {
+function ensurePersonMeetingSourceV1(intake: SqlitePersonMeetingIntakeV1, input: {
   readonly provider: Pick<PersonMeetingProviderV1, 'normalizer_version' | 'custodian_assurance'>; readonly person: MeetingIntakePersonV1;
   readonly session: { readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown };
   readonly commitments: ProcessorCommitmentsV1; readonly current: () => void;

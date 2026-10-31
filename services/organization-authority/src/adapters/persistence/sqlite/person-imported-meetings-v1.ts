@@ -9,7 +9,7 @@ import { personOriginalGrantedProjectIdsV1 } from './person-original-access-v1.j
 import { HAND_IN_SOURCE_ADAPTER_ID_V1 } from './person-hand-in-meetings-v1.js';
 
 /** An unapproved import, which is always its importer's alone: a suggested project grants no read (ADR-0046). */
-export interface ImportedMeetingTextV1 {
+interface ImportedMeetingTextV1 {
   readonly dates: EvidenceDatesV1;
   readonly api_version: 0; readonly context_id: `cap_${string}`; readonly title: string; readonly text: string;
   readonly received_at: string;

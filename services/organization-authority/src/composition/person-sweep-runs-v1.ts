@@ -47,7 +47,7 @@ export interface SweepCountsV1 {
   readonly unreadable_items: readonly string[];
 }
 /** Where a sweep reads its items and their decisions, and writes its checks. */
-export interface PersonSweepSourcesV1 extends OpenItemSourcesV1 {
+interface PersonSweepSourcesV1 extends OpenItemSourcesV1 {
   readonly runs: OpenItemSourcesV1['runs'] & Pick<SqliteTriggerRunsV1, 'list'>;
   readonly items: OpenItemSourcesV1['items'] & Pick<SqliteImpactItemsV1, 'read' | 'recordCheck'>;
   readonly records: OpenItemSourcesV1['records'] & PersonRecordAnchorV1;

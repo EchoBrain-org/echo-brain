@@ -23,6 +23,7 @@ import type {
   PersonOriginalContextEvidenceDeskPortV1,
 } from "../application/ports/person-original-context-retrieval-v1.js";
 import { PERSON_DOCUMENT_DATE_FIELDS_V1, PERSON_MEETING_DATE_FIELDS_V1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
+import { personUnknownScopeV1 } from "../adapters/persistence/sqlite/person-original-access-v1.js";
 import { mergeUncheckedV1 } from "../application/evidence-unchecked-v1.js";
 import {
   PersonRecordSearchIndexLagV1,
@@ -51,7 +52,7 @@ export interface PersonEvidenceDeskExclusionsV1 {
 
 /** The V3 route creates one desk per request; actor, bearer and scope never
  * enter the model-facing methods. */
-export interface CreatePersonEvidenceDeskV1Options {
+interface CreatePersonEvidenceDeskV1Options {
   readonly access_token: string;
   readonly scope: PersonAskScopeV2;
   readonly originals: PersonOriginalContextEvidenceDeskPortV1;
@@ -63,7 +64,7 @@ export interface CreatePersonEvidenceDeskV1Options {
  * A result of this desk. A dated search or list also says what its date filter could not test, summed over meeting
  * records and originals (research tool contract v1): those items are not in the result.
  */
-export type PersonEvidenceDeskResultV1 = EvidenceDeskResultV1 & Pick<EvidenceDeskResultV2, "unchecked">;
+type PersonEvidenceDeskResultV1 = EvidenceDeskResultV1 & Pick<EvidenceDeskResultV2, "unchecked">;
 
 /** The concrete desk: the V1 port, `openCitation`, and results that carry `unchecked`. */
 export interface PersonEvidenceDeskV1 extends EvidenceDeskPortV1 {
@@ -101,17 +102,12 @@ type Stored = Readonly<{
   record_anchor?: { readonly atom_id: Sha256Digest; readonly record_sha256: Sha256Digest; readonly record_position: number; readonly envelope_sha256: Sha256Digest; readonly atom_order: number; readonly audience_project_count: number; readonly item_kind: "decision" | "action" | "rationale"; readonly text: string; readonly policy_id: "restricted-reviewer-person-v2" | "organization-member-readable-person-v2" | "project-members-readable-person-v1" };
 }>;
 
-/** A compile error when a scope kind is added; a closed failure at run time. */
-function unknownScope(scope: never): never {
-  throw new AuthorityOperationError("invalid_request", `scope ${String((scope as { readonly kind?: unknown }).kind)} is invalid`);
-}
-
 function publicScope(scope: PersonAskScopeV2): EvidenceDeskScopeV1 {
   switch (scope.kind) {
     case "global": return Object.freeze({ kind: "global" });
     case "project": return Object.freeze({ kind: "project", project_id: scope.project_id }) as EvidenceDeskScopeV1;
     case "mine": return Object.freeze({ kind: "mine" });
-    default: return unknownScope(scope);
+    default: return personUnknownScopeV1(scope);
   }
 }
 
@@ -122,7 +118,7 @@ function recordScope(scope: PersonAskScopeV2): Readonly<{ project_id?: never }> 
     case "project": return { project_id: scope.project_id };
     // The records route narrows to meetings the caller finally approved.
     case "mine": return { mine: true as const };
-    default: return unknownScope(scope);
+    default: return personUnknownScopeV1(scope);
   }
 }
 
