@@ -237,6 +237,25 @@ prompts, raw errors, or stack traces from these fields. The legacy
 metric and alarm. It is not part of new lifecycle diagnosis, and this slice
 does not add alarms, a status API, correlation, or close #87.
 
+#### Watch the record-search ceiling
+
+The runtime logs `echo-clean-live-search-capacity-v1`, with counts and limit
+names only, when record search nears or passes its admission ceiling:
+`status` `near` after a publication at 75% or more of any limit (with `atoms`,
+`segments` and `postings`), and `status` `over` with the `limit` it exceeded
+on every refused rebuild, which also logs the legacy worker-failure event. Over
+the ceiling, the API still opens on restart, but record search and lists stay
+unavailable and Ask answers without approved meetings until a release raises
+the ceiling. The
+[scaling decision guide](../architecture/scaling-decision-guide.md#limits-to-check-first)
+gives the limits and their cost.
+
+```
+fields @timestamp, status, limit, atoms, segments, postings
+| filter kind = "echo-clean-live-search-capacity-v1"
+| sort @timestamp desc
+```
+
 #### Inspect the shared trace transport heartbeat
 
 Staging and production use the same core context and transport implementation.

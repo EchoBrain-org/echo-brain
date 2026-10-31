@@ -33,6 +33,16 @@ this record on 2026-09-30, in the change that merges the implementation, as
 requires before any new release path ships. `reviewed_ref` is the source the
 design was checked against; it is not an implementation claim.
 
+**Amended 2026-10-31 (search ceiling).** The founder raised the generation's
+admission ceiling to 8,192 atoms, so the record bound below becomes 8,192, and
+the record metadata cache now holds that many records. At 1,024 entries it
+emptied itself on every page past 1,024 records, and a warm mine page then cost
+as much as a cold one. The opt-in benchmark, which now seeds the ceiling,
+measured page 1 over 8,192 single-atom records on one development Mac:
+global 58.9 ms cold and 11.0 ms warm, mine 818.5 ms cold and 9.9 ms warm, all
+inside the revisit thresholds. Approved meetings carry several atoms per record,
+so real lists stay well below that.
+
 ## Context and options
 
 Nothing today lists what a person can read or has added:

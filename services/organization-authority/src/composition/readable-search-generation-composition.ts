@@ -36,6 +36,7 @@ import {
   READABLE_SEARCH_SCORER_ID,
   readableSearchPlaneBaselineSha256,
   isReadableSearchActiveGenerationWarmV1,
+  retireReadableSearchGenerationsV1,
   warmReadableSearchActiveGenerationV1,
   type ReadableSearchActiveGenerationV1,
   type ReadableSearchAtomV1,
@@ -252,6 +253,8 @@ export function createReadableSearchGenerationReconcilerV1(input: {
   readonly signer: FileOrganizationAuthoritySigner;
   /** Chosen with the active approval protocol; this runtime names no provider. */
   readonly policy_projectors: RecordPolicyFactProjectorRegistryV1;
+  /** Observational only: deleting replaced generations failed after a publication. */
+  readonly on_retire_failure?: (error: unknown) => void;
   readonly now?: () => string;
 }): ReadableSearchGenerationReconcilerV1<ReconciliationSnapshotV1> {
   const contract = readableSearchGenerationContractV1();
@@ -430,6 +433,13 @@ export function createReadableSearchGenerationReconcilerV1(input: {
         active_generation: activeGeneration(generation),
       }),
     invalidate_generation: clearReadableSearchActiveGenerationV1,
+    retire_generations: (generation_id) => {
+      retireReadableSearchGenerationsV1({
+        state_directory: input.state_directory,
+        keep_generation_id: generation_id,
+      });
+    },
+    ...(input.on_retire_failure === undefined ? {} : { on_retire_failure: input.on_retire_failure }),
     ...(input.now === undefined ? {} : { now: input.now }),
   });
 }

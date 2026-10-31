@@ -332,6 +332,9 @@ export async function runOrganizationAuthorityServiceCli(
         // The lifecycle reporter constructs this closed, content-free schema.
         io.stderr(`${canonicalJson(event as never)}\n`);
       },
+      on_search_capacity: (event) => {
+        io.stderr(`${canonicalJson({ schema_version: 1, kind: "echo-clean-live-search-capacity-v1", ...event } as never)}\n`);
+      },
       ...(parsed["--worker-interval-ms"] === undefined
         ? {}
         : {
