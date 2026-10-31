@@ -126,8 +126,8 @@ describe("Authority minimal observability stack", () => {
 
   it("alarms on external failure, missing schedule activity, and repeated runtime signals", () => {
     const stack = template();
-    const failureFilter = resource(stack, "WorkerFailureMetricFilter");
-    const readyFilter = resource(stack, "RuntimeReadyMetricFilter");
+    const failureFilter = resource(stack, "AttributedWorkerFailureMetricFilter");
+    const readyFilter = resource(stack, "AttributedRuntimeReadyMetricFilter");
     const alarms = Object.entries(stack.Resources).filter(
       ([, value]) => value.Type === "AWS::CloudWatch::Alarm",
     );
@@ -138,10 +138,11 @@ describe("Authority minimal observability stack", () => {
     expect(readyFilter.Properties).toMatchObject({
       FilterPattern: '{ $.kind = "echo-clean-live-runtime-ready-v1" }',
     });
-    expect(alarms).toHaveLength(6);
+    expect(alarms).toHaveLength(4);
     for (const [, alarm] of alarms) {
       expect(alarm.Properties?.AlarmActions).toEqual([{ Ref: "AlertTopic" }]);
       expect(alarm.Properties?.OKActions).toEqual([{ Ref: "AlertTopic" }]);
+      expect(alarm.Properties?.ActionsEnabled).not.toBe(false);
     }
     expect(resource(stack, "ExternalDescriptorFailureAlarm").Properties).toMatchObject({
       Namespace: "AWS/Lambda",
@@ -163,8 +164,8 @@ describe("Authority minimal observability stack", () => {
       TreatMissingData: "breaching",
     });
     for (const logicalId of [
-      "RepeatedWorkerFailureAlarm",
-      "RepeatedRuntimeReadyAlarm",
+      "AttributedWorkerFailureAlarm",
+      "AttributedRuntimeReadyAlarm",
     ]) {
       expect(resource(stack, logicalId).Properties).toMatchObject({
         Period: 300,
@@ -175,19 +176,28 @@ describe("Authority minimal observability stack", () => {
     }
   });
 
-  it("retains effective legacy alarms while exposing disabled host-attributed comparisons", () => {
+  it("alarms only on runtime metrics attributed to this stack's Authority host", () => {
     const stack = template();
-    for (const metric of ["WorkerFailure", "RuntimeReady"]) {
-      const legacy = resource(stack, `${metric}MetricFilter`).Properties!;
-      const attributed = resource(stack, `Attributed${metric}MetricFilter`).Properties!;
-      const alarm = resource(stack, `Attributed${metric}Alarm`).Properties!;
-      expect(attributed.LogGroupName).toEqual(legacy.LogGroupName);
-      expect(attributed.FilterPattern).toEqual(legacy.FilterPattern);
-      expect(attributed.MetricTransformations).toMatchObject([{ MetricName: metric, MetricNamespace: { "Fn::Sub": "EchoBrain/AuthorityOperations/${AuthorityHost}" } }]);
-      expect(alarm).toMatchObject({ ActionsEnabled: false, Namespace: { "Fn::Sub": "EchoBrain/AuthorityOperations/${AuthorityHost}" }, MetricName: metric, Period: 300, Threshold: 3 });
-      expect(resource(stack, `Repeated${metric}Alarm`).Properties!.ActionsEnabled).not.toBe(false);
+    const namespace = { "Fn::Sub": "EchoBrain/AuthorityOperations/${AuthorityHost}" };
+    const filters = Object.values(stack.Resources).filter(
+      (value) => value.Type === "AWS::Logs::MetricFilter",
+    );
+
+    expect(filters).toHaveLength(2);
+    for (const filter of filters) {
+      expect(filter.Properties.LogGroupName).toEqual({ Ref: "DockerRuntimeLogGroup" });
+      expect(filter.Properties.MetricTransformations).toMatchObject([{ MetricNamespace: namespace }]);
     }
-    expect(stack.Outputs.RuntimeMonitoringAttribution).toBeDefined();
+    for (const metric of ["WorkerFailure", "RuntimeReady"]) {
+      const alarm = resource(stack, `Attributed${metric}Alarm`).Properties;
+      expect(resource(stack, `Attributed${metric}MetricFilter`).Properties.MetricTransformations).toMatchObject([{ MetricName: metric }]);
+      expect(alarm).toMatchObject({ Namespace: namespace, MetricName: metric });
+      expect(JSON.stringify(alarm.AlarmDescription)).toContain("${AuthorityHost}");
+    }
+    // The undimensioned legacy namespace sums every stack that still writes it.
+    expect(JSON.stringify(stack.Resources)).not.toContain('"EchoBrain/AuthorityOperations"');
+    expect(stack.Outputs.RepeatedWorkerFailureAlarmName?.Value).toEqual({ Ref: "AttributedWorkerFailureAlarm" });
+    expect(JSON.stringify(stack.Outputs.RuntimeMonitoringAttribution)).not.toMatch(/legacy|disabled/);
   });
 
   it("attaches narrowly scoped Docker log-write permissions to the supplied host role", () => {
