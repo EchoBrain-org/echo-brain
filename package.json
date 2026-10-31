@@ -36,7 +36,6 @@
     "build:authority-image": "node tools/build-authority-image.mjs",
     "bundle:authority-staging-host": "node tools/build-authority-staging-host-bundle.mjs",
     "authority:local": "node tools/authority-local.mjs",
-    "authority:staging-connector-rehearsal": "node tools/staging-connector-rehearsal.mjs",
     "authority:staging": "node tools/authority-staging.mjs",
     "authority:staging-release": "node tools/authority-staging-release.mjs",
     "client-update:staging": "node tools/client-update-staging.mjs",
