@@ -44,7 +44,7 @@ test('a failed check gives its reason, offers Try again, and then its follow-ups
   await expect(followUps).toHaveText('Follow-ups · 4 not sent', { timeout: 30_000 });
   await expect(page.getByTestId('decision')).toContainText('Launch the pilot next week.');
   await page.screenshot({ path: testInfo.outputPath('impact-card.png') });
-  expect(runOperations().filter(operation => operation === 'start')).toHaveLength(2);
+  expect(startedRuns()).toHaveLength(2);
   // The line opens the meeting's list, over the decision; Back returns to it.
   await followUps.click();
   const list = page.getByTestId('follow-ups');

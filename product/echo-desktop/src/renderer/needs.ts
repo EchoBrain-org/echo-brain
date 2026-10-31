@@ -1,7 +1,7 @@
 import type {
   PersonImpactStageV1, PersonOpenItemKindV1, PersonOpenItemStateV1, PersonOpenItemsSummaryV1, PersonOpenItemVerdictV1,
 } from '@echo-brain/organization-api';
-import type { ConnectedTool, HomeView, OpenItemView } from '../shared/protocol.js';
+import type { ConnectedTool, OpenItemView } from '../shared/protocol.js';
 import { needsAttention, overdue, waitedDays, waitingSince } from './altitude.js';
 import { externalSourceProvider } from './answer.js';
 import { clip } from './format.js';
@@ -208,7 +208,7 @@ export function checkWords(check: OpenItemView['check'], now = Date.now()): stri
   return check === null ? null : `Checked ${checkedAgo(check.checked_at, now)} · ${VERDICT[check.verdict]}`;
 }
 
-/** A list row's faint word when the item's last check matched what the meeting decided. */
+/** What a follow-ups row's hover ends with when the item's last check matched what the meeting decided. */
 export function matchesNow(item: OpenItemView): string | null {
   return item.check?.verdict === 'landed' ? VERDICT.landed : null;
 }
@@ -243,7 +243,7 @@ export const CLOSED_STATES = ['done', 'not_relevant'] as const;
  * first.
  */
 export function followUpOrder(items: readonly OpenItemView[], now: number): Record<'active' | (typeof CLOSED_STATES)[number], OpenItemView[]> {
-  const since = (item: OpenItemView) => Date.parse(waitingSince(item) ?? item.created_at);
+  const since = (item: OpenItemView) => Date.parse(waitingSince(item)!);
   const needs = (item: OpenItemView) => Number(needsAttention(item, now));
   const closed = (state: (typeof CLOSED_STATES)[number]) => items.filter(item => item.state === state).sort((left, right) => left.created_at.localeCompare(right.created_at));
   return {
@@ -314,7 +314,7 @@ const daysSince = (iso: string, now: number) => Math.floor(Math.max(0, now - Dat
 export function markWords(item: OpenItemView, now: number): string {
   const { tone } = followUpMark(item, now);
   const status = item.state === 'unsent' ? (ownerUnmatched(item) ? 'Not sent yet · no owner' : 'Not sent yet')
-    : item.state === 'open' ? `Open · waiting ${days(waitedDays(item, now) ?? 0)}` : STAGES[item.state];
+    : item.state === 'open' ? `Open · waiting ${days(waitedDays(item, now)!)}` : STAGES[item.state];
   return joined([status, tone === 'late' ? 'over a week' : tone === 'signal' ? 'needs attention' : null]);
 }
 
@@ -359,7 +359,7 @@ export function followUpCount(count: number): string {
 }
 
 /** Parts of a line that are not empty, joined: "1 open · 4 not sent". */
-export function joined(parts: readonly (string | null)[]): string {
+function joined(parts: readonly (string | null)[]): string {
   return parts.filter((part): part is string => part !== null).join(' · ');
 }
 
@@ -424,24 +424,11 @@ function checkedAgo(iso: string, now: number): string {
 }
 
 /**
- * Home's footer (F9), as its two parts: its link, "2 waiting on others" (open
- * items you sent that wait on someone else) while any do, else "Follow-ups",
- * also before Home is read; and when ECHO last checked one of yours, "ECHO
- * checked 2 h ago", or null. Never what matches.
- */
-export function homeFooter(open: Pick<HomeView, 'waiting' | 'last_checked_at'> | null, now = Date.now()): { link: string; checked: string | null } {
-  return {
-    link: open !== null && open.waiting > 0 ? `${open.waiting} waiting on others` : 'Follow-ups',
-    checked: lastChecked([open?.last_checked_at], now),
-  };
-}
-
-/**
  * When ECHO last checked one of yours, as "ECHO checked 2 h ago": the latest
  * of the times reads said (your Follow-ups list's own, and Home's, whichever
  * was read since); null when none knows of one.
  */
-export function lastChecked(times: readonly (string | null | undefined)[], now = Date.now()): string | null {
+export function lastChecked(times: readonly (string | null | undefined)[], now: number): string | null {
   const at = times.filter((time): time is string => typeof time === 'string').sort().at(-1);
   return at === undefined ? null : `ECHO checked ${checkedAgo(at, now)}`;
 }

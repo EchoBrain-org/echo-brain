@@ -36,7 +36,7 @@ export function FaceMark({ membership_id, name, needs = false, titled = true }: 
   return <span class={`face${needs ? ' needs' : ''}`} style={identity(membership_id)} title={titled ? name : undefined}>{initials(name)}</span>;
 }
 
-export function NoOwner() {
+function NoOwner() {
   return <span class="face none" title="No owner">?</span>;
 }
 
@@ -45,13 +45,13 @@ function Faces({ faces }: { faces: readonly Face[] }) {
 }
 
 /** One row, in a project and for a person: the same columns, so the page reads the same however far in it is. */
-function Row({ testid, nav, mark, markTitle, who, name, faint = false, needs = null, needsTitle, people = null, progress = null, date = null, label, zoom, onClick, data = {} }: {
-  testid: string; nav: string; mark: ComponentChildren; markTitle: string; who: ComponentChildren; name: ComponentChildren; faint?: boolean;
+function Row({ testid, nav, mark, markTitle, who, name, needs = null, needsTitle, people = null, progress = null, date = null, onClick, data = {} }: {
+  testid: string; nav: string; mark: ComponentChildren; markTitle: string; who: ComponentChildren; name: ComponentChildren;
   needs?: ComponentChildren; needsTitle?: string; people?: ComponentChildren; progress?: ComponentChildren; date?: ComponentChildren;
-  label?: string; zoom?: string; onClick: () => void; data?: Record<string, string>;
+  onClick: () => void; data?: Record<string, string>;
 }) {
   return (
-    <button type="button" class={`alt-row${faint ? ' faint' : ''}`} data-testid={testid} data-alt-nav={nav} data-zoom={zoom} aria-label={label} onClick={onClick} {...data}>
+    <button type="button" class="alt-row" data-testid={testid} data-alt-nav={nav} onClick={onClick} {...data}>
       <span class="alt-mark" title={markTitle}>{mark}</span>
       <span class="alt-who">{who}</span>
       <span class="alt-name">{name}</span>
@@ -100,16 +100,12 @@ function Unread({ failed }: { failed: boolean }) {
   return <span class="alt-chip faint" data-testid="alt-chip" title={failed ? UNREAD : 'Reading'}><Ring fraction={0} tone="faint" />{failed ? UNREAD : 'Reading'}</span>;
 }
 
-function GroupHead({ children }: { children: ComponentChildren }) {
-  return <div class="alt-group-head" data-testid="alt-group-head">{children}</div>;
-}
-
 /** The stops, in the title row on Home: My projects (its top, and any kind's list there), then the project and the person Home last zoomed on. */
 export function Stops({ state }: { state: State }) {
   const { level, project_id, membership_id, name } = state.altitude;
   const project = project_id === null ? null : altitudeProjects(state).find(each => each.project_id === project_id) ?? null;
   const person = membership_id !== null && name !== null ? { membership_id, name } : null;
-  const stop = (at: 'projects' | 'project' | 'person', label: string, words: string, mark: ComponentChildren, disabled: boolean) => (
+  const stop = (at: AltLevel, label: string, words: string, mark: ComponentChildren, disabled: boolean) => (
     <button type="button" class={`alt-stop${level === at ? ' on' : ''}`} data-testid="alt-stop" data-level={at} aria-label={label} title={label}
       aria-pressed={level === at} disabled={disabled} onClick={() => zoomTo(at)}>
       {mark}{level === at && <span>{words}</span>}
@@ -239,7 +235,7 @@ export function ProjectLevel({ state }: { state: State }) {
       </header>
       {decisions.length > 0 && (
         <section class="alt-group" data-testid="alt-group" data-group="decisions">
-          <GroupHead><span>Decisions</span><span class="n">{decisions.length}</span></GroupHead>
+          <div class="alt-group-head" data-testid="alt-group-head"><span>Decisions</span><span class="n">{decisions.length}</span></div>
           {decisions.map(decision => (
             <Row key={decision.record_sha256} testid="alt-decision" nav={`record:${decision.record_sha256}`} onClick={() => void openFollowUps('record', decision.record_sha256, decision.title)}
               mark={<Ring fraction={decision.total === 0 ? 1 : decision.done / decision.total} tone={decision.done >= decision.total ? 'done' : decision.needs > 0 ? 'signal' : 'muted'} />}

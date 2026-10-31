@@ -50,6 +50,11 @@ export async function launch(mode = '', files: Readonly<Record<string, string>> 
   // contains assertion steps but no browser snapshots.
   if (process.env.CI) await context.tracing.start({ screenshots: true, snapshots: true });
   const page = await app.firstWindow();
+  // A hidden window on a busy runner can take half a second to draw its first frame, and what the app puts off to a frame
+  // waits with it: the caret going to the Ask bar at launch then takes the focus from wherever the test has moved it. A test
+  // starts once the window has drawn.
+  await page.locator('.app').first().waitFor({ state: 'attached' });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
   let closed = false;
   return {
     app, page, home, userData,

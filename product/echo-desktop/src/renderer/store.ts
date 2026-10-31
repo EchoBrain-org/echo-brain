@@ -657,8 +657,6 @@ function emptyAltitude(): AltitudeState {
     listFailure: null, listStale: false };
 }
 
-const accountKey = (account: Expect) => `${account.authority} ${account.membership_id}`;
-
 // Home no longer remembers where it was zoomed (One place to look v1): every start opens its top. Where an older version
 // kept it on this computer goes, once, if it can.
 try { localStorage.removeItem('echo.home.altitude'); } catch { /* Nothing kept, or nothing to keep it in. */ }
@@ -1343,7 +1341,7 @@ function laidOver(list: ProjectSummary[], rows: readonly ProjectSummary[]): Proj
 /** One of the sidebar's lists, shown; `read`, the rows of it just read, none older than a change made here. */
 function showList(status: ListStatus, list: State['projects'], read: readonly ProjectSummary[] = []): void {
   set(status === 'active' ? { projects: list } : { archivedProjects: list });
-  // Your projects, read: Home zoomed out reads what it has not read of them yet.
+  // Your projects, read: Home reads what it has not read of them yet.
   if (status === 'active' && !list.loading && !list.failure) {
     projectsKnown = true;
     if (list.next === null) {
@@ -1642,7 +1640,7 @@ const ACTIVITY_EVERY_MS = 120_000;
 
 /** An account as a short hash (FNV-1a twice over, 16 hex digits): the key its last-opened times are kept under. */
 export function accountHash(account: Expect): string {
-  const text = accountKey(account);
+  const text = `${account.authority} ${account.membership_id}`;
   return [0x811c9dc5, 0x01000193].map(basis => {
     let hash = basis;
     for (const character of text) hash = Math.imul(hash ^ character.codePointAt(0)!, 0x01000193) >>> 0;
@@ -5438,10 +5436,7 @@ export function needAt(row: NeedRow): string | null {
     case 'checking': return row.run?.updated_at ?? null;
     case 'failed': return row.run.updated_at;
     case 'send': return row.send.finished_at;
-    default: {
-      const { sent_at, owner_set_at, state_set_at, created_at } = row.item;
-      return [sent_at, owner_set_at, state_set_at].reduce<string>((latest, at) => (at !== null && Date.parse(at) > Date.parse(latest) ? at : latest), created_at);
-    }
+    default: return freshness.changedAt(row.item);
   }
 }
 
@@ -5870,7 +5865,7 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
     // Tools that answered lift their hold, though Home was left before they did: this load was the Try again it waits for (R4).
     // Only while it is still Home's newest load: a newer one (after a sign-out and in, even as the same person) holds its own.
     if (tools && !toolsFailure && state.home?.seq === mine && sameExpect(expect(), account)) runsHeld = false;
-    if (runSeq === ran && !toolsFailure && !runsHeld && homeShown() === null && sameExpect(expect(), account) && runsGo()) {
+    if (runSeq === ran && !toolsFailure && !runsHeld && sameExpect(expect(), account) && runsGo()) {
       const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
       if (runs.status === 'fulfilled') endedOffHome(runs.value.runs);
       void driveRuns(runs.status === 'fulfilled' ? runs.value.runs : runsSeen, publishing, runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
@@ -6095,14 +6090,9 @@ let starting: Promise<Failure | undefined> | null = null;
  */
 function startRun(run_id: string): Promise<Failure | undefined> {
   if (starting) return starting;
-  const answer = (async () => {
-    try {
-      const { state: started } = await runsCommand({ schema_version: 1, operation: 'start', run_id });
-      return started === 'busy' ? BUSY : undefined;
-    } catch (error) {
-      return failureOf(error);
-    }
-  })();
+  const answer = runsCommand({ schema_version: 1, operation: 'start', run_id })
+    .then(({ state: started }) => (started === 'busy' ? BUSY : undefined))
+    .catch(failureOf);
   starting = answer;
   void answer.finally(() => { if (starting === answer) starting = null; });
   return answer;
@@ -6686,7 +6676,7 @@ export function openFollowUps(scope: 'record' | 'project', id: string, title: st
 }
 
 /**
- * Follow-ups (yours), from the sidebar or Home's footer: everything you sent, own or last handed on (`involved`), as a page
+ * Follow-ups (yours), from the sidebar: everything you sent, own or last handed on (`involved`), as a page
  * of its own. The bar searches all context.
  */
 export function openYourFollowUps(): Promise<void> {
@@ -7459,46 +7449,42 @@ export async function checkNow(): Promise<void> {
  */
 async function followSweep(runId: string, ours: () => boolean): Promise<'done' | 'failed' | null> {
   try {
-    return await sweepEnded(runId, ours);
+    let next: string | undefined = runId;
+    let failures = 0;
+    let lastFailure: Failure | undefined;
+    for (;;) {
+      if (next !== undefined) {
+        const refused = await startRun(next);
+        if (!ours()) return null;
+        failures = refused ? failures + 1 : 0;
+        lastFailure = refused;
+      }
+      // The list waits on its sweep: it is in flight until a runs list shows it ended.
+      await new Promise(resolve => setTimeout(resolve, runPollDelay({ runs: [], publishing: false, failures, lastFailure, owed: true })!));
+      next = undefined;
+      if (!ours()) return null;
+      if (!runsGo()) continue;
+      let runs: readonly PersonRunV1[];
+      try {
+        runs = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
+      } catch (error) {
+        failures += 1;
+        lastFailure = failureOf(error);
+        continue;
+      }
+      if (!ours()) return null;
+      const run = runs.find(entry => entry.run_id === runId);
+      if (run?.state === 'done') return 'done';
+      if (!run || run.state === 'failed') return 'failed';
+      next = runToStart(runs)?.run_id;
+      // Nothing to start: a run is going, ours or one before it; look again at the usual pace.
+      if (next === undefined) {
+        failures = 0;
+        lastFailure = undefined;
+      }
+    }
   } finally {
     kickRuns();
-  }
-}
-
-async function sweepEnded(runId: string, ours: () => boolean): Promise<'done' | 'failed' | null> {
-  let next: string | undefined = runId;
-  let failures = 0;
-  let lastFailure: Failure | undefined;
-  for (;;) {
-    if (next !== undefined) {
-      const refused = await startRun(next);
-      if (!ours()) return null;
-      failures = refused ? failures + 1 : 0;
-      lastFailure = refused;
-    }
-    // The list waits on its sweep: it is in flight until a runs list shows it ended.
-    await new Promise(resolve => setTimeout(resolve, runPollDelay({ runs: [], publishing: false, failures, lastFailure, owed: true })!));
-    next = undefined;
-    if (!ours()) return null;
-    if (!runsGo()) continue;
-    let runs: readonly PersonRunV1[];
-    try {
-      runs = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
-    } catch (error) {
-      failures += 1;
-      lastFailure = failureOf(error);
-      continue;
-    }
-    if (!ours()) return null;
-    const run = runs.find(entry => entry.run_id === runId);
-    if (run?.state === 'done') return 'done';
-    if (!run || run.state === 'failed') return 'failed';
-    next = runToStart(runs)?.run_id;
-    // Nothing to start: a run is going, ours or one before it; look again at the usual pace.
-    if (next === undefined) {
-      failures = 0;
-      lastFailure = undefined;
-    }
   }
 }
 
