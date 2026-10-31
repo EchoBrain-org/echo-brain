@@ -1,11 +1,11 @@
-import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { AnswerCompositionGenerationBindingV1 } from '@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1';
-import { openOrganizationAuthorityRuntime } from '../src/composition/organization-authority-runtime.js';
+import { openOrganizationAuthorityRuntime, type OrganizationAuthorityRuntimeConfig } from '../src/composition/organization-authority-runtime.js';
 import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from '../src/composition/authority-record-protocols-v1.js';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
@@ -22,8 +22,29 @@ vi.mock('../src/composition/person-meeting-runtime-v1.js', async importOriginal 
   } };
 });
 
+// The search engine as shipped, unless a test makes builds refuse or reports a fuller published generation.
+const searchEngine = vi.hoisted(() => ({
+  refuse: undefined as string | undefined,
+  usage: undefined as { atoms: number; segments: number; postings: number } | undefined,
+}));
+vi.mock('@echo-brain/organization-retrieval/readable-search-engine-v1', async importOriginal => {
+  const actual = await importOriginal<typeof import('@echo-brain/organization-retrieval/readable-search-engine-v1')>();
+  return {
+    ...actual,
+    buildReadableSearchGenerationV1: (input: Parameters<typeof actual.buildReadableSearchGenerationV1>[0]) => {
+      if (searchEngine.refuse !== undefined) throw new Error(`readable-search generation exceeds ${searchEngine.refuse}`);
+      return actual.buildReadableSearchGenerationV1(input);
+    },
+    readableSearchActiveGenerationUsageV1: () => searchEngine.usage ?? actual.readableSearchActiveGenerationUsageV1(),
+  };
+});
+
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  searchEngine.refuse = undefined;
+  searchEngine.usage = undefined;
+});
 
 const generation: AnswerCompositionGenerationBindingV1 = {
   generation: { generation_adapter_id: 'personal-only-generation', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000 },
@@ -64,10 +85,13 @@ function bootstrapFixture(names: { readonly organization: string; readonly owner
 }
 
 /** The provider-neutral runtime with no meeting provider composed. */
-async function startRuntimeForTest(options: { readonly organization_source_row?: true }) {
+async function startRuntimeForTest(options: { readonly organization_source_row?: true; readonly before_open?: (state_directory: string) => void } & Pick<OrganizationAuthorityRuntimeConfig, 'on_search_capacity' | 'on_worker_error'>) {
   const { initialized, credentials } = bootstrapFixture({ organization: 'Personal-only fixture', owner: 'Owner', revision: 'personal-only-runtime-test' });
   if (options.organization_source_row === true) seedOrganizationSourceRow(initialized.state_directory, initialized);
+  options.before_open?.(initialized.state_directory);
   const runtime = await openOrganizationAuthorityRuntime({
+    ...(options.on_search_capacity === undefined ? {} : { on_search_capacity: options.on_search_capacity }),
+    ...(options.on_worker_error === undefined ? {} : { on_worker_error: options.on_worker_error }),
     state_directory: initialized.state_directory, host: '127.0.0.1', port: await availablePort(), authority_url: 'https://authority.example',
     oidc: { issuer: 'https://issuer.invalid', client_id: 'fixture-client', redirect_uri: 'https://authority.example/v2/session/oidc/callback', tenant: { kind: 'issuer' }, id_token_algorithms: ['RS256'] },
     client_authentication: { method: 'none' }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
@@ -93,6 +117,51 @@ describe('Organization Authority runtime without an organization source lane', (
       expect((await fetch(`http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`)).status).toBe(200);
       expect(runtime.db.prepare('SELECT count(*) FROM authority_live_source_progress_v2').pluck().get()).toBe(0);
     } finally { await runtime.close(); }
+  });
+
+  it('serves the API with its search index past the ceiling, naming the limit it hit', async () => {
+    searchEngine.refuse = 'maximum_segments';
+    const capacity: unknown[] = [];
+    const failures: string[] = [];
+    const runtime = await startRuntimeForTest({ on_search_capacity: event => capacity.push(event), on_worker_error: error => failures.push(error.message) });
+    try {
+      expect((await fetch(`http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`)).status).toBe(200);
+      expect(capacity[0]).toEqual({ status: 'over', limit: 'maximum_segments' });
+      expect(failures[0]).toBe('readable-search generation exceeds maximum_segments');
+      expect(runtime.db.prepare('SELECT count(*) FROM authority_readable_search_active_generation').pluck().get()).toBe(0);
+    } finally { await runtime.close(); }
+  });
+
+  it('starts after a search rebuild was killed midway, and its next build removes the leftover', async () => {
+    let retrieval = '';
+    const runtime = await startRuntimeForTest({ before_open: state => {
+      // What a kill during the first rebuild leaves: generations/, and a half-written segment beside it.
+      retrieval = join(state, 'record-retrieval');
+      const segment = join(retrieval, `.staging-${'c'.repeat(32)}`, 'segments', 'partial');
+      mkdirSync(segment, { recursive: true, mode: 0o700 });
+      mkdirSync(join(retrieval, 'generations'), { mode: 0o700 });
+      writeFileSync(join(segment, 'facts.sqlite-journal'), 'unfinished');
+    } });
+    try {
+      expect((await fetch(`http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`)).status).toBe(200);
+      expect(readdirSync(retrieval)).toEqual(['generations']);
+      expect(readdirSync(join(retrieval, 'generations'))).toEqual([
+        runtime.db.prepare('SELECT generation_id FROM authority_readable_search_active_generation').pluck().get(),
+      ]);
+    } finally { await runtime.close(); }
+  });
+
+  it('warns once a published search generation reaches three quarters of a limit', async () => {
+    const notices = async (usage: NonNullable<typeof searchEngine.usage>) => {
+      searchEngine.usage = usage;
+      const capacity: unknown[] = [];
+      const runtime = await startRuntimeForTest({ on_search_capacity: event => capacity.push(event) });
+      await runtime.close();
+      return capacity;
+    };
+    expect(await notices({ atoms: 6_143, segments: 95, postings: 153_599 })).toEqual([]);
+    for (const usage of [{ atoms: 6_144, segments: 1, postings: 0 }, { atoms: 0, segments: 96, postings: 0 }, { atoms: 0, segments: 1, postings: 153_600 }])
+      expect(await notices(usage)).toEqual([{ status: 'near', ...usage }]);
   });
 
   it('starts the deployable service before any personal source without reading provider credentials', async () => {

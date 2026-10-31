@@ -14,6 +14,7 @@ const { runtimeState, initialRuntimeState } = vi.hoisted(() => {
   const initialRuntimeState = () => ({
     worker_error: undefined as WorkerErrorObserver | undefined,
     worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
+    search_capacity: undefined as WorkerTelemetryObserver | undefined,
     startup_error: undefined as Error | undefined,
     open_gate: undefined as Promise<void> | undefined,
     nango: undefined as object | undefined,
@@ -59,6 +60,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
   openOrganizationAuthorityService: async (config: {
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
+    readonly on_search_capacity?: WorkerTelemetryObserver;
     readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
     readonly staging_research_eval_v1?: true;
     readonly staging_claude_research_v1?: true;
@@ -73,6 +75,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
     runtimeState.worker_error = config.on_worker_error;
     runtimeState.worker_telemetry = config.on_worker_telemetry;
+    runtimeState.search_capacity = config.on_search_capacity;
     runtimeState.config_keys = Object.keys(config);
     runtimeState.core_runtime_observation = config.core_runtime_observation;
     runtimeState.staging_research_eval_v1 = config.staging_research_eval_v1;
@@ -783,6 +786,34 @@ describe("admitted runtime CLI events", () => {
       `${canonicalJson({
         schema_version: 1,
         kind: "echo-clean-live-worker-failed-v1",
+      } as never)}\n`,
+    ]);
+  });
+
+  it("logs search capacity notices as content-free counts", async () => {
+    const stderr: string[] = [];
+    const running = start({ stderr: (value) => stderr.push(value) });
+    await vi.waitFor(() => expect(runtimeState.search_capacity).toBeDefined());
+
+    runtimeState.search_capacity!({ status: "near", atoms: 6_144, segments: 40, postings: 98_304 });
+    runtimeState.search_capacity!({ status: "over", limit: "maximum_atoms" });
+    process.emit("SIGTERM");
+    await expect(running).resolves.toBe(0);
+
+    expect(stderr.slice(1)).toEqual([
+      `${canonicalJson({
+        schema_version: 1,
+        kind: "echo-clean-live-search-capacity-v1",
+        status: "near",
+        atoms: 6_144,
+        segments: 40,
+        postings: 98_304,
+      } as never)}\n`,
+      `${canonicalJson({
+        schema_version: 1,
+        kind: "echo-clean-live-search-capacity-v1",
+        status: "over",
+        limit: "maximum_atoms",
       } as never)}\n`,
     ]);
   });
