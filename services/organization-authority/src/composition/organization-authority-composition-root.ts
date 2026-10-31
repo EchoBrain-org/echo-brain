@@ -471,7 +471,7 @@ export async function openOrganizationAuthorityService(
       answer_composition_generation_bundle:
         createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
-          ...(sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && sharedConfig.personal_claude_research !== undefined ? { personal_claude_research: sharedConfig.personal_claude_research } : {}),
+          ...(sharedConfig.personal_claude_research === undefined ? {} : { personal_claude_research: sharedConfig.personal_claude_research }),
           ...(sharedConfig.staging_claude_research_v1 === true && sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? { research_engine: 'claude-sdk' as const } : {}),
         }),
       model_call_limiter: modelCalls,
