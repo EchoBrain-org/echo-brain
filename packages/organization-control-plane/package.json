@@ -17,10 +17,6 @@
       "types": "./dist/security/file-secret-store.d.ts",
       "import": "./dist/security/file-secret-store.js"
     },
-    "./application/record-visibility-policy-contracts-v1": {
-      "types": "./dist/application/record-visibility-policy-contracts-v1.d.ts",
-      "import": "./dist/application/record-visibility-policy-contracts-v1.js"
-    },
     "./application/organization-secret-store-contracts": {
       "types": "./dist/application/organization-secret-store-contracts.d.ts",
       "import": "./dist/application/organization-secret-store-contracts.js"

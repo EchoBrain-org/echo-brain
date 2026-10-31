@@ -1,5 +1,5 @@
 import { validateExternalHumanIdentityLinkContractV2, type ExternalHumanIdentityLinkContractV2, type PersonMembershipType } from "../application/organization-tool-connection-contracts-v2.js";
-import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/application/record-visibility-policy-contracts-v1";
+import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1";
 import { canonicalJson, canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import type Database from "better-sqlite3";
 import type { SlackApprovalTargetV1 } from "../../private-approval/slack-approval-presenter-v1.js";
