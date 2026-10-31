@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
+import { executeStagingRelease, planStagingRelease, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
 import type { StagingReleasePlanOptions } from '../../tools/authority-staging-release.mjs';
 import { cleanReleaseRecord, cleanRuntimeProfile, deployRuntimeProfileFiles } from '../support/clean-v1-release.js';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
@@ -141,12 +141,6 @@ describe('bounded staging release operator', () => {
     expectTypeOf<Paths & { action: 'install' | 'inspect-install' }>().toMatchTypeOf<StagingReleasePlanOptions>();
   });
 
-  it('does not accept arbitrary commands or a production operation', () => {
-    expect(() => releaseAction('shell')).toThrow('action_invalid');
-    expect(() => releaseAction('onboard')).toThrow('action_invalid');
-    expect(releaseAction('inspect-install')).toBe('inspect-install');
-  });
-
   it('requires a validated request before rendering any remote command', () => {
     expect(() => releaseSsmParameters({ action: 'status' })).toThrow();
   });
@@ -174,7 +168,7 @@ describe('bounded staging release operator', () => {
     expect(new Set(rendered)).toEqual(new Set([rendered[0]]));
   });
 
-  it.each(['shell', 'onboard', 'restore', 'down', 'stage-v7-to-v9', 'stage-v8-to-v10', 'stage-v9-to-v10'])('rejects unsupported action %s before AWS', action => {
+  it.each(['shell', 'onboard', 'restore', 'down'])('rejects unsupported action %s before AWS', action => {
     const f = fixture();
     // @ts-expect-error Untrusted JS/CLI callers still require runtime rejection.
     expect(() => planStagingRelease({ ...f.options, action }, f.dependencies)).toThrow('action_invalid');

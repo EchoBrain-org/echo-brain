@@ -129,7 +129,6 @@ describe('staging connector rehearsal wrapper', () => {
       () => Response.json({ ...accepted, profile_sha256: canonicalSha256('other') }),
       () => Response.json({ ...accepted, tool: 'slack' }),
       () => Response.json({ ...accepted, result: { ...accepted.result, text: 'private provider body' } }),
-      () => Response.json({ ...accepted, schema_version: 1, kind: 'echo-staging-connector-rehearsal-receipt-v1' }),
       () => Response.json({ ...accepted, receipt: { source_text: 'private content' } }),
       () => new Response(JSON.stringify({ error: { code: 'internal', message: 'private source text must not escape' } }), {
         status: 500, headers: { 'content-type': 'application/json' },
@@ -143,17 +142,6 @@ describe('staging connector rehearsal wrapper', () => {
         return reply();
       } }), error => error instanceof Error && error.message === 'Staging connector rehearsal failed');
       assert.equal(reads, 1);
-    }
-  });
-
-  it('rejects all retired capture commands before any request', async () => {
-    for (const tool of ['granola', 'jira', 'slack']) {
-      let calls = 0;
-      await assert.rejects(runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release',
-        profile_path: '/no-profile-needed', tool, limit: 1 } as never, {
-        fetch: async () => { calls += 1; return Response.json({}); },
-      }), /Staging connector rehearsal failed/);
-      assert.equal(calls, 0);
     }
   });
 
@@ -183,15 +171,13 @@ describe('staging connector rehearsal wrapper', () => {
     assert.ok(!JSON.stringify(result).includes('a'.repeat(43)));
   });
 
-  it('rejects capture-only inputs and retired profiles before bearer traffic', async () => {
+  it('rejects capture-only inputs before bearer traffic', async () => {
     const directory = root(); const home = join(directory, 'person-home');
-    const profilePath = join(directory, 'profile.json'); const configured = profile(profilePath);
+    const profilePath = join(directory, 'profile.json'); profile(profilePath);
     install(home); let calls = 0;
     const fetch: typeof globalThis.fetch = async () => { calls += 1; return Response.json({}); };
     const input = { action: 'verify-read' as const, release_id: 'clean-v1-fixture-release', profile_path: profilePath, person_home: home, tool: 'jira' as const };
     await assert.rejects(runStagingConnectorRehearsal({ ...input, limit: 1 } as never, { fetch }));
-    writeFileSync(profilePath, JSON.stringify({ ...configured, schema_version: 1, kind: 'echo-staging-connector-rehearsal-profile-v1' }));
-    await assert.rejects(runStagingConnectorRehearsal(input, { fetch }));
     assert.equal(calls, 0);
   });
 

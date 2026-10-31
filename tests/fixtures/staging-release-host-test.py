@@ -113,24 +113,7 @@ class HostProtocol(unittest.TestCase):
     def candidate(self):
         self.write('clean-data/release/candidate.clean-v1.json', host.base64.b64decode(base['files']['candidate.json']['base64']))
 
-    def test_v4_hash_witnesses_still_require_installed_reviewed_bytes(self):
-        self.install()
-        request = self.request('stage')
-        for name in host.TOOLS:
-            del request['files'][name]['base64']
-        result = self.execute(request)
-        self.assertTrue(result['ok'], result)
-        self.assertEqual(self.calls[-1][0], 'stage')
-        for mutation in ('unknown', 'missing'):
-            request['operation_id'] = str(uuid.uuid4())
-            path = self.root / host.TOOLS[0]
-            if mutation == 'unknown': self.write(host.TOOLS[0], b'unknown tool bytes', 0o755)
-            else: path.unlink()
-            result = self.execute(request)
-            self.assertFalse(result['ok'])
-        self.assertEqual(len(self.calls), 1)
-
-    def test_stage_dispatch_keeps_the_bounded_stage_arguments(self):
+    def test_v4_hash_witnesses_dispatch_bounded_stage_arguments_but_require_installed_reviewed_bytes(self):
         self.install()
         request = self.request('stage')
         for name in host.TOOLS:
@@ -144,6 +127,14 @@ class HostProtocol(unittest.TestCase):
         legacy['kind'] = 'echo-staging-release-request-v2'
         with self.assertRaises(host.Refused):
             host.validate_request(legacy)
+        for mutation in ('unknown', 'missing'):
+            request['operation_id'] = str(uuid.uuid4())
+            path = self.root / host.TOOLS[0]
+            if mutation == 'unknown': self.write(host.TOOLS[0], b'unknown tool bytes', 0o755)
+            else: path.unlink()
+            result = self.execute(request)
+            self.assertFalse(result['ok'])
+        self.assertEqual(len(self.calls), 1)
 
     def test_v4_install_may_defer_changed_tools_but_not_candidate_bytes(self):
         for name in ('candidate.json', 'runtime-profile.json'):
