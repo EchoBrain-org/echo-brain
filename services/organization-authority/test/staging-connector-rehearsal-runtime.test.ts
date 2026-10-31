@@ -27,7 +27,7 @@ vi.mock('@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/o
   }),
 }));
 vi.mock('@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1', () => ({
-  createOpenRouterDecisionProcessorBundleV1: () => ({ processor_adapter_id: 'fixture', assert_admission_commitments() {} }),
+  createOpenRouterDecisionProcessorBundleV1: () => ({ processor_adapter_id: 'fixture', current_commitments: () => undefined, assert_admission_commitments() {} }),
 }));
 vi.mock('../src/composition/organization-authority-setup-cli.js', () => ({
   readOrganizationAuthoritySetupManifest: (directory: string) => ({ state_directory: directory, authority_url: 'https://authority-staging.echobrain.org', authority_id: 'oau_fixture', organization_id: 'org_fixture', state_lineage_id: 'lineage-fixture', owner_principal_id: 'prn_fixture', owner_membership_id: 'mem_fixture' }),
