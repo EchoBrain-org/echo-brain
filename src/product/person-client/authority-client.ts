@@ -1017,7 +1017,6 @@ export class PersonAuthorityClient {
           : `${PERSON_RECORDS_PATH_V1}?limit=${limit}`,
       access_token: accessToken,
       validate_response: validatePersonRecordListV1,
-      headers: { "x-echo-person-record-version": "2" },
       maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
     });
   }

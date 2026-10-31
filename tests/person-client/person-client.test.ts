@@ -643,14 +643,14 @@ describe("Person client", () => {
     { record_approved_by: { display_name: "Maya Chen" } },
     {},
     undefined,
-  ])("retrieves one exact readable cited record, negotiating optional source metadata with older Authorities: %j", async (metadata) => {
+  ])("retrieves one exact readable cited record with the source metadata it carries, asking with no version header: %j", async (metadata) => {
     await withHome(async (home) => {
       const recordSha256 = `sha256:${"d".repeat(64)}` as const;
       const client = await signedInClient(home, async (input, init) => {
         const url = new URL(String(input));
         expect(url.pathname + url.search).toBe(`/v1/person/records?record_sha256=${recordSha256}`);
         expect(init?.method).toBe("GET");
-        expect(new Headers(init?.headers).get("x-echo-person-record-version")).toBe("2");
+        expect(new Headers(init?.headers).has("x-echo-person-record-version")).toBe(false);
         return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [{
           position: 1, approval_id: fixtureId("apr", 1), record_sha256: recordSha256,
           envelope: { approved: true }, ...(metadata === undefined ? {} : { source_metadata: metadata }),
