@@ -348,9 +348,10 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
 
     it("N-3, N-4, N-10, N-17: no unjoined project, record coordinate, identity, request id or evidence quote leaves", async () => {
       const start = f.bodies.length;
-      // The team's notes and documents, which no project or only me lists: every reader opens them by ref. The meetings
-      // shared with EVERYONE, the quoted one included, list in that project, which every reader holds.
-      const team = [f.refs.empBTeamNote, f.refs.longDocument];
+      // The team's notes and documents, which only me never lists and a project lists only to its members (emp_a's is
+      // filed in SHARED, which emp_b does not hold): every reader opens them by ref. The meetings shared with EVERYONE,
+      // the quoted one included, list in that project, which every reader holds.
+      const team = [f.refs.empBTeamNote, f.refs.empATeamNote, f.refs.longDocument];
       for (const token of ["owner", "emp_a", "emp_b"] as const) {
         const opened = new Set<string>(team);
         for (const scope of scopes(f, token)) {
