@@ -2352,8 +2352,4 @@ export {
   READABLE_SEARCH_BM25_K1,
   READABLE_SEARCH_SCORE_SCALE,
   READABLE_SEARCH_SCORER_ID,
-  readableSearchDocumentLength,
-  readableSearchInverseDocumentFrequency,
-  readableSearchScoreV2,
-  type ReadableSearchCorpusStatistics,
 } from "./application/analyzer.js";
