@@ -489,7 +489,7 @@ function isoTime(value: unknown): string | undefined {
  * An approved item's id as the Authority's citations carry it: the digest of
  * its record and its signal's id, never the signal id itself.
  */
-export function atomId(recordSha256: string, signalId: string): string {
+function atomId(recordSha256: string, signalId: string): string {
   return canonicalSha256({ kind: 'echo-organization-record-atom', record_hash: recordSha256, signal_id: signalId });
 }
 
