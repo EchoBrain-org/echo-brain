@@ -47,7 +47,7 @@ For a repeatable ranking diagnostic:
 npm run eval:retrieval-quality -- --out /tmp/echo-retrieval-quality.json
 ```
 
-Defaults: 650 atoms, 300 member-readable target facts, seed
+Defaults: 650 atoms, 300 target facts that every reader may read, seed
 `retrieval-quality-v1`. Each target supplies two rare text terms; the three
 query classes add zero, three or five frequent terms. Each reports Recall@10,
 MRR@10 and top-1. Targets are selected before scoring, so this measures target
@@ -121,7 +121,9 @@ production review and its authorization callback. The authorization witness is
 the review's own (the authenticated Person action and its Authority audit
 entry); the harness injects none.
 The frozen V4 workload keeps its `organization-member` policy class, which only
-the history generator and ranking tests use. The checkpoint's shared audience is
+the history generator and ranking tests use; the engine has no such policy, so
+the search fixture indexes those facts as records of one project every reader
+holds. The checkpoint's shared audience is
 the project members, because the in-app review offers the approving person only
 that or themselves alone. The metric profile is unchanged.
 This directly composes the shared production components; it does not start the

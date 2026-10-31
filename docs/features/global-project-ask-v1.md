@@ -117,8 +117,8 @@ evidence still requires current access when opened.
   each destination of a meeting is its own record. Project Ask includes those
   records while their audience still admits the reader, and a record its
   approver kept private inside the project, for that approver alone
-  ([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)); plain Only me,
-  Team and older records remain global-only. A project name appearing in an
+  ([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)); plain Only me
+  and older records remain global-only. A project name appearing in an
   approved record is not sufficient to include it.
 - Raw meeting snapshots, meeting transcripts, and pending/rejected approvals
   are not exposed merely because they exist in the shared source tables.
