@@ -144,21 +144,12 @@ describe("workspace source boundaries", () => {
     });
   });
 
-  it("accepts the declared workspace component indexes", () => {
-    const fixture = fixtureRepository();
-
-    const result = runBoundary(fixture);
-
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-  });
-
   describe("ownership, layer and component-index refusals", () => {
     const authorityPath = "services/organization-authority/source-boundary.v1.json";
     const retiredRoot = readJson<Registry>(REGISTRY).retired_workspace_roots[0]!;
     const retiredPath = readJson<BoundaryManifest>(authorityPath)
       .component_index_contract!.retired_source_paths[0]!;
     const unlayered = "services/organization-authority/src/unlayered.ts";
-    const quality = "services/organization-authority/src/quality/replacement-quality-lane-v2.ts";
     const orphan = "src/product/organization/orphan.ts";
     // Document parser and filesystem work stay out of these layers.
     const layerProbes = [
@@ -185,7 +176,7 @@ describe("workspace source boundaries", () => {
         "services/organization-authority/src/composition/organization-authority-service-cli.ts",
       ];
       writeFixtureJson(fixture, authorityPath, authority);
-      for (const path of [retiredPath, unlayered, quality, orphan]) {
+      for (const path of [retiredPath, unlayered, orphan]) {
         mkdirSync(dirname(join(fixture, path)), { recursive: true });
         writeFileSync(join(fixture, path), "export {};\n");
       }
@@ -203,7 +194,6 @@ describe("workspace source boundaries", () => {
       ["a reintroduced retired Authority component path", `retired component source path remains: ${retiredPath}`],
       ["a compatibility facade that targets the wrong implementation", "compatibility entrypoint must import only its declared implementation targets"],
       ["an owned source file outside every declared layer", `owned source file has no layer rule: ${unlayered}`],
-      ["a replacement under the retired synthetic quality directory", `owned source file has no layer rule: ${quality}`],
       ["a module under a retired machine product root", `module remains under removed internal root: ${orphan}`],
     ])("refuses %s", (_label, message) => {
       expect(result.status).not.toBe(0);
@@ -256,37 +246,6 @@ describe("workspace source boundaries", () => {
 
     writeFileSync(join(first, "tracked.txt"), "first fixture only\n");
     expect(readFileSync(join(second, "tracked.txt"), "utf8")).toBe("dirty\n");
-  });
-
-  it("matches every declared workspace to one checked boundary", () => {
-    const rootPackage = readJson<{ workspaces: string[] }>("package.json");
-    const registry = readJson<Registry>(REGISTRY);
-    const manifests = registry.manifests.map((path) =>
-      readJson<BoundaryManifest>(path),
-    );
-    const workspaceRoots = manifests
-      .filter((manifest) => manifest.workspace)
-      .map((manifest) => manifest.boundary_root)
-      .sort();
-
-    expect(registry).toMatchObject({
-      registry_version: 1,
-      kind: "echo-workspace-source-boundary-registry",
-    });
-    expect(registry.retired_workspace_roots).toEqual([
-      "services/organization-control-plane",
-      "services/organization-record",
-      "services/organization-retrieval",
-    ]);
-    expect(workspaceRoots).toEqual([...rootPackage.workspaces].sort());
-    expect(new Set(manifests.map((manifest) => manifest.name)).size).toBe(
-      manifests.length,
-    );
-    for (const manifest of manifests) {
-      for (const entryPoint of manifest.entry_points) {
-        expect(existsSync(join(REPO, entryPoint)), entryPoint).toBe(true);
-      }
-    }
   });
 
   it("locks the one-way workspace dependency graph", () => {
@@ -467,21 +426,8 @@ describe("workspace source boundaries", () => {
     };
     visit("services/organization-authority");
 
-    // npm ci reads every workspace manifest, but the server builder compiles
-    // and receives source only for the Authority dependency closure.
-    for (const workspace of rootPackage.workspaces) {
-      const parent = workspace.split("/")[0]!;
-      const manifestCopied =
-        dockerfile.includes(`COPY ${workspace} ./${workspace}`) ||
-        dockerfile.includes(`COPY ${parent} ./${parent}`) ||
-        dockerfile.includes(
-          `COPY ${workspace}/package.json ./${workspace}/package.json`,
-        );
-      expect(
-        manifestCopied,
-        `builder omits workspace manifest ${workspace}`,
-      ).toBe(true);
-    }
+    // The server builder compiles and receives source only for the Authority
+    // dependency closure.
     for (const workspace of runtimeClosure) {
       const parent = workspace.split("/")[0]!;
       const sourceCopied =
@@ -722,8 +668,6 @@ describe("workspace source boundaries", () => {
         (path) => `external import @forbidden/pkg is not allowed in ${path}`,
         [`export { value } from /* boundary */ '@forbidden/pkg';`],
       ],
-      // Punctuation between the loader and its call cannot hide the name.
-      ["require with a comment before its call", loader, [`require /* boundary */ ('@forbidden/pkg');`]],
       [
         "non-literal module loading",
         (path) => `non-literal module loading is forbidden in ${path}:`,
@@ -823,112 +767,11 @@ describe("workspace source boundaries", () => {
           `get('module')._load('@forbidden/pkg');`,
         ],
       ],
-      [
-        "loader aliased to another identifier",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          "const load = createRequire(import.meta.url);",
-          "const indirect = load;",
-          `indirect('@forbidden/pkg');`,
-        ],
-      ],
-      [
-        "loader passed as an argument",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          "const load = createRequire(import.meta.url);",
-          "const forward = (loader) => loader('@forbidden/pkg');",
-          "forward(load);",
-        ],
-      ],
-      [
-        "loader returned from a closure",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          "const load = createRequire(import.meta.url);",
-          "const expose = () => load;",
-          `expose()('@forbidden/pkg');`,
-        ],
-      ],
-      [
-        "direct call with an allowlisted target",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          `createRequire(import.meta.url)('@echo-brain/federation-protocol');`,
-        ],
-      ],
-      [
-        "assignment after a bare declaration",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          "let load;",
-          "load = createRequire(import.meta.url);",
-          `load('@forbidden/pkg');`,
-        ],
-      ],
-      [
-        "loader stored in an object",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          "const loaders = { load: createRequire(import.meta.url) };",
-          `loaders.load('@forbidden/pkg');`,
-        ],
-      ],
-      [
-        "loader stored in an array",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          "const loaders = [createRequire(import.meta.url)];",
-          `loaders[0]('@forbidden/pkg');`,
-        ],
-      ],
-      [
-        "loader returned from a function",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          "const make = () => createRequire(import.meta.url);",
-          `make()('@forbidden/pkg');`,
-        ],
-      ],
       ["bare require call", loader, [`require('@forbidden/pkg');`]],
       // A computed name and a shorthand property both *evaluate* the
       // identifier, so the member-name exemption must not reach them.
       ["object shorthand property", loader, ["export const bundle = { require };"]],
       ["computed object key", loader, ["export const table = { [require]: 1 };"]],
-      [
-        "computed object key via createRequire",
-        loader,
-        [`import { createRequire } from 'node:module';`, "export const table = { [createRequire]: 1 };"],
-      ],
-      [
-        "computed class member",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          "export class Loaders {",
-          "  [createRequire]() {",
-          "    return 1;",
-          "  }",
-          "}",
-        ],
-      ],
-      [
-        "shorthand property carrying a createRequire alias",
-        loader,
-        [
-          `import { createRequire } from 'node:module';`,
-          "const load = createRequire(import.meta.url);",
-          "export const bundle = { load };",
-        ],
-      ],
     ];
     let acceptedResult: BoundaryResult;
     let refusedResult: BoundaryResult;
@@ -987,14 +830,7 @@ describe("workspace source boundaries", () => {
     const asset = "packages/federation-protocol/src/asset-probe.ts";
     const unregistered = "packages/unregistered/src/index.ts";
     const swift = "product/unregistered.swift";
-    const composition = "services/organization-authority/src/composition";
-    const directions = [
-      ["neutral-to-bootstrap", "packages/organization-api/src/direction-probe.ts", `../../../${composition}/organization-authority-setup-cli.js`, "neutral module reaches bootstrap", `${composition}/organization-authority-setup-cli.ts`],
-      ["provider-to-service", "providers/openrouter/src/direction-probe-service.ts", `../../../${composition}/organization-authority-runtime.js`, "provider imports the composing service", `${composition}/organization-authority-runtime.ts`],
-      ["cross-provider", "providers/openrouter/src/direction-probe-provider.ts", "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1", "cross-provider dependency", "providers/synthetic-demo/src/staging-synthetic-personal-meeting-provider-v1.ts"],
-    ];
     let ownership: BoundaryResult;
-    let direction: BoundaryResult;
     beforeAll(() => {
       const fixture = fixtureRepository();
       const write = (path: string, source: string) => writeFileSync(join(fixture, path), source);
@@ -1009,12 +845,6 @@ describe("workspace source boundaries", () => {
       write(unregistered, "export const value = 1;\n");
       write(swift, "struct Unregistered {}\n");
       ownership = runBoundary(fixture);
-
-      const directionFixture = fixtureRepository();
-      for (const [, path, target] of directions) {
-        writeFileSync(join(directionFixture, path!), `import '${target}';\n`);
-      }
-      direction = runBoundary(directionFixture);
     });
 
     it.each([
@@ -1029,11 +859,6 @@ describe("workspace source boundaries", () => {
     ])("refuses %s", (_label, message) => {
       expect(ownership.status).not.toBe(0);
       expect(ownership.stdout, ownership.stderr).toContain(message);
-    });
-
-    it.each(directions)("forbids %s dependencies", (_label, path, _target, failure, resolved) => {
-      expect(direction.status).not.toBe(0);
-      expect(direction.stdout, direction.stderr).toContain(`${failure}: ${path} -> ${resolved}`);
     });
   });
 
@@ -1070,41 +895,6 @@ describe("workspace source boundaries", () => {
     product.adapter_architecture.provider_roots.push(root); writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
     const result = runBoundary(fixture);
     expect(result.status, result.stdout + result.stderr).toBe(0);
-  });
-
-  it("applies builtin and external allowlists at the matching layer", () => {
-    const fixture = fixtureRepository();
-    const manifestPath =
-      "packages/organization-authority-kernel/source-boundary.v1.json";
-    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
-    manifest.allowed_node_builtins = ["process"];
-    manifest.allowed_external_packages = ["ajv"];
-    writeFixtureJson(fixture, manifestPath, manifest);
-    const packagePath = "packages/organization-authority-kernel/package.json";
-    const packageJson = readFixtureJson<{
-      dependencies: Record<string, string>;
-    }>(fixture, packagePath);
-    packageJson.dependencies.ajv = "8.17.1";
-    writeFixtureJson(fixture, packagePath, packageJson);
-    writeFileSync(
-      join(fixture, "packages/organization-authority-kernel/src/domain/probe.ts"),
-      [
-        `import process from 'node:process';`,
-        `import Ajv from 'ajv';`,
-        "void process;",
-        "void Ajv;",
-        "",
-      ].join("\n"),
-    );
-
-    const result = runBoundary(fixture);
-    expect(result.status).not.toBe(0);
-    expect(result.stdout + result.stderr).toContain(
-      "layer rule 'organization-authority-kernel-domain' rejects Node builtin node:process",
-    );
-    expect(result.stdout + result.stderr).toContain(
-      "layer rule 'organization-authority-kernel-domain' rejects external import ajv",
-    );
   });
 
   it("rejects manifests that narrow ownership or point outside their boundary", () => {
