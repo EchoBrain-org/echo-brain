@@ -1,5 +1,7 @@
 import {
   chmodSync,
+  cpSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   realpathSync,
@@ -50,6 +52,43 @@ afterEach(() => {
   }
 });
 
+/** A bootstrapped organization with an empty record log and its search reconciler; the caller closes both databases. */
+function emptyOrganizationSearch() {
+  const parent = root();
+  const initialized = bootstrapOrganizationAuthorityState({
+    state_directory: join(parent, "state"),
+    organization_display_name: "Clean Search Organization",
+    owner_display_name: "Founder",
+    created_at: "2026-08-22T12:00:00.000Z",
+    creating_artifact_revision: "clean-search-runtime-test",
+  });
+  const lineage = verifyAuthorityStateLineage(initialized.state_directory);
+  const authority = openAuthorityDatabase(
+    join(initialized.state_directory, "authority.sqlite"),
+    { fileMustExist: true },
+  );
+  const record = openOrganizationRecordDatabase(
+    join(initialized.state_directory, "record-log.sqlite"),
+    { fileMustExist: true },
+  );
+  const reconciler = createReadableSearchGenerationReconcilerV1({
+    state_directory: initialized.state_directory,
+    root: lineage.root,
+    authority,
+    record,
+    signer: FileOrganizationAuthoritySigner.openExisting({
+      directory: join(initialized.state_directory, "keys"),
+      authority_id: initialized.authority_id,
+      organization_id: initialized.organization_id,
+    }),
+    policy_projectors: createRecordPolicyFactProjectorRegistryV1([
+      createPersonPolicyFactProjectorV2(),
+    ]),
+    now: () => "2026-08-22T12:01:00.000Z",
+  });
+  return { parent, initialized, lineage, authority, record, reconciler };
+}
+
 describe("readable-search generation composition", () => {
   it("binds the query scoring contract to the runtime BM25 scorer", () => {
     vi.mocked(canonicalSha256).mockClear();
@@ -61,39 +100,8 @@ describe("readable-search generation composition", () => {
   });
 
   it("publishes the zero-head generation once and leaves a restart-verifiable pointer", async () => {
-    const parent = root();
-    const initialized = bootstrapOrganizationAuthorityState({
-      state_directory: join(parent, "state"),
-      organization_display_name: "Clean Search Organization",
-      owner_display_name: "Founder",
-      created_at: "2026-08-22T12:00:00.000Z",
-      creating_artifact_revision: "clean-search-runtime-test",
-    });
-    const lineage = verifyAuthorityStateLineage(initialized.state_directory);
-    const authority = openAuthorityDatabase(
-      join(initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
-    );
-    const record = openOrganizationRecordDatabase(
-      join(initialized.state_directory, "record-log.sqlite"),
-      { fileMustExist: true },
-    );
+    const { parent, initialized, lineage, authority, record, reconciler } = emptyOrganizationSearch();
     try {
-      const reconciler = createReadableSearchGenerationReconcilerV1({
-        state_directory: initialized.state_directory,
-        root: lineage.root,
-        authority,
-        record,
-        signer: FileOrganizationAuthoritySigner.openExisting({
-          directory: join(initialized.state_directory, "keys"),
-          authority_id: initialized.authority_id,
-          organization_id: initialized.organization_id,
-        }),
-        policy_projectors: createRecordPolicyFactProjectorRegistryV1([
-          createPersonPolicyFactProjectorV2(),
-        ]),
-        now: () => "2026-08-22T12:01:00.000Z",
-      });
       const first = await reconciler.reconcile(new AbortController().signal);
       expect(first).toMatchObject({
         status: "published",
@@ -167,6 +175,36 @@ describe("readable-search generation composition", () => {
         initialized.state_directory,
       );
       expect(restartVerification.retrieval).toEqual({
+        present: true,
+        generation_count: 1,
+        segment_count: 1,
+      });
+    } finally {
+      record.close();
+      authority.close();
+    }
+  });
+
+  it("keeps only the generation it publishes, and an interrupted deletion never blocks a restart", async () => {
+    const { initialized, authority, record, reconciler } = emptyOrganizationSearch();
+    try {
+      const first = await reconciler.reconcile(new AbortController().signal);
+      if (first.status !== "published") throw new Error("the empty organization did not publish");
+      const retrieval = join(initialized.state_directory, "record-retrieval");
+      const generations = join(retrieval, "generations");
+      // A generation this run superseded, and the debris of a deletion a crash interrupted.
+      cpSync(join(generations, first.generation_id), join(generations, canonicalSha256({ superseded: true })), { recursive: true });
+      mkdirSync(join(retrieval, `.retired-${"0".repeat(32)}`), { mode: 0o700 });
+      expect(verifyAuthorityStateLineage(initialized.state_directory).retrieval.generation_count).toBe(2);
+
+      // The same exact head published again: only that generation and the generations directory remain.
+      authority.prepare("DELETE FROM authority_readable_search_active_generation").run();
+      clearReadableSearchActiveGenerationV1();
+      await expect(reconciler.reconcile(new AbortController().signal))
+        .resolves.toMatchObject({ status: "published", generation_id: first.generation_id });
+      expect(readdirSync(generations)).toEqual([first.generation_id]);
+      expect(readdirSync(retrieval)).toEqual(["generations"]);
+      expect(verifyAuthorityStateLineage(initialized.state_directory).retrieval).toEqual({
         present: true,
         generation_count: 1,
         segment_count: 1,

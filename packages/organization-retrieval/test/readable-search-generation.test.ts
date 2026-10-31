@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -15,8 +15,11 @@ import {
   READABLE_SEARCH_CONTENT_BASELINE_V2,
   READABLE_SEARCH_FACTS_BASELINE_V3,
   READABLE_SEARCH_LEXICAL_BASELINE_V2,
+  readableSearchActiveGenerationUsageV1,
+  readableSearchExceededLimitV1,
   readableSearchPlaneBaselineSha256,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+  retireReadableSearchGenerationsV1,
   searchReadableSearchGenerationV1,
   warmReadableSearchActiveGenerationV1,
   type BuildReadableSearchGenerationV1Input,
@@ -342,26 +345,50 @@ describe("immutable readable-search generation v1", () => {
           (_, index) =>
             atomWith(`posting-limit-${index}`, {
               text: Array.from(
-                { length: 17 },
+                {
+                  length:
+                    READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_postings /
+                      READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms +
+                    1,
+                },
                 (__, term) => `term${term}x${index}`,
               ).join(" "),
             }),
         ),
     ],
-  ])("rejects %s before staging", (dimension, atoms) => {
+  ])("rejects %s before staging, naming the limit", (dimension, atoms) => {
     const directory = tempDirectory();
-    expect(() =>
-      buildReadableSearchGenerationV1(input(directory, atoms())),
-    ).toThrow(dimension);
+    let refused: unknown;
+    expect(() => {
+      try {
+        buildReadableSearchGenerationV1(input(directory, atoms()));
+      } catch (error) {
+        refused = error;
+        throw error;
+      }
+    }).toThrow(dimension);
+    expect(readableSearchExceededLimitV1(refused)).toBe(dimension);
     expect(existsSync(join(directory, "record-retrieval"))).toBe(false);
+  });
+
+  it("names a limit only for an admission refusal", () => {
+    for (const failure of [
+      new Error("readable-search generation exceeds current admission budget"),
+      new Error("readable-search generation exceeds constructor"),
+      new Error("injected content transaction failure"),
+      "readable-search generation exceeds maximum_atoms",
+    ])
+      expect(readableSearchExceededLimitV1(failure)).toBeUndefined();
   });
 
   it("builds, warms and searches a generation exactly at its atom, segment and posting budget", () => {
     const budget = READABLE_SEARCH_ADMISSION_BUDGET_V1;
     const directory = tempDirectory();
-    // Tuple 0 is the member segment; tuples 1..31 are one reviewer segment each.
+    // Tuple 0 is the member segment; every other tuple is one reviewer segment.
     // Every decision atom has its content terms plus the controlled category posting.
     const contentTerms = budget.maximum_postings / budget.maximum_atoms - 1;
+    const lastTuple = budget.maximum_segments - 1;
+    const lastAtom = budget.maximum_atoms - 1;
     const atoms = Array.from({ length: budget.maximum_atoms }, (_, index) => {
       const tuple = index % budget.maximum_segments;
       const text = [
@@ -392,6 +419,11 @@ describe("immutable readable-search generation v1", () => {
 
     const active_generation = activeGeneration(built);
     warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation });
+    expect(readableSearchActiveGenerationUsageV1()).toEqual({
+      atoms: budget.maximum_atoms,
+      segments: budget.maximum_segments,
+      postings: budget.maximum_postings,
+    });
     const search = (tuple: number | null, query: string) =>
       searchReadableSearchGenerationV1({
         state_directory: directory,
@@ -404,13 +436,41 @@ describe("immutable readable-search generation v1", () => {
     // Equal scores fall back to atom order: a member reads the member segment alone,
     // and the last reviewer reads it merged with their own segment.
     const member = search(null, "capacity");
-    expect(member.items.map((item) => item.atom_order)).toEqual([0, 32, 64, 96, 128, 160, 192, 224, 256, 288]);
+    expect(member.items.map((item) => item.atom_order)).toEqual(
+      Array.from({ length: 10 }, (_, rank) => rank * budget.maximum_segments),
+    );
     expect(member.truncated).toBe(true);
-    expect(search(31, "capacity").items.map((item) => item.atom_order)).toEqual([0, 31, 32, 63, 64, 95, 96, 127, 128, 159]);
+    expect(search(lastTuple, "capacity").items.map((item) => item.atom_order)).toEqual(
+      Array.from({ length: 5 }, (_, rank) => [rank * budget.maximum_segments, rank * budget.maximum_segments + lastTuple]).flat(),
+    );
     // The last atom's own term reaches its reviewer and no one else.
-    expect(search(31, "term0x1023").items.map((item) => item.text)).toEqual([atoms[1023]!.text]);
-    expect(search(30, "term0x1023").items).toEqual([]);
-    expect(search(null, "term0x1023").items).toEqual([]);
+    expect(lastAtom % budget.maximum_segments).toBe(lastTuple);
+    expect(search(lastTuple, `term0x${lastAtom}`).items.map((item) => item.text)).toEqual([atoms[lastAtom]!.text]);
+    expect(search(lastTuple - 1, `term0x${lastAtom}`).items).toEqual([]);
+    expect(search(null, `term0x${lastAtom}`).items).toEqual([]);
+  });
+
+  it("retires every generation but the published one, leaving the builder's staging alone", () => {
+    const directory = tempDirectory();
+    const member = ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2;
+    const older = buildReadableSearchGenerationV1(input(directory, [atom("older", member)]));
+    const published = buildReadableSearchGenerationV1(input(directory, [atom("published", member)]));
+    const root = join(directory, "record-retrieval");
+    const generations = join(root, "generations");
+    const staging = `.staging-${"a".repeat(32)}`;
+    mkdirSync(join(generations, staging), { mode: 0o700 });
+    // What a retirement interrupted after its rename leaves.
+    mkdirSync(join(root, `.retired-${"b".repeat(32)}`), { mode: 0o700 });
+    const retire = (keep_generation_id: `sha256:${string}`) =>
+      retireReadableSearchGenerationsV1({ state_directory: directory, keep_generation_id });
+
+    expect(() => retire(digest("never published"))).toThrow("kept readable-search generation is missing");
+    expect(readdirSync(generations)).toContain(older.manifest.generation_id);
+    expect(retire(published.manifest.generation_id)).toBe(1);
+    expect(readdirSync(generations).sort()).toEqual([staging, published.manifest.generation_id].sort());
+    expect(readdirSync(root)).toEqual(["generations"]);
+    expect(retire(published.manifest.generation_id)).toBe(0);
+    warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation: activeGeneration(published) });
   });
 
   it("reuses the exact completed generation without rewriting it, and stamps every plane manifest without a migration ledger", () => {

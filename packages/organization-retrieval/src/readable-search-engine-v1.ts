@@ -57,17 +57,35 @@ type Plane = "facts" | "content" | "lexical";
 type SegmentKind = "organization-member" | "reviewer" | "project-members";
 
 /**
- * Lean V1 admission ceiling. The values leave room for roughly one thousand
- * approved signal atoms with sixteen content postings plus one controlled
- * category posting each, while bounding every collection traversed by the
- * synchronous reader. Validation happens before retrieval staging is touched.
+ * Lean V1 admission ceiling, sized by measurement (see the scaling decision
+ * guide). Every rebuild is synchronous, roughly 0.13 ms per atom plus 9 ms per
+ * segment: at this ceiling one took about 2.5 s to build and 0.5 s to prewarm
+ * on a laptop. Postings allow 25 per atom, above the 15 to 17 an approved item
+ * carries, so atoms bind first. Validation happens before retrieval staging is
+ * touched.
  */
 export const READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
-  maximum_atoms: 1_024,
-  maximum_segments: 32,
+  maximum_atoms: 8_192,
+  maximum_segments: 128,
   maximum_atom_text_utf8_bytes: 4_096,
-  maximum_postings: 17_408,
+  maximum_postings: 204_800,
 });
+export type ReadableSearchAdmissionLimitV1 = keyof typeof READABLE_SEARCH_ADMISSION_BUDGET_V1;
+
+/**
+ * The limit a refused build exceeded, or undefined for any other failure. A
+ * refused build touches no files: the published generation stays in place.
+ */
+export function readableSearchExceededLimitV1(
+  error: unknown,
+): ReadableSearchAdmissionLimitV1 | undefined {
+  const limit = error instanceof Error
+    ? /^readable-search generation exceeds (\w+)$/.exec(error.message)?.[1]
+    : undefined;
+  return limit !== undefined && Object.hasOwn(READABLE_SEARCH_ADMISSION_BUDGET_V1, limit)
+    ? limit as ReadableSearchAdmissionLimitV1
+    : undefined;
+}
 
 export const READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
   active_generation_cache_entries: 1,
@@ -1075,6 +1093,53 @@ export function buildReadableSearchGenerationV1(
   }
 }
 
+const RETIRED_GENERATION = /^\.retired-[0-9a-f]{32}$/;
+
+/**
+ * Deletes every generation except `keep_generation_id`, which the active
+ * pointer must already name. Each one is durably renamed out of
+ * `generations/` before its files go, so a crash leaves only debris outside
+ * the tree the state-lineage guard verifies, and the next call removes it.
+ * Returns how many generations it deleted.
+ */
+export function retireReadableSearchGenerationsV1(input: {
+  readonly state_directory: string;
+  readonly keep_generation_id: Sha256Digest;
+}): number {
+  assertCanonicalAbsoluteDirectory(
+    input.state_directory,
+    "readable-search engine state directory",
+  );
+  validDigest(input.keep_generation_id, "kept generation_id");
+  const root = join(input.state_directory, RETRIEVAL_DIRECTORY);
+  const generations = join(root, GENERATIONS_DIRECTORY);
+  assertPrivateDirectory(root, "readable-search engine root");
+  assertPrivateDirectory(generations, "readable-search generations directory");
+  assertPrivateDirectory(
+    join(generations, input.keep_generation_id),
+    "kept readable-search generation",
+  );
+  const remove = (debris: string): void => {
+    assertWithin(debris, root, "retired readable-search generation");
+    rmSync(debris, { recursive: true, force: false });
+  };
+  for (const name of readdirSync(root))
+    if (RETIRED_GENERATION.test(name)) remove(join(root, name));
+  let retired = 0;
+  for (const name of readdirSync(generations)) {
+    // The builder owns staging debris and removes it before its next build.
+    if (name === input.keep_generation_id || STAGING_DIRECTORY.test(name))
+      continue;
+    const debris = join(root, `.retired-${randomBytes(16).toString("hex")}`);
+    renameSync(join(generations, name), debris);
+    fsyncPath(generations);
+    fsyncPath(root);
+    remove(debris);
+    retired += 1;
+  }
+  return retired;
+}
+
 /** Exact immutable-generation identity published by Authority's active pointer. */
 export interface ReadableSearchActiveGenerationV1 {
   readonly generation_id: Sha256Digest;
@@ -1528,6 +1593,21 @@ export function isReadableSearchActiveGenerationWarmV1(
 /** Drops the sole process-local handle, primarily for shutdown and tests. */
 export function clearReadableSearchActiveGenerationV1(): void {
   validatedActiveGenerationHandleV1 = null;
+}
+
+/** What the warm generation admitted, measured against the admission ceiling; undefined while none is warm. */
+export function readableSearchActiveGenerationUsageV1():
+  | { readonly atoms: number; readonly segments: number; readonly postings: number }
+  | undefined {
+  const handle = validatedActiveGenerationHandleV1;
+  if (handle === null) return undefined;
+  let atoms = 0;
+  let postings = 0;
+  for (const segment of handle.segments) {
+    atoms += segment.facts.length;
+    postings += segment.postings.length;
+  }
+  return Object.freeze({ atoms, segments: handle.segments.length, postings });
 }
 
 function assertCanonicalAbsoluteDirectory(path: string, label: string): void {

@@ -33,6 +33,13 @@ this record on 2026-09-30, in the change that merges the implementation, as
 requires before any new release path ships. `reviewed_ref` is the source the
 design was checked against; it is not an implementation claim.
 
+**Amended 2026-10-31 (search ceiling).** The founder raised the generation's
+admission ceiling to 8,192 atoms, so the record bound below becomes 8,192.
+Scaling the measured cost linearly to 8,192 single-atom records gives about
+12 ms for a warm page and 1.7 s for a cold mine page, inside the revisit
+thresholds. Approved meetings carry several atoms per record, so real lists
+stay well below that.
+
 ## Context and options
 
 Nothing today lists what a person can read or has added:

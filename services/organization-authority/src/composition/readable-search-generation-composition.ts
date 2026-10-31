@@ -36,6 +36,7 @@ import {
   READABLE_SEARCH_SCORER_ID,
   readableSearchPlaneBaselineSha256,
   isReadableSearchActiveGenerationWarmV1,
+  retireReadableSearchGenerationsV1,
   warmReadableSearchActiveGenerationV1,
   type ReadableSearchActiveGenerationV1,
   type ReadableSearchAtomV1,
@@ -430,6 +431,12 @@ export function createReadableSearchGenerationReconcilerV1(input: {
         active_generation: activeGeneration(generation),
       }),
     invalidate_generation: clearReadableSearchActiveGenerationV1,
+    retire_generations: (generation_id) => {
+      retireReadableSearchGenerationsV1({
+        state_directory: input.state_directory,
+        keep_generation_id: generation_id,
+      });
+    },
     ...(input.now === undefined ? {} : { now: input.now }),
   });
 }

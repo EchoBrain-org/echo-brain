@@ -184,6 +184,32 @@ describe("readable-search generation reconciliation", () => {
     expect(active(authority, "record_head_position")).toBe(1);
   });
 
+  it("retires older generations only once the pointer names the published one", async () => {
+    const authority = database();
+    const retire = vi.fn((generation_id: string) => {
+      expect(active(authority, "generation_id")).toBe(generation_id);
+    });
+    const value = reconciler(authority, head(2), { retire_generations: retire });
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published" });
+    await expect(value.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "current" });
+    expect(retire.mock.calls).toEqual([[GENERATION]]);
+
+    let reads = 0;
+    const superseded = reconciler(database(), head(3), {
+      retire_generations: retire,
+      read_record_head: () => (++reads < 2 ? head(3) : head(4)),
+    });
+    await expect(superseded.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "superseded" });
+    const refused = reconciler(database(), head(3), {
+      retire_generations: retire,
+      build_generation: () => {
+        throw new Error("readable-search generation exceeds maximum_atoms");
+      },
+    });
+    await expect(refused.reconcile(new AbortController().signal)).rejects.toThrow("maximum_atoms");
+    expect(retire).toHaveBeenCalledOnce();
+  });
+
   it("does not publish a completed generation when its captured head was superseded", async () => {
     const authority = database();
     const captured = head(2);
