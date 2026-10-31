@@ -99,6 +99,7 @@ describe("Agentic Ask HTTP capability gate", () => {
     try {
       const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
       await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: true });
+      expect(value.sessions.authenticateAccess).toHaveBeenCalledWith({ access_token: "token" });
     } finally { await value.close(); }
   });
 
