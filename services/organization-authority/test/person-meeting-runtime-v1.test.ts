@@ -146,16 +146,16 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   };
   const leave = (project_id: string, member: keyof typeof actors) => f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
     .run(new Date().toISOString(), project_id, actors[member].membership_id);
-  const listRoute = () => createPersonListRouteV1({ organization_id: person.organization_id, sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(f.db), originals: new SqlitePersonOriginalItemsV1(f.db, sessions, person.organization_id),
+  const listRoute = () => createPersonListRouteV1({ organization_id: person.organization_id, sessions, directory: new SqlitePersonListDirectoryV1(f.db), originals: new SqlitePersonOriginalItemsV1(f.db, sessions, person.organization_id),
     meetings: { collectMeetings: () => ({ status: 'ok', rows: [], handle: {} }), commitMeetings: () => ({}), revalidateMeetingRelease() {}, openMeeting() { throw new Error('unused'); } },
   });
-  // Who can find and open the imported note through the list route and the original-context desk.
+  // Who can find and open the imported note through the list route's Only me (an unapproved import is its importer's alone) and the original-context desk.
   const readers = async (tokens: readonly (keyof typeof actors)[] = ['owner', 'other', 'reader-a', 'reader-b']) => {
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, sessions, person.organization_id);
     const list = listRoute();
     const can: string[] = [];
     for (const token of tokens) {
-      const listed = (await list.list({ access_token: token, request: { schema_version: 1 } })).items.filter(item => item.kind === 'imported_meeting');
+      const listed = (await list.list({ access_token: token, request: { schema_version: 1, only_me: true } })).items.filter(item => item.kind === 'imported_meeting');
       const found = originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] }).items;
       if (listed.length !== found.length) throw new Error(`list and desk disagree for ${token}`);
       if (listed.length === 0) continue;
@@ -352,7 +352,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(a).toHaveLength(1); expect(b).toHaveLength(1); expect(a[0]?.approval_id).not.toBe(b[0]?.approval_id);
     await expect(f.call(runtime, { operation: 'review_open', approval_id: a[0]!.approval_id }, 'other')).rejects.toMatchObject({ code: 'not_found' });
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
-    for (const token of ['owner', 'other']) expect(originals.deskSearch({ access_token: token, scope: { kind: 'mine' }, query: 'cohort' }).items).toHaveLength(1);
+    for (const token of ['owner', 'other']) expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toHaveLength(1);
   });
 
   it('browses without retention; imports once across clients/restart and approves without Slack', async () => {
@@ -392,16 +392,17 @@ describe('personal meeting intake uses the shared processing path', () => {
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.db.prepare('SELECT count(*) AS n FROM authority_source_revisions_v1').get()).toEqual(before); expect(f.extracted()).toBe(0);
   });
-  it('lists and cites imported originals for their importer alone, in global, Mine and Only me scope and never in project scope, without releasing transcripts', async () => {
+  it('lists and cites imported originals for their importer alone, in global and Only me scope and never in project scope, without releasing transcripts', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
     const list = f.listRoute();
-    const page = await list.list({ access_token: 'owner', request: { schema_version: 1, mine: true } });
+    // Only me lists it (ADR-0049), filed in no project.
+    const page = await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } });
     expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', visibility: 'only_me', projects: [] });
-    // Only me lists it exactly as Mine does (ADR-0049).
-    expect((await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items).toEqual(page.items);
+    // A suggested project's list holds no unapproved note either.
+    expect((await list.list({ access_token: 'owner', request: { schema_version: 1, project_id: project } })).items).toEqual([]);
     const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
     expect(JSON.stringify(opened)).toContain('Ship the cohort'); expect(JSON.stringify(opened)).not.toContain('TRANSCRIPT_SECRET');
     // A suggested project grants nothing: its scope holds no unapproved notes, for its members or the importer.
@@ -410,7 +411,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     }
     const search = originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] });
     expect(search.items).toHaveLength(1); expect(search.items[0]?.kind).toBe('imported_meeting');
-    expect(originals.deskOpen({ access_token: 'owner', scope: { kind: 'mine' }, citation: search.items[0]!.citation }).items[0]?.text).toContain('Ship the cohort');
+    expect(originals.deskOpen({ access_token: 'owner', scope: { kind: 'global' }, citation: search.items[0]!.citation }).items[0]?.text).toContain('Ship the cohort');
     for (const token of ['other', 'reader-a']) {
       expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toEqual([]);
       expect(() => originals.deskOpen({ access_token: token, scope: { kind: 'global' }, citation: search.items[0]!.citation })).toThrow();
@@ -944,7 +945,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
     await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     const list = f.listRoute();
-    const page = await list.list({ access_token: 'owner', request: { schema_version: 1, mine: true } });
+    const page = await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } });
     expect(page.items).toHaveLength(1);
     const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
     expect(opened).toMatchObject({ text: '', next_cursor: null });
@@ -966,7 +967,7 @@ describe('personal meeting intake uses the shared processing path', () => {
         await f.call(runtime, { operation: 'submit', meeting, project_id: null, retain: true }, 'owner', 'synthetic');
         await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
       }
-      const listed = await f.listRoute().list({ access_token: 'owner', request: { schema_version: 1, mine: true } });
+      const listed = await f.listRoute().list({ access_token: 'owner', request: { schema_version: 1, only_me: true } });
       expect(listed.items).toHaveLength(5);
       const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.person.organization_id);
       for (const limit of [1, 2]) {

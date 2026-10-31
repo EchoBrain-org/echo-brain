@@ -9,7 +9,7 @@ component_ids:
 created_at: 2026-10-23
 reviewed_at: 2026-10-23
 reviewed_ref: 56461ffc1f79ae9facb39cd198bf0bead76efa27
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -24,8 +24,9 @@ than a stack of equal paragraphs: the conclusion first, sections and bullets
 for distinct topics and parallel items, tables for owners, dates and
 statuses, citations beside each claim, sources collapsed, and a quieter note
 when research stopped short. The design is the "Ask Answer Format" canvas
-(THERM example). This record is proposed until the founder confirms the
-result on the desktop. It does not mean the change is deployed or qualified.
+(THERM example). The founder accepted this record on 2026-10-31, as built in
+#358 (`b36b18e`). Acceptance does not mean the change is deployed or
+qualified.
 
 ## Context and options
 

@@ -238,3 +238,33 @@ test('a sign-in begun while a sign-out is still finishing is left alone', async 
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   expect(run.calls().filter(call => call.path === '/v2/session/oidc/begin')).toHaveLength(1);
 });
+
+test('a reply that lands after someone else signed in on this computer is never taken as the page\'s account, and nothing more goes out for it', async () => {
+  run = await launch();
+  const { page, home } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  type Reply = { ok: boolean; value?: unknown; failure?: { code: string; retryable?: boolean; mutation_outcome?: string } };
+  const host = (method: string, params: object) => page.evaluate(([name, values]) =>
+    (window as unknown as { echo: { rpc(method: string, params: object): Promise<Reply> } }).echo.rpc(name, values), [method, params] as const);
+  const ari = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
+  const note = () => ({ expect: ari, request_id: crypto.randomUUID(), text: 'Offsite dates', audience: { kind: 'only-me' }, project_ids: [] });
+  const saves = () => run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates').length;
+  // Kim signs in while a read is on its way: what it read is not shown as Ari's.
+  writeFileSync(join(home, 'switch-on'), '/v1/person/list');
+  expect(await host('list.page', { expect: ari, scope: { kind: 'only-me' } })).toEqual({ ok: false, failure: { code: 'account_changed', retryable: false } });
+  // Now a write for Ari is refused before it is sent: it was not saved.
+  expect(await host('notes.submit', note())).toMatchObject({ ok: false, failure: { code: 'account_changed', mutation_outcome: 'not_submitted' } });
+  expect(saves()).toBe(0);
+});
+
+test('a save on its way when someone else signs in is never called saved or not', async () => {
+  run = await launch();
+  const { page, home } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  writeFileSync(join(home, 'switch-on'), '/v3/person/updates');
+  const reply = await page.evaluate(() => (window as unknown as { echo: { rpc(method: string, params: object): Promise<unknown> } }).echo.rpc('notes.submit', {
+    expect: { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' },
+    request_id: crypto.randomUUID(), text: 'Offsite dates', audience: { kind: 'only-me' }, project_ids: [],
+  }));
+  expect(reply).toMatchObject({ ok: false, failure: { code: 'account_changed', retryable: false, mutation_outcome: 'unknown' } });
+});

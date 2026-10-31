@@ -1,6 +1,5 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
-  PERSON_LIST_HEADER_PROJECTS_MAX_V1,
   PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1,
   PERSON_LIST_PAGE_SIZE_V1,
   PERSON_LIST_TEXT_MAX_BYTES_V1,
@@ -8,7 +7,6 @@ import {
   personRefKindV1,
   validatePersonListResponseV1,
   validatePersonOpenResponseV1,
-  type OrganizationPersonToolV4,
   type PersonListProjectV1,
   type PersonListRequestV1,
   type PersonListResponseV1,
@@ -47,7 +45,6 @@ import {
   type PersonOpenPositionV1,
 } from "./person-list-cursor-v1.js";
 import { isCanonicalUtcMillisTimestampV1 } from "../application/canonical-utc-timestamp-v1.js";
-import { personUnknownScopeV1 } from "../adapters/persistence/sqlite/person-original-access-v1.js";
 
 /** One page of 25 plus the row that proves another page exists. */
 const COLLECT_LIMIT = PERSON_LIST_PAGE_SIZE_V1 + 1;
@@ -70,8 +67,6 @@ type Opened =
 interface CreatePersonListRouteV1Options {
   readonly organization_id: string;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
-  /** The caller's connected tools; only each tool id and status leave. */
-  readonly tools: (access_token: string) => Promise<readonly OrganizationPersonToolV4[]>;
   readonly directory: PersonListDirectoryPortV1;
   readonly originals: PersonOriginalItemsPortV1;
   readonly meetings: PersonMeetingItemsPortV1;
@@ -93,11 +88,11 @@ function unavailable(): never {
   throw new AuthorityOperationError("unavailable", "person list is unavailable");
 }
 
+/** Exactly one of a project and only_me: the list has no global or mine scope. */
 function scopeOf(request: PersonListRequestV1): PersonListScopeV1 {
-  if ([request.project_id, request.mine, request.only_me].filter((value) => value !== undefined).length > 1) invalidRequest();
-  if (request.project_id !== undefined) return Object.freeze({ kind: "project", project_id: request.project_id });
-  if (request.only_me === true) return Object.freeze({ kind: "only_me" });
-  return request.mine === true ? Object.freeze({ kind: "mine" }) : Object.freeze({ kind: "global" });
+  if (request.project_id !== undefined && request.only_me === undefined) return Object.freeze({ kind: "project", project_id: request.project_id });
+  if (request.only_me === true && request.project_id === undefined) return Object.freeze({ kind: "only_me" });
+  return invalidRequest();
 }
 
 /** One vs several audience projects, and approver vs uploader, are never released. */
@@ -208,32 +203,8 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
     const project = scope.kind === "project" ? joined.projects.find((candidate) => candidate.project_id === scope.project_id) : undefined;
     // The same denial as Ask with this project, before any store or tool runs.
     if (scope.kind === "project" && project === undefined) denied();
-    let header: Pick<PersonListResponseV1, "me" | "connected" | "projects" | "projects_more" | "project"> = {};
-    if (request.cursor === undefined) {
-      switch (scope.kind) {
-        case "global": {
-          const me = options.directory.me(actor);
-          if (me === undefined) denied();
-          const tools = await options.tools(access_token);
-          header = {
-            me: { display_name: boundedTextV1(me.display_name, PERSON_LIST_TEXT_MAX_BYTES_V1) ?? invalidOutput(), membership_type: actor.membership_type },
-            connected: tools.map((tool) => ({ tool: tool.tool_id, status: tool.personal_status })),
-            projects: joined.projects.slice(0, PERSON_LIST_HEADER_PROJECTS_MAX_V1).map(headerProject),
-            projects_more: joined.projects.length > PERSON_LIST_HEADER_PROJECTS_MAX_V1,
-          };
-          break;
-        }
-        case "project":
-          header = { project: headerProject(project!) };
-          break;
-        case "mine":
-        case "only_me":
-          break;
-        default:
-          personUnknownScopeV1(scope);
-      }
-      signal?.throwIfAborted();
-    }
+    // The first project page names the project; an only_me page has no header.
+    const header: Pick<PersonListResponseV1, "project"> = request.cursor === undefined && project !== undefined ? { project: headerProject(project) } : {};
 
     // Synchronous from here: collect, merge, shape, commit, revalidate, audit.
     const originals = positions.note.state === "done" && positions.document.state === "done" ? undefined : options.originals.collect({

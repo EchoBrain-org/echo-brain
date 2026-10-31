@@ -1,9 +1,9 @@
 # Approval surface v2: statements at the gate
 
 **Status:** Direction, founder session 2026-08-10; not scheduled. Instantiates
-the [organization permission architecture](2026-08-09-organization-permission-architecture.md)
+the [organization permission architecture](../product/2026-08-09-organization-permission-architecture.md)
 when built; the closed
-[append/derive design](2026-08-07-org-decision-record-append-derive-design.md)
+[append/derive design](../product/2026-08-07-org-decision-record-append-derive-design.md)
 is unaffected — its contract already reserves every field this direction
 populates.
 

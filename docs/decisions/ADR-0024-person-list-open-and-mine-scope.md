@@ -530,3 +530,10 @@ fallbacks: Ask goes to `/v7` alone. On 2026-10-26
 [ADR-0049](ADR-0049-only-me-is-a-lock.md) removed Mine from the desktop: its
 page, sidebar row and Ask scope. The Authority and the CLI keep `--mine`. The
 person list also gained a list-only Only me scope.
+
+Update (2026-10-31): the founder approved retiring the rest of the mine scope.
+`person ask` and `person list` no longer take `--mine`; the Ask request, the
+evidence desk, the research core and the shared answer scope know only global
+and one project, and a request that names mine is refused. The list's global
+scope went with it: a list takes exactly one of a project and Only me, and no
+first page names the person, their connected tools and their projects.

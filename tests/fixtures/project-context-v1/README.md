@@ -46,20 +46,18 @@ encoding implementation.
 | `projects member-remove` | `POST /v1/person/projects/members/remove` | member-remove | `200` immutable mutation receipt |
 | `projects associate` | `POST /v1/person/projects/context/associate` | association | `200` immutable mutation receipt |
 | `projects dissociate` | `POST /v1/person/projects/context/dissociate` | dissociation | `200` immutable mutation receipt |
-| none | `POST /v2/person/projects/context/feed` | project browse | `200` V2 project feed |
 | `projects search-v2` | `POST /v2/person/projects/context/search` | project search | `200` V2 project search page |
-| none | `GET /v2/person/projects/{project_id}/context/{context_id}` | none | `200` V2 project context read |
 | `updates submit-v3` | `POST /v3/person/updates` | V3 submit | `202` V3 receipt |
 | `updates status-v3` | `GET /v3/person/updates/{request_id}` | none | `200` V3 status |
 | `updates search` | `POST /v2/person/updates/search` | V2 search | `200` V2 search result |
-| none | `GET /v3/person/updates/content/{context_id}` | none | `200` V3 original read |
 
 The CLI retired the V1 project reads and the V2 note commands on 2026-09-30,
 and the Authority retired their routes on 2026-10-25
 ([ADR-0048](../../../docs/decisions/ADR-0048-retire-older-person-routes.md)).
 `updates search` stays: it is the only search of notes stored as V2.
 `person list --project` browses a project and `person open --ref` reads one
-item, so the feed, the context read and the V3 note read have no CLI command.
+item; the project feed, the project context read and the V3 note read had no
+caller and were retired on 2026-10-31.
 
 `projects directory` requires a lead grant on that project. `directory` (fixture
 `person-directory`) lists the same active-member names for any active member of

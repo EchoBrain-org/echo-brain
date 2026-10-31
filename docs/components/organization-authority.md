@@ -152,9 +152,10 @@ would weaken the Authority boundary.
 
 ## Current references
 
-The staging connector rehearsal serves only the owner's `status` and
-`verify-read` actions. The dormant connector capture composition was removed
-unused on 2026-10-19
+The staging connector profile only selects providers inside the ordinary
+composition root; the owner's rehearsal runner and its
+`/v1/staging/connector-rehearsal` route are retired. The dormant connector
+capture composition was removed unused on 2026-10-19
 ([ADR-0029](../decisions/ADR-0029-capture-and-derive-foundation.md)).
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)

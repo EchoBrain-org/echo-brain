@@ -11,7 +11,7 @@ component_ids:
 created_at: 2026-10-11
 reviewed_at: 2026-10-11
 reviewed_ref: 3aea847cca4fa44cfa1ab28dbf44b1b707590b8b
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -21,14 +21,14 @@ updates:
 
 # ADR-0034: Person-bound Confluence live page evidence with Nango custody
 
-Proposed, not accepted. This record describes a release path that already runs:
-Confluence page evidence in Ask shipped in `38ada9c` (2026-10-05) and the
-staging overlay selects it, but no accepted decision covers it.
+The founder accepted this record on 2026-10-31, as built. It describes a
+release path that already runs: Confluence page evidence in Ask shipped in
+`38ada9c` (2026-10-05) and the staging overlay selects it.
 [INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)
 requires an accepted ADR for every new release path, and
 [ADR-0026](ADR-0026-jira-person-live-evidence-nango.md) permits live Jira Ask
-only. Acceptance is the founder's call; until then this path is outside that
-invariant's accepted scope.
+only; this acceptance brings the path inside that invariant's accepted scope.
+Acceptance does not mean the path is qualified.
 
 ## Context and options
 

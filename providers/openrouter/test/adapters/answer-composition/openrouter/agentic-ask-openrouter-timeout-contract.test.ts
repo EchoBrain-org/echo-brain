@@ -32,7 +32,7 @@ function launchEvidence(): EvidenceDeskItemV1 {
       kind: "approved_record" as const,
       atom_id: atom,
       record_sha256: canonicalSha256({ record: "launch" }),
-      policy_id: "organization-member-readable-person-v2" as const,
+      policy_id: "project-members-readable-person-v1" as const,
     }),
     kind: "decision" as const,
     text: "Launch is Tuesday.",

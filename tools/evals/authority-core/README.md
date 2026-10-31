@@ -25,7 +25,7 @@ The metric components are:
 
 | File | Purpose |
 | --- | --- |
-| `metrics.v4.json`, `verify-contract.mjs` | Pin the core-only contract and verify its formulas; `metrics.v2.json` and `metrics.v3.json` are frozen predecessors. |
+| `metrics.v4.json`, `verify-contract.mjs` | Pin the core-only contract and verify its formulas. `metrics.v4.json` records the V3 digests; the frozen V2 and V3 contracts left the tree on 2026-10-31 and remain in Git. |
 | `corpus-v1.mjs` | Generate provider-free history templates and logical postings. |
 | `oracle-v1.mjs` | Independently reimplement ranking (BM25 fixed-point, ADR-0011) and build held-out query plans for the oracle/engine agreement test. |
 | `grading.mjs` | Nearest-rank p95 used by the ranking diagnostic; failed work counts as infinite latency. |
@@ -47,7 +47,7 @@ For a repeatable ranking diagnostic:
 npm run eval:retrieval-quality -- --out /tmp/echo-retrieval-quality.json
 ```
 
-Defaults: 650 atoms, 300 member-readable target facts, seed
+Defaults: 650 atoms, 300 target facts that every reader may read, seed
 `retrieval-quality-v1`. Each target supplies two rare text terms; the three
 query classes add zero, three or five frequent terms. Each reports Recall@10,
 MRR@10 and top-1. Targets are selected before scoring, so this measures target
@@ -64,7 +64,10 @@ remains the acceptance path for captured answers, citations and visibility.
 
 The frozen V4 definition names the test's original location under
 `tools/evals/retrieval-quality/test/`; it now lives at
-`test/oracle-engine-agreement.test.mjs`. The V4 rules and pins are unchanged.
+`test/oracle-engine-agreement.test.mjs`. The V4 rules are unchanged. Its
+definition pin and profile digest changed once, on 2026-10-31: the definition's
+link to the retired V3 contract moved to a commit permalink, and its verifier
+sentence no longer claims predecessor checks.
 
 No measurement scorer, run-integrity verifier or milestone protocol is
 implemented; nothing here can issue a qualification or milestone result.
@@ -118,7 +121,9 @@ production review and its authorization callback. The authorization witness is
 the review's own (the authenticated Person action and its Authority audit
 entry); the harness injects none.
 The frozen V4 workload keeps its `organization-member` policy class, which only
-the history generator and ranking tests use. The checkpoint's shared audience is
+the history generator and ranking tests use; the engine has no such policy, so
+the search fixture indexes those facts as records of one project every reader
+holds. The checkpoint's shared audience is
 the project members, because the in-app review offers the approving person only
 that or themselves alone. The metric profile is unchanged.
 This directly composes the shared production components; it does not start the

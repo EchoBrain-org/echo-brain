@@ -136,7 +136,7 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(f.prompts.join("\n")).not.toContain("SCOUT confidential review");
     for (const citation of answer.citations) {
       if (citation.citation.kind !== "source_revision") throw new Error("wrong citation kind");
-      expect(f.originals.read({ access_token: "member", scope: answer.scope, citation: citation.citation }).atom.text).toMatch(/SCOUT (Software|Hardware) Review/);
+      expect(f.originals.read({ access_token: "member", scope: { kind: "global" }, citation: citation.citation }).atom.text).toMatch(/SCOUT (Software|Hardware) Review/);
     }
     const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
     expect(body).toMatchObject({ principal_id: MEMBER.principal_id, outcome: "answered" });
@@ -144,7 +144,7 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(auditRow(f.database)!.body_json).not.toContain("transition table");
   });
 
-  it("lists keyword-free evidence, opens it, cites the exact source, and appends a bound terminal audit", async () => {
+  it("lists keyword-free evidence, cites the exact source, finds it through the desk's search, and appends a bound terminal audit", async () => {
     const f = fixture(); f.upload("Atlas plan", "The launch window is October.");
     const answer = await f.ask();
     expect(answer.outcome).toBe("answered");
@@ -153,11 +153,11 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(answer.citations).toHaveLength(1);
     const citation = answer.citations[0]!.citation;
     if (citation.kind !== "source_revision") throw new Error("wrong citation kind");
-    expect(f.originals.read({ access_token: "owner", scope: answer.scope, citation }).atom.text).toBe("Atlas plan.md\nThe launch window is October.");
-    const opened = await f.route.openEvidence({ access_token: "owner", request: { schema_version: 1, citation, project_id: PROJECT_ALPHA } });
-    expect(opened.items[0]!.text).toBe("Atlas plan.md\nThe launch window is October.");
-    expect(opened.items[0]).not.toHaveProperty("dates");
-    expect(opened.items[0]).not.toHaveProperty("date_kind");
+    expect(answer.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
+    expect(f.originals.read({ access_token: "owner", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation }).atom.text).toBe("Atlas plan.md\nThe launch window is October.");
+    const found = await f.route.searchEvidence({ access_token: "owner", request: { schema_version: 1, query: "launch window", project_id: PROJECT_ALPHA } });
+    expect(found.items.map(item => item.citation)).toContainEqual(citation);
+    for (const item of found.items) for (const key of ["dates", "date_kind"]) expect(item).not.toHaveProperty(key);
     const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
     expect(body.response_sha256).toBe(canonicalSha256(answer)); expect(body.principal_id).toBe(OWNER.principal_id);
     expect(body).toMatchObject({ model_calls: 4, rounds: 3 }); expect(auditRow(f.database)!.body_json).not.toContain("October");

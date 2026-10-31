@@ -322,7 +322,7 @@ describe("an Ask without the previous turn is today's, byte for byte (ADR-0047)"
 });
 
 describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
-  const citation = { citation: { kind: "approved_record" as const, atom_id: `sha256:${"c".repeat(64)}` as const, record_sha256: `sha256:${"d".repeat(64)}` as const, policy_id: "organization-member-readable-person-v2" as const },
+  const citation = { citation: { kind: "approved_record" as const, atom_id: `sha256:${"c".repeat(64)}` as const, record_sha256: `sha256:${"d".repeat(64)}` as const, policy_id: "project-members-readable-person-v1" as const },
     kind: "decision" as const, label: "Decision", visibility: "team" as const };
   const long = (index: number) => `${index} ${"x".repeat(4_080)}.`;
   const statement = (index: number) => ({ text: long(index), citation_indexes: [0], private: false });

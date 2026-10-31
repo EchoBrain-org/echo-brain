@@ -13,7 +13,6 @@ import { createJourneyTelemetryTransportFromEnvironmentV1 } from "./observabilit
 import { createLangSmithRuntimeV1 } from './observability/langsmith-runtime-v1.js';
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { readStagingConnectorRehearsalSelection } from './staging-connector-rehearsal-selection.js';
-import { openStagingConnectorRehearsalService } from './staging-connector-rehearsal-runtime.js';
 import { CLEAN_V1_RELEASE_ID } from './clean-v1-release-id.js';
 import { readPersonalClaudeSelectionV1 } from './personal-claude-selection-v1.js';
 
@@ -215,27 +214,34 @@ export async function runOrganizationAuthorityServiceCli(
             authority_url: manifest.authority_url,
             meetings_directory: requestedSyntheticMeetingsDirectory,
           });
-    const connectorRehearsal = readStagingConnectorRehearsalSelection({
+    // The fixed staging connector profile only selects providers and switches of the one composition root.
+    const stagingProfile = readStagingConnectorRehearsalSelection({
       state_directory: stateDirectory, authority_url: manifest.authority_url, environment: process.env,
     });
+    if (stagingProfile !== undefined && (
+        (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev') ||
+        (parsed['--jira-cloud-id'] !== undefined && parsed['--jira-cloud-id'] !== stagingProfile.jira.cloud_id) ||
+        (parsed['--jira-nango-integration'] !== undefined && parsed['--jira-nango-integration'] !== stagingProfile.jira.integration_key))) {
+      throw new Error('The staging connector profile requires Nango Cloud, and explicit Jira flags must match its site and integration');
+    }
     const stagingJiraAsk = process.env.ECHO_STAGING_JIRA_ASK_V1;
     if (stagingJiraAsk !== undefined && !['', 'false', 'true'].includes(stagingJiraAsk)) {
       throw new Error('Staging Jira Ask selection is invalid');
     }
-    if (stagingJiraAsk === 'true' && connectorRehearsal === undefined) {
+    if (stagingJiraAsk === 'true' && stagingProfile === undefined) {
       throw new Error('Staging Jira Ask requires the fixed staging connector profile');
     }
     const stagingConfluenceAsk = process.env.ECHO_STAGING_CONFLUENCE_ASK_V1;
     if (stagingConfluenceAsk !== undefined && !['', 'false', 'true'].includes(stagingConfluenceAsk)) {
       throw new Error('Staging Confluence Ask selection is invalid');
     }
-    if (stagingConfluenceAsk === 'true' && (connectorRehearsal === undefined ||
+    if (stagingConfluenceAsk === 'true' && (stagingProfile === undefined ||
         (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev') ||
-        (parsed['--confluence-cloud-id'] !== undefined && parsed['--confluence-cloud-id'] !== connectorRehearsal.profile.jira.cloud_id) ||
+        (parsed['--confluence-cloud-id'] !== undefined && parsed['--confluence-cloud-id'] !== stagingProfile.jira.cloud_id) ||
         (parsed['--confluence-nango-integration'] !== undefined && parsed['--confluence-nango-integration'] !== 'confluence'))) {
       throw new Error('Staging Confluence Ask requires the fixed staging cloud site and the confluence Nango Cloud integration');
     }
-    if (connectorRehearsal !== undefined && stagingSyntheticMeetingsDirectory !== undefined) {
+    if (stagingProfile !== undefined && stagingSyntheticMeetingsDirectory !== undefined) {
       throw new Error('Staging connector rehearsal cannot select another synthetic source profile');
     }
     const stagingClaudeResearch = process.env.ECHO_STAGING_CLAUDE_RESEARCH_V1;
@@ -261,11 +267,12 @@ export async function runOrganizationAuthorityServiceCli(
     if (stagingResearchEval === 'true' && manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) {
       throw new Error('Research evaluation is available only on the staging Authority');
     }
-    const jiraCloudId = parsed['--jira-cloud-id'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.cloud_id : undefined);
-    const jiraIntegration = parsed['--jira-nango-integration'] ?? (stagingJiraAsk === 'true' ? connectorRehearsal?.profile.jira.integration_key : undefined);
+    // Staging Jira connections live in the state directory, as every Authority's do.
+    const jiraCloudId = parsed['--jira-cloud-id'] ?? (stagingJiraAsk === 'true' ? stagingProfile?.jira.cloud_id : undefined);
+    const jiraIntegration = parsed['--jira-nango-integration'] ?? (stagingJiraAsk === 'true' ? stagingProfile?.jira.integration_key : undefined);
     // Staging shares only the validated Atlassian site, never Jira's project or grant.
     // Other deployments select Confluence with both explicit profile-owned flags.
-    const confluenceCloudId = parsed['--confluence-cloud-id'] ?? (stagingConfluenceAsk === 'true' ? connectorRehearsal?.profile.jira.cloud_id : undefined);
+    const confluenceCloudId = parsed['--confluence-cloud-id'] ?? (stagingConfluenceAsk === 'true' ? stagingProfile?.jira.cloud_id : undefined);
     const confluenceIntegration = parsed['--confluence-nango-integration'] ?? (stagingConfluenceAsk === 'true' ? 'confluence' : undefined);
     const telemetryEnvironment = manifest.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? "staging" : "production";
     const telemetryVocabulary = { ...OPENROUTER_TELEMETRY_VOCABULARY_V1, triggers: AGENTIC_TRIGGER_DEFINITIONS_V1.map(definition => definition.name) };
@@ -278,10 +285,7 @@ export async function runOrganizationAuthorityServiceCli(
       existing: journeyTelemetry.enabled ? journeyTelemetry.core_runtime : undefined, vocabulary: telemetryVocabulary,
       write: io.stderr,
     });
-    const openService: typeof openOrganizationAuthorityService = connectorRehearsal === undefined
-      ? openOrganizationAuthorityService
-      : (config, dependencies) => openStagingConnectorRehearsalService(config, connectorRehearsal, dependencies);
-    const runtime = await openService({
+    const runtime = await openOrganizationAuthorityService({
       ...(langSmith.scope === undefined ? {} : { core_runtime_observation: langSmith.scope }),
       state_directory: stateDirectory,
       host,

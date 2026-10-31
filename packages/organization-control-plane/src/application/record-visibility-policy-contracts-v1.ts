@@ -5,9 +5,7 @@
  */
 export type ApprovalContractSha256 = `sha256:${string}`;
 
-export type PersonApprovalPolicyId =
-  | "organization-member-readable-person-v2"
-  | "restricted-reviewer-person-v2";
+export type PersonApprovalPolicyId = "restricted-reviewer-person-v2";
 
 export const RESTRICTED_REVIEWER_PERSON_POLICY_ID =
   "restricted-reviewer-person-v2" as const;

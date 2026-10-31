@@ -38,7 +38,7 @@ behavior.
    is the accepted, not-yet-implementation-claimed narrow extension for a
    disposable Layer 2 related-atom projection and Layer 3 adjacent-fact
    expansion.
-7. [Approval surface v2](2026-08-10-approval-surface-v2-direction.md)
+7. [Approval surface v2](../archive/2026-08-10-approval-surface-v2-direction.md)
    contains future product rules, not formally adopted invariants. They are
    recorded separately below.
 

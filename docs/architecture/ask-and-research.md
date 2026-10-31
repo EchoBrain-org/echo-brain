@@ -36,8 +36,8 @@ flowchart LR
   ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md));
   `x-echo-client-now` and `x-echo-time-zone` anchor dates. A follow-up carries
   the previous turn ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
-- **Scopes:** the whole organization, or one project. The `mine` scope is CLI
-  only.
+- **Scopes:** the whole organization, or one project. The `mine` scope is
+  retired; a request that names it is refused.
 - **Contracts:** `packages/organization-api` (`person-answer-v8.ts` and the
   progress, receipt and layout contracts).
 
@@ -118,7 +118,7 @@ their own Claude account; that code lives in
 | --- | --- | --- |
 | `POST /v1/person/ask/check` | Content-free check that an old turn's sources are still readable | Desktop, when an old turn opens |
 | `POST /v2/person/ask/source` | Open one cited source | Desktop |
-| `POST /v3/person/evidence/search`, `/open` | The evidence desk directly | CLI and the research-loop eval |
+| `POST /v3/person/evidence/search` | The evidence desk's search, directly | The research-loop eval |
 | `POST /v1/person/diagnostics` | One-use diagnostic capture | Research-loop traces |
 | `POST /v1/person/research-eval/start`, `/read` | Staging evaluation runs | `npm run eval:research-loop` |
 

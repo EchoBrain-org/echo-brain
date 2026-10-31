@@ -10,7 +10,6 @@ import {
   listReadableSearchGenerationV1,
   readReadableSearchGenerationAtomsV1,
   READABLE_SEARCH_ADMISSION_BUDGET_V1,
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
   READABLE_SEARCH_CONTENT_BASELINE_V2,
   READABLE_SEARCH_FACTS_BASELINE_V3,
@@ -114,11 +113,11 @@ function input(
       record_sha256: exactHeadAtom?.record_sha256 ?? digest("head"),
     },
     retrieval_contract_sha256: digest("contract"),
-    organization_member_policy_contract_sha256: digest(
-      `policy-${ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2}`,
-    ),
     restricted_reviewer_policy_contract_sha256: digest(
       `policy-${RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2}`,
+    ),
+    project_members_policy_contract_sha256: digest(
+      `policy-${PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1}`,
     ),
     analyzer: {
       analyzer_contract_sha256: digest("analyzer-contract"),
@@ -165,11 +164,22 @@ function atom(
   };
 }
 
+/** The project every member-like reader here holds: a shared atom is filed in it, and they read it. */
+const SHARED_PROJECT = "prj_shared";
+const SHARED: { readonly project_ids: readonly string[] } = { project_ids: [SHARED_PROJECT] };
+
+/** An atom shared with SHARED_PROJECT's members. */
+function shared(id: string): ReadableSearchAtomV1 {
+  return { ...atom(id, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1), audience_project_ids: [SHARED_PROJECT], association_project_ids: [SHARED_PROJECT] };
+}
+
+/** A shared atom with `overrides`; one turned into a reviewer atom keeps no project audience or association. */
 function atomWith(
   id: string,
   overrides: Partial<ReadableSearchAtomV1> = {},
 ): ReadableSearchAtomV1 {
-  const base = atom(id, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2);
+  const { audience_project_ids: _audience, association_project_ids: _association, ...unfiled } = shared(id);
+  const base = overrides.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 ? unfiled : shared(id);
   const value = { ...base, ...overrides };
   return { ...value, text_sha256: digest(value.text) };
 }
@@ -235,10 +245,10 @@ describe("immutable readable-search generation v1", () => {
     }
   });
 
-  it("refuses a member atom filed in a project and a reviewer atom with an audience project", () => {
+  it("refuses an atom under the retired Team policy and a reviewer atom with an audience project", () => {
     const directory = tempDirectory();
-    expect(() => buildReadableSearchGenerationV1(input(directory, [{ ...atom("member-filed", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2), association_project_ids: ["prj_alpha"] }])))
-      .toThrow("member atom must not carry project associations");
+    expect(() => buildReadableSearchGenerationV1(input(directory, [atom("team", "organization-member-readable-person-v2" as never)])))
+      .toThrow("atom policy is unsupported");
     expect(() => buildReadableSearchGenerationV1(input(directory, [{ ...atom("reviewer-audience", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2), audience_project_ids: ["prj_alpha"], association_project_ids: ["prj_alpha"] }])))
       .toThrow("reviewer atom must not carry a project audience");
   });
@@ -261,7 +271,7 @@ describe("immutable readable-search generation v1", () => {
     try {
       buildReadableSearchGenerationV1(
         input(directory, [
-          atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
+          shared("member"),
           atom("reviewer", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2),
         ]),
       );
@@ -290,7 +300,7 @@ describe("immutable readable-search generation v1", () => {
       expect(() =>
         buildReadableSearchGenerationV1(
           input(directory, [
-            atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
+            shared("member"),
           ]),
         ),
       ).toThrow("injected content transaction failure");
@@ -317,7 +327,7 @@ describe("immutable readable-search generation v1", () => {
       "maximum_segments",
       () =>
         Array.from(
-          { length: READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_segments },
+          { length: READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_segments + 1 },
           (_, index) =>
             atomWith(`segment-limit-${index}`, {
               policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
@@ -388,7 +398,7 @@ describe("immutable readable-search generation v1", () => {
   it("builds, warms and searches a generation exactly at its atom, segment and posting budget", () => {
     const budget = READABLE_SEARCH_ADMISSION_BUDGET_V1;
     const directory = tempDirectory();
-    // Tuple 0 is the member segment; every other tuple is one reviewer segment.
+    // Tuple 0 is the shared project segment; every other tuple is one reviewer segment.
     // Every decision atom has its content terms plus the controlled category posting.
     const contentTerms = budget.maximum_postings / budget.maximum_atoms - 1;
     const lastTuple = budget.maximum_segments - 1;
@@ -433,11 +443,11 @@ describe("immutable readable-search generation v1", () => {
         state_directory: directory,
         active_generation,
         reader: tuple === null
-          ? { principal_id: "prn_member", membership_id: "mem_member" }
-          : { principal_id: `reviewer-${tuple}`, membership_id: `membership-${tuple}` },
+          ? { principal_id: "prn_member", membership_id: "mem_member", ...SHARED }
+          : { principal_id: `reviewer-${tuple}`, membership_id: `membership-${tuple}`, ...SHARED },
         query,
       });
-    // Equal scores fall back to atom order: a member reads the member segment alone,
+    // Equal scores fall back to atom order: a project member reads the shared segment alone,
     // and the last reviewer reads it merged with their own segment.
     const member = search(null, "capacity");
     expect(member.items.map((item) => item.atom_order)).toEqual(
@@ -456,9 +466,8 @@ describe("immutable readable-search generation v1", () => {
 
   it("retires every generation but the published one, leaving the builder's staging to its next build", () => {
     const directory = tempDirectory();
-    const member = ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2;
-    const older = buildReadableSearchGenerationV1(input(directory, [atom("older", member)]));
-    const published = buildReadableSearchGenerationV1(input(directory, [atom("published", member)]));
+    const older = buildReadableSearchGenerationV1(input(directory, [shared("older")]));
+    const published = buildReadableSearchGenerationV1(input(directory, [shared("published")]));
     const root = join(directory, "record-retrieval");
     const generations = join(root, "generations");
     const staging = `.staging-${"a".repeat(32)}`;
@@ -474,7 +483,7 @@ describe("immutable readable-search generation v1", () => {
     expect(readdirSync(generations)).toEqual([published.manifest.generation_id]);
     expect(readdirSync(root).sort()).toEqual([staging, "generations"].sort());
     expect(retire(published.manifest.generation_id)).toBe(0);
-    buildReadableSearchGenerationV1(input(directory, [atom("published", member)]));
+    buildReadableSearchGenerationV1(input(directory, [shared("published")]));
     expect(readdirSync(root)).toEqual(["generations"]);
     warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation: activeGeneration(published) });
   });
@@ -482,7 +491,7 @@ describe("immutable readable-search generation v1", () => {
   it("reuses the exact completed generation without rewriting it, and stamps every plane manifest without a migration ledger", () => {
     const directory = tempDirectory();
     const source = input(directory, [
-      atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
+      shared("member"),
     ]);
     const first = buildReadableSearchGenerationV1(source);
     const second = buildReadableSearchGenerationV1(source);
@@ -520,11 +529,11 @@ describe("immutable readable-search generation v1", () => {
     }
   });
 
-  it("separates member and exact reviewer tuples into immutable segments, then searches only the member segment and the reader's exact reviewer tuple", () => {
+  it("separates a shared project and exact reviewer tuples into immutable segments, then searches only the reader's granted project and exact reviewer tuple", () => {
     const directory = tempDirectory();
     const built = buildReadableSearchGenerationV1(
       input(directory, [
-        atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
+        shared("member"),
         atom("reviewer", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2),
       ]),
     );
@@ -547,6 +556,7 @@ describe("immutable readable-search generation v1", () => {
       reader: {
         principal_id: "prn_reviewer",
         membership_id: "mem_reviewer",
+        ...SHARED,
       },
       query: "searchable",
     });
@@ -557,21 +567,28 @@ describe("immutable readable-search generation v1", () => {
     const otherReader = searchReadableSearchGenerationV1({
       state_directory: directory,
       active_generation,
-      reader: { principal_id: "prn_other", membership_id: "mem_reviewer" },
+      reader: { principal_id: "prn_other", membership_id: "mem_reviewer", ...SHARED },
       query: "searchable",
     });
     expect(otherReader.items.map((item) => item.text)).toEqual([
       "searchable member",
     ]);
+    // Without the project grant, only the exact reviewer tuple remains.
+    expect(searchReadableSearchGenerationV1({
+      state_directory: directory,
+      active_generation,
+      reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer" },
+      query: "searchable",
+    }).items.map((item) => item.text)).toEqual(["searchable reviewer"]);
   });
 
-  it("ranks by BM25 over the reader's admitted segments only, so private statistics never move member results", () => {
+  it("ranks by BM25 over the reader's admitted segments only, so private statistics never move shared results", () => {
     const directory = tempDirectory();
-    // Two member atoms tie on tf-sum for "beta gamma" and on BM25 when the
-    // scoring scope is the member segment alone (df(beta) = df(gamma) = 1).
+    // Two shared atoms tie on tf-sum for "beta gamma" and on BM25 when the
+    // scoring scope is the shared segment alone (df(beta) = df(gamma) = 1).
     // The tie-break (same log position, lower atom order first) puts the
     // gamma atom first. Five private atoms also contain "gamma"; if their
-    // document frequency leaked into a member's scope, gamma would become
+    // document frequency leaked into a project member's scope, gamma would become
     // common, the beta atom would win, and the order would flip.
     const gammaAtom = atomWith("member-gamma", { atom_order: 0, text: "alpha gamma" });
     const betaAtom = atomWith("member-beta", { atom_order: 1, text: "alpha beta" });
@@ -594,7 +611,7 @@ describe("immutable readable-search generation v1", () => {
     const member = searchReadableSearchGenerationV1({
       state_directory: directory,
       active_generation,
-      reader: { principal_id: "prn_member", membership_id: "mem_member" },
+      reader: { principal_id: "prn_member", membership_id: "mem_member", ...SHARED },
       query: "beta gamma",
     });
     expect(member.items.map((item) => item.text)).toEqual(["alpha gamma", "alpha beta"]);
@@ -604,7 +621,7 @@ describe("immutable readable-search generation v1", () => {
     const reviewer = searchReadableSearchGenerationV1({
       state_directory: directory,
       active_generation,
-      reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer" },
+      reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer", ...SHARED },
       query: "beta gamma",
     });
     expect(reviewer.items[0]?.text).toBe("alpha beta");
@@ -614,7 +631,7 @@ describe("immutable readable-search generation v1", () => {
     const noisy = searchReadableSearchGenerationV1({
       state_directory: directory,
       active_generation,
-      reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer" },
+      reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer", ...SHARED },
       query: "gamma gamma beta",
     });
     expect(noisy.items[0]?.text).toBe("alpha beta");
@@ -651,7 +668,7 @@ describe("immutable readable-search generation v1", () => {
       expect(searchReadableSearchGenerationV1({
         state_directory: directory,
         active_generation,
-        reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer" },
+        reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer", ...SHARED },
         query,
       }).items.map((item) => item.text)).toEqual([
         "The reviewer approved the hiring plan.",
@@ -660,7 +677,7 @@ describe("immutable readable-search generation v1", () => {
       expect(searchReadableSearchGenerationV1({
         state_directory: directory,
         active_generation,
-        reader: { principal_id: "prn_other", membership_id: "mem_reviewer" },
+        reader: { principal_id: "prn_other", membership_id: "mem_reviewer", ...SHARED },
         query,
       }).items.map((item) => item.text)).toEqual([
         "We approved the launch for Tuesday.",
@@ -668,14 +685,22 @@ describe("immutable readable-search generation v1", () => {
     }
   });
 
-  it("builds an empty member generation from the exact head, then fails closed when the active pointer does not bind its immutable manifest", () => {
+  it("builds an empty generation with no segment from the exact head, warms it, then fails closed when the active pointer does not bind its immutable manifest", () => {
     const directory = tempDirectory();
     const built = buildReadableSearchGenerationV1(input(directory));
-    expect(built.manifest.segments).toHaveLength(1);
-    expect(built.manifest.segments[0]!.segment_id).toMatch(/^sha256:/);
+    expect(built.manifest.segments).toEqual([]);
+    expect(built.manifest.policies.map((policy) => policy.policy_id)).toEqual([RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1]);
     expect(
       existsSync(join(built.generation_directory, "manifest.json")),
     ).toBe(true);
+    expect(readdirSync(join(built.generation_directory, "segments"))).toEqual([]);
+    warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation: activeGeneration(built) });
+    expect(searchReadableSearchGenerationV1({
+      state_directory: directory,
+      active_generation: activeGeneration(built),
+      reader: { principal_id: "prn_reader", membership_id: "mem_reader", ...SHARED },
+      query: "searchable",
+    }).items).toEqual([]);
     expect(() =>
       searchReadableSearchGenerationV1({
         state_directory: directory,
@@ -719,9 +744,9 @@ describe("immutable readable-search generation v1", () => {
     const R0 = { ...atom("restricted", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2), record_position: 2, record_sha256: digest("record-r"), envelope_sha256: digest("envelope-r"), approval_id: "approval-r", text: "reviewer launch", text_sha256: digest("reviewer launch") };
     const P0 = inRecord("p", 3, 0, "project launch", { policy_id: projectPolicy, policy_contract_sha256: digest(`policy-${projectPolicy}`), audience_project_ids: ["prj_alpha", "prj_beta"], association_project_ids: ["prj_alpha"] });
     const B0 = inRecord("b", 4, 0, "beta launch");
-    const MEMBER = { principal_id: "prn_member", membership_id: "mem_member" };
-    const REVIEWER = { principal_id: "prn_reviewer", membership_id: "mem_reviewer" };
-    const ALPHA = { principal_id: "prn_alpha", membership_id: "mem_alpha", project_ids: ["prj_alpha"] };
+    const MEMBER = { principal_id: "prn_member", membership_id: "mem_member", ...SHARED };
+    const REVIEWER = { principal_id: "prn_reviewer", membership_id: "mem_reviewer", ...SHARED };
+    const ALPHA = { principal_id: "prn_alpha", membership_id: "mem_alpha", project_ids: ["prj_alpha", SHARED_PROJECT] };
 
     function warmed(directory: string, atoms: readonly ReadableSearchAtomV1[]) {
       const head = atoms.reduce((top, value) => value.record_position > top.record_position ? value : top);
@@ -741,11 +766,11 @@ describe("immutable readable-search generation v1", () => {
       const records = (reader: typeof MEMBER & { project_ids?: readonly string[] }, extra: { project_id?: string; record_sha256s?: readonly `sha256:${string}`[] } = {}) =>
         listReadableSearchGenerationRecordsV1({ ...active, reader, ...extra }).records;
       expect(records(MEMBER)).toEqual([
-        { record_position: 4, record_sha256: B0.record_sha256, envelope_sha256: B0.envelope_sha256, approval_id: B0.approval_id, policy_id: B0.policy_id, audience_project_count: 0, atom_count: 1 },
-        { record_position: 1, record_sha256: A0.record_sha256, envelope_sha256: A0.envelope_sha256, approval_id: A0.approval_id, policy_id: A0.policy_id, audience_project_count: 0, atom_count: 2 },
+        { record_position: 4, record_sha256: B0.record_sha256, envelope_sha256: B0.envelope_sha256, approval_id: B0.approval_id, policy_id: B0.policy_id, audience_project_count: 1, atom_count: 1 },
+        { record_position: 1, record_sha256: A0.record_sha256, envelope_sha256: A0.envelope_sha256, approval_id: A0.approval_id, policy_id: A0.policy_id, audience_project_count: 1, atom_count: 2 },
       ]);
       expect(records(REVIEWER).map((row) => row.record_sha256)).toEqual([B0.record_sha256, R0.record_sha256, A0.record_sha256]);
-      expect(records(ALPHA).map((row) => [row.record_sha256, row.audience_project_count])).toEqual([[B0.record_sha256, 0], [P0.record_sha256, 2], [A0.record_sha256, 0]]);
+      expect(records(ALPHA).map((row) => [row.record_sha256, row.audience_project_count])).toEqual([[B0.record_sha256, 1], [P0.record_sha256, 2], [A0.record_sha256, 1]]);
       expect(records(ALPHA, { project_id: "prj_alpha" }).map((row) => row.record_sha256)).toEqual([P0.record_sha256]);
       expect(() => records(MEMBER, { project_id: "prj_alpha" })).toThrow("project scope");
       expect(records(REVIEWER, { record_sha256s: [A0.record_sha256, R0.record_sha256].sort() }).map((row) => row.record_sha256)).toEqual([R0.record_sha256, A0.record_sha256]);

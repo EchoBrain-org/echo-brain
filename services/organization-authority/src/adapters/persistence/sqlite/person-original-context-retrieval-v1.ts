@@ -38,7 +38,7 @@ import { createUncheckedTallyV1 } from "../../../application/evidence-unchecked-
 const MAXIMUM_PACKET_BYTES = 3_072;
 const SOURCE_ID = /^source:[0-9a-f]{64}$/;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
-/** The Ask source check reads under global access: everything the caller may read, mine and every project included. */
+/** The Ask source check reads under global access: everything the caller may read, every project included. */
 const GLOBAL_SCOPE: PersonAskScopeV2 = Object.freeze({ kind: "global" });
 
 
@@ -473,7 +473,6 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
         if (!this.projectGrant(actor, scope.project_id)) denied();
         return;
       case "global":
-      case "mine":
         return;
       default:
         personUnknownScopeV1(scope);

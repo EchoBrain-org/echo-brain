@@ -40,9 +40,12 @@ flowchart LR
    updates) and forwards host methods, swapping file handles for paths on the
    way. Dropped files use a separate channel with the path read from a real
    `File`.
-3. The host refreshes the token first when it would expire during the call,
-   reads `person status` before and after the command, and refuses a result
-   that belongs to another account.
+3. The host refreshes the token first when it would expire during the call and
+   passes the page's account with every account-scoped command as the client's
+   pin (`--expected-membership-id`, `--expected-authority`). The client sends
+   nothing when another account, or none, is signed in, and withholds a result
+   if the account changed while it ran; the host runs no `person status`
+   around the command.
 4. The Person client talks HTTPS to the Authority, for example
    `POST /v7/person/ask`, `POST /v1/person/runs`, `GET /v1/person/changes` and
    `GET /v2/person/projects`.

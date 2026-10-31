@@ -63,7 +63,7 @@ function assertExpectedOrganization(
 
 function asResponse(
   records: readonly PersonReadableRecordV1[],
-  metadata?: (record: PersonReadableRecordV1) => PersonRecordSourceMetadataV1,
+  metadata: (record: PersonReadableRecordV1) => PersonRecordSourceMetadataV1,
 ): PersonRecordListV1 {
   return Object.freeze({
     schema_version: 1,
@@ -75,7 +75,7 @@ function asResponse(
           approval_id: record.approval_id,
           record_sha256: record.record_sha256,
           envelope: record.envelope as JsonObject,
-          ...(metadata === undefined ? {} : { source_metadata: metadata(record) }),
+          source_metadata: metadata(record),
         }),
       ),
     ),
@@ -95,7 +95,6 @@ export function createPersonRecordReadRouteV1(
       readonly access_token: string;
       readonly limit?: number;
       readonly record_sha256?: Sha256Digest;
-      readonly include_source_metadata?: boolean;
     }): PersonRecordListV1 {
       const admitted = options.sessions.authenticateAccess({
         access_token: input.access_token,
@@ -116,8 +115,7 @@ export function createPersonRecordReadRouteV1(
           : { record_sha256: input.record_sha256 }),
       });
 
-      const response = asResponse(initialRows, input.include_source_metadata === true
-        ? (record) => sourceMetadata(record, options) : undefined);
+      const response = asResponse(initialRows, (record) => sourceMetadata(record, options));
       const released = options.sessions.authenticateAccess({
         access_token: input.access_token,
       });

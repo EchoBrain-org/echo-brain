@@ -43,7 +43,7 @@ The server reads its mapped Jira project live using the asker's own connected
 account. It combines those tickets with the ECHO content already visible in the
 project, with ticket citations. No Jira ticket content is retained. An unmapped
 project or an asker without a connection gets no Jira evidence, with no fallback
-to a wider search. Mine excludes Jira.
+to a wider search.
 
 The mapping is provider configuration in the existing Jira sidecar; it requires
 no Authority schema reset. A saved stable Jira project ID bounds searches and exact
@@ -72,7 +72,7 @@ site. Space renames preserve the mapping. Project Ask lists within those spaces
 under the asker's own connection, then opens selected pages. It never widens an
 unmapped project to global Confluence. Global Ask lists pages the connected
 person can access, including personal spaces, without an ECHO space allowlist.
-Mine excludes live tools. Page text stays request-local and citations open the
+Page text stays request-local and citations open the
 original Confluence page.
 
 The CLI equivalent is `person tools project --tool confluence --echo-project <id>`.

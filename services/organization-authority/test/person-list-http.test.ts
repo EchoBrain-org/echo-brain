@@ -9,7 +9,7 @@ import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js"
 
 const NOTE_REF = `note:ctx_${"a".repeat(64)}` as const;
 const listed: PersonListResponseV1 = {
-  schema_version: 1, kind: "echo-person-list-v1", scope: { kind: "mine" },
+  schema_version: 1, kind: "echo-person-list-v1", scope: { kind: "only_me" },
   items: [{ ref: NOTE_REF, kind: "note", title: "Pricing memo", added_at: "2026-09-21T18:00:00.000Z", visibility: "only_me", projects: [] }],
   next_cursor: null,
 };
@@ -61,11 +61,11 @@ describe("person list and open HTTP transport", () => {
       open: vi.fn(async () => opened),
     } satisfies PersonListHttpApplicationV1;
     const origin = await start(application);
-    const list = await post(origin, PERSON_LIST_PATH_V1, { schema_version: 1, mine: true });
+    const list = await post(origin, PERSON_LIST_PATH_V1, { schema_version: 1, only_me: true });
     expect(list.status).toBe(200);
     expect(list.headers.get("cache-control")).toBe("no-store");
     expect(await list.json()).toEqual(listed);
-    expect(application.list).toHaveBeenCalledWith({ access_token: "fixture-token", request: { schema_version: 1, mine: true }, signal: expect.any(AbortSignal) });
+    expect(application.list).toHaveBeenCalledWith({ access_token: "fixture-token", request: { schema_version: 1, only_me: true }, signal: expect.any(AbortSignal) });
     const open = await post(origin, PERSON_OPEN_PATH_V1, { schema_version: 1, ref: NOTE_REF });
     expect(open.status).toBe(200);
     expect(await open.json()).toEqual(opened);
@@ -76,16 +76,18 @@ describe("person list and open HTTP transport", () => {
     const application = { list: vi.fn(async () => listed), open: vi.fn(async () => opened) };
     const origin = await start(application);
     for (const body of [
-      "{", { schema_version: 1, mine: true, project_id: "prj_11111111-1111-4111-8111-111111111111" }, { schema_version: 1, mine: false },
-      { schema_version: 1, limit: 25 }, { schema_version: 1, scope: { kind: "global" } }, { schema_version: 1, cursor: "a=b" }, { schema_version: 2 },
+      // The retired global list (no scope) and mine, alone or with a project.
+      "{", { schema_version: 1 }, { schema_version: 1, mine: true }, { schema_version: 1, mine: true, project_id: "prj_11111111-1111-4111-8111-111111111111" },
+      { schema_version: 1, only_me: true, project_id: "prj_11111111-1111-4111-8111-111111111111" }, { schema_version: 1, only_me: false },
+      { schema_version: 1, only_me: true, limit: 25 }, { schema_version: 1, scope: { kind: "global" } }, { schema_version: 1, only_me: true, cursor: "a=b" }, { schema_version: 2, only_me: true },
     ]) await failure(await post(origin, PERSON_LIST_PATH_V1, body), 400, "invalid_request");
     for (const body of [
       { schema_version: 1, ref: `record:${"a".repeat(64)}` }, { schema_version: 1, ref: NOTE_REF, cursor: "AAAA" },
       { schema_version: 1, ref: ` ${NOTE_REF}` }, { schema_version: 1, ref: NOTE_REF, scope: { kind: "global" } },
     ]) await failure(await post(origin, PERSON_OPEN_PATH_V1, body), 400, "invalid_request");
-    await failure(await post(origin, PERSON_LIST_PATH_V1, { schema_version: 1 }, null), 401, "unauthorized");
+    await failure(await post(origin, PERSON_LIST_PATH_V1, { schema_version: 1, only_me: true }, null), 401, "unauthorized");
     await failure(await post(origin, PERSON_OPEN_PATH_V1, { schema_version: 1, ref: NOTE_REF }, "Basic token"), 401, "unauthorized");
-    expect((await fetch(`${origin}${PERSON_LIST_PATH_V1}?mine=true`, { method: "POST", headers: { authorization: "Bearer fixture-token" }, body: "{}" })).status).toBe(404);
+    expect((await fetch(`${origin}${PERSON_LIST_PATH_V1}?only_me=true`, { method: "POST", headers: { authorization: "Bearer fixture-token" }, body: "{}" })).status).toBe(404);
     expect((await fetch(`${origin}${PERSON_LIST_PATH_V1}`, { headers: { authorization: "Bearer fixture-token" } })).status).toBe(404);
     expect(application.list).not.toHaveBeenCalled();
     expect(application.open).not.toHaveBeenCalled();
@@ -104,7 +106,7 @@ describe("person list and open HTTP transport", () => {
     ];
     for (const [value, status, code] of cases) {
       error = value;
-      await failure(await post(origin, PERSON_LIST_PATH_V1, { schema_version: 1 }), status, code);
+      await failure(await post(origin, PERSON_LIST_PATH_V1, { schema_version: 1, only_me: true }), status, code);
       await failure(await post(origin, PERSON_OPEN_PATH_V1, { schema_version: 1, ref: NOTE_REF }), status, code);
     }
     error = new AuthorityOperationError("not_found", "item is not available");
@@ -122,7 +124,7 @@ describe("person list and open HTTP transport", () => {
   });
 
   it("aborts the route's signal when the client disconnects", async () => {
-    for (const [path, body] of [[PERSON_LIST_PATH_V1, { schema_version: 1 }], [PERSON_OPEN_PATH_V1, { schema_version: 1, ref: NOTE_REF }]] as const) {
+    for (const [path, body] of [[PERSON_LIST_PATH_V1, { schema_version: 1, only_me: true }], [PERSON_OPEN_PATH_V1, { schema_version: 1, ref: NOTE_REF }]] as const) {
       let started!: () => void;
       let observed!: () => void;
       const startedPromise = new Promise<void>((resolve) => { started = resolve; });

@@ -1,4 +1,4 @@
-import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { NangoSlackConnectionV1 } from "../adapters/nango/nango-connection-client-v1.js";
 import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../application/slack-app-credentials-v1.js";

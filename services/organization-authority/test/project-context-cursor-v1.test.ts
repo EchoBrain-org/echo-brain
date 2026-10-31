@@ -60,8 +60,8 @@ describe('project untrusted keyset cursors', () => {
     }
   });
 
-  it('carries only public time/id/score ordering coordinates for projects, feeds and search', () => {
-    for (const operation of ['project_list_v2', 'feed_v2', 'search_v2'] as const) {
+  it('carries only public time/id/score ordering coordinates for projects and search', () => {
+    for (const operation of ['project_list_v2', 'search_v2'] as const) {
       const scoped = { ...scope, operation };
       const key = operation === 'project_list_v2' ? `prj_${id}` : `ctx_${'a'.repeat(64)}`;
       const position = operation === 'search_v2' ? [4, time, key] as const : [time, key] as const;

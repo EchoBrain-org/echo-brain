@@ -40,8 +40,9 @@ the session; the Authority owns everything organizational.
 - Renderer → main: allowlisted `rpc` methods, plain JSON, trusted sender only.
 - Main → host: host methods; file handles become paths; host notices return as
   events.
-- Host → Person client: argv in, JSON lines out, with a token refresh before
-  and an account check around every account-scoped call.
+- Host → Person client: argv in, JSON lines out, with a token refresh first
+  when the token would lapse during the call, and the page's account pin on
+  every account-scoped call.
 - Updates: [ADR-0035](../decisions/ADR-0035-desktop-updates-from-the-signed-feed.md)
   and [ADR-0050](../decisions/ADR-0050-update-floor-only-rises.md).
 - Change check and notifications:

@@ -7,10 +7,9 @@ import type Database from "better-sqlite3";
  *
  * Authority has already authenticated the current Person session before this
  * query is called.  This reader makes the remaining record-side decision from
- * immutable facts only: every active Person may read member-readable records,
- * while a restricted record is visible only to the exact reviewer tuple that
- * resolved it.  Rejections produce no Person fact and consequently cannot be
- * returned by this query.
+ * immutable facts only: a restricted record is visible only to the exact
+ * reviewer tuple that resolved it, and a project record to a current member of
+ * one of its audience projects.
  */
 export interface PersonRecordReaderV1Input {
   readonly authority_id: string;
@@ -137,15 +136,6 @@ export class PersonRecordReaderV1 {
             AND (
               EXISTS (
                 SELECT 1
-                  FROM organization_record_member_readable_person_fact AS member_fact
-                 WHERE member_fact.record_position = record.position
-                   AND member_fact.record_sha256 = record.record_sha256
-                   AND member_fact.authority_id = ?
-                   AND member_fact.organization_id = ?
-                   AND member_fact.state_lineage_id = ?
-              )
-              OR EXISTS (
-                SELECT 1
                   FROM organization_record_restricted_reviewer_person_fact AS reviewer_fact
                  WHERE reviewer_fact.record_position = record.position
                    AND reviewer_fact.record_sha256 = record.record_sha256
@@ -164,9 +154,6 @@ export class PersonRecordReaderV1 {
       .all(
         ...(input.record_sha256 === undefined ? [] : [input.record_sha256]),
         ...(input.after_position === undefined ? [] : [input.after_position]),
-        input.authority_id,
-        input.organization_id,
-        input.state_lineage_id,
         input.authority_id,
         input.organization_id,
         input.state_lineage_id,

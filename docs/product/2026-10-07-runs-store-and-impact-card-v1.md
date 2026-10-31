@@ -8,7 +8,7 @@ while writing". The rulings made while building both specs are listed in
 Decision record:
 [ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md). Builds on
 [unified meeting approval v1](2026-10-07-unified-meeting-approval-v1.md) and
-the [research trigger contract v1](2026-10-06-research-trigger-contract-v1.md).
+the [research trigger contract v1](../archive/2026-10-06-research-trigger-contract-v1.md).
 
 Implementation note, 2026-10-08: open items and Sweep, listed below under "Not
 in this round", are specified in

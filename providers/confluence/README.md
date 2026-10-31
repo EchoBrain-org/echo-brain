@@ -34,8 +34,8 @@ Desktop Ask, and the CLI's `echo-brain person ask --question '<question>'`
 with a strict V8 response
 ([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), as the
 [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
-describes. An Authority without it fails the Ask as `not_supported`; no
-failure falls back to another route.
+describes. A 404 from it is the Authority's own `not_found`; no failure falls
+back to another route.
 
 Project leads configure [Confluence spaces](../../docs/features/project-settings-v1.md#confluence-space-mapping)
 independently of the asker's personal grant. Connection state and mappings store

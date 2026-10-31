@@ -1,5 +1,5 @@
 import type { SourceAdmissionStoreV1 } from '@echo-brain/organization-processing/core';
-import type { PersonDocumentUploadMetadataV2, PersonDocumentUploadResultV2, PersonDocumentStatusV2, PersonDocumentMetadataV2, PersonDocumentTextV1, PersonDocumentSearchV2, PersonDocumentSearchResultV2, PersonDocumentExtractionStateV1 } from '@echo-brain/organization-api';
+import type { PersonDocumentUploadMetadataV2, PersonDocumentUploadResultV2, PersonDocumentStatusV2, PersonDocumentMetadataV2, PersonDocumentSearchV2, PersonDocumentSearchResultV2, PersonDocumentExtractionStateV1 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { PersonDocumentAssociationApplicationV1, PersonDocumentAssociationRepositoryV1 } from './document-associations-v1.js';
 
@@ -19,14 +19,13 @@ export interface DocumentExtractionResultV1 {
 export type DocumentReadRequestV1 =
   | { readonly operation: 'status'; readonly request_id: string }
   | { readonly operation: 'metadata' | 'original'; readonly document_id: string; readonly project_id?: string | null }
-  | { readonly operation: 'text'; readonly document_id: string; readonly cursor: string | null; readonly project_id?: string | null }
   | { readonly operation: 'search'; readonly request: PersonDocumentSearchV2 };
 /** Every read serves a stored document whichever upload version wrote it; only V2 uploads are accepted (ADR-0048). */
 export interface PersonDocumentRepositoryV1 extends PersonDocumentAssociationRepositoryV1 {
   readonly sourceAdmission: SourceAdmissionStoreV1;
   preflightV2(actor: PersonAccessAuthorization, metadata?: PersonDocumentUploadMetadataV2): void;
   uploadV2(actor: PersonAccessAuthorization, metadata: PersonDocumentUploadMetadataV2, bytes: Uint8Array, reauthenticate: () => PersonAccessAuthorization): PersonDocumentUploadResultV2;
-  readV2(actor: PersonAccessAuthorization, request: DocumentReadRequestV1, reauthenticate: () => PersonAccessAuthorization): PersonDocumentStatusV2 | PersonDocumentOriginalV2 | PersonDocumentTextV1 | PersonDocumentSearchResultV2;
+  readV2(actor: PersonAccessAuthorization, request: DocumentReadRequestV1, reauthenticate: () => PersonAccessAuthorization): PersonDocumentStatusV2 | PersonDocumentOriginalV2 | PersonDocumentSearchResultV2;
   claimExtraction(): DocumentExtractionClaimV1 | undefined;
   completeExtraction(claim: DocumentExtractionClaimV1, result: DocumentExtractionResultV1): boolean;
 }
@@ -34,7 +33,6 @@ export interface PersonDocumentApplicationV1 extends PersonDocumentAssociationAp
   /** With no metadata, only the session and its active membership are checked. */
   preflightV2(accessToken: string, metadata?: unknown): void;
   uploadV2(accessToken: string, metadata: unknown, bytes: Uint8Array): PersonDocumentUploadResultV2;
-  text(accessToken: string, documentId: unknown, page?: { readonly cursor?: unknown; readonly project_id?: unknown }): PersonDocumentTextV1;
   searchV2(accessToken: string, request: unknown): PersonDocumentSearchResultV2;
   statusV2(accessToken: string, requestId: unknown): PersonDocumentStatusV2;
   readV2(accessToken: string, documentId: unknown, scope?: { readonly project_id?: unknown }): PersonDocumentMetadataV2;

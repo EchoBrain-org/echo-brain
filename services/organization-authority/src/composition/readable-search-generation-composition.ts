@@ -1,4 +1,4 @@
-import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
+import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { join } from "node:path";
 import { readdirSync, statSync } from "node:fs";
 import { currentCoreRuntimeDetailV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -10,7 +10,6 @@ import {
 } from "@echo-brain/federation-protocol";
 import {
   organizationAuthorityPinSha256,
-  organizationMemberReadablePersonPolicyContractSha256,
   restrictedReviewerPersonPolicyContractSha256,
   projectMembersReadablePersonPolicyContractSha256,
   verifyOrganizationAuthorityPin,
@@ -112,7 +111,6 @@ const READABLE_SEARCH_BUILDER_RELEASE_V1 = Object.freeze({
 
 interface ReadableSearchGenerationContractV1 {
   readonly retrieval_contract_sha256: Sha256Digest;
-  readonly organization_member_policy_contract_sha256: Sha256Digest;
   readonly restricted_reviewer_policy_contract_sha256: Sha256Digest;
   readonly project_members_policy_contract_sha256: Sha256Digest;
   readonly analyzer: {
@@ -128,8 +126,6 @@ interface ReadableSearchGenerationContractV1 {
 
 /** One current-only contract shared by current generation publication and serving. */
 export function readableSearchGenerationContractV1(): ReadableSearchGenerationContractV1 {
-  const organizationMemberPolicy =
-    organizationMemberReadablePersonPolicyContractSha256();
   const restrictedReviewerPolicy =
     restrictedReviewerPersonPolicyContractSha256();
   const projectMembersPolicy = projectMembersReadablePersonPolicyContractSha256();
@@ -158,11 +154,6 @@ export function readableSearchGenerationContractV1(): ReadableSearchGenerationCo
           policy_contract_sha256: projectMembersPolicy,
           reader: "current-active-member-of-any-audience-project",
           scope: "selected-project-requires-current-membership-and-record-association",
-        },
-        {
-          policy_id: "organization-member-readable-person-v2",
-          policy_contract_sha256: organizationMemberPolicy,
-          reader: "current-active-owner-or-employee-in-record-organization",
         },
         {
           policy_id: "restricted-reviewer-person-v2",
@@ -194,7 +185,6 @@ export function readableSearchGenerationContractV1(): ReadableSearchGenerationCo
       admission_budget: READABLE_SEARCH_ADMISSION_BUDGET_V1,
       reader_behavior: READABLE_SEARCH_READER_BEHAVIOR_V1,
     }),
-    organization_member_policy_contract_sha256: organizationMemberPolicy,
     restricted_reviewer_policy_contract_sha256: restrictedReviewerPolicy,
     project_members_policy_contract_sha256: projectMembersPolicy,
     analyzer,
@@ -245,7 +235,8 @@ function lineagePlane(
  * reads approved records only and makes no model call.
  */
 export function createReadableSearchGenerationReconcilerV1(input: {
-  readonly record_input_codecs?: RecordInputCodecRegistryV4;
+  /** The record codecs the Authority appends with; every stored envelope is verified through them. */
+  readonly record_input_codecs: RecordInputCodecRegistryV4;
   readonly state_directory: string;
   readonly root: StateLineageRootManifestV2;
   readonly authority: Database.Database;
@@ -322,7 +313,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
             value,
             pinnedAuthority,
             input.root.state_lineage_id,
-            input.record_input_codecs ?? HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+            input.record_input_codecs,
           ),
       });
       if (currentCoreRuntimeDetailV1() !== null) {
@@ -396,8 +387,6 @@ export function createReadableSearchGenerationReconcilerV1(input: {
           ...snapshot.record_head,
         },
         retrieval_contract_sha256: contract.retrieval_contract_sha256,
-        organization_member_policy_contract_sha256:
-          contract.organization_member_policy_contract_sha256,
         restricted_reviewer_policy_contract_sha256:
           contract.restricted_reviewer_policy_contract_sha256,
         project_members_policy_contract_sha256: contract.project_members_policy_contract_sha256,

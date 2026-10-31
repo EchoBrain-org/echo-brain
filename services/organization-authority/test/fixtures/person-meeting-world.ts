@@ -28,10 +28,10 @@ import {
 } from "./signed-approval-decision-v1.js";
 
 /**
- * A small organization with real signed approvals, for the meeting list and
- * open (ADR-0024). Array audiences are approval decisions; Team approvals and
- * rejections are generic human acts, which name no approver. OWNER and EMP_A hold SHARED; EMP_A has left
- * PROJ_X; nobody who reads holds UNJOINED; EMP_B and EMP_C hold nothing.
+ * A small organization with real signed approval decisions, for the meeting list and open (ADR-0024). Every reader holds
+ * EVERYONE, the organization-wide project; OWNER and EMP_A also hold SHARED; EMP_A has left PROJ_X; nobody who reads holds
+ * UNJOINED; EMP_B and EMP_C hold nothing else. r1, r7a and r7b are shared with EVERYONE and approved by APPROVER_X, who
+ * never reads, so they are nobody's mine.
  */
 const person = (name: string, membership_type: "owner" | "employee"): AuthorityPersonMembershipBinding => ({
   organization_id: COORDINATES.organization_id, principal_id: `prn_${name}`, membership_id: `mem_${name}`, membership_type,
@@ -40,7 +40,7 @@ export const OWNER = person("owner", "owner");
 export const EMP_A = person("emp_a", "employee");
 export const EMP_B = person("emp_b", "employee");
 export const EMP_C = person("emp_c", "employee");
-/** Approves r7a and r7b; never a reader. */
+/** Approves r1, r7a and r7b; never a reader. */
 export const APPROVER_X = person("approver_x", "employee");
 const READERS = { owner: OWNER, emp_a: EMP_A, emp_b: EMP_B, emp_c: EMP_C } as const;
 export type ReaderToken = keyof typeof READERS;
@@ -48,7 +48,9 @@ export type ReaderToken = keyof typeof READERS;
 export const SHARED = "prj_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const UNJOINED = "prj_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 export const PROJ_X = "prj_cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-export const PROJECT_NAMES = { [SHARED]: "Shared launch", [UNJOINED]: "Unjoined roadmap", [PROJ_X]: "Project X" } as const;
+/** Every reader is a member: what every reader reads. */
+export const EVERYONE = "prj_e0e0e0e0-e0e0-4e0e-8e0e-e0e0e0e0e0e0";
+export const PROJECT_NAMES = { [SHARED]: "Shared launch", [UNJOINED]: "Unjoined roadmap", [PROJ_X]: "Project X", [EVERYONE]: "Everyone" } as const;
 const NOW = "2026-09-01T00:00:00.000Z";
 export const T = (day: number): string => `2026-09-${String(day).padStart(2, "0")}T10:00:00.000Z`;
 export const RETRIEVAL_CONTRACT = readableSearchGenerationContractV1().retrieval_contract_sha256;
@@ -60,14 +62,13 @@ const meeting = (title: string | undefined, time: OrganizationRecordMeetingTimeV
 /** r1..r7b of the world table, in append order. */
 export const STANDARD_RECORDS: readonly WorldApprovalV1[] = [
   // 19:00 on Aug 31 in Los Angeles, although Sep 1 in UTC.
-  { name: "r1", approval_id: "apr_r1", projects: "team", final_approver: EMP_B, issued_at: T(1), brief: meeting("Weekly sync", { actual_start_at: "2026-09-01T02:00:00.000Z", timezone: "America/Los_Angeles" }) },
+  { name: "r1", approval_id: "apr_r1", projects: [EVERYONE], final_approver: APPROVER_X, issued_at: T(1), brief: meeting("Weekly sync", { actual_start_at: "2026-09-01T02:00:00.000Z", timezone: "America/Los_Angeles" }) },
   { name: "r2", approval_id: "apr_r2", projects: [], final_approver: OWNER, issued_at: T(2), brief: meeting(undefined, { scheduled_start_at: "2026-09-02T00:00:00.000Z", all_day: true }) },
   { name: "r3", approval_id: "apr_r3", projects: [SHARED, UNJOINED], final_approver: OWNER, issued_at: T(3) },
   { name: "r4", approval_id: "apr_r4", projects: [SHARED], final_approver: EMP_A, issued_at: T(4), brief: meeting("Pricing review", { actual_start_at: T(4) }) },
-  { name: "r5", approval_id: "apr_r5", projects: [], final_approver: OWNER, issued_at: T(5), action: "reject" },
   { name: "r6", approval_id: "apr_r6", projects: [PROJ_X], final_approver: EMP_A, issued_at: T(6) },
-  { name: "r7a", approval_id: "apr_r7a", projects: "team", final_approver: APPROVER_X, issued_at: T(7) },
-  { name: "r7b", approval_id: "apr_r7b", projects: "team", final_approver: APPROVER_X, issued_at: T(7) },
+  { name: "r7a", approval_id: "apr_r7a", projects: [EVERYONE], final_approver: APPROVER_X, issued_at: T(7) },
+  { name: "r7b", approval_id: "apr_r7b", projects: [EVERYONE], final_approver: APPROVER_X, issued_at: T(7) },
 ];
 
 function grant(database: Database.Database, projectId: string, actor: AuthorityPersonMembershipBinding, role: "lead" | "member"): void {
@@ -111,14 +112,16 @@ export async function meetingWorld(options: {
   for (const [actor, name] of [[OWNER, "Olive Owner"], [EMP_A, "Ari Employee"], [EMP_B, "Bea Employee"], [EMP_C, "Cy Employee"], [APPROVER_X, "Xan Approver"]] as const) {
     addMembership(authority, actor, name, actor.membership_type === "owner" ? null : `${actor.principal_id}@example.test`);
   }
-  for (const [projectId, creator] of [[SHARED, OWNER], [UNJOINED, APPROVER_X], [PROJ_X, APPROVER_X]] as const) {
+  for (const [projectId, creator] of [[SHARED, OWNER], [UNJOINED, APPROVER_X], [PROJ_X, APPROVER_X], [EVERYONE, OWNER]] as const) {
     seedProject(authority, projectId, creator, { name: PROJECT_NAMES[projectId], created_at: NOW });
   }
   grant(authority, SHARED, OWNER, "lead");
   grant(authority, UNJOINED, APPROVER_X, "lead");
   grant(authority, PROJ_X, APPROVER_X, "lead");
+  grant(authority, EVERYONE, OWNER, "lead");
   grant(authority, SHARED, EMP_A, "member");
   grant(authority, PROJ_X, EMP_A, "member");
+  for (const reader of [EMP_A, EMP_B, EMP_C]) grant(authority, EVERYONE, reader, "member");
 
   const record: Database.Database = recordDatabase();
   const signer = protocolAuthority();

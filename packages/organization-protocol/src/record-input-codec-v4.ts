@@ -1,9 +1,5 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import {
-  buildHumanActRecordInputV1, validateHumanActRecordInputV1, validateHumanActResolutionRefV1,
-  validateHumanActEventV1, HUMAN_ACT_RESOLUTION_REF_V1_KIND,
-  type ApprovedHumanActEventV1, type RejectedHumanActEventV1,
-} from "./human-act-record-input-v1.js";
+import type { ApprovedDecisionSnapshotV2 } from "./approved-decision-snapshot-v2.js";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 /** V4 domain fields shared by every admitted, versioned resolution codec. */
@@ -14,7 +10,7 @@ export interface RecordResolutionRefV4 {
   readonly organization_id: string;
   readonly state_lineage_id: string;
   readonly approval_id: string;
-  readonly action: "approve" | "reject";
+  readonly action: "approve";
   readonly audit_event_id: string;
   readonly audit_sequence: number;
   readonly audit_entry_sha256: Sha256Digest;
@@ -24,22 +20,19 @@ export interface RecordResolutionRefV4 {
   readonly authorization_proof_sha256: Sha256Digest;
 }
 /**
- * Provider codecs may add a versioned approval consequence while retaining the
- * common V4 envelope joins. The envelope only needs the approved snapshot and
- * selected policy; each codec validates its richer event before this point.
+ * Codecs may add a versioned approval consequence while retaining the common
+ * V4 envelope joins. The envelope only needs the approved snapshot and selected
+ * policy; each codec validates its richer event before this point. Every record
+ * is an approval: a rejection writes none.
  */
-export type RecordHumanActEventV4 =
-  | ApprovedHumanActEventV1
-  | {
-      readonly kind: "approved";
-      readonly approved_snapshot: ApprovedHumanActEventV1["approved_snapshot"];
-      readonly approved_snapshot_sha256: Sha256Digest;
-      readonly policy_id: string;
-      readonly policy_contract_sha256: Sha256Digest;
-      readonly policy_consequence_sha256: Sha256Digest;
-    }
-  | RejectedHumanActEventV1
-  | { readonly kind: "rejected" };
+export interface RecordHumanActEventV4 {
+  readonly kind: "approved";
+  readonly approved_snapshot: ApprovedDecisionSnapshotV2;
+  readonly approved_snapshot_sha256: Sha256Digest;
+  readonly policy_id: string;
+  readonly policy_contract_sha256: Sha256Digest;
+  readonly policy_consequence_sha256: Sha256Digest;
+}
 export interface ValidatedRecordInputV4 {
   readonly human_act_resolution_ref: RecordResolutionRefV4;
   readonly event: RecordHumanActEventV4;
@@ -82,7 +75,7 @@ export function createRecordInputCodecRegistryV4(codecs: readonly RecordInputCod
   });
   function check(codec: RecordInputCodecV4, result: ValidatedRecordInputV4): ValidatedRecordInputV4 {
     if (result.human_act_resolution_ref.kind !== codec.reference_kind || result.human_act_resolution_ref.schema_version !== codec.reference_schema_version ||
-        (result.event.kind !== "approved" && result.event.kind !== "rejected")) fail("V4 record codec returned a different contract");
+        result.event.kind !== "approved") fail("V4 record codec returned a different contract");
     return result;
   }
   return Object.freeze({
@@ -100,14 +93,3 @@ export function createRecordInputCodecRegistryV4(codecs: readonly RecordInputCod
     },
   });
 }
-
-export const HUMAN_ACT_RECORD_INPUT_CODEC_V1: RecordInputCodecV4 = Object.freeze({
-  input_reference_field: "human_act_resolution_ref",
-  reference_kind: HUMAN_ACT_RESOLUTION_REF_V1_KIND,
-  reference_schema_version: 1,
-  validateInput: validateHumanActRecordInputV1,
-  fromReference: (reference: unknown, event: unknown) => buildHumanActRecordInputV1({
-    human_act_resolution_ref: validateHumanActResolutionRefV1(reference), event: validateHumanActEventV1(event),
-  }),
-});
-export const HUMAN_ACT_RECORD_INPUT_CODECS_V4 = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1]);

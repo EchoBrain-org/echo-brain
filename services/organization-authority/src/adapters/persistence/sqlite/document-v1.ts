@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { appendAuditRowV1 } from './audit-row-v1.js';
 import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { assertPersonDocumentOriginalV1, PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, validatePersonDocumentUploadMetadataV2, validatePersonDocumentIdV1, type PersonDocumentSavedV2, type PersonDocumentUploadResultV2, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1, type PersonDocumentAssociationReceiptV1, type PersonDocumentUploadMetadataV2, type PersonDocumentReceiptV2, type PersonDocumentMetadataV2, type PersonDocumentMediaTypeV1, type PersonDocumentExtractionStateV1, type PersonDocumentTextChunkV1, type PersonDocumentTextV1, type PersonDocumentSearchV2, type PersonDocumentSearchResultV2, type PersonDocumentStatusV2, type ProjectIdV1 } from '@echo-brain/organization-api';
+import { assertPersonDocumentOriginalV1, PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, validatePersonDocumentUploadMetadataV2, validatePersonDocumentIdV1, type PersonDocumentSavedV2, type PersonDocumentUploadResultV2, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1, type PersonDocumentAssociationReceiptV1, type PersonDocumentUploadMetadataV2, type PersonDocumentReceiptV2, type PersonDocumentMetadataV2, type PersonDocumentMediaTypeV1, type PersonDocumentExtractionStateV1, type PersonDocumentSearchV2, type PersonDocumentSearchResultV2, type PersonDocumentStatusV2, type ProjectIdV1 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -26,7 +26,6 @@ function fail(code: 'not_found'|'unauthorized'|'conflict'|'stale_access_state'|'
 function actorIdentity(actor: PersonAccessAuthorization): string { const { checked_at: _checked, ...rest } = actor; return canonicalJson(rest); }
 function immutable<T>(value: T): T { const copy = JSON.parse(canonicalJson(value)) as T; const freeze = (v: unknown): void => { if (v && typeof v === 'object') { Object.values(v).forEach(freeze); Object.freeze(v); } }; freeze(copy); return copy; }
 function cursorEncode(value: unknown): string { return Buffer.from(canonicalJson(value)).toString('base64url'); }
-function cursorDecode(cursor: string|null, scope: string): number { if (cursor === null) return 0; try { const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {scope:unknown;offset:unknown}; if (Object.keys(value).sort().join() !== 'offset,scope' || value.scope !== scope || !Number.isSafeInteger(value.offset) || (value.offset as number) < 0 || (value.offset as number) > 65536) fail('invalid_request'); if (cursorEncode(value) !== cursor) fail('invalid_request'); return value.offset as number; } catch { return fail('invalid_request'); } }
 function searchCursorDecode(cursor: string|null, scope: string): {received_at:string;document_id:string}|null {
   if(cursor===null)return null;
   try {
@@ -84,7 +83,7 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
   private auditRead<T>(actor: PersonAccessAuthorization, permission: Permissions, authorizationRevision: number, reauthenticate: () => PersonAccessAuthorization, operation: DocumentReadRequestV1['operation'], response: T): T {
     const value = response as { readonly bytes?: Uint8Array; readonly metadata?: { readonly sha256: string }; readonly documents?: readonly unknown[] };
     const auditResponse = value.bytes === undefined ? response : { metadata: value.metadata, original_sha256: value.metadata?.sha256, original_bytes: value.bytes.byteLength };
-    if (Buffer.byteLength(canonicalJson(auditResponse)) > (operation === 'text' ? 24 * 1024 : 32 * 1024)) fail('invalid_output');
+    if (Buffer.byteLength(canonicalJson(auditResponse)) > 32 * 1024) fail('invalid_output');
     this.current(actor, permission, reauthenticate); if (this.authorizationRevision(actor.organization_id) !== authorizationRevision) fail('stale_access_state');
     const audit = {schema_version:1,kind:'echo-document-read-audit-v1',audit_id:randomUUID(),organization_id:actor.organization_id,principal_id:actor.principal_id,membership_id:actor.membership_id,session_family_id:actor.session_family_id,operation,authorization_sha256:canonicalSha256({person:JSON.parse(actorIdentity(actor)),permission:permission.digest}),response_sha256:canonicalSha256(auditResponse),released_count:value.documents?.length ?? 1,checked_at:actor.checked_at};
     appendAuditRowV1(this.database,'authority_person_document_read_audit_v1',audit,actor.checked_at);
@@ -138,8 +137,7 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
     const granted = new Set(permission.grants.map((grant) => grant.project_id));
     return Object.freeze((this.database.prepare(`SELECT project_id FROM authority_person_document_associations_v1 WHERE document_id=? AND organization_id=? ORDER BY project_id`).all(row.document_id,row.organization_id) as {project_id:ProjectIdV1}[]).map(value => value.project_id).filter((project_id) => granted.has(project_id)));
   }
-  readV2(actor: PersonAccessAuthorization, request: DocumentReadRequestV1, reauthenticate: () => PersonAccessAuthorization): PersonDocumentStatusV2 | PersonDocumentOriginalV2 | PersonDocumentTextV1 | PersonDocumentSearchResultV2 {
-    if (request.operation === 'text') return this.text(actor,request,reauthenticate);
+  readV2(actor: PersonAccessAuthorization, request: DocumentReadRequestV1, reauthenticate: () => PersonAccessAuthorization): PersonDocumentStatusV2 | PersonDocumentOriginalV2 | PersonDocumentSearchResultV2 {
     if (request.operation === 'search') { if (request.request.schema_version !== 2) fail('invalid_request'); return this.searchV2(actor, request.request, reauthenticate); }
     return this.transaction(() => {
       const permission=this.permissions(actor); const revision=this.authorizationRevision(actor.organization_id); let row: Row;
@@ -160,23 +158,6 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
     return { sql:`d.organization_id=? AND (d.audience_kind='team' OR (d.audience_kind='only_me' AND d.membership_id=?) OR (d.audience_kind='project' AND d.audience_project_id IN (${membershipProjects})) OR (d.audience_kind='projects' AND EXISTS (SELECT 1 FROM authority_person_document_audience_projects_v1 audience WHERE audience.document_id=d.document_id AND audience.organization_id=d.organization_id AND audience.project_id IN (${membershipProjects}))))`, args:[permission.actor.organization_id,permission.actor.membership_id,...projects,...projects] };
   }
   private row(permission: Permissions, id: string): Row { const acl = this.acl(permission); const row = this.database.prepare(`${SELECT} WHERE ${acl.sql} AND d.document_id=?`).get(...acl.args,id) as Row|undefined; if (!row) fail(); return row; }
-  /** Extracted text, eight chunks a page, of a document the reader may read, whichever version uploaded it. */
-  private text(actor: PersonAccessAuthorization, request: Extract<DocumentReadRequestV1, { readonly operation: 'text' }>, reauthenticate: () => PersonAccessAuthorization): PersonDocumentTextV1 {
-    return this.transaction(() => {
-      const permission = this.permissions(actor);
-      const authorizationRevision = this.authorizationRevision(actor.organization_id);
-      const row = this.row(permission,request.document_id);
-      const selected=request.project_id??null;this.requireProject(permission,selected);if(selected!==null&&!this.database.prepare('SELECT 1 FROM authority_person_document_associations_v1 WHERE document_id=? AND project_id=? AND organization_id=?').get(row.document_id,selected,row.organization_id))fail();
-      const scope = canonicalSha256({kind:'text',project_id:request.project_id??null,id:row.document_id,sha:row.original_sha256,extractor:row.extractor,membership_id:actor.membership_id,organization_id:actor.organization_id});
-      const offset = cursorDecode(request.cursor,scope);
-      const candidates = this.database.prepare(`SELECT ordinal,anchor_kind,anchor_start,text FROM authority_person_document_text_v1 WHERE document_id=? AND ordinal>=? ORDER BY ordinal LIMIT 9`).all(row.document_id,offset) as PersonDocumentTextChunkV1[];
-      const chunks: PersonDocumentTextChunkV1[] = []; let total=0;
-      for (const chunk of candidates) { const size=Buffer.byteLength(chunk.text); if (size > PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES) fail('invalid_output'); if(chunks.length>=8 || total+size>8192 || Buffer.byteLength(canonicalJson([...chunks,chunk]))>20*1024) break; chunks.push(chunk);total+=size; }
-      const next = candidates.length > chunks.length ? (chunks.at(-1)!.ordinal + 1) : null;
-      const response: PersonDocumentTextV1 = {schema_version:1,kind:'echo-person-document-text-v1',document_id:row.document_id,original_sha256:row.original_sha256,extractor:row.extractor,extraction_state:row.extraction_state,chunks,next_cursor:next===null?null:cursorEncode({scope,offset:next})};
-      return immutable(this.auditRead(actor,permission,authorizationRevision,reauthenticate,'text',response));
-    });
-  }
   private authorizationRevision(organizationId:string):number {
     const state=this.database.prepare('SELECT revision FROM authority_project_authorization_state_v1 WHERE organization_id=?').get(organizationId) as {revision:number}|undefined;
     if(!state)fail('stale_access_state');

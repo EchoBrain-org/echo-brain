@@ -13,7 +13,7 @@ function fixture(options: {
 } = {}) {
   const launch: EvidenceDeskItemV1 = {
     id: "desk_launch", kind: "decision", text: "Launch is Tuesday.", label: "Launch review", visibility: "team",
-    citation: { kind: "approved_record", atom_id: canonicalSha256("launch"), record_sha256: canonicalSha256("record"), policy_id: "organization-member-readable-person-v2" },
+    citation: { kind: "approved_record", atom_id: canonicalSha256("launch"), record_sha256: canonicalSha256("record"), policy_id: "project-members-readable-person-v1" },
     receipt_sha256: canonicalSha256("receipt"),
   };
   const need = (status: string, evidence: string[]) => [{ question: "When is launch?", notes: "", needs: [{ need: "launch date", status, evidence }] }];
@@ -68,7 +68,7 @@ describe("agentic Ask: final publication boundary", () => {
   it("checks each model call incrementally but releases nothing when already-checked evidence is revoked mid-run", async () => {
     const launch: EvidenceDeskItemV1 = {
       id: "desk_launch", kind: "decision", text: "Launch is Tuesday.", label: "Launch review", visibility: "team",
-      citation: { kind: "approved_record", atom_id: canonicalSha256("launch"), record_sha256: canonicalSha256("record"), policy_id: "organization-member-readable-person-v2" },
+      citation: { kind: "approved_record", atom_id: canonicalSha256("launch"), record_sha256: canonicalSha256("record"), policy_id: "project-members-readable-person-v1" },
       receipt_sha256: canonicalSha256("receipt"),
     };
     // A desk that honours the incremental mode: it re-checks an item only

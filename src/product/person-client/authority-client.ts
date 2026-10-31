@@ -14,9 +14,7 @@ import {
 import {
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
   PERSON_ANSWER_PATH_V7,
-  PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
-  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
   PERSON_RESEARCH_EVAL_START_PATH_V1,
@@ -46,13 +44,11 @@ import {
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceSearchRequestV1,
-  validatePersonEvidenceOpenRequestV1,
   validatePersonEvidenceDeskResponseV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
   type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
   type PersonEvidenceSearchRequestV1,
-  type PersonEvidenceOpenRequestV1,
   type PersonEvidenceDeskResponseV1,
   type PersonSourceEvidenceReadRequestV1,
   type PersonSourceEvidenceV1,
@@ -113,7 +109,6 @@ export type { EmployeeRosterV1, PersonRecordListItemV1, PersonRecordListV1, Pers
  */
 export type PersonAnswerV8 = OrganizationPersonAnswerV8;
 export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
-export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
 export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonListV1 = PersonListResponseV1;
@@ -137,19 +132,16 @@ export type PersonAskProgressSinkV3 = (event: PersonAskProgressStepEventV3) => v
 export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
   readonly unsent: boolean;
-  /** The Ask route answered it, with its route header: never an Authority without the route. */
-  readonly routeMatched: boolean;
 
   constructor(
     public readonly code: string,
     public readonly status: number | null,
     message: string,
-    options: { readonly unsent?: boolean; readonly routeMatched?: boolean } = {},
+    options: { readonly unsent?: boolean } = {},
   ) {
     super(message);
     this.name = "PersonAuthorityClientError";
     this.unsent = options.unsent === true;
-    this.routeMatched = options.routeMatched === true;
   }
 }
 
@@ -331,8 +323,7 @@ function lostAskStream(): PersonAuthorityClientError {
  * the Authority sees the disconnect and stops the Ask.
  */
 async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3): Promise<PersonAskProgressTerminalEventV3> {
-  // Only `/v7` streams, and it marks the stream as its own, so an in-band 404 is never a missing route.
-  if (response.status !== 200 || response.body === null || !response.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)) {
+  if (response.status !== 200 || response.body === null) {
     throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
   }
   const reader = response.body.getReader();
@@ -383,12 +374,12 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
   return terminal!;
 }
 
-type AskScope = ProjectIdV1 | { readonly mine: true } | undefined;
+type AskScope = ProjectIdV1 | undefined;
 
 /** The Ask's V3 request, which may carry the asker's previous turn (ADR-0047). */
 function askRequest(question: string, scope: AskScope, captureId: PersonDiagnosticCaptureIdV1 | undefined, previous?: PersonAnswerPreviousV1) {
   return validatePersonAnswerRequestV3({ schema_version: 3, question,
-    ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }),
+    ...(scope === undefined ? {} : { project_id: scope }), ...(captureId === undefined ? {} : { capture_id: captureId }),
     ...(previous === undefined ? {} : { previous }) });
 }
 
@@ -403,7 +394,7 @@ function askHeaders(): Readonly<Record<string, string>> {
  * question, say what is different since or ask which one (ADR-0047).
  */
 function inAskScope<T extends { readonly scope: unknown }>(response: T, scope: AskScope, previous?: PersonAnswerPreviousV1): T {
-  const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
+  const expectedScope = scope === undefined ? { kind: 'global' } : { kind: 'project', project_id: scope };
   if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
   }
@@ -557,7 +548,6 @@ export class PersonAuthorityClient {
         code,
         response.status,
         "Person Authority rejected the request",
-        { routeMatched: response.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5) },
       );
     }
     if (expectedStatus !== undefined && response.status !== expectedStatus) {
@@ -1023,7 +1013,6 @@ export class PersonAuthorityClient {
           : `${PERSON_RECORDS_PATH_V1}?limit=${limit}`,
       access_token: accessToken,
       validate_response: validatePersonRecordListV1,
-      headers: { "x-echo-person-record-version": "2" },
       maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
     });
   }
@@ -1074,29 +1063,16 @@ export class PersonAuthorityClient {
     });
   }
 
-  /** A read of a route an older Authority lacks: its 404 is `not_supported`, with this message, never `not_found`. */
-  private async notSupportedOn404<T>(read: Promise<T>, message: string): Promise<T> {
-    try {
-      return await read;
-    } catch (error) {
-      if (error instanceof PersonAuthorityClientError && error.status === 404) throw new PersonAuthorityClientError("not_supported", 404, message);
-      throw error;
-    }
-  }
-
   /**
-   * Ask (`/v7`, the V8 answer, research tool contract v1): global by default, a supplied project ID is a strict
-   * project-only scope, and mine is only what the asker added. The answer may cite live tickets and pages, follow-ups,
-   * and the asker's projects, people, tools and tool containers, and must echo the requested scope. The request may
-   * carry the asker's previous turn (ADR-0047).
+   * Ask (`/v7`, the V8 answer, research tool contract v1): global by default, and a supplied project ID is a strict
+   * project-only scope. The answer may cite live tickets and pages, follow-ups, and the asker's projects, people, tools
+   * and tool containers, and must echo the requested scope. The request may carry the asker's previous turn (ADR-0047).
    */
-  askV7(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
-    return this.askRoute((async () => {
-      const response = await this.json({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
-        validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV8,
-        access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
-      return inAskScope(response, scope, previous);
-    })());
+  async askV7(accessToken: string, question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
+    const response = await this.json({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
+      validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV8,
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
+    return inAskScope(response, scope, previous);
   }
 
   /**
@@ -1107,37 +1083,20 @@ export class PersonAuthorityClient {
    * inside the stream is the error its JSON response would have had. The ask
    * timeout and the caller's signal bound the whole stream.
    */
-  askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
+  async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
-    return this.askRoute((async () => {
-      const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
-      const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, undefined, previous), validate_request: validatePersonAnswerRequestV3,
-        access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
-      if (!isAskProgressStream(response)) {
-        const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
-        return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validatePersonAnswerResponseV8), scope, previous) });
-      }
-      const terminal = await readAskProgressStream(response, deadline, onProgress);
-      if (terminal.type === 'error') {
-        throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request', { routeMatched: true });
-      }
-      return Object.freeze({ result: inAskScope(terminal.response, scope, previous), receipt: terminal.receipt });
-    })());
-  }
-
-  /**
-   * An Ask on `/v7`, which answers every request it matches with its route header: a `not_found` 404 without it is an
-   * Authority with no `/v7`, `not_supported` here, never `not_found`. Any other failure is the Authority's own.
-   */
-  private async askRoute<T>(read: Promise<T>): Promise<T> {
-    try {
-      return await read;
-    } catch (error) {
-      if (error instanceof PersonAuthorityClientError && error.status === 404 && error.code === "not_found" && !error.routeMatched) {
-        throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no /v7 Ask");
-      }
-      throw error;
+    const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
+    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, undefined, previous), validate_request: validatePersonAnswerRequestV3,
+      access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
+    if (!isAskProgressStream(response)) {
+      const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
+      return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validatePersonAnswerResponseV8), scope, previous) });
     }
+    const terminal = await readAskProgressStream(response, deadline, onProgress);
+    if (terminal.type === 'error') {
+      throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request');
+    }
+    return Object.freeze({ result: inAskScope(terminal.response, scope, previous), receipt: terminal.receipt });
   }
 
   /** Prepares or reads an explicitly requested private capture on the ordinary product route. */
@@ -1173,30 +1132,21 @@ export class PersonAuthorityClient {
 
   /**
    * The Ask source check (Ask timeline v1, C1; ADR-0047): whether each source old answers cited is the same, changed, unreadable
-   * or unknown now, and no content. An Authority without the route answers 404, which is `not_supported` here, never `not_found`.
+   * or unknown now, and no content.
    */
   async askCheck(accessToken: string, value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
     const request = validatePersonAskCheckRequestV1(value);
-    return this.notSupportedOn404(this.json({
+    return this.json({
       path: PERSON_ASK_CHECK_PATH_V1, body: request, validate_request: validatePersonAskCheckRequestV1,
       validate_response: response => validatePersonAskCheckV1(response, request), access_token: accessToken,
       maximum_request_bytes: PERSON_ASK_CHECK_LIMITS_V1.body_bytes, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_CHECK_TIMEOUT_MS, signal,
-    }), "This Authority has no Ask source check");
+    });
   }
 
-  evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.evidenceDesk(PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonEvidenceSearchRequestV1, accessToken, value, signal);
-  }
-
-  evidenceOpen(accessToken: string, value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.evidenceDesk(PERSON_EVIDENCE_OPEN_PATH_V1, validatePersonEvidenceOpenRequestV1, accessToken, value, signal);
-  }
-
-  private async evidenceDesk<T extends { readonly project_id?: string }>(path: string, validate_request: (value: unknown) => T, accessToken: string,
-    value: T, signal: AbortSignal | undefined): Promise<PersonEvidenceDeskV1> {
-    const request = validate_request(value);
-    const response = await this.json({ path, body: request,
-      validate_request, validate_response: validatePersonEvidenceDeskResponseV1,
+  async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
+    const request = validatePersonEvidenceSearchRequestV1(value);
+    const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
+      validate_request: validatePersonEvidenceSearchRequestV1, validate_response: validatePersonEvidenceDeskResponseV1,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
     const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');
@@ -1209,12 +1159,10 @@ export class PersonAuthorityClient {
     const response = await this.json({ path: PERSON_LIST_PATH_V1, body: request,
       validate_request: validatePersonListRequestV1, validate_response: validatePersonListResponseV1,
       access_token: accessToken, maximum_response_bytes: PERSON_LIST_RESPONSE_MAX_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal });
-    const expectedScope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id }
-      : request.mine === true ? { kind: 'mine' } : request.only_me === true ? { kind: 'only_me' } : { kind: 'global' };
+    const expectedScope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : { kind: 'only_me' };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different list scope');
-    // Global page 1 carries me; project page 1 carries project; mine, only_me and cursor pages carry no header.
-    const hasHeader = response.me !== undefined || response.project !== undefined;
-    if (hasHeader !== (request.cursor === undefined && (expectedScope.kind === 'global' || expectedScope.kind === 'project'))) {
+    // Project page 1 carries project; only_me and cursor pages carry no header.
+    if ((response.project !== undefined) !== (request.cursor === undefined && expectedScope.kind === 'project')) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a list header on the wrong page');
     }
     return response;

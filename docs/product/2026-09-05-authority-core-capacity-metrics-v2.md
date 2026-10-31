@@ -6,9 +6,10 @@ publication, retrieval, deterministic evidence composition, audit ordering and
 replay. It excludes providers, HTTP transport, OIDC, Slack, model behavior,
 prompt quality, provider costs and provider latency.
 
-The executable coordinates are [metrics.v2.json](../../tools/evals/authority-core/metrics.v2.json).
-`node tools/evals/authority-core/verify-contract.mjs` checks its definition digest and
-numeric invariants. That check is not a run and never passes a milestone.
+The executable coordinates are [metrics.v2.json](https://github.com/EchoBrain-org/echo-brain/blob/aa92138e4a7d8386b2ff51a95c7d2f82e86236be/tools/evals/authority-core/metrics.v2.json).
+Until the V2 and V3 contracts left the tree on 2026-10-31,
+`node tools/evals/authority-core/verify-contract.mjs` checked its definition digest and
+numeric invariants. That check was not a run and never passed a milestone.
 
 | Point | Active employees N | Searchable history | Atoms minimum | Postings minimum |
 | --- | ---: | --- | ---: | ---: |

@@ -27,7 +27,7 @@ const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === "
 const RECORD = canonicalSha256({ record: "display-review" });
 function recordItem(atom: string, text: string, extra: Partial<EvidenceDeskItemV2> = {}): EvidenceDeskItemV2 {
   return Object.freeze({
-    id: `desk_${atom}`, citation: { kind: "approved_record" as const, atom_id: canonicalSha256({ atom }), record_sha256: RECORD, policy_id: "organization-member-readable-person-v2" as const },
+    id: `desk_${atom}`, citation: { kind: "approved_record" as const, atom_id: canonicalSha256({ atom }), record_sha256: RECORD, policy_id: "project-members-readable-person-v1" as const },
     kind: "decision" as const, text, label: "Display review", visibility: "team" as const, occurred_at: "2026-10-05", receipt_sha256: canonicalSha256({ receipt: atom }), ...extra,
   });
 }
@@ -158,6 +158,14 @@ async function run(name: string, scenario: Scenario) {
 }
 
 /**
+ * A historical card under the record policy it cites now: it was recorded citing an organization-wide (Team) record, a
+ * policy since retired, and the fixture record is a project record.
+ */
+function currentPolicy<T>(card: T): T {
+  return JSON.parse(JSON.stringify(card).replaceAll('"policy_id":"organization-member-readable-person-v2"', '"policy_id":"project-members-readable-person-v1"')) as T;
+}
+
+/**
  * A historical card as current notes say it: an item research saw and could not read is counted, never named, since every
  * viewer of the record reads these notes (ADR-0046). The other notes keep their place.
  */
@@ -182,7 +190,7 @@ describe("impact card golden replay", () => {
     for (const [name, scenario] of Object.entries(SCENARIOS)) observed[name] = await run(name, scenario);
     const recorded = JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as typeof observed;
     for (const name of Object.keys(observed).filter(name => name !== "research_stopped_on_budget" && name !== "fallback_after_two_bad_replies")) {
-      expect(observed[name]!.card).toEqual(countedUnread(recorded[name]!.card));
+      expect(observed[name]!.card).toEqual(countedUnread(currentPolicy(recorded[name]!.card)));
     }
   });
 
@@ -192,7 +200,7 @@ describe("impact card golden replay", () => {
       readonly people: readonly { readonly name: string; readonly items: readonly number[] }[]; readonly citations: readonly { readonly citation: unknown }[];
     };
     const observed = (await run("fallback_after_two_bad_replies", SCENARIOS.fallback_after_two_bad_replies!)).card as Card;
-    const recorded = (JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as Record<string, { readonly card: Card }>).fallback_after_two_bad_replies!.card;
+    const recorded = currentPolicy((JSON.parse(readFileSync(HISTORICAL_FIXTURE, "utf8")) as Record<string, { readonly card: Card }>).fallback_after_two_bad_replies!.card);
     // What was decided needs no model: the record's decision and action, in their approved words, cited first.
     expect(observed.decided).toEqual([{ text: DECISION.text, citation_index: 0 }, { text: ACTION.text, citation_index: 1 }]);
     expect(observed.citations.slice(0, 2).map(entry => entry.citation)).toEqual([DECISION.citation, ACTION.citation]);

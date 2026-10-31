@@ -9,7 +9,7 @@ component_ids:
 created_at: 2026-10-25
 reviewed_at: 2026-10-27
 reviewed_ref: aa79d90c81dbcf8f0147ecb66bfbbe4edbf2c2ff
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -33,8 +33,9 @@ says whether what it was based on has changed. It must read as one continuous
 conversation, not sessions to open, take two or three steps at most, and let a
 question follow from the answer before it. The design is
 [Ask timeline v1](../product/2026-10-25-ask-timeline-v1.md) and the "Ask
-timeline" canvas. This record is proposed until the founder confirms the
-result on the desktop. It does not mean the change is deployed or qualified.
+timeline" canvas. The founder accepted this record on 2026-10-31, as built in
+#365 (`aa79d90`). Acceptance does not mean the change is deployed or
+qualified.
 
 ## Context and options
 

@@ -30,13 +30,6 @@ export {
   type RecordRetrievalSourceVerifiedEnvelopeV1,
 } from "./retrieve/record-retrieval-source-snapshot-v1.js";
 export {
-  createPersonPolicyFactProjectorV2,
-  type RevalidatedPersonPolicyAuthorizationWitnessV2,
-  type RevalidatedPersonPolicyAuthorizationAllowV2View,
-  type RevalidatedPersonPolicyAuditEntryV2View,
-} from "./application/person-policy-facts-v2.js";
-export {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
 } from "./application/person-policy-fact-contracts-v2.js";

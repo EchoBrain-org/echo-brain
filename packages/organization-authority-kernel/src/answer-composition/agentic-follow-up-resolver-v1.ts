@@ -53,8 +53,6 @@ const QUESTION_CHARS = 240;
 const RESOLUTIONS = ["same", "resolved", "clarify"] as const;
 /** Kinds research opens from a citation before its first step: approved records, originals, tickets and pages. */
 const OPENABLE: ReadonlySet<string> = new Set(["approved_record", "source_revision", "ticket", "page"]);
-/** Live tool items, which Mine never reads. */
-const LIVE: ReadonlySet<string> = new Set(["ticket", "page"]);
 
 /** What a follow-up refers to. `about` holds indexes into the previous turn's citations. */
 export type AgenticFollowUpResolutionV1 =
@@ -232,14 +230,14 @@ export async function resolveAgenticFollowUpV1(input: AgenticFollowUpResolverInp
 
 /**
  * Where research starts for a resolved follow-up: the earlier citations it is about that research can open (approved
- * records, originals, tickets and pages; no live tool item in Mine). Each is a head start, never the answer: one that
- * cannot be read is reported, not failed, and one whose tool cannot be read for now is skipped unmentioned (`skip`), so
- * research answers as it would have with no starting item.
+ * records, originals, tickets and pages). Each is a head start, never the answer: one that cannot be read is reported,
+ * not failed, and one whose tool cannot be read for now is skipped unmentioned (`skip`), so research answers as it would
+ * have with no starting item.
  */
-export function agenticFollowUpStartingV1(previous: PersonAnswerPreviousV1, about: readonly number[], scope: PersonAnswerScopeV3): readonly AgenticBriefStartingItemV1[] {
+export function agenticFollowUpStartingV1(previous: PersonAnswerPreviousV1, about: readonly number[]): readonly AgenticBriefStartingItemV1[] {
   return Object.freeze(about.flatMap(index => {
     const cited = previous.citations[index]?.citation;
-    if (cited === undefined || !OPENABLE.has(cited.kind) || (scope.kind === "mine" && LIVE.has(cited.kind))) return [];
+    if (cited === undefined || !OPENABLE.has(cited.kind)) return [];
     return [Object.freeze({ citation: cited, if_unreadable: "skip" as const })];
   }));
 }

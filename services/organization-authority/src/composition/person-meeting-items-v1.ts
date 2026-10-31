@@ -229,7 +229,7 @@ export interface RecordMetadataV1 {
   readonly envelope_sha256: Sha256Digest;
   /** The signed receipt's issue time, canonical. */
   readonly added_at?: string;
-  /** null: no approver projects, so the record is nobody's mine. */
+  /** null: no approver projects, so the record names no approver. */
   readonly approver?: RecordApproverTupleV1 | null;
   readonly presentation?: Readonly<{ title: string | null; meeting_date?: string }>;
 }

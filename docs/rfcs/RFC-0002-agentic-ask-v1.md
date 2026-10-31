@@ -94,7 +94,8 @@ the literal question
    only a desk handle bound to the request and the structured-generation
    port. No database, storage or lower-layer handle.
 3. **Doors**: a new `POST /v3/person/ask` route; the `person ask` CLI and the
-   desktop app on that route; a new `person evidence` CLI door onto the desk.
+   desktop app on that route; a new `person evidence` CLI door onto the desk
+   (retired on 2026-10-31; see the CLI door below).
 
 ### Evidence desk
 
@@ -156,6 +157,10 @@ Person: `person evidence search --query <text> [--project <id>] [--kind <k>]
 authorized desk request; callers repeat the project scope when opening a
 project result. Omitting scope explicitly selects global access, never an
 inferred continuation of an earlier project request.
+
+Update (2026-10-31): both CLI commands and `POST /v3/person/evidence/open`
+are retired. `POST /v3/person/evidence/search` stays, because the
+research-loop evaluation reads it.
 
 ### Ask loop
 
@@ -470,7 +475,8 @@ fixes apply to the desk path only.
 - Authenticated `GET /v3/person/capabilities` reports `agentic_ask_v1`.
   Explicit false, or a canonical missing capability route on an older server,
   selects V2. A V3 execution, authorization, cancellation or validation failure
-  never triggers an automatic downgrade.
+  never triggers an automatic downgrade. (Update (2026-10-31): the capability
+  read is retired and answers the ordinary 404.)
 - Rollback: turn the flag off. Clients fall back to V2; audit rows stay
   readable.
 

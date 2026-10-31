@@ -95,6 +95,18 @@ describe('Confluence spaces as a tool container source (research tool contract v
     expect(f.spaceLists().slice(-4).map(query => query.limit)).toEqual(['250', '250', '250', '250']);
   });
 
+  it('lists a space whose CJK name fills the 1,024 UTF-16 code units a name may use, and leaves out one more', async () => {
+    // 1,024 CJK characters are 3,072 UTF-8 bytes: a byte bound of 1,024 left out the space Confluence always listed.
+    const name = '需求'.repeat(512);
+    const f = fixture(); f.state.spaces = [{ id: '45', key: 'LONG', name }, { id: '46', key: 'LONGER', name: `${name}需` }];
+    const source = await f.make();
+    const listed = await source.list({});
+    expect(listed.items.map(item => item.attributes)).toEqual([{ key: 'LONG', tool: 'Confluence' }]);
+    expect(name.startsWith(listed.items[0]!.label)).toBe(true);
+    expect(Buffer.byteLength(listed.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
+    expect(listed).toMatchObject({ notice: LEFT_OUT });
+  });
+
   // What every tool's containers share (project scopes, refused dates, checks) is the shared reader's, tested there and through Jira.
 
   it('refuses malformed space pages before anything is released', async () => {

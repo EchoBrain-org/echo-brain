@@ -2,7 +2,6 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_ANSWER_PATH_V7,
-  PERSON_ANSWER_ROUTE_HEADER_V5,
   personAnswerCitationKeyV8,
   personWorkspaceRefV1,
   validatePersonAnswerCitationV6,
@@ -27,7 +26,7 @@ const container = { citation: containerCitation, kind: 'tool_container' as const
 const itemId = 'itm_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10';
 const followUp = { citation: { kind: 'follow_up' as const, item_id: itemId }, kind: 'follow_up' as const, label: 'THERM-48 Fan curve v2', visibility: 'team' as const, ref: `follow_up:${itemId}` as const };
 const record = `sha256:${'a'.repeat(64)}` as const;
-const meeting = { citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'organization-member-readable-person-v2' as const }, kind: 'decision' as const, label: 'Ship fan curve v2', visibility: 'team' as const, ref: `meeting:${record}` as const };
+const meeting = { citation: { kind: 'approved_record' as const, atom_id: `sha256:${'b'.repeat(64)}` as const, record_sha256: record, policy_id: 'project-members-readable-person-v1' as const }, kind: 'decision' as const, label: 'Ship fan curve v2', visibility: 'team' as const, ref: `meeting:${record}` as const };
 const page = { citation: { kind: 'page' as const, tool_id: 'knowledge', external_scope_id: 'site-1', page_id: 'p1', section_id: 's1', version: '3', permalink: 'https://knowledge.example.test/wiki/p1', text_sha256: canonicalSha256('x') }, kind: 'page' as const, label: 'Plan', visibility: 'only_me' as const };
 const isPrivate = (citation: { readonly visibility: string }) => citation.visibility === 'only_me' || citation.visibility === 'approver_only';
 /** One answered part whose one sentence cites every citation, marked private exactly when one of them is. */
@@ -39,7 +38,6 @@ const response = (citations: readonly { readonly visibility: string }[] = [proje
 describe('Workspace answer V8 (research tool contract v1)', () => {
   it('serves on its own route and cites projects, people, tools and tool containers', () => {
     expect(PERSON_ANSWER_PATH_V7).toBe('/v7/person/ask');
-    expect(PERSON_ANSWER_ROUTE_HEADER_V5).toBe('x-echo-person-ask-route');
     const all = [project, person, tool, container];
     const accepted = validatePersonAnswerResponseV8(response(all));
     expect(accepted.citations).toEqual(all);

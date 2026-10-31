@@ -11,7 +11,7 @@ component_ids:
 created_at: 2026-10-24
 reviewed_at: 2026-10-24
 reviewed_ref: 915761ccd0f53978ff461a8fc6403118d32fbd42
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -23,6 +23,10 @@ updates:
 ---
 
 # ADR-0046: Meetings stay private until each item is approved to its destination
+
+The founder accepted this record on 2026-10-31, as built in #360 (`915761c`)
+and #362 (`8cc3fff`). Acceptance does not mean the change is deployed or
+qualified.
 
 ## Context and options
 

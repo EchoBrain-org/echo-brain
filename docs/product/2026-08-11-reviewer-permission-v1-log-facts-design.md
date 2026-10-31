@@ -52,7 +52,7 @@ B is not a prerequisite for A.
 - [Organization permission architecture](2026-08-09-organization-permission-architecture.md)
 - [Permission pilot v1 contract](2026-08-10-permission-pilot-v1-contract.md)
 - [Org decision record: append and derive](2026-08-07-org-decision-record-append-derive-design.md)
-- [Approval surface v2 direction](2026-08-10-approval-surface-v2-direction.md)
+- [Approval surface v2 direction](../archive/2026-08-10-approval-surface-v2-direction.md)
 
 ## Decision
 

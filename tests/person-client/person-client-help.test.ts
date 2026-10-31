@@ -39,7 +39,7 @@ function dispatchedActions(): string[] {
   if (rules === undefined || !ts.isObjectLiteralExpression(rules)) throw new Error("commands.ts no longer declares RULES");
   return rules.properties.map((property) => (property.name as ts.Identifier | ts.StringLiteral).text);
 }
-const GROUPS = ["documents", "projects", "updates", "evidence", "employee"];
+const GROUPS = ["documents", "projects", "updates", "employee"];
 /** `projects-read-v2` is typed `projects read-v2`; any other action is one word. */
 function command(action: string): string[] {
   const group = GROUPS.find((name) => action.startsWith(`${name}-`));
@@ -85,15 +85,18 @@ describe("Person client help", () => {
   it("documents list without overstating what it covers", async () => {
     // An agent reads this help: it must not overstate what list covers, and must say how a waiting page fails.
     const listHelp = await help(["list", "--help"]);
-    expect(listHelp).toContain("the notes, documents, imported meetings and approved meetings ask can read;");
+    expect(listHelp).toContain("--project lists one project you belong to, as ask can read it there;");
     expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
-    expect(listHelp).toContain("usage: echo-brain person list [--project <project-id> | --mine | --only-me] [--cursor <next_cursor>]");
+    expect(listHelp).toContain("usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]");
+    expect(listHelp).toContain("Give exactly one scope.");
     expect(listHelp).toContain("--only-me lists everything only you can read, filed in a project or not");
+    // The retired scopes are not offered: no --mine, and no list of everything.
+    expect(listHelp).not.toContain("--mine");
   });
 
   it("refuses an unknown command, group command or tool verb, and its help, before any session or network use", async () => {
     // Retired commands are refused only because RULES no longer has them; these reach that refusal each way.
-    for (const argv of [["readable-search"], ["documents", "upload"], ["tools", "bogus"]].flatMap((name) => [name, [...name, "--help"]])) {
+    for (const argv of [["readable-search"], ["documents", "upload"], ["evidence", "search"], ["evidence", "open"], ["tools", "bogus"]].flatMap((name) => [name, [...name, "--help"]])) {
       const { code, stdout, stderr, network } = await run(argv);
       expect(code, argv.join(" ")).toBe(2);
       expect(stdout).toBe("");
