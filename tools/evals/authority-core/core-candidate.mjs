@@ -110,6 +110,7 @@ async function open(state_directory) {
   };
   runtime = await startOrganizationAuthorityServiceLifecycle({ api: undefined }, {
     processing,
+    api: {},
     // IPC replaces the transport only. The actual application routes above
     // still authenticate every request, fence releases, and persist audits.
     start_api_runtime: async () => ({ address: { address: "core-ipc", family: "IPC", port: 0 }, close: async () => {} }),
