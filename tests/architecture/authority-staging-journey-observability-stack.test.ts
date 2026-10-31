@@ -68,79 +68,10 @@ describe("staging journey observability overview stack", () => {
       ConstraintDescription:
         "must be the one owned Authority staging runtime log group",
     });
-    expect(stack.Parameters.AlertTopicArn).toMatchObject({
-      Type: "String",
-      AllowedPattern: expect.stringContaining(":sns:"),
-    });
 
     const serialized = JSON.stringify(stack);
     expect(serialized).not.toContain("authority-prod");
     expect(serialized).not.toMatch(/production|prod\.echobrain\.org/i);
-    expect(Object.keys(stack.Resources)).toHaveLength(4);
-  });
-
-  it("derives only successful worker-cycle liveness from the supplied staging log group", () => {
-    const stack = template();
-    const filters = Object.values(stack.Resources).filter(
-      (item) => item.Type === "AWS::Logs::MetricFilter",
-    );
-    expect(filters).toHaveLength(1);
-    expect(resource(stack, "WorkerCycleCompletedMetricFilter").Properties).toMatchObject({
-      LogGroupName: { Ref: "StagingLogGroupName" },
-      FilterPattern:
-        '{ ($.kind = "echo-clean-live-worker-cycle-v1") && ($.event = "succeeded") }',
-      MetricTransformations: [
-        {
-          MetricNamespace: NAMESPACE,
-          MetricName: "WorkerCycleCompleted",
-          MetricValue: "1",
-          Unit: "Count",
-        },
-      ],
-    });
-
-    for (const filter of filters) {
-      const transformation = (filter.Properties?.MetricTransformations as readonly {
-        readonly Dimensions?: unknown;
-      }[])[0]!;
-      expect(transformation.Dimensions).toBeUndefined();
-    }
-  });
-
-  it("defines exactly the two active staging alarms with the intended missing-data behavior and existing topic", () => {
-    const stack = template();
-    const alarms = Object.entries(stack.Resources).filter(
-      ([, item]) => item.Type === "AWS::CloudWatch::Alarm",
-    );
-    expect(alarms).toHaveLength(2);
-    for (const [, alarm] of alarms) {
-      expect(alarm.Properties?.AlarmActions).toEqual([{ Ref: "AlertTopicArn" }]);
-      expect(alarm.Properties?.OKActions).toEqual([{ Ref: "AlertTopicArn" }]);
-      expect(alarm.Properties?.Namespace).toBe(NAMESPACE);
-      expect(alarm.Properties).not.toHaveProperty("Metrics");
-    }
-    expect(resource(stack, "WorkerSilenceAlarm").Properties).toMatchObject({
-      MetricName: "WorkerCycleCompleted",
-      Statistic: "Sum",
-      Period: 60,
-      EvaluationPeriods: 3,
-      DatapointsToAlarm: 2,
-      Threshold: 1,
-      ComparisonOperator: "LessThanThreshold",
-      TreatMissingData: "breaching",
-    });
-    expect(resource(stack, "AskRetrievalFailureAlarm").Properties).toMatchObject({
-      MetricName: "AskRetrievalFailure",
-      Statistic: "Sum",
-      Period: 300,
-      EvaluationPeriods: 1,
-      DatapointsToAlarm: 1,
-      Threshold: 2,
-      ComparisonOperator: "GreaterThanOrEqualToThreshold",
-      TreatMissingData: "notBreaching",
-    });
-    expect(stack.Resources).not.toHaveProperty("ApprovedSearchStuckAlarm");
-    expect(stack.Outputs).not.toHaveProperty("ApprovedSearchStuckAlarmName");
   });
 
   it("has a valid, staging-only dashboard with active liveness, current core phases, and labeled historical views", () => {

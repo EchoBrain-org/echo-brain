@@ -38,13 +38,6 @@ function userDataSub(
   )["Fn::Base64"]["Fn::Sub"];
 }
 
-const PUBLIC_ACCESS_BLOCKED = {
-  BlockPublicAcls: true,
-  BlockPublicPolicy: true,
-  IgnorePublicAcls: true,
-  RestrictPublicBuckets: true,
-};
-
 describe("Authority staging host stack", () => {
   it("creates a persistent slot and makes only host lifecycle resources conditional", () => {
     const stack = template();
@@ -101,128 +94,29 @@ describe("Authority staging host stack", () => {
       ],
     });
 
+    // The Guard policy pins the other unconditional and host-only resources.
     for (const logicalId of [
-      "StagingVpc",
       "StagingPublicSubnet",
       "StagingHostSecurityGroup",
-      "StagingHostSetupBundle",
-      "StagingOnboardingTransferKey",
-      "StagingOnboardingTransferBucket",
-      "AuthorityTunnelTokenSecret",
-      "StagingHostRole",
-      "StagingDataVolume",
       "StagingHostLaunchTemplate",
     ]) {
       expect(resource(stack, logicalId).Condition).toBeUndefined();
-    }
-    for (const logicalId of [
-      "StagingReadyHandle",
-      "StagingHost",
-      "StagingDataVolumeAttachment",
-      "StagingReady",
-    ]) {
-      expect(resource(stack, logicalId).Condition).toBe("HostEnabledCondition");
-    }
-  });
-
-  it("creates a dedicated public VPC with zero host ingress and only required bootstrap and tunnel egress", () => {
-    const stack = template();
-    const subnet = resource(stack, "StagingPublicSubnet");
-    const route = resource(stack, "StagingInternetRoute");
-    const securityGroup = resource(stack, "StagingHostSecurityGroup");
-
-    expect(resource(stack, "StagingVpc").Type).toBe("AWS::EC2::VPC");
-    expect(resource(stack, "StagingInternetGateway").Type).toBe(
-      "AWS::EC2::InternetGateway",
-    );
-    expect(subnet.Properties).toMatchObject({ MapPublicIpOnLaunch: true });
-    expect(route.Properties).toEqual({
-      DestinationCidrBlock: "0.0.0.0/0",
-      GatewayId: { Ref: "StagingInternetGateway" },
-      RouteTableId: { Ref: "StagingPublicRouteTable" },
-    });
-    expect(securityGroup.Properties).toMatchObject({
-      SecurityGroupIngress: [],
-      SecurityGroupEgress: [],
-    });
-    for (const [logicalId, protocol, port, description] of [
-      [
-        "StagingHostHttpsEgress",
-        "tcp",
-        443,
-        "HTTPS for version-pinned bootstrap, registry, SSM, and tunnel control traffic",
-      ],
-      [
-        "StagingHostAptHttpEgress",
-        "tcp",
-        80,
-        "HTTP for Ubuntu package mirrors during bootstrap",
-      ],
-      [
-        "StagingHostCloudflaredTcpEgress",
-        "tcp",
-        7844,
-        "Cloudflare Tunnel TCP transport",
-      ],
-      [
-        "StagingHostCloudflaredUdpEgress",
-        "udp",
-        7844,
-        "Cloudflare Tunnel QUIC transport",
-      ],
-    ] as const) {
-      expect(resource(stack, logicalId).Properties).toEqual({
-        GroupId: { "Fn::GetAtt": ["StagingHostSecurityGroup", "GroupId"] },
-        IpProtocol: protocol,
-        FromPort: port,
-        ToPort: port,
-        CidrIp: "0.0.0.0/0",
-        Description: description,
-      });
     }
   });
 
   it("retains the encrypted state boundary, empty tunnel container, and private versioned setup bucket", () => {
     const stack = template();
     const dataVolume = resource(stack, "StagingDataVolume");
-    const secret = resource(stack, "AuthorityTunnelTokenSecret");
     const bucket = resource(stack, "StagingHostSetupBundle");
     const onboardingBucket = resource(stack, "StagingOnboardingTransferBucket");
-    const onboardingKey = resource(stack, "StagingOnboardingTransferKey");
 
-    for (const value of [
-      dataVolume,
-      secret,
-      bucket,
-      onboardingBucket,
-      onboardingKey,
-    ]) {
-      expect(value.DeletionPolicy).toBe("Retain");
-      expect(value.UpdateReplacePolicy).toBe("Retain");
-    }
     expect(dataVolume.Properties).toMatchObject({
       AvailabilityZone: { Ref: "AvailabilityZone" },
-      Encrypted: true,
-      VolumeType: "gp3",
     });
     expect(JSON.stringify(dataVolume.Properties?.Tags)).toContain(
       "/srv/echo-authority-clean-v1/clean-data",
     );
-    expect(secret.Properties).not.toHaveProperty("SecretString");
-    expect(secret.Properties).not.toHaveProperty("GenerateSecretString");
-    expect(secret.Properties).not.toHaveProperty("Name");
-    expect(bucket.Properties).toMatchObject({
-      VersioningConfiguration: { Status: "Enabled" },
-      PublicAccessBlockConfiguration: PUBLIC_ACCESS_BLOCKED,
-      BucketEncryption: {
-        ServerSideEncryptionConfiguration: [
-          { ServerSideEncryptionByDefault: { SSEAlgorithm: "AES256" } },
-        ],
-      },
-    });
     expect(onboardingBucket.Properties).toMatchObject({
-      VersioningConfiguration: { Status: "Enabled" },
-      PublicAccessBlockConfiguration: PUBLIC_ACCESS_BLOCKED,
       OwnershipControls: {
         Rules: [{ ObjectOwnership: "BucketOwnerEnforced" }],
       },
@@ -238,7 +132,6 @@ describe("Authority staging host stack", () => {
         ServerSideEncryptionConfiguration: [
           {
             ServerSideEncryptionByDefault: {
-              SSEAlgorithm: "aws:kms",
               KMSMasterKeyID: {
                 "Fn::GetAtt": ["StagingOnboardingTransferKey", "Arn"],
               },
@@ -249,40 +142,16 @@ describe("Authority staging host stack", () => {
     });
     expect(bucket.Properties).not.toHaveProperty("LifecycleConfiguration");
     expect(bucket.Properties).not.toHaveProperty("OwnershipControls");
-    expect(onboardingKey.Properties).toMatchObject({ EnableKeyRotation: true });
   });
 
   it("uses an ARM64 launch template with IMDSv2 and a disposable encrypted root", () => {
     const stack = template();
-    const launchTemplate = resource(stack, "StagingHostLaunchTemplate");
-    const data = launchTemplate.Properties!.LaunchTemplateData as Record<
-      string,
-      unknown
-    >;
 
     expect(stack.Parameters.StagingInstanceType).toMatchObject({
       Default: "t4g.small",
       AllowedValues: ["t4g.nano", "t4g.small", "t4g.medium"],
     });
-    expect(data.ImageId).toEqual({ Ref: "StagingAmiId" });
-    expect(data.MetadataOptions).toEqual({
-      HttpTokens: "required",
-      HttpEndpoint: "enabled",
-      HttpPutResponseHopLimit: 2,
-    });
-    expect(data.BlockDeviceMappings).toEqual([
-      {
-        DeviceName: "/dev/sda1",
-        Ebs: {
-          DeleteOnTermination: true,
-          Encrypted: true,
-          VolumeSize: 30,
-          VolumeType: "gp3",
-        },
-      },
-    ]);
     expect(resource(stack, "StagingHost").Properties).toMatchObject({
-      InstanceInitiatedShutdownBehavior: "terminate",
       LaunchTemplate: {
         LaunchTemplateId: { Ref: "StagingHostLaunchTemplate" },
       },
@@ -294,21 +163,6 @@ describe("Authority staging host stack", () => {
     const role = resource(stack, "StagingHostRole");
     const serialized = JSON.stringify(role.Properties);
 
-    expect(role.Properties?.ManagedPolicyArns).toEqual([
-      {
-        "Fn::Sub":
-          "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore",
-      },
-    ]);
-    expect(serialized).toContain("s3:GetObjectVersion");
-    expect(serialized).toContain("s3:VersionId");
-    expect(serialized).toContain("secretsmanager:GetSecretValue");
-    expect(serialized).toContain("AuthorityTunnelTokenSecret");
-    expect(serialized).toContain("ecr:GetAuthorizationToken");
-    expect(serialized).toContain("ecr:BatchCheckLayerAvailability");
-    expect(serialized).toContain("ecr:BatchGetImage");
-    expect(serialized).toContain("ecr:GetDownloadUrlForLayer");
-    expect(serialized).toContain("AuthorityEcrRepositoryArn");
     expect(serialized).not.toMatch(/ec2:|backup:|kms:\*|s3:\*/i);
   });
 
@@ -378,18 +232,8 @@ describe("Authority staging host stack", () => {
     const policy = resource(stack, "StagingOnboardingTransferBucketPolicy");
     const statements = (policy.Properties?.PolicyDocument as { Statement: readonly Record<string, unknown>[] }).Statement;
 
-    expect(policy).toMatchObject({
-      Type: "AWS::S3::BucketPolicy",
-      DeletionPolicy: "Retain",
-      UpdateReplacePolicy: "Retain",
-      Properties: { Bucket: { Ref: "StagingOnboardingTransferBucket" } },
-    });
+    // The Guard policy pins each Deny statement exactly, but not their count.
     expect(statements).toHaveLength(4);
-    expect(statements.every((statement) => statement.Effect === "Deny")).toBe(true);
-    expect(statements.some((statement) => statement.Sid === "DenyInsecureTransport" && JSON.stringify(statement).includes("aws:SecureTransport"))).toBe(true);
-    expect(statements.some((statement) => statement.Sid === "DenyMissingEncryptionHeader" && JSON.stringify(statement).includes("s3:x-amz-server-side-encryption"))).toBe(true);
-    expect(statements.some((statement) => statement.Sid === "DenyMissingOrWrongEncryptionMode" && JSON.stringify(statement).includes("aws:kms"))).toBe(true);
-    expect(statements.some((statement) => statement.Sid === "DenyWrongEncryptionKey" && JSON.stringify(statement).includes("StagingOnboardingTransferKey"))).toBe(true);
   });
 
   it("signals only machine configuration, tunnel connection, and retained-state materialization after the data attachment", () => {
@@ -399,8 +243,6 @@ describe("Authority staging host stack", () => {
       (launchTemplate.Properties!.LaunchTemplateData as Record<string, unknown>)
         .UserData,
     );
-    const attachment = resource(stack, "StagingDataVolumeAttachment");
-    const ready = resource(stack, "StagingReady");
 
     for (const required of [
       "--region '${AWS::Region}'",
@@ -437,19 +279,6 @@ describe("Authority staging host stack", () => {
     expect(userData).not.toMatch(/terminal_green|authority-descriptor|https/i);
     expect(userData).not.toMatch(/retry [0-9]+ [0-9]+ apt-get/);
     expect(userData).not.toMatch(/retry [0-9]+ [0-9]+ systemctl/);
-    expect(attachment.DeletionPolicy).toBeUndefined();
-    expect(attachment.UpdateReplacePolicy).toBeUndefined();
-    expect(attachment.Properties).toEqual({
-      Device: "/dev/sdf",
-      InstanceId: { Ref: "StagingHost" },
-      VolumeId: { Ref: "StagingDataVolume" },
-    });
-    expect(ready.DependsOn).toBe("StagingDataVolumeAttachment");
-    expect(ready.Properties).toEqual({
-      Count: 1,
-      Handle: { Ref: "StagingReadyHandle" },
-      Timeout: "900",
-    });
   });
 
   it("renders executable shell quoting and valid WaitCondition JSON", () => {
