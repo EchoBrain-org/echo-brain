@@ -271,8 +271,10 @@ describe("immutable readable-search generation v1", () => {
     }
   });
 
-  it("removes a staged generation after a plane transaction rolls back", () => {
+  it("stages beside generations/ and removes the staging after a plane transaction rolls back", () => {
     const directory = tempDirectory();
+    const root = join(directory, "record-retrieval");
+    const midBuild: string[][] = [];
     const originalTransaction = Database.prototype.transaction;
     const transaction = vi
       .spyOn(Database.prototype, "transaction")
@@ -280,6 +282,7 @@ describe("immutable readable-search generation v1", () => {
       .mockImplementationOnce(function (this: Database.Database, callback) {
         return originalTransaction.call(this, () => {
           callback();
+          midBuild.push(readdirSync(root).sort(), readdirSync(join(root, "generations")));
           throw new Error("injected content transaction failure");
         });
       });
@@ -291,9 +294,10 @@ describe("immutable readable-search generation v1", () => {
           ]),
         ),
       ).toThrow("injected content transaction failure");
-      expect(
-        readdirSync(join(directory, "record-retrieval", "generations")),
-      ).toEqual([]);
+      // Never inside generations/, which the state-lineage guard verifies at every start.
+      expect(midBuild).toEqual([[expect.stringMatching(/^\.staging-[0-9a-f]{32}$/), "generations"], []]);
+      expect(readdirSync(root)).toEqual(["generations"]);
+      expect(readdirSync(join(root, "generations"))).toEqual([]);
       expect(transaction).toHaveBeenCalledTimes(2);
     } finally {
       transaction.mockRestore();

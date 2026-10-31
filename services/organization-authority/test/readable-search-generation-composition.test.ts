@@ -185,15 +185,16 @@ describe("readable-search generation composition", () => {
     }
   });
 
-  it("keeps only the generation it publishes, and an interrupted deletion never blocks a restart", async () => {
+  it("keeps only the generation it publishes, and an interrupted build or deletion never blocks a restart", async () => {
     const { initialized, authority, record, reconciler } = emptyOrganizationSearch();
     try {
       const first = await reconciler.reconcile(new AbortController().signal);
       if (first.status !== "published") throw new Error("the empty organization did not publish");
       const retrieval = join(initialized.state_directory, "record-retrieval");
       const generations = join(retrieval, "generations");
-      // A generation this run superseded, and the debris of a deletion a crash interrupted.
+      // A generation this run superseded, and the debris of a build and a deletion a crash interrupted.
       cpSync(join(generations, first.generation_id), join(generations, canonicalSha256({ superseded: true })), { recursive: true });
+      mkdirSync(join(retrieval, `.staging-${"0".repeat(32)}`), { mode: 0o700 });
       mkdirSync(join(retrieval, `.retired-${"0".repeat(32)}`), { mode: 0o700 });
       expect(verifyAuthorityStateLineage(initialized.state_directory).retrieval.generation_count).toBe(2);
 

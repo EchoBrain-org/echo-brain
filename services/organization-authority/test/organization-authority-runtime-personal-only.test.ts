@@ -133,13 +133,14 @@ describe('Organization Authority runtime without an organization source lane', (
     } finally { await runtime.close(); }
   });
 
-  it('starts after a search rebuild was killed midway, and its first publication removes the leftover', async () => {
+  it('starts after a search rebuild was killed midway, and its next build removes the leftover', async () => {
     let retrieval = '';
     const runtime = await startRuntimeForTest({ before_open: state => {
-      // What a kill during a rebuild leaves where the builder stages: a half-written segment.
+      // What a kill during the first rebuild leaves: generations/, and a half-written segment beside it.
       retrieval = join(state, 'record-retrieval');
       const segment = join(retrieval, `.staging-${'c'.repeat(32)}`, 'segments', 'partial');
       mkdirSync(segment, { recursive: true, mode: 0o700 });
+      mkdirSync(join(retrieval, 'generations'), { mode: 0o700 });
       writeFileSync(join(segment, 'facts.sqlite-journal'), 'unfinished');
     } });
     try {
