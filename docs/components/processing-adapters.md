@@ -57,9 +57,10 @@ Personal live-context adapters are a separate read capability. Confluence
 discovers and opens pages as the authenticated person, while Jira reads tickets;
 each also lists the person's Confluence spaces or Jira projects as tool
 containers for Ask
-([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). They share bounded request-local evidence and audit contracts, but each provider
-owns its OAuth verification, query syntax, permission checks, pagination, and
-body parsing. Project mappings narrow discovery; global reads add no ECHO
+([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)). They share
+bounded request-local evidence and audit contracts, but each provider owns its
+OAuth verification, query syntax, permission checks, pagination, and body
+parsing. Project mappings narrow discovery; global reads add no ECHO
 container allowlist. Neither capability grants custody of provider content.
 
 Selecting composition bundles own external capabilities; provider-neutral
