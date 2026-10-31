@@ -12,18 +12,17 @@ const decision = { citation: { kind: 'approved_record', atom_id: sha('1'), recor
 const line = (value: unknown) => JSON.stringify(value);
 
 describe('the command an Ask runs', () => {
-  it('asks every Ask, Mine included, on /v7 with its progress, as the account the page shows', () => {
+  it('asks every Ask, Mine included, on /v7 with its progress (the host pins every call to the page\'s account)', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
-    // The client refuses to ask as any other account, so no step of another reaches the page.
-    const asked = ['ask', '--question=What did we agree?', '--progress', `--expected-membership-id=${EXPECT.membership_id}`, `--expected-authority=${EXPECT.authority}`];
-    expect(askArgv('What did we agree?', { kind: 'global' }, EXPECT)).toEqual(asked);
-    expect(askArgv('What did we agree?', { kind: 'project', project_id: project }, EXPECT)).toEqual([...asked, `--project=${project}`]);
-    expect(askArgv('What did we agree?', { kind: 'mine' }, EXPECT)).toEqual([...asked, '--mine']);
+    const asked = ['ask', '--question=What did we agree?', '--progress'];
+    expect(askArgv('What did we agree?', { kind: 'global' })).toEqual(asked);
+    expect(askArgv('What did we agree?', { kind: 'project', project_id: project })).toEqual([...asked, `--project=${project}`]);
+    expect(askArgv('What did we agree?', { kind: 'mine' })).toEqual([...asked, '--mine']);
   });
 
-  it('reads what it cites: a meeting by its record, a passage where it was asked', () => {
+  it('reads what it cites: a meeting by its record, as Ask cites it, a passage where it was asked', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
-    expect(askRecordArgv({ record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' })).toEqual(['records', `--record-sha256=${sha('2')}`]);
+    expect(askRecordArgv({ record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' })).toEqual(['records', `--record-sha256=${sha('2')}`, '--brief']);
     const ref = { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha('6') };
     const passage = ['ask-source', `--source-id=${ref.source_id}`, '--revision-id=r1', `--source-sha256=${sha('4')}`, `--representation-sha256=${sha('5')}`, `--anchor-sha256=${sha('6')}`];
     expect(askSourceArgv(ref, { kind: 'global' })).toEqual(passage);

@@ -7,6 +7,7 @@ import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/orga
 import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
+import { personCitedRecordV1, type PersonCitedRecordV1 } from '@echo-brain/organization-api';
 import { validatePersonAskCheckRequestV1, type PersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
 import { validatePersonAnswerRequestV3, type PersonAnswerPreviousV1 } from '@echo-brain/organization-api';
@@ -17,7 +18,7 @@ import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { EmployeeMutationError, PersonClient } from "./client.js";
 import { PersonAuthorityClientError, PersonContextMutationError } from "./authority-client.js";
-import { PersonClientSessionUnavailableError } from "./session-store.js";
+import { PersonClientSessionUnavailableError, type PersonSessionEndedCode } from "./session-store.js";
 import { startPersonLoopbackHandoff } from "./browser-login-handoff.js";
 import {
   readPersonOnboardingInvitation,
@@ -84,6 +85,7 @@ const OPTIONS = {
   limit: { type: "string" },
   "open-browser": { type: "boolean" },
   "record-sha256": { type: "string" },
+  brief: { type: "boolean" },
   kind: { type: "string" },
   item: { type: "string" },
   neighbours: { type: "string" },
@@ -153,7 +155,7 @@ const RULES: Readonly<
     requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
   },
   "ask-check": { accepts: ["request"], requires: ["request"] },
-  records: { accepts: ["limit", "query", "record-sha256"] },
+  records: { accepts: ["limit", "query", "record-sha256", "brief"] },
   "tools": {},
   "employee-invite": {
     accepts: ["name", "email", "out"],
@@ -208,6 +210,8 @@ Commands:
   project-activity  When each of your projects last had something new from someone else, with no content.
 
 Run \`echo-brain person <command> --help\` for command options.
+
+Every command but login, status, session-refresh and logout takes paired --expected-membership-id <id> --expected-authority <origin>, the account it is for. Signed out or signed in as anyone else, it sends nothing; if the account changes while it runs, its output is not for that account. Either way it fails with code account_changed, signed_out, reauthentication_required or sign_in_required, and "sent" says whether its request went out.
 `,
   login: `usage: echo-brain person login (--invitation <path> | --authority-url <url>) [--open-browser]
 
@@ -300,9 +304,10 @@ Checks whether the sources earlier answers cited changed, with no content. The r
 
 Lists active people in your organization by name, or narrows the list with a name search. Any signed-in member may use it; no project is needed. Shows names and membership IDs only. Pass next_cursor as --cursor with the same --query and --limit for the next page.
 `,
-  records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex>]
+  records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex> [--brief]]
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
+--brief prints that one record as Ask cites it (echo-person-cited-record-v1) in place of its signed envelope: the meeting, its approver, participants and policy, and up to 32 decisions, actions and rationales, each with the atom id Ask citations carry and up to 3 quotes. A record you cannot read fails with not_found.
 `,
   documents: `usage: echo-brain person documents <upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate> [options]
 
@@ -579,6 +584,58 @@ function expectedAccount(values: Record<Option, string | boolean | undefined>) {
   };
 }
 
+/** These act on the session itself; every other command acts for one account, and takes a pin. */
+const SESSION_ACTIONS: ReadonlySet<string> = new Set(["login", "status", "session-refresh", "logout"]);
+const PIN_OPTIONS: readonly Option[] = ["expected-membership-id", "expected-authority"];
+
+/** The account a pinned run is for: paired --expected-membership-id and --expected-authority. */
+interface AccountPin { readonly membership_id: string; readonly authority: string }
+
+function accountPin(values: Record<Option, string | boolean | undefined>): AccountPin | undefined {
+  const membership = values["expected-membership-id"];
+  const authority = values["expected-authority"];
+  if (membership === undefined && authority === undefined) return undefined;
+  if (typeof membership !== "string" || typeof authority !== "string") throw new Error("--expected-membership-id and --expected-authority must be given together");
+  return { membership_id: membership, authority };
+}
+
+/** Why a pinned run cannot run, or stand, as its account: no one is signed in (and why, when a refresh ended the session), or someone else is. */
+type PinRefusal = "account_changed" | "signed_out" | PersonSessionEndedCode;
+
+function pinRefusal(client: PersonClient, pin: AccountPin): PinRefusal | null {
+  let signedIn: { readonly authority_origin: string; readonly membership_id: string };
+  try {
+    signedIn = client.sessionSummary();
+  } catch (error) {
+    // A session that cannot be read at all cannot be shown to be the pinned one.
+    return error instanceof PersonClientSessionUnavailableError ? client.sessionEnded()?.reason ?? "signed_out" : "account_changed";
+  }
+  return signedIn.authority_origin === pin.authority && signedIn.membership_id === pin.membership_id ? null : "account_changed";
+}
+
+/** A pinned run that ended under another account, or none: what it printed is not for its account. */
+class AccountPinError extends Error {
+  constructor(readonly code: PinRefusal) {
+    super("The signed-in account changed during the request");
+    this.name = "AccountPinError";
+  }
+}
+
+/** Throws when the pin no longer holds. */
+function assertPinned(client: PersonClient, pin: AccountPin | undefined): void {
+  const refused = pin === undefined ? null : pinRefusal(client, pin);
+  if (refused !== null) throw new AccountPinError(refused);
+}
+
+/** A refused pinned run: nothing went out (`sent` false), or the account changed while it ran. */
+function pinRefused(action: string, code: PinRefusal, sent: boolean) {
+  return {
+    ok: false, action, code, sent,
+    error: sent ? "The signed-in account changed during the request; its output is not for the expected account."
+      : "Not signed in as the expected account; nothing was sent.",
+  };
+}
+
 function optionalProject(values: Record<Option, string | boolean | undefined>) {
   return values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
 }
@@ -677,6 +734,18 @@ function optionalRecordLimit(
     throw new PersonQueryInputError("invalid_limit", `--limit must be an integer from 1 to ${maximum}`);
   }
   return Number(value);
+}
+
+/** --brief: the one record asked for, as Ask cites it. None readable is not_found; anything else is not a record Ask cites. */
+function citedRecord(listed: Awaited<ReturnType<PersonClient["records"]>>, recordSha256: string): PersonCitedRecordV1 {
+  const records = listed.kind === "echo-clean-person-record-list-v1" ? listed.records : [];
+  if (records.length === 0) throw new PersonAuthorityClientError("not_found", null, "No record you can read has that digest");
+  try {
+    if (records.length !== 1 || records[0]!.record_sha256 !== recordSha256) throw new Error("Another record came back");
+    return personCitedRecordV1(records[0]!);
+  } catch {
+    throw new PersonAuthorityClientError("invalid_response", null, "Person Authority returned a record Ask cannot cite");
+  }
 }
 
 interface BrowserOpenerOptions {
@@ -896,6 +965,7 @@ export async function runPersonClientCli(
     let askCheckRequest: PersonAskCheckRequestV1 | undefined;
     let askPrevious: PersonAnswerPreviousV1 | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
+  let pin: AccountPin | undefined;
   try {
     const args = argv.slice(subcommandAction === undefined ? 1 : 2);
     // Accept a negative integer as a limit value so the existing bounds explain
@@ -926,7 +996,7 @@ export async function runPersonClientCli(
         seen.add(token.name);
       }
     }
-    const accepted = new Set(rule.accepts ?? []);
+    const accepted = new Set([...(rule.accepts ?? []), ...(SESSION_ACTIONS.has(action) ? [] : PIN_OPTIONS)]);
     for (const [name, value] of Object.entries(values)) {
       if (value !== undefined && value !== false && !accepted.has(name as Option)) {
         throw new Error(
@@ -948,7 +1018,7 @@ export async function runPersonClientCli(
       if (toolVerbDefinition === undefined) throw new Error(usage());
       const command = `echo-brain person tools ${verbName} --tool ${tool}`;
       for (const [name, value] of Object.entries(values)) {
-        if (value !== undefined && value !== false && name !== 'tool' && !Object.hasOwn(toolVerbDefinition.options, name)) {
+        if (value !== undefined && value !== false && name !== 'tool' && !PIN_OPTIONS.includes(name) && !Object.hasOwn(toolVerbDefinition.options, name)) {
           throw new Error(`--${name} is not valid with \`${command}\``);
         }
       }
@@ -977,6 +1047,7 @@ export async function runPersonClientCli(
       ) {
         throw new Error("--record-sha256 must be sha256 followed by 64 lowercase hex characters");
       }
+      if (values.brief === true && values["record-sha256"] === undefined) throw new Error("--brief requires --record-sha256");
     }
     // At most one scope. Only list accepts --only-me; ask has already refused it as not valid.
     const scopeFlags = ["project", "mine", "only-me"].filter((name) => values[name] !== undefined && values[name] !== false).map((name) => `--${name}`);
@@ -987,6 +1058,7 @@ export async function runPersonClientCli(
     if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
       throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
     }
+    pin = accountPin(values);
     // The previous turn (ADR-0047) is validated with the whole request, its 16 KiB bound included, before any network or
     // session use.
     if (action === "ask" && values.previous !== undefined) askPrevious = askPreviousOf(values);
@@ -1047,6 +1119,12 @@ export async function runPersonClientCli(
       : { random_uuid: dependencies.random_uuid }),
   });
   const readInteractiveLine = dependencies.read_input ?? readBoundedStdinLine;
+  // A pinned run is for its account alone: signed out, or as anyone else, it sends nothing.
+  const refusedBefore = pin === undefined ? null : pinRefusal(client, pin);
+  if (refusedBefore !== null) {
+    print(stderr, pinRefused(action, refusedBefore, false));
+    return 1;
+  }
 
   try {
     if (toolVerbDefinition !== undefined) {
@@ -1061,6 +1139,7 @@ export async function runPersonClientCli(
           await (dependencies.sleep ?? ((delay: number) => new Promise<void>(resolve => setTimeout(resolve, delay))))(ms);
           dependencies.abort_signal?.throwIfAborted();
         } });
+      assertPinned(client, pin);
       return 0;
     }
     switch (action) {
@@ -1333,14 +1412,12 @@ export async function runPersonClientCli(
         const query = values.query;
         const recordSha256 = values["record-sha256"];
         if (query !== undefined) validatePersonQueryText(query);
-        print(stdout, {
-          ok: true,
-          result: await client.records(
-            optionalRecordLimit(values, query === undefined ? 100 : 10),
-            typeof query === "string" ? query : undefined,
-            typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
-          ),
-        });
+        const records = await client.records(
+          optionalRecordLimit(values, query === undefined ? 100 : 10),
+          typeof query === "string" ? query : undefined,
+          typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
+        );
+        print(stdout, { ok: true, result: values.brief === true ? citedRecord(records, String(recordSha256)) : records });
         break;
       }
       case "tools":
@@ -1373,8 +1450,16 @@ export async function runPersonClientCli(
         print(stdout, { ok: true, revoked: true });
         break;
     }
+    // A pinned run ends as it began, for its account; otherwise what it printed is not for it.
+    assertPinned(client, pin);
     return 0;
   } catch (error) {
+    // Under another account by now, or none, that is the failure, whatever else went wrong: the request may have gone out.
+    const refused = pin === undefined ? null : error instanceof AccountPinError ? error.code : pinRefusal(client, pin);
+    if (refused !== null) {
+      print(stderr, pinRefused(action, refused, true));
+      return 1;
+    }
     if (isContextAction(action)) {
       print(stderr, contextCliFailure(action, error, values));
       return 1;

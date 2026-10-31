@@ -9,15 +9,15 @@ import type {
   ProjectActivity, ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef,
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_HAND_IN_MEETING_ID_V1, validatePersonMeetingResultV2,
   validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
   validatePersonUploadSearchResultV2, validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
-  validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2,
+  validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
   type PersonAnswerCitationV8, type PersonAskReceiptRowV3, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenMeetingAtomV1, type PersonOpenMeetingV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
+  type PersonCitedRecordSectionV1,
 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
 
@@ -39,11 +39,6 @@ function list(value: unknown): unknown[] {
 /** Output that does not have the shape the client promises. */
 export class ViewError extends Error {
   constructor() { super('invalid_output'); }
-}
-
-/** Nothing where something was asked for: the Authority no longer shows it to this person. */
-export class NotReadable extends Error {
-  constructor() { super('not_found'); }
 }
 
 /** `{ ok: true, result }`: the wrapper list, open, documents, ask-source, tools and other client commands print their result in. */
@@ -464,8 +459,6 @@ export function openItemsView(result: PersonRunsResultsV1['items']): OpenItemsVi
 const MAX_SOURCE_TEXT = 2_000;
 /** Longest part of an approved item the reader shows, in characters: more than one part holds (3 KiB). */
 const MAX_READER_TEXT = 4_000;
-/** Items shown per section, and participants shown. */
-const MAX_RECORD_ITEMS = 32;
 
 /**
  * Text as the source pane or the reader may show it: control and format
@@ -485,113 +478,36 @@ function isoTime(value: unknown): string | undefined {
   return typeof value === 'string' && value.length <= 64 && !Number.isNaN(Date.parse(value)) ? value : undefined;
 }
 
-/**
- * An approved item's id as the Authority's citations carry it: the digest of
- * its record and its signal's id, never the signal id itself.
- */
-export function atomId(recordSha256: string, signalId: string): string {
-  return canonicalSha256({ kind: 'echo-organization-record-atom', record_hash: recordSha256, signal_id: signalId });
+/** Who can read a record, by its policy. */
+const RECORD_VISIBILITY: Readonly<Record<RecordPolicy, ApprovedRecord['visibility']>> = {
+  'organization-member-readable-person-v2': 'organization', 'project-members-readable-person-v1': 'project', 'restricted-reviewer-person-v2': 'approver',
+};
+
+/** A section of a cited record, as the pane shows it: only a decision still open says so, and each item keeps the atom id its citations carry. */
+function citedSection({ items, more }: PersonCitedRecordSectionV1): RecordSection {
+  return { more, items: items.map(({ atom_id, text: itemText, status, owner, quotes }) => ({
+    text: sourceText(itemText)!, ...(status === 'proposed' || status === 'unresolved' ? { status } : {}), ...(owner === undefined ? {} : { owner }),
+    excerpts: quotes.map(({ quote, started_at }) => ({ quote: sourceText(quote)!, ...(started_at === undefined ? {} : { at: started_at }) })), atom_id,
+  })) };
 }
 
 /**
- * One section of the approved brief. Every item must be of the section's kind,
- * with its own id and some text, or the whole record is refused. The first 32
- * show, each with its first three distinct excerpts.
- */
-function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale', record: string, owners: ReadonlyMap<string, string> = new Map()): RecordSection {
-  const ids = new Set<string>();
-  const items: RecordItem[] = [];
-  const entries = list(raw);
-  for (const entry of entries) {
-    const item = object(entry);
-    const itemText = sourceText(item.text);
-    if (item.kind !== kind || typeof item.id !== 'string' || item.id === '' || ids.has(item.id) || itemText === undefined) {
-      throw new ViewError();
-    }
-    ids.add(item.id);
-    if (items.length === MAX_RECORD_ITEMS) continue;
-    const excerpts: { quote: string; at?: string }[] = [];
-    for (const span of Array.isArray(item.evidence) ? item.evidence.slice(0, 32) : []) {
-      const found = span !== null && typeof span === 'object' ? span as Json : {};
-      const quote = sourceText(found.quote);
-      if (quote === undefined || excerpts.some(excerpt => excerpt.quote === quote)) continue;
-      const at = isoTime(found.started_at);
-      excerpts.push(at === undefined ? { quote } : { quote, at });
-      if (excerpts.length === 3) break;
-    }
-    const status = kind === 'decision' && (item.status === 'proposed' || item.status === 'unresolved') ? item.status : undefined;
-    const owner = kind === 'action' ? owners.get(item.id) : undefined;
-    items.push({ text: itemText, ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), excerpts, atom_id: atomId(record, item.id) });
-  }
-  return { items, more: entries.length > MAX_RECORD_ITEMS };
-}
-
-/** Owners the approver confirmed in the signed approval, by action id; the brief itself never has them. */
-function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
-  const owners = new Map<string, string>();
-  const entries = reference !== null && typeof reference === 'object' ? (reference as Json).action_owners : undefined;
-  for (const entry of Array.isArray(entries) ? entries.slice(0, 40) : []) {
-    const found = entry !== null && typeof entry === 'object' ? entry as Json : {};
-    const owner = sourceText(found.owner);
-    if (typeof found.signal_id === 'string' && owner !== undefined && owner.length <= 120) owners.set(found.signal_id, owner);
-  }
-  return owners;
-}
-
-/**
- * The one approved record asked for, as `person records --record-sha256`
- * prints it: only an approved event under the policy the answer cited. Only
- * what the pane shows is copied, and each item's atom id, the digest its
- * citations carry; participants' identities and signal ids stay behind.
+ * The one approved record asked for, as `person records --record-sha256
+ * --brief` prints it (organization-api's cited record): only the record and
+ * policy the answer cited, each text as the pane shows it.
  */
 export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
-  const value = object(unwrap(raw));
-  if (value.schema_version !== 1 || value.kind !== 'echo-clean-person-record-list-v1') throw new ViewError();
-  const records = list(value.records);
-  // A record the person can no longer read comes back as an empty list.
-  if (records.length === 0) throw new NotReadable();
-  if (records.length !== 1) throw new ViewError();
-  const record = object(records[0]);
-  const envelope = object(record.envelope);
-  if (typeof record.position !== 'number' || record.position < 1 ||
-      record.record_sha256 !== asked.record_sha256 || envelope.record_sha256 !== asked.record_sha256) {
-    throw new ViewError();
-  }
-  const body = object(envelope.body);
-  const event = object(body.event);
-  if (event.kind !== 'approved' || event.policy_id !== asked.policy_id) throw new ViewError();
-  const brief = object(object(object(event.approved_snapshot).approved_payload).brief);
-  const meeting = object(brief.meeting);
-  // Each item carries its atom id, so the pane can light the ones an answer cites.
-  const decisions = recordSection(brief.decisions, 'decision', asked.record_sha256);
-  const actions = recordSection(brief.actions, 'action', asked.record_sha256, confirmedOwners(body.human_act_resolution_ref));
-  const rationales = recordSection(brief.rationales, 'rationale', asked.record_sha256);
-
-  const participants: string[] = [];
-  let participantsMore = false;
-  for (const entry of Array.isArray(meeting.participants) ? meeting.participants.slice(0, 10_000) : []) {
-    const name = sourceText(entry !== null && typeof entry === 'object' ? (entry as Json).display_name : undefined);
-    if (name === undefined || participants.includes(name)) continue;
-    if (participants.length === MAX_RECORD_ITEMS) { participantsMore = true; break; }
-    participants.push(name);
-  }
-  const time = meeting.time !== null && typeof meeting.time === 'object' ? meeting.time as Json : {};
-  const startedAt = isoTime(time.actual_start_at) ?? isoTime(time.scheduled_start_at);
-  const timezone = typeof time.timezone === 'string' && /^[A-Za-z0-9_+\-/]{1,64}$/.test(time.timezone) ? time.timezone : undefined;
-  const metadata = record.source_metadata !== null && typeof record.source_metadata === 'object' ? record.source_metadata as Json : {};
-  const approver = metadata.record_approved_by !== null && typeof metadata.record_approved_by === 'object'
-    ? sourceText((metadata.record_approved_by as Json).display_name) : undefined;
-  const title = sourceText(meeting.title);
+  const record = validated(validatePersonCitedRecordV1, unwrap(raw));
+  if (record.record_sha256 !== asked.record_sha256 || record.policy_id !== asked.policy_id) throw new ViewError();
   return {
-    ...(title === undefined ? {} : { title }),
-    ...(startedAt === undefined ? {} : { started_at: startedAt }),
-    ...(timezone === undefined ? {} : { timezone }),
-    all_day: time.all_day === true,
-    ...(approver === undefined ? {} : { approved_by: approver }),
-    participants, participants_more: participantsMore,
-    visibility: asked.policy_id === 'restricted-reviewer-person-v2' ? 'approver'
-      : asked.policy_id === 'project-members-readable-person-v1' ? 'project' : 'organization',
-    decisions, actions, rationales,
+    ...(record.title === undefined ? {} : { title: sourceText(record.title)! }),
+    ...(record.started_at === undefined ? {} : { started_at: record.started_at }),
+    ...(record.timezone === undefined ? {} : { timezone: record.timezone }),
+    all_day: record.all_day,
+    ...(record.approved_by === undefined ? {} : { approved_by: sourceText(record.approved_by)! }),
+    participants: record.participants.map(name => sourceText(name)!), participants_more: record.participants_more,
+    visibility: RECORD_VISIBILITY[record.policy_id],
+    decisions: citedSection(record.decisions), actions: citedSection(record.actions), rationales: citedSection(record.rationales),
   };
 }
 

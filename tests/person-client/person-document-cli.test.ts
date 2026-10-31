@@ -216,7 +216,7 @@ describe('document CLI custody and bounded transport', () => {
   it('checks the captured GUI account before opening a file or submitting bytes', async () => {
     const f = setup(); unlinkSync(f.file); const fetch = vi.fn();
     const outcome = await run(f.home, [...uploadArgs(f.file), '--expected-authority', 'https://authority.example', '--expected-membership-id', 'mem_00000000-0000-4000-8000-000000000002'], fetch);
-    expect(outcome.failure).toMatchObject({ code: 'stale_access_state', mutation_outcome: 'not_submitted' }); expect(fetch).not.toHaveBeenCalled();
+    expect(outcome.failure).toMatchObject({ code: 'account_changed', sent: false }); expect(fetch).not.toHaveBeenCalled();
   });
 
   it('retains a submitted snapshot and withholds its receipt after an account switch', async () => {
@@ -335,7 +335,7 @@ describe('document CLI custody and bounded transport', () => {
     expect(mismatch.failure).toMatchObject({ code: 'outcome_unknown' });
     const offline = vi.fn();
     const stale = await run(f.home, [...args, '--expected-authority', 'https://authority.example', '--expected-membership-id', 'mem_other'], offline);
-    expect(stale.failure).toMatchObject({ code: 'stale_access_state', mutation_outcome: 'not_submitted' }); expect(offline).not.toHaveBeenCalled();
+    expect(stale.failure).toMatchObject({ code: 'account_changed', sent: false }); expect(offline).not.toHaveBeenCalled();
   });
 
   it('does not count interrupted preparation directories against the retained-request limit', async () => {
