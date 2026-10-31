@@ -195,7 +195,7 @@ describe("Organization Authority API runtime", () => {
       await vi.waitFor(() => expect(generationCalls).toBe(1), { timeout: 2000 });
       // Personal meeting intake waits behind the in-flight enrichment in the same worker.
       expect(events).toEqual(['upload']);
-      expect(application.readUploadV3('fixture', receipt.context_id).text).toBe(request.text);
+      expect(application.searchUploadsV3('fixture', { query: 'customer' }).results).toEqual([expect.objectContaining({ context_id: receipt.context_id, excerpt: request.text })]);
       let stopped = false;
       const closing = runtime.close().then(() => { stopped = true; });
       await new Promise(resolve => setTimeout(resolve, 30));
@@ -212,8 +212,7 @@ describe("Organization Authority API runtime", () => {
       await runtime.close(); runtime = undefined;
       expect([events[0], events.filter(event => event === 'upload').length]).toEqual(['upload', 2]);
       expect(generationCalls).toBe(2); expect(maximumActive).toBe(1); expect(errors).toEqual([]);
-      expect(application.searchUploadsV3('fixture', { query: 'telephone' }).results[0]?.context_id).toBe(receipt.context_id);
-      expect(application.readUploadV3('fixture', receipt.context_id).text).toBe(request.text);
+      expect(application.searchUploadsV3('fixture', { query: 'telephone' }).results).toEqual([expect.objectContaining({ context_id: receipt.context_id, excerpt: request.text })]);
       expect(database.prepare('SELECT count(*) AS n FROM authority_live_source_admission_v2').get()).toEqual({ n: 0 });
       expect(database.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
       expect(database.prepare('SELECT count(*) AS n FROM authority_person_update_work_v2').get()).toEqual({ n: 1 });
@@ -944,20 +943,20 @@ describe("Organization Authority API runtime", () => {
       const receipt = await post("/v3/person/updates", upload, 202);
       const context_id = receipt.context_id as string;
       expect(await get(`/v3/person/updates/${upload.request_id}`)).toMatchObject({ status: "stored", metadata: "pending" });
-      expect(await get(`/v3/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text, audience: upload.audience });
-      expect(await get(`/v2/person/projects/${project_id}/context/${context_id}`)).toMatchObject({ text: upload.text, project_id });
-      const feed = await post("/v2/person/projects/context/feed", { project_id, limit: 10 });
-      expect(feed).toMatchObject({ items: [{ context_id }] });
-      expect(await post("/v2/person/projects/context/search", { project_id, query: "original" })).toMatchObject({ items: [{ context_id }] });
+      const open = { schema_version: 1, ref: `note:${context_id}` };
+      expect(await post("/v1/person/open", open)).toMatchObject({ text: upload.text, item: { visibility: "project", projects: [{ project_id }] } });
+      const found = await post("/v2/person/projects/context/search", { project_id, query: "original" });
+      expect(found).toMatchObject({ items: [{ context_id, audience: upload.audience }] });
       expect(await post("/v3/person/updates/search", { query: "original" })).toMatchObject({ results: [{ context_id }] });
       // The V2 notes search stays composed for the notes stored as V2; a V3 note is not one of them (ADR-0048).
       expect(await post("/v2/person/updates/search", { query: "original" })).toEqual({ schema_version: 2, kind: "echo-person-upload-search-v2", results: [] });
       // The retired reads and writes answer as routes that never existed (ADR-0048).
       for (const path of ["/v1/person/projects", `/v1/person/projects/${project_id}`, `/v1/person/projects/${project_id}/context/${context_id}`,
-        `/v2/person/updates/${upload.request_id}`, `/v2/person/updates/content/${context_id}`]) {
+        `/v2/person/projects/${project_id}/context/${context_id}`, `/v2/person/updates/${upload.request_id}`, `/v2/person/updates/content/${context_id}`,
+        `/v3/person/updates/content/${context_id}`, `/v2/person/documents/doc_${"0".repeat(64)}/text`]) {
         expect(await get(path, 404)).toEqual({ error: { code: "not_found", message: "request failed" } });
       }
-      for (const path of ["/v1/person/projects/context/feed", "/v1/person/projects/context/search", "/v2/person/updates"]) {
+      for (const path of ["/v1/person/projects/context/feed", "/v1/person/projects/context/search", "/v2/person/projects/context/feed", "/v2/person/updates"]) {
         expect(await post(path, { project_id }, 404)).toEqual({ error: { code: "not_found", message: "request failed" } });
       }
       expect(await post("/v1/person/projects/members", { project_id })).toMatchObject({ items: [{ membership_id: initialized.owner_membership_id, role: "lead" }] });
@@ -967,11 +966,10 @@ describe("Organization Authority API runtime", () => {
       await post("/v1/person/projects/members/set", { schema_version: 1, kind: "echo-project-member-set-v1", request_id: "00000000-0000-4000-8000-000000000003", project_id, membership_id: initialized.owner_membership_id, role: "lead" });
       expect(await post("/v1/person/projects/members/remove", { schema_version: 1, kind: "echo-project-member-remove-v1", request_id: "00000000-0000-4000-8000-000000000004", project_id, membership_id: initialized.owner_membership_id }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
       await post("/v1/person/projects/context/dissociate", { schema_version: 1, kind: "echo-project-context-dissociate-v1", request_id: "00000000-0000-4000-8000-000000000005", project_id, context_id });
-      expect(await post("/v2/person/projects/context/feed", { project_id })).toMatchObject({ items: [] });
-      expect(await get(`/v2/person/projects/${project_id}/context/${context_id}`, 404)).toEqual({ error: { code: "not_found", message: "request failed" } });
-      expect(await get(`/v3/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text });
+      expect(await post("/v2/person/projects/context/search", { project_id, query: "original" })).toMatchObject({ items: [] });
+      expect(await post("/v1/person/open", open)).toMatchObject({ text: upload.text, item: { projects: [] } });
       await post("/v1/person/projects/context/associate", { schema_version: 1, kind: "echo-project-context-associate-v1", request_id: "00000000-0000-4000-8000-000000000006", project_id, context_id });
-      expect(await post("/v2/person/projects/context/feed", { project_id })).toEqual(feed);
+      expect(await post("/v2/person/projects/context/search", { project_id, query: "original" })).toEqual(found);
       // The composed Ask source check (ADR-0047) needs no answer model: an unknown follow-up is unreadable, and with no tool
       // connected a ticket is unknown.
       expect(await post("/v1/person/ask/check", { schema_version: 1, kind: "echo-person-ask-check-request-v1", items: [
@@ -981,7 +979,7 @@ describe("Organization Authority API runtime", () => {
       ] })).toEqual({ schema_version: 1, kind: "echo-person-ask-check-v1", items: [{ state: "unreadable" }, { state: "unknown" }] });
       const inspection = openAuthorityDatabase(join(initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
       try {
-        expect(inspection.prepare("SELECT json_extract(body_json, '$.response_sha256') AS response_sha256 FROM authority_project_read_audit_v1 WHERE json_extract(body_json, '$.operation') = 'feed_v2' ORDER BY rowid DESC LIMIT 1").get()).toEqual({ response_sha256: canonicalSha256(feed) });
+        expect(inspection.prepare("SELECT json_extract(body_json, '$.response_sha256') AS response_sha256 FROM authority_project_read_audit_v1 WHERE json_extract(body_json, '$.operation') = 'search_v2' ORDER BY rowid DESC LIMIT 1").get()).toEqual({ response_sha256: canonicalSha256(found) });
         const auditCount = () => inspection.prepare("SELECT count(*) AS n FROM authority_project_read_audit_v1").get();
         const before = auditCount();
         let authentications = 0;
@@ -990,13 +988,13 @@ describe("Organization Authority API runtime", () => {
           new Date(now + (++authentications === 1 ? 0 : 365 * 24 * 60 * 60 * 1000)).toISOString(),
         );
         try {
-          expect(await get(`/v2/person/projects/${project_id}/context/${context_id}`, 401)).toEqual({ error: { code: "unauthorized", message: "request failed" } });
+          expect(await post("/v2/person/projects/context/search", { project_id, query: "original" }, 401)).toEqual({ error: { code: "unauthorized", message: "request failed" } });
           expect(authentications).toBe(2);
           expect(auditCount()).toEqual(before);
         } finally { clock.mockRestore(); }
         inspection.exec("CREATE TRIGGER fixture_project_audit_failure BEFORE INSERT ON authority_project_read_audit_v1 BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END");
         try {
-          expect(await get(`/v3/person/updates/content/${context_id}`, 503)).toEqual({ error: { code: "unavailable", message: "request failed" } });
+          expect(await post("/v3/person/updates/search", { query: "original" }, 503)).toEqual({ error: { code: "unavailable", message: "request failed" } });
           expect(auditCount()).toEqual(before);
         } finally { inspection.exec("DROP TRIGGER fixture_project_audit_failure"); }
         expect(inspection.prepare("SELECT count(*) AS n FROM authority_live_source_candidates_v2").get()).toEqual({ n: 0 });
@@ -1015,7 +1013,7 @@ describe("Organization Authority API runtime", () => {
       expect(await post("/v1/person/projects", create, 201)).toEqual(created);
       expect(await post("/v3/person/updates", upload, 202)).toEqual(receipt);
       expect(await post("/v3/person/updates", { ...upload, audience: { kind: "team" } }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
-      expect(await get(`/v3/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text, audience: upload.audience });
+      expect(await post("/v1/person/open", open)).toMatchObject({ text: upload.text, item: { visibility: "project", projects: [{ project_id }] } });
 
       // The person list and open need no answer model or published generation (ADR-0024).
       expect(await post("/v1/person/list", { schema_version: 1 })).toEqual({

@@ -102,7 +102,7 @@ describe("person list and open cursors", () => {
   });
 
   it("refuses a cursor from another operation, version or ref", () => {
-    const projectCursor = encodeProjectCursorV1({ operation: "feed_v2", project_id: PROJECT_A, limit: 25, organization_id: ORGANIZATION, membership_id: MEMBERSHIP }, [TIME, NOTE]);
+    const projectCursor = encodeProjectCursorV1({ operation: "search_v2", project_id: PROJECT_A, canonical_query: "note", limit: 25, organization_id: ORGANIZATION, membership_id: MEMBERSHIP }, [2, TIME, NOTE]);
     refused(() => decodePersonListCursorV1(projectCursor, list({ kind: "project", project_id: PROJECT_A })));
     // The same fields framed as version 1 under the list binding.
     refused(() => decodePersonListCursorV1(frameCursorV1(1, listDigest(list()), ["", "", "", "", "", ""]), list()));

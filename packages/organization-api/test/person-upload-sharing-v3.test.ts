@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   validatePersonDocumentMetadataV2, validatePersonDocumentReceiptV2, validatePersonDocumentSavedV2, validatePersonDocumentSearchV2,
   validatePersonDocumentUploadMetadataV2, validatePersonUpdateReceiptV3, validatePersonUpdateSavedV3, validatePersonUpdateStatusResultV3, validatePersonUpdateSubmitV3,
-  validateProjectContextFeedV2,
+  validateProjectContextSearchResultV2,
 } from '../src/index.js';
 
 const first = 'prj_00000000-0000-4000-8000-000000000001';
@@ -28,7 +28,7 @@ describe('multi-project Person upload contracts', () => {
   });
 
   it('returns multi-project audience through project V2 rather than counterfeiting it as V1', () => {
-    expect(validateProjectContextFeedV2({ schema_version: 2, kind: 'echo-project-context-feed-v2', project_id: first, items: [{
+    expect(validateProjectContextSearchResultV2({ schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id: first, items: [{
       context_id: `ctx_${'a'.repeat(64)}`, received_at: '2026-09-23T00:00:00.000Z', title: 'MRD', excerpt: 'Project kickoff', audience,
     }], next_cursor: null })).toMatchObject({ items: [{ audience }] });
   });

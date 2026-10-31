@@ -3,8 +3,8 @@ import { expect, it } from 'vitest';
 import {
   validatePersonUpdateSubmitV2,
   validateProjectContextBrowseV1,
-  validateProjectContextFeedV2,
   validateProjectContextSearchV1,
+  validateProjectContextSearchResultV2,
   validateProjectCreateV1,
   validateProjectMemberSetV1,
 } from '../src/index.js';
@@ -19,7 +19,7 @@ const validators: Readonly<Record<string, (value: unknown) => unknown>> = {
   'project-member-set': validateProjectMemberSetV1,
   'project-browse': validateProjectContextBrowseV1,
   'project-search': validateProjectContextSearchV1,
-  'project-feed-v2': validateProjectContextFeedV2,
+  'project-search-result-v2': validateProjectContextSearchResultV2,
 };
 
 it.each(cases)('$id is rejected by its public codec', testCase => {

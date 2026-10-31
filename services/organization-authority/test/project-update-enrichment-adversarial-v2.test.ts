@@ -40,8 +40,9 @@ function fixture() {
   const submit = (audience: PersonUpdateSubmitV2['audience'] = { kind: 'team' }) => insertStoredNoteV2(database, OWNER, {
     request_id: requestId(3), title: 'Customer note', text: 'The customer prefers calls.', project_id: project.project_id as ProjectIdV1, audience,
   }, now);
-  /** The original as a project reader reads it: the V2 project context read serves stored V2 notes. */
-  const original = (token: string, contextId: string) => application.readContextV2(token, project.project_id, contextId);
+  /** The original as a project reader finds it: the project search serves stored V2 notes; undefined when it is not readable. */
+  const original = (token: string, contextId: string) =>
+    application.searchV2(token, { project_id: project.project_id, query: 'customer' }).items.find(item => item.context_id === contextId);
   const removeUploader = () => application.removeMember('member', {
     schema_version: 1, kind: 'echo-project-member-remove-v1', request_id: requestId(4),
     project_id: project.project_id, membership_id: OWNER.membership_id,
@@ -65,7 +66,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     await f.run();
     expect(f.generate).not.toHaveBeenCalled();
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'unavailable', search_hints: '' });
-    expect(f.original('member', receipt.context_id).text).toBe('The customer prefers calls.');
+    expect(f.original('member', receipt.context_id)?.excerpt).toBe('The customer prefers calls.');
   });
 
   it('discards model hints after organization revocation and preserves another member’s team-original access', async () => {
@@ -77,7 +78,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     });
     await f.run();
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'unavailable', search_hints: '' });
-    expect(f.original('member', receipt.context_id).text).toBe('The customer prefers calls.');
+    expect(f.original('member', receipt.context_id)?.excerpt).toBe('The customer prefers calls.');
     expect(f.application.searchUploads('member', { query: 'telephone' }).results).toEqual([]);
     expect(f.application.searchUploads('member', { query: 'customer' }).results).toHaveLength(1);
   });
@@ -106,7 +107,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     });
     await expect(f.worker().runOnce(aborted.signal)).rejects.toThrow('fixture shutdown');
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'processing', search_hints: '' });
-    expect(f.original('member', receipt.context_id).text).toBe('The customer prefers calls.');
+    expect(f.original('member', receipt.context_id)?.excerpt).toBe('The customer prefers calls.');
     await f.run(); // Refused during the lease.
     expect(f.generate).toHaveBeenCalledTimes(1);
     f.later();
@@ -127,7 +128,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     expect(workState(f.database, receipt.context_id)).toEqual({ state: 'unavailable', search_hints: '', attempts: 5 });
     f.later(); await f.run();
     expect(f.generate).toHaveBeenCalledTimes(5);
-    expect(f.original('member', receipt.context_id).text).toBe('The customer prefers calls.');
+    expect(f.original('member', receipt.context_id)?.excerpt).toBe('The customer prefers calls.');
     expect(f.application.searchUploads('member', { query: 'customer' }).results).toHaveLength(1);
   });
 
@@ -152,7 +153,7 @@ describe('V2 enrichment lifecycle and revocation', () => {
     f.generate.mockResolvedValue({ search_hints: 'telephone', audience: { kind: 'team' }, text: 'rewritten' });
     await f.run();
     expect(workState(f.database, receipt.context_id)).toMatchObject({ state: 'pending', search_hints: '' });
-    expect(f.original('owner', receipt.context_id)).toMatchObject({ text: 'The customer prefers calls.', audience: { kind: 'only_me' } });
-    expect(() => f.original('member', receipt.context_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(f.original('owner', receipt.context_id)).toMatchObject({ excerpt: 'The customer prefers calls.', audience: { kind: 'only_me' } });
+    expect(f.original('member', receipt.context_id)).toBeUndefined();
   });
 });

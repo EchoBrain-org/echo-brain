@@ -7,7 +7,7 @@ beforeEach(() => { h = new SyntheticProjectHarness(); });
 afterEach(() => h.close());
 
 describe('PC-06 synthetic table-delta invariant with real V15 custody', () => {
-  it('adds only original custody/work/receipt/association/audit rows, with no meeting, approval or second queue', async () => {
+  it('adds only original custody/work/receipt/association rows, with no meeting, approval or second queue', async () => {
     const counts = () => {
       const tables = h.database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[];
       return Object.fromEntries(tables.map(({ name }) => [name, (h.database.prepare(`SELECT count(*) AS n FROM "${name.replaceAll('"', '""')}"`).get() as { n: number }).n]));
@@ -23,7 +23,6 @@ describe('PC-06 synthetic table-delta invariant with real V15 custody', () => {
       'authority_person_updates_v2', 'authority_person_update_work_v2',
       'authority_person_update_audience_projects_v1',
       'authority_project_command_receipts_v1', 'authority_project_context_associations_v1',
-      'authority_project_read_audit_v1',
     ].sort());
     const operations = JSON.parse(readFileSync(new URL('../../../../tests/fixtures/project-context-v1/operations.json', import.meta.url), 'utf8'));
     expect(JSON.stringify(operations)).not.toMatch(/\/ask|MeetingDocument|\/approval|\/records/);

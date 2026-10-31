@@ -308,7 +308,7 @@ describe("person original items store", () => {
     expect(serialized).not.toContain(PROJECT_BETA);
   });
 
-  it("lists a project exactly as the project feed and document search do, and denies it like Ask", () => {
+  it("lists a project exactly as the project search and document search do, and denies it like Ask", () => {
     const f = fixture();
     f.note("owner", { kind: "team" }, [PROJECT_ALPHA]);
     f.note("owner", { kind: "only_me" }, [PROJECT_ALPHA, PROJECT_BETA]);
@@ -321,19 +321,20 @@ describe("person original items store", () => {
     f.document("owner", { kind: "project", project_id: PROJECT_BETA }, [PROJECT_ALPHA], { state: "ready" });
     f.document("member", { kind: "only_me" }, [PROJECT_ALPHA]);
     f.document("owner", { kind: "team" }, [PROJECT_BETA], { version: 1 });
-    const feed = (token: string, project_id: string) => {
+    // Every note says "note text", so one search term pages through all of a project's notes, newest first.
+    const search = (token: string, project_id: string) => {
       const found: string[] = [];
       for (let cursor: string | undefined, guard = 0; guard < 50; guard += 1) {
-        const page = f.projects.feedV2(token, { project_id, ...(cursor === undefined ? {} : { cursor }) });
+        const page = f.projects.searchV2(token, { project_id, query: "note", ...(cursor === undefined ? {} : { cursor }) });
         found.push(...page.items.map((item) => item.context_id));
         if (page.next_cursor === null) return found;
         cursor = page.next_cursor;
       }
-      throw new Error("feed did not end");
+      throw new Error("search did not end");
     };
     for (const [token, projectId] of [["owner", PROJECT_ALPHA], ["owner", PROJECT_BETA], ["member", PROJECT_ALPHA]] as const) {
       const rows = f.walk(token, inProject(projectId)).rows;
-      expect(rows.filter((row) => row.kind === "note").map((row) => row.id)).toEqual(feed(token, projectId));
+      expect(rows.filter((row) => row.kind === "note").map((row) => row.id)).toEqual(search(token, projectId));
       expect(rows.filter((row) => row.kind === "document").map((row) => row.id)).toEqual(f.searchAll(token, projectId));
       expect(rows.length).toBeGreaterThan(0);
     }
@@ -536,7 +537,7 @@ describe("person original items store", () => {
         let readable = true;
         try {
           if (version === 2) readable = f.projects.searchUploads(token, { query: markers.get(id)! }).results.some((result) => result.context_id === id);
-          else f.projects.readUploadV3(token, id);
+          else readable = f.projects.searchUploadsV3(token, { query: "note" }).results.some((result) => result.context_id === id);
         } catch { readable = false; }
         expect(listed.has(id), `${token} ${id}`).toBe(readable);
       }

@@ -18,11 +18,11 @@ import {
   validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
   validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectContextSearchResultV2,
-  validateProjectContextReadV2, validatePersonUploadContextId, validatePersonUpdateRequestId,
+  validateProjectContextSearchV1, validateProjectContextSearchResultV2,
+  validatePersonUpdateRequestId,
   validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
   validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
-  validatePersonUploadSearchV3, validatePersonUploadSearchResultV3, validatePersonUploadContentV3,
+  validatePersonUploadSearchV3, validatePersonUploadSearchResultV3,
 } from '@echo-brain/organization-api';
 import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
 import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
@@ -677,7 +677,7 @@ function projectResponse(response: ServerResponse, status: number, value: unknow
   json(response, status, value);
 }
 
-type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1, 'listProjectsV2' | 'readProjectV2' | 'readContextV2'>;
+type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1, 'listProjectsV2' | 'readProjectV2'>;
 const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   readonly operation: ProjectBodyOperation;
   readonly request: (value: unknown) => unknown;
@@ -696,7 +696,6 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
-  [`${PERSON_PROJECTS_PATH_V2}/context/feed`, { operation: 'feedV2', request: validateProjectContextBrowseV1, response: validateProjectContextFeedV2, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V2}/context/search`, { operation: 'searchV2', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV2, status: 200 }],
   // The one V2 notes route: the notes stored as V2, which no V3 read returns (ADR-0048).
   [`${PERSON_UPDATES_PATH_V2}/search`, { operation: 'searchUploads', request: validatePersonUploadSearchV2, response: validatePersonUploadSearchResultV2, status: 200 }],
@@ -725,10 +724,8 @@ async function projectRoute(
     ? url.pathname.slice(PERSON_UPDATES_PATH_V3.length + 1).split('/') : [];
   const list = url.pathname === PERSON_PROJECTS_PATH_V2;
   const readProject = projectPath.length === 1;
-  const readContext = projectPath.length === 3 && projectPath[1] === 'context';
   const status = uploadPath.length === 1;
-  const readUpload = uploadPath.length === 2 && uploadPath[0] === 'content';
-  if (!list && !readProject && !readContext && !status && !readUpload) return undefined;
+  if (!list && !readProject && !status) return undefined;
   const token = accessToken(request.headers.authorization);
   if ((!list && url.search !== '') || (await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES)).length !== 0) {
     throw new AuthorityOperationError('invalid_request', 'request failed');
@@ -737,17 +734,9 @@ async function projectRoute(
     const page = projectPage(url);
     return response => projectResponse(response, 200, application.listProjectsV2(token, page), validateProjectListV2);
   }
-  if (readProject || readContext) {
+  if (readProject) {
     const project = projectInput(validateProjectIdV1, projectPath[0]);
-    if (readContext) {
-      const context = projectInput(validatePersonUploadContextId, projectPath[2]);
-      return response => projectResponse(response, 200, application.readContextV2(token, project, context), validateProjectContextReadV2);
-    }
     return response => projectResponse(response, 200, application.readProjectV2(token, project), validateProjectSummaryV2);
-  }
-  if (readUpload) {
-    const context = projectInput(validatePersonUploadContextId, uploadPath[1]);
-    return response => projectResponse(response, 200, application.readUploadV3(token, context), validatePersonUploadContentV3);
   }
   const id = projectInput(validatePersonUpdateRequestId, uploadPath[0]);
   return response => projectResponse(response, 200, application.uploadStatusV3(token, id), validatePersonUpdateStatusResultV3);
