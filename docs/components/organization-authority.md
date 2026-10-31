@@ -92,14 +92,18 @@ copies into its runtime stage. Its hosting account and operator are selected
 under
 [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md):
 
-| Workspace                       | Owns                                                                                                                                                                                |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `organization-authority`        | Organization identity, access, HTTP boundary, and composition                                                                                                                       |
-| `organization-authority-kernel` | Authority SQL baselines, persistence adapters, state lineage, the agentic research loop and answer composition (Ask, impact checks, sweeps), and the audited live-evidence boundary |
-| `organization-processing`       | Provider-neutral meeting processing and admitted-meeting workflow                                                                                                                   |
-| `organization-control-plane`    | Verified provider connection and Person identity links; no approval state                                                                                                           |
-| `organization-record`           | Append-only approved record and deterministic append-side projections                                                                                                               |
-| `organization-retrieval`        | Rebuildable permission-aware retrieval generations                                                                                                                                  |
+| Workspace                       | Owns                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| `organization-authority`        | Organization identity, access, HTTP boundary, and composition                         |
+| `organization-authority-kernel` | Authority SQL baselines, persistence adapters, state lineage, and the research loop   |
+| `organization-processing`       | Provider-neutral meeting processing and admitted-meeting workflow                     |
+| `organization-control-plane`    | Verified provider connection and Person identity links; no approval state             |
+| `organization-record`           | Append-only approved record and deterministic append-side projections                 |
+| `organization-retrieval`        | Rebuildable permission-aware retrieval generations                                    |
+
+The kernel's research loop and answer composition serve Ask, impact checks
+and sweeps alike, and its `src/shared/` folder holds the audited live-evidence
+boundary.
 
 The rest of the closure is the shared `federation-protocol`,
 `organization-protocol` and `organization-api` contracts plus the composed
