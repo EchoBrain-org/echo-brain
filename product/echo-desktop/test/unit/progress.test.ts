@@ -142,7 +142,7 @@ describe('the line and its rows', () => {
 });
 
 describe('the receipt', () => {
-  const receipt: AskReceipt = { looked_through: 14, elapsed_ms: 48_400, rows: [
+  const receipt: AskReceipt = { looked_through: 14, rows: [
     { type: 'searched', sources: [{ kind: 'meetings' }], found: 9 }, { type: 'read', items: [decision('1'), ticket('THERM-48')] },
   ] };
   it('says how many items it looked through and how long the person waited', () => {

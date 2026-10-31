@@ -6,7 +6,7 @@
 // Markdown.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerBlock } from '../../src/shared/protocol.js';
-import { layoutAnswer } from '../../src/host/test-authority.js';
+import { layoutAnswer } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
 import { asking as askingWith, byTestId, elements, fail, flush, Held, ok, paneTurn, plainHooks, rpcFor, storeLifecycle, text, type Node } from './harness.js';
 

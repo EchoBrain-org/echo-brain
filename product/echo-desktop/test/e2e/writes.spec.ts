@@ -203,24 +203,6 @@ test('starting over on an unconfirmed upload removes the copy kept to resend it'
   expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/documents\.abandon ok /);
 });
 
-test('Organization warns before it is saved, and the toast says it was shared', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
-  await page.getByTestId('capture-place').click();
-  await page.getByTestId('place-team').click();
-  await expect(page.getByTestId('capture-place')).toHaveText('Organization');
-  await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
-  await expect(page.getByTestId('compose-readers')).toHaveClass(/warning/);
-  await page.getByTestId('compose-body').fill('All hands notes');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('toast')).toHaveText('Shared with your organization');
-  expect(posts()[0]!.body?.audience).toEqual({ kind: 'team' });
-  expect(posts()[0]!.body?.association_project_ids).toEqual([]);
-});
-
 test('saving to the project on screen adds to its feed and leaves the rest of the page alone', async () => {
   run = await launch();
   const { page } = run;

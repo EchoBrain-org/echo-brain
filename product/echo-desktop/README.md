@@ -116,18 +116,22 @@ account under a hash of it, and goes when the timeline does: at our own
 sign-out, or when another account signs in here. A project seen for the first
 time has no dot, and a read that fails leaves the dots as they were.
 
-Home zooms ([Home altitude v1](../../docs/product/2026-10-29-home-altitude-v1.md)).
-A row of stops at its top, **My projects · a project · a person**, with **⌖ Me**
-beside them, moves it between four altitudes. All of them use data the
-Authority already sends, and nothing is typed in by hand.
+Home zooms ([Home altitude v1](../../docs/product/2026-10-29-home-altitude-v1.md),
+[One place to look v1](../../docs/product/2026-10-30-one-place-home-v1.md)).
+Its stops, **My projects · a project · a person**, sit in the title row in
+place of a title; the project and person stops wait until you have zoomed into
+one. All of them use data the Authority already sends, and nothing is typed in
+by hand.
 
-- **Me** is Home as below, under **Needs you**.
-- **My projects** puts each of your projects on one row:
-  - its health dot (on track, at risk, or off track, in the one signal colour);
-  - an orange count of follow-ups needing attention;
-  - its owners' faces;
-  - a ring and a percentage for how many follow-ups are done;
-  - how long its oldest waiting follow-up has waited.
+- **My projects**, Home's top, shows **Needs you** (below), then each of your
+  projects on one row, off track first, then at risk, then on track:
+  - a mark only when it is not on track: a solid orange dot off track, an
+    orange ring at risk (a faint ring while it is unread, or its read failed);
+  - its tile and name, then, faintly, the follow-up that has needed attention
+    longest and whose it is ("no owner" for one with none);
+  - a grey bar of how many of its follow-ups are done (none with no
+    follow-ups);
+  - how long its oldest waiting follow-up has waited ("9d").
 
   A follow-up needs attention when it hasn't been sent for over a day, has
   been open for over three, or has no owner. Off track means one has waited
@@ -140,10 +144,18 @@ Click a row or a group to zoom in. Escape zooms out from a project or a
 person, after it has cleared the bar or closed what is open. A trackpad
 pinch also zooms. My projects only reads rows, never live. A project reads
 its waiting follow-ups live once, as its follow-ups list does. A person reads
-at most 20 of theirs live. Home remembers its altitude per account on this
-computer.
+at most 20 of theirs live. Home does not remember how far it was zoomed: every
+start, the sidebar's Home row and another account open its top.
 
-Home shows only what waits on you, under **Needs you**. Each row is one of:
+**Needs you** shows only what waits on you, by what it asks of you: Approve,
+Retry, Send, Update (with Review), then Checking. A kind with one row shows
+that row; with two or more, one line gives its verb and count, the newest
+row's name, "and N more" and how long ago the newest came, and opens that
+kind's list: Home zoomed into it, its rows newest first. Back, Escape or the
+sidebar's Home go back to Home's top, and so does the list by itself once its
+last row is dealt with. Checking with two or more is one faint line that
+opens nothing. Its count is the sidebar's Home badge, and with nothing waiting
+it says "Nothing needs you". Each row is one of:
 
 - **Approve**: a meeting waiting for your decision. Its card shows what was
   decided, numbered (a decision still proposed or unresolved says so), and
@@ -218,7 +230,7 @@ found). "Open" is one status only: a total of not sent and open together is
 A **follow-ups list** is a meeting's (from its Send row, its line in the
 reader, its decision page, or a follow-up's page), a project's (from the line
 above its feed), or **Follow-ups**: everything you sent, own or last handed
-on, in every status, from the sidebar or Home's footer. When that list is already open
+on, in every status, from the sidebar. When that list is already open
 under what shows, its links go back to it, ticks and place kept, instead of
 opening it again. Rows are grouped Not sent, Open, Done and Dismissed, each
 group counted over the whole list, the meeting's actions first; each row
@@ -323,10 +335,11 @@ account was told of opens, and a sheet or Capture that is up stays.
 desktop.log records `lifecycle conceal|resume|shown|wake` and `changes moved
 <areas>` (by area name only).
 
-Under the rows, and on an empty Home (with no projects too), a footer says how
-many items you sent wait on others and when ECHO last checked ("2 waiting on
-others · ECHO checked 2 h ago"), with **Follow-ups**. An approved meeting
-and a project each show a follow-ups line counted by status ("Follow-ups · 1
+The sidebar's **Follow-ups** row counts, in grey, the items you sent that wait
+on others (nothing at none), and that list says faintly at its end when ECHO
+last checked ("ECHO checked 2 h ago"). **Only me**, under it, lists everything
+only you can read. An approved meeting and a project each show a follow-ups
+line counted by status ("Follow-ups · 1
 open · 4 not sent"), which opens that list and keeps what it last said while
 it is read again; a meeting's row in a project's feed says how many of its
 follow-ups are not closed ("4 follow-ups"). Home also
@@ -375,7 +388,7 @@ npm start
 `npm start` builds the app and runs it against the test fixture Authority in a
 throwaway home and app-data directory, deleted on exit; it never reads or
 writes your real ECHO session. `npm start -- <mode>` selects one of the
-fixture's test modes in `src/host/test-authority.ts`.
+fixture's test modes in `test/fixtures/authority.ts`.
 
 `npm run typecheck` checks the app's TypeScript. `npm test` builds the app,
 then runs the unit tests (`test/unit`, Vitest) and the Electron end-to-end

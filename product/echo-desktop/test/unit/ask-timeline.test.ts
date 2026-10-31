@@ -698,7 +698,7 @@ describe('Ask on the timeline', () => {
   });
 
   it('keeps of a turn only what the page reads back: its full question and "since" once, no receipt, and each source\'s citation once', async () => {
-    const receipt: AskReceipt = { looked_through: 1, elapsed_ms: 4_000, rows: [{ type: 'read', items: [ticket('THERM-482', '20482')] }] };
+    const receipt: AskReceipt = { looked_through: 1, rows: [{ type: 'read', items: [ticket('THERM-482', '20482')] }] };
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => {
         const answer = answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is in progress.', [0]]]);

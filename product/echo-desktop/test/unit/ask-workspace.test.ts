@@ -78,7 +78,7 @@ describe('your workspace and your tools\' containers open beside Ask (research t
 
     // The answer cites it, and its receipt names it: the pane stays on it, and Open shows.
     vi.advanceTimersByTime(3_000);
-    release(ok(answering([cited], { looked_through: 1, elapsed_ms: 31_000, rows: [{ type: 'searched', sources: [{ kind: 'projects' }], found: 1 },
+    release(ok(answering([cited], { looked_through: 1, rows: [{ type: 'searched', sources: [{ kind: 'projects' }], found: 1 },
       { type: 'read', items: [cited] }] })));
     await flush();
     expect(store.paneTarget()?.sources).toEqual([cited]);

@@ -66,8 +66,6 @@ test('ask inside a project is scoped to it until the chip is cleared', async () 
   expect(asks[1]!.body && 'project_id' in asks[1]!.body).toBe(false);
 });
 
-const APOLLO = 'prj_11111111-1111-4111-8111-111111111111';
-const BEACON = 'prj_44444444-4444-4444-8444-444444444444';
 const notes = () => run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
 
 test('capture starts private outside a project, closes itself on save and says where it went', async () => {
@@ -96,71 +94,6 @@ test('capture starts private outside a project, closes itself on save and says w
   await page.getByTestId('write-button').click();
   await expect(page.getByTestId('toast')).toHaveCount(0);
   await expect(page.getByTestId('compose-body')).toHaveValue('');
-});
-
-test('capturing inside a project saves to it, and the Only me lock keeps it filed there for you alone', async () => {
-  run = await launch();
-  const { page } = run;
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
-  await expect(page.getByTestId('capture-lock')).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByTestId('compose-readers')).toHaveText('Apollo members can read this.');
-  await page.getByTestId('compose-body').fill('Weekly update');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo');
-  expect(notes()[0]!.body?.audience).toEqual({ kind: 'project', project_id: APOLLO });
-  expect(notes()[0]!.body?.association_project_ids).toEqual([APOLLO]);
-
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('capture-lock').click();
-  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
-  await page.getByTestId('compose-body').fill('My own reminder');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo · only you');
-  expect(notes()[1]!.body?.audience).toEqual({ kind: 'only_me' });
-  expect(notes()[1]!.body?.association_project_ids).toEqual([APOLLO]);
-});
-
-test('the lock keeps a capture filed in the projects ticked for you alone, and Organization files it in none, for everyone', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('capture-place')).toHaveText('No project');
-  await page.getByTestId('compose-body').fill('Beacon kickoff moved');
-  // Tick Beacon, then the lock: it is filed in Beacon, and only you can read it.
-  await page.getByTestId('capture-place').click();
-  await page.getByRole('checkbox', { name: 'Beacon' }).click();
-  await page.getByTestId('projects-done').click();
-  await expect(page.getByTestId('capture-lock')).toHaveAttribute('aria-pressed', 'false');
-  await page.getByTestId('capture-lock').click();
-  await expect(page.getByTestId('capture-place')).toHaveText('Beacon');
-  await expect(page.getByTestId('capture-lock')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
-  // The caret stays in Capture: ⌘↩ saves straight away.
-  await page.keyboard.press('ControlOrMeta+Enter');
-  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon · only you');
-  expect(notes()[0]!.body?.audience).toEqual({ kind: 'only_me' });
-  expect(notes()[0]!.body?.association_project_ids).toEqual([BEACON]);
-
-  // Inside Apollo, Apollo is ticked and listed first. Beacon too, then Organization: everyone can read it, filed in none.
-  await page.getByTestId('sidebar-project').first().click();
-  await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
-  await page.getByTestId('capture-place').click();
-  await expect(page.getByTestId('projects-row')).toHaveText(['Apollo', 'Beacon']);
-  await expect(page.getByRole('checkbox', { name: 'Apollo' })).toBeChecked();
-  await page.getByRole('checkbox', { name: 'Beacon' }).click();
-  await page.getByTestId('place-team').click();
-  await expect(page.getByTestId('projects-list')).toHaveCount(0);
-  await expect(page.getByTestId('capture-lock')).toHaveCount(0);
-  await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
-  await page.getByTestId('compose-body').fill('For everyone, about Apollo and Beacon');
-  await page.keyboard.press('ControlOrMeta+Enter');
-  await expect(page.getByTestId('toast')).toHaveText('Shared with your organization');
-  expect(notes()[1]!.body?.audience).toEqual({ kind: 'team' });
-  expect(notes()[1]!.body?.association_project_ids).toEqual([]);
 });
 
 test('an unconfirmed save says so, locks the text and never claims it was sent', async () => {

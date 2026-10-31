@@ -3,7 +3,7 @@ import type { Answer, AnswerSource } from '../../src/shared/protocol.js';
 import {
   answerMarkdown, answerSentences, documentName, externalSourceProvider, lateForYou, MAX_SOURCES, passageBlocks, sourceGroups, statementGroups, tableDay,
 } from '../../src/renderer/answer.js';
-import { layoutAnswer } from '../../src/host/test-authority.js';
+import { layoutAnswer } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
 
 const digest = (digit: string) => `sha256:${digit.repeat(64)}`;

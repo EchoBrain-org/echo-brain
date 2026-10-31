@@ -28,7 +28,7 @@ const item = (title: string, approved_at: string): OpenItemView => ({
 });
 const meeting = (title: string, day: number): ListItem => ({
   ref: { kind: 'meeting', id: `sha256:${String(day).padStart(64, '0')}` }, title, added_at: `2026-10-${String(day).padStart(2, '0')}T10:00:00.000Z`, visibility: 'project',
-  projects: ['Apollo'], meeting_date: `2026-10-${String(day).padStart(2, '0')}`,
+  projects: ['Apollo'],
 });
 const note = (title: string, day: number): ListItem => ({
   ref: { kind: 'note', id: `ctx_${day}` }, title, added_at: `2026-10-${String(day).padStart(2, '0')}T09:00:00.000Z`, visibility: 'project', projects: ['Apollo'],

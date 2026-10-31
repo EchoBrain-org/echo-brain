@@ -11,7 +11,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, HOST_TIMEOUT_MS, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
@@ -68,7 +68,7 @@ async function load(): Promise<ClientModules> {
   if (__ECHO_TEST_HOOK__ && process.env.ECHO_DESKTOP_TEST_FIXTURES) {
     // Belt and braces with main: the fixture never writes into the real home.
     if (sameFolder(home!, homedir())) throw new Error('The test Authority needs a private ECHO_HOME');
-    const test = await import('./test-authority.js');
+    const test = await import('../../test/fixtures/authority.js');
     const hook = test.installTestAuthority(home!, process.env.ECHO_DESKTOP_TEST_FIXTURES, sessions.PersonSessionStore);
     Object.assign(dependencies, hook.dependencies);
     now = hook.now;
@@ -93,22 +93,6 @@ try {
 const modules = load();
 modules.catch(error => { console.error('person host failed to load the client:', error); });
 
-/** Per-method limits; the client enforces its own shorter network timeouts. */
-const TIMEOUT_MS: Record<HostMethodName, number> = {
-  'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000, 'changes.read': 15_000,
-  'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
-  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
-  'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
-  'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
-  'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
-  'employees.reissue': 45_000, 'employees.revoke': 45_000,
-  'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
-  'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
-  'meetings.handIn': 90_000,
-  // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
-  'timeline.read': 15_000, 'timeline.put': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
-};
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put']);
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -171,7 +155,7 @@ function refreshDue(store: SessionStore, now: number, ahead: number): boolean {
 
 async function gated<T>(run: () => Promise<T>, method: HostMethodName, refreshFailed?: (refresh: CliRun) => T): Promise<T> {
   const { store, now } = await modules;
-  const ahead = TIMEOUT_MS[method] + 60_000;
+  const ahead = HOST_TIMEOUT_MS[method] + 60_000;
   while (exclusive) await exclusive;
   if (!LOCAL.has(method) && refreshDue(store, now(), ahead)) {
     let release!: () => void;
@@ -828,7 +812,7 @@ port.on('message', ({ data }) => {
   let expired = false;
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<Result<unknown>>(resolve => {
-    timer = setTimeout(() => { expired = true; abort?.abort(); resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[method]);
+    timer = setTimeout(() => { expired = true; abort?.abort(); resolve(code('timeout', write, requestId)); }, HOST_TIMEOUT_MS[method]);
   });
   // Sign-in still runs after a refresh with no answer: it replaces the
   // session, and sign-out ends it either way. Any other call was not made,

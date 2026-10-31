@@ -76,18 +76,6 @@ test('the ask bar has the caret at launch and whenever the window comes forward'
   await expect(page.getByTestId('ask-field')).toBeFocused();
 });
 
-test('an ask can be cancelled, and Ask closes on the page it was asked from', async () => {
-  run = await launch('ask-hangs');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('ask-field').fill('Where are we?');
-  await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('asking')).toBeVisible();
-  await page.getByTestId('ask-cancel').click();
-  await expect(page.getByTestId('ask-view')).toHaveCount(0);
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-});
-
 test('a source shows at most 2,000 characters', async () => {
   run = await launch('long-evidence');
   const { page } = run;

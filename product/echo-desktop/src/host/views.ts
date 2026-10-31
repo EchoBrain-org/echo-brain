@@ -128,7 +128,7 @@ function itemRef(ref: string): ItemRef {
 function listItem(row: PersonListRowV1): ListItem {
   const base = { ref: itemRef(row.ref), title: row.title, added_at: row.added_at, visibility: VISIBILITY[row.visibility], projects: row.projects.map(project => project.name) };
   if (row.kind === 'document') return { ...base, document: { type: MEDIA[row.media_type], size: row.size_bytes, extraction: row.extraction_state } };
-  return row.kind === 'meeting' && row.meeting_date !== undefined ? { ...base, meeting_date: row.meeting_date } : base;
+  return base;
 }
 
 /** A list's scope as the API names it. */
@@ -327,7 +327,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
     ...(part.records?.map(record => record.text) ?? [])])]
     .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
   return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, elapsed_ms: receipt.elapsed_ms, rows: receipt.rows.map(askRow) } }),
+    ...(receipt === undefined ? {} : { receipt: { looked_through: receipt.looked_through, rows: receipt.rows.map(askRow) } }),
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }) };
@@ -489,7 +489,7 @@ function isoTime(value: unknown): string | undefined {
  * An approved item's id as the Authority's citations carry it: the digest of
  * its record and its signal's id, never the signal id itself.
  */
-export function atomId(recordSha256: string, signalId: string): string {
+function atomId(recordSha256: string, signalId: string): string {
   return canonicalSha256({ kind: 'echo-organization-record-atom', record_hash: recordSha256, signal_id: signalId });
 }
 

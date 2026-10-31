@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  changesLogLine, externalUrl, externalSourcePermalink, HOST_METHODS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES,
+  changesLogLine, externalUrl, externalSourcePermalink, HOST_TIMEOUT_MS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES,
   noticeOf, paramsLimit, plainJsonBytes, remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Notice, type Result, type UpdateState,
@@ -254,7 +254,7 @@ function resolveHandle(handle: unknown, kind: HandleKind): string | null {
 
 // ---- broker ----------------------------------------------------------------
 
-const hostMethods = new Set<string>(HOST_METHODS);
+const hostMethods = new Set<string>(Object.keys(HOST_TIMEOUT_MS));
 const mainMethods = new Set<string>(MAIN_METHODS);
 
 function refused(code = 'invalid_request'): Result<never> {
