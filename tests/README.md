@@ -6,7 +6,7 @@ Tests live at the narrowest active boundary they exercise:
 | --- | --- |
 | `tests/person-client/` | thin Person CLI and private session behavior |
 | `tests/architecture/` | source, workspace, and artifact boundaries |
-| `packages/*/test/` | shared protocol and API contracts |
+| `packages/*/test/` | neutral package tests (protocols, API, processing, kernel, record, retrieval, control plane) |
 | `services/*/test/` | server application, persistence, and component behavior |
 | `providers/**/test/` | provider adapters, connections and live readers |
 | `product/echo-desktop/test/` | Electron desktop unit (`unit/`, Vitest) and end-to-end (`e2e/`, Playwright) tests, with the app's own configs |
