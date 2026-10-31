@@ -51,6 +51,7 @@ import { createPersonRecordSearchRouteV1, personMeetingReleaseOptionsV1 } from "
 import { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
 import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
+import { AUTHORITY_RECORD_INPUT_CODECS_V1 } from "./authority-record-protocols-v1.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
@@ -119,7 +120,7 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly record_approver?: RecordApproverProjectorV1;
   /**
    * The record codecs the Authority appends with. Ask's evidence desk reads
-   * approved records through them; without them only human-act records parse.
+   * approved records through them; without them the Authority's own list is used.
    */
   readonly record_input_codecs?: import("@echo-brain/organization-protocol").RecordInputCodecRegistryV4;
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
@@ -300,7 +301,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const captureProjects = createRecordProjectAuthorizationV1(projectRepository);
     const originals = new SqlitePersonOriginalContextRetrievalV1(database, sessions, metadata.organization_id);
     const recordSearch = createPersonRecordSearchRouteV1({
-      ...(dependencies.record_input_codecs === undefined ? {} : { record_input_codecs: dependencies.record_input_codecs }),
+      record_input_codecs: dependencies.record_input_codecs ?? AUTHORITY_RECORD_INPUT_CODECS_V1,
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
       organization_id: metadata.organization_id,
@@ -311,7 +312,7 @@ export async function startOrganizationAuthorityApiRuntime(
       record: recordDatabase,
       audit: readAudit,
       capture_projects: captureProjects,
-      // Mine needs the approver; the person list names it.
+      // The person list and open name a meeting's approver.
       ...personMeetingReleaseOptionsV1({
         record_approver: dependencies.record_approver,
         memberships,
@@ -412,7 +413,6 @@ export async function startOrganizationAuthorityApiRuntime(
       person_list: createPersonListRouteV1({
         organization_id: metadata.organization_id,
         sessions,
-        tools: personTools,
         directory: new SqlitePersonListDirectoryV1(database),
         originals: originalItems,
         meetings: recordSearch,

@@ -10,6 +10,13 @@ import { POLICY_RESTRICTED_REVIEWER } from "./corpus-v1.mjs";
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 const LINEAGE = { authority_id: "auth_core_eval", organization_id: "org_core_eval", state_lineage_id: "lineage_core_eval" };
 const contracts = { member: sha("policy-member"), reviewer: sha("policy-reviewer") };
+/**
+ * The frozen corpus assigns its organization-member share to a policy the engine no longer has (the Team policy is
+ * retired). Those atoms are indexed as project records of one project every reader holds, which admits and scores them
+ * for every reader exactly as the corpus's member policy does.
+ */
+const EVERYONE_PROJECT = "prj_core_eval_everyone";
+const PROJECT_POLICY = "project-members-readable-person-v1";
 
 function plane(role, baseline, version, sha256Of) {
   const schema_sha256 = sha256Of(baseline);
@@ -40,7 +47,7 @@ function engineAtom(atom) {
     item_kind: atom.item_kind,
     text: atom.text,
     text_sha256: sha(atom.text),
-    policy_id: atom.policy_id,
+    policy_id: reviewer ? atom.policy_id : PROJECT_POLICY,
     policy_contract_sha256: reviewer ? contracts.reviewer : contracts.member,
     authorization_audit_event_id: `audit-${atom.atom_id}`,
     authorization_audit_sequence: atom.log_position,
@@ -49,6 +56,7 @@ function engineAtom(atom) {
     authorization_proof_sha256: sha(`proof-${atom.atom_id}`),
     reviewer_principal_id: reviewer ? atom.reviewer_principal_id : null,
     reviewer_membership_id: reviewer ? atom.reviewer_membership_id : null,
+    ...(reviewer ? {} : { audience_project_ids: [EVERYONE_PROJECT], association_project_ids: [EVERYONE_PROJECT] }),
   };
 }
 
@@ -71,8 +79,8 @@ export function withSearchGeneration(corpusAtoms, run) {
       },
       exact_head: { ...LINEAGE, position: last.record_position, record_sha256: last.record_sha256 },
       retrieval_contract_sha256: sha("core-search-eval-contract"),
-      organization_member_policy_contract_sha256: contracts.member,
       restricted_reviewer_policy_contract_sha256: contracts.reviewer,
+      project_members_policy_contract_sha256: contracts.member,
       analyzer: {
         analyzer_contract_sha256: sha("core-search-eval-analyzer-contract"),
         analyzer_source_sha256: sha("core-search-eval-analyzer-source"),
@@ -98,7 +106,9 @@ export function withSearchGeneration(corpusAtoms, run) {
       manifest: built.manifest,
       buildMs,
       warmMs: performance.now() - warmStarted,
-      search: (reader, query) => engine.searchReadableSearchGenerationV1({ state_directory, active_generation, reader, query, limit: 10 }),
+      search: (reader, query) => engine.searchReadableSearchGenerationV1({
+        state_directory, active_generation, reader: { ...reader, project_ids: [EVERYONE_PROJECT] }, query, limit: 10,
+      }),
     });
   } finally {
     engine.clearReadableSearchActiveGenerationV1();

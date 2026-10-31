@@ -91,7 +91,7 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 ### Optional staging connector rehearsal
 
 The ordinary manifest omits `staging_connector_rehearsal`. Initial preparation
-can enable staging-only Jira read verification with this closed,
+can select staging-only live Jira and Confluence Ask with this closed,
 nonsecret object in `onboarding.clean-v1.json`:
 
 ```json
@@ -118,16 +118,15 @@ ordinary seven-file preparation carries the profile inside the existing
 nonsecret manifest. The four-synthetic-meeting provider-reuse transfer rejects
 an enabled connector profile; it cannot be used as an alternate connector
 input lane. The profile is fixed for the life of the rehearsal: a different
-Jira project needs a fresh rehearsal.
+Atlassian site or Jira integration needs a fresh rehearsal.
 
 The profile contains no Nango secret or Slack token. The Authority continues to
 read the existing `nango-secret-key`; the profile's Jira integration key is an
-ordinary Nango integration identifier. Jira is read live through
-`verify-read`; all capture requests are rejected before provider I/O and retain
-no pointers or bodies. Approval qualification uses the separate synthetic
-release canary, whose staging-only personal source never discovers provider
-data. Jira's person connection sidecar is owned by the Authority runtime beside
-its retained state directory.
+ordinary Nango integration identifier. Jira is read live under each Person's
+own connection, and no tool pointers or bodies are captured. Approval
+qualification uses the separate synthetic release canary, whose staging-only
+personal source never discovers provider data. Each Person's Jira connection
+lives in `state/jira-person-connections.sqlite`, as on every Authority.
 
 When the fixed connector profile is present, the committed EC2 runtime profile
 also selects live Jira and Confluence Ask under each Person's own grant (the
@@ -145,23 +144,20 @@ archived person-bound grant cannot be requalified: after that recovery, revoke
 or disconnect the old provider grant and reconnect through the restored owner's
 current session.
 
-The same fixed profile also admits the owner's explicitly invoked `verify-read`
-diagnostic through the [runner](../../services/organization-authority/README.md#staging-connector-rehearsal).
-It verifies one request-local Jira issue text read and emits
-only hashes and a byte count. It changes no capture custody, retains no body,
-calls no model and enables no Ask source. It needs no profile rewrite or reset.
+Releases before the one that retired the owner's `verify-read` runner kept Jira
+connections in a runtime-owned sidecar, `clean-data/staging-connector-rehearsal-v1/`.
+Nothing reads it now: after that release, every staging member who used Jira
+connects it again through Tools (see the
+[service guide](../../services/organization-authority/README.md#staging-connector-rehearsal)).
 
-The runtime creates and validates its own
-`clean-data/staging-connector-rehearsal-v1/binding.json`. It binds the
-Authority lineage, initial owner, and canonical profile digest. Same-volume host
-reconstruction by `restore-clean-v1-host.sh`, including the CloudFormation
-bootstrap's `materialize`, allows only the profile at its fixed path with that
-exact retained sidecar; a missing, unsafe, or mismatched sidecar fails closed.
-The offline whole-volume backup verifier refuses any selected connector
-rehearsal, its profile file or its sidecar, so a backup restore always requires
-provider revocation and a fresh rehearsal. Do not delete or edit the sidecar to
-make a startup pass. The human host operator must first disconnect or revoke
-the affected Jira connection at the provider, then prepare a fresh profile.
+Same-volume host reconstruction by `restore-clean-v1-host.sh`, including the
+CloudFormation bootstrap's `materialize`, allows only the profile at its fixed
+path with its recorded digest. It ignores a leftover sidecar while the profile is
+selected and refuses one once the selection is retired. The offline whole-volume
+backup verifier refuses any selected connector rehearsal, its profile file or a
+leftover sidecar, so a backup restore always requires provider revocation and a
+fresh rehearsal. The human host operator must first disconnect or revoke the
+affected Jira connections at the provider, then prepare a fresh profile.
 
 Check the private input directory before spending an AWS session on it:
 

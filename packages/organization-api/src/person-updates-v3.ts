@@ -16,7 +16,6 @@ export type PersonUpdateStatusV3 = Omit<PersonUpdateReceiptV3, 'kind' | 'state'>
 /** Own account-scoped proof once the uploader no longer holds every named project; it carries no project coordinates (ADR-0023). */
 export interface PersonUpdateSavedV3 { readonly schema_version: 3; readonly kind: 'echo-person-update-saved-v3'; readonly request_id: string; readonly context_id: string; readonly received_at: string; readonly status: 'stored'; }
 export type PersonUpdateStatusResultV3 = PersonUpdateStatusV3 | PersonUpdateSavedV3;
-export interface PersonUploadContentV3 { readonly schema_version: 3; readonly kind: 'echo-person-upload-content-v3'; readonly context_id: string; readonly received_at: string; readonly audience: UploadAudienceV3; readonly title: string; readonly text: string; }
 export type PersonUploadSearchV3 = PersonUploadSearchV1;
 export interface PersonUploadSearchResultV3 { readonly schema_version: 3; readonly kind: 'echo-person-upload-search-v3'; readonly results: readonly { readonly context_id: string; readonly received_at: string; readonly audience: UploadAudienceV3; readonly title: string; readonly excerpt: string }[]; }
 
@@ -47,11 +46,6 @@ export function validatePersonUpdateSavedV3(value: unknown): PersonUpdateSavedV3
 }
 export function validatePersonUpdateStatusResultV3(value: unknown): PersonUpdateStatusResultV3 {
   return object(value, 'Person update status').kind === 'echo-person-update-saved-v3' ? validatePersonUpdateSavedV3(value) : validatePersonUpdateStatusV3(value);
-}
-export function validatePersonUploadContentV3(value: unknown): PersonUploadContentV3 {
-  const record = object(value, 'Person upload content'); assertExactKeys(record, ['schema_version','kind','context_id','received_at','audience','title','text'], 'Person upload content'); if (record.schema_version !== 3 || record.kind !== 'echo-person-upload-content-v3') fail('Person upload content is invalid');
-  validatePersonUploadContextId(record.context_id); timestamp(record.received_at); text(record.title, 'Person upload content title', PERSON_UPDATE_TITLE_MAX_BYTES, false); text(record.text, 'Person upload content text', PERSON_UPDATE_TEXT_MAX_BYTES, true);
-  const response = Object.freeze({ schema_version: 3 as const, kind: 'echo-person-upload-content-v3' as const, context_id: record.context_id as string, received_at: record.received_at as string, audience: validatePersonUploadAudienceV3(record.audience), title: record.title as string, text: record.text as string }); responseBound(response, 'Person upload content'); return response;
 }
 export function validatePersonUploadSearchV3(value: unknown): PersonUploadSearchV3 { return validatePersonUploadSearchV1(value); }
 export function validatePersonUploadSearchResultV3(value: unknown): PersonUploadSearchResultV3 {

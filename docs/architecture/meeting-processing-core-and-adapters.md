@@ -318,7 +318,7 @@ active provider has completed qualification.
 The Jira live runtime (`jira-person-live-runtime-v1.ts`) is a selected,
 request-bound Person read capability. Global Ask reads tickets visible through
 the asker's own Jira connection; project Ask additionally requires the saved
-ECHO-to-Jira project mapping, and Mine excludes Jira. Jira data is read live for
+ECHO-to-Jira project mapping. Jira data is read live for
 the request and does not enter source admission or canonical meeting
 processing. Personal connector verification remains request-only.
 
@@ -328,7 +328,7 @@ connected person on the selected Confluence site, without an ECHO space or
 page allowlist. Project Ask narrows discovery to the saved ECHO-project to
 Confluence-space mapping and still checks the asker's permissions. A mapping
 does not grant access, and an unmapped project does not fall back to global
-Confluence discovery. Mine excludes external pages.
+Confluence discovery.
 
 Live pages have their own provider-neutral citation contract. They are not
 retained uploads, meeting records, or tickets. Discovery releases page metadata;

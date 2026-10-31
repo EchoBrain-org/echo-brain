@@ -12,18 +12,20 @@ segments, 4,096 UTF-8 bytes per atom, and 204,800 lexical postings. Admission is
 checked before a staging directory is created, and a refused build names the
 limit it exceeded (`readableSearchExceededLimitV1`). The exact budget and the
 one-entry reader behavior are inputs to both the Authority retrieval contract
-and builder artifact identity. Once a pointer names a new generation, the
-Authority deletes every other one (`retireReadableSearchGenerationsV1`); each
-is renamed out of `generations/` first, so an interrupted deletion leaves
-nothing the state-lineage guard reads.
+and builder artifact identity. A build stages beside `generations/`, in
+`record-retrieval/.staging-*`, and renames the finished generation into it, so
+a process killed mid-build still passes the state-lineage guard at its next
+start; the next build removes the leftover. Once a pointer names a new
+generation, the Authority deletes every other one
+(`retireReadableSearchGenerationsV1`); each is renamed out of `generations/`
+first, so an interrupted deletion also leaves nothing the guard reads.
 
 The process keeps exactly one fully validated active-generation handle. A
 reconciler validates every manifest, root, row binding, permission tuple, and
 uniqueness constraint before publishing a pointer or reporting an existing
 pointer current. Requests never warm it. They fail bounded-unavailable on a
-miss and inspect only the member segment, the caller's exact reviewer segment,
-and project segments whose audience names one of the caller's current
-projects.
+miss and inspect only the caller's exact reviewer segment and project segments
+whose audience names one of the caller's current projects.
 
 The acceptance target, defined for the admitted maximum before timing
 evidence is considered, is **50 ms** for a real Layer 3 batch of four queries

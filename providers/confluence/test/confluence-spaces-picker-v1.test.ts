@@ -9,7 +9,8 @@ const cloud = '00000000-0000-4000-8000-000000000007';
 const person = { organization_id: 'org-fixture', principal_id: 'person-fixture', membership_id: 'member-fixture' };
 const other = { organization_id: 'org-fixture', principal_id: 'other-fixture', membership_id: 'other-member' };
 const site = 'https://fixture.atlassian.net';
-function fixture(next = `https://api.atlassian.com/ex/confluence/${cloud}/wiki/api/v2/spaces?limit=20&cursor=next-page`) {
+type Space = { readonly id: string; readonly key: string; readonly name: string };
+function fixture(next = `https://api.atlassian.com/ex/confluence/${cloud}/wiki/api/v2/spaces?limit=20&cursor=next-page`, spaces: readonly Space[] = [{ id: '100', key: 'ECHO', name: 'ECHO product' }]) {
   const db = new Database(':memory:');
   const store = new ConfluenceConnectionStoreV1(db);
   const begun = store.begin(person);
@@ -31,7 +32,7 @@ function fixture(next = `https://api.atlassian.com/ex/confluence/${cloud}/wiki/a
         ? { accountId: 'account-fixture', type: 'known', accountType: 'atlassian' }
         : request.searchParams.get('cursor') === 'next-page'
           ? { results: [{ id: '200', key: '~personal', name: 'Personal space' }], _links: {} }
-          : { results: [{ id: '100', key: 'ECHO', name: 'ECHO product' }], _links: { next } };
+          : { results: spaces, _links: { next } };
     return Response.json(body);
   });
   const service = createConfluencePersonConnectionV1({ store, nango, cloud_id: cloud, fetch: fetch as typeof globalThis.fetch, authenticate: token => ({ ...(token === 'session-two' ? other : person), authorization_sha256: canonicalSha256({ token }) }) });
@@ -67,6 +68,20 @@ it.each([
   const f = fixture(next);
   try { await expect(f.service.spacesList({ access_token: 'session-one' })).rejects.toMatchObject({ code: 'invalid_output' }); }
   finally { f.db.close(); }
+});
+
+it('lists a space whose CJK key and name fill the 256 UTF-16 code units the picker allows, and refuses one more', async () => {
+  // 256 CJK characters are 768 UTF-8 bytes: a byte bound of 256 refused the space the picker always listed.
+  const key = '空间'.repeat(128);
+  const name = '需求'.repeat(128);
+  const f = fixture(undefined, [{ id: '100', key, name }]);
+  try { expect(await f.service.spacesList({ access_token: 'session-one' })).toMatchObject({ items: [{ id: '100', key, name }] }); }
+  finally { f.db.close(); }
+  for (const space of [{ id: '100', key: `${key}空`, name }, { id: '100', key, name: `${name}需` }]) {
+    const longer = fixture(undefined, [space]);
+    try { await expect(longer.service.spacesList({ access_token: 'session-one' })).rejects.toMatchObject({ code: 'invalid_output' }); }
+    finally { longer.db.close(); }
+  }
 });
 
 it('does not accept a picker cursor for another authenticated person', async () => {

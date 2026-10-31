@@ -100,25 +100,22 @@ type Stored = Readonly<{
   item: EvidenceDeskItemV1;
   original?: OriginalContextDeskReleaseV1;
   record?: PersonRecordSearchBatchReleaseV1;
-  record_anchor?: { readonly atom_id: Sha256Digest; readonly record_sha256: Sha256Digest; readonly record_position: number; readonly envelope_sha256: Sha256Digest; readonly atom_order: number; readonly audience_project_count: number; readonly item_kind: "decision" | "action" | "rationale"; readonly text: string; readonly policy_id: "restricted-reviewer-person-v2" | "organization-member-readable-person-v2" | "project-members-readable-person-v1" };
+  record_anchor?: { readonly atom_id: Sha256Digest; readonly record_sha256: Sha256Digest; readonly record_position: number; readonly envelope_sha256: Sha256Digest; readonly atom_order: number; readonly audience_project_count: number; readonly item_kind: "decision" | "action" | "rationale"; readonly text: string; readonly policy_id: "restricted-reviewer-person-v2" | "project-members-readable-person-v1" };
 }>;
 
 function publicScope(scope: PersonAskScopeV2): EvidenceDeskScopeV1 {
   switch (scope.kind) {
     case "global": return Object.freeze({ kind: "global" });
     case "project": return Object.freeze({ kind: "project", project_id: scope.project_id }) as EvidenceDeskScopeV1;
-    case "mine": return Object.freeze({ kind: "mine" });
     default: return personUnknownScopeV1(scope);
   }
 }
 
 /** The records half of a scope. Every records call spreads this, so no scope can fall through to global. */
-function recordScope(scope: PersonAskScopeV2): Readonly<{ project_id?: never }> | Readonly<{ project_id: string }> | Readonly<{ mine: true }> {
+function recordScope(scope: PersonAskScopeV2): Readonly<{ project_id?: never }> | Readonly<{ project_id: string }> {
   switch (scope.kind) {
     case "global": return {};
     case "project": return { project_id: scope.project_id };
-    // The records route narrows to meetings the caller finally approved.
-    case "mine": return { mine: true as const };
     default: return personUnknownScopeV1(scope);
   }
 }
@@ -128,7 +125,7 @@ function sourceCitation(item: OriginalContextDeskReleaseV1["items"][number]): Ev
 }
 
 function recordCitation(item: { readonly atom_id: Sha256Digest; readonly record_sha256: Sha256Digest; readonly policy_id: string }): EvidenceDeskCitationV1 {
-  if (item.policy_id !== "restricted-reviewer-person-v2" && item.policy_id !== "organization-member-readable-person-v2" && item.policy_id !== "project-members-readable-person-v1") throw new AuthorityOperationError("unavailable", "record evidence is unavailable");
+  if (item.policy_id !== "restricted-reviewer-person-v2" && item.policy_id !== "project-members-readable-person-v1") throw new AuthorityOperationError("unavailable", "record evidence is unavailable");
   return Object.freeze({ kind: "approved_record", atom_id: item.atom_id, record_sha256: item.record_sha256, policy_id: item.policy_id });
 }
 

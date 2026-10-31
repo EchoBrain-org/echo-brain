@@ -6,7 +6,7 @@ import {
   encodeP256DerSignature,
 } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonContentPolicyIdV2 } from "../src/human-act-record-input-v1.js";
+import type { ApprovalDecisionPolicyIdV1 } from "../src/approval-decision-record-input-v2.js";
 import {
   ORGANIZATION_RECORD_RECEIPT_SIGNATURE_V2_KIND,
   ORGANIZATION_RECORD_RECEIPT_V2_KIND,
@@ -25,7 +25,7 @@ import type {
   OrganizationRecordReceiptV2,
 } from "../src/organization-record-receipt-v2.js";
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "../src/person-content-policy-v2.js";
 import {
@@ -41,6 +41,7 @@ import {
   AUTHORITY_ID,
   ORGANIZATION_ID,
   P256_ORDER,
+  RECORD_INPUT_CODECS,
   STATE_LINEAGE_ID,
   digest,
   envelopeInput,
@@ -49,17 +50,19 @@ import {
 } from "./fixtures/record-v4-fixture.js";
 import type { TestAuthority } from "./fixtures/record-v4-fixture.js";
 
+const codecs = RECORD_INPUT_CODECS;
+
 async function createEnvelope(
   authority: TestAuthority,
-  action: "approve" | "reject" = "approve",
-  policyId: PersonContentPolicyIdV2 = RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  policyId: ApprovalDecisionPolicyIdV1 = RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   predecessor: { position: number; sha256: Sha256Digest } | null = null,
 ): Promise<OrganizationRecordEnvelopeV4> {
   return createOrganizationRecordEnvelopeV4(
-    envelopeInput(action, policyId, predecessor),
+    envelopeInput(policyId, predecessor),
     authority.pinned,
     STATE_LINEAGE_ID,
     authority.sign,
+    codecs,
   );
 }
 
@@ -85,6 +88,7 @@ function issue(
     authority.pinned,
     STATE_LINEAGE_ID,
     signer,
+    codecs,
   );
 }
 
@@ -181,22 +185,19 @@ describe("private D3-3 organization record receipt v2", () => {
         "utf8",
       ),
     ).toBe(
-      '{"authority_id":"oau_00000000-0000-4000-8000-000000000001","kind":"echo-organization-record-receipt-signature-v2","organization_id":"org_00000000-0000-4000-8000-000000000002","receipt_sha256":"sha256:022c53dc27233a3f2414aae163b7e63376ba74582794d5cd70a5cc138d0c5ad3","schema_version":2,"signing_key_id":"sha256:9999999999999999999999999999999999999999999999999999999999999999","state_lineage_id":"state-lineage-1"}',
+      '{"authority_id":"oau_00000000-0000-4000-8000-000000000001","kind":"echo-organization-record-receipt-signature-v2","organization_id":"org_00000000-0000-4000-8000-000000000002","receipt_sha256":"sha256:9727e2fec45f0fc9cd99ccb694652d456a207207dae6dfbe9dd21f7537773c14","schema_version":2,"signing_key_id":"sha256:9999999999999999999999999999999999999999999999999999999999999999","state_lineage_id":"state-lineage-1"}',
     );
   });
 
-  it("derives both policy outcomes for both actions and verifies the exact envelope", async () => {
+  it("derives each policy's outcome and verifies the exact envelope", async () => {
     const authority = testAuthority();
-    for (const [action, policyId] of [
-      ["approve", RESTRICTED_REVIEWER_PERSON_POLICY_ID],
-      ["approve", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID],
-      ["reject", RESTRICTED_REVIEWER_PERSON_POLICY_ID],
-      ["reject", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID],
+    for (const policyId of [
+      RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+      PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
     ] as const) {
       const predecessor = { position: 7, sha256: digest("7") };
       const envelope = await createEnvelope(
         authority,
-        action,
         policyId,
         predecessor,
       );
@@ -207,19 +208,17 @@ describe("private D3-3 organization record receipt v2", () => {
           envelope,
           authority.pinned,
           STATE_LINEAGE_ID,
+          codecs,
         ),
       ).toEqual(receipt);
-      expect(receipt.body.event_kind).toBe(
-        action === "approve" ? "approved" : "rejected",
-      );
+      expect(receipt.body.event_kind).toBe("approved");
       expect(receipt.body.predecessor_record_sha256).toBe(digest("7"));
       expect(receipt.body.record_head_position).toBe(8);
       expect(receipt.body.record_head_sha256).toBe(envelope.record_sha256);
-      expect(receipt.body.policy_fact_outcome).toEqual(
-        action === "approve"
-          ? { kind: "appended", policy_id: policyId }
-          : { kind: "none" },
-      );
+      expect(receipt.body.policy_fact_outcome).toEqual({
+        kind: "appended",
+        policy_id: policyId,
+      });
     }
   });
 
@@ -231,7 +230,6 @@ describe("private D3-3 organization record receipt v2", () => {
     ).rejects.toThrow("does not continue the envelope predecessor");
     const chained = await createEnvelope(
       authority,
-      "approve",
       RESTRICTED_REVIEWER_PERSON_POLICY_ID,
       { position: 9, sha256: digest("9") },
     );
@@ -242,7 +240,6 @@ describe("private D3-3 organization record receipt v2", () => {
 
     const exhausted = await createEnvelope(
       authority,
-      "approve",
       RESTRICTED_REVIEWER_PERSON_POLICY_ID,
       { position: Number.MAX_SAFE_INTEGER, sha256: digest("8") },
     );
@@ -251,10 +248,11 @@ describe("private D3-3 organization record receipt v2", () => {
     ).rejects.toThrow("does not continue the envelope predecessor");
   });
 
-  it("rejects mixed outcomes, head drift, chain drift, and body shape drift", async () => {
-    const { authority, receipt } = await genesisReceipt();
+  it("rejects a rejection, an approval without facts, head drift, chain drift, and body shape drift", async () => {
+    const { receipt } = await genesisReceipt();
     for (const [patch, message] of [
-      [{ policy_fact_outcome: { kind: "none" } }, "must append policy facts"],
+      [{ event_kind: "rejected" }, "event kind is unsupported"],
+      [{ policy_fact_outcome: { kind: "none" } }, "unexpected shape"],
       [
         {
           policy_fact_outcome: {
@@ -281,24 +279,6 @@ describe("private D3-3 organization record receipt v2", () => {
         checkpoint_sha256: digest("2"),
       }),
     ).toThrow("unexpected shape");
-
-    const rejectionEnvelope = await createEnvelope(authority, "reject");
-    const rejection = await issue(authority, rejectionEnvelope, 1);
-    expect(() =>
-      validateOrganizationRecordReceiptBodyV2(
-        replaceBody(rejection.body, {
-          policy_fact_outcome: {
-            kind: "appended",
-            policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-          },
-        }),
-      ),
-    ).toThrow("must not append policy facts");
-    expect(() =>
-      validateOrganizationRecordReceiptBodyV2(
-        replaceBody(rejection.body, { predecessor_record_sha256: digest("1") }),
-      ),
-    ).toThrow("null only at genesis");
   });
 
   it("denies every re-signed receipt-to-envelope binding mutation", async () => {
@@ -309,11 +289,10 @@ describe("private D3-3 organization record receipt v2", () => {
       { state_lineage_id: "another-lineage" },
       { envelope_id: "another-envelope" },
       { semantic_idempotency_key: digest("1") },
-      { event_kind: "rejected", policy_fact_outcome: { kind: "none" } },
       {
         policy_fact_outcome: {
           kind: "appended",
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
         },
       },
       { record_sha256: digest("2"), record_head_sha256: digest("2") },
@@ -329,14 +308,14 @@ describe("private D3-3 organization record receipt v2", () => {
           envelope,
           authority.pinned,
           STATE_LINEAGE_ID,
+          codecs,
         ),
       ).toThrow();
     }
 
     const anotherEnvelope = await createEnvelope(
       authority,
-      "approve",
-      ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+      PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
     );
     expect(() =>
       verifyOrganizationRecordReceiptV2(
@@ -344,12 +323,12 @@ describe("private D3-3 organization record receipt v2", () => {
         anotherEnvelope,
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("does not bind the exact record envelope v4");
 
     const chainedEnvelope = await createEnvelope(
       authority,
-      "approve",
       RESTRICTED_REVIEWER_PERSON_POLICY_ID,
       { position: 5, sha256: digest("5") },
     );
@@ -367,6 +346,7 @@ describe("private D3-3 organization record receipt v2", () => {
         chainedEnvelope,
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("does not continue the envelope predecessor");
     const wrongPredecessorBody = validateOrganizationRecordReceiptBodyV2(
@@ -384,6 +364,7 @@ describe("private D3-3 organization record receipt v2", () => {
         chainedEnvelope,
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("does not bind the exact record envelope v4");
   });
@@ -396,8 +377,10 @@ describe("private D3-3 organization record receipt v2", () => {
       mutable(input).record_position = 2;
       mutable(input).issued_at = "2026-08-20T13:00:00.000Z";
       mutable(input.envelope.body).envelope_id = "mutated-envelope";
-      mutable(input.envelope.body.event).policy_id =
-        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID;
+      mutable(input.envelope.body).event = {
+        ...input.envelope.body.event,
+        policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
+      };
       return authority.sign(bytes, keyId);
     };
     const receipt = await createOrganizationRecordReceiptV2(
@@ -405,6 +388,7 @@ describe("private D3-3 organization record receipt v2", () => {
       authority.pinned,
       STATE_LINEAGE_ID,
       mutatingSigner,
+      codecs,
     );
     expect(receipt.body.record_position).toBe(1);
     expect(receipt.body.issued_at).toBe("2026-08-20T12:04:00.000Z");
@@ -423,6 +407,7 @@ describe("private D3-3 organization record receipt v2", () => {
         envelope,
         authority.pinned,
         "another-lineage",
+        codecs,
       ),
     ).toThrow("expected lineage");
 
@@ -436,6 +421,7 @@ describe("private D3-3 organization record receipt v2", () => {
         envelope,
         foreign.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("pinned Authority");
 
@@ -460,6 +446,7 @@ describe("private D3-3 organization record receipt v2", () => {
         envelope,
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("signing key does not match the pinned Authority");
   });
@@ -495,12 +482,14 @@ describe("private D3-3 organization record receipt v2", () => {
         envelope,
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("signature is invalid");
 
     const v4Input = buildOrganizationRecordSignatureInputV4(
       envelope.body,
       receipt.signing_key_descriptor.key_id,
+      codecs,
     );
     const v4DomainSignature = await authority.sign(
       organizationRecordSignatureInputV4Bytes(v4Input),
@@ -512,6 +501,7 @@ describe("private D3-3 organization record receipt v2", () => {
         envelope,
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("signature is invalid");
   });

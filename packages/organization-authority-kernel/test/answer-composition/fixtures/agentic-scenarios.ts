@@ -22,7 +22,7 @@ const wall_ms = () => Date.parse(LIST_READ_AT);
 export function record(id: string, text: string | undefined = `Approved record ${id}: the review decided ${id}.`, options: Partial<EvidenceDeskItemV1> = {}): EvidenceDeskItemV1 {
   return Object.freeze({
     id: `desk_${canonicalSha256({ id }).slice(7)}`,
-    citation: { kind: "approved_record" as const, atom_id: canonicalSha256({ id }), record_sha256: canonicalSha256({ id, record: true }), policy_id: "organization-member-readable-person-v2" as const },
+    citation: { kind: "approved_record" as const, atom_id: canonicalSha256({ id }), record_sha256: canonicalSha256({ id, record: true }), policy_id: "project-members-readable-person-v1" as const },
     kind: "decision" as const, ...(text === undefined ? {} : { text }), label: `Meeting ${id}`, visibility: "team" as const,
     occurred_at: "2026-10-01", receipt_sha256: canonicalSha256({ receipt: id }), ...options,
   });

@@ -9,14 +9,12 @@ import type {
   ProjectStatusV2,
 } from "@echo-brain/organization-api";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
-import type { PersonAskScopeV2 } from "./person-original-context-retrieval-v1.js";
 
 /**
- * Ask's scopes, and the list's only_me (ADR-0049): every item whose only
- * reader is the caller, filed in a project or not. Ask never takes it, and it
- * is always ⊆ global.
+ * A list's scope: one project, or only_me (ADR-0049), every item whose only
+ * reader is the caller, filed in a project or not. Ask never takes only_me.
  */
-export type PersonListStoreScopeV1 = PersonAskScopeV2 | Readonly<{ readonly kind: "only_me" }>;
+export type PersonListStoreScopeV1 = Readonly<{ readonly kind: "project"; readonly project_id: string }> | Readonly<{ readonly kind: "only_me" }>;
 /** Last emitted row of ONE source. Store order inside a source: added_at DESC, id ASC (binary). */
 export interface PersonItemPositionV1 { readonly added_at: string; readonly id: string }
 /** Store-raw visibility; only the list route collapses it (ADR-0024). */
@@ -139,11 +137,10 @@ export interface PersonListDirectoryPortV1 {
     /** Names, roles and statuses only. A change is a concurrent rename, not an access change. */
     readonly names_sha256: Sha256Digest;
   };
-  me(actor: PersonAccessAuthorization): { readonly display_name: string } | undefined;
   /** One content-free page audit, written only after every fence passed. */
   audit(entry: {
     readonly operation: "person_list" | "person_open";
-    readonly scope_kind: "global" | "project" | "mine" | "only_me" | "item";
+    readonly scope_kind: "project" | "only_me" | "item";
     readonly actor: PersonAccessAuthorization;
     readonly response_sha256: Sha256Digest;
     readonly released_count: number;

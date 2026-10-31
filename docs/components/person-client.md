@@ -132,7 +132,9 @@ and print one JSON line; their command contract is under
 [Agents](../architecture/person-client-architecture.md#agents), and their
 enforcement in the [served-path table](permissions.md#served-paths).
 
-`person changes` takes no options and reads the Authority's change check
+`person changes` takes no options but the
+[account pin](../architecture/person-client-architecture.md#account-and-answer-sources)
+and reads the Authority's change check
 ([ADR-0036](../decisions/ADR-0036-person-change-check.md)) under the signed-in
 session. It prints `echo-person-changes-v1` (one fingerprint each for
 `projects`, `follow_ups` and `reviews`, and `check_again_after_seconds`) as
@@ -142,7 +144,8 @@ serves the check, so a failure keeps the code the Authority sent, a 404's
 ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md),
 [`person-changes.test.ts`](../../tests/person-client/person-changes.test.ts)).
 
-`person project-activity` takes no options and reads the Authority's project
+`person project-activity` takes no options but the account pin and reads the
+Authority's project
 activity ([Ask timeline v1](../product/2026-10-25-ask-timeline-v1.md) C2) under
 the signed-in session. It prints `echo-person-project-activity-v1` (for each
 active project, when something new last arrived from someone else that the

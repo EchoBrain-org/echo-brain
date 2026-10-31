@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { PERSON_IMPACT_CARD_LIMITS_V1, validatePersonImpactCardV1 } from '../src/person-impact-card-v1.js';
 
 const recordCitation = {
-  citation: { kind: 'approved_record', atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' },
+  citation: { kind: 'approved_record', atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'project-members-readable-person-v1' },
   kind: 'decision', label: 'Gate review: display precision', visibility: 'team',
 };
 const ticketCitation = {

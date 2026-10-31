@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type ExternalHumanIdentityLinkContractV2, type PersonMembershipType } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
-import { canonicalJson, canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
+import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import { isCurrentSlackDmApprovalTargetV1, matchSlackApprovalClickActorV1, resolveSlackDmApprovalTargetV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
 import { slackNangoAppPublicConfigurationSha256V1, type SlackConnectionCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { applyOrganizationControlBaselineV4 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";

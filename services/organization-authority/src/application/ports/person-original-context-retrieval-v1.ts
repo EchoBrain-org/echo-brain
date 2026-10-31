@@ -4,14 +4,10 @@ import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type { PersonItemRefV1 } from "@echo-brain/organization-api";
 import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-authority-kernel/shared/released-source-context-v1";
 
-/**
- * The caller-selected boundary; global is still limited to the actor's ACL.
- * mine = added by the caller (membership_id AND principal_id); always ⊆ global.
- */
+/** The caller-selected boundary; global is still limited to the actor's ACL. */
 export type PersonAskScopeV2 =
   | Readonly<{ readonly kind: "global" }>
-  | Readonly<{ readonly kind: "project"; readonly project_id: string }>
-  | Readonly<{ readonly kind: "mine" }>;
+  | Readonly<{ readonly kind: "project"; readonly project_id: string }>;
 
 interface OriginalContextAuthorizationV1 {
   readonly principal_id: string;

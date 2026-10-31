@@ -11,7 +11,7 @@ component_ids:
 created_at: 2026-10-01
 reviewed_at: 2026-10-02
 reviewed_ref: 1d7e72bd75babcfbc8025b4a089a8517aef80d7b
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -20,10 +20,11 @@ updates:
 
 # ADR-0027: Rebind a lost Nango Slack connection under the same credential handle
 
-This is a proposal awaiting founder acceptance. The connection-recovery fix on
-PR #250 implements it; the claim is source-tested only, not deployed or
-qualified. [ADR-0025](ADR-0025-nango-holds-slack-connection-credentials.md)
-stays accepted and is not edited.
+The founder accepted this record on 2026-10-31, as built: the
+connection-recovery fix from PR #250 merged in #251 (`1d7e72b`). Acceptance
+does not mean the change is deployed or qualified.
+[ADR-0025](ADR-0025-nango-holds-slack-connection-credentials.md) stays accepted
+and is not edited.
 
 ## Context and options
 

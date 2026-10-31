@@ -242,7 +242,7 @@ test('an approved record opens beside the answer: who approved it, who was there
   await expect(record.locator('h2')).toHaveText('Tuesday sync');
   await expect(record).toContainText('Record approved byMaya Chen');
   await expect(record).toContainText('ParticipantsMaya Chen, Ari');
-  await expect(record).toContainText('VisibilityVisible to active organization members');
+  await expect(record).toContainText('VisibilityVisible to project members');
   await expect(record.getByTestId('record-decisions')).toContainText('Ship Apollo with annual plans first.“Annual plans first, monthly after launch.”');
   await expect(record.getByTestId('record-actions')).toContainText('Maya updates the pricing page.');
   await expect(record.getByTestId('record-rationales')).toContainText('Annual plans fund the launch.');

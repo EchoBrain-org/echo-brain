@@ -6,19 +6,17 @@ import {
   encodeP256DerSignature,
 } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
+import type {
+  ApprovalDecisionPolicyIdV1,
+  ApprovalDecisionRecordInputV2,
+  ApprovalDecisionRefV2,
+} from "../src/approval-decision-record-input-v2.js";
 import {
   approvedDecisionSnapshotV2Sha256,
-  buildHumanActRecordInputV1,
   validateApprovedDecisionSnapshotV2,
-} from "../src/human-act-record-input-v1.js";
-import type {
-  HumanActEventV1,
-  HumanActRecordInputV1,
-  HumanActResolutionRefV1,
-  PersonContentPolicyIdV2,
-} from "../src/human-act-record-input-v1.js";
+} from "../src/approved-decision-snapshot-v2.js";
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "../src/person-content-policy-v2.js";
 import {
@@ -46,32 +44,30 @@ import {
   AUTHORITY_ID,
   ORGANIZATION_ID,
   P256_ORDER,
+  RECORD_INPUT_CODECS,
   STATE_LINEAGE_ID,
+  approvalDecision,
   digest,
   envelopeInput,
-  humanAct,
   mutable,
   processorProvenance,
   sourceProvenance,
   testAuthority,
 } from "./fixtures/record-v4-fixture.js";
 
+const codecs = RECORD_INPUT_CODECS;
+
 function recordBody(
-  action: "approve" | "reject" = "approve",
-  policyId: PersonContentPolicyIdV2 = RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  policyId: ApprovalDecisionPolicyIdV1 = RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   predecessor: { position: number; sha256: Sha256Digest } | null = null,
 ): OrganizationRecordEnvelopeBodyV4 {
-  const aggregate = humanAct(action, policyId);
-  const validated = buildHumanActRecordInputV1({
-    human_act_resolution_ref: aggregate.human_act_resolution_ref,
-    event: aggregate.event,
-  });
+  const validated = codecs.validateInput(approvalDecision(policyId));
   const source = sourceProvenance();
   const processor = processorProvenance();
   return {
     schema_version: 4,
     kind: ORGANIZATION_RECORD_ENVELOPE_V4_KIND,
-    envelope_id: `envelope-${action}-${policyId}`,
+    envelope_id: `envelope-${policyId}`,
     authority_id: AUTHORITY_ID,
     organization_id: ORGANIZATION_ID,
     state_lineage_id: STATE_LINEAGE_ID,
@@ -166,24 +162,21 @@ describe("private D3-2 record envelope v4", () => {
     ).toThrow("opaque string");
   });
 
-  it("joins the complete D3-1 aggregate and exact approved provenance for both policies", () => {
+  it("joins the complete approval decision and exact approved provenance for both policies", () => {
     for (const policyId of [
       RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-      ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+      PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
     ] as const) {
-      const body = recordBody("approve", policyId);
-      const validated = validateOrganizationRecordEnvelopeBodyV4(body);
+      const body = recordBody(policyId);
+      const validated = validateOrganizationRecordEnvelopeBodyV4(body, codecs);
       expect(validated.event.kind).toBe("approved");
       expect(
-        (validated.human_act_resolution_ref as HumanActResolutionRefV1)
-          .policy_id,
+        (validated.human_act_resolution_ref as unknown as ApprovalDecisionRefV2)
+          .selected_policy_id,
       ).toBe(policyId);
       expect(validated.semantic_idempotency_key).toBe(
-        buildHumanActRecordInputV1({
-          human_act_resolution_ref:
-            body.human_act_resolution_ref as HumanActResolutionRefV1,
-          event: body.event as HumanActEventV1,
-        }).semantic_idempotency_key,
+        codecs.fromReference(body.human_act_resolution_ref, body.event)
+          .semantic_idempotency_key,
       );
       expect(Object.keys(validated).sort()).toEqual([
         "authority_id",
@@ -206,31 +199,34 @@ describe("private D3-2 record envelope v4", () => {
     }
   });
 
-  it("accepts rejection for both policies while joining its exact source locator", () => {
-    for (const policyId of [
-      RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-      ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-    ] as const) {
-      const body = recordBody("reject", policyId, {
-        position: 7,
-        sha256: digest("7"),
-      });
-      const validated = validateOrganizationRecordEnvelopeBodyV4(body);
-      expect(validated.event.kind).toBe("rejected");
-      expect(validated.predecessor_position).toBe(7);
-      expect(validated.predecessor_record_sha256).toBe(digest("7"));
-      expect(
-        (validated.human_act_resolution_ref as HumanActResolutionRefV1)
-          .policy_id,
-      ).toBe(policyId);
-    }
+  it("refuses a rejection: only an approval writes a record", () => {
+    const body = recordBody(RESTRICTED_REVIEWER_PERSON_POLICY_ID, {
+      position: 7,
+      sha256: digest("7"),
+    });
+    expect(validateOrganizationRecordEnvelopeBodyV4(body, codecs).predecessor_position).toBe(7);
+    expect(() =>
+      validateOrganizationRecordEnvelopeBodyV4(
+        replaceBody(body, {
+          human_act_resolution_ref: { ...body.human_act_resolution_ref, action: "reject" },
+        }),
+        codecs,
+      ),
+    ).toThrow("Approval decision reference is unsupported");
+    expect(() =>
+      validateOrganizationRecordEnvelopeBodyV4(
+        replaceBody(body, { event: { kind: "rejected" } }),
+        codecs,
+      ),
+    ).toThrow("A rejection writes no approval decision record");
   });
 
-  it("denies broken D3, coordinate, digest, and payload-provenance joins", async () => {
+  it("denies broken approval, coordinate, digest, and payload-provenance joins", async () => {
     const body = recordBody();
     expect(() =>
       validateOrganizationRecordEnvelopeBodyV4(
         replaceBody(body, { semantic_idempotency_key: digest("9") }),
+        codecs,
       ),
     ).toThrow("semantic idempotency key");
     expect(() =>
@@ -241,6 +237,7 @@ describe("private D3-2 record envelope v4", () => {
             state_lineage_id: "another-lineage",
           },
         }),
+        codecs,
       ),
     ).toThrow("does not match the record coordinates");
     expect(() =>
@@ -248,6 +245,7 @@ describe("private D3-2 record envelope v4", () => {
         replaceBody(body, {
           source_provenance_sha256: digest("8"),
         }),
+        codecs,
       ),
     ).toThrow("source provenance digest");
     expect(() =>
@@ -255,6 +253,7 @@ describe("private D3-2 record envelope v4", () => {
         replaceBody(body, {
           processor_provenance_sha256: digest("8"),
         }),
+        codecs,
       ),
     ).toThrow("processor provenance digest");
 
@@ -281,48 +280,45 @@ describe("private D3-2 record envelope v4", () => {
       ],
     ] as const) {
       const broken = structuredClone(body);
-      if (broken.event.kind !== "approved") throw new Error("expected approval");
       const brokenEvent = mutable(broken.event);
       mutatePayload(mutable(mutable(brokenEvent.approved_snapshot).approved_payload));
       brokenEvent.approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(
         validateApprovedDecisionSnapshotV2(brokenEvent.approved_snapshot),
       );
-      mutable(broken).semantic_idempotency_key = buildHumanActRecordInputV1({
-        human_act_resolution_ref:
-          broken.human_act_resolution_ref as HumanActResolutionRefV1,
-        event: broken.event as HumanActEventV1,
-      }).semantic_idempotency_key;
-      expect(() => validateOrganizationRecordEnvelopeBodyV4(broken)).toThrow(
+      mutable(broken.human_act_resolution_ref).approved_snapshot_sha256 =
+        brokenEvent.approved_snapshot_sha256;
+      mutable(broken).semantic_idempotency_key = codecs.fromReference(
+        broken.human_act_resolution_ref,
+        broken.event,
+      ).semantic_idempotency_key;
+      expect(() => validateOrganizationRecordEnvelopeBodyV4(broken, codecs)).toThrow(
         message,
       );
     }
 
-    const brokenAggregate = humanAct("approve", RESTRICTED_REVIEWER_PERSON_POLICY_ID);
-    const brokenHumanAct: HumanActRecordInputV1 = {
-      ...brokenAggregate,
-      idempotency: {
-      ...brokenAggregate.idempotency,
-      human_act_event_sha256: digest("9"),
-      },
-    };
+    const brokenDecision = approvalDecision();
+    mutable(brokenDecision.approval_decision_ref_v2).approved_snapshot_sha256 =
+      digest("9");
     const authority = testAuthority();
     await expect(
       createOrganizationRecordEnvelopeV4(
-        { ...envelopeInput(), human_act_record_input: brokenHumanAct },
+        { ...envelopeInput(), human_act_record_input: brokenDecision },
         authority.pinned,
         STATE_LINEAGE_ID,
         authority.sign,
+        codecs,
       ),
-    ).rejects.toThrow("idempotency digests");
+    ).rejects.toThrow("differs from its approved event");
   });
 
   it("pins genesis/non-genesis pairing and exact signature-input bytes", () => {
     expect(
       validateOrganizationRecordEnvelopeBodyV4(
-        recordBody("approve", RESTRICTED_REVIEWER_PERSON_POLICY_ID, {
+        recordBody(RESTRICTED_REVIEWER_PERSON_POLICY_ID, {
           position: 1,
           sha256: digest("1"),
         }),
+        codecs,
       ),
     ).toBeDefined();
     for (const patch of [
@@ -333,6 +329,7 @@ describe("private D3-2 record envelope v4", () => {
       expect(() =>
         validateOrganizationRecordEnvelopeBodyV4(
           replaceBody(recordBody(), patch),
+          codecs,
         ),
       ).toThrow();
     }
@@ -340,6 +337,7 @@ describe("private D3-2 record envelope v4", () => {
     const signatureInput = buildOrganizationRecordSignatureInputV4(
       recordBody(),
       digest("9"),
+      codecs,
     );
     expect(signatureInput).toEqual({
       schema_version: 4,
@@ -348,12 +346,12 @@ describe("private D3-2 record envelope v4", () => {
       organization_id: ORGANIZATION_ID,
       state_lineage_id: STATE_LINEAGE_ID,
       signing_key_id: digest("9"),
-      record_sha256: organizationRecordEnvelopeBodyV4Sha256(recordBody()),
+      record_sha256: organizationRecordEnvelopeBodyV4Sha256(recordBody(), codecs),
     });
     expect(
       organizationRecordSignatureInputV4Bytes(signatureInput).toString("utf8"),
     ).toBe(
-      '{"authority_id":"oau_00000000-0000-4000-8000-000000000001","kind":"echo-organization-record-signature-v4","organization_id":"org_00000000-0000-4000-8000-000000000002","record_sha256":"sha256:069c31455565bde8ce19aaa5ae5b809b4d34b07c0ec83f3cc1c14f524d5a4b00","schema_version":4,"signing_key_id":"sha256:9999999999999999999999999999999999999999999999999999999999999999","state_lineage_id":"state-lineage-1"}',
+      '{"authority_id":"oau_00000000-0000-4000-8000-000000000001","kind":"echo-organization-record-signature-v4","organization_id":"org_00000000-0000-4000-8000-000000000002","record_sha256":"sha256:4a5c4719fd08c567df786f0c8a87bea2fadb5892848dcdf4c30b1a80c62a852e","schema_version":4,"signing_key_id":"sha256:9999999999999999999999999999999999999999999999999999999999999999","state_lineage_id":"state-lineage-1"}',
     );
     expect(() =>
       validateOrganizationRecordSignatureInputV4({
@@ -369,39 +367,32 @@ describe("private D3-2 record envelope v4", () => {
     ).toThrow("unexpected shape");
   });
 
-  it("creates and verifies both actions and policies with a pinned Authority key and lineage", async () => {
+  it("creates and verifies both policies with a pinned Authority key and lineage", async () => {
     const authority = testAuthority();
     const cases = [
-      ["approve", RESTRICTED_REVIEWER_PERSON_POLICY_ID, null],
+      [RESTRICTED_REVIEWER_PERSON_POLICY_ID, null],
       [
-        "approve",
-        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+        PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
         { position: 1, sha256: digest("1") },
       ],
-      ["reject", RESTRICTED_REVIEWER_PERSON_POLICY_ID, null],
-      [
-        "reject",
-        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-        { position: 2, sha256: digest("2") },
-      ],
     ] as const;
-    for (const [action, policyId, predecessor] of cases) {
+    for (const [policyId, predecessor] of cases) {
       const envelope = await createOrganizationRecordEnvelopeV4(
-        envelopeInput(action, policyId, predecessor),
+        envelopeInput(policyId, predecessor),
         authority.pinned,
         STATE_LINEAGE_ID,
         authority.sign,
+        codecs,
       );
       expect(
         verifyOrganizationRecordEnvelopeV4(
           envelope,
           authority.pinned,
           STATE_LINEAGE_ID,
+          codecs,
         ),
       ).toEqual(envelope);
-      expect(envelope.body.event.kind).toBe(
-        action === "approve" ? "approved" : "rejected",
-      );
+      expect(envelope.body.event.kind).toBe("approved");
       expect(Object.keys(envelope).sort()).toEqual([
         "body",
         "record_sha256",
@@ -421,8 +412,8 @@ describe("private D3-2 record envelope v4", () => {
       mutable(input.processor_provenance).processor_adapter_version =
         "mutated-version";
       mutable(
-        (input.human_act_record_input as HumanActRecordInputV1)
-          .human_act_resolution_ref,
+        (input.human_act_record_input as ApprovalDecisionRecordInputV2)
+          .approval_decision_ref_v2,
       ).approval_id = "mutated-approval";
       return authority.sign(bytes, keyId);
     };
@@ -431,6 +422,7 @@ describe("private D3-2 record envelope v4", () => {
       authority.pinned,
       STATE_LINEAGE_ID,
       mutatingSigner,
+      codecs,
     );
     expect(envelope.body).toEqual(expectedBody);
     expect(envelope.body.envelope_id).not.toBe(input.envelope_id);
@@ -446,12 +438,14 @@ describe("private D3-2 record envelope v4", () => {
       authority.pinned,
       STATE_LINEAGE_ID,
       authority.sign,
+      codecs,
     );
     expect(() =>
       verifyOrganizationRecordEnvelopeV4(
         { ...envelope, record_sha256: digest("0") },
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("record digest");
     expect(() =>
@@ -459,6 +453,7 @@ describe("private D3-2 record envelope v4", () => {
         { ...envelope, signature: `${envelope.signature.slice(0, -4)}AAAA` },
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow();
     expect(() =>
@@ -466,6 +461,7 @@ describe("private D3-2 record envelope v4", () => {
         envelope,
         authority.pinned,
         "another-lineage",
+        codecs,
       ),
     ).toThrow("expected lineage");
 
@@ -478,6 +474,7 @@ describe("private D3-2 record envelope v4", () => {
         envelope,
         foreign.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("pinned Authority");
     expect(() =>
@@ -488,6 +485,7 @@ describe("private D3-2 record envelope v4", () => {
         },
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("signing key");
 
@@ -497,6 +495,7 @@ describe("private D3-2 record envelope v4", () => {
     const alternateSignatureInput = buildOrganizationRecordSignatureInputV4(
       envelope.body,
       alternateSameAuthority.descriptor.signing_key.key_id,
+      codecs,
     );
     const alternateSignature = await alternateSameAuthority.sign(
       organizationRecordSignatureInputV4Bytes(alternateSignatureInput),
@@ -512,19 +511,21 @@ describe("private D3-2 record envelope v4", () => {
         },
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("signing key does not match the pinned Authority");
     expect(() =>
       validateOrganizationRecordEnvelopeV4({
         ...envelope,
         body: { ...envelope.body, schema_version: 3 },
-      }),
+      }, codecs),
     ).toThrow("unsupported envelope");
 
     const oldDomainBytes = canonicalJsonBytes({
       ...buildOrganizationRecordSignatureInputV4(
         envelope.body,
         envelope.signing_key_descriptor.key_id,
+        codecs,
       ),
       schema_version: 3,
       kind: "echo-organization-record-signature-v3",
@@ -538,6 +539,7 @@ describe("private D3-2 record envelope v4", () => {
         { ...envelope, signature: oldDomainSignature.toString("base64") },
         authority.pinned,
         STATE_LINEAGE_ID,
+        codecs,
       ),
     ).toThrow("signature is invalid");
   });
@@ -549,18 +551,19 @@ describe("private D3-2 record envelope v4", () => {
       authority.pinned,
       STATE_LINEAGE_ID,
       authority.sign,
+      codecs,
     );
     expect(() =>
       validateOrganizationRecordEnvelopeV4({
         ...envelope,
         signature: "not+canonical=",
-      }),
+      }, codecs),
     ).toThrow("canonical base64");
     expect(() =>
       validateOrganizationRecordEnvelopeV4({
         ...envelope,
         signature: Buffer.from("not DER").toString("base64"),
-      }),
+      }, codecs),
     ).toThrow("strict DER low-S");
     const decoded = decodeStrictP256DerSignature(
       Buffer.from(envelope.signature, "base64"),
@@ -570,7 +573,7 @@ describe("private D3-2 record envelope v4", () => {
       validateOrganizationRecordEnvelopeV4({
         ...envelope,
         signature: highS.toString("base64"),
-      }),
+      }, codecs),
     ).toThrow("strict DER low-S");
 
     let bodyReads = 0;
@@ -582,7 +585,7 @@ describe("private D3-2 record envelope v4", () => {
         return envelope.body;
       },
     });
-    expect(() => validateOrganizationRecordEnvelopeV4(accessor)).toThrow(
+    expect(() => validateOrganizationRecordEnvelopeV4(accessor, codecs)).toThrow(
       "enumerable data properties",
     );
     expect(bodyReads).toBe(0);
@@ -591,26 +594,26 @@ describe("private D3-2 record envelope v4", () => {
     Object.defineProperty(withSymbol.body, Symbol("hidden"), {
       value: "hidden",
     });
-    expect(() => validateOrganizationRecordEnvelopeV4(withSymbol)).toThrow(
+    expect(() => validateOrganizationRecordEnvelopeV4(withSymbol, codecs)).toThrow(
       "symbol properties",
     );
     const nonEnumerable = structuredClone(envelope);
     Object.defineProperty(nonEnumerable.body.source_provenance, "hidden", {
       value: "hidden",
     });
-    expect(() => validateOrganizationRecordEnvelopeV4(nonEnumerable)).toThrow(
+    expect(() => validateOrganizationRecordEnvelopeV4(nonEnumerable, codecs)).toThrow(
       "enumerable data properties",
     );
     const customPrototype = structuredClone(envelope);
     Object.setPrototypeOf(customPrototype.body.processor_provenance, null);
-    expect(() => validateOrganizationRecordEnvelopeV4(customPrototype)).toThrow(
+    expect(() => validateOrganizationRecordEnvelopeV4(customPrototype, codecs)).toThrow(
       "plain object",
     );
     const cyclic = structuredClone(envelope) as OrganizationRecordEnvelopeV4 & {
       cycle?: unknown;
     };
     cyclic.cycle = cyclic;
-    expect(() => validateOrganizationRecordEnvelopeV4(cyclic)).toThrow("cycle");
+    expect(() => validateOrganizationRecordEnvelopeV4(cyclic, codecs)).toThrow("cycle");
   });
 
   it("rejects wrapper drift and a non-Buffer detached signer result", async () => {
@@ -620,19 +623,20 @@ describe("private D3-2 record envelope v4", () => {
       authority.pinned,
       STATE_LINEAGE_ID,
       authority.sign,
+      codecs,
     );
     for (const candidate of [
       { ...envelope, integrity: {} },
       { ...envelope, authorization_proof_sha256: digest("1") },
       { ...envelope, human_act_resolution_ref_sha256: digest("2") },
     ]) {
-      expect(() => validateOrganizationRecordEnvelopeV4(candidate)).toThrow(
+      expect(() => validateOrganizationRecordEnvelopeV4(candidate, codecs)).toThrow(
         "unexpected shape",
       );
     }
     const missing = { ...envelope } as unknown as Record<string, unknown>;
     delete missing.record_sha256;
-    expect(() => validateOrganizationRecordEnvelopeV4(missing)).toThrow(
+    expect(() => validateOrganizationRecordEnvelopeV4(missing, codecs)).toThrow(
       "unexpected shape",
     );
     await expect(
@@ -641,6 +645,7 @@ describe("private D3-2 record envelope v4", () => {
         authority.pinned,
         STATE_LINEAGE_ID,
         (async () => "not-a-buffer") as unknown as AuthorityDetachedSigner,
+        codecs,
       ),
     ).rejects.toThrow("signature bytes");
   });

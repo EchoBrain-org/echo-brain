@@ -6,11 +6,11 @@ import { AUTHORITY_BASELINE_SCHEMA_VERSION, isCurrentAuthorityState } from '@ech
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   validatePersonUpdateReceiptV2, validatePersonUpdateSubmitV2,
-  validatePersonUploadContextId, validatePersonUploadSearchResultV2,
+  validatePersonUploadSearchResultV2,
   validatePersonUploadSearchV2, validatePersonUpdateRequestId,
   validatePersonUpdateReceiptV3, validatePersonUpdateSavedV3, validatePersonUpdateStatusV3, validatePersonUpdateSubmitV3,
-  validatePersonUploadContentV3, validatePersonUploadSearchResultV3,
-  validateProjectContextFeedV2, validateProjectContextReadV2, validateProjectContextSearchResultV2,
+  validatePersonUploadSearchResultV3,
+  validateProjectContextSearchResultV2,
   validateProjectCreateReceiptV1, validateProjectMembersV1,
   validateProjectContextBrowseV1, validateProjectContextSearchV1, validateProjectDirectorySearchV1,
   validateProjectDirectoryV1, validateProjectIdV1, validateProjectMutationReceiptV1,
@@ -20,9 +20,9 @@ import {
   type OrganizationDirectorySearchV1, type OrganizationDirectoryV1,
   type PersonUploadSearchV2, type PersonUploadSearchResultV2,
   type PersonUpdateReceiptV3, type PersonUpdateStatusResultV3, type PersonUpdateSubmitV3,
-  type PersonUploadContentV3, type PersonUploadSearchResultV3, type PersonUploadAudienceV3,
+  type PersonUploadSearchResultV3, type PersonUploadAudienceV3,
   type ProjectContextAssociateV1, type ProjectContextBrowseV1, type ProjectContextDissociateV1,
-  type ProjectContextFeedV2, type ProjectContextReadV2, type ProjectContextSearchResultV2,
+  type ProjectContextSearchResultV2,
   type ProjectContextSearchV1, type ProjectCreateReceiptV1, type ProjectCreateV1,
   type ProjectDirectorySearchV1, type ProjectDirectoryV1, type ProjectIdV1,
   type ProjectMembersV1, type ProjectMemberAddV1, type ProjectMemberRemoveV1, type ProjectMemberSetV1,
@@ -380,18 +380,9 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
     const page = remaining.slice(0, limit);
     return { items: page, next_cursor: next(remaining, page, limit) ? encodeProjectCursorV1(scope, [page.at(-1)!.display_name, page.at(-1)!.membership_id]) : null };
   }
-  feedV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV2 {
-    this.open(); const input = this.input(() => validateProjectContextBrowseV1(request)); this.require(snapshot, 'feed_v2', input.project_id);
-    const limit=input.limit??10; const scope=cursorScope(snapshot,limit); const pos=decodeProjectCursorV1(input.cursor,scope); const rows=this.projectSourcesV3(snapshot,input.project_id).sort((a,b)=>b.received_at.localeCompare(a.received_at)||a.context_id.localeCompare(b.context_id)); const remaining=after(rows,pos,row=>[row.received_at,row.context_id]); const page=remaining.slice(0,limit);
-    return this.store.issue(snapshot,'feed_v2',validateProjectContextFeedV2({schema_version:2,kind:'echo-project-context-feed-v2',project_id:input.project_id,items:page.map((row)=>({context_id:row.context_id,received_at:row.received_at,title:row.title,excerpt:excerpt(row),audience:this.releasedAudience(snapshot,row)})),next_cursor:next(remaining,page,limit)?encodeProjectCursorV1(scope,[page.at(-1)!.received_at,page.at(-1)!.context_id]):null}));
-  }
   searchV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextSearchV1): ProjectContextSearchResultV2 {
     this.open(); const input=this.input(()=>validateProjectContextSearchV1(request)); this.require(snapshot,'search_v2',input.project_id); const limit=input.limit??10; const scope=cursorScope(snapshot,limit,input.query); const pos=decodeProjectCursorV1(input.cursor,scope); const terms=projectSearchTermsV1(input.query); const rows=ranked(this.projectSourcesV3(snapshot,input.project_id),terms);const remaining=after(rows,pos,value=>[value.score,value.row.received_at,value.row.context_id]);const page=remaining.slice(0,limit);
     return this.store.issue(snapshot,'search_v2',validateProjectContextSearchResultV2({schema_version:2,kind:'echo-project-context-search-result-v2',project_id:input.project_id,items:page.map(({row})=>({context_id:row.context_id,received_at:row.received_at,title:row.title,excerpt:excerpt(row),audience:this.releasedAudience(snapshot,row)})),next_cursor:next(remaining,page,limit)?encodeProjectCursorV1(scope,[page.at(-1)!.score,page.at(-1)!.row.received_at,page.at(-1)!.row.context_id]):null}));
-  }
-  readContextV2(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1, contextId: string): ProjectContextReadV2 {
-    this.open(); const input=this.input(()=>({project_id:validateProjectIdV1(projectId),context_id:validatePersonUploadContextId(contextId)})); this.require(snapshot,'context_read_v2',input.project_id); if(snapshot.scope.operation!=='context_read_v2'||snapshot.scope.context_id!==input.context_id)throw new Error('project context scope mismatch'); const row=this.projectSourcesV3(snapshot,input.project_id).find((value)=>value.context_id===input.context_id);if(row===undefined)denied();
-    return this.store.issue(snapshot,'context_read_v2',validateProjectContextReadV2({schema_version:2,kind:'echo-project-context-read-v2',project_id:input.project_id,context_id:row.context_id,received_at:row.received_at,title:row.title,text:row.text,audience:this.releasedAudience(snapshot,row)}));
   }
   /** The notes stored as V2, which no V3 read returns (ADR-0048 keeps this search for them). */
   searchUploads(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV2 {
@@ -408,10 +399,6 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       return this.store.issue(snapshot, 'upload_status_v3', validatePersonUpdateSavedV3({ schema_version: 3, kind: 'echo-person-update-saved-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, status: 'stored' }));
     }
     return this.store.issue(snapshot, 'upload_status_v3', validatePersonUpdateStatusV3({ schema_version: 3, kind: 'echo-person-update-status-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, association_project_ids, audience, status: 'stored', metadata: row.state }));
-  }
-  readUploadV3(snapshot: ProjectAuthorizationSnapshotV1, contextId: string): PersonUploadContentV3 {
-    this.open(); const input = this.input(() => validatePersonUploadContextId(contextId)); this.require(snapshot, 'upload_read_v3'); if (snapshot.scope.operation !== 'upload_read_v3' || snapshot.scope.context_id !== input) throw new Error('project context scope mismatch'); const row = this.store.source(input); if (row === undefined || row.request_version !== 3 || !this.store.readable(snapshot.person, snapshot.grants, row)) denied(); this.store.validateSource(row);
-    return this.store.issue(snapshot, 'upload_read_v3', validatePersonUploadContentV3({ schema_version: 3, kind: 'echo-person-upload-content-v3', context_id: row.context_id, received_at: row.received_at, audience: this.releasedAudience(snapshot, row), title: row.title, text: row.text }));
   }
   searchUploadsV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV3 {
     this.open(); const input = this.input(() => validatePersonUploadSearchV2(request)); this.require(snapshot, 'upload_search_v3'); const terms = projectSearchTermsV1(input.query);
@@ -578,7 +565,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
   private projectSourcesV3(snapshot:ProjectAuthorizationSnapshotV1,projectId:ProjectIdV1):SourceRow[]{return this.readableSources(snapshot,this.store.database.prepare(`${SELECT_SOURCE} JOIN authority_project_context_associations_v1 association ON association.context_id=submission.context_id WHERE association.project_id=? AND association.organization_id=? AND submission.request_version IN (2,3)`).all(projectId,snapshot.person.organization_id) as SourceRow[]);}
   private lastLead(projectId:ProjectIdV1):void{const n=(this.store.database.prepare(`SELECT count(*) AS n FROM authority_project_memberships_v1 grant JOIN authority_memberships membership ON membership.membership_id=grant.membership_id AND membership.status='active' WHERE grant.project_id=? AND grant.status='active' AND grant.role='lead'`).get(projectId) as {n:number}).n;if(n<=1)denied('conflict');}
 }
-const READ_OPERATIONS: readonly string[] = ['project_list', 'project_list_v2', 'project_read_v2', 'members', 'directory', 'organization_directory', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'];
+const READ_OPERATIONS: readonly string[] = ['project_list', 'project_list_v2', 'project_read_v2', 'members', 'directory', 'organization_directory', 'search_v2', 'upload_search', 'upload_status_v3', 'upload_search_v3'];
 function readOperation(scope: ProjectAuthorizationScopeV1): ProjectReadOperationV1 {
   if (isReadScope(scope)) return scope.operation as ProjectReadOperationV1;
   throw new Error('mutation cannot release');

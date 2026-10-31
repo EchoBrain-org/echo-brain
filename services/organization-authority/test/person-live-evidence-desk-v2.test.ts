@@ -276,8 +276,8 @@ describe('thin live ticket dispatcher', () => {
     await expect(deskWith(f.base, f.ticket).revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
     expect(f.base.revalidate).toHaveBeenCalledTimes(2);
   });
-  it.each([{ kind: 'mine' as const }, { kind: 'project' as const, project_id: 'prj_00000000-0000-4000-8000-000000000001' as const }])('excludes tickets in unsupported scope and refuses explicit ticket reads without global fallback', async scope => {
-    const f = fixture(scope);
+  it('excludes tickets in a project scope without their binding and refuses explicit ticket reads without global fallback', async () => {
+    const f = fixture({ kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' });
     expect(() => deskWith(f.base, f.ticket)).toThrow(AuthorityOperationError);
     expect(() => deskWith(f.base, undefined, mixedFixture().page)).toThrow(AuthorityOperationError);
     const desk = deskWith(f.base);

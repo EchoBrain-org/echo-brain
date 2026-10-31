@@ -266,8 +266,6 @@ function buildInputForCanary(
       record_sha256: recordHead.record_sha256,
     },
     retrieval_contract_sha256: contract.retrieval_contract_sha256,
-    organization_member_policy_contract_sha256:
-      contract.organization_member_policy_contract_sha256,
     restricted_reviewer_policy_contract_sha256:
       contract.restricted_reviewer_policy_contract_sha256,
     analyzer: contract.analyzer,

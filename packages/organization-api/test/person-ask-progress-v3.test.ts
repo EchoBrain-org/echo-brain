@@ -20,7 +20,7 @@ import {
 
 const record = canonicalSha256('record');
 const projectId = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' as const;
-const decision = { citation: { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: record, policy_id: 'organization-member-readable-person-v2' as const }, kind: 'decision' as const, label: 'THERM DVT recovery sync', visibility: 'team' as const, ref: `meeting:${record}` as const };
+const decision = { citation: { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: record, policy_id: 'project-members-readable-person-v1' as const }, kind: 'decision' as const, label: 'THERM DVT recovery sync', visibility: 'team' as const, ref: `meeting:${record}` as const };
 const ticket = { citation: { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: 'cloud-1', ticket_id: '10048', permalink: 'https://example.atlassian.net/browse/THERM-48', text_sha256: canonicalSha256('THERM-48') }, kind: 'ticket' as const, label: 'THERM-48: Fan curve', visibility: 'only_me' as const };
 const passage = (n: number) => ({ citation: { kind: 'source_revision' as const, source_id: `source:${n.toString(16).padStart(64, 'a')}`, revision_id: `rev-${n}`, source_sha256: canonicalSha256(`s${n}`), representation_sha256: canonicalSha256(`r${n}`), anchor_sha256: canonicalSha256(`a${n}`), document_id: `doc_${'b'.repeat(64)}` as const }, kind: 'document_passage' as const, label: `Spec part ${n}`, visibility: 'only_me' as const, ref: `document:doc_${'b'.repeat(64)}` as const });
 const followUp = { citation: { kind: 'follow_up' as const, item_id: 'itm_launch-1' }, kind: 'follow_up' as const, label: 'Ship the launch checklist', visibility: 'team' as const, ref: 'follow_up:itm_launch-1' as const };

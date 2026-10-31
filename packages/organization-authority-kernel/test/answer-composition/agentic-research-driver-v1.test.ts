@@ -208,22 +208,20 @@ describe('native research harness shares the real ECHO tool state', () => {
     expect(parseAgenticDriverFinishV1(value, true)).toEqual(value);
   });
 
-  it.each(['global', 'mine'] as const)('keeps the %s catalog and source restrictions bound by ECHO', async scope => {
+  it('keeps the global catalog and source restrictions bound by ECHO', async () => {
     const list = vi.fn(async () => result([]));
     const h = harness(async session => {
       const catalog = (session.initial.source_catalog as { source: string }[]).map(value => value.source);
-      expect(catalog.includes('tickets')).toBe(scope === 'global');
-      expect(catalog.includes('pages')).toBe(scope === 'global');
+      expect(catalog).toEqual(expect.arrayContaining(['tickets', 'pages']));
       await admit(session);
-      const read = await session.call('list', { source: 'tickets' });
-      if (scope === 'mine') expect(JSON.stringify(read)).toContain('error');
+      await session.call('list', { source: 'tickets' });
       await session.call('finish', finish([], false));
-    }, { scope: { kind: scope }, live_sources: [
+    }, { scope: { kind: 'global' }, live_sources: [
       { source_id: 'jira', selector: 'tickets', kind: 'ticket', description: 'Authorized Jira source', tool_id: 'jira', metadata_only_list: true },
       { source_id: 'confluence', selector: 'pages', kind: 'page', description: 'Authorized Confluence source', tool_id: 'confluence', metadata_only_list: true },
     ], list });
     await h.ask();
-    expect(list).toHaveBeenCalledTimes(scope === 'mine' ? 0 : 1);
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it('reports not found only after completed reads and still performs final release checks', async () => {

@@ -1,13 +1,12 @@
-import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { HUMAN_ACT_RECORD_INPUT_CODECS_V4 } from '@echo-brain/organization-protocol';
-import { createPersonPolicyFactProjectorV2, createRecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { AnswerCompositionGenerationBindingV1 } from '@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1';
 import { openOrganizationAuthorityRuntime, type OrganizationAuthorityRuntimeConfig } from '../src/composition/organization-authority-runtime.js';
+import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from '../src/composition/authority-record-protocols-v1.js';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials } from '../src/composition/person-onboarding-service.js';
@@ -86,9 +85,10 @@ function bootstrapFixture(names: { readonly organization: string; readonly owner
 }
 
 /** The provider-neutral runtime with no meeting provider composed. */
-async function startRuntimeForTest(options: { readonly organization_source_row?: true } & Pick<OrganizationAuthorityRuntimeConfig, 'on_search_capacity' | 'on_worker_error'>) {
+async function startRuntimeForTest(options: { readonly organization_source_row?: true; readonly before_open?: (state_directory: string) => void } & Pick<OrganizationAuthorityRuntimeConfig, 'on_search_capacity' | 'on_worker_error'>) {
   const { initialized, credentials } = bootstrapFixture({ organization: 'Personal-only fixture', owner: 'Owner', revision: 'personal-only-runtime-test' });
   if (options.organization_source_row === true) seedOrganizationSourceRow(initialized.state_directory, initialized);
+  options.before_open?.(initialized.state_directory);
   const runtime = await openOrganizationAuthorityRuntime({
     ...(options.on_search_capacity === undefined ? {} : { on_search_capacity: options.on_search_capacity }),
     ...(options.on_worker_error === undefined ? {} : { on_worker_error: options.on_worker_error }),
@@ -96,8 +96,8 @@ async function startRuntimeForTest(options: { readonly organization_source_row?:
     oidc: { issuer: 'https://issuer.invalid', client_id: 'fixture-client', redirect_uri: 'https://authority.example/v2/session/oidc/callback', tenant: { kind: 'issuer' }, id_token_algorithms: ['RS256'] },
     client_authentication: { method: 'none' }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
     answer_composition_generation_bundle: { load: () => generation },
-    record_input_codecs: HUMAN_ACT_RECORD_INPUT_CODECS_V4,
-    record_policy_fact_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2()]),
+    record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
+    record_policy_fact_projectors: authorityRecordPolicyProjectorsV1(),
     worker_interval_ms: 3_600_000,
   }, { api: {} });
   const db = openAuthorityDatabase(join(initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
@@ -129,6 +129,25 @@ describe('Organization Authority runtime without an organization source lane', (
       expect(capacity[0]).toEqual({ status: 'over', limit: 'maximum_segments' });
       expect(failures[0]).toBe('readable-search generation exceeds maximum_segments');
       expect(runtime.db.prepare('SELECT count(*) FROM authority_readable_search_active_generation').pluck().get()).toBe(0);
+    } finally { await runtime.close(); }
+  });
+
+  it('starts after a search rebuild was killed midway, and its next build removes the leftover', async () => {
+    let retrieval = '';
+    const runtime = await startRuntimeForTest({ before_open: state => {
+      // What a kill during the first rebuild leaves: generations/, and a half-written segment beside it.
+      retrieval = join(state, 'record-retrieval');
+      const segment = join(retrieval, `.staging-${'c'.repeat(32)}`, 'segments', 'partial');
+      mkdirSync(segment, { recursive: true, mode: 0o700 });
+      mkdirSync(join(retrieval, 'generations'), { mode: 0o700 });
+      writeFileSync(join(segment, 'facts.sqlite-journal'), 'unfinished');
+    } });
+    try {
+      expect((await fetch(`http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`)).status).toBe(200);
+      expect(readdirSync(retrieval)).toEqual(['generations']);
+      expect(readdirSync(join(retrieval, 'generations'))).toEqual([
+        runtime.db.prepare('SELECT generation_id FROM authority_readable_search_active_generation').pluck().get(),
+      ]);
     } finally { await runtime.close(); }
   });
 

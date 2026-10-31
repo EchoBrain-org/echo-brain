@@ -81,11 +81,11 @@ attributes no speaker. Custody, extraction and review stay in the Authority. The
 [Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)
 records its limits and live qualification.
 
-Jira's server-only connection handoff (the staging rehearsal's read proof, the
-impact check's assignee lookup and the Ask source check's ticket markers; Jira
-context capture is disabled) derives its transport and current-grant fences
-from an authenticated Person connection. Meeting processing, approval, revision
-custody and shared connectors remain provider-neutral.
+Jira's server-only bulk ticket reads (the impact check's assignee lookup and
+the Ask source check's ticket markers; Jira context capture is disabled) derive
+their transport and current-grant fences from an authenticated Person
+connection. Meeting processing, approval, revision custody and shared
+connectors remain provider-neutral.
 
 `providers/openrouter` also carries Ask's answer model and, for the staging
 Authority only, the Claude Agent SDK research engine and the transport for one

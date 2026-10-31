@@ -16,7 +16,7 @@ import { EMPTY_BUNDLE, scriptedGate } from "../fixtures/agentic-scenarios.js";
  * model call writes the summaries and relations; code builds the rest.
  */
 const RECORD = canonicalSha256({ record: "gate-review" });
-const recordCitation = { kind: "approved_record" as const, atom_id: canonicalSha256({ atom: "decision" }), record_sha256: RECORD, policy_id: "organization-member-readable-person-v2" as const };
+const recordCitation = { kind: "approved_record" as const, atom_id: canonicalSha256({ atom: "decision" }), record_sha256: RECORD, policy_id: "project-members-readable-person-v1" as const };
 
 function recordItem(id: string, text: string, options: Partial<EvidenceDeskItemV2> = {}, record = RECORD): EvidenceDeskItemV2 {
   return Object.freeze({

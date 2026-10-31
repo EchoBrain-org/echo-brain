@@ -1,4 +1,4 @@
-import { canonicalJson, canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
+import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import { validateOrganizationToolConnectionContractV2, validateOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
 import type Database from "better-sqlite3";
 

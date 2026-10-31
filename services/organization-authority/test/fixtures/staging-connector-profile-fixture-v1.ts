@@ -19,7 +19,7 @@ export function privateFile(path: string, value: string): void {
   chmodSync(path, 0o600);
 }
 
-/** Creates a new private root whose `private/` directory holds the staging profile and test inputs. */
+/** Creates a new private root whose `private/` directory holds the test inputs. */
 export function prepare(root: string): void {
   for (const path of [root, join(root, 'private')]) {
     mkdirSync(path, { mode: 0o700 });
@@ -30,7 +30,7 @@ export function prepare(root: string): void {
 export function configuration(root: string) {
   const privateRoot = join(root, 'private');
   return {
-    organization_name: 'Connector rehearsal fixture',
+    organization_name: 'Staging connector fixture',
     owner_name: 'Fixture Founder',
     owner_email: FIXTURE_EMAIL,
     oidc: { config_file: join(privateRoot, 'oidc-config.json') },

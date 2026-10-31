@@ -6,7 +6,7 @@ tests sit beside the code they cover. Decision record:
 [desktop README](../../product/echo-desktop/README.md) describes the refresh
 and notifications as built; the rulings R1–R10 and N1–N6 below stay because
 code cites them. Replaces F8 of
-[follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md) and its definition
+[follow-ups thread v1](../archive/2026-10-14-follow-ups-thread-v1.md) and its definition
 of Follow-ups. R8, and R9's `changes unsupported`, were retired on 2026-10-25
 ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md)): a 404 from
 the check is `not_found`, and a failed check backs off. Mine left the desktop

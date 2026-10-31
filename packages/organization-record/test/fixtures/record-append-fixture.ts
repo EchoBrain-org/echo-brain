@@ -1,39 +1,44 @@
 import {
   canonicalJson,
+  canonicalSha256,
   normalizeP256LowS,
   p256KeyId,
   sha256Digest,
   type JsonObject,
+  type JsonValue,
   type P256SigningKeyDescriptor,
   type Sha256Digest
 } from "@echo-brain/federation-protocol";
-import { HUMAN_ACT_RECORD_INPUT_CODEC_V1, createRecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync, sign as signMessage } from "node:crypto";
+import {
+  APPROVAL_DECISION_CONSEQUENCE_KIND_V1,
+  APPROVAL_DECISION_FIELD_V2,
+  APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2,
+  APPROVAL_DECISION_RECORD_INPUT_CODEC_V2,
+  APPROVAL_DECISION_REF_KIND_V2,
+  APPROVAL_DECISION_SNAPSHOT_SURFACE_V1,
+  approvalRecordIdV2,
+  validateApprovalDecisionRecordInputV2,
+  type ApprovalDecisionPolicyIdV1,
+} from "../../../organization-protocol/src/approval-decision-record-input-v2.js";
+import {
+  APPROVED_DECISION_SNAPSHOT_V2_KIND,
+  approvedDecisionSnapshotV2Sha256,
+  validateApprovedDecisionSnapshotV2,
+  type ApprovedDecisionSnapshotV2,
+} from "../../../organization-protocol/src/approved-decision-snapshot-v2.js";
 import {
   organizationAuthorityPinSha256,
   verifyOrganizationAuthorityPin,
 } from "../../../organization-protocol/src/authority-descriptor.js";
-import {
-  APPROVED_DECISION_SNAPSHOT_V2_KIND,
-  HUMAN_ACT_RESOLUTION_REF_V1_KIND,
-  approvedDecisionSnapshotV2Sha256,
-  buildHumanActRecordInputV1,
-  validateApprovedDecisionSnapshotV2,
-  type HumanActEventV1,
-  type PersonContentPolicyIdV2,
-} from "../../../organization-protocol/src/human-act-record-input-v1.js";
 import {
   createOrganizationRecordReceiptV2,
   validateOrganizationRecordReceiptBodyV2,
   verifyOrganizationRecordReceiptV2,
 } from "../../../organization-protocol/src/organization-record-receipt-v2.js";
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
-  RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
-  organizationMemberReadablePersonConsequenceSha256,
-  organizationMemberReadablePersonPolicyContractSha256,
-  restrictedReviewerPersonConsequenceSha256,
+  projectMembersReadablePersonPolicyContractSha256,
   restrictedReviewerPersonPolicyContractSha256,
 } from "../../../organization-protocol/src/person-content-policy-v2.js";
 import {
@@ -42,15 +47,17 @@ import {
   createOrganizationRecordEnvelopeV4,
   verifyOrganizationRecordEnvelopeV4,
 } from "../../../organization-protocol/src/record-envelope-v4.js";
+import { createRecordInputCodecRegistryV4 } from "../../../organization-protocol/src/record-input-codec-v4.js";
+import { projectApprovedMeetingPolicyFactsV1 } from "../../src/application/approved-meeting-policy-projection-v1.js";
 import {
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-  type PersonPolicyIdV2
 } from "../../src/application/person-policy-fact-contracts-v2.js";
 import {
-  type PersonHumanActActionV2,
-  type PersonHumanActResolutionRefV1View,
-  type RevalidatedPersonPolicyAuthorizationWitnessV2,
-} from "../../src/application/person-policy-facts-v2.js";
+  createRecordPolicyFactProjectorRegistryV1,
+  type RecordPolicyFactEnvelopeV1,
+  type RecordPolicyFactProjectorV1,
+} from "../../src/application/record-policy-fact-projection-v1.js";
 import {
   type AppendV4RecordInput,
   type V4ReceiptFactory,
@@ -60,7 +67,8 @@ import {
 import { openOrganizationRecordDatabase } from "../../src/persistence/open-organization-record-database.js";
 import { applyOrganizationRecordLogBaselineV6 } from "../../src/persistence/record-log-baseline.js";
 
-export const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1]);
+/** The record codecs the Authority appends and reads with: approval decisions only. */
+export const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([APPROVAL_DECISION_RECORD_INPUT_CODEC_V2]);
 
 export const COORDINATES = {
   authority_id: "oau_00000000-0000-4000-8000-000000000001",
@@ -128,28 +136,46 @@ export function database(): ReturnType<typeof openOrganizationRecordDatabase> {
   return value;
 }
 
-export function policy(policy_id: PersonPolicyIdV2) {
-  if (policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID) {
-    return {
-      policy_contract_sha256: restrictedReviewerPersonPolicyContractSha256(),
-      policy_consequence_text: RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
-      policy_consequence_sha256: restrictedReviewerPersonConsequenceSha256(),
-    };
-  }
-  return {
-    policy_contract_sha256:
-      organizationMemberReadablePersonPolicyContractSha256(),
-    policy_consequence_text:
-      ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
-    policy_consequence_sha256:
-      organizationMemberReadablePersonConsequenceSha256(),
-  };
+/** The project every fixture project record is shared with unless a test names others. */
+export const FIXTURE_PROJECT_ID = "prj_00000000-0000-4000-8000-000000000001";
+export const FIXTURE_REVIEWER = { principal_id: "principal-1", membership_id: "membership-1" } as const;
+
+/**
+ * A neutral policy projector for approval-decision records. The Authority's
+ * projector (approval-decision-projection-v1.ts) also re-checks the decision
+ * witness; this one derives the same facts from the verified reference alone,
+ * so the record log is tested without the Authority.
+ */
+export function approvalDecisionTestProjector(): RecordPolicyFactProjectorV1 {
+  const parse = (envelope: RecordPolicyFactEnvelopeV1) => validateApprovalDecisionRecordInputV2({
+    [APPROVAL_DECISION_FIELD_V2]: envelope.body.human_act_resolution_ref,
+    event: envelope.body.event,
+  });
+  return Object.freeze({
+    id: APPROVAL_DECISION_REF_KIND_V2,
+    matches: (envelope: RecordPolicyFactEnvelopeV1) =>
+      (envelope.body.human_act_resolution_ref as { readonly kind?: unknown }).kind === APPROVAL_DECISION_REF_KIND_V2,
+    policyBinding(envelope: RecordPolicyFactEnvelopeV1) {
+      const { event } = parse(envelope);
+      return { policy_id: event.policy_id, policy_contract_sha256: event.policy_contract_sha256 };
+    },
+    project(input: Parameters<RecordPolicyFactProjectorV1["project"]>[0]) {
+      const parsed = parse(input.envelope);
+      return projectApprovedMeetingPolicyFactsV1({ ...input, event: parsed.event, reference: parsed.approval_decision_ref_v2 });
+    },
+  });
 }
 
-export function humanAct(
+export const RECORD_POLICY_PROJECTORS = createRecordPolicyFactProjectorRegistryV1([approvalDecisionTestProjector()]);
+
+/** The record approval id of a proposal's destination: Only me ([]) or its projects. */
+export function recordApprovalId(proposal_approval_id: string, projects: readonly string[] = []): string {
+  return approvalRecordIdV2(proposal_approval_id, projects);
+}
+
+/** A frozen approval-core snapshot under `approval_id`: decisions, then actions, then rationales. */
+export function approvedSnapshot(
   approval_id: string,
-  action: PersonHumanActActionV2,
-  policy_id: PersonContentPolicyIdV2,
   signal_count: number,
   signal_counts?: {
     readonly decisions?: number;
@@ -157,25 +183,8 @@ export function humanAct(
     readonly rationales?: number;
   },
   decision_text?: string,
-) {
-  const selected = policy(policy_id);
-  const reference = {
-    schema_version: 1 as const,
-    kind: HUMAN_ACT_RESOLUTION_REF_V1_KIND,
-    ...COORDINATES,
-    approval_id,
-    action,
-    policy_id,
-    policy_contract_sha256: selected.policy_contract_sha256,
-    audit_event_id: `audit-${approval_id}`,
-    audit_sequence: 1,
-    audit_entry_sha256: sha256Digest(`audit-entry-${approval_id}`),
-    provider_action_kind: "echo-provider-human-action-v2" as const,
-    provider_action_schema_version: 2 as const,
-    provider_action_sha256: sha256Digest(`provider-${approval_id}`),
-    authorization_proof_sha256: sha256Digest(`authorization-${approval_id}`),
-  };
-  const snapshot = {
+): ApprovedDecisionSnapshotV2 {
+  return validateApprovedDecisionSnapshotV2({
     schema_version: 2 as const,
     kind: APPROVED_DECISION_SNAPSHOT_V2_KIND,
     approval_id,
@@ -258,87 +267,66 @@ export function humanAct(
       alternatives: [],
       links: null,
       reviewed_at: "2026-08-20T12:01:00.000Z",
-      surface: "person-approval",
+      surface: APPROVAL_DECISION_SNAPSHOT_SURFACE_V1,
     },
-  };
-  const approvedSnapshot = validateApprovedDecisionSnapshotV2(snapshot);
-  const event: HumanActEventV1 =
-    action === "approve"
-      ? {
-          kind: "approved" as const,
-          approved_snapshot: approvedSnapshot,
-          approved_snapshot_sha256:
-            approvedDecisionSnapshotV2Sha256(approvedSnapshot),
-          policy_id,
-          ...selected,
-        }
-      : {
-          kind: "rejected" as const,
-          candidate_sha256: sha256Digest(`candidate-${approval_id}`),
-          approved_snapshot_sha256:
-            approvedDecisionSnapshotV2Sha256(approvedSnapshot),
-          frozen_card_sha256: sha256Digest(`card-${approval_id}`),
-          policy_id,
-          policy_contract_sha256: selected.policy_contract_sha256,
-          policy_consequence_sha256: selected.policy_consequence_sha256,
-          action: "reject" as const,
-          rejection_payload: {
-            source: {
-              adapter_id: "granola",
-              instance_id: "primary",
-              external_id: "external-approval-1",
-            },
-            meeting_id: `meeting-${approval_id}`,
-            rejected_at: "2026-08-20T12:02:00.000Z",
-            reason: "Needs a clearer owner.",
-            reconsider_after: null,
-          },
-        };
-  return buildHumanActRecordInputV1({
-    human_act_resolution_ref: reference,
-    event,
   });
 }
 
-export function authorizationWitness(
-  human: { readonly human_act_resolution_ref: PersonHumanActResolutionRefV1View },
-  reviewer: { readonly principal_id: string; readonly membership_id: string } = { principal_id: "principal-1", membership_id: "membership-1" },
-): RevalidatedPersonPolicyAuthorizationWitnessV2 {
-  const ref = human.human_act_resolution_ref;
-  return {
-    authorization_allow: {
-      authority_id: ref.authority_id,
-      organization_id: ref.organization_id,
-      state_lineage_id: ref.state_lineage_id,
-      approval_id: ref.approval_id,
-      action: ref.action,
-      policy_id: ref.policy_id,
-      policy_contract_sha256: ref.policy_contract_sha256,
-      principal_id: reviewer.principal_id,
-      membership_id: reviewer.membership_id,
-      provider_action_sha256: ref.provider_action_sha256,
-      decision: "allow",
-    },
-    authorization_proof_sha256: ref.authorization_proof_sha256,
-    provider_action_kind: ref.provider_action_kind,
-    provider_action_schema_version: ref.provider_action_schema_version,
-    audit_entry: {
-      authority_id: ref.authority_id,
-      organization_id: ref.organization_id,
-      state_lineage_id: ref.state_lineage_id,
-      audit_event_id: ref.audit_event_id,
-      audit_sequence: ref.audit_sequence,
-      actor_class: "provider_human",
-      principal_id: reviewer.principal_id,
-      membership_id: reviewer.membership_id,
-      action: ref.action,
-      subject_kind: "approval",
-      subject_id: ref.approval_id,
-      detail_digest: ref.authorization_proof_sha256,
-      provider_action_sha256: ref.provider_action_sha256,
-    },
-    audit_entry_sha256: ref.audit_entry_sha256,
+/**
+ * One approval decision of proposal `proposal_approval_id` with every item
+ * routed to one destination: Only me (the restricted reviewer) or `projects`.
+ */
+export function approvalDecision(input: {
+  readonly proposal_approval_id: string;
+  readonly policy_id: ApprovalDecisionPolicyIdV1;
+  readonly projects?: readonly string[];
+  readonly signal_count: number;
+  readonly signal_counts?: {
+    readonly decisions?: number;
+    readonly actions?: number;
+    readonly rationales?: number;
   };
+  readonly decision_text?: string;
+  readonly reviewer?: { readonly principal_id: string; readonly membership_id: string };
+}) {
+  const projects = input.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID ? [...(input.projects ?? [FIXTURE_PROJECT_ID])] : [];
+  const approval_id = recordApprovalId(input.proposal_approval_id, projects);
+  const snapshot = approvedSnapshot(approval_id, input.signal_count, input.signal_counts, input.decision_text);
+  const approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(snapshot);
+  const policy_contract_sha256 = input.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
+    ? restrictedReviewerPersonPolicyContractSha256()
+    : projectMembersReadablePersonPolicyContractSha256();
+  const policy_consequence = {
+    schema_version: 2 as const, kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id: input.policy_id,
+    audience_project_ids: projects, association_project_ids: projects,
+  };
+  const policy_consequence_sha256 = canonicalSha256(policy_consequence as unknown as JsonValue);
+  const brief = snapshot.approved_payload.brief;
+  const command_id = `cmd-${input.proposal_approval_id}`;
+  const reviewer = input.reviewer ?? FIXTURE_REVIEWER;
+  return validateApprovalDecisionRecordInputV2({
+    [APPROVAL_DECISION_FIELD_V2]: {
+      schema_version: 2, kind: APPROVAL_DECISION_REF_KIND_V2, ...COORDINATES,
+      approval_id, proposal_approval_id: input.proposal_approval_id, command_id, action: "approve", surface: "desktop",
+      candidate_sha256: sha256Digest(`candidate-${input.proposal_approval_id}`),
+      proposal_snapshot_sha256: sha256Digest(`proposal-${input.proposal_approval_id}`),
+      approved_snapshot_sha256,
+      route_signal_ids: [...brief.decisions, ...brief.actions].map((signal) => signal.id),
+      final_approver: { principal_id: reviewer.principal_id, membership_id: reviewer.membership_id },
+      selected_policy_id: input.policy_id, policy_contract_sha256, policy_consequence_sha256,
+      audience_project_ids: projects, association_project_ids: projects, action_owners: [],
+      audit_event_id: `audit:${command_id}`, audit_sequence: 1,
+      audit_entry_sha256: sha256Digest(`audit-entry-${input.proposal_approval_id}`),
+      provider_action_kind: APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2, provider_action_schema_version: 2,
+      provider_action_sha256: sha256Digest(`provider-${input.proposal_approval_id}`),
+      authorization_proof_sha256: sha256Digest(`authorization-${input.proposal_approval_id}`),
+      approved_at: "2026-08-21T12:01:00.000Z",
+    },
+    event: {
+      kind: "approved", approved_snapshot: snapshot, approved_snapshot_sha256, policy_id: input.policy_id,
+      policy_contract_sha256, policy_consequence, policy_consequence_sha256,
+    },
+  });
 }
 
 export function sourceProvenance() {
@@ -372,7 +360,7 @@ export function processorProvenance() {
 
 function envelopeFactory(
   authority: ProtocolAuthority,
-  human: ReturnType<typeof humanAct>,
+  decision: ReturnType<typeof approvalDecision>,
   calls: { value: number },
 ): V4RecordEnvelopeFactory {
   return {
@@ -380,14 +368,13 @@ function envelopeFactory(
       calls.value += 1;
       return createOrganizationRecordEnvelopeV4(
         {
-          envelope_id: `envelope-${human.human_act_resolution_ref.approval_id}`,
+          envelope_id: `envelope-${decision.approval_decision_ref_v2.proposal_approval_id}`,
           issued_at: "2026-08-21T12:01:00.000Z",
           predecessor_position: allocation.predecessor_position,
           predecessor_record_sha256: allocation.predecessor_record_sha256,
           human_act_record_input: {
-            human_act_resolution_ref: human.human_act_resolution_ref,
-            event: human.event,
-            idempotency: human.idempotency,
+            approval_decision_ref_v2: decision.approval_decision_ref_v2,
+            event: decision.event,
           },
           source_provenance: sourceProvenance(),
           processor_provenance: processorProvenance(),
@@ -474,9 +461,12 @@ export function receiptFactory(
 
 export function appendInput(input: {
   readonly authority: ProtocolAuthority;
+  /** The decided proposal; the record is appended under its destination's derived approval id. */
   readonly approval_id?: string;
-  readonly action?: PersonHumanActActionV2;
-  readonly policy_id?: PersonContentPolicyIdV2;
+  readonly policy_id?: ApprovalDecisionPolicyIdV1;
+  /** A project record's audience (default the fixture project). */
+  readonly projects?: readonly string[];
+  readonly reviewer?: { readonly principal_id: string; readonly membership_id: string };
   readonly signal_count?: number;
   readonly signal_counts?: {
     readonly decisions?: number;
@@ -488,24 +478,26 @@ export function appendInput(input: {
   readonly receipt?: V4ReceiptFactory;
   readonly semantic_idempotency_key?: Sha256Digest;
 }): AppendV4RecordInput {
-  const human = humanAct(
-    input.approval_id ?? "approval-1",
-    input.action ?? "approve",
-    input.policy_id ?? RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-    input.signal_count ?? 1,
-    input.signal_counts,
-    input.decision_text,
-  );
+  const decision = approvalDecision({
+    proposal_approval_id: input.approval_id ?? "approval-1",
+    policy_id: input.policy_id ?? RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+    signal_count: input.signal_count ?? 1,
+    ...(input.projects === undefined ? {} : { projects: input.projects }),
+    ...(input.signal_counts === undefined ? {} : { signal_counts: input.signal_counts }),
+    ...(input.decision_text === undefined ? {} : { decision_text: input.decision_text }),
+    ...(input.reviewer === undefined ? {} : { reviewer: input.reviewer }),
+  });
   return {
-    approval_id: input.approval_id ?? "approval-1",
-    action: input.action ?? "approve",
+    approval_id: decision.approval_decision_ref_v2.approval_id,
+    action: "approve",
     semantic_idempotency_key:
-      input.semantic_idempotency_key ?? human.semantic_idempotency_key,
+      input.semantic_idempotency_key ?? decision.semantic_idempotency_key,
     receipt_issued_at: "2026-08-21T12:02:00.000Z",
-    authorization_witness: authorizationWitness(human),
+    // The test projector reads the verified reference alone.
+    authorization_witness: {},
     envelope_factory: envelopeFactory(
       input.authority,
-      human,
+      decision,
       input.envelope_calls ?? { value: 0 },
     ),
     receipt_factory:

@@ -11,11 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createRecordPolicyFactProjectorRegistryV1,
-  createPersonPolicyFactProjectorV2,
-  openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-api-v1";
+import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   clearReadableSearchActiveGenerationV1,
   READABLE_SEARCH_SCORER_ID,
@@ -23,6 +19,7 @@ import {
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
+import { AUTHORITY_RECORD_INPUT_CODECS_V1, authorityRecordPolicyProjectorsV1 } from "../src/composition/authority-record-protocols-v1.js";
 import {
   createReadableSearchGenerationReconcilerV1,
   readableSearchGenerationContractV1,
@@ -81,9 +78,8 @@ function emptyOrganizationSearch() {
       authority_id: initialized.authority_id,
       organization_id: initialized.organization_id,
     }),
-    policy_projectors: createRecordPolicyFactProjectorRegistryV1([
-      createPersonPolicyFactProjectorV2(),
-    ]),
+    policy_projectors: authorityRecordPolicyProjectorsV1(),
+    record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
     now: () => "2026-08-22T12:01:00.000Z",
   });
   return { parent, initialized, lineage, authority, record, reconciler };
@@ -174,10 +170,11 @@ describe("readable-search generation composition", () => {
       const restartVerification = verifyAuthorityStateLineage(
         initialized.state_directory,
       );
+      // A log with no approved atom publishes a generation with no segment.
       expect(restartVerification.retrieval).toEqual({
         present: true,
         generation_count: 1,
-        segment_count: 1,
+        segment_count: 0,
       });
     } finally {
       record.close();
@@ -185,15 +182,16 @@ describe("readable-search generation composition", () => {
     }
   });
 
-  it("keeps only the generation it publishes, and an interrupted deletion never blocks a restart", async () => {
+  it("keeps only the generation it publishes, and an interrupted build or deletion never blocks a restart", async () => {
     const { initialized, authority, record, reconciler } = emptyOrganizationSearch();
     try {
       const first = await reconciler.reconcile(new AbortController().signal);
       if (first.status !== "published") throw new Error("the empty organization did not publish");
       const retrieval = join(initialized.state_directory, "record-retrieval");
       const generations = join(retrieval, "generations");
-      // A generation this run superseded, and the debris of a deletion a crash interrupted.
+      // A generation this run superseded, and the debris of a build and a deletion a crash interrupted.
       cpSync(join(generations, first.generation_id), join(generations, canonicalSha256({ superseded: true })), { recursive: true });
+      mkdirSync(join(retrieval, `.staging-${"0".repeat(32)}`), { mode: 0o700 });
       mkdirSync(join(retrieval, `.retired-${"0".repeat(32)}`), { mode: 0o700 });
       expect(verifyAuthorityStateLineage(initialized.state_directory).retrieval.generation_count).toBe(2);
 
@@ -204,10 +202,11 @@ describe("readable-search generation composition", () => {
         .resolves.toMatchObject({ status: "published", generation_id: first.generation_id });
       expect(readdirSync(generations)).toEqual([first.generation_id]);
       expect(readdirSync(retrieval)).toEqual(["generations"]);
+      // The empty log's generation has no segment.
       expect(verifyAuthorityStateLineage(initialized.state_directory).retrieval).toEqual({
         present: true,
         generation_count: 1,
-        segment_count: 1,
+        segment_count: 0,
       });
     } finally {
       record.close();

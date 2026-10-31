@@ -6,6 +6,5 @@ export interface PersonRecordReadHttpApplicationV1 {
     readonly access_token: string;
     readonly limit?: number;
     readonly record_sha256?: `sha256:${string}`;
-    readonly include_source_metadata?: boolean;
   }): PersonRecordListV1;
 }

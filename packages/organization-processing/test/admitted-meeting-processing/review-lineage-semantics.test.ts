@@ -4,9 +4,9 @@ import type {
   MeetingDocument,
 } from "../../src/core/index.js";
 import {
+  legacyRestrictedReviewerReviewPolicySnapshotV1,
   reviewInputSha256V1,
   reviewSemanticSha256V1,
-  type ReviewPolicySnapshotV1,
   type ReviewProcessorCommitmentV1,
 } from "../../src/admitted-meeting-processing/review-lineage-semantics.js";
 
@@ -16,12 +16,7 @@ const PROCESSOR: ReviewProcessorCommitmentV1 = {
   version: "1.0.0",
   configuration_sha256: `sha256:${"a".repeat(64)}`,
 };
-const REVIEW_POLICY = {
-  policy_id: "organization-member-readable-person-v2",
-  policy_contract_sha256: `sha256:${"b".repeat(64)}`,
-  policy_consequence_text: "Approving makes this review member-readable.",
-  policy_consequence_sha256: `sha256:${"c".repeat(64)}`,
-} as ReviewPolicySnapshotV1;
+const REVIEW_POLICY = legacyRestrictedReviewerReviewPolicySnapshotV1;
 
 function meeting(overrides: Partial<MeetingDocument> = {}): MeetingDocument {
   return {

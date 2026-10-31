@@ -4,7 +4,7 @@
 > own git worktree and branch, then merged in order D → C → B → A by the
 > controller. Each track works test-first (superpowers:test-driven-development).
 
-**Goal:** Build [One place to look v1](../../product/2026-10-30-one-place-home-v1.md).
+**Goal:** Build [One place to look v1](../product/2026-10-30-one-place-home-v1.md).
 It covers:
 - a clean Home, with the altitude bar in the title row, Needs you by category and the new project rows;
 - the Follow-ups count and an Only me row in the sidebar;

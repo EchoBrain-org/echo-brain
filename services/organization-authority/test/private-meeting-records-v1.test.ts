@@ -6,8 +6,7 @@ import { PersonRecordReaderV1 } from "@echo-brain/organization-record/organizati
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createRecordProjectAuthorizationV1 } from "../src/composition/person-record-project-scope-v1.js";
-import type { PersonItemPositionV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
-import type { PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
+import type { PersonItemPositionV1, PersonListStoreScopeV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import { failure } from "./authority-failure.js";
 import { EMP_A, OWNER, SHARED, T, meetingWorld, type MeetingWorldV1, type ReaderToken } from "./fixtures/person-meeting-world.js";
@@ -15,8 +14,8 @@ import { EMP_A, OWNER, SHARED, T, meetingWorld, type MeetingWorldV1, type Reader
 const worlds: MeetingWorldV1[] = [];
 afterEach(() => { for (const world of worlds.splice(0)) world.close(); });
 
-const GLOBAL: PersonAskScopeV2 = { kind: "global" };
-const IN_SHARED: PersonAskScopeV2 = { kind: "project", project_id: SHARED };
+const ONLY_ME: PersonListStoreScopeV1 = { kind: "only_me" };
+const IN_SHARED: PersonListStoreScopeV1 = { kind: "project", project_id: SHARED };
 
 /** OWNER and EMP_A both hold SHARED. OWNER keeps "kept" for themself inside SHARED and shares "open" with it. */
 async function world() {
@@ -31,7 +30,7 @@ async function world() {
 }
 
 /** collect(limit) → commit(all) until a short page, as the list route drives one source. */
-function walk(route: PersonRecordSearchRouteV1, token: ReaderToken, scope: PersonAskScopeV2): PersonStoreMeetingRowV1[] {
+function walk(route: PersonRecordSearchRouteV1, token: ReaderToken, scope: PersonListStoreScopeV1): PersonStoreMeetingRowV1[] {
   const rows: PersonStoreMeetingRowV1[] = [];
   let after: PersonItemPositionV1 | null = null;
   for (let page = 0; page < 50; page += 1) {
@@ -54,8 +53,8 @@ describe("a meeting item kept private inside a project (ADR-0049)", () => {
     const w = await world();
     const route = w.route();
     const kept = w.digest("kept"), open = w.digest("open");
-    // The person list: filed in SHARED, read only by its approver, who sees it there and everywhere.
-    for (const scope of [GLOBAL, IN_SHARED]) {
+    // The person list: filed in SHARED, read only by its approver, who sees it there and in Only me.
+    for (const scope of [ONLY_ME, IN_SHARED]) {
       expect(walk(route, "owner", scope).find((row) => row.id === kept)).toEqual({ kind: "meeting", id: kept, title: "Supplier reserve", added_at: T(10),
         visibility: "approver_only", association_project_ids: [SHARED] });
     }
@@ -76,12 +75,11 @@ describe("a meeting item kept private inside a project (ADR-0049)", () => {
     const w = await world();
     const route = w.route();
     const kept = w.digest("kept"), open = w.digest("open");
-    // EMP_A holds SHARED and reads the record OWNER shared with it there: the private one is simply absent.
-    for (const scope of [GLOBAL, IN_SHARED]) {
-      const rows = walk(route, "emp_a", scope);
-      expect(rows.map((row) => row.id)).toContain(open);
-      expect(rows.map((row) => row.id)).not.toContain(kept);
-    }
+    // EMP_A holds SHARED and reads the record OWNER shared with it there: the private one is simply absent, there and from EMP_A's Only me.
+    const shared = walk(route, "emp_a", IN_SHARED).map((row) => row.id);
+    expect(shared).toContain(open);
+    expect(shared).not.toContain(kept);
+    expect(walk(route, "emp_a", ONLY_ME).map((row) => row.id)).not.toContain(kept);
     for (const project_id of [undefined, SHARED]) {
       const scoped = project_id === undefined ? {} : { project_id };
       const searched = route.searchBatch({ access_token: "emp_a", query: "reserve", desk: true, ...scoped });
@@ -132,7 +130,7 @@ describe("a meeting item kept private inside a project (ADR-0049)", () => {
     w.leave(SHARED, OWNER);
     // A project the reader left is the Ask denial before any read; the record is still the approver's, and names no project they hold.
     expect(failure(() => route.collectMeetings({ access_token: "owner", scope: IN_SHARED, after: null, limit: 26 }))).toEqual({ code: "unauthorized", message: "person authentication failed" });
-    expect(walk(route, "owner", GLOBAL).find((row) => row.id === kept)).toMatchObject({ visibility: "approver_only", association_project_ids: [] });
+    expect(walk(route, "owner", ONLY_ME).find((row) => row.id === kept)).toMatchObject({ visibility: "approver_only", association_project_ids: [] });
     expect(walk(route, "emp_a", IN_SHARED).map((row) => row.id)).not.toContain(kept);
   });
 });

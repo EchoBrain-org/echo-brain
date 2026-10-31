@@ -39,8 +39,6 @@ import {
 import { openReadableSearchPlane } from "./persistence/open-readable-search-plane.js";
 
 /** The only policies accepted by the readable-search generation lineage. */
-export const ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 =
-  "organization-member-readable-person-v2" as const;
 export const RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 =
   "restricted-reviewer-person-v2" as const;
 /**
@@ -50,11 +48,10 @@ export const RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 =
 export const PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 =
   "project-members-readable-person-v1" as const;
 export type ReadableSearchPolicyIdV1 =
-  | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2
   | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
   | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
 type Plane = "facts" | "content" | "lexical";
-type SegmentKind = "organization-member" | "reviewer" | "project-members";
+type SegmentKind = "reviewer" | "project-members";
 
 /**
  * Lean V1 admission ceiling, sized by measurement (see the scaling decision
@@ -90,7 +87,7 @@ export function readableSearchExceededLimitV1(
 export const READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
   active_generation_cache_entries: 1,
   cache_miss: "bounded-unavailable",
-  request_segments: "member-plus-exact-reviewer-tuple",
+  request_segments: "exact-reviewer-tuple-plus-granted-projects",
   validation: "complete-before-publication-or-current-status",
 });
 
@@ -159,10 +156,9 @@ export interface BuildReadableSearchGenerationV1Input {
   readonly lineage: ReadableSearchLineageV1;
   readonly exact_head: ReadableSearchExactHeadV1;
   readonly retrieval_contract_sha256: Sha256Digest;
-  /** Exact current policy contracts, committed even when a segment is empty. */
-  readonly organization_member_policy_contract_sha256: Sha256Digest;
+  /** Exact current policy contracts, committed even when no atom carries them. */
   readonly restricted_reviewer_policy_contract_sha256: Sha256Digest;
-  /** Optional only so historical two-policy builds retain their exact shape. */
+  /** Optional: a build without it commits the reviewer policy alone. */
   readonly project_members_policy_contract_sha256?: Sha256Digest;
   readonly analyzer: ReadableSearchAnalyzerV1;
   readonly source_revision: string;
@@ -197,7 +193,7 @@ export interface ReadableSearchGenerationManifestV1 {
   readonly state_lineage_id: string;
   readonly exact_head: ReadableSearchExactHeadV1;
   readonly retrieval_contract_sha256: Sha256Digest;
-  /** Two-policy generations are legacy; new project generations carry three. */
+  /** The reviewer policy, then the project policy when the build committed it. */
   readonly policies: readonly Readonly<{
     policy_id: ReadableSearchPolicyIdV1;
     policy_contract_sha256: Sha256Digest;
@@ -347,16 +343,6 @@ function baselineSchemaVersion(plane: Plane): 2 | 3 {
 }
 
 function policyBranch(atom: ReadableSearchAtomV1): SegmentKind {
-  if (atom.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2) {
-    if (
-      atom.reviewer_principal_id !== null ||
-      atom.reviewer_membership_id !== null
-    )
-      throw new Error("member atom must not carry a reviewer tuple");
-    if (projectAssociations(atom).length > 0)
-      throw new Error("member atom must not carry project associations");
-    return "organization-member";
-  }
   if (atom.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2) {
     text(atom.reviewer_principal_id, "reviewer_principal_id");
     text(atom.reviewer_membership_id, "reviewer_membership_id");
@@ -419,11 +405,9 @@ function assertAtom(
     throw new Error("readable-search engine atom text does not bind text_sha256");
   const branch = policyBranch(atom);
   const expected =
-    branch === "organization-member"
-      ? input.organization_member_policy_contract_sha256
-      : branch === "reviewer"
-        ? input.restricted_reviewer_policy_contract_sha256
-        : input.project_members_policy_contract_sha256;
+    branch === "reviewer"
+      ? input.restricted_reviewer_policy_contract_sha256
+      : input.project_members_policy_contract_sha256;
   if (expected === undefined)
     throw new Error("readable-search project policy contract is absent");
   if (atom.policy_contract_sha256 !== expected)
@@ -440,11 +424,9 @@ function segmentIdentity(
   audience_project_ids: readonly string[] = [],
 ): { segment_id: Sha256Digest; segment_kind: SegmentKind } {
   const segment_kind =
-    policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2
-      ? "organization-member"
-      : policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
-        ? "reviewer"
-        : "project-members";
+    policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
+      ? "reviewer"
+      : "project-members";
   return {
     segment_kind,
     segment_id: canonicalSha256({
@@ -843,16 +825,6 @@ function assertWithinAdmissionBudget(
   if (input.atoms.length > budget.maximum_atoms)
     throw new Error("readable-search generation exceeds maximum_atoms");
   const segments = new Set<string>();
-  segments.add(
-    segmentIdentity(
-      input.lineage,
-      ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-      input.organization_member_policy_contract_sha256,
-      null,
-      null,
-      [],
-    ).segment_id,
-  );
   let postings = 0;
   for (const atom of input.atoms) {
     if (
@@ -902,10 +874,6 @@ export function buildReadableSearchGenerationV1(
     validDigest(input.exact_head.record_sha256, "exact_head.record_sha256");
   validDigest(input.retrieval_contract_sha256, "retrieval_contract_sha256");
   validDigest(
-    input.organization_member_policy_contract_sha256,
-    "organization_member_policy_contract_sha256",
-  );
-  validDigest(
     input.restricted_reviewer_policy_contract_sha256,
     "restricted_reviewer_policy_contract_sha256",
   );
@@ -936,17 +904,17 @@ export function buildReadableSearchGenerationV1(
   );
   ensurePrivateDirectory(root, "readable-search engine root");
   ensurePrivateDirectory(generations, "readable-search generations directory");
-  for (const name of readdirSync(generations))
+  // Staging sits beside `generations/`, outside the tree the state-lineage
+  // guard verifies, so a process killed mid-build still starts. The next build
+  // removes what it left.
+  for (const name of readdirSync(root))
     if (STAGING_DIRECTORY.test(name)) {
-      const orphan = join(generations, name);
-      assertWithin(orphan, generations, "readable-search engine staging");
+      const orphan = join(root, name);
+      assertWithin(orphan, root, "readable-search engine staging");
       ensurePrivateDirectory(orphan, "readable-search engine staging");
       rmSync(orphan, { recursive: true, force: false });
     }
-  const staging = join(
-    generations,
-    `.staging-${randomBytes(16).toString("hex")}`,
-  );
+  const staging = join(root, `.staging-${randomBytes(16).toString("hex")}`);
   mkdirSync(staging, { mode: 0o700 });
   try {
     ensurePrivateDirectory(
@@ -964,23 +932,6 @@ export function buildReadableSearchGenerationV1(
         atoms: ReadableSearchAtomV1[];
       }
     >();
-    const memberContract = input.organization_member_policy_contract_sha256;
-    const member = segmentIdentity(
-      input.lineage,
-      ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-      memberContract,
-      null,
-      null,
-      [],
-    );
-    groups.set(member.segment_id, {
-      policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-      policy_contract_sha256: memberContract,
-      reviewer_principal_id: null,
-      reviewer_membership_id: null,
-      audience_project_ids: [],
-      atoms: [],
-    });
     for (const atom of input.atoms) {
       const segmentId = atomSegmentId(input.lineage, atom);
       const group = groups.get(segmentId);
@@ -1014,11 +965,6 @@ export function buildReadableSearchGenerationV1(
     );
     const roots = generationRoots(segments);
     const policies: ReadableSearchGenerationManifestV1["policies"] = [
-      {
-        policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-        policy_contract_sha256:
-          input.organization_member_policy_contract_sha256,
-      },
       {
         policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
         policy_contract_sha256:
@@ -1081,6 +1027,7 @@ export function buildReadableSearchGenerationV1(
     } else {
       renameSync(staging, finalDirectory);
       fsyncPath(generations);
+      fsyncPath(root);
     }
     return {
       generation_directory: finalDirectory,
@@ -1127,13 +1074,13 @@ export function retireReadableSearchGenerationsV1(input: {
   // state directory. Flush the directory, so that commit cannot roll back
   // after the generations it replaced are gone.
   fsyncPath(input.state_directory);
+  // Staging leftovers beside these belong to the builder, which removes them
+  // before its next build.
   for (const name of readdirSync(root))
     if (RETIRED_GENERATION.test(name)) remove(join(root, name));
   let retired = 0;
   for (const name of readdirSync(generations)) {
-    // The builder owns staging debris and removes it before its next build.
-    if (name === input.keep_generation_id || STAGING_DIRECTORY.test(name))
-      continue;
+    if (name === input.keep_generation_id) continue;
     const debris = join(root, `.retired-${randomBytes(16).toString("hex")}`);
     renameSync(join(generations, name), debris);
     fsyncPath(generations);
@@ -1439,8 +1386,8 @@ function readerRecordNarrowing(
 /** Whether a fact is excluded: `undefined` excludes nothing. */
 function readerExclusion(value: ReadableSearchExclusionV1 | undefined): (fact: ReadableSearchFactRow) => boolean {
   if (value === undefined) return () => false;
-  if (!Array.isArray(value.record_sha256s) || !Array.isArray(value.policy_ids) || value.policy_ids.some(policy => policy !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2
-    && policy !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 && policy !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1) || new Set(value.policy_ids).size !== value.policy_ids.length) {
+  if (!Array.isArray(value.record_sha256s) || !Array.isArray(value.policy_ids) || value.policy_ids.some(policy => policy !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
+    && policy !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1) || new Set(value.policy_ids).size !== value.policy_ids.length) {
     throw new Error("readable-search exclusion must name a record array and known policies once each");
   }
   const records = readerRecordNarrowing(value.record_sha256s)!;
@@ -1461,8 +1408,6 @@ function admittedSegment(
   segment: ReadableSearchSegmentRows,
   reader: ReadableSearchReaderV1,
 ): boolean {
-  if (segment.manifest.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)
-    return true;
   if (segment.manifest.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)
     return segment.manifest.reviewer_principal_id === reader.principal_id &&
       segment.manifest.reviewer_membership_id === reader.membership_id;
@@ -1685,15 +1630,11 @@ function assertReadableSearchGenerationManifest(
   validDigest(manifest.retrieval_contract_sha256, "retrieval_contract_sha256");
   validDigest(manifest.input_root, "generation input_root");
   validDigest(manifest.builder_artifact_sha256, "builder_artifact_sha256");
-  if (!Array.isArray(manifest.policies) || (manifest.policies.length !== 2 && manifest.policies.length !== 3))
+  if (!Array.isArray(manifest.policies) || (manifest.policies.length !== 1 && manifest.policies.length !== 2))
     throw new Error("readable-search generation policies are invalid");
-  const [member, reviewer, project] = manifest.policies;
-  if (
-    member?.policy_id !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
-    reviewer?.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
-  )
+  const [reviewer, project] = manifest.policies;
+  if (reviewer?.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)
     throw new Error("readable-search generation policy order is invalid");
-  validDigest(member.policy_contract_sha256, "member policy contract");
   validDigest(reviewer.policy_contract_sha256, "reviewer policy contract");
   if (
     project !== undefined &&
@@ -1722,12 +1663,12 @@ function assertReadableSearchGenerationManifest(
     throw new Error("readable-search generation index is invalid");
   for (const [label, value] of Object.entries(manifest.roots ?? {}))
     validDigest(value, `generation ${label}`);
+  // A generation of a log with no approved atom has no segment.
   if (
     manifest.roots?.facts_root === undefined ||
     manifest.roots.content_root === undefined ||
     manifest.roots.lexical_root === undefined ||
-    !Array.isArray(manifest.segments) ||
-    manifest.segments.length === 0
+    !Array.isArray(manifest.segments)
   )
     throw new Error("readable-search generation roots or segments are missing");
   const { generation_id: _generationId, ...withoutIdentity } = manifest;
@@ -1747,11 +1688,9 @@ function assertSegmentManifest(
   if (
     manifest.schema_version !== 1 ||
     manifest.kind !== "clean-readable-search-segment-manifest-v1" ||
-    (manifest.segment_kind !== "organization-member" &&
-      manifest.segment_kind !== "reviewer" &&
+    (manifest.segment_kind !== "reviewer" &&
       manifest.segment_kind !== "project-members") ||
-    (manifest.policy_id !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 &&
-      manifest.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
+    (manifest.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
       manifest.policy_id !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1)
   )
     throw new Error("readable-search engine segment manifest is invalid");
@@ -1768,11 +1707,6 @@ function assertSegmentManifest(
   ] as const)
     nonNegative(value, `segment ${label}`);
   if (
-    (manifest.segment_kind === "organization-member" &&
-      (manifest.policy_id !==
-        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
-        manifest.reviewer_principal_id !== null ||
-        manifest.reviewer_membership_id !== null)) ||
     (manifest.segment_kind === "reviewer" &&
       (manifest.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 ||
         typeof manifest.reviewer_principal_id !== "string" ||
@@ -2060,6 +1994,9 @@ function readAndValidateReadableSearchSegment(
       const item = contentByAtom.get(fact.atom_id);
       const document = documentByAtom.get(fact.atom_id);
       const isProjectFact = fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
+      // Associations are validated for every fact; a project fact, or a reviewer fact its approver filed in projects
+      // (ADR-0049), may carry them.
+      canonicalProjectIds(JSON.parse(fact.association_project_ids_json), "fact association_project_ids", isProjectFact);
       if (
         item === undefined ||
         document === undefined ||
@@ -2071,10 +2008,6 @@ function readAndValidateReadableSearchSegment(
         fact.reviewer_principal_id !== segment.reviewer_principal_id ||
         fact.reviewer_membership_id !== segment.reviewer_membership_id ||
         canonicalJson(canonicalProjectIds(JSON.parse(fact.audience_project_ids_json), "fact audience_project_ids", isProjectFact)) !== canonicalJson(segment.audience_project_ids ?? []) ||
-        // Associations are validated for every fact; a project fact, or a reviewer fact its approver filed in projects
-        // (ADR-0049), may carry them. A member fact never does.
-        (canonicalProjectIds(JSON.parse(fact.association_project_ids_json), "fact association_project_ids", isProjectFact).length > 0 &&
-          fact.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2) ||
         item.log_position !== fact.log_position ||
         item.record_hash !== fact.record_hash ||
         item.atom_order !== fact.atom_order ||
@@ -2214,16 +2147,6 @@ function validateAndWarmReadableSearchGenerationV1(
     if (admittedSegment(segment, input.reader))
       admitted.push(segment);
   }
-  const memberContract = manifest.policies[0].policy_contract_sha256;
-  const memberSegmentId = segmentIdentity(
-    manifest,
-    ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-    memberContract,
-    null,
-    null,
-  ).segment_id;
-  if (!seenSegments.has(memberSegmentId))
-    throw new Error("readable-search generation omits its member segment");
   const budget = READABLE_SEARCH_ADMISSION_BUDGET_V1;
   const postingCount = validatedSegments.reduce(
     (sum, segment) => sum + segment.postings.length,

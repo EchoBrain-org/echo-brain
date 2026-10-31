@@ -13,7 +13,7 @@ function approvedCitation(id) {
     kind: "approved_record",
     atom_id: canonicalSha256({ fixture: "agentic-ask", id }),
     record_sha256: canonicalSha256({ fixture: "agentic-ask-record", id }),
-    policy_id: "organization-member-readable-person-v2",
+    policy_id: "project-members-readable-person-v1",
   });
 }
 

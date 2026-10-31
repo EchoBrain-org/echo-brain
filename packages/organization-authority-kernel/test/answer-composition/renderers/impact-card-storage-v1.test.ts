@@ -24,11 +24,11 @@ const OWNER = "Rafael Moreno";
 const RECORD = canonicalSha256({ record: "gate-review" });
 
 const recordCitation = (name: string): PersonAnswerCitationV6 => Object.freeze({
-  citation: { kind: "approved_record" as const, atom_id: canonicalSha256({ atom: name }), record_sha256: RECORD, policy_id: "organization-member-readable-person-v2" as const },
+  citation: { kind: "approved_record" as const, atom_id: canonicalSha256({ atom: name }), record_sha256: RECORD, policy_id: "project-members-readable-person-v1" as const },
   kind: "decision" as const, label: `Gate review: ${name}`, visibility: "team" as const,
 });
 const otherRecordCitation = (name: string): PersonAnswerCitationV6 => Object.freeze({
-  citation: { kind: "approved_record" as const, atom_id: canonicalSha256({ atom: name }), record_sha256: canonicalSha256({ record: name }), policy_id: "organization-member-readable-person-v2" as const },
+  citation: { kind: "approved_record" as const, atom_id: canonicalSha256({ atom: name }), record_sha256: canonicalSha256({ record: name }), policy_id: "project-members-readable-person-v1" as const },
   kind: "action" as const, label: `Planning sync: ${name}`, visibility: "team" as const,
 });
 const ticketCitation = (key: string, label: string): PersonAnswerCitationV6 => Object.freeze({
