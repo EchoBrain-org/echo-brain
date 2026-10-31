@@ -335,9 +335,10 @@ Owners: [deploy/organization-authority/README.md](../../deploy/organization-auth
   postings, whichever binds first (`READABLE_SEARCH_ADMISSION_BUDGET_V1`).
   Segments are one for the organization, one per approver with Only me items,
   and one per distinct set of audience projects. Past any limit the rebuild
-  throws. A running service keeps serving the previous generation, so new
-  approvals stop reaching search, lists and Ask; the next restart fails before
-  the API starts listening. See the
+  throws, and reads need a generation built for the record log's exact head,
+  so record search and lists become unavailable, Ask answers without approved
+  meetings and impact checks keep retrying; the next restart fails before the
+  API starts listening. See the
   [scaling decision guide](scaling-decision-guide.md).
 - **One process, one volume, no migrations.** A baseline change means fresh
   state.

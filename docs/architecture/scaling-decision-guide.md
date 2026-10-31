@@ -41,9 +41,10 @@ Source baseline: `aa92138e4a7d8386b2ff51a95c7d2f82e86236be`, checked October 30,
   organization, one per approver with Only me items, and one per distinct set
   of audience projects), 4,096 bytes of text per item, and 17,408 index
   postings. A build past any of these throws. While the service runs, the
-  search task logs `echo-clean-live-worker-failed-v1` and the last published
-  generation keeps serving, so newly approved items stop reaching search,
-  lists, and Ask. Startup brings search up to the record head before the API
+  search task logs `echo-clean-live-worker-failed-v1`. Reads need a generation
+  built for the record log's exact head (`PersonRecordSearchIndexLagV1`), so
+  record search and lists become unavailable, Ask answers without approved
+  meetings, and impact checks keep retrying. Startup brings search up to the record head before the API
   listener binds, so once the record log is past the ceiling a restart fails
   (`echo-clean-live-startup-failed-v1`) and the API does not open.
 - **Infrastructure:** the staging template permits only `t4g.nano`, `small`,
