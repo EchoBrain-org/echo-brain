@@ -74,6 +74,8 @@ import type {
 } from "../application/ports/person-list-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { PERSON_MEETING_DATE_FIELDS_V1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
+import { personUnknownScopeV1 } from "../adapters/persistence/sqlite/person-original-access-v1.js";
+import { isCanonicalUtcMillisTimestampV1 } from "../application/canonical-utc-timestamp-v1.js";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { samePersonReleaseAuthorizationV1 } from "../application/person-release-authorization-v1.js";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -767,7 +769,6 @@ const PROJECT_RECORDS_MAX = 500;
 const PROJECT_RECORDS_PAGE = 100;
 /** The newest filed records project activity lists, and looks through for a meeting from someone else (Ask timeline v1, C2). */
 const PROJECT_ACTIVITY_SCAN_MAX = 500;
-const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 type MeetingCollectionState = {
   readonly authorization: PersonRecordSearchReleaseAuthorizationV1;
@@ -814,11 +815,6 @@ function metadataUnavailable(): never {
   throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
 }
 
-/** A compile error when a scope kind is added; a closed failure at run time. */
-function unknownScope(scope: never): never {
-  throw new AuthorityOperationError("invalid_request", `scope ${String((scope as { readonly kind?: unknown }).kind)} is invalid`);
-}
-
 /**
  * The records half of a list scope: mine is the caller's own approvals, and
  * only_me the records kept for the caller alone (ADR-0049); neither is ever global.
@@ -829,14 +825,13 @@ function meetingScope(scope: PersonListStoreScopeV1): Readonly<{ project_id?: st
     case "project": return { project_id: scope.project_id, mine: false, only_me: false };
     case "mine": return { mine: true, only_me: false };
     case "only_me": return { mine: false, only_me: true };
-    default: return unknownScope(scope);
+    default: return personUnknownScopeV1(scope);
   }
 }
 
 function meetingPosition(value: PersonItemPositionV1 | null | undefined): PersonItemPositionV1 | null {
   if (value === null) return null;
-  if (value === undefined || typeof value !== "object" || typeof value.added_at !== "string" || !CANONICAL_TIME.test(value.added_at) ||
-    !Number.isFinite(Date.parse(value.added_at)) || new Date(value.added_at).toISOString() !== value.added_at ||
+  if (value === undefined || typeof value !== "object" || !isCanonicalUtcMillisTimestampV1(value.added_at) ||
     typeof value.id !== "string" || !RECORD_SHA256.test(value.id)) invalidRequest();
   return Object.freeze({ added_at: value.added_at, id: value.id });
 }

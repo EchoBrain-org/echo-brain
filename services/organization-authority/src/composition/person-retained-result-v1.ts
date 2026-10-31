@@ -1,6 +1,11 @@
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
+/** Completed results wait this long for their reader, then are dropped unread. */
+export const RETAINED_RESULT_TTL_MS_V1 = 15 * 60_000;
+/** After a result is first read it stays this long, so a lost response can be read again. */
+export const RETAINED_RESULT_REREAD_MS_V1 = 60_000;
+
 /** The closed codes a retained diagnostic capture or research evaluation fails with. */
 export type RetainedResultFailureCodeV1 = 'conflict' | 'invalid_request' | 'invalid_output' | 'not_found' | 'stale_access_state'
   | 'unauthorized' | 'rate_limited' | 'quota_exceeded' | 'unavailable' | 'timed_out';
