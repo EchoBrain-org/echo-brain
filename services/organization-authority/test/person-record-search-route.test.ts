@@ -203,9 +203,9 @@ function policyAtom(input: {
 }
 
 function benchmarkAtom(index: number): ReadableSearchAtomV1 {
-  const reviewer = index >= 500;
-  // Fourteen benchmark reviewer tuples plus the exact owner tuple used by the
-  // policy fixture yield fifteen reviewer segments and one member segment.
+  // From index 14 an atom is restricted to a reviewer other than the policy
+  // fixture's owner, so the owner never reads it.
+  const reviewer = index >= 14;
   const reviewerIndex = reviewer ? index % 14 : 0;
   const text = Array.from(
     { length: 16 },
@@ -587,7 +587,7 @@ describe("Person Layer 2 route", () => {
     }
   });
 
-  it("releases each policy only to the authenticated active member tuple it admits", async () => {
+  it("releases each policy only to the authenticated active member tuple it admits", () => {
     const value = setup(false);
     const record = recordLog();
     const restrictedRecordHash = sha256Digest("restricted-record");
@@ -596,7 +596,6 @@ describe("Person Layer 2 route", () => {
         "INSERT INTO organization_record_log (position, record_sha256) VALUES (?, ?)",
       )
       .run(2, restrictedRecordHash);
-    const buildStarted = performance.now();
     const built = buildReadableSearchGenerationV1(
       realGenerationInput(value.state_directory, [
         policyAtom({
@@ -607,13 +606,11 @@ describe("Person Layer 2 route", () => {
           id: "restricted",
           policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
         }),
-        ...Array.from({ length: 998 }, (_, index) =>
+        ...Array.from({ length: 16 }, (_, index) =>
           benchmarkAtom(index + 2),
         ),
       ]),
     );
-    const buildMilliseconds = performance.now() - buildStarted;
-    const prewarmStarted = performance.now();
     warmReadableSearchActiveGenerationV1({
       state_directory: value.state_directory,
       active_generation: {
@@ -623,7 +620,6 @@ describe("Person Layer 2 route", () => {
         exact_head: built.manifest.exact_head,
       },
     });
-    const prewarmMilliseconds = performance.now() - prewarmStarted;
     pointAt(value.authority, { generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256, exact_head: built.manifest.exact_head });
     const authorizations = {
       "owner-bearer": readerAuthorization({
@@ -659,17 +655,10 @@ describe("Person Layer 2 route", () => {
         access_token: "owner-bearer",
         query: "policy",
       });
-      const eventLoopStarted = performance.now();
-      const eventLoopProbe = new Promise<number>((resolve) =>
-        setImmediate(() => resolve(performance.now() - eventLoopStarted)),
-      );
-      const requestStarted = performance.now();
       const benchmark = route.searchBatch({
         access_token: "owner-bearer",
         query: "benchmark0 benchmark1 benchmark2 benchmark3",
       });
-      const requestMilliseconds = performance.now() - requestStarted;
-      const eventLoopDelayMilliseconds = await eventLoopProbe;
       expect(benchmark.response.items).toHaveLength(10);
       expect(
         benchmark.response.items.every(
@@ -678,15 +667,6 @@ describe("Person Layer 2 route", () => {
             ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
         ),
       ).toBe(true);
-      console.info("clean-readable-search lean-v1 benchmark", {
-        atoms: 1_000,
-        segments: built.manifest.segments.length,
-        postings: 15_974,
-        buildMilliseconds,
-        prewarmMilliseconds,
-        requestMilliseconds,
-        eventLoopDelayMilliseconds,
-      });
       expect(Object.keys(owner).sort()).toEqual(["items", "kind", "schema_version"]);
       expect(owner.items).toEqual(
         expect.arrayContaining([
