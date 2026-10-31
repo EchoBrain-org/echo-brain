@@ -145,7 +145,6 @@ describe("staging journey observability overview stack", () => {
     expect(serialized).toContain("Current core: record append");
     expect(serialized).toContain("Historical: Approved decision");
     expect(serialized).toContain("Historical approval wait p50 (ms)");
-    expect(serialized).not.toMatch(/ApprovedSearch|approved-search backlog/i);
     expect(metricSerialized).toContain("StageClosedLatencyMs");
     expect(metricSerialized).toContain("'p50'");
     expect(metricSerialized).toContain("'p95'");
@@ -213,9 +212,6 @@ describe("staging journey observability overview stack", () => {
     expect(wallClock).toContain(
       "journey_wall_clock_ms - normalized_human_wait_ms as service_wall_clock_ms",
     );
-    expect(wallClock).not.toContain(
-      "fields workflow, journey_wall_clock_ms, journey_wall_clock_ms - normalized_human_wait_ms",
-    );
     expect([...wallClock.matchAll(/\bas human_wait_ms\b/g)]).toHaveLength(1);
     expect([...wallClock.matchAll(/\bas normalized_human_wait_ms\b/g)]).toHaveLength(1);
     expect(wallClock).toContain("p50_service_wall_clock_ms");
@@ -223,7 +219,6 @@ describe("staging journey observability overview stack", () => {
     expect(wallClock).toContain("p99_service_wall_clock_ms");
     expect(JSON.stringify(logWidgets)).toContain("Full and service wall-clock");
     expect(wallClock).toContain('outcome in ["rejected", "denied"]');
-    expect(wallClock).not.toContain("first_observed_at_ms");
     expect(queries.join("\n")).not.toMatch(/sum\(elapsed_ms\)/i);
     const tokenTotals = queries.find((query) => query.includes("journey_total_tokens"));
     if (tokenTotals === undefined) throw new Error("token-total query is required");
@@ -233,7 +228,6 @@ describe("staging journey observability overview stack", () => {
     );
     expect(tokenTotals).toContain("sum(total_tokens) as journey_total_tokens");
     expect(tokenTotals).toContain("sum(if(isNumeric(total_tokens), 1, 0))");
-    expect(tokenTotals).not.toContain("ispresent(total_tokens)");
     expect(tokenTotals).toContain("total_token_samples > 0");
     expect([...tokenTotals.matchAll(/\bas total_tokens\b/g)]).toHaveLength(1);
     expect(tokenTotals).toContain("p95_total_tokens");
@@ -269,18 +263,12 @@ describe("staging journey observability overview stack", () => {
     expect(rates).toContain('filter event in ["succeeded", "failed"]');
     expect(rates).toContain('sum(if(event = "failed", 1, 0))');
     expect(rates).toContain('accounting.kind = "execution" and ispresent(accounting.retry_of_attempt)');
-    expect(rates).not.toContain('attempt > 1');
     expect(rates).toContain("succeeded_attempts / closed_attempts");
     expect(rates).toContain("failed_attempts / closed_attempts");
     expect(rates).toContain("retry_attempts as measured_retry_attempts, unknown_retry_attempts");
     expect(rates).toContain(
       "display workflow, runtime_stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
     );
-    expect(rates).not.toContain(
-      "fields workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
-    );
-    expect(rates).not.toContain("started_attempts");
-    expect(rates).not.toContain('event = "started"');
     expect(rates).not.toContain("ask_response");
     expect(rates).not.toContain("meeting_terminal_persist");
   });

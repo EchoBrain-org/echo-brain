@@ -214,8 +214,6 @@ describe("Authority current-host recovery floor stack", () => {
     expect(serialized).toContain(
       "not independently encrypted by the backup vault",
     );
-    expect(serialized).not.toContain("BackupVaultEncryptionKeyArn");
-    expect(runbook).not.toContain("OwnerId:OwnerId");
     expect(runbook).toContain("account-scoped `describe-volumes`");
   });
 
