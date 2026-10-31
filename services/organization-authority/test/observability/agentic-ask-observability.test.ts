@@ -15,7 +15,7 @@ import { PersonRecordSearchIndexLagV1 } from "../../src/composition/person-recor
 import { createJourneyTelemetryTransportV1 } from "../../src/composition/observability/journey-telemetry-transport-v1.js";
 import { OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "../fixtures/project-context-sqlite.js";
 
-const MODEL = "deepseek/deepseek-v3.2";
+const MODEL = "anthropic/claude-sonnet-5.5";
 const identity = { release_sha: "a".repeat(40), build_number: 42 };
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
