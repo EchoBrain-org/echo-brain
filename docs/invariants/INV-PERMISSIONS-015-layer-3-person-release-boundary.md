@@ -36,7 +36,7 @@ decision_ids:
   - ADR-0049
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the person-bound Confluence live page path whose decision record (ADR-0034) is proposed and not yet accepted, the ADR-0030 imported meeting notes boundary as narrowed by ADR-0046 (their importer only), the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, the ADR-0034 person-bound Confluence live page path, the ADR-0030 imported meeting notes boundary as narrowed by ADR-0046 (their importer only), the ADR-0032 stored-run view as widened by ADR-0033, the ADR-0033 open-item reads and the ADR-0040 follow-ups Ask source over them, the ADR-0036 change check (digests only), the ADR-0039 Ask progress stream (names only after the access check before a model call), the ADR-0042 workspace sources (the asker's projects, people and tools) and tool containers (Jira projects and Confluence spaces) of the V8 Ask, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -139,9 +139,9 @@ Update, 2026-10-11: Confluence page evidence, added on `POST /v5/person/ask`
 (V6 answers) and read on `POST /v7/person/ask` now, runs through the same audited live-evidence
 path, under the asker's own Confluence grant and, in a project, only the
 lead-mapped spaces; Mine and unmapped projects exclude it. Its decision record,
-[ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md), is
-proposed, not accepted, so this path does not yet meet the accepted-ADR
-requirement of the change procedure below. Its negative disclosure tests are
+[ADR-0034](../decisions/ADR-0034-confluence-person-live-page-evidence.md), was
+accepted on 2026-10-31, so this path meets the accepted-ADR requirement of the
+change procedure below. Its negative disclosure tests are
 `providers/confluence/test/confluence-person-live-evidence-reader-v1.test.ts`
 and `services/organization-authority/test/confluence-person-ask-integration.test.ts`.
 

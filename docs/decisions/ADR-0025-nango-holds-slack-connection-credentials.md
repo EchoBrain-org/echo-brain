@@ -122,8 +122,8 @@ Consequences:
   same handle, so the state hash and every outstanding card are unchanged; a
   different app or workspace is still refused. Because the rebind rewrites
   the bundle, it is recorded separately in
-  [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md), proposed and
-  awaiting founder acceptance.
+  [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md), accepted on
+  2026-10-31.
 - **Fresh lineage on staging.** Because credential custody changed shape, a
   pre-Nango staging host cannot reuse its connection in place: after
   installing the target release's host tooling, it runs `replace-rehearsal`

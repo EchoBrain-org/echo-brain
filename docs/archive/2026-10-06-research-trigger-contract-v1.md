@@ -1,7 +1,7 @@
 # Research trigger contract v1
 
 Status: approved on 2026-10-06; shipped in #287 and #290 (phases 4 to 6), on
-top of the [research loop evaluation v1](2026-10-06-research-loop-eval-v1.md).
+top of the [research loop evaluation v1](../product/2026-10-06-research-loop-eval-v1.md).
 
 ## Goal
 
@@ -297,7 +297,7 @@ One commit per phase. The golden replay and `npm run check` pass after each.
   ([ADR-0032](../decisions/ADR-0032-stored-trigger-runs.md)), the sweep
   renderer and shared open items
   ([ADR-0033](../decisions/ADR-0033-shared-open-items.md),
-  [open items and Home v1](2026-10-08-open-items-and-home-v1.md) section 6 and
+  [open items and Home v1](../product/2026-10-08-open-items-and-home-v1.md) section 6 and
   rulings R77 to R82), and the research call rules of
   [ADR-0037](../decisions/ADR-0037-openrouter-routing-for-research-calls.md) and
   [ADR-0038](../decisions/ADR-0038-incremental-access-check-before-model-calls.md).

@@ -298,8 +298,8 @@
   },
   "profile_pin": {
     "algorithm": "sha256-sorted-json-rules-and-raw-definition-v1",
-    "definition_sha256": "7c1900ffe132dcb0534a17bc103bfa07cb62a767c6472884ee95cf039f05ea6c",
-    "sha256": "e650be1de46d9c9551f0432ad96a7a734f09e13012a4337a4eb425bdd7f81836",
+    "definition_sha256": "323898ce415287b31b07411c5a1fd3a477e4fbf06c14ae05f74a6eeccbd75688",
+    "sha256": "8a13390809cff6042953497d15c6abb4ec4568a7ca99e3d70e6570e12234659f",
     "change_policy": "any-rule-or-definition-change-requires-v5-and-a-new-baseline"
   },
   "implementation_status": {

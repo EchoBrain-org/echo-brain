@@ -6,7 +6,7 @@ export type ClientUpdateStagingState =
   | 'unconfirmed';
 
 export type ClientUpdateStagingHosting = 's3';
-export type ClientUpdateStagingKind = 'echo-client-update-staging-feed-operation-v1' | 'echo-client-update-staging-s3-feed-operation-v1';
+export type ClientUpdateStagingKind = 'echo-client-update-staging-s3-feed-operation-v1';
 
 export type ClientUpdateStagingSummary = Readonly<{
   schema_version: 1;

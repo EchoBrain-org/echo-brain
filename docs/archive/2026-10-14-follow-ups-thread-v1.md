@@ -1,12 +1,12 @@
 # Follow-ups thread v1
 
-Superseded in part by [desktop refresh and notifications v1](2026-10-15-desktop-refresh-and-notifications-v1.md):
+Superseded in part by [desktop refresh and notifications v1](../product/2026-10-15-desktop-refresh-and-notifications-v1.md):
 F8's five-minute scan is replaced by the change check and N1–N6, and Follow-ups
 lists what you sent, own or last handed on.
 
 Status: approved by the founder on 2026-10-14 (the fix order and the target
 map). Replaces the parts of
-[open items and Home v1](2026-10-08-open-items-and-home-v1.md) named under
+[open items and Home v1](../product/2026-10-08-open-items-and-home-v1.md) named under
 Rulings below; everything else there still holds.
 Visual map: https://claude.ai/artifact/PAUmZ7J8c8xuhU9sgmwQdj.
 

@@ -19,12 +19,6 @@ const BUCKET_RESOURCES = Object.freeze([
   ['FeedBucketPolicy', 'AWS::S3::BucketPolicy'],
 ]);
 const HOSTING = Object.freeze(Object.fromEntries([
-  ['cloudfront', 'echo-client-update-staging-v1', 'staging-feed-v1.template.json', 'echo-client-update-staging-feed-operation-v1', 'echo-client-update-staging-', [
-    ...BUCKET_RESOURCES,
-    ['FeedDistribution', 'AWS::CloudFront::Distribution'],
-    ['FeedOriginAccessControl', 'AWS::CloudFront::OriginAccessControl'],
-    ['FeedCachePolicy', 'AWS::CloudFront::CachePolicy'],
-  ]],
   ['s3', 'echo-client-update-staging-s3-v1', 'staging-feed-s3-v1.template.json', 'echo-client-update-staging-s3-feed-operation-v1', 'echo-client-update-staging-s3-', BUCKET_RESOURCES],
 ].map(([name, stack, file, kind, prefix, expected]) => [name, Object.freeze({
   name, stack, template: resolve(REPO, 'deploy/client-updates', file), kind, prefix, expected,
@@ -116,8 +110,7 @@ function account(aws) {
   if (identity?.Account !== ACCOUNT || typeof identity?.Arn !== 'string' || !pattern.test(identity.Arn)) fail('echo_prod_sso_required');
 }
 
-function accountPublicAccess(lane, aws) {
-  if (lane.name !== 's3') return;
+function accountPublicAccess(aws) {
   const response = aws(['s3control', 'get-public-access-block', '--account-id', ACCOUNT]);
   const configuration = response?.PublicAccessBlockConfiguration;
   // Only the explicit NoSuchPublicAccessBlockConfiguration result is absent.
@@ -137,23 +130,16 @@ function stackDescription(lane, aws) {
   return stack;
 }
 
-function stableOutputs(lane, stack) {
+function stableOutputs(stack) {
   const outputs = Object.fromEntries((stack.Outputs ?? []).map(item => [item.OutputKey, item.OutputValue]));
   const bucket = outputs.BucketName;
   const distribution = outputs.DistributionId;
   const feed = outputs.FeedUrl;
-  if (lane.name === 's3') {
-    // Dotted bucket names cannot use S3's wildcard HTTPS certificate. Require
-    // the literal regional REST URL, rejecting normalization and other origins.
-    if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket ?? '') ||
-        (distribution !== undefined && distribution !== null) || feed !== `https://${bucket}.s3.${REGION}.amazonaws.com/feed.json`) fail('staging_outputs_invalid');
-    return { bucket_name: bucket, distribution_id: null, feed_url: feed };
-  }
-  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket ?? '') || !/^[A-Z0-9]{13,20}$/.test(distribution ?? '')) fail('staging_outputs_invalid');
-  let url;
-  try { url = new URL(feed); } catch { fail('staging_outputs_invalid'); }
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/feed.json' || !/^[a-z0-9]+\.cloudfront\.net$/.test(url.hostname)) fail('staging_outputs_invalid');
-  return { bucket_name: bucket, distribution_id: distribution, feed_url: url.href };
+  // Dotted bucket names cannot use S3's wildcard HTTPS certificate. Require
+  // the literal regional REST URL, rejecting normalization and other origins.
+  if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket ?? '') ||
+      (distribution !== undefined && distribution !== null) || feed !== `https://${bucket}.s3.${REGION}.amazonaws.com/feed.json`) fail('staging_outputs_invalid');
+  return { bucket_name: bucket, distribution_id: null, feed_url: feed };
 }
 
 function expectedChanges(lane, changes) {
@@ -203,7 +189,7 @@ function readReceipt(path) {
       (receipt.state === 'succeeded' ? receipt.outputs === null : receipt.outputs !== null)) fail('receipt_invalid');
   if (receipt.outputs !== null) {
     if (!receipt.outputs || typeof receipt.outputs !== 'object' || Array.isArray(receipt.outputs) || canonical(Object.keys(receipt.outputs).sort()) !== canonical(['bucket_name', 'distribution_id', 'feed_url'])) fail('receipt_invalid');
-    stableOutputs(lane, { Outputs: [
+    stableOutputs({ Outputs: [
       { OutputKey: 'BucketName', OutputValue: receipt.outputs.bucket_name },
       { OutputKey: 'DistributionId', OutputValue: receipt.outputs.distribution_id },
       { OutputKey: 'FeedUrl', OutputValue: receipt.outputs.feed_url },
@@ -240,8 +226,6 @@ function summary(receipt) {
 
 export function planClientUpdateStaging({ output, hosting = 's3' }, dependencies = {}) {
   const lane = hostingLane(hosting);
-  // The rolled-back CloudFront operation is retained for receipt inspection only.
-  if (lane.name !== 's3') fail('hosting_retired');
   const runtime = dependencies.runtime ?? planningRuntime;
   const aws = dependencies.aws ?? defaultAws;
   const awsNoOutput = dependencies.awsNoOutput ?? defaultAwsNoOutput;
@@ -262,7 +246,7 @@ export function planClientUpdateStaging({ output, hosting = 's3' }, dependencies
       change_set_id: null, stack_id: null, change_set_type: null, inventory: null, state: 'planning', outputs: null };
   }
   account(aws);
-  accountPublicAccess(lane, aws);
+  accountPublicAccess(aws);
   if (fresh) save(destination, receipt, true);
   const existing = readChangeSet(lane, receipt.change_set_name, aws);
   if (existing?.pending) return summary(receipt);
@@ -288,7 +272,6 @@ export function executeClientUpdateStaging({ receipt: receiptPath, approveChange
   return withLock(path, () => {
     const receipt = readReceipt(path);
     const lane = receiptLane(receipt);
-    if (lane.name !== 's3') fail('hosting_retired');
     if (approveChangeSet !== receipt.change_set_id) fail('exact_change_set_approval_required');
     if (receipt.state === 'succeeded') return summary(receipt);
     if (receipt.state === 'unconfirmed') fail('operation_unconfirmed');
@@ -298,7 +281,7 @@ export function executeClientUpdateStaging({ receipt: receiptPath, approveChange
     if (receipt.state === 'planned') {
       describeBoundChangeSet(lane, receipt, aws);
       remoteTemplateMatches(lane, receipt, aws);
-      accountPublicAccess(lane, aws);
+      accountPublicAccess(aws);
       receipt.state = 'executing'; save(path, receipt);
       try { awsNoOutput(['cloudformation', 'execute-change-set', '--change-set-name', receipt.change_set_id, '--client-request-token', clientToken('execute', receipt.change_set_id)]); }
       catch { return summary(receipt); }
@@ -309,9 +292,7 @@ export function executeClientUpdateStaging({ receipt: receiptPath, approveChange
 
 function statusReceipt(path, receipt, aws) {
   const lane = receiptLane(receipt);
-  // Archived CloudFront receipts remain immutable; return fresh observations
-  // without rewriting the evidence of that retired operation.
-  const saveStatus = () => { if (lane.name === 's3') save(path, receipt); };
+  const saveStatus = () => save(path, receipt);
   account(aws);
   let stack;
   try { stack = stackDescription(lane, aws); } catch { receipt.state = 'unconfirmed'; saveStatus(); return summary(receipt); }
@@ -319,7 +300,7 @@ function statusReceipt(path, receipt, aws) {
   if (['CREATE_IN_PROGRESS', 'UPDATE_IN_PROGRESS', 'REVIEW_IN_PROGRESS'].includes(stack.StackStatus)) return summary(receipt);
   if (stack.StackId !== receipt.stack_id) { receipt.state = 'unconfirmed'; saveStatus(); return summary(receipt); }
   if (!['CREATE_COMPLETE', 'UPDATE_COMPLETE'].includes(stack.StackStatus)) { receipt.state = 'unconfirmed'; saveStatus(); return summary(receipt); }
-  try { receipt.outputs = stableOutputs(lane, stack); receipt.state = 'succeeded'; saveStatus(); }
+  try { receipt.outputs = stableOutputs(stack); receipt.state = 'succeeded'; saveStatus(); }
   catch { receipt.state = 'unconfirmed'; saveStatus(); }
   return summary(receipt);
 }
