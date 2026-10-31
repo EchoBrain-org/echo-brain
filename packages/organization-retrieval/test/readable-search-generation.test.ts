@@ -450,7 +450,7 @@ describe("immutable readable-search generation v1", () => {
     expect(search(null, `term0x${lastAtom}`).items).toEqual([]);
   });
 
-  it("retires every generation but the published one, leaving the builder's staging alone", () => {
+  it("retires every generation but the published one, leaving the builder's staging to its next build", () => {
     const directory = tempDirectory();
     const member = ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2;
     const older = buildReadableSearchGenerationV1(input(directory, [atom("older", member)]));
@@ -458,7 +458,7 @@ describe("immutable readable-search generation v1", () => {
     const root = join(directory, "record-retrieval");
     const generations = join(root, "generations");
     const staging = `.staging-${"a".repeat(32)}`;
-    mkdirSync(join(generations, staging), { mode: 0o700 });
+    mkdirSync(join(root, staging), { mode: 0o700 });
     // What a retirement interrupted after its rename leaves.
     mkdirSync(join(root, `.retired-${"b".repeat(32)}`), { mode: 0o700 });
     const retire = (keep_generation_id: `sha256:${string}`) =>
@@ -467,9 +467,11 @@ describe("immutable readable-search generation v1", () => {
     expect(() => retire(digest("never published"))).toThrow("kept readable-search generation is missing");
     expect(readdirSync(generations)).toContain(older.manifest.generation_id);
     expect(retire(published.manifest.generation_id)).toBe(1);
-    expect(readdirSync(generations).sort()).toEqual([staging, published.manifest.generation_id].sort());
-    expect(readdirSync(root)).toEqual(["generations"]);
+    expect(readdirSync(generations)).toEqual([published.manifest.generation_id]);
+    expect(readdirSync(root).sort()).toEqual([staging, "generations"].sort());
     expect(retire(published.manifest.generation_id)).toBe(0);
+    buildReadableSearchGenerationV1(input(directory, [atom("published", member)]));
+    expect(readdirSync(root)).toEqual(["generations"]);
     warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation: activeGeneration(published) });
   });
 
