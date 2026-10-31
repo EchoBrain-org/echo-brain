@@ -26,7 +26,7 @@ import { renamedProject, reread } from './feed.js';
 import { askedWhen } from './format.js';
 import * as freshness from './freshness.js';
 import { meetingMessage, message } from './messages.js';
-import { ACTIVE_STATES, CLOSED_STATES, firstName, reopenSends, sentWords } from './needs.js';
+import { ACTIVE_STATES, CLOSED_STATES, firstName, ownerRows, ownerShown, reopenSends, sentWords } from './needs.js';
 
 /** Only me: everything only you can read, filed in a project or not (ADR-0049). Follow-ups: everything you sent, own or last handed on. */
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'only-me' } | { page: 'tools' } | { page: 'decision' }
@@ -612,8 +612,8 @@ export interface State {
   altitude: AltitudeState;
 }
 
-/** Home's altitudes: Me (Needs you), My projects, one project, one person. */
-export type AltLevel = 'me' | 'projects' | 'project' | 'person';
+/** Home's altitudes: My projects (its top, with Needs you above your projects), one project, one person. */
+export type AltLevel = 'projects' | 'project' | 'person';
 /**
  * One project as Home's altitudes read it: its counts, its follow-ups still waiting (`active`: not sent or open), and, once
  * Home zoomed into it, every follow-up but the dismissed ones (`all`). `reading`: its live read is on its way.
@@ -628,6 +628,8 @@ export interface ProjectRead {
 }
 export interface AltitudeState {
   level: AltLevel;
+  /** At the top, the one kind of what needs you Home is zoomed into (its list, One place to look v1); null at the top itself. */
+  category: NeedCategory | null;
   /** The project Home last zoomed into, and the person (with their name, for the stop before their rows are read). */
   project_id: string | null;
   membership_id: string | null;
@@ -648,40 +650,18 @@ export interface AltitudeState {
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
-/** Where Home was last zoomed, on this computer. */
-const ALTITUDE = 'echo.home.altitude';
-const LEVELS: readonly AltLevel[] = ['me', 'projects', 'project', 'person'];
 
-function emptyAltitude(level: AltLevel = 'me'): AltitudeState {
-  return { level, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: false, reading: false, listFailure: null, listStale: false };
+/** Home at its top: My projects, no kind of what needs you open, nothing zoomed on and nothing read yet. */
+function emptyAltitude(): AltitudeState {
+  return { level: 'projects', category: null, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: false, reading: false,
+    listFailure: null, listStale: false };
 }
 
 const accountKey = (account: Expect) => `${account.authority} ${account.membership_id}`;
 
-/** The altitude this account last left Home at on this computer; Me when there is none, it is another's, or it cannot be read. */
-function recalledAltitude(account: Expect): AltitudeState {
-  try {
-    const kept = JSON.parse(localStorage.getItem(ALTITUDE) ?? 'null') as Partial<Record<'account' | 'level' | 'project_id' | 'membership_id' | 'name', unknown>> | null;
-    if (!kept || kept.account !== accountKey(account) || !LEVELS.includes(kept.level as AltLevel)) return emptyAltitude();
-    const text = (value: unknown) => (typeof value === 'string' && value !== '' ? value : null);
-    const altitude = { ...emptyAltitude(kept.level as AltLevel), project_id: text(kept.project_id), membership_id: text(kept.membership_id), name: text(kept.name) };
-    if (altitude.level === 'project' && altitude.project_id === null) return emptyAltitude('projects');
-    if (altitude.level === 'person' && (altitude.membership_id === null || altitude.name === null)) return emptyAltitude('projects');
-    return altitude;
-  } catch {
-    return emptyAltitude();
-  }
-}
-
-function rememberAltitude(altitude: AltitudeState): void {
-  const account = expect();
-  if (!account) return;
-  try {
-    localStorage.setItem(ALTITUDE, JSON.stringify({
-      account: accountKey(account), level: altitude.level, project_id: altitude.project_id, membership_id: altitude.membership_id, name: altitude.name,
-    }));
-  } catch { /* Home starts at Me next time. */ }
-}
+// Home no longer remembers where it was zoomed (One place to look v1): every start opens its top. Where an older version
+// kept it on this computer goes, once, if it can.
+try { localStorage.removeItem('echo.home.altitude'); } catch { /* Nothing kept, or nothing to keep it in. */ }
 
 function rememberedSidebar(): boolean {
   try { return localStorage.getItem(SIDEBAR_OPEN) !== 'false'; } catch { return true; }
@@ -731,6 +711,11 @@ function set(patch: Partial<State>): void {
   // retaining settings drafts and writes while unmounting its global handlers.
   if (state.projectSettings?.menu && (sheetShown() || (state.compose && !state.compose.hidden))) {
     state = { ...state, projectSettings: { ...state.projectSettings, menu: false } };
+  }
+  // A kind's list shows while that kind has rows: once its last is dealt with, Home goes back to its top by itself.
+  const category = state.altitude.category;
+  if ('home' in patch && category !== null && !homeRows(state).some(row => categoryOf(row) === category)) {
+    state = { ...state, altitude: { ...state.altitude, category: null } };
   }
   // A held update click says what to settle only while it is unsettled, here or in main.
   if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
@@ -802,8 +787,10 @@ function applyStatus(status: AppStatus): void {
     // A sign-out the host lost mid-way did happen: the account goes as it would have. Any other sign-out still drops what
     // a screen keeps beside its sheet, as the sheet goes, even one the cover has away.
     if (signOutPending) { signOutPending = null; forgetAccount(); } else dropAccountKeeps();
-    // No one to check for: signing in again starts over, learning what is there, and reads the timeline again.
+    // No one to check for: signing in again starts over, learning what is there, and reads the timeline again. No run starts
+    // for no one either, even from a list on its way.
     freshness.stop();
+    stopRunPolling();
     forgetTimeline();
     set({ news: new Set(), visit: null });
     emptyBar();
@@ -818,8 +805,8 @@ function applyStatus(status: AppStatus): void {
     return;
   }
   const same = sameExpect(lastAccount, next);
-  // Someone else: nothing of the last account's survives, not even a draft. Home opens where this account last left it.
-  if (!same) { forgetAccount(); set({ altitude: recalledAltitude(next) }); }
+  // Someone else: nothing of the last account's survives, not even a draft. Home opens at its top.
+  if (!same) forgetAccount();
   // A new role is a change of access: the bar's text goes, and People & invites is for owners.
   else if (before && before.role !== next.role) {
     emptyBar();
@@ -829,6 +816,8 @@ function applyStatus(status: AppStatus): void {
   signOutPending = null;
   if (!same || !wasSignedIn) {
     void loadHome();
+    // Checks move on any page: away from Home, or covered, the driver looks at the runs itself (R4).
+    kickRuns();
     // This account's Ask timeline on this computer (ADR-0047), and when it last opened each project.
     void loadTimeline();
     rememberSeen(lastAccount);
@@ -907,6 +896,11 @@ function forgetAccount(): void {
   openUnread = false;
   resultOwed = false;
   sweepOwed = null;
+  // So were the driver's runs list, Home's hold on it and a start or look on its way: the next account's go at once.
+  runsSeen = [];
+  runsHeld = false;
+  starting = null;
+  looking = null;
   lastAccount = null;
   // A Home load on its way is the last account's: the next one starts afresh.
   homeLoading = null;
@@ -1340,8 +1334,14 @@ const refreshing = new Set<ListStatus>();
 
 function listChanged(): void { projectsEdition += 1; }
 
-/** One of the sidebar's lists, shown. */
-function showList(status: ListStatus, list: State['projects']): void {
+/** Rows laid over `list` by project: each row read takes the place of its project's. */
+function laidOver(list: ProjectSummary[], rows: readonly ProjectSummary[]): ProjectSummary[] {
+  const read = new Map(rows.map(row => [row.project_id, row]));
+  return list.map(item => read.get(item.project_id) ?? item);
+}
+
+/** One of the sidebar's lists, shown; `read`, the rows of it just read, none older than a change made here. */
+function showList(status: ListStatus, list: State['projects'], read: readonly ProjectSummary[] = []): void {
   set(status === 'active' ? { projects: list } : { archivedProjects: list });
   // Your projects, read: Home zoomed out reads what it has not read of them yet.
   if (status === 'active' && !list.loading && !list.failure) {
@@ -1352,13 +1352,14 @@ function showList(status: ListStatus, list: State['projects']): void {
         listToken += 1;
         set({ altitude: { ...state.altitude, list: null, listFailure: null, listStale: false } });
       }
-    } else if (state.route.page !== 'home' || state.altitude.level === 'me') {
+    } else if (state.route.page !== 'home') {
       // Out of sight, Home keeps showing its copy of the pages, and reads them all again on its next load. A read already on
-      // its way may predate the change, so it no longer counts, whether or not Home has a copy yet.
+      // its way may predate the change, so it no longer counts, whether or not Home has a copy yet. The rows just read take
+      // their projects' places in it, so Only me's tiles find a project renamed elsewhere by its new name.
       listToken += 1;
-      if (state.altitude.list !== null && !state.altitude.listStale) set({ altitude: { ...state.altitude, listStale: true } });
+      if (state.altitude.list !== null) set({ altitude: { ...state.altitude, list: laidOver(state.altitude.list, read), listStale: true } });
     }
-    if (state.route.page === 'home' && state.altitude.level !== 'me') {
+    if (state.route.page === 'home') {
       // More pages than the sidebar shows: Home reads them all again, so a project gone from (or new to) a later page counts.
       if (list.next !== null) void readAltitudeList();
       else if (followFocus() || list.items.some(project => !state.altitude.reads[project.project_id])) void loadAltitude(false);
@@ -1373,6 +1374,7 @@ async function loadProjectList(status: ListStatus, more: boolean): Promise<void>
   if (!account || (more && !state[key].next)) return;
   const cursor = more ? state[key].next ?? undefined : undefined;
   showList(status, { ...state[key], loading: true, failure: undefined });
+  const edition = projectsEdition;
   const result = await rpc('projects.list', { expect: account, status, ...(cursor ? { cursor } : {}) });
   if (!sameAccount(account)) return;
   if (!result.ok) {
@@ -1383,7 +1385,8 @@ async function loadProjectList(status: ListStatus, more: boolean): Promise<void>
   }
   if (status === 'active' && rolesChanged(result.value.items)) emptyBar();
   const items = appendPage(more ? state[key].items : [], result.value.items, project => project.project_id);
-  showList(status, { items, next: result.value.next_cursor, loading: false });
+  // A page read before a change made here is older than it: Home's copy keeps what the change made of it.
+  showList(status, { items, next: result.value.next_cursor, loading: false }, edition === projectsEdition ? result.value.items : []);
   listChanged();
   refreshIfOwed(status);
 }
@@ -1424,7 +1427,8 @@ function showProjectList(status: ListStatus, pages: readonly ProjectPage[], show
     if (items.length >= shown) break;
   }
   if (status === 'active' && rolesChanged(items)) emptyBar();
-  showList(status, { items, next, loading: false });
+  // Every page read, past the ones shown: the change check reads them all.
+  showList(status, { items, next, loading: false }, pages.flatMap(page => page.items));
   return true;
 }
 
@@ -1464,7 +1468,11 @@ function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
   return fresh.some(project => known.has(project.project_id) && known.get(project.project_id) !== project.role);
 }
 
-/** Back to Home as it was left: the same pages, the same scroll. The bar searches all context. */
+/**
+ * Back to Home as it was left: the same pages, the same scroll, a kind's list
+ * still open (Back from a decision or a follow-up opened from it, Approve).
+ * The bar searches all context.
+ */
 export function goHome(): void {
   readSeq += 1;
   set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
@@ -1472,7 +1480,17 @@ export function goHome(): void {
   syncSearch();
   freshness.navigated();
   void loadHome();
-  if (state.altitude.level !== 'me') void loadAltitude();
+  void loadAltitude();
+}
+
+/**
+ * The sidebar's Home: Home at its top, whatever it was zoomed on or into (One
+ * place to look v1). What it read stays, and so do the project and person
+ * stops it last zoomed on.
+ */
+export function openHome(): void {
+  set({ altitude: { ...state.altitude, level: 'projects', category: null } });
+  goHome();
 }
 
 /**
@@ -1731,9 +1749,9 @@ export function newOnVisit(current: State, projectId: string, addedAt: string): 
 }
 
 /**
- * Only me, from Home's footer or a toast (ADR-0049): everything only you can
- * read, filed in a project or not, newest first. Its bar is Home's, all
- * context, and a capture from it starts in no project.
+ * Only me, from the sidebar or a toast (ADR-0049, One place to look v1):
+ * everything only you can read, filed in a project or not, newest first. Its
+ * bar is Home's, all context, and a capture from it starts in no project.
  */
 export async function openOnlyMe(): Promise<void> {
   if (!expect()) return;
@@ -2657,6 +2675,8 @@ function replaceProject(project: ProjectSummary): void {
   const update = (items: ProjectSummary[]) => items.map(item => item.project_id === project.project_id ? project : item);
   set({ projects: { ...state.projects, items: update(state.projects.items) }, archivedProjects: { ...state.archivedProjects, items: update(state.archivedProjects.items) },
     ...sameProjectRoute(project) });
+  // Home's copy of every page takes it too, out of sight or not (Only me's tiles find projects there by name).
+  if (state.altitude.list !== null) changeAltitudeList(update(state.altitude.list));
   listChanged();
 }
 
@@ -2687,13 +2707,9 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
       ...sameProjectRoute(fresh),
       toast: detail.archived ? `Archived ${fresh.name}` : `Restored ${fresh.name}` });
     if (detail.archived) projectLeftHere(project.project_id);
-    else if (state.altitude.list !== null) {
-      // A read of every page on its way may predate the restore: it no longer counts.
-      listToken += 1;
-      set({ altitude: { ...state.altitude, list: [...state.altitude.list, fresh] } });
-    }
-    // Home zoomed out reads a project restored to your list (and lets go of one archived).
-    if (state.route.page === 'home' && state.altitude.level !== 'me') void loadAltitude(false);
+    else if (state.altitude.list !== null) changeAltitudeList([...state.altitude.list, fresh]);
+    // Home reads a project restored to your list (and lets go of one archived).
+    if (state.route.page === 'home') void loadAltitude(false);
     listChanged();
     return;
   }
@@ -2731,7 +2747,7 @@ function forgetLeftProject(projectId: string): void {
   unresolvedChanged();
   void loadHome();
   // Home, where leaving lands, reads again as it does whenever it is shown.
-  if (state.altitude.level !== 'me') void loadAltitude();
+  void loadAltitude();
 }
 
 // ---- people ----------------------------------------------------------------------
@@ -3021,6 +3037,9 @@ async function openCreated(): Promise<void> {
     set({ projects: { ...state.projects, items: [project, ...state.projects.items] } });
     listChanged();
   }
+  const list = state.altitude.list;
+  // Home's copy of every page has it too, as a restore does.
+  if (list !== null && !list.some(item => item.project_id === project.project_id)) changeAltitudeList([project, ...list]);
   setNewProject({ opening: false, project, notice: undefined, hidden: true }, mine);
   void openProject(project);
   pumpNewProject();
@@ -5092,10 +5111,11 @@ let comingBack = false;
 
 /**
  * Where the window stands, as main says when it changes. Not in front: the
- * page is covered (the privacy cover), and its live reads and polls stop. In
- * front: it uncovers. On screen and in front again: ECHO came back, and what
- * shows is read again (R4). Owed reads wait while the window cannot be seen
- * (R6). Answers the return's reads when it came back, else null.
+ * page is covered (the privacy cover), and its live reads and polls stop;
+ * checks keep moving, by the runs list alone (R1). In front: it uncovers. On
+ * screen and in front again: ECHO came back, and what shows is read again
+ * (R4). Owed reads wait while the window cannot be seen (R6). Answers the
+ * return's reads when it came back, else null.
  */
 export function windowState(next: { onScreen: boolean; front: boolean }): Promise<void> | null {
   const back = next.onScreen && next.front && !canSee();
@@ -5113,7 +5133,6 @@ export function windowState(next: { onScreen: boolean; front: boolean }): Promis
  * again for the account on return.
  */
 function conceal(): void {
-  stopRunPolling();
   // The source pane closes and forgets what it read; the records are read again on return.
   const reading = state.sources !== null;
   // People closes, as the sidebar's rows must take a drop; unless a change in it is on its way.
@@ -5149,8 +5168,8 @@ const projectShown = () => (state.route.page === 'project' ? state.route.project
 const SURFACES: readonly Surface[] = [
   // Home, and the decision page over it: their rows, and the decision's check (only new rows read live, but on a return).
   { areas: ['follow_ups', 'reviews'], shows: () => (state.route.page === 'home' || state.route.page === 'decision') && state.home !== null, read: back => loadHome(back) },
-  // Home zoomed out: your projects' follow-ups, and the live titles of the project or person it is zoomed on.
-  { areas: ['follow_ups'], shows: () => state.route.page === 'home' && state.altitude.level !== 'me', read: () => loadAltitude() },
+  // Home's altitudes: your projects' follow-ups, and the live titles of the project or person it is zoomed on.
+  { areas: ['follow_ups'], shows: () => state.route.page === 'home', read: () => loadAltitude() },
   // The decision page's records: each finished check's follow-ups.
   { areas: ['follow_ups'], shows: () => state.route.page === 'decision' && (state.decision?.runs.length ?? 0) > 0, read: () => loadRecordLines(state.decision!) },
   { areas: ['reviews'], shows: () => state.route.page === 'decision' && state.decision !== null,
@@ -5198,6 +5217,9 @@ function owe({ back, areas }: { readonly back: boolean; readonly areas: readonly
     if ((back || surface.areas.some(area => areas.includes(area))) && surface.shows()) owed.set(surface, back || owed.get(surface) === true);
   }
   settleOwed();
+  // Coming back, or a meeting approved or published anywhere (the reviews moved): a check may wait to start, on any page (R4).
+  // Home's own load, owed just now, drives where it shows.
+  if (back || areas.includes('reviews')) kickRuns();
 }
 
 /**
@@ -5392,6 +5414,55 @@ export function needRows(reviews: readonly PersonMeetingReviewV2[], runs: readon
   ];
 }
 
+/**
+ * What a row asks of you, as Home's top groups it (One place to look v1):
+ * Approve, Retry (a check that did not finish), Send, and Update (a follow-up
+ * that waits on you, or a Review of one you sent that changed). Checking is
+ * on its way and asks nothing yet, so it never opens a list.
+ */
+export type NeedCategory = 'approve' | 'retry' | 'send' | 'update';
+const CATEGORIES = ['approve', 'retry', 'send', 'update', 'checking'] as const;
+
+export function categoryOf(row: NeedRow): NeedCategory | 'checking' {
+  return row.kind === 'failed' ? 'retry' : row.kind === 'review' ? 'update' : row.kind;
+}
+
+/**
+ * When a row's age counts from: a meeting to approve, when it met (the
+ * reviews say no more); a check, its run's last move; a Send, when its check
+ * finished; a follow-up, when it last moved (sent, handed on, set or made).
+ */
+export function needAt(row: NeedRow): string | null {
+  switch (row.kind) {
+    case 'approve': return row.review.meeting_at;
+    case 'checking': return row.run?.updated_at ?? null;
+    case 'failed': return row.run.updated_at;
+    case 'send': return row.send.finished_at;
+    default: {
+      const { sent_at, owner_set_at, state_set_at, created_at } = row.item;
+      return [sent_at, owner_set_at, state_set_at].reduce<string>((latest, at) => (at !== null && Date.parse(at) > Date.parse(latest) ? at : latest), created_at);
+    }
+  }
+}
+
+/** One kind of what needs you on Home's top: its rows, the newest first. */
+export interface HomeCategory { category: NeedCategory | 'checking'; rows: NeedRow[] }
+
+/**
+ * Home's rows by what they ask of you, in Home's order: Approve, Retry, Send,
+ * Update, then Checking; a kind with no rows is left out. Meetings keep the
+ * reviews' own order, the newest first; the others go newest first by when
+ * they last moved.
+ */
+export function homeCategories(rows: readonly NeedRow[]): HomeCategory[] {
+  const moved = (row: NeedRow) => Date.parse(needAt(row) ?? '') || 0;
+  return CATEGORIES.flatMap(category => {
+    const these = rows.filter(row => categoryOf(row) === category);
+    const newest = category === 'approve' || category === 'checking' ? these : [...these].sort((a, b) => moved(b) - moved(a));
+    return newest.length === 0 ? [] : [{ category, rows: newest }];
+  });
+}
+
 /** A load of Home's altitudes is the last account's, or an earlier one's, once this moves on. */
 let altitudeToken = 0;
 let altitudeLoading: { key: string; done: Promise<void> } | null = null;
@@ -5409,12 +5480,16 @@ export function altitudeProjects(current: State = state): readonly ProjectSummar
 }
 
 let listToken = 0;
+/** The token of the read of every page on its way; it still counts while it is `listToken`. */
+let listReading: number | null = null;
 
 /** Every page of your projects, read for Home; a failure is kept to say so. False when a newer read or another account took over. */
 async function readWholeList(account: Expect, current: () => boolean): Promise<boolean> {
   const token = ++listToken;
+  listReading = token;
   const still = () => token === listToken && current();
   const read = await readProjectPages(account, 'active', Number.POSITIVE_INFINITY, still);
+  if (listReading === token) listReading = null;
   if (!still() || read === null) return false;
   // A failed read keeps the copy Home had (it still shows those projects) and says it could not read them all.
   set({ altitude: read.ok
@@ -5431,21 +5506,33 @@ async function readAltitudeList(): Promise<void> {
 }
 
 /**
+ * Home's copy of every page, with a change made here (a project renamed, made,
+ * restored, archived or left). A read of every page on its way may predate the
+ * change, so it no longer counts; what else it carried (a project you joined
+ * meanwhile) is read again, as a change to your projects is: now on Home, else
+ * on Home's next load.
+ */
+function changeAltitudeList(list: ProjectSummary[] | null): void {
+  const overtaken = listReading === listToken;
+  listToken += 1;
+  set({ altitude: { ...state.altitude, list, ...(overtaken && list !== null && state.route.page !== 'home' ? { listStale: true } : {}) } });
+  if (overtaken && state.route.page === 'home') void readAltitudeList();
+}
+
+/**
  * A project left your list here (you left or archived it): it goes from what
  * Home read and from its copy of your projects, and Home zoomed on it goes to
  * My projects.
  */
 function projectLeftHere(projectId: string): void {
-  // A read of every page already on its way may still hold this project: it no longer counts.
-  listToken += 1;
   const { [projectId]: _left, ...reads } = state.altitude.reads;
   const focus = state.altitude.project_id === projectId;
-  const altitude = {
-    ...state.altitude, reads, list: state.altitude.list?.filter(project => project.project_id !== projectId) ?? null,
+  set({ altitude: {
+    ...state.altitude, reads,
     ...(focus ? { project_id: null, level: state.altitude.level === 'project' ? 'projects' as const : state.altitude.level } : {}),
-  };
-  set({ altitude });
-  if (focus) rememberAltitude(altitude);
+  } });
+  // A read of every page already on its way may still hold this project.
+  changeAltitudeList(state.altitude.list?.filter(project => project.project_id !== projectId) ?? null);
 }
 
 /** Your whole list, once Home knows it: only a project missing from the whole list is gone. */
@@ -5459,32 +5546,37 @@ function followFocus(): boolean {
   const list = wholeList();
   const { project_id } = state.altitude;
   if (list === null || project_id === null || list.some(project => project.project_id === project_id)) return false;
-  const altitude = { ...state.altitude, project_id: null, level: state.altitude.level === 'project' ? 'projects' as const : state.altitude.level };
-  set({ altitude });
-  rememberAltitude(altitude);
+  set({ altitude: { ...state.altitude, project_id: null, level: state.altitude.level === 'project' ? 'projects' as const : state.altitude.level } });
   return true;
 }
 
 /**
  * Home zooms to `level`: on a project or a person when given one, else the
- * last it zoomed on. Me reads nothing new; every other altitude reads what it
+ * last it zoomed on, and out of any kind's list. Each altitude reads what it
  * has not read yet (Home altitude v1).
  */
 export function zoomTo(level: AltLevel, target: { project_id?: string; membership_id?: string; name?: string } = {}): void {
-  const altitude = {
-    ...state.altitude, level, project_id: target.project_id ?? state.altitude.project_id,
+  set({ altitude: {
+    ...state.altitude, level, category: null, project_id: target.project_id ?? state.altitude.project_id,
     membership_id: target.membership_id ?? state.altitude.membership_id, name: target.name ?? state.altitude.name,
-  };
-  set({ altitude });
-  rememberAltitude(altitude);
-  if (level !== 'me') void loadAltitude(false);
+  } });
+  void loadAltitude(false);
 }
 
-/** One level out: a person to their project, a project to My projects. False on My projects and Me, which go nowhere. */
+/** Home zooms into one kind of what needs you: its list, at the top's altitude (One place to look v1). It reads nothing new. */
+export function openCategory(category: NeedCategory): void {
+  set({ altitude: { ...state.altitude, level: 'projects', category } });
+}
+
+/**
+ * One level out: a person to their project, a project to My projects, a
+ * kind's list to the top. False at the top, which goes nowhere.
+ */
 export function zoomOut(): boolean {
-  const { level, project_id } = state.altitude;
+  const { level, project_id, category } = state.altitude;
   if (level === 'person') { zoomTo(project_id === null ? 'projects' : 'project'); return true; }
   if (level === 'project') { zoomTo('projects'); return true; }
+  if (category !== null) { set({ altitude: { ...state.altitude, category: null } }); return true; }
   return false;
 }
 
@@ -5525,7 +5617,6 @@ export function loadAltitude(fresh = true): Promise<void> {
   if (!account) return Promise.resolve();
   followFocus();
   const { level, project_id, membership_id } = state.altitude;
-  if (level === 'me') return Promise.resolve();
   altitudeOwed ||= fresh;
   const again = altitudeOwed;
   // A load on its way is joined only for the same zoom over the same projects: one that just joined your list is read.
@@ -5701,6 +5792,11 @@ function checkEnded(before: readonly PersonRunV1[], after: readonly PersonRunV1[
   return before.some(run => going(run) && !after.some(next => next.run_id === run.run_id && going(next)));
 }
 
+/** The sweep Home asked for is no longer going in this list: what it found is owed. */
+function swept(runs: readonly PersonRunV1[]): boolean {
+  return sweepOwed !== null && !runs.some(run => run.run_id === sweepOwed && going(run));
+}
+
 /** Tools that could not be read: they fail Home's load, which says so with their own failure. */
 class ToolsFailed extends CommandFailed {}
 
@@ -5739,9 +5835,13 @@ async function readReviews(mine: number, tools: Promise<Result<ConnectedTools>> 
  * poll). A poll reads what waits on you only once a check has ended, or after
  * that read failed. Home stops loading, and drives its runs, once its rows
  * are read; their live read goes on, and alone says whether a sweep is due.
+ * Its runs drive only if no drive or look of the driver's began since it did:
+ * that one goes by a newer list, which this read's must not undo (R3).
  */
 async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promise<Result<ConnectedTools>>): Promise<void> {
+  const account = expect();
   const before = state.home?.runs ?? [];
+  const ran = runSeq;
   /** One part, shown once read while Home is still this read's; answered as settled. */
   const shown = <T>(read: Promise<T>, apply: (value: T) => Partial<HomeState>): Promise<PromiseSettledResult<T>> => read.then(
     value => {
@@ -5750,7 +5850,6 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
       return { status: 'fulfilled' as const, value };
     },
     (reason: unknown) => ({ status: 'rejected' as const, reason }));
-  const swept = (runs: readonly PersonRunV1[]) => sweepOwed !== null && !runs.some(run => run.run_id === sweepOwed && going(run));
   const ended = (runs: readonly PersonRunV1[]) => checkEnded(before, runs) || swept(runs);
   const reviewsRead = shown(readReviews(mine, tools), reviews => ({ reviews }));
   const runsRead = shown(runsCommand({ schema_version: 1, operation: 'list' }), value => {
@@ -5763,21 +5862,33 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
   const checkSwept = runs.status === 'fulfilled' && swept(runs.value.runs);
   if (waiting === null && homeShown(mine) && (openUnread || resultOwed)) waiting = readWaiting(mine, true);
   const unread = waiting ? await waiting.rows : undefined;
-  // A read that is no longer Home's shows nothing, so it settles nothing Home owes either.
-  const home = homeShown(mine);
-  if (!home) return;
   const toolsFailure = reviews.status === 'rejected' && reviews.reason instanceof ToolsFailed ? reviews.reason.failure : undefined;
+  // A read that is no longer Home's shows nothing, so it settles nothing Home owes either. Home was left or covered while it
+  // was on its way: unless a newer Home load, drive or look drives, the runs it read still do, for the account it read them for (R1, R3).
+  const home = homeShown(mine);
+  if (!home) {
+    // Tools that answered lift their hold, though Home was left before they did: this load was the Try again it waits for (R4).
+    // Only while it is still Home's newest load: a newer one (after a sign-out and in, even as the same person) holds its own.
+    if (tools && !toolsFailure && state.home?.seq === mine && sameExpect(expect(), account)) runsHeld = false;
+    if (runSeq === ran && !toolsFailure && !runsHeld && homeShown() === null && sameExpect(expect(), account) && runsGo()) {
+      const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
+      if (runs.status === 'fulfilled') endedOffHome(runs.value.runs);
+      void driveRuns(runs.status === 'fulfilled' ? runs.value.runs : runsSeen, publishing, runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
+    }
+    return;
+  }
   set({ home: { ...home, loading: false, failure: reviews.status === 'fulfilled' ? undefined : poll ? home.failure : toolsFailure ?? { code: 'unavailable', retryable: true } } });
   if (checkSwept) sweepOwed = null;
   if (waiting) openUnread = unread !== undefined;
   // A check that ended owes a read of what it found (set as its list showed); only a read that brings its rows pays it.
   if (waiting && unread === undefined) resultOwed = false;
   updateDecisionRuns(home.runs);
-  // Tools that could not be read fail the load, as Home says: it waits for Try again, and starts no run meanwhile.
+  // Tools that could not be read fail the load, as Home says: it waits for Try again, and no run starts meanwhile, on any page.
+  if (tools) runsHeld = toolsFailure !== undefined;
   if (toolsFailure) return;
   // The next poll waits longer after a failed runs read, or a failed read of what a check found.
   const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed ? unread : undefined;
-  void driveRuns(home.runs, home.reviews.some(review => review.status === 'publishing'), failed, waiting?.sweepDue);
+  if (runSeq === ran) void driveRuns(home.runs, home.reviews.some(review => review.status === 'publishing'), failed, waiting?.sweepDue);
 }
 
 /**
@@ -5831,13 +5942,35 @@ async function readHomeLive(mine: number, fresh: boolean): Promise<boolean> {
   return sweepDue;
 }
 
+// ---- checks keep moving: the runs driver (one place to look v1, R1–R4) ---------------------
+
 let runPoll: ReturnType<typeof setTimeout> | null = null;
 let runSeq = 0;
 /** Polls in a row whose runs read failed, or whose start started nothing: each waits longer than the one before. */
 let runFailures = 0;
-/** How often Home looks again while a check is going, and the longest it waits after failed reads. */
+/** How often the driver looks again while a check is going, and the longest it waits after failed reads. */
 const RUN_POLL_MS = 5_000;
 const RUN_POLL_MAX_MS = 60_000;
+/** The runs list the driver last went by, whoever read it: Home's state keeps its own (R3). */
+let runsSeen: readonly PersonRunV1[] = [];
+/** Home could not read the tools: as Home says, no run starts by itself until a Home load reads them (Try again). */
+let runsHeld = false;
+/** The driver's own look on its way, if any: a kick meanwhile has nothing to add. */
+let looking: Promise<void> | null = null;
+
+/**
+ * Checks go wherever ECHO runs for you: signed in, on any page, with the
+ * window in front, behind other apps or closed to the tray (R1). Nothing runs
+ * once ECHO quits, and nothing for no one.
+ */
+function runsGo(): boolean {
+  return Boolean(state.status?.signed_in) && expect() !== null;
+}
+
+/** Home reads its own runs, with what waits on you: while it shows and can be seen. Anywhere else the driver reads the runs list alone. */
+function homeSeen(): HomeState | null {
+  return canSee() ? homeShown() : null;
+}
 
 function stopRunPolling(): void {
   runSeq += 1;
@@ -5848,16 +5981,75 @@ function stopRunPolling(): void {
 function pollRuns(mine: number, delay: number): void {
   runPoll = setTimeout(() => {
     runPoll = null;
-    const home = homeShown();
-    if (mine === runSeq && home) void readHome(home.seq, true);
+    if (mine === runSeq && runsGo()) lookAtRuns();
   }, delay);
 }
 
 /**
+ * Looks at the runs now, when nothing else is about to (R4): on sign-in, on
+ * coming back, when the reviews move (a meeting approved or published), and
+ * once Check now stops following its sweep. Not while Home's tools failed, a
+ * look is armed or on its way, or a Home load (which drives) is on its way
+ * while Home is seen.
+ */
+function kickRuns(): void {
+  if (!runsGo() || runsHeld || runPoll !== null || looking !== null || (homeSeen() !== null && homeLoading !== null)) return;
+  lookAtRuns();
+}
+
+/** One look: Home's own read while Home is seen, as its poll; anywhere else the runs list alone. */
+function lookAtRuns(): void {
+  // Its list is newer than any read before it, whose runs drive no more (R3).
+  runSeq += 1;
+  const home = homeSeen();
+  const look = (home ? readHome(home.seq, true) : readRuns()).finally(() => { if (looking === look) looking = null; });
+  looking = look;
+}
+
+/**
+ * The driver's own look, away from Home or while Home cannot be seen: the
+ * runs list alone, none of it written to Home (R3). A check it sees end owes
+ * Home what it found, read once Home shows, and the follow-ups that show are
+ * read again (`endedOffHome`); the open decision follows its
+ * checks; then the next queued run starts. A Home load, a newer look or
+ * another account since drives instead: this list starts nothing.
+ */
+async function readRuns(): Promise<void> {
+  const account = expect();
+  const mine = runSeq;
+  let listed: readonly PersonRunV1[] | undefined;
+  let failure: Failure | undefined;
+  try {
+    listed = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;
+  } catch (error) {
+    failure = failureOf(error);
+  }
+  if (mine !== runSeq || !sameExpect(expect(), account) || !runsGo()) return;
+  if (listed) {
+    endedOffHome(listed);
+    updateDecisionRuns(listed);
+  }
+  await driveRuns(listed ?? runsSeen, false, failure);
+}
+
+/**
+ * A runs list read off Home, before the driver goes by it: a check it shows
+ * ended since the driver's last list owes Home what it found, and what shows
+ * of the follow-ups is read again at once, with when ECHO last checked. A
+ * sweep moves no follow-up's state, so the change check never sees it end.
+ */
+function endedOffHome(listed: readonly PersonRunV1[]): void {
+  if (!checkEnded(runsSeen, listed) && !swept(listed)) return;
+  resultOwed = true;
+  if (swept(listed)) sweepOwed = null;
+  owe({ back: false, areas: ['follow_ups'] });
+}
+
+/**
  * Milliseconds until the next runs read, or null for none. `failures` counts
- * consecutive failed reads. Home looks again only while a check is pending or
- * running, a review is publishing, or what a finished check found is still
- * unread (`owed`); after failed reads it waits twice as long each time (10 s,
+ * consecutive failed reads. The driver looks again only while a check is
+ * pending or running, a review is publishing, or what a finished check found
+ * is still unread (`owed`); after failed reads it waits twice as long each time (10 s,
  * 20 s, at most 60 s). A read that failed as unavailable with nothing in
  * flight is not tried again: an Authority with no model answers so for good,
  * and no check ever ends there.
@@ -5886,36 +6078,52 @@ export function runToStart(runs: readonly PersonRunV1[]): PersonRunV1 | undefine
 const BUSY: Failure = { code: 'busy', retryable: true };
 
 /**
+ * The start on its way, if any. One goes at a time: a start asked for
+ * meanwhile (Home's list and the driver's, or Check now's, can name the same
+ * queued run at once) is answered by it, never sent again (R3). The Authority
+ * runs one check per person, so a second start could only be `busy`.
+ */
+let starting: Promise<Failure | undefined> | null = null;
+
+/**
  * Starts a queued run. A start that starts nothing (refused, failed, or
  * `busy`) is answered with why, so the next look waits longer, as after a
  * failed runs read (ruling R50). A start the Authority holds `pending` (its
  * search index has not caught up yet) is not one: holding costs it a few reads,
- * so Home looks again at the usual pace and the check starts soon after the
- * search index catches up.
+ * so the driver looks again at the usual pace and the check starts soon after
+ * the search index catches up.
  */
-async function startRun(run_id: string): Promise<Failure | undefined> {
-  try {
-    const { state: started } = await runsCommand({ schema_version: 1, operation: 'start', run_id });
-    return started === 'busy' ? BUSY : undefined;
-  } catch (error) {
-    return failureOf(error);
-  }
+function startRun(run_id: string): Promise<Failure | undefined> {
+  if (starting) return starting;
+  const answer = (async () => {
+    try {
+      const { state: started } = await runsCommand({ schema_version: 1, operation: 'start', run_id });
+      return started === 'busy' ? BUSY : undefined;
+    } catch (error) {
+      return failureOf(error);
+    }
+  })();
+  starting = answer;
+  void answer.finally(() => { if (starting === answer) starting = null; });
+  return answer;
 }
 
 /**
- * Runs go only from your signed-in desktop: start the next queued one when
- * none is going, impact checks first, then sweeps (a sweep's attempt that
- * went back to the queue is started again like an impact check's); then look
- * again when `runPollDelay` says. Once no run is queued or going, a sweep
- * Home's live read says is due (`sweepDue`, once it answers) is asked for and
- * started, once per Home load. `failure` is the runs read's, when it failed:
- * the list is the last good one.
+ * Runs go only from your signed-in desktop, on whatever page shows (R1):
+ * start the next queued one when none is going, impact checks first, then
+ * sweeps (a sweep's attempt that went back to the queue is started again like
+ * an impact check's); then look again when `runPollDelay` says, by Home's
+ * reads while Home is seen, else by the runs list alone. Once no run is queued
+ * or going, a sweep Home's live read says is due (`sweepDue`, once it
+ * answers) is asked for and started, once per Home load. `failure` is the
+ * runs read's, when it failed: the list is the last good one.
  */
 async function driveRuns(listed: readonly PersonRunV1[], publishing = false, failure?: Failure, sweepDue = Promise.resolve(false)): Promise<void> {
   stopRunPolling();
+  runsSeen = listed;
   const mine = runSeq;
   const load = homeLoads;
-  const current = () => mine === runSeq && homeShown() !== null;
+  const current = () => mine === runSeq && runsGo();
   // A failed read never skips the start or the sweep request (D6): each is tried, and its failure joins the read's.
   let failed = failure;
   const next = runToStart(listed);
@@ -5931,7 +6139,9 @@ async function driveRuns(listed: readonly PersonRunV1[], publishing = false, fai
     if (!current()) return;
   }
   runFailures = failed ? runFailures + 1 : 0;
-  const delay = runPollDelay({ runs: listed, publishing, failures: runFailures, lastFailure: failed, owed: resultOwed || sweepOwed !== null });
+  // What a finished check found is Home's to read: owed, it keeps the driver looking only while Home reads (R2).
+  const owed = (homeSeen() !== null && resultOwed) || sweepOwed !== null;
+  const delay = runPollDelay({ runs: listed, publishing, failures: runFailures, lastFailure: failed, owed });
   if (delay !== null && current()) pollRuns(mine, delay);
 }
 
@@ -6212,7 +6422,8 @@ export async function retryImpact(run_id: string): Promise<void> {
     if (!shown) return;
     editDecision({ runs: shown.runs.map(item => (item.run_id === run_id ? { ...item, state: 'pending', error_code: null } : item)) });
     const runs = await runsCommand({ schema_version: 1, operation: 'list' });
-    // Home looks again while it runs; away from Home the decision reads its checks once more, as a meeting's line does.
+    // The driver looks again while it runs, on any page; away from Home the decision also reads its checks once more at once, as
+    // a meeting's line does.
     if (homeUnder()) void driveRuns(runs.runs);
     else { await driveRuns(runs.runs); await readRecordRuns(mine); }
   } catch { /* the card still offers Try again */ }
@@ -6329,10 +6540,11 @@ type ListSource = { scope: 'involved' | 'record' | 'project'; id?: string; ids?:
 
 /**
  * A follow-ups list, a page at a time. Current work (Not sent and Open) shows
- * first, so it is never behind More; each closed group (Done, Dismissed) shows
- * its rows once opened: a meeting's and a notification's start open, yours
- * and a project's closed ("Done · 12"). Not sent rows you may send are ticked
- * to Send or Dismiss them.
+ * first, as one list, so it is never behind More; each closed group (Done,
+ * Dismissed) shows its rows once opened: a meeting's and a notification's
+ * start open, yours and a project's closed ("Done · 12"). Not sent rows you
+ * may send are ticked to Send or Dismiss them. Its owner line shows one
+ * owner's rows at a time, or everyone's.
  */
 export type FollowUpList = ListSource & ListFields;
 
@@ -6365,6 +6577,12 @@ interface ListFields extends ChangeView {
   expanded: Readonly<Partial<Record<ClosedState, true>>>;
   /** The row whose page was opened from this list last: coming back, it takes the focus. */
   opened?: string;
+  /**
+   * The owner line's filter (One place to look v1, F3): only this owner's rows (their membership id, or `none` for the rows
+   * waiting for one); none, everyone's. Kept with the list, so it holds through its item pages and reads while one of its rows is
+   * that owner's; once none is, it is dropped (All), so a later read bringing one back filters nothing. A new list has none.
+   */
+  owner?: string;
 }
 
 /** One follow-up's page (F5): from a row with the row's copy, or by its id alone, then read again. */
@@ -6433,7 +6651,9 @@ function changeView(): FollowUpList | ItemPage | null {
 
 function setView(view: FollowUpView): void {
   const stack = followUpsShown();
-  if (stack?.views.some(entry => entry.seq === view.seq)) set({ followUps: { ...stack, views: stack.views.map(entry => (entry.seq === view.seq ? view : entry)) } });
+  // A list's owner filter with none of its rows left shows everyone's (All), and stays so: a later read bringing one back filters nothing.
+  const next = view.kind === 'list' && view.owner !== undefined && ownerShown(view.items, view.owner) === null ? { ...view, owner: undefined } : view;
+  if (stack?.views.some(entry => entry.seq === view.seq)) set({ followUps: { ...stack, views: stack.views.map(entry => (entry.seq === view.seq ? next : entry)) } });
 }
 
 /** A view opened over what shows: the page, or the view before it. */
@@ -6736,6 +6956,25 @@ export function retryFollowUps(): Promise<void> {
   return list?.failed ? readList(list.seq, list.failed.read) : Promise.resolve();
 }
 
+/**
+ * The owner line (One place to look v1, F3 and F4): only one owner's rows
+ * (`none`: those waiting for one), or, picked again or on All (`null`),
+ * everyone's. Rows it hides are unticked, so Send and Dismiss act only on rows
+ * you see. Not while a change is on its way.
+ */
+export function filterOwner(owner: string | null): void {
+  const list = shownView('list');
+  if (!list || list.busy) return;
+  const next = owner === null || owner === list.owner ? undefined : owner;
+  const shown = new Set(ownerRows(list.items, next).map(item => item.item_id));
+  setView({ ...list, owner: next, picker: null, ticks: Object.fromEntries(Object.entries(list.ticks).filter(([item_id]) => shown.has(item_id))) });
+}
+
+/** The Not sent rows a list would send: ticked, sendable, and shown under its owner filter. */
+export function tickedRows(list: FollowUpList): OpenItemView[] {
+  return ownerRows(list.items, list.owner).filter(item => list.ticks[item.item_id] && sendable(item));
+}
+
 /** A Not sent row's tick. */
 export function tickFollowUp(item_id: string): void {
   const list = shownView('list');
@@ -6785,7 +7024,7 @@ function notSent(include: boolean): string {
 }
 
 /**
- * Send N or Dismiss N: the ticked Not sent rows, one send per check (run)
+ * Send N or Dismiss N: the ticked Not sent rows that show, one send per check (run)
  * listing only those items, to their owners (`include`) or dismissed (F1),
  * for the account shown when it was clicked; it stops once the list closes or
  * the account changes. The list stays: it is read again rows only, which
@@ -6798,7 +7037,7 @@ export async function sendTicked(include: boolean): Promise<void> {
   const list = shownView('list');
   const account = expect();
   if (!list || !account || list.busy || list.loading || state.concealed) return;
-  const ticked = list.items.filter(item => list.ticks[item.item_id] && sendable(item));
+  const ticked = tickedRows(list);
   if (ticked.length === 0) return;
   setView({ ...list, busy: true, said: null, picker: null });
   const sends: Record<string, SendCommand> = { ...list.sends };
@@ -7174,8 +7413,9 @@ export async function openListDecision(): Promise<void> {
 /**
  * Check now, faint on a meeting's or a project's list (canvas 9.6, 9.7): a
  * sweep of that scope. With nothing open the list says so; otherwise
- * "Checking…" until the sweep ends, then the list is read again. A sweep that
- * fails says so, and Try again asks for another.
+ * "Checking…" until the sweep ends, then the list is read again, and what
+ * it found is read on Back by what is under it, as after a change. A sweep
+ * that fails says so, and Try again asks for another.
  */
 export async function checkNow(): Promise<void> {
   const list = shownView('list');
@@ -7203,18 +7443,29 @@ export async function checkNow(): Promise<void> {
   const now = ours();
   if (!now || ended === null) return;
   setView({ ...now, check: ended === 'done' ? null : 'failed' });
-  if (ended === 'done') await readList(now.seq, 'again');
+  if (ended !== 'done') return;
+  changedFrom(now.seq);
+  await readList(now.seq, 'again');
 }
 
 /**
  * Check now's sweep, followed until it ends (`done` or `failed`; null once
  * nothing waits on it, `ours`). It is started at once; if another run goes
  * first (`busy`), each runs list says what starts next, impact checks before
- * sweeps. The list is read at Home's pace (`runPollDelay`): longer after a
- * failed read or a start that started nothing, and not while ECHO is behind
- * another app.
+ * sweeps. The list is read at the driver's pace (`runPollDelay`): longer after
+ * a failed read or a start that started nothing; on while ECHO is behind
+ * other apps, as checks are (R1). Once it stops following, the driver goes on
+ * with whatever queued behind its sweep (R4).
  */
 async function followSweep(runId: string, ours: () => boolean): Promise<'done' | 'failed' | null> {
+  try {
+    return await sweepEnded(runId, ours);
+  } finally {
+    kickRuns();
+  }
+}
+
+async function sweepEnded(runId: string, ours: () => boolean): Promise<'done' | 'failed' | null> {
   let next: string | undefined = runId;
   let failures = 0;
   let lastFailure: Failure | undefined;
@@ -7229,7 +7480,7 @@ async function followSweep(runId: string, ours: () => boolean): Promise<'done' |
     await new Promise(resolve => setTimeout(resolve, runPollDelay({ runs: [], publishing: false, failures, lastFailure, owed: true })!));
     next = undefined;
     if (!ours()) return null;
-    if (state.concealed) continue;
+    if (!runsGo()) continue;
     let runs: readonly PersonRunV1[];
     try {
       runs = (await runsCommand({ schema_version: 1, operation: 'list' })).runs;

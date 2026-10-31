@@ -26,7 +26,7 @@ export type Health = 'on' | 'risk' | 'off';
 const waiting = (item: OpenItemView) => item.state === 'unsent' || item.state === 'open';
 
 /** Since when it has waited: an unsent one since it was made, an open one since it was sent or last set; null once closed. */
-function waitingSince(item: OpenItemView): string | null {
+export function waitingSince(item: OpenItemView): string | null {
   if (item.state === 'unsent') return item.created_at;
   if (item.state !== 'open') return null;
   const moved = [item.sent_at, item.state_set_at].filter((at): at is string => at !== null).sort();
@@ -57,6 +57,11 @@ export function needsAttention(item: OpenItemView, now: number): boolean {
   return elapsed > (item.state === 'unsent' ? UNSENT_DAYS : OPEN_DAYS) * DAY_MS;
 }
 
+/** Waiting longer than a week, by the clock: what puts its project off track, and what a follow-ups row marks solid. */
+export function overdue(item: OpenItemView, now: number): boolean {
+  return (waitedMs(item, now) ?? 0) > OFF_TRACK_DAYS * DAY_MS;
+}
+
 /** Someone a row shows as a face, and whether one of theirs needs attention. */
 export interface Face { membership_id: string; name: string; needs: boolean }
 
@@ -68,6 +73,8 @@ interface Rollup {
   /** Days the oldest waiting follow-up has waited, or null when none waits. */
   oldest: number | null;
   faces: Face[];
+  /** Why it is not on track: of those needing attention, the one that has waited longest; null when none needs attention. */
+  reason: OpenItemView | null;
 }
 
 function faces(rows: readonly OpenItemView[], now: number): Face[] {
@@ -89,7 +96,7 @@ export function rollup(rows: readonly OpenItemView[], counts: { unsent: number; 
   const kept = rows.filter(item => item.state !== 'not_relevant');
   const flagged = kept.filter(item => needsAttention(item, now));
   const waits = kept.flatMap(item => { const days = waitedDays(item, now); return days === null ? [] : [days]; });
-  const late = flagged.some(item => (waitedMs(item, now) ?? 0) > OFF_TRACK_DAYS * DAY_MS);
+  const late = flagged.some(item => overdue(item, now));
   return {
     done: counts ? counts.done : kept.filter(item => item.state === 'done').length,
     total: counts ? counts.unsent + counts.open + counts.done : kept.length,
@@ -97,6 +104,7 @@ export function rollup(rows: readonly OpenItemView[], counts: { unsent: number; 
     health: late || flagged.length >= OFF_TRACK_COUNT ? 'off' : flagged.length > 0 ? 'risk' : 'on',
     oldest: waits.length === 0 ? null : Math.max(...waits),
     faces: faces(kept, now),
+    reason: flagged.reduce<OpenItemView | null>((longest, item) => (longest === null || waitedMs(item, now)! > waitedMs(longest, now)! ? item : longest), null),
   };
 }
 

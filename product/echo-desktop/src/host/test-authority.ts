@@ -128,8 +128,8 @@ interface SweepRun {
 }
 
 /** The granola modes whose projects are the meeting's: Thermostat redesign (Ari leads it) and Supplier review. */
-const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-checked', 'granola-paged', 'granola-review', 'granola-review-assign-lost', 'granola-sweep',
-  'granola-alike', 'granola-routes', 'granola-extra-failed']);
+const GRANOLA_PROJECTS = new Set(['granola', 'granola-owner', 'granola-checked', 'granola-paged', 'granola-review', 'granola-review-assign-lost', 'granola-review-paste',
+  'granola-sweep', 'granola-alike', 'granola-routes', 'granola-extra-failed']);
 const THERMOSTAT = 'prj_11111111-1111-4111-8111-111111111111';
 const SUPPLIER = 'prj_44444444-4444-4444-8444-444444444444';
 /** A project made long ago, that Ari is added to when a test says (`added-oldest`). */
@@ -151,12 +151,15 @@ const ATOM_PART_BYTES = 3 * 1024;
 
 /**
  * The modes where Ari has added notes, uploads and approved meetings of their own, some only Ari can read (ADR-0049);
- * `only-me-empty` has none yet.
+ * `only-me-empty` has none yet, and `only-me-filed` adds a file of Ari's own filed in two projects.
  */
-const ONLY_ME_MODES = new Set(['only-me', 'owner-only-me', 'only-me-empty', 'only-me-fails-once', 'only-me-meetings-held', 'only-me-unauthorized']);
+const ONLY_ME_MODES = new Set(['only-me', 'owner-only-me', 'only-me-empty', 'only-me-fails-once', 'only-me-meetings-held', 'only-me-unauthorized',
+  'only-me-filed']);
 const PRICING_REVIEW = `sha256:${'7'.repeat(64)}`;
 const BEACON_KICKOFF = `sha256:${'8'.repeat(64)}`;
 const PRICING_MEMO = `doc_${'9'.repeat(64)}`;
+/** Ari's own contract, filed in Apollo and Beacon under the Only me lock (`only-me-filed`). */
+const SUPPLIER_CONTRACT = `doc_${'4'.repeat(64)}`;
 const LAUNCH_CHECKLIST = `ctx_${'b'.repeat(64)}`;
 /** Ari's own notes on a supplier call, filed in Apollo under the Only me lock. */
 const SUPPLIER_CALL = `ctx_${'5'.repeat(64)}`;
@@ -409,9 +412,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting's first record: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
-  // The hand-in modes list Paste a meeting. Each meeting pasted, once per content: processed at once, it waits for review,
-  // its first line the decision and its second the action, each starting at the project it suggests.
-  const handIn = mode.startsWith('hand-in');
+  // The hand-in modes (and granola-review-paste, in place of Granola) list Paste a meeting. Each meeting pasted, once per
+  // content: processed at once, it waits for review, its first line the decision and its second the action, each starting at
+  // the project it suggests.
+  const handIn = mode.startsWith('hand-in') || mode === 'granola-review-paste';
   const pasted: { meeting_id: string; title: string; lines: readonly [string, string]; meeting_at: string | null; all_day: boolean; project_ids: string[] }[] = [];
   // The checks of its other records, one per further destination: they find nothing, but in granola-routes each finds the
   // actions sent there, and in granola-extra-failed each fails until Try again.
@@ -526,6 +530,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       pages: [[{ ordinal: 0, anchor_kind: 'page', anchor_start: 1, text: 'Annual plans lead the price sheet.' }]],
     });
     ownDocuments.add(PRICING_MEMO);
+    if (mode === 'only-me-filed') {
+      documents.push({
+        document_id: SUPPLIER_CONTRACT, request_id: '00000000-0000-4000-8000-0000000000d4', filename: 'Supplier contract.pdf', title: 'Supplier contract',
+        original: '%PDF-1.4 Supplier contract\n', detected_media_type: 'application/pdf', audience: { kind: 'only_me' },
+        association_project_ids: [apollo, beacon], received_at: '2026-09-21T21:30:00.000Z', extraction_state: 'ready',
+        pages: [[{ ordinal: 0, anchor_kind: 'page', anchor_start: 1, text: 'Lead times are two weeks.' }]],
+      });
+      ownDocuments.add(SUPPLIER_CONTRACT);
+    }
     catalog.set(LAUNCH_CHECKLIST, {
       received_at: '2026-09-20T12:00:00.000Z', title: 'Launch checklist', text: 'Book the venue.\nSend the invites.\n', audience: { kind: 'team' },
     });
@@ -1085,11 +1098,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // by Ari, and a supplier page Ari cannot open to Rafael. In granola-checked Mina's sweep checked them
   // two hours ago; granola-review is the same, except that ECHO-12, Mina's to update, changed and still
   // does not match (a Review row on Ari's Home); granola-review-assign-lost also loses the first assign's
-  // reply, once it is made. In the sweep modes none has been checked, so Home says a
-  // sweep is due. granola-alike: the
-  // check is done and nothing is sent yet; it also found items whose titles nothing tells apart: two
-  // supplier pages Ari cannot open, with the same expected phrase, and two tickets Jira did not answer
-  // for just now, not assessed (no expected phrase).
+  // reply, once it is made, and granola-review-paste has Paste a meeting in place of Granola. In the sweep
+  // modes none has been checked, so Home says a sweep is due. granola-alike: the check is done and nothing
+  // is sent yet; it also found items whose titles nothing tells apart: two supplier pages Ari cannot open,
+  // with the same expected phrase, and two tickets Jira did not answer for just now, not assessed (no
+  // expected phrase).
   if (mode === 'granola-checked' || mode === 'granola-paged' || mode.startsWith('granola-review') || mode.startsWith('granola-sweep') || mode === 'granola-alike') {
     granolaApproved = true;
     granolaReview = { action: 'approve', routes: routesTo([THERMOSTAT]), owners: MEETING_ACTIONS.map(action => ({ signal_id: action.signal_id, owner: action.owner })) };
@@ -1262,7 +1275,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           slackLinked ? tool('slack', 'Slack', 'linked', 'T0123ABCD', 'U0123ABCD') : tool('slack', 'Slack', 'unlinked', 'T0123ABCD', null),
           tool('jira', 'Jira', jiraLinked ? 'linked' : mode === 'tools-revoked' ? 'revoked' : 'unlinked', JIRA_CLOUD, jiraLinked ? 'atlassian-account-1' : null),
           tool('confluence', 'Confluence', confluenceLinked ? 'linked' : 'unlinked', CONFLUENCE_CLOUD, confluenceLinked ? 'atlassian-account-1' : null),
-          mode.startsWith('granola') && !sentToAri ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
+          mode.startsWith('granola') && !sentToAri && !handIn ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
             external_scope_id: null, external_subject_id: null, organization_setup: null },
           ...(handIn ? [tool('hand-in', 'Paste a meeting', 'linked', null, 'hand-in')] : []),
         ],
@@ -1325,9 +1338,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           if (mode === 'granola-window-full' && body?.watch !== 'off') return failure('quota_exceeded', 409);
           granolaWatch = { watch: body?.watch as string, folder_id: body?.folder_id as string | null, project_id: body?.project_id as string | null }; return json({ status: 'saved' });
         case 'import': granolaImported = true; return json({ status: 'queued' });
-        // granola-routes: once approved, the meeting is past the newest reviews the list holds, so the list no longer names it.
-        case 'reviews': return json({ reviews: (granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added')
-          && !(mode === 'granola-routes' && granolaApproved) ? [review] : [] });
+        // granola-routes: once approved, the meeting is past the newest reviews the list holds, so the list no longer names it. While
+        // the test's `reviews-unavailable` file is there, the read fails, as an Authority that cannot answer just then.
+        case 'reviews':
+          if (elsewhere('reviews-unavailable')) return failure('unavailable', 503);
+          return json({ reviews: (granolaImported || mode === 'granola-browse-unavailable' || mode === 'granola-decided-in-slack' || mode === 'granola-project-added')
+            && !(mode === 'granola-routes' && granolaApproved) ? [review] : [] });
         case 'review_open': {
           // The proposal, by its own id or by one of its records' (whose proposal the Authority answers).
           if (body?.approval_id !== review.approval_id && !records.some(record => record.approval_id === body?.approval_id)) return failure('not_found', 404);

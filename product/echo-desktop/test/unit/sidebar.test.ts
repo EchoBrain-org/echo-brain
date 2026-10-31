@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { State } from '../../src/renderer/store.js';
 import type { UpdateState } from '../../src/shared/protocol.js';
-import { ACCOUNT, elements, project, text } from './harness.js';
+import { ACCOUNT, elements, project, render, text } from './harness.js';
 
-const { loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk } = vi.hoisted(() => ({
-  loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn(), openNewProject: vi.fn(), returnToAsk: vi.fn(),
+const { loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome } = vi.hoisted(() => ({
+  loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn(), openNewProject: vi.fn(), returnToAsk: vi.fn(), openOnlyMe: vi.fn(), openHome: vi.fn(),
 }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', async original => ({
@@ -13,7 +13,7 @@ vi.mock('preact/hooks', async original => ({
   useState: () => [true, vi.fn()],
 }));
 vi.mock('../../src/renderer/store.js', async original => ({
-  ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk,
+  ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome,
 }));
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -73,9 +73,9 @@ describe('New project', () => {
     expect(plus?.props.title).toBe('New project');
     (plus?.props.onClick as () => void)();
     expect(openNewProject).toHaveBeenCalledExactlyOnceWith();
-    // The top block keeps Home, Ask, Capture and Follow-ups only: Only me is a link on Home (ADR-0049).
+    // The top block is Home, Ask, Capture, Follow-ups and Only me: every place one click away (One place to look v1).
     const rows = tree.filter(node => typeof node.props.class === 'string' && node.props.class.split(' ').includes('side-row'));
-    expect(rows.map(node => node.props['data-testid'])).toEqual(['sidebar-home', 'sidebar-ask', 'sidebar-capture', 'sidebar-follow-ups', 'sidebar-tools']);
+    expect(rows.map(node => node.props['data-testid'])).toEqual(['sidebar-home', 'sidebar-ask', 'sidebar-capture', 'sidebar-follow-ups', 'sidebar-only-me', 'sidebar-tools']);
   });
 
   it('is not offered while signed out', async () => {
@@ -86,30 +86,72 @@ describe('New project', () => {
   });
 });
 
-describe('your follow-ups (F9)', () => {
-  /** The store's first state, signed in, with no projects at all, Home read, on `route`. */
-  async function signedIn(route: State['route']): Promise<State> {
+describe('your follow-ups (F9) and Only me', () => {
+  /** The store's first state, signed in, with no projects at all, Home read (`waiting` on others), on `route`. */
+  async function signedIn(route: State['route'], waiting: number | null = null): Promise<State> {
     const { getState } = await import('../../src/renderer/store.js');
+    const open = waiting === null ? null : { send: [], items: [], landed: 0, waiting, last_checked_at: null, sweep_due: false };
     return {
       ...getState(), route,
       status: { client_version: 'test', signed_in: true, account: ACCOUNT },
-      home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
+      home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open, live: {}, reading: false },
     };
   }
+  const rows = (state: State) => elements(Sidebar({ state })).filter(node => typeof node.props['data-testid'] === 'string' && node.props['data-testid'].startsWith('sidebar-'));
+  const find = (shown: ReturnType<typeof rows>, id: string) => shown.find(node => node.props['data-testid'] === id);
+  let Sidebar: typeof import('../../src/renderer/screens/sidebar.js').Sidebar;
+  beforeEach(async () => { ({ Sidebar } = await import('../../src/renderer/screens/sidebar.js')); });
 
-  it('are in the sidebar under Capture, current on their own page, Home then not', async () => {
-    const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
-    const rows = (state: State) => elements(Sidebar({ state })).filter(node => typeof node.props['data-testid'] === 'string' && node.props['data-testid'].startsWith('sidebar-'));
+  it('are in the sidebar under Capture, Only me right after Follow-ups, each current on its own page and Home then not', async () => {
     const shown = rows(await signedIn({ page: 'follow-ups' }));
     const order = shown.map(node => node.props['data-testid']);
     expect(order.indexOf('sidebar-follow-ups')).toBe(order.indexOf('sidebar-capture') + 1);
-    expect(shown.find(node => node.props['data-testid'] === 'sidebar-follow-ups')?.props['aria-current']).toBe('page');
-    expect(shown.find(node => node.props['data-testid'] === 'sidebar-home')?.props['aria-current']).toBeUndefined();
+    expect(order.indexOf('sidebar-only-me')).toBe(order.indexOf('sidebar-follow-ups') + 1);
+    expect(find(shown, 'sidebar-follow-ups')?.props['aria-current']).toBe('page');
+    expect(find(shown, 'sidebar-home')?.props['aria-current']).toBeUndefined();
     const home = rows(await signedIn({ page: 'home' }));
-    expect(home.find(node => node.props['data-testid'] === 'sidebar-follow-ups')?.props['aria-current']).toBeUndefined();
-    // Only me is one of Home's own pages: Home stays current there.
+    expect(home.filter(node => node.props['aria-current'] === 'page').map(node => node.props['data-testid'])).toEqual(['sidebar-home']);
+    // Only me is its own place now: its row is current there, and Home is not.
     const onlyMe = rows(await signedIn({ page: 'only-me' }));
-    expect(onlyMe.find(node => node.props['data-testid'] === 'sidebar-home')?.props['aria-current']).toBe('page');
+    expect(onlyMe.filter(node => node.props['aria-current'] === 'page').map(node => node.props['data-testid'])).toEqual(['sidebar-only-me']);
+    // A decision opened from Home is still Home's.
+    expect(find(rows(await signedIn({ page: 'decision' })), 'sidebar-home')?.props['aria-current']).toBe('page');
+  });
+
+  it('Follow-ups counts what others still owe you, in grey, and says so; nothing at none, or before Home is read', async () => {
+    const row = find(rows(await signedIn({ page: 'home' }, 4)), 'sidebar-follow-ups')!;
+    const count = elements(row).find(node => node.props['data-testid'] === 'sidebar-follow-ups-count')!;
+    expect(text(count)).toBe('4');
+    // Grey, never the orange badge: nothing here waits on you.
+    expect(count.props.class).toBe('side-count');
+    expect(elements(row).some(node => node.props.class === 'badge')).toBe(false);
+    expect(count.props.title).toBe('4 waiting on others');
+    expect(row.props['aria-label']).toBe('Follow-ups, 4 waiting on others');
+    for (const none of [0, null]) {
+      const plain = find(rows(await signedIn({ page: 'home' }, none)), 'sidebar-follow-ups')!;
+      expect(elements(plain).some(node => node.props['data-testid'] === 'sidebar-follow-ups-count')).toBe(false);
+      expect(plain.props['aria-label']).toBeUndefined();
+      expect(text(plain)).toBe('Follow-ups');
+    }
+  });
+
+  it('Only me opens its page from its lock, and takes no dropped file', async () => {
+    const row = find(rows(await signedIn({ page: 'home' })), 'sidebar-only-me')!;
+    expect(text(row)).toBe('Only me');
+    expect(elements(render(row)).some(node => node.type === 'svg')).toBe(true);
+    (row.props.onClick as () => void)();
+    expect(openOnlyMe).toHaveBeenCalledExactlyOnceWith();
+    for (const handler of ['onDragOver', 'onDrop']) {
+      const event = { stopPropagation: vi.fn(), preventDefault: vi.fn() };
+      (row.props[handler] as (event: unknown) => void)(event);
+      expect(event.stopPropagation).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('Home opens Home at its top', async () => {
+    const row = find(rows(await signedIn({ page: 'only-me' })), 'sidebar-home')!;
+    (row.props.onClick as () => void)();
+    expect(openHome).toHaveBeenCalledExactlyOnceWith();
   });
 });
 
