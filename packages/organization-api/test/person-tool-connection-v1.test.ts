@@ -5,7 +5,7 @@ import {
   validatePersonToolCommandV1,
   validatePersonToolConnectV1,
   validatePersonToolStateV1,
-} from "@echo-brain/organization-api";
+} from "../src/index.js";
 
 // The display name only labels failures, so one tool covers every tool.
 const name = "Jira";
