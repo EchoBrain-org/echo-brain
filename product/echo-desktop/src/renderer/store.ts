@@ -657,8 +657,6 @@ function emptyAltitude(): AltitudeState {
     listFailure: null, listStale: false };
 }
 
-const accountKey = (account: Expect) => `${account.authority} ${account.membership_id}`;
-
 // Home no longer remembers where it was zoomed (One place to look v1): every start opens its top. Where an older version
 // kept it on this computer goes, once, if it can.
 try { localStorage.removeItem('echo.home.altitude'); } catch { /* Nothing kept, or nothing to keep it in. */ }
@@ -1343,7 +1341,7 @@ function laidOver(list: ProjectSummary[], rows: readonly ProjectSummary[]): Proj
 /** One of the sidebar's lists, shown; `read`, the rows of it just read, none older than a change made here. */
 function showList(status: ListStatus, list: State['projects'], read: readonly ProjectSummary[] = []): void {
   set(status === 'active' ? { projects: list } : { archivedProjects: list });
-  // Your projects, read: Home zoomed out reads what it has not read of them yet.
+  // Your projects, read: Home reads what it has not read of them yet.
   if (status === 'active' && !list.loading && !list.failure) {
     projectsKnown = true;
     if (list.next === null) {
@@ -1642,7 +1640,7 @@ const ACTIVITY_EVERY_MS = 120_000;
 
 /** An account as a short hash (FNV-1a twice over, 16 hex digits): the key its last-opened times are kept under. */
 export function accountHash(account: Expect): string {
-  const text = accountKey(account);
+  const text = `${account.authority} ${account.membership_id}`;
   return [0x811c9dc5, 0x01000193].map(basis => {
     let hash = basis;
     for (const character of text) hash = Math.imul(hash ^ character.codePointAt(0)!, 0x01000193) >>> 0;
@@ -5438,10 +5436,7 @@ export function needAt(row: NeedRow): string | null {
     case 'checking': return row.run?.updated_at ?? null;
     case 'failed': return row.run.updated_at;
     case 'send': return row.send.finished_at;
-    default: {
-      const { sent_at, owner_set_at, state_set_at, created_at } = row.item;
-      return [sent_at, owner_set_at, state_set_at].reduce<string>((latest, at) => (at !== null && Date.parse(at) > Date.parse(latest) ? at : latest), created_at);
-    }
+    default: return freshness.changedAt(row.item);
   }
 }
 
