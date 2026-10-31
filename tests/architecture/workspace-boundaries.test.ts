@@ -115,14 +115,6 @@ function runBoundary(fixture: string): BoundaryResult {
 describe("workspace source boundaries", () => {
   // Every refusal names its own field or path, so one checker run proves each.
   describe("product manifest refusals", () => {
-    const retiredFields = [
-      "entry_points",
-      "allowed_internal_paths",
-      "forbidden_internal_roots",
-      "allowed_external_runtime_packages",
-      "runtime_assets",
-      "layer_rules",
-    ];
     let result: BoundaryResult;
     beforeAll(() => {
       const fixture = fixtureRepository();
@@ -130,10 +122,7 @@ describe("workspace source boundaries", () => {
       const boundary = readFixtureJson<
         Record<string, unknown> & { adapter_architecture: Record<string, unknown> }
       >(fixture, path);
-      for (const field of retiredFields) {
-        boundary[field] = [field === "layer_rules" ? {} : "src/retired-machine.ts"];
-      }
-      boundary.child_process_owner = "src/retired-machine.ts";
+      boundary.entry_points = ["src/retired-machine.ts"];
       boundary.adapter_architecture.provider_coupled_exceptions = [];
       (boundary.adapter_architecture.bootstrap_entrypoints as string[]).push("services/organization-authority/src/missing.ts");
       writeFixtureJson(fixture, path, boundary);
@@ -145,11 +134,7 @@ describe("workspace source boundaries", () => {
     });
 
     it.each([
-      ...retiredFields.map((field) => [
-        `reactivation through retired machine ${field}`,
-        `retired machine boundary ${field} must remain empty`,
-      ]),
-      ["a process owner in the retired machine boundary", "retired machine boundary child_process_owner must remain null"],
+      ["reactivation through a retired machine field", "retired machine boundary field is unsupported: entry_points"],
       ["retired provider exceptions", "unsupported or retired: provider_coupled_exceptions"],
       ["a stale bootstrap declaration", "bootstrap entrypoint must name a composing source module: services/organization-authority/src/missing.ts"],
       ["a divergent export condition", "requires an explicit workspace export: @echo-brain/provider-openrouter ./llm/openrouter-decision-processor"],
