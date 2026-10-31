@@ -10,8 +10,8 @@ import { createHash } from "node:crypto";
  */
 export const ANALYZER_SOURCE_SHA256 =
   "340d7f303a96bfb59b9661ce998a6b12b7cfd4947322eae7cd9a794451415d91";
-export const VOCABULARY_SIZE = 4096;
-export const ZIPF_EXPONENT = 1.1;
+const VOCABULARY_SIZE = 4096;
+const ZIPF_EXPONENT = 1.1;
 export const POLICY_ORGANIZATION_MEMBER = "organization-member-readable-person-v2";
 export const POLICY_RESTRICTED_REVIEWER = "restricted-reviewer-person-v2";
 
@@ -83,7 +83,7 @@ function base26(value) {
  * Produces pronounceable-ish, lower-case alphabetic words.  The final suffix
  * makes the 4,096 values unique without leaking numerical marker syntax.
  */
-export function buildVocabulary(size = VOCABULARY_SIZE) {
+function buildVocabulary(size = VOCABULARY_SIZE) {
   if (!Number.isInteger(size) || size < 1 || size > VOCABULARY_SIZE) {
     throw new Error("vocabulary size must be an integer from 1 through 4096");
   }

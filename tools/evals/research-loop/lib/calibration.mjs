@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
  * runs; the judge's numbers are used only when it agrees on at least 90% of
  * the same checks.
  */
-export const CALIBRATION_BAR = 0.9;
+const CALIBRATION_BAR = 0.9;
 export const CALIBRATION_SAMPLE_RUNS = 15;
 
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -31,7 +31,7 @@ export function judgeChecks(testCase, judge) {
 }
 
 /** Deterministic spread across cases: every k-th judged run. */
-export function sampleRuns(graded, size) {
+function sampleRuns(graded, size) {
   const judged = graded.filter(entry => entry.judge !== null && entry.judge !== undefined).sort((left, right) => `${left.checks.case_id}/${left.checks.trial}`.localeCompare(`${right.checks.case_id}/${right.checks.trial}`));
   if (judged.length <= size) return judged;
   const step = judged.length / size;
@@ -50,7 +50,7 @@ const sampleProblem = sample => {
 };
 
 /** Binds a blind sheet and its result to one exact grading pass. */
-export function calibrationBinding(graded, sample = calibrationSample(graded)) {
+function calibrationBinding(graded, sample = calibrationSample(graded)) {
   return {
     schema_version: 1,
     judge_model: graded.judge_model ?? null,

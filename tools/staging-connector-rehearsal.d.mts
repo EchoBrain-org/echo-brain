@@ -10,4 +10,3 @@ export function runStagingConnectorRehearsal(
   input: StagingConnectorRehearsalInput,
   options?: { readonly fetch?: typeof fetch },
 ): Promise<unknown>;
-export function main(argv?: readonly string[]): Promise<number>;

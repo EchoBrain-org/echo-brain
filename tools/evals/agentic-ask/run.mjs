@@ -173,7 +173,7 @@ function substantiveGapText(value) {
  * keeps searching from a planner that selects finish. It never retains a
  * query, item id, need text, note, prompt, or response body.
  */
-export function researchStepDiagnostic(value) {
+function researchStepDiagnostic(value) {
   const object = value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
   const parts = Array.isArray(object?.parts) ? object.parts : [];
   const actions = Array.isArray(object?.actions) ? object.actions : [];

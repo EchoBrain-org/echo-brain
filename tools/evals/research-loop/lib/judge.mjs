@@ -8,7 +8,7 @@
 const ITEM_TEXT_CHARS = 6_000;
 const TERNARY = { type: "string", enum: ["yes", "no", "not_applicable"] };
 
-export const JUDGE_SCHEMA = Object.freeze({
+const JUDGE_SCHEMA = Object.freeze({
   type: "object", additionalProperties: false,
   required: ["needs", "invented_needs", "parts", "gaps", "must_not", "unsupported_claims", "false_abstention", "verdicts", "notes"],
   properties: {

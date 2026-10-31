@@ -9,7 +9,7 @@ import { isDeepStrictEqual } from "node:util";
  */
 
 /** Evaluation cost benchmark, the finish step included; release acceptance can omit this cap. */
-export const REACH_MAX_ROUNDS = 4;
+const REACH_MAX_ROUNDS = 4;
 
 /**
  * Every collection an open-ended key names, with the source ids and catalog selectors a call or an item names it by. A
@@ -40,7 +40,7 @@ export function collectionOfSource(source) {
 }
 
 /** The collection an item research came across belongs to: a container by what it cites, else by kind, else by source. */
-export function collectionOfItem(item) {
+function collectionOfItem(item) {
   if (item?.kind === "tool_container") {
     const container = item.citation?.container;
     return Object.entries(COLLECTIONS).find(([, entry]) => entry.container !== undefined && entry.container === container)?.[0] ?? null;

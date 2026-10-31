@@ -112,17 +112,6 @@ export type StagingReleaseSummary = Readonly<{
   outcome: StagingReleaseOutcome | null;
 }>;
 
-export type StagingReleaseReceipt = Readonly<{
-  schema_version: 1;
-  kind: 'echo-staging-release-operation-v1';
-  request: StagingReleaseRequest;
-  request_sha256: string;
-  parameters_sha256: string;
-  state: StagingReleaseState;
-  command_id: string | null;
-  outcome: StagingReleaseOutcome | null;
-}>;
-
 export type StagingReleasePlanOptions = Readonly<{
   acceptedRelease: string;
   release: string;

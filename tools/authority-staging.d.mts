@@ -239,7 +239,3 @@ export function runAuthorityStaging(
   dependencies?: LifecycleDependencies,
 ): Promise<StagingLifecycleReceipt>;
 export function createAwsCliAdapters(): LifecycleDependencies;
-export function main(
-  argv?: readonly string[],
-  dependencies?: LifecycleDependencies,
-): Promise<StagingLifecycleReceipt>;

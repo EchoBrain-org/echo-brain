@@ -120,7 +120,7 @@ function gitSourceSha(directory) {
   return sourceSha(sha);
 }
 
-export function buildRuntimeProfile(sourceDirectory) {
+function buildRuntimeProfile(sourceDirectory) {
   const directory = resolve(sourceDirectory);
   const directoryState = lstatSync(directory);
   if (directoryState.isSymbolicLink() || !directoryState.isDirectory()) fail('source directory must be a non-symlink directory');
@@ -155,7 +155,7 @@ export function readRuntimeProfile(path) {
   return profile;
 }
 
-export function runtimeProfileDigest(path) {
+function runtimeProfileDigest(path) {
   readRuntimeProfile(path);
   return createHash('sha256').update(readFileSync(resolve(path))).digest('hex');
 }

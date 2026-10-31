@@ -2220,7 +2220,7 @@ function parseCli(argv) {
   });
 }
 
-export async function main(argv = process.argv.slice(2), dependencies = {}) {
+async function main(argv = process.argv.slice(2), dependencies = {}) {
   const {
     action,
     execute,

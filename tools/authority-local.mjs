@@ -1094,7 +1094,7 @@ function parse(argv) {
   return { action, ...values, state: validateStateDirectory(values.state) };
 }
 
-export function main(argv = process.argv.slice(2)) {
+function main(argv = process.argv.slice(2)) {
   const requested = parse(argv);
   if (requested.action === "up") up(requested.state, requested);
   else if (requested.action === "reset") reset(requested.state, requested);

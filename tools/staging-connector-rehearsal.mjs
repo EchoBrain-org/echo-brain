@@ -135,7 +135,7 @@ function parseCli(argv) {
   return Object.freeze({ ...base, tool: argv[6] });
 }
 
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const receipt = await runStagingConnectorRehearsal(parseCli(argv));
   process.stdout.write(`${JSON.stringify(receipt)}\n`);
   return receipt.action === "verify-read" && receipt.result.status === "refused" ? 1 : 0;

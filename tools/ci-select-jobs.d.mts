@@ -20,13 +20,6 @@ export const JOB_INPUTS: Readonly<Record<'desktop_app' | 'person_client_package'
 export const JOB_OUTPUTS: readonly CiJobOutput[];
 
 export function gitIn(cwd: string): GitRunner;
-export function verifyMainPush(input: Readonly<{
-  event: any;
-  sha: string;
-  repository: string;
-  api: GithubApi;
-  sleep: (ms: number) => Promise<void>;
-}>): Promise<CiJobSelection>;
 export function selectJobs(input: Readonly<{
   eventName: string;
   event: any;

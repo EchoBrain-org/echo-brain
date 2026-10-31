@@ -28,7 +28,7 @@ export function compareCandidates(left, right) {
   return Buffer.compare(Buffer.from(left.atom_id), Buffer.from(right.atom_id));
 }
 
-export function isAuthorized(atom, reader) {
+function isAuthorized(atom, reader) {
   if (atom.policy_id === POLICY_ORGANIZATION_MEMBER) return true;
   return atom.policy_id === POLICY_RESTRICTED_REVIEWER &&
     atom.reviewer_principal_id === reader.principal_id &&
@@ -55,12 +55,12 @@ function itemForResult(atom) {
  * taken over exactly the atoms this reader is authorized to read, and the
  * closed decision family weighted as a constant unit instead of IDF.
  */
-export const BM25_K1 = 1.2;
-export const BM25_B = 0.75;
-export const SCORE_SCALE = 1_000_000;
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
+const SCORE_SCALE = 1_000_000;
 const CONTROLLED_TERMS = new Set(["decision", "decisions", "decide", "decided", "deciding"]);
 
-export function inverseDocumentFrequency(documentFrequency, documentCount) {
+function inverseDocumentFrequency(documentFrequency, documentCount) {
   if (documentFrequency <= 0 || documentCount <= 0) return 0;
   return Math.round(Math.log(1 + (documentCount - documentFrequency + 0.5) / (documentFrequency + 0.5)) * SCORE_SCALE);
 }
