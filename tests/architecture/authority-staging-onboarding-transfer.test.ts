@@ -41,12 +41,10 @@ const REUSABLE_INPUT_FILES = [
   "release.json",
   "runtime-profile.json",
 ];
-const STAGING_SYNTHETIC_MEETING_FILES = [
-  "01-revenue-signal-calibration.json",
-  "02-data-handling-review.json",
-  "03-implementation-capacity-triage.json",
-  "04-commercial-exception-review.json",
-];
+// The four staging fixture notes the transfer accepts, named as demo/meetings holds them.
+const STAGING_SYNTHETIC_MEETING_FILES = readdirSync(
+  join(import.meta.dirname, "../../demo/meetings"),
+).sort();
 const temporary: string[] = [];
 
 function privateDirectory(label: string) {

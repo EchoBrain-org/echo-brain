@@ -407,12 +407,7 @@ sys.exit(os.waitstatus_to_exitcode(status))
   };
 }
 
-const REHEARSAL_MEETING_FILES = [
-  "01-revenue-signal-calibration.json",
-  "02-data-handling-review.json",
-  "03-implementation-capacity-triage.json",
-  "04-commercial-exception-review.json",
-] as const;
+const REHEARSAL_MEETING_FILES = readdirSync(resolve(REPO, "demo/meetings")).sort();
 
 function rehearsalInputs(
   fixture: ReturnType<typeof preparedStatusFixture>,
@@ -1514,10 +1509,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         file_sha256: Record<string, string>;
       };
       expect(Object.keys(marker.file_sha256).sort()).toEqual([
-        "meetings/01-revenue-signal-calibration.json",
-        "meetings/02-data-handling-review.json",
-        "meetings/03-implementation-capacity-triage.json",
-        "meetings/04-commercial-exception-review.json",
+        ...REHEARSAL_MEETING_FILES.map((name) => `meetings/${name}`),
         "nonsecret/onboarding.clean-v1.json",
         "nonsecret/release.json",
         "nonsecret/runtime-profile.json",
