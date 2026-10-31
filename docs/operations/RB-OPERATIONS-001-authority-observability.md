@@ -128,9 +128,9 @@ aws cloudformation describe-stacks \
 ```
 
 Expected evidence is a complete stack, one alert topic, one public check
-function, one Authority log group, and six alarms: four that notify and the two
-attributed comparison alarms with actions disabled (see Runtime metric and
-alarm attribution).
+function, one Authority log group, and four alarms that notify the topic: two
+on the public check and two on this host's runtime metrics (see Runtime metric
+and alarm attribution).
 
 Open the Amazon SNS confirmation email ("AWS Notification - Subscription
 Confirmation") and choose **Confirm subscription** within 48 hours. SNS
@@ -308,9 +308,9 @@ output passed grounding or became an approval candidate.
 
 Do not place or infer meeting/provider content, identifiers, credentials,
 prompts, raw errors, or stack traces from these fields. The legacy
-`echo-clean-live-worker-failed-v1` event remains only for the existing aggregate
-metric and alarm. It is not part of new lifecycle diagnosis, and this slice
-does not add alarms, a status API, correlation, or close #87.
+`echo-clean-live-worker-failed-v1` event remains only for the host's
+worker-failure metric and alarm. It is not part of new lifecycle diagnosis,
+and this slice does not add alarms, a status API, correlation, or close #87.
 
 #### Inspect the shared trace transport heartbeat
 
@@ -949,33 +949,45 @@ before 2026-10-19 also carry `content_capture` counters and
 
 #### Runtime metric and alarm attribution
 
-Legacy `EchoBrain/AuthorityOperations` metrics have no dimensions, so one metric
-sums every log group whose stack filters into it. Every legacy alarm on it, in
-every stack, changes state together, and an alarm email cannot identify the
-host. A legacy alarm that stays in `ALARM` while the same stack's attributed
-comparison alarm stays `OK` is counting another host's events. It is not stuck:
-with `TreatMissingData` `notBreaching` it returns to `OK` after a period with no
-datapoints, so a long `ALARM` means datapoints keep arriving. Its state reason
-still shows the datapoint of its last transition, not the latest one. While
-another host holds it in `ALARM`, it cannot report a new failure on this host;
-only the attributed alarm could, and its actions stay disabled until the
-reviewed transition. To attribute an alarm, compare the legacy and attributed
+Each stack's two runtime alarms read only its own host. Its metric filters
+write `WorkerFailure` and `RuntimeReady` from its own log group to
+`EchoBrain/AuthorityOperations/${AuthorityHost}`, and each alarm's description
+names the host, the log group and the stack, so an alarm email identifies the
+host. `RuntimeMonitoringAttribution` lists the stack, host, log group, metric
+namespace, both runtime alarms and the ALARM/OK topic. Offline proofs establish
+no live attribution or four-meeting candidate acceptance.
+
+A stack not yet updated to this template still alarms on the legacy
+`EchoBrain/AuthorityOperations` metrics, which have no dimensions. One metric
+sums every log group whose stack still filters into it, every legacy alarm on
+it changes state together, and an alarm email cannot identify the host. A
+legacy alarm that stays in `ALARM` while the stack's attributed comparison
+alarm, where it has one, stays `OK` is counting another host's events. It is
+not stuck: with `TreatMissingData` `notBreaching` it returns to `OK` after a
+period with no datapoints, so a long `ALARM` means datapoints keep arriving.
+Its state reason still shows the datapoint of its last transition, not the
+latest one. While another host holds it in `ALARM`, it cannot report a new
+failure on this host. To attribute it, compare the legacy and attributed
 metrics, list the log groups of the metric filters that write the legacy
 metric, and count each group's `echo-clean-live-worker-failed-v1` events
 without reading their bodies.
 
+Move such a stack to the attributed alarms only after its topic shows a
+confirmed subscription (step 2) and step 4 has delivered both emails. Create
+the change set as in step 1, with all three parameters `UsePreviousValue=true`.
+For a stack on the previous template, expected evidence is exactly six changes:
+`Remove` of `WorkerFailureMetricFilter`, `RuntimeReadyMetricFilter`,
+`RepeatedWorkerFailureAlarm` and `RepeatedRuntimeReadyAlarm`, and `Modify`
+without replacement of `AttributedWorkerFailureAlarm` and
+`AttributedRuntimeReadyAlarm`. A stack from before the attributed alarms
+instead shows eight: the same four `Remove` and an `Add` of both attributed
+filters and both attributed alarms. Execute it, then rehearse step 6. Removing
+a stack's legacy filters also stops it adding to the legacy metrics that older
+stacks still alarm on.
+
 An empty alert topic means its email subscription expired or was removed.
 Restore it through the [two reviewed change sets](#re-create-an-expired-email-subscription),
 not by subscribing outside CloudFormation.
-
-The runtime template preserves legacy filters/actions and adds matching filters
-under `EchoBrain/AuthorityOperations/${AuthorityHost}`. Both comparison alarms
-have `ActionsEnabled: false`. `RuntimeMonitoringAttribution` identifies the stack,
-host, log group, metric namespaces, alarms and ALARM/OK topic. Before changing
-alert routing, the operator must verify that chain through the confirmed
-subscription, compare both metrics, and record recovery delivery. Keep legacy
-actions effective until the reviewed transition. No live attribution or
-four-meeting candidate acceptance is established by offline proofs.
 
 Metric namespace/name/dimensions must match between filters and alarms. References:
 [metric concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html),
@@ -1097,10 +1109,11 @@ aws logs put-log-events \
     timestamp="$rehearsal_epoch_ms",message='{"schema_version":1,"kind":"echo-clean-live-worker-failed-v1"}'
 ```
 
-Expected evidence is a `WorkerFailure` metric value of three, the repeated
-worker-failure alarm entering `ALARM`, and the alarm later returning to `OK`
-when the five-minute evaluation window clears. Do not synthesize an exception
-containing product data.
+Expected evidence is a `WorkerFailure` value of three in
+`EchoBrain/AuthorityOperations/<authority-host>`, the alarm named by the
+`RepeatedWorkerFailureAlarmName` output entering `ALARM` with an alarm email,
+and its return to `OK` with a recovery email once the five-minute period
+clears. Do not synthesize an exception containing product data.
 
 ### 7. Rehearse the real public failure path
 
