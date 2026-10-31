@@ -40,7 +40,7 @@ import { createPersonRecordSearchRouteV1, PersonRecordSearchIndexLagV1, type Cre
 import { createRecordProjectAuthorizationV1, recordProjectAuthorizationOfGrantsV1 } from "../src/composition/person-record-project-scope-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
-import { addMembership } from "./fixtures/project-context-sqlite.js";
+import { addMembership, seedProjectMember } from "./fixtures/project-context-sqlite.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
 import { EMP_A, EMP_B, OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from "./fixtures/person-meeting-world.js";
 
@@ -334,8 +334,7 @@ describe("Person Layer 2 route", () => {
     const projects = createProjectContextApplicationV1({ repository, authenticate: token => token === "lead" ? lead : reader });
     const created = projects.createProject("lead", { schema_version: 1, kind: "echo-project-create-v1", request_id: randomUUID(), name: "Launch" });
     const projectId = created.project_id;
-    value.authority.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-      VALUES(?,?,?,?,?,?,'member','active',?)`).run(`pgm_${randomUUID()}`, projectId, reader.organization_id, reader.principal_id, reader.membership_id, reader.membership_type, reader.checked_at);
+    seedProjectMember(value.authority, projectId, reader, "member", { granted_at: reader.checked_at });
     const text = "Approved launch remains scheduled for Monday.";
     const atom = { ...policyAtom({ id: "member", policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 }), policy_contract_sha256: sha256Digest("project-policy"), text, text_sha256: sha256Digest(text), audience_project_ids: [projectId], association_project_ids: [projectId] };
     try {

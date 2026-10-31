@@ -11,7 +11,7 @@ import { SqlitePersonHandInMeetingsV1 } from '../src/adapters/persistence/sqlite
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
-import { addMembership, authorization } from './fixtures/project-context-sqlite.js';
+import { addMembership, authorization, seedProject, seedProjectMember } from './fixtures/project-context-sqlite.js';
 import { decisions } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
 
 const project = 'prj_00000000-0000-4000-8000-000000000003';
@@ -38,10 +38,9 @@ async function fixture(options: { readonly quiet?: boolean } = {}) {
   // Each project is created by, and joined by, one of the two.
   let grants = 0;
   const grantProject = (project_id: string, who: keyof typeof actors) => {
-    const actor = actors[who], type = who === 'owner' ? 'owner' : 'employee';
-    f.db.prepare("INSERT INTO authority_projects_v1 VALUES (?,?,?,'active',?,?,?,?)").run(project_id, owner.organization_id, 'Supplier review', now, actor.principal_id, actor.membership_id, type);
-    f.db.prepare("INSERT INTO authority_project_memberships_v1 VALUES (?,?,?,?,?,?,'member','active',?,NULL)")
-      .run(`pgm_00000000-0000-4000-8000-${String(5 + grants++).padStart(12, '0')}`, project_id, owner.organization_id, actor.principal_id, actor.membership_id, type, now);
+    const actor = { ...actors[who], membership_type: who === 'owner' ? 'owner' as const : 'employee' as const };
+    seedProject(f.db, project_id, actor, { name: 'Supplier review', created_at: now });
+    seedProjectMember(f.db, project_id, actor, 'member', { id: `pgm_00000000-0000-4000-8000-${String(5 + grants++).padStart(12, '0')}`, granted_at: now });
   };
   const ledger = new SqliteExtractionAttemptStoreV1(new Database(':memory:'), { authority_id: 'aut_runtime', organization_id: 'org_runtime', state_lineage_id: 'lineage-runtime' });
   ledgers.push(ledger);

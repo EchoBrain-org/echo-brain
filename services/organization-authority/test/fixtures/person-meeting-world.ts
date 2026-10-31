@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +17,7 @@ import { createRecordProjectAuthorizationV1 } from "../../src/composition/person
 import type { ApproverMembershipsV1 } from "../../src/composition/person-meeting-items-v1.js";
 import { createPersonRecordSearchRouteV1, type CreatePersonRecordSearchRouteV1Options, type PersonRecordSearchRouteV1 } from "../../src/composition/person-record-search-route.js";
 import { readableSearchGenerationContractV1 } from "../../src/composition/readable-search-generation-composition.js";
-import { addMembership, authorization } from "./project-context-sqlite.js";
+import { addMembership, authorization, seedProject, seedProjectMember } from "./project-context-sqlite.js";
 import {
   SIGNED_APPROVAL_APPROVER,
   SIGNED_APPROVAL_CODECS,
@@ -72,9 +71,7 @@ export const STANDARD_RECORDS: readonly WorldApprovalV1[] = [
 ];
 
 function grant(database: Database.Database, projectId: string, actor: AuthorityPersonMembershipBinding, role: "lead" | "member"): void {
-  database.prepare(`INSERT INTO authority_project_memberships_v1
-    (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-    VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`, projectId, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, role, NOW);
+  seedProjectMember(database, projectId, actor, role, { granted_at: NOW });
 }
 
 /** Named explicitly: an inferred better-sqlite3 type cannot be emitted from a test module. */
@@ -115,9 +112,7 @@ export async function meetingWorld(options: {
     addMembership(authority, actor, name, actor.membership_type === "owner" ? null : `${actor.principal_id}@example.test`);
   }
   for (const [projectId, creator] of [[SHARED, OWNER], [UNJOINED, APPROVER_X], [PROJ_X, APPROVER_X]] as const) {
-    authority.prepare(`INSERT INTO authority_projects_v1
-      (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
-      VALUES (?,?,?,?,?,?,?)`).run(projectId, COORDINATES.organization_id, PROJECT_NAMES[projectId], NOW, creator.principal_id, creator.membership_id, creator.membership_type);
+    seedProject(authority, projectId, creator, { name: PROJECT_NAMES[projectId], created_at: NOW });
   }
   grant(authority, SHARED, OWNER, "lead");
   grant(authority, UNJOINED, APPROVER_X, "lead");

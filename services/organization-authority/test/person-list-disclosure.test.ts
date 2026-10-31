@@ -33,7 +33,7 @@ import { personMeetingReleaseOptionsV1 } from "../src/composition/person-record-
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, STANDARD_RECORDS, T, UNJOINED, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
-import { addMembership, authorization } from "./fixtures/project-context-sqlite.js";
+import { addMembership, authorization, seedProject } from "./fixtures/project-context-sqlite.js";
 import { SIGNED_APPROVAL_APPROVER, SIGNED_APPROVAL_PRIVATE_MARKER } from "./fixtures/signed-approval-decision-v1.js";
 
 /**
@@ -86,9 +86,7 @@ async function disclosureWorld() {
   const org = COORDINATES.organization_id;
   // APPROVER_X authors across SHARED and UNJOINED; no reader holds UNJOINED.
   w.grant(SHARED, APPROVER_X);
-  w.authority.prepare(`INSERT INTO authority_projects_v1
-    (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
-    VALUES (?,?,?,?,?,?,?)`).run(OWNER_B, org, "Owner side project", T(1), OWNER.principal_id, OWNER.membership_id, OWNER.membership_type);
+  seedProject(w.authority, OWNER_B, OWNER, { name: "Owner side project", created_at: T(1) });
   w.grant(OWNER_B, OWNER);
   addMembership(w.authority, RETURNED, "Ari Employee", "ari-returned@example.test");
   await w.approve({

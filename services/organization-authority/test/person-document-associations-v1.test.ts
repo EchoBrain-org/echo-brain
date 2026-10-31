@@ -12,7 +12,7 @@ import { createProjectContextApplicationV1 } from '../src/application/project-co
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { createPersonDocumentUploadStagingV1 } from '../src/adapters/files/document-upload-staging-v1.js';
 import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
-import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertStoredDocumentV1, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertStoredDocumentV1, projectContextDatabase, revokeMembership, seedProject, seedProjectMember } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
 const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
@@ -23,10 +23,10 @@ afterEach(async () => {
 function setup() {
   const db = projectContextDatabase(); databases.push(db);
   for (const project of [PROJECT_ALPHA, PROJECT_BETA]) {
-    db.prepare('INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)').run(project, OWNER.organization_id, project, PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type);
-    grant(db, project, OWNER, 'lead');
+    seedProject(db, project, OWNER);
+    seedProjectMember(db, project, OWNER, 'lead');
   }
-  grant(db, PROJECT_ALPHA, MEMBER, 'member');
+  seedProjectMember(db, PROJECT_ALPHA, MEMBER, 'member');
   const repository = new SqlitePersonDocumentRepositoryV1(db, () => PROJECT_CONTEXT_NOW);
   const app = createPersonDocumentApplicationV1({ repository, authenticate: token => authorization(token === 'member' ? MEMBER : token === 'returned' ? RETURNED_MEMBER : OWNER) });
   const bytes = Buffer.from('immutable SCOUT requirements');
@@ -35,9 +35,6 @@ function setup() {
     content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: 'team' }, association_project_ids: [], ...changes,
   }, bytes);
   return { db, repository, app, bytes, upload };
-}
-function grant(db: Database.Database, project: string, actor: typeof OWNER, role: 'lead' | 'member') {
-  db.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at) VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`, project, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, role, PROJECT_CONTEXT_NOW);
 }
 function associate(document_id: `doc_${string}`, project_id: typeof PROJECT_ALPHA | typeof PROJECT_BETA = PROJECT_ALPHA): PersonDocumentAssociateV1 {
   return { schema_version: 1, kind: 'echo-person-document-associate-v1', request_id: randomUUID(), document_id, project_id };
@@ -163,7 +160,7 @@ describe('document project associations', () => {
     expect(() => app.associate('member', { ...request, project_id: PROJECT_BETA })).toThrow(expect.objectContaining({ code: 'conflict' }));
     expect(() => app.dissociate('member', { ...request, kind: 'echo-person-document-dissociate-v1' })).toThrow(expect.objectContaining({ code: 'conflict' }));
     expect(() => app.readV2('member', saved.document_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
-    revokeMembership(db, MEMBER); addMembership(db, RETURNED_MEMBER, 'Returned', 'member@example.test'); grant(db, PROJECT_ALPHA, RETURNED_MEMBER, 'member');
+    revokeMembership(db, MEMBER); addMembership(db, RETURNED_MEMBER, 'Returned', 'member@example.test'); seedProjectMember(db, PROJECT_ALPHA, RETURNED_MEMBER, 'member');
     expect(() => app.associate('member', request)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
     expect(() => app.associate('returned', request)).toThrow(expect.objectContaining({ code: 'not_found' }));
   });

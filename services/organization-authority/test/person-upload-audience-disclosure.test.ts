@@ -13,7 +13,7 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
-import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
+import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, projectContextDatabase, seedProject, seedProjectMember } from "./fixtures/project-context-sqlite.js";
 import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
 /**
@@ -33,23 +33,15 @@ afterEach(async () => {
   for (const database of databases.splice(0)) database.close();
 });
 
-function grant(database: Database.Database, projectId: string, actor: AuthorityPersonMembershipBinding, role: "lead" | "member"): void {
-  database.prepare(`INSERT INTO authority_project_memberships_v1
-    (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-    VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`, projectId, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, role, PROJECT_CONTEXT_NOW);
-}
-
 function fixture() {
   const database = projectContextDatabase(); databases.push(database);
   const projects: readonly [string, AuthorityPersonMembershipBinding, readonly AuthorityPersonMembershipBinding[]][] = [
     [SHARED, OWNER, [MEMBER]], [OWNER_ONLY, OWNER, []], [MEMBER_ONLY, MEMBER, []], [SHARED_TOO, OWNER, [MEMBER]],
   ];
   for (const [projectId, lead, members] of projects) {
-    database.prepare(`INSERT INTO authority_projects_v1
-      (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
-      VALUES (?,?,?,?,?,?,?)`).run(projectId, lead.organization_id, projectId, PROJECT_CONTEXT_NOW, lead.principal_id, lead.membership_id, lead.membership_type);
-    grant(database, projectId, lead, "lead");
-    for (const member of members) grant(database, projectId, member, "member");
+    seedProject(database, projectId, lead);
+    seedProjectMember(database, projectId, lead, "lead");
+    for (const member of members) seedProjectMember(database, projectId, member, "member");
   }
   const authenticate = (token: string) => authorization(token === "member" ? MEMBER : OWNER);
   const documents = createPersonDocumentApplicationV1({ repository: new SqlitePersonDocumentRepositoryV1(database, () => PROJECT_CONTEXT_NOW), authenticate });

@@ -14,30 +14,19 @@ import { createProjectContextApplicationV1 } from "../src/application/project-co
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import type { OriginalContextCitationV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
-import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, insertStoredNoteV2, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
+import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, insertStoredNoteV2, projectContextDatabase, seedProject, seedProjectMember } from "./fixtures/project-context-sqlite.js";
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
-
-function grant(database: Database.Database, projectId: string, actor: typeof OWNER | typeof MEMBER, role: "lead" | "member"): void {
-  database.prepare(`INSERT INTO authority_project_memberships_v1
-    (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-    VALUES (?,?,?,?,?,?,?,'active',?)`).run(
-    `pgm_${randomUUID()}`, projectId, actor.organization_id, actor.principal_id,
-    actor.membership_id, actor.membership_type, role, PROJECT_CONTEXT_NOW,
-  );
-}
 
 function fixture() {
   const database = projectContextDatabase();
   databases.push(database);
   for (const projectId of [PROJECT_ALPHA, PROJECT_BETA]) {
-    database.prepare(`INSERT INTO authority_projects_v1
-      (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
-      VALUES (?,?,?,?,?,?,?)`).run(projectId, OWNER.organization_id, projectId, PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type);
-    grant(database, projectId, OWNER, "lead");
+    seedProject(database, projectId, OWNER);
+    seedProjectMember(database, projectId, OWNER, "lead");
   }
-  grant(database, PROJECT_ALPHA, MEMBER, "member");
+  seedProjectMember(database, PROJECT_ALPHA, MEMBER, "member");
   let milliseconds = Date.parse(PROJECT_CONTEXT_NOW);
   const now = () => new Date(milliseconds += 1_000).toISOString();
   const repository = new SqlitePersonDocumentRepositoryV1(database, now);
@@ -360,7 +349,7 @@ describe("adversarial original-context retrieval", () => {
     expect(texts(search("homepersonalnotemarker"))).toEqual([]);
     expect(texts(search("homepersonalnotemarker", PROJECT_ALPHA, "owner"))).toEqual([]);
     expect(f.retrieval.read({ access_token: "owner", scope: { kind: "global" }, citation: citationOf(home.release.released_atoms[0]!) }).atom.text).toContain("homepersonalnotemarker");
-    grant(f.database, PROJECT_BETA, MEMBER, "member");
+    seedProjectMember(f.database, PROJECT_BETA, MEMBER, "member");
     expect(texts(search("sharedmodernmarker", PROJECT_BETA))).toEqual([]);
     expect(texts(search("documentmodernmarker", PROJECT_BETA))).toEqual([expect.stringContaining("documentmodernmarker")]);
     const global = search("sharedmodernmarker");
@@ -508,13 +497,13 @@ describe("adversarial original-context retrieval", () => {
     expect(check(release, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
     expect(check(release)).toThrow(expect.objectContaining({ code: "unauthorized" }));
     // Rejoining is a new grant, so the earlier release stays refused even though the item is readable again.
-    grant(f.database, PROJECT_ALPHA, MEMBER, "member");
+    seedProjectMember(f.database, PROJECT_ALPHA, MEMBER, "member");
     expect(check(release, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
     const rejoined = search();
     expect(rejoined.items).toHaveLength(1);
     expect(check(rejoined, true)).not.toThrow();
     // Any change to the caller's own grants refuses the releases before it, so one request never mixes two snapshots of them.
-    grant(f.database, PROJECT_BETA, MEMBER, "member");
+    seedProjectMember(f.database, PROJECT_BETA, MEMBER, "member");
     expect(check(rejoined, true)).toThrow(expect.objectContaining({ code: "unauthorized" }));
     expect(check(rejoined)).toThrow(expect.objectContaining({ code: "unauthorized" }));
     expect(check(search(), true)).not.toThrow();

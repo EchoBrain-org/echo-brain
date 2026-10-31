@@ -7,7 +7,7 @@ import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../src/adapters/pe
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { PersonUpdateProcessingV1 } from '../src/composition/person-update-processing-v1.js';
 import type { ProjectIdV1 } from '@echo-brain/organization-api';
-import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredNoteV2, projectContextDatabase } from './fixtures/project-context-sqlite.js';
+import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredNoteV2, projectContextDatabase, seedProjectMember } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) if (database.open) database.close(); });
@@ -87,10 +87,7 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
     f.generation.structured_output.generate.mockImplementationOnce(async () => {
       f.database.prepare("UPDATE authority_project_memberships_v1 SET status = 'revoked', revoked_at = ? WHERE project_id = ? AND membership_id = ?")
         .run(PROJECT_CONTEXT_NOW, projectId, OWNER.membership_id);
-      f.database.prepare(`INSERT INTO authority_project_memberships_v1
-        (project_membership_id, project_id, organization_id, principal_id, membership_id, membership_type, role, status, granted_at)
-        VALUES ('pgm_99999999-9999-4999-8999-999999999999', ?, ?, ?, ?, ?, 'lead', 'active', ?)`)
-        .run(projectId, OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, PROJECT_CONTEXT_NOW);
+      seedProjectMember(f.database, projectId, OWNER, 'lead', { id: 'pgm_99999999-9999-4999-8999-999999999999' });
       return { search_hints: 'customer telephone preference' };
     });
 

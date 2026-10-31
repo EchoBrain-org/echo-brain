@@ -13,7 +13,7 @@ import { createPersonDocumentApplicationV1 } from "../../src/application/documen
 import { createPersonLiveAnswerRouteV1 } from "../../src/composition/person-live-answer-route-v1.js";
 import { PersonRecordSearchIndexLagV1 } from "../../src/composition/person-record-search-route.js";
 import { createJourneyTelemetryTransportV1 } from "../../src/composition/observability/journey-telemetry-transport-v1.js";
-import { OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "../fixtures/project-context-sqlite.js";
+import { OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase, seedProject, seedProjectMember } from "../fixtures/project-context-sqlite.js";
 
 const MODEL = "anthropic/claude-sonnet-5.5";
 const identity = { release_sha: "a".repeat(40), build_number: 42 };
@@ -32,10 +32,8 @@ type Line = Record<string, any>;
  */
 function fixture() {
   const database = projectContextDatabase(); databases.push(database);
-  database.prepare(`INSERT INTO authority_projects_v1 (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
-    VALUES (?,?,?,?,?,?,?)`).run(PROJECT_ALPHA, OWNER.organization_id, "Atlas", PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type);
-  database.prepare(`INSERT INTO authority_project_memberships_v1 (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-    VALUES (?,?,?,?,?,?,'lead','active',?)`).run(`pgm_${randomUUID()}`, PROJECT_ALPHA, OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, PROJECT_CONTEXT_NOW);
+  seedProject(database, PROJECT_ALPHA, OWNER, { name: "Atlas" });
+  seedProjectMember(database, PROJECT_ALPHA, OWNER, "lead");
   let tick = Date.parse(PROJECT_CONTEXT_NOW);
   let revokeAtStep: number | undefined;
   let revoked = false;

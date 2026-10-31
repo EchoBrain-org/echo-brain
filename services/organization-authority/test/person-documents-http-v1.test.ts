@@ -17,7 +17,7 @@ import { createPersonDocumentUploadStagingV1 } from '../src/adapters/files/docum
 import type { PersonDocumentApplicationV1 } from '../src/application/ports/document-v1.js';
 import type { PersonDocumentUploadStagingV1 } from '../src/application/ports/document-upload-staging-v1.js';
 import { createOrganizationAuthorityHttpServer, type OrganizationAuthorityHttpServerOptions } from '../src/presentation/organization-authority-http-server.js';
-import { addMembership, authorization, PROJECT_CONTEXT_NOW, PROJECT_ALPHA, PROJECT_BETA } from './fixtures/project-context-sqlite.js';
+import { addMembership, authorization, PROJECT_CONTEXT_NOW, PROJECT_ALPHA, PROJECT_BETA, seedProject, seedProjectMember } from './fixtures/project-context-sqlite.js';
 import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 import { PersonDocumentProcessingV1 } from '../src/composition/person-document-processing-v1.js';
 import { pdf, zip, entries } from './document-extraction-fixtures.js';
@@ -32,8 +32,8 @@ async function fixture(extra:{decorate?:(app:PersonDocumentApplicationV1)=>Perso
  db.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_00000000-0000-4000-8000-000000000006',?,'Document HTTP fixture','{}',?,?)`).run(PEOPLE.alice.organization_id,PROJECT_CONTEXT_NOW,PROJECT_CONTEXT_NOW);
  db.prepare(`INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)`).run(PEOPLE.alice.organization_id,PROJECT_CONTEXT_NOW);
  for(const actor of [PEOPLE.alice,PEOPLE.bob])addMembership(db,actor,actor.principal_id,`${actor.principal_id}@example.test`);
- db.prepare(`INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)`).run(PROJECT_ALPHA,PEOPLE.alice.organization_id,'SCOUT',PROJECT_CONTEXT_NOW,PEOPLE.alice.principal_id,PEOPLE.alice.membership_id,PEOPLE.alice.membership_type);
- for(const actor of [PEOPLE.alice,PEOPLE.bob])db.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at) VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`,PROJECT_ALPHA,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,actor===PEOPLE.alice?'lead':'member',PROJECT_CONTEXT_NOW);
+ seedProject(db,PROJECT_ALPHA,PEOPLE.alice,{name:'SCOUT'});
+ for(const actor of [PEOPLE.alice,PEOPLE.bob])seedProjectMember(db,PROJECT_ALPHA,actor,actor===PEOPLE.alice?'lead':'member');
  const repository=new SqlitePersonDocumentRepositoryV1(db,()=>PROJECT_CONTEXT_NOW);const app=createPersonDocumentApplicationV1({repository,authenticate:value=>{if(value!==token&&value!==memberToken)throw new AuthorityOperationError('unauthorized','fixture secret');return authorization(value===token?PEOPLE.alice:PEOPLE.bob);}});
  const staging=extra.staging??createPersonDocumentUploadStagingV1({temporaryDirectory:directory});
  const server=createOrganizationAuthorityHttpServer(authorityHttpServerOptions({person_documents:extra.decorate?.(app)??app,document_upload_staging:staging,...(extra.closing?{is_closing:extra.closing}:{}),...extra.server}));server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();if(!address||typeof address==='string')throw new Error('address unavailable');
@@ -50,8 +50,8 @@ async function upload(origin:string,bytes:Buffer,value=input(bytes)){const respo
 describe('document binary HTTP boundary and real service integration',()=>{
  it('serves one modern original through both project scopes and the union of current members without widening private uploads',async()=>{
   const h=await fixture(), bytes=Buffer.from('Shared hardware software interface');
-  h.db.prepare(`INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)`).run(PROJECT_BETA,PEOPLE.alice.organization_id,'Hardware',PROJECT_CONTEXT_NOW,PEOPLE.alice.principal_id,PEOPLE.alice.membership_id,PEOPLE.alice.membership_type);
-  const grantBeta=(actor:typeof PEOPLE.alice)=>h.db.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at) VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`,PROJECT_BETA,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,'member',PROJECT_CONTEXT_NOW);
+  seedProject(h.db,PROJECT_BETA,PEOPLE.alice,{name:'Hardware'});
+  const grantBeta=(actor:typeof PEOPLE.alice)=>seedProjectMember(h.db,PROJECT_BETA,actor,'member');
   grantBeta(PEOPLE.alice);
   const value:PersonDocumentUploadMetadataV2={schema_version:2,kind:'echo-person-document-upload-v2',request_id:randomUUID(),filename:'interface.md',title:'Interface',content_length:bytes.length,sha256:sha256Digest(bytes),association_project_ids:[PROJECT_ALPHA,PROJECT_BETA],audience:{kind:'projects',project_ids:[PROJECT_ALPHA,PROJECT_BETA]}};
   const put=async(metadata=value)=>fetch(`${h.origin}/v2/person/documents/${metadata.request_id}`,{method:'PUT',headers:headers(metadata),body:new Uint8Array(bytes)});

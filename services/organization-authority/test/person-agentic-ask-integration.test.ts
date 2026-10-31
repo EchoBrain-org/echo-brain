@@ -14,7 +14,7 @@ import type { PersonPageCitationV1, PersonTicketCitationV1 } from "@echo-brain/o
 import type { PersonLiveEvidenceItemV1, PersonLiveEvidenceSourceV1 } from "@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1";
 import { PersonRecordSearchIndexLagV1 } from "../src/composition/person-record-search-route.js";
 import { CONFLUENCE_LIVE_CONNECTOR_V1, JIRA_LIVE_CONNECTOR_V1 } from "../src/composition/person-live-connector-registry-v1.js";
-import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
+import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase, seedProject, seedProjectMember } from "./fixtures/project-context-sqlite.js";
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
@@ -31,12 +31,8 @@ type Prompt = {
 type Membership = { organization_id: string; principal_id: string; membership_id: string; display_name: string };
 function fixture(options: { readonly membership?: (id: string) => Membership | undefined; readonly generate?: StructuredGenerationPort["generate"] } = {}) {
   const database = projectContextDatabase(); databases.push(database);
-  database.prepare(`INSERT INTO authority_projects_v1
-    (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
-    VALUES (?,?,?,?,?,?,?)`).run(PROJECT_ALPHA, OWNER.organization_id, "Atlas", PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type);
-  for (const actor of [OWNER, MEMBER]) database.prepare(`INSERT INTO authority_project_memberships_v1
-    (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-    VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`, PROJECT_ALPHA, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, actor === OWNER ? "lead" : "member", PROJECT_CONTEXT_NOW);
+  seedProject(database, PROJECT_ALPHA, OWNER, { name: "Atlas" });
+  for (const actor of [OWNER, MEMBER]) seedProjectMember(database, PROJECT_ALPHA, actor, actor === OWNER ? "lead" : "member");
   let tick = Date.parse(PROJECT_CONTEXT_NOW);
   let revoked = false;
   const authenticateAccess = ({ access_token }: { access_token: string }) => {
