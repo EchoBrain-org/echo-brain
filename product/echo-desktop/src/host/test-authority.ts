@@ -2104,7 +2104,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       asks += 1;
       if (mode === 'ask-unavailable') return failure('unavailable', 503);
-      if (mode === 'ask-hangs') return new Promise<Response>(() => undefined);
       // One project, or all you may read.
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : { kind: 'global' };
       const question = request.question;
