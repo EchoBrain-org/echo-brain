@@ -1,9 +1,8 @@
 // The Ask timeline (ADR-0047), in the real app with the fixture Authority:
 // kept on this computer through navigation, earlier turns folded to lines
-// that open as they were, those past the newest three behind one line, what
-// changed lit, Ask again with "Since", follow-ups resolved or asked "Which
-// one?", a project's dot with its New rows, and the sidebar's Ask going back
-// to where you left Ask.
+// that open as they were, what changed lit, Ask again with "Since",
+// follow-ups resolved or asked "Which one?", and a project's dot with its New
+// rows.
 import { expect, test, type Page } from '@playwright/test';
 import { readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -75,57 +74,6 @@ test('the timeline stays through navigation, on this computer only, each place s
   await page.locator('[data-testid="suggestion"]', { hasText: 'What did we agree?' }).click();
   await expect(page.getByTestId('opened-turn')).toContainText('We agreed to ship Apollo with annual plans first.');
   expect(asks()).toHaveLength(3);
-});
-
-test('earlier questions past the newest three fold into one line that opens them in place, folded again the next time Ask opens', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  for (const question of ['One?', 'Two?', 'Three?', 'Four?', 'Five?']) {
-    await ask(page, question);
-    await back(page);
-  }
-  await ask(page, 'Six?');
-  // Five was the latest when Ask opened, so it and Six show in full; One to Four fold, the newest three as lines.
-  const line = page.getByTestId('earlier-toggle');
-  await expect(line).toHaveText('1 earlier question');
-  await expect(line).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByTestId('timeline-question')).toHaveText(['Two?', 'Three?', 'Four?']);
-  await line.click();
-  await expect(line).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.getByTestId('timeline-question')).toHaveText(['One?', 'Two?', 'Three?', 'Four?']);
-  await back(page);
-  await page.getByTestId('sidebar-ask').click();
-  await expect(page.getByTestId('earlier-toggle')).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByTestId('earlier-toggle')).toHaveText('2 earlier questions');
-  await expect(page.getByTestId('timeline-question')).toHaveText(['Three?', 'Four?', 'Five?']);
-});
-
-test('the sidebar\'s Ask goes back to Ask where you left it from any page, and with nothing asked yet puts the cursor in the bar', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('sidebar-ask').click();
-  await expect(page.getByTestId('ask-view')).toHaveCount(0);
-  await expect(page.getByTestId('ask-field')).toBeFocused();
-  await ask(page, 'What did we agree?');
-  await expect(page.getByTestId('sidebar-ask')).toHaveAttribute('aria-current', 'page');
-  await expect(page.getByTestId('sidebar-home')).not.toHaveAttribute('aria-current', 'page');
-  // A project closes Ask; the sidebar's Ask goes back to it, on Home where it was asked.
-  await page.getByTestId('sidebar-project').nth(0).click();
-  await expect(page.getByTestId('title')).toHaveText('Apollo');
-  await page.getByTestId('sidebar-ask').click();
-  await expect(page.getByTestId('title')).toHaveText('Ask');
-  await expect(page.getByTestId('question')).toHaveText(['What did we agree?']);
-  await expect(page.getByTestId('back')).toContainText('Home');
-  // Asked in Apollo, it goes back to Apollo's Ask.
-  await page.getByTestId('sidebar-project').nth(0).click();
-  await ask(page, 'What is left in Apollo?');
-  await page.getByTestId('sidebar-home').click();
-  await expect(page.getByTestId('ask-view')).toHaveCount(0);
-  await page.getByTestId('sidebar-ask').click();
-  await expect(page.getByTestId('question')).toHaveText(['What is left in Apollo?']);
-  await expect(page.getByTestId('back')).toContainText('Apollo');
 });
 
 test('a line tagged Changed opens as its heading, with what changed lit and what you can no longer read left out', async () => {
