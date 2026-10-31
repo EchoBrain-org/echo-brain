@@ -20,6 +20,8 @@ or private-key implementation.
 - Lists and opens, meetings, runs and open items, impact cards, sweep
   results, changes, project activity, diagnostics, connector access, and the
   staging research evaluation.
+- The record list and record search, and the owner's employee roster and
+  invitations.
 
 The package depends only on the federation and organization protocol packages.
 Database rows and Authority domain objects never become transport types.

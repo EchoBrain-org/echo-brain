@@ -1,22 +1,4 @@
-export const PERSON_RECORD_SEARCH_PATH_V1 = "/v1/person/records";
-
-type PersonRecordSearchDigestV1 = `sha256:${string}`;
-type PersonRecordSearchPolicyV1 =
-  | "organization-member-readable-person-v2"
-  | "restricted-reviewer-person-v2"
-  | "project-members-readable-person-v1";
-
-export interface PersonRecordSearchResponseV2 {
-  readonly schema_version: 2;
-  readonly kind: "echo-clean-person-record-search-v2";
-  readonly items: readonly {
-    readonly atom_id: PersonRecordSearchDigestV1;
-    readonly record_sha256: PersonRecordSearchDigestV1;
-    readonly kind: "decision" | "action" | "rationale";
-    readonly text: string;
-    readonly policy_id: PersonRecordSearchPolicyV1;
-  }[];
-}
+import type { PersonRecordSearchV2 } from "@echo-brain/organization-api";
 
 /** A bearer-only Layer 2 route. Caller identity never appears in the body. */
 export interface PersonRecordSearchHttpApplicationV1 {
@@ -24,5 +6,5 @@ export interface PersonRecordSearchHttpApplicationV1 {
     readonly access_token: string;
     readonly query: string;
     readonly limit?: number;
-  }): PersonRecordSearchResponseV2;
+  }): PersonRecordSearchV2;
 }

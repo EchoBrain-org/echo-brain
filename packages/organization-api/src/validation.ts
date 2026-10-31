@@ -96,6 +96,35 @@ export function assertExactKeys(
 }
 
 /**
+ * Plain-Error forms of asRecord and assertExactKeys for the record and
+ * employee codecs, whose messages the Person client reports unchanged.
+ */
+export function asPlainRecord(
+  value: unknown,
+  message: string,
+): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(message);
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+export function exactKeys(
+  value: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+  message: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (
+    actual.length !== expected.length ||
+    actual.some((key, index) => key !== expected[index])
+  ) {
+    throw new Error(message);
+  }
+}
+
+/**
  * Reviewer wire families are closed recursively. Reject in-memory properties
  * that RFC 8785 would otherwise omit instead of validating a different
  * apparent object. This is opt-in so landed schema-v1 snapshot semantics stay

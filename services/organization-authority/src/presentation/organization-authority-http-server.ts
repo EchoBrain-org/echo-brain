@@ -30,7 +30,7 @@ import type { PersonDocumentUploadStagingV1 } from '../application/ports/documen
 import { createPersonDocumentsHttpHandlerV1, uniqueMemberJsonV1 } from './person-documents-http-route-v1.js';
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2 } from '@echo-brain/organization-api';
 import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
-import { validatePersonQueryText } from "@echo-brain/organization-api";
+import { PERSON_EMPLOYEES_PATH_V1, PERSON_RECORDS_PATH_V1, validatePersonRecordSearchRequestV2 } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
@@ -55,18 +55,9 @@ import {
 } from "../application/person-identity-sessions.js";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import type { ProviderHttpApplicationV1, ProviderHttpRouteV1, ProviderHttpResponseV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
-import {
-  PERSON_RECORDS_PATH_V1,
-  type PersonRecordReadHttpApplicationV1,
-} from "./person-record-read-http-application.js";
-import {
-  PERSON_RECORD_SEARCH_PATH_V1,
-  type PersonRecordSearchHttpApplicationV1,
-} from "./person-record-search-http-application.js";
-import {
-  PERSON_EMPLOYEES_PATH_V1,
-  type PersonEmployeeHttpApplication,
-} from "./person-employee-http-application.js";
+import type { PersonRecordReadHttpApplicationV1 } from "./person-record-read-http-application.js";
+import type { PersonRecordSearchHttpApplicationV1 } from "./person-record-search-http-application.js";
+import type { PersonEmployeeHttpApplication } from "./person-employee-http-application.js";
 import {
   PERSON_ANSWER_PATH_V7,
   PERSON_ANSWER_ROUTE_HEADER_V5,
@@ -131,7 +122,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `PUT ${PERSON_EMPLOYEES_PATH_V1}`,
   `DELETE ${PERSON_EMPLOYEES_PATH_V1}`,
   `GET ${PERSON_RECORDS_PATH_V1}`,
-  `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
+  `POST ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V7}`,
   `POST ${PERSON_ASK_CHECK_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
@@ -643,30 +634,8 @@ function recordSearchInput(value: unknown): {
   readonly query: string;
   readonly limit?: number;
 } {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new AuthorityOperationError("invalid_request", "request is invalid");
-  }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  let query: string;
-  try { query = validatePersonQueryText(record.query); }
+  try { return validatePersonRecordSearchRequestV2(value); }
   catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
-  if (
-    keys.length < 1 || keys.length > 2 || !keys.includes("query") ||
-    keys.some(key => key !== "query" && key !== "limit") ||
-    (record.limit !== undefined &&
-      (!Number.isSafeInteger(record.limit) ||
-        (record.limit as number) < 1 ||
-        (record.limit as number) > 10))
-  ) {
-    throw new AuthorityOperationError("invalid_request", "request is invalid");
-  }
-  return Object.freeze({
-    query,
-    ...(record.limit === undefined
-      ? {}
-      : { limit: record.limit as number }),
-  });
 }
 
 /** Validate transport input without exposing codec diagnostics to the caller. */
@@ -1123,7 +1092,7 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (
         method === "POST" &&
-        url.pathname === PERSON_RECORD_SEARCH_PATH_V1 &&
+        url.pathname === PERSON_RECORDS_PATH_V1 &&
         url.search === ""
       ) {
         const input = recordSearchInput(await body(request));

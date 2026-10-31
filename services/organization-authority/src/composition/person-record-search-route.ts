@@ -27,6 +27,7 @@ import {
   type PersonAnswerCitationV3,
   type PersonOpenMeetingAtomV1,
   type PersonOpenMeetingDetailV1,
+  type PersonRecordSearchV2,
   type ProjectIdV1,
 } from "@echo-brain/organization-api";
 import { PersonRecordReaderV1, type RecordApproverProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
@@ -79,10 +80,7 @@ import { isCanonicalUtcMillisTimestampV1 } from "../application/canonical-utc-ti
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { samePersonReleaseAuthorizationV1 } from "../application/person-release-authorization-v1.js";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import type {
-  PersonRecordSearchHttpApplicationV1,
-  PersonRecordSearchResponseV2,
-} from "../presentation/person-record-search-http-application.js";
+import type { PersonRecordSearchHttpApplicationV1 } from "../presentation/person-record-search-http-application.js";
 
 interface CurrentPersonSessions {
   authenticateAccess(input: {
@@ -176,7 +174,7 @@ export interface PersonRecordSearchBatchReleaseV1 {
 }
 
 interface PersonRecordSearchBatchResultV1 {
-  readonly response: PersonRecordSearchResponseV2;
+  readonly response: PersonRecordSearchV2;
   readonly release: PersonRecordSearchBatchReleaseV1;
   /** Private desk projection of immutable V4 meeting metadata. */
   readonly desk_items?: readonly PersonRecordDeskItemV1[];
@@ -583,7 +581,7 @@ function indexLagUnavailable(): never {
 
 function asResponse(input: {
   readonly items: readonly ReadableSearchResultItemV1[];
-}): PersonRecordSearchResponseV2 {
+}): PersonRecordSearchV2 {
   return Object.freeze({
     schema_version: 2,
     kind: "echo-clean-person-record-search-v2",
@@ -909,7 +907,7 @@ export function createPersonRecordSearchRouteV1(
     readonly pointer: ActiveGenerationRow;
     readonly projects: RecordProjectAuthorizationV1;
     readonly scope: Pick<PersonRecordSearchBatchInputV1, "project_id" | "mine">;
-    readonly response: PersonRecordSearchResponseV2;
+    readonly response: PersonRecordSearchV2;
     readonly desk_items?: readonly PersonRecordDeskItemV1[];
     /** A dated desk read's untested atoms: released beside the items, so audited with them. */
     readonly unchecked?: EvidenceDeskUncheckedV1;
@@ -1387,7 +1385,7 @@ export function createPersonRecordSearchRouteV1(
       readonly access_token: string;
       readonly query: string;
       readonly limit?: number;
-    }): PersonRecordSearchResponseV2 {
+    }): PersonRecordSearchV2 {
       return searchBatch({
         access_token: input.access_token,
         query: input.query,
