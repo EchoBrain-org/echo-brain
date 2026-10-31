@@ -364,90 +364,6 @@
         "TreatMissingData": "breaching"
       }
     },
-    "WorkerFailureMetricFilter": {
-      "Type": "AWS::Logs::MetricFilter",
-      "Properties": {
-        "LogGroupName": {
-          "Ref": "DockerRuntimeLogGroup"
-        },
-        "FilterPattern": "{ $.kind = \"echo-clean-live-worker-failed-v1\" }",
-        "MetricTransformations": [
-          {
-            "MetricNamespace": "EchoBrain/AuthorityOperations",
-            "MetricName": "WorkerFailure",
-            "MetricValue": "1",
-            "Unit": "Count"
-          }
-        ]
-      }
-    },
-    "RuntimeReadyMetricFilter": {
-      "Type": "AWS::Logs::MetricFilter",
-      "Properties": {
-        "LogGroupName": {
-          "Ref": "DockerRuntimeLogGroup"
-        },
-        "FilterPattern": "{ $.kind = \"echo-clean-live-runtime-ready-v1\" }",
-        "MetricTransformations": [
-          {
-            "MetricNamespace": "EchoBrain/AuthorityOperations",
-            "MetricName": "RuntimeReady",
-            "MetricValue": "1",
-            "Unit": "Count"
-          }
-        ]
-      }
-    },
-    "RepeatedWorkerFailureAlarm": {
-      "Type": "AWS::CloudWatch::Alarm",
-      "Properties": {
-        "AlarmDescription": "Legacy shared WorkerFailure identity across contributing log groups in this account and Region. Host attribution requires source-log comparison.",
-        "AlarmActions": [
-          {
-            "Ref": "AlertTopic"
-          }
-        ],
-        "OKActions": [
-          {
-            "Ref": "AlertTopic"
-          }
-        ],
-        "Namespace": "EchoBrain/AuthorityOperations",
-        "MetricName": "WorkerFailure",
-        "Statistic": "Sum",
-        "Period": 300,
-        "EvaluationPeriods": 1,
-        "DatapointsToAlarm": 1,
-        "Threshold": 3,
-        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
-        "TreatMissingData": "notBreaching"
-      }
-    },
-    "RepeatedRuntimeReadyAlarm": {
-      "Type": "AWS::CloudWatch::Alarm",
-      "Properties": {
-        "AlarmDescription": "Legacy shared RuntimeReady identity across contributing log groups in this account and Region. Host attribution requires source-log comparison.",
-        "AlarmActions": [
-          {
-            "Ref": "AlertTopic"
-          }
-        ],
-        "OKActions": [
-          {
-            "Ref": "AlertTopic"
-          }
-        ],
-        "Namespace": "EchoBrain/AuthorityOperations",
-        "MetricName": "RuntimeReady",
-        "Statistic": "Sum",
-        "Period": 300,
-        "EvaluationPeriods": 1,
-        "DatapointsToAlarm": 1,
-        "Threshold": 3,
-        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
-        "TreatMissingData": "notBreaching"
-      }
-    },
     "AuthorityDockerLogWritePolicy": {
       "Type": "AWS::IAM::ManagedPolicy",
       "Properties": {
@@ -497,7 +413,7 @@
       "Type": "AWS::CloudWatch::Alarm",
       "Properties": {
         "AlarmDescription": {
-          "Fn::Sub": "Comparison only: WorkerFailure from ${DockerRuntimeLogGroup} for ${AuthorityHost} in ${AWS::StackName}. Actions disabled pending operator attribution verification."
+          "Fn::Sub": "Repeated sanitized worker failures for ${AuthorityHost}, counted from ${DockerRuntimeLogGroup} in ${AWS::StackName}."
         },
         "AlarmActions": [
           {
@@ -519,8 +435,7 @@
         "DatapointsToAlarm": 1,
         "Threshold": 3,
         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
-        "TreatMissingData": "notBreaching",
-        "ActionsEnabled": false
+        "TreatMissingData": "notBreaching"
       }
     },
     "AttributedRuntimeReadyMetricFilter": {
@@ -546,7 +461,7 @@
       "Type": "AWS::CloudWatch::Alarm",
       "Properties": {
         "AlarmDescription": {
-          "Fn::Sub": "Comparison only: RuntimeReady from ${DockerRuntimeLogGroup} for ${AuthorityHost} in ${AWS::StackName}. Actions disabled pending operator attribution verification."
+          "Fn::Sub": "Repeated Authority runtime starts for ${AuthorityHost}, counted from ${DockerRuntimeLogGroup} in ${AWS::StackName}."
         },
         "AlarmActions": [
           {
@@ -568,8 +483,7 @@
         "DatapointsToAlarm": 1,
         "Threshold": 3,
         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
-        "TreatMissingData": "notBreaching",
-        "ActionsEnabled": false
+        "TreatMissingData": "notBreaching"
       }
     }
   },
@@ -593,9 +507,9 @@
       }
     },
     "RepeatedWorkerFailureAlarmName": {
-      "Description": "Alarm for repeated sanitized worker failures.",
+      "Description": "Alarm for repeated sanitized worker failures on this stack's Authority host.",
       "Value": {
-        "Ref": "RepeatedWorkerFailureAlarm"
+        "Ref": "AttributedWorkerFailureAlarm"
       }
     },
     "DockerRuntimeLogGroupName": {
@@ -611,9 +525,9 @@
       }
     },
     "RuntimeMonitoringAttribution": {
-      "Description": "Inspect stack, host log source, legacy and attributed metric identity, and alarm topic together. Subscription confirmation requires operator verification.",
+      "Description": "Inspect stack, host log source, attributed metric namespace, runtime alarms and alarm topic together. Subscription confirmation requires operator verification.",
       "Value": {
-        "Fn::Sub": "stack=${AWS::StackName};host=${AuthorityHost};log=${DockerRuntimeLogGroup};legacy=EchoBrain/AuthorityOperations;attributed=EchoBrain/AuthorityOperations/${AuthorityHost};worker_alarm=${RepeatedWorkerFailureAlarm};comparison_alarm=${AttributedWorkerFailureAlarm};alarm_and_ok_topic=${AlertTopic};comparison_actions=disabled"
+        "Fn::Sub": "stack=${AWS::StackName};host=${AuthorityHost};log=${DockerRuntimeLogGroup};metrics=EchoBrain/AuthorityOperations/${AuthorityHost};worker_alarm=${AttributedWorkerFailureAlarm};runtime_ready_alarm=${AttributedRuntimeReadyAlarm};alarm_and_ok_topic=${AlertTopic}"
       }
     }
   }
