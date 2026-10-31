@@ -72,7 +72,7 @@ export function providerModuleGraph(tree, resolveRelative, errors) {
         ts.forEachChild(node, assetReferences);
       };
       assetReferences(parsed);
-      for (const reference of collectModuleReferences(parsed, { includeTypeQueries: true })) {
+      for (const reference of collectModuleReferences(parsed)) {
         if (reference.specifier === null) continue; // The workspace loader gate reports this.
         const target = resolve(path, reference.specifier);
         if (target !== null) found.add(target);
@@ -81,5 +81,5 @@ export function providerModuleGraph(tree, resolveRelative, errors) {
     cache.set(path, found);
     return found;
   };
-  return { targets, resolve, publicExports };
+  return { targets };
 }

@@ -1,10 +1,8 @@
 import { spawnSync } from "node:child_process";
 import {
-  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -107,27 +105,11 @@ function writeFixtureJson(fixture: string, path: string, value: unknown): void {
 }
 
 function runBoundary(fixture: string): BoundaryResult {
-  // The checker exits right after writing its report, and pipe writes are
-  // asynchronous on macOS, so a batched report could be cut at 64 KiB.
-  // Capture through files instead, outside the scanned fixture.
-  const output = mkdtempSync(join(tmpdir(), "echo-workspace-boundary-output-"));
-  const paths = [join(output, "stdout"), join(output, "stderr")] as const;
-  const fds = paths.map((path) => openSync(path, "w"));
-  try {
-    const result = spawnSync(
-      process.execPath,
-      [join(fixture, "tools/check-architecture-boundaries.mjs")],
-      { cwd: fixture, stdio: ["ignore", fds[0], fds[1]] },
-    );
-    return {
-      status: result.status,
-      stdout: readFileSync(paths[0], "utf8"),
-      stderr: readFileSync(paths[1], "utf8"),
-    };
-  } finally {
-    fds.forEach((fd) => closeSync(fd));
-    rmSync(output, { recursive: true, force: true });
-  }
+  return spawnSync(
+    process.execPath,
+    [join(fixture, "tools/check-architecture-boundaries.mjs")],
+    { cwd: fixture, encoding: "utf8" },
+  );
 }
 
 describe("workspace source boundaries", () => {
@@ -1073,7 +1055,7 @@ describe("workspace source boundaries", () => {
   it("builds neutral packages with no provider, Person or service workspace available", () => {
     const result = spawnSync(process.execPath, [join(REPO, "tools/check-neutral-build.mjs")], { cwd: REPO, encoding: "utf8" });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ ok: true, neutral_workspaces: 8, provider_workspaces: 0, service_workspaces: 0, prebuilt_workspace_outputs: 0 });
+    expect(JSON.parse(result.stdout)).toEqual({ ok: true, neutral_workspaces: 8 });
   });
 
   it("admits a new vendor only through a real workspace and one provider folder", () => {

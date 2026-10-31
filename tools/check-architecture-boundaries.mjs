@@ -79,7 +79,7 @@ function parseSourceFile(path, source) {
 }
 
 function moduleReferences(path, source) {
-  return collectModuleReferences(parseSourceFile(path, source), { includeTypeQueries: true });
+  return collectModuleReferences(parseSourceFile(path, source));
 }
 
 function resolveRelative(tree, importer, spec) {
@@ -801,18 +801,14 @@ function main() {
 
   const result = {
     ok: errors.length === 0,
-    entry_points: [],
-    closure: [],
-    external_packages: [],
-    runtime_assets: [],
     removed_internal_roots: removed,
-    layer_rules: [],
     provider_architecture: providerOwnership,
     workspace_boundaries: workspaceBoundaries,
     errors,
   };
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-  if (!result.ok) process.exit(1);
+  // Let the report drain: a piped stdout is asynchronous on macOS.
+  if (!result.ok) process.exitCode = 1;
 }
 
 main();

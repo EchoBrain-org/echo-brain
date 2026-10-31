@@ -140,6 +140,5 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
     workspace_edges: [...workspaceEdges.values()].reduce((count, targets) => count + targets.size, 0),
     workspace_cycles: cycles,
     bootstrap_entrypoints: [...bootstrap].sort(),
-    exceptions: 0,
   };
 }
