@@ -102,3 +102,9 @@ Adopt option 2, the founder's choice.
   while projects stay ticked and on for good with no project. Existing
   record logs (V5) are refused at startup, so this ships with a fresh-state
   reset.
+
+Update (2026-10-31): the Authority no longer keeps the mine scope for the CLI.
+`person ask` and `person list` refuse `--mine`, the Ask request refuses mine,
+and the shared answer scope (`PersonAnswerScopeV3`) and the research kernel
+know only global and one project. The person list takes exactly one of a
+project and Only me.

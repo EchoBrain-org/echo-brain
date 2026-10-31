@@ -134,3 +134,7 @@ the audit write that the `/v3` core never had. The Authority keeps serving
 
 On 2026-10-25 [ADR-0047](ADR-0047-ask-timeline.md) retired `/v3` to `/v6`
 and the `off_scope` outcome. `/v7` is the only Ask route.
+
+Update (2026-10-31): `GET /v3/person/capabilities` is retired. No client read
+it; it answers the ordinary 404 and stays reserved against provider adapters,
+as [ADR-0048](ADR-0048-retire-older-person-routes.md)'s retired routes do.

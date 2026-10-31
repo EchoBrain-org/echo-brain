@@ -114,6 +114,19 @@ Retire them, and keep what reads stored data.
   Ask source check's `not_supported` and the desktop's handling of it, and
   `/v3/person/capabilities`.
 
+Update (2026-10-31): what this record left out is retired too.
+`GET /v3/person/capabilities` answers the ordinary 404 and stays reserved
+against provider adapters. `/v7` no longer sets `x-echo-person-ask-route`, and
+the client no longer turns a 404 from Ask or the Ask source check into
+`not_supported`: it is `not_found`, as from any other read (the desktop's own
+handling went with the Ask timeline, [ADR-0047](ADR-0047-ask-timeline.md)).
+`GET /v1/person/records` always carries `source_metadata`, so the client sends
+no `x-echo-person-record-version`. The CLI-only mine scope and the person
+list's global scope are retired
+([ADR-0024](ADR-0024-person-list-open-and-mine-scope.md)), and so are
+`POST /v3/person/evidence/open` and the `person evidence` commands;
+`POST /v3/person/evidence/search` stays for the research-loop evaluation.
+
 ## Migration, rollback, and evidence
 
 - **Release order:** the Authority first, then the clients, the order the Ask

@@ -90,6 +90,13 @@ At `reviewed_ref`, the clients use the envelope as follows:
 - Nothing pages by `position`. The route accepts only `limit` and an exact
   `record_sha256`.
 
+Update (2026-10-31): the desktop no longer reads the envelope. Its source
+cards run `person records --record-sha256 <digest> --brief`, which prints the
+Person client's projection of the listed envelope (`personCitedRecordV1` in
+organization-api's `person-cited-record-v1.ts`), and the desktop validates
+that. The route still releases the signed envelope; this proposal is
+unchanged.
+
 A reader who cannot see every record cannot check the predecessor chain in any
 case. The chain fields therefore add no verification value for a partial
 reader. At most, a reader could verify the signature on each record, and no
