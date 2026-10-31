@@ -198,7 +198,7 @@ interface PersonRecordDeskItemV1 {
   readonly label: string;
   /** How Ask's list rows name the record (ADR-0041): one line of its own text, then its meeting. Released and audited with the row. */
   readonly list_label: string;
-  readonly visibility: "team" | "project" | "projects" | "approver_only";
+  readonly visibility: "project" | "projects" | "approver_only";
   /**
    * The atom's own facts, and its meeting's as the person open shows them (PersonOpenMeetingDetailV1): the participants'
    * names, and the final approver's current directory name (research tool contract v1). Released with the atom only.
@@ -324,7 +324,7 @@ export interface PersonReadableDecisionV1 {
   readonly approval_id: string; readonly record_sha256: Sha256Digest; readonly title: string;
   readonly approved_at: string; readonly project_ids: readonly ProjectIdV1[];
   /** Who the record is shared with, as a desk citation of it says (its policy and audience); Ask's follow-ups carry it (ADR-0040). */
-  readonly visibility: "team" | "project" | "projects" | "approver_only";
+  readonly visibility: "project" | "projects" | "approver_only";
 }
 
 /** Which decisions an open item's viewer can read (open items and Home v1, section 4). */
@@ -620,7 +620,7 @@ function deskListLabel(text: string, title: string | undefined, time: DeskMeetin
 }
 
 /** Store-raw: only the list route collapses these tokens (ADR-0024). */
-function recordVisibility(policy_id: ReadableSearchResultItemV1["policy_id"], audience_project_count: number): Exclude<PersonStoreVisibilityV1, "only_me"> {
+function recordVisibility(policy_id: ReadableSearchResultItemV1["policy_id"], audience_project_count: number): Exclude<PersonStoreVisibilityV1, "only_me" | "team"> {
   if (policy_id === "restricted-reviewer-person-v2") return "approver_only";
   if (audience_project_count < 1) metadataUnavailable();
   return audience_project_count === 1 ? "project" : "projects";
