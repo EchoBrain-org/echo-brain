@@ -3,7 +3,7 @@
 // <home>/calls.jsonl so tests can assert what the app actually sent.
 import * as organizationApi from '@echo-brain/organization-api';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const AUTHORITY = 'https://authority.example';
@@ -1235,6 +1235,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       ...(layout === null ? {} : { layout }) })}\n`);
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
+    // Kim signs in on this computer while the request named in `switch-on` is on its way; it is still answered.
+    if (elsewhere('switch-on') && readFileSync(join(home, 'switch-on'), 'utf8') === path) {
+      unlinkSync(join(home, 'switch-on'));
+      store.install(AUTHORITY, 'oau_00000000-0000-4000-8000-000000000001', { ...session, membership_id: 'mem_55555555-5555-4555-8555-555555555555', display_name: 'Kim' });
+    }
 
     if (method === 'GET' && path === '/v1/authority-descriptor') return json({ authority_descriptor: descriptor });
     if (method === 'POST' && path === '/v2/session/oidc/begin') {
