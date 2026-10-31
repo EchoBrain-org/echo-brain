@@ -8,8 +8,7 @@
   "package_json": "packages/organization-api/package.json",
   "entry_points": [
     "packages/organization-api/src/index.ts",
-    "packages/organization-api/src/validation.ts",
-    "packages/organization-api/src/contracts.ts"
+    "packages/organization-api/src/validation.ts"
   ],
   "owned_source_paths": [
     "packages/organization-api/src/**"

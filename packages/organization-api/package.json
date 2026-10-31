@@ -14,10 +14,6 @@
     "./validation": {
       "types": "./dist/validation.d.ts",
       "import": "./dist/validation.js"
-    },
-    "./contracts": {
-      "types": "./dist/contracts.d.ts",
-      "import": "./dist/contracts.js"
     }
   },
   "files": [
