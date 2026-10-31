@@ -121,8 +121,6 @@ interface PersonRecordSearchBatchInputV1 extends EvidenceDateFilterV1 {
   readonly query: string;
   /** Authority-checked project scope; association never replaces audience. */
   readonly project_id?: string;
-  /** Records whose final approver is the caller (ADR-0024); exclusive with project_id. */
-  readonly mine?: true;
   readonly limit?: number;
   /** Desk-only result kind narrowing, applied by Layer 2 before its cap. */
   readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
@@ -169,8 +167,6 @@ export interface PersonRecordSearchBatchReleaseV1 {
   readonly record_read_audit_row_sha256: Sha256Digest;
   readonly project_authorization?: RecordProjectAuthorizationV1;
   readonly project_id?: string;
-  /** Every later open from this release stays narrowed to the caller's approvals. */
-  readonly mine?: true;
 }
 
 interface PersonRecordSearchBatchResultV1 {
@@ -182,7 +178,7 @@ interface PersonRecordSearchBatchResultV1 {
   /** An open only: the anchor record's own text was left out; `truncated` also covers its meeting's other records (ADR-0041). */
   readonly anchor_truncated?: boolean;
   /**
-   * A dated desk read only: the atoms of its selection (scope, mine and kinds, not a search's words) that its date filter
+   * A dated desk read only: the atoms of its selection (scope and kinds, not a search's words) that its date filter
    * could not test because they do not record that date, and the dates they do record (research tool contract v1). They
    * are not in the result. Audited with the release.
    */
@@ -240,7 +236,6 @@ export interface PersonEvidenceDeskRecordsV1 extends Pick<
   listDeskBatch(input: EvidenceDateFilterV1 & {
     readonly access_token: string;
     readonly project_id?: string;
-    readonly mine?: true;
     readonly expected_pointer?: PersonRecordSearchReleasePointerV1;
     readonly limit?: number;
     readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
@@ -249,12 +244,10 @@ export interface PersonEvidenceDeskRecordsV1 extends Pick<
   initializeDesk(input: {
     readonly access_token: string;
     readonly project_id?: string;
-    readonly mine?: true;
   }): PersonRecordSearchBatchResultV1;
   openDeskCitation(input: {
     readonly access_token: string;
     readonly project_id?: string;
-    readonly mine?: true;
     readonly atom_id: Sha256Digest;
     readonly record_sha256: Sha256Digest;
     readonly policy_id: ReadableSearchResultItemV1["policy_id"];
@@ -418,15 +411,15 @@ export interface CreatePersonRecordSearchRouteV1Options {
   readonly search_generation?: SearchGeneration;
   /** The Authority's record codecs; approval-decision records need them to parse. */
   readonly record_input_codecs: RecordInputCodecRegistryV4;
-  /** The composed approver projectors. Mine needs them; without them mine is unavailable, never global. */
+  /** The composed approver projectors, which name a meeting's approver (`approved_by`). */
   readonly record_approver?: RecordApproverProjectorV1;
   /** Resolves only the approver named by a record already released to this reader. */
   readonly memberships?: ApproverMembershipsV1;
 }
 
 /**
- * What the person list and open need beyond the records: the approver (mine
- * and `approved_by`) and the directory that names it. The runtime and the
+ * What the person list and open need beyond the records: the approver
+ * (`approved_by`) and the directory that names it. The runtime and the
  * disclosure test compose them through this one function, so a dropped
  * option fails that test.
  */
@@ -540,13 +533,6 @@ function validBatchQuery(query: string): boolean {
   );
 }
 
-/** Mine narrows to the caller's own approvals; it is never combined with a project. */
-function assertValidMine(input: { readonly mine?: unknown; readonly project_id?: unknown }): void {
-  if ((input.mine !== undefined && input.mine !== true) || (input.mine === true && input.project_id !== undefined)) {
-    invalidRequest();
-  }
-}
-
 /** The engine's form of a desk exclusion: sorted unique digests, and the restricted-reviewer policy for approver-only records. */
 function engineExclusion(exclude: PersonRecordDeskExclusionV1 | undefined): ReadableSearchExclusionV1 | undefined {
   if (exclude === undefined) return undefined;
@@ -555,7 +541,6 @@ function engineExclusion(exclude: PersonRecordDeskExclusionV1 | undefined): Read
 }
 
 function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
-  assertValidMine(input);
   if (
     !validBatchQuery(input.query) ||
     (input.kinds !== undefined && (!Array.isArray(input.kinds) || input.kinds.length < 1 || new Set(input.kinds).size !== input.kinds.length || input.kinds.some((kind) => kind !== "decision" && kind !== "action" && kind !== "rationale"))) ||
@@ -759,8 +744,8 @@ function readGeneration<T>(read: () => T): T {
 }
 
 const MEETING_COLLECT_MAX = 26;
-/** The Layer 1 reader page limit: a longer lag holds Mine or Only me without reading further. */
-const MEETING_WAITING_MINE_MAX = 100;
+/** The Layer 1 reader page limit: a longer lag holds Only me without reading further. */
+const MEETING_WAITING_ONLY_ME_MAX = 100;
 const MEETING_PART_MAX = 65_535;
 const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
 /** The most records one project lookup returns, and the candidates it reads per page. */
@@ -791,7 +776,7 @@ type ApprovedRecordV1 = {
   /** When it was approved: the envelope's issue time. */
   readonly approved_at: string;
 };
-/** A dated read's records and, per record, its atoms in the window, with what it could not test; without dates, mine's records. */
+/** A dated read's records and, per record, its atoms in the window, with what it could not test; without dates, every record. */
 type DatedRecordSelectionV1 = {
   readonly records: readonly Sha256Digest[] | undefined;
   readonly atom_orders?: ReadonlyMap<Sha256Digest, ReadonlySet<number>>;
@@ -814,16 +799,11 @@ function metadataUnavailable(): never {
   throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
 }
 
-/**
- * The records half of a list scope: mine is the caller's own approvals, and
- * only_me the records kept for the caller alone (ADR-0049); neither is ever global.
- */
-function meetingScope(scope: PersonListStoreScopeV1): Readonly<{ project_id?: string; mine: boolean; only_me: boolean }> {
+/** The records half of a list scope: one project, or only_me, the records kept for the caller alone (ADR-0049). */
+function meetingScope(scope: PersonListStoreScopeV1): Readonly<{ project_id?: string; only_me: boolean }> {
   switch (scope.kind) {
-    case "global": return { mine: false, only_me: false };
-    case "project": return { project_id: scope.project_id, mine: false, only_me: false };
-    case "mine": return { mine: true, only_me: false };
-    case "only_me": return { mine: false, only_me: true };
+    case "project": return { project_id: scope.project_id, only_me: false };
+    case "only_me": return { only_me: true };
     default: return personUnknownScopeV1(scope);
   }
 }
@@ -907,7 +887,7 @@ export function createPersonRecordSearchRouteV1(
     readonly current: PersonAccessAuthorization;
     readonly pointer: ActiveGenerationRow;
     readonly projects: RecordProjectAuthorizationV1;
-    readonly scope: Pick<PersonRecordSearchBatchInputV1, "project_id" | "mine">;
+    readonly scope: Pick<PersonRecordSearchBatchInputV1, "project_id">;
     readonly response: PersonRecordSearchV2;
     readonly desk_items?: readonly PersonRecordDeskItemV1[];
     /** A dated desk read's untested atoms: released beside the items, so audited with them. */
@@ -942,7 +922,6 @@ export function createPersonRecordSearchRouteV1(
       record_read_audit_row_sha256: receipt,
       project_authorization: input.projects,
       ...(input.scope.project_id === undefined ? {} : { project_id: input.scope.project_id }),
-      ...(input.scope.mine === true ? { mine: true as const } : {}),
     });
     releaseWitnesses.add(release);
     return release;
@@ -968,19 +947,6 @@ export function createPersonRecordSearchRouteV1(
     const event = envelope.body.event;
     if (envelope.record_sha256 !== recordSha256 || event.kind !== "approved") metadataUnavailable();
     return { envelope: parsed, brief: event.approved_snapshot.approved_payload.brief, reference: envelope.body.human_act_resolution_ref, policy_id: event.policy_id, added_at: receiptTime(row.receipt_issued_at), approved_at: approvalTime(envelope) };
-  }
-
-  /** Whether the caller is this admitted record's final approver. The tuple never leaves the server. */
-  function approvedByCaller(record: ReadableSearchGenerationRecordV1, authorization: PersonAccessAuthorization): boolean {
-    let approver = metadata.get(record.record_sha256, record.envelope_sha256)?.approver;
-    if (approver === undefined) {
-      const row = envelopeRow(record.record_position, record.record_sha256, record.envelope_sha256);
-      let envelope: JsonObject;
-      try { envelope = parseCanonicalJson(row.canonical_envelope) as JsonObject; } catch { metadataUnavailable(); }
-      approver = approverTupleV1(envelope, record.approval_id, options, options.record_approver) ?? null;
-      metadata.merge(record.record_sha256, record.envelope_sha256, { approver, added_at: receiptTime(row.receipt_issued_at) });
-    }
-    return approver !== null && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id;
   }
 
   /**
@@ -1009,33 +975,20 @@ export function createPersonRecordSearchRouteV1(
   }
 
   /**
-   * The caller's own approvals in this exact generation, sorted. It is a pure
-   * function of (generation, tuple), so a release's revalidation is unchanged.
-   */
-  function mineRecordSet(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow): readonly Sha256Digest[] {
-    if (options.record_approver === undefined) throw new AuthorityOperationError("unavailable", "record evidence is unavailable");
-    return Object.freeze(generationRecords(authorization, projects, pointer)
-      .filter((record) => approvedByCaller(record, authorization))
-      .map((record) => record.record_sha256)
-      .sort());
-  }
-
-  /**
-   * A dated read's selection, before the retrieval limit (research tool contract v1). Of the reader-admitted records
-   * (under mine, the caller's own approvals), the atoms of the requested kinds whose date falls in the window, and a count
+   * A dated read's selection, before the retrieval limit (research tool contract v1). Of the reader-admitted records,
+   * the atoms of the requested kinds whose date falls in the window, and a count
    * of the atoms the filter could not test because they do not record that date, with the dates those atoms do record.
    * No date field is the meeting's time, as before; `any` is any of an atom's dates. Every atom records its approval, an
    * action its due date when one is set, and none when ECHO received it.
    */
-  function datedSelection(input: EvidenceDateFilterV1 & { readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][] }, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, mine: readonly Sha256Digest[] | undefined, projectId?: string): DatedRecordSelectionV1 {
+  function datedSelection(input: EvidenceDateFilterV1 & { readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][] }, authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, projectId?: string): DatedRecordSelectionV1 {
     // Meetings' one set of dates: an approved record takes `received` too, which none of its atoms records.
     validateEvidenceDateFilterV1(input, PERSON_MEETING_DATE_FIELDS_V1);
-    if (input.since === undefined && input.until === undefined) return { records: mine };
+    if (input.since === undefined && input.until === undefined) return { records: undefined };
     const field = input.date_field ?? "occurred";
     const atom_orders = new Map<Sha256Digest, ReadonlySet<number>>();
     const tally = createUncheckedTallyV1();
     for (const record of generationRecords(authorization, projects, pointer, projectId)) {
-      if (mine !== undefined && !mine.includes(record.record_sha256)) continue;
       const approved = approvedRecord(record.record_position, record.record_sha256, record.envelope_sha256);
       const time = approved.brief.meeting.time;
       const stamp = meetingStamp(time);
@@ -1176,29 +1129,23 @@ export function createPersonRecordSearchRouteV1(
 
   /**
    * Whether a record this reader can read in this scope was appended after the
-   * published head. An approval the reader cannot see, under mine one the
-   * reader did not approve, and under only_me one not kept for the reader
-   * alone, never changes what the reader sees. The probe reads only the log
-   * after the published head.
+   * published head. An approval the reader cannot see, and under only_me one
+   * not kept for the reader alone, never changes what the reader sees. The
+   * probe reads only the log after the published head.
    */
-  function meetingWaiting(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: { readonly mine: boolean; readonly only_me: boolean; readonly project_id?: string }, publishedHead: number): boolean {
-    const narrowed = scope.mine || scope.only_me;
+  function meetingWaiting(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: { readonly only_me: boolean; readonly project_id?: string }, publishedHead: number): boolean {
     const waiting = new PersonRecordReaderV1(options.record).list({
       authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
       principal_id: authorization.principal_id, membership_id: authorization.membership_id,
       ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
       ...(scope.project_id === undefined ? {} : { project_id: scope.project_id }),
-      after_position: publishedHead, limit: narrowed ? MEETING_WAITING_MINE_MAX : 1,
+      after_position: publishedHead, limit: scope.only_me ? MEETING_WAITING_ONLY_ME_MAX : 1,
     });
-    if (!narrowed) return waiting.length > 0;
-    // A lag longer than one probe holds, rather than list a stale Mine or Only me.
-    if (waiting.length === MEETING_WAITING_MINE_MAX) return true;
+    if (!scope.only_me) return waiting.length > 0;
+    // A lag longer than one probe holds, rather than list a stale Only me.
+    if (waiting.length === MEETING_WAITING_ONLY_ME_MAX) return true;
     // The Layer 1 read admits a restricted reviewer record to its approver alone.
-    if (scope.only_me) return waiting.some((record) => envelopePolicy(record.envelope) === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
-    return waiting.some((record) => {
-      const approver = approverTupleV1(record.envelope, record.approval_id, options, options.record_approver);
-      return approver !== undefined && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id;
-    });
+    return waiting.some((record) => envelopePolicy(record.envelope) === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
   }
 
   function meetingCollection(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: PersonListStoreScopeV1, rows: readonly PersonStoreMeetingRowV1[]): PersonMeetingCollectionV1 {
@@ -1267,8 +1214,7 @@ export function createPersonRecordSearchRouteV1(
     if (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer)) {
       unavailable();
     }
-    const dated = datedSelection(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
-    const mine = dated.records;
+    const dated = datedSelection(input, authorization, projects, pointer, input.project_id);
     const excluded = engineExclusion(input.exclude);
     const result = readGeneration(() =>
       search({
@@ -1276,7 +1222,7 @@ export function createPersonRecordSearchRouteV1(
         active_generation: activeGenerationAt(pointer),
         reader: readerOf(authorization, projects),
         ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-        ...(mine === undefined ? {} : { record_sha256s: mine }),
+        ...(dated.records === undefined ? {} : { record_sha256s: dated.records }),
         ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
         query: input.query,
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
@@ -1330,16 +1276,13 @@ export function createPersonRecordSearchRouteV1(
     readonly projects: RecordProjectAuthorizationV1;
     readonly initial_authorization: PersonRecordSearchReleaseAuthorizationV1;
     readonly project_id?: string;
-    readonly mine?: true;
     readonly anchor: Pick<ReadableSearchResultItemV1, "atom_id" | "record_sha256" | "record_position" | "envelope_sha256" | "atom_order" | "audience_project_count" | "item_kind" | "text" | "policy_id">;
   }): PersonRecordSearchBatchResultV1 {
-    const mine = input.mine === true ? mineRecordSet(input.current, input.projects, input.pointer) : undefined;
     const anchors = readGeneration(() => readReadableSearchGenerationAtomsV1({
       state_directory: options.state_directory,
       active_generation: activeGenerationAt(input.pointer),
       reader: readerOf(input.current, input.projects),
       ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-      ...(mine === undefined ? {} : { record_sha256s: mine }),
       atom_ids: [input.anchor.atom_id],
     }));
     assertGeneration(anchors, input.pointer);
@@ -1354,7 +1297,7 @@ export function createPersonRecordSearchRouteV1(
       resolvedAnchor.text !== input.anchor.text ||
       resolvedAnchor.policy_id !== input.anchor.policy_id) unavailable();
     // The anchor's record in its own order: decisions, actions, then rationales. The anchor read already admitted
-    // it, under mine too, and its first ten atoms always hold the nine that join the anchor.
+    // it, and its first ten atoms always hold the nine that join the anchor.
     const record = readGeneration(() => listReadableSearchGenerationV1({
       state_directory: options.state_directory,
       active_generation: activeGenerationAt(input.pointer),
@@ -1397,9 +1340,7 @@ export function createPersonRecordSearchRouteV1(
     initializeDesk(input: {
       readonly access_token: string;
       readonly project_id?: string;
-      readonly mine?: true;
     }): PersonRecordSearchBatchResultV1 {
-      assertValidMine(input);
       // Authenticate and capture scope before testing the only failure which
       // can legitimately select originals-only mode: an index behind the log.
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
@@ -1415,18 +1356,16 @@ export function createPersonRecordSearchRouteV1(
       }
       // A one-item inventory both fixes the immutable release and ensures the
       // warmed generation can actually be opened. Any later error is terminal.
-      return this.listDeskBatch({ access_token: input.access_token, ...(input.project_id === undefined ? {} : { project_id: input.project_id }), ...(input.mine === true ? { mine: true as const } : {}), limit: 1 });
+      return this.listDeskBatch({ access_token: input.access_token, ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit: 1 });
     },
     listDeskBatch(input: EvidenceDateFilterV1 & {
       readonly access_token: string;
       readonly project_id?: string;
-      readonly mine?: true;
       readonly expected_pointer?: PersonRecordSearchReleasePointerV1;
       readonly limit?: number;
       readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
       readonly exclude?: PersonRecordDeskExclusionV1;
     }): PersonRecordSearchBatchResultV1 {
-      assertValidMine(input);
       const limit = input.limit ?? 50;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) invalidRequest();
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
@@ -1436,15 +1375,14 @@ export function createPersonRecordSearchRouteV1(
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
       if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head) || (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer))) unavailable();
-      const dated = datedSelection(input, authorization, projects, pointer, input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined, input.project_id);
-      const mine = dated.records;
+      const dated = datedSelection(input, authorization, projects, pointer, input.project_id);
       const excluded = engineExclusion(input.exclude);
       const inventory = readGeneration(() => listReadableSearchGenerationV1({
         state_directory: options.state_directory,
         active_generation: activeGenerationAt(pointer),
         reader: readerOf(authorization, projects),
         ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit,
-        ...(mine === undefined ? {} : { record_sha256s: mine }),
+        ...(dated.records === undefined ? {} : { record_sha256s: dated.records }),
         ...(dated.atom_orders === undefined ? {} : { atom_orders: dated.atom_orders }),
         ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
         ...(excluded === undefined ? {} : { exclude: excluded }),
@@ -1466,20 +1404,17 @@ export function createPersonRecordSearchRouteV1(
     openDeskCitation(input: {
       readonly access_token: string;
       readonly project_id?: string;
-      readonly mine?: true;
       readonly atom_id: Sha256Digest;
       readonly record_sha256: Sha256Digest;
       readonly policy_id: ReadableSearchResultItemV1["policy_id"];
     }): PersonRecordSearchBatchResultV1 {
-      assertValidMine(input);
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       assertExpectedOrganization(authorization);
       const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
       if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head)) unavailable();
-      const mine = input.mine === true ? mineRecordSet(authorization, projects, pointer) : undefined;
-      const found = readGeneration(() => readReadableSearchGenerationAtomsV1({ state_directory: options.state_directory, active_generation: activeGenerationAt(pointer), reader: readerOf(authorization, projects), ...(input.project_id === undefined ? {} : { project_id: input.project_id }), ...(mine === undefined ? {} : { record_sha256s: mine }), atom_ids: [input.atom_id] }));
+      const found = readGeneration(() => readReadableSearchGenerationAtomsV1({ state_directory: options.state_directory, active_generation: activeGenerationAt(pointer), reader: readerOf(authorization, projects), ...(input.project_id === undefined ? {} : { project_id: input.project_id }), atom_ids: [input.atom_id] }));
       assertGeneration(found, pointer);
       const anchor = found.items[0];
       if (anchor === undefined || anchor.record_sha256 !== input.record_sha256 || anchor.policy_id !== input.policy_id) throw new AuthorityOperationError("not_found", "record evidence is not available");
@@ -1496,7 +1431,6 @@ export function createPersonRecordSearchRouteV1(
         projects,
         initial_authorization: releaseAuthorization(authorization),
         ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
-        ...(input.mine === true ? { mine: true as const } : {}),
         anchor,
       });
     },
@@ -1519,7 +1453,6 @@ export function createPersonRecordSearchRouteV1(
         projects,
         initial_authorization: input.release.initial_authorization,
         ...(input.release.project_id === undefined ? {} : { project_id: input.release.project_id }),
-        ...(input.release.mine === true ? { mine: true as const } : {}),
         anchor: input.anchor,
       });
     },
@@ -1530,8 +1463,6 @@ export function createPersonRecordSearchRouteV1(
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       assertExpectedOrganization(authorization);
       const projects = captureRecordProjectsV1(options.capture_projects, authorization, scope.project_id);
-      // Mine without the approver projectors fails closed; it never lists global.
-      if (scope.mine && options.record_approver === undefined) unavailable();
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
       if (pointer !== null && (pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256)) unavailable();
@@ -1543,8 +1474,7 @@ export function createPersonRecordSearchRouteV1(
       }
       const listed = generationRecords(authorization, projects, pointer, scope.project_id, lagging);
       // Only me is the restricted reviewer records, which the generation admits to their approver alone.
-      const candidates = scope.mine ? listed.filter((record) => approvedByCaller(record, authorization))
-        : scope.only_me ? listed.filter((record) => record.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2) : listed;
+      const candidates = scope.only_me ? listed.filter((record) => record.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2) : listed;
       const added = addedAtOf(candidates);
       const taken = candidates
         .map((record) => ({ record, position: { added_at: added.get(record.record_sha256)!, id: record.record_sha256 } }))

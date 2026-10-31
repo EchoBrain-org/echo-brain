@@ -468,12 +468,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // No longer a lead of the first project, though the list said so.
   if (mode === 'demoted') members[desktop.projects[0]!.project_id] = members[desktop.projects[0]!.project_id]!.map(entry => ({ ...entry, role: entry.role === 'lead' ? 'member' : 'lead' }));
   const documents = structuredClone(desktop.documents);
-  const feedItem = fixture('projects-feed-v2').items as Record<string, unknown>[];
-  const readable = fixture('projects-read-context-v2');
+  const feedItem = fixture('projects-search-v2').items as Record<string, unknown>[];
   const catalog = new Map<string, { received_at: string; title: string; text: string; audience: Record<string, unknown> }>([
     [String(feedItem[0]!.context_id), { received_at: String(feedItem[0]!.received_at), title: String(feedItem[0]!.title),
       // Shared with several projects; a reader sees only the one it is read in (ADR-0023).
-      text: String(readable.text), audience: { kind: 'projects' } }],
+      text: 'We agreed to ship.\n', audience: { kind: 'projects' } }],
     ...desktop.notes.map(note => [note.context_id, note] as const),
   ]);
   const filed = new Map<string, string[]>(desktop.projects.map(project => [project.project_id, [String(feedItem[0]!.context_id)]]));

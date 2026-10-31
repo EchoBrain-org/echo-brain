@@ -26,7 +26,8 @@ import type { PersonOriginalContextEvidenceDeskPortV1 } from '../src/application
 import { createPersonEvidenceDeskV1 } from '../src/composition/person-evidence-desk-v1.js';
 import { createPersonRecordSearchRouteV1, type PersonEvidenceDeskRecordsV1 } from '../src/composition/person-record-search-route.js';
 import * as recordHeadReader from '../src/composition/readable-search-generation-reconciler.js';
-import { meetingWorld, EMP_A, SHARED } from './fixtures/person-meeting-world.js';
+import { meetingWorld, EMP_A, OWNER, SHARED, T } from './fixtures/person-meeting-world.js';
+import { seedProject } from './fixtures/project-context-sqlite.js';
 import { COORDINATES, RECORD_POLICY_PROJECTORS, appendInput, database as recordDatabase, protocolAuthority, recordApprovalId } from '../../../packages/organization-record/test/fixtures/record-append-fixture.js';
 
 import { SIGNED_APPROVAL_CODECS, SIGNED_APPROVAL_PROJECTORS, appendSignedApprovalV1 } from './fixtures/signed-approval-decision-v1.js';
@@ -477,14 +478,14 @@ describe('Person evidence desk over an approval-decision record with a confirmed
   });
 });
 
-describe('Person evidence desk: mine (ADR-0024)', () => {
+describe('Person evidence desk: scopes and dates (ADR-0024)', () => {
   it('selects action deadlines before the item cap without selecting the meeting day or other actions', async () => {
     const w = await meetingWorld({ extra: [{ name: 'deadlines', approval_id: 'apr_deadlines', projects: [SHARED], final_approver: EMP_A, signals: { decisions: 1, actions: 3 },
       brief: brief => ({ ...brief, meeting: { ...brief.meeting, time: { actual_start_at: '2026-10-01T12:00:00.000Z' } },
         actions: brief.actions.map((action, index) => ({ ...action, text: `Deadline action ${index}`, due_at: index === 2 ? '2026-10-20T12:00:00.000Z' : '2026-10-19T12:00:00.000Z' })) }),
     }] });
     closers.push(w.close);
-    const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'mine' }, originals: emptyOriginals(), records: w.route() });
+    const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'project', project_id: SHARED }, originals: emptyOriginals(), records: w.route() });
     const filter = { since: '2026-10-20', until: '2026-10-20', date_field: 'due' as const, time_zone: 'America/Los_Angeles' };
     const page = await desk.list({ source: 'meeting', ...filter, limit: 1 });
     expect(page.items).toHaveLength(1);
@@ -525,12 +526,22 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
   it('does not disclose missing dates in records outside the caller scope', async () => {
     const w = await meetingWorld();
     closers.push(w.close);
-    for (const [access_token, scope] of [['emp_a', { kind: 'mine' as const }]] as const) {
-      const desk = createPersonEvidenceDeskV1({ access_token, scope, originals: emptyOriginals(), records: w.route() });
-      const listed = await desk.list({ source: 'meeting', since: '2026-10-16', until: '2026-10-16' });
-      expect(listed).not.toHaveProperty('notice');
-      expect(listed).not.toHaveProperty('unchecked');
-    }
+    // A project of EMP_A's whose one meeting records its time: r3, r7a and r7b, which EMP_A reads undated elsewhere, are outside it.
+    const dated = 'prj_dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    seedProject(w.authority, dated, OWNER, { name: 'Dated', created_at: T(1) });
+    w.grant(dated, EMP_A);
+    await w.approve({ name: 'dated', approval_id: 'apr_dated', projects: [dated], final_approver: EMP_A, issued_at: T(11),
+      brief: brief => ({ ...brief, meeting: { ...brief.meeting, time: { actual_start_at: '2026-10-01T12:00:00.000Z' } } }) });
+    w.rebuild();
+    const filter = { since: '2026-10-16', until: '2026-10-16' };
+    const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'project', project_id: dated }, originals: emptyOriginals(), records: w.route() });
+    const listed = await desk.list({ source: 'meeting', ...filter });
+    expect(listed.items).toEqual([]);
+    expect(listed).not.toHaveProperty('notice');
+    expect(listed).not.toHaveProperty('unchecked');
+    // The same read across everything EMP_A may read counts them.
+    const global = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'global' }, originals: emptyOriginals(), records: w.route() });
+    expect(await global.list({ source: 'meeting', ...filter })).toMatchObject({ items: [], unchecked: { count: 3 } });
   });
 
   it('sums what both halves of a dated meetings read could not test, and takes each source\'s own dates (research tool contract v1)', async () => {
@@ -554,7 +565,7 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
     await desk.revalidate({});
   });
 
-  it('passes mine, never a project, to every record call, and returns only the caller\'s own approvals', async () => {
+  it('passes the project, and no other scope, to every record call, and returns only its records', async () => {
     const w = await meetingWorld();
     closers.push(w.close);
     const route = w.route();
@@ -566,23 +577,24 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
       listDeskBatch(input) { calls.push({ method: 'listDeskBatch', input }); return route.listDeskBatch(input); },
       openDeskCitation(input) { calls.push({ method: 'openDeskCitation', input }); return route.openDeskCitation(input); },
     };
-    const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'mine' }, originals: emptyOriginals(), records });
-    expect(desk.scope).toEqual({ kind: 'mine' });
+    const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'project', project_id: SHARED }, originals: emptyOriginals(), records });
+    expect(desk.scope).toEqual({ kind: 'project', project_id: SHARED });
     const recordsOf = (items: readonly { readonly citation: { readonly kind: string; readonly record_sha256?: string } }[]) =>
-      [...new Set(items.flatMap((item) => item.citation.kind === 'approved_record' ? [item.citation.record_sha256] : []))];
+      [...new Set(items.flatMap((item) => item.citation.kind === 'approved_record' ? [item.citation.record_sha256] : []))].sort();
+    const shared = [w.digest('r3'), w.digest('r4')].sort();
     const searched = await desk.search({ query: 'Decision' });
-    expect(recordsOf(searched.items)).toEqual([w.digest('r4')]);
-    expect(recordsOf((await desk.search({})).items)).toEqual([w.digest('r4')]);
-    expect(recordsOf((await desk.list({ source: 'meeting' })).items)).toEqual([w.digest('r4')]);
-    const own = searched.items.find((item) => item.citation.kind === 'approved_record')!.citation as PersonAnswerCitationV3;
+    expect(recordsOf(searched.items)).toEqual(shared);
+    expect(recordsOf((await desk.search({})).items)).toEqual(shared);
+    expect(recordsOf((await desk.list({ source: 'meeting' })).items)).toEqual(shared);
+    const own = searched.items.find((item) => item.citation.kind === 'approved_record' && item.citation.record_sha256 === w.digest('r4'))!.citation as PersonAnswerCitationV3;
     expect(recordsOf((await desk.openCitation({ citation: own })).items)).toEqual([w.digest('r4')]);
     const other = route.searchBatch({ access_token: 'emp_a', query: 'Decision', desk: true }).desk_items!.find((item) => item.record_sha256 === w.digest('r1'))!;
     await expect(desk.openCitation({ citation: { kind: 'approved_record', atom_id: other.atom_id, record_sha256: other.record_sha256, policy_id: other.policy_id } as PersonAnswerCitationV3 })).rejects.toMatchObject({ code: 'not_found' });
     await desk.revalidate({});
     expect(new Set(calls.map((call) => call.method))).toEqual(new Set(['initializeDesk', 'searchBatch', 'listDeskBatch', 'openDeskCitation']));
     for (const call of calls) {
-      expect(call.input).toMatchObject({ mine: true });
-      expect(call.input).not.toHaveProperty('project_id');
+      expect(call.input).toMatchObject({ project_id: SHARED });
+      expect(call.input).not.toHaveProperty('mine');
     }
   });
 });

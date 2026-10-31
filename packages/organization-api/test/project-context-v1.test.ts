@@ -9,8 +9,6 @@ import {
   validateProjectContextAssociateV1,
   validateProjectContextBrowseV1,
   validateProjectContextDissociateV1,
-  validateProjectContextFeedV2,
-  validateProjectContextReadV2,
   validateProjectContextSearchV1,
   validateProjectContextSearchResultV2,
   validateProjectCreateReceiptV1,
@@ -90,9 +88,8 @@ describe('project context V1 public codecs', () => {
 
   it('uses a complete audience object for scoped releases, including a differently-associated project audience', () => {
     const audience_project = 'prj_00000000-0000-4000-8000-000000000004';
-    const feed = validateProjectContextFeedV2({ schema_version: 2, kind: 'echo-project-context-feed-v2', project_id, items: [{ context_id, received_at, title: 'Original', excerpt: 'Exact source excerpt.', audience: { kind: 'project', project_id: audience_project } }], next_cursor: null });
-    expect(feed.items[0]?.audience).toEqual({ kind: 'project', project_id: audience_project });
-    expect(validateProjectContextReadV2({ schema_version: 2, kind: 'echo-project-context-read-v2', project_id, context_id, received_at, title: 'Original', text: 'Exact original bytes.\n', audience: { kind: 'only_me' } }).text).toBe('Exact original bytes.\n');
+    const page = validateProjectContextSearchResultV2({ schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id, items: [{ context_id, received_at, title: 'Original', excerpt: 'Exact source excerpt.', audience: { kind: 'project', project_id: audience_project } }], next_cursor: null });
+    expect(page.items[0]?.audience).toEqual({ kind: 'project', project_id: audience_project });
   });
 
   it('admits an initial project-directory browse without a search query', () => {
@@ -155,11 +152,10 @@ describe('project context V1 public codecs', () => {
     expect(() => validatePersonUpdateSubmitV2({ ...common, text: '"'.repeat(8192) })).toThrow();
   });
 
-  it('keeps a stored near-request-bound original readable in its project', () => {
+  it('keeps a stored near-request-bound V2 original valid', () => {
     const text = '\n'.repeat(8047) + 'a';
     const submit = { schema_version: 2 as const, kind: 'echo-person-update-submit-v2' as const, request_id, title: 'x', text, project_id: null, audience: { kind: 'only_me' as const } };
     expect(validatePersonUpdateSubmitV2(submit).text).toBe(text);
-    expect(validateProjectContextReadV2({ schema_version: 2, kind: 'echo-project-context-read-v2', project_id, context_id, received_at, title: 'x', text, audience: { kind: 'only_me' } }).text).toBe(text);
   });
 
   it('admits the worst bounded escaped page under the dedicated response ceiling', () => {
@@ -170,7 +166,7 @@ describe('project context V1 public codecs', () => {
       excerpt: '"'.repeat(300),
       audience: { kind: 'team' as const },
     }));
-    expect(validateProjectContextFeedV2({ schema_version: 2, kind: 'echo-project-context-feed-v2', project_id, items, next_cursor: null }).items).toHaveLength(10);
+    expect(validateProjectContextSearchResultV2({ schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id, items, next_cursor: null }).items).toHaveLength(10);
   });
 
   it('rejects hostile recursive input before any project contract can observe a different shape', () => {
@@ -196,7 +192,6 @@ describe('project context V1 public codecs', () => {
       ['project list', validateProjectListV2, 2, 'echo-project-list-v2', summary, uuid('prj'), {}],
       ['project members', validateProjectMembersV1, 1, 'echo-project-members-v1', member, uuid('mem')],
       ['project directory', validateProjectDirectoryV1, 1, 'echo-project-directory-v1', directory, uuid('mem')],
-      ['project feed', validateProjectContextFeedV2, 2, 'echo-project-context-feed-v2', context, contextId],
       ['project search', validateProjectContextSearchResultV2, 2, 'echo-project-context-search-result-v2', context, contextId],
     ];
     for (const [label, validate, version, kind, make, id, scope] of cases) {
@@ -204,10 +199,10 @@ describe('project context V1 public codecs', () => {
       expect(() => validate(page(version, kind, [make(), make()], scope)), `${label} duplicate`).toThrow();
       expect(() => validate(page(version, kind, eleven(make, id), scope)), `${label} oversized`).toThrow();
     }
-    expect(() => validateProjectContextFeedV2({ schema_version: 2, kind: 'echo-project-context-feed-v2', project_id, items: [{ ...context(), audience: { kind: 'project', project_id: project_id_2, global_auth: true } }], next_cursor: null })).toThrow();
+    expect(() => validateProjectContextSearchResultV2({ schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id, items: [{ ...context(), audience: { kind: 'project', project_id: project_id_2, global_auth: true } }], next_cursor: null })).toThrow();
     expect(() => validateProjectMembersV1({ schema_version: 1, kind: 'echo-project-members-v1', project_id, items: [{ ...member(), global_auth: true }], next_cursor: null })).toThrow();
     const sparse = [context()]; sparse.length = 2;
-    expect(() => validateProjectContextFeedV2({ schema_version: 2, kind: 'echo-project-context-feed-v2', project_id, items: sparse, next_cursor: null })).toThrow();
+    expect(() => validateProjectContextSearchResultV2({ schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id, items: sparse, next_cursor: null })).toThrow();
   });
 
   it('rejects invalid paging, missing fields, and unreal timestamps at each public result boundary', () => {
@@ -218,7 +213,6 @@ describe('project context V1 public codecs', () => {
     }
     expect(() => validateProjectListV2({ ...list, next_cursor: 'AQ=' })).toThrow();
     expect(() => validateProjectListV2({ ...list, items: [{ schema_version: 2, kind: 'echo-project-summary-v2', project_id, name: 'Project', created_at: '2026-02-30T00:00:00.000Z', role: 'lead', status: 'active' }] })).toThrow();
-    expect(() => validateProjectContextReadV2({ schema_version: 2, kind: 'echo-project-context-read-v2', project_id, context_id, received_at, title: 'Original', text: 'Body', audience: null })).toThrow();
     expect(() => validateProjectCreateReceiptV1({ schema_version: 1, kind: 'echo-project-create-receipt-v1', request_id, project_id, created_at: received_at })).toThrow();
   });
 

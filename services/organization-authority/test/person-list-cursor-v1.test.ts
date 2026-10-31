@@ -25,9 +25,9 @@ const DOCUMENT = `doc_${"b".repeat(64)}`;
 const MEETING = `sha256:${"c".repeat(64)}`;
 const IMPORTED = `cap_${"d".repeat(64)}`;
 const SCOPES: readonly PersonListScopeV1[] = [
-  { kind: "global" }, { kind: "mine" }, { kind: "only_me" }, { kind: "project", project_id: PROJECT_A }, { kind: "project", project_id: PROJECT_B },
+  { kind: "only_me" }, { kind: "project", project_id: PROJECT_A }, { kind: "project", project_id: PROJECT_B },
 ];
-const list = (scope: PersonListScopeV1 = { kind: "global" }, changes: Partial<PersonListCursorBindingV1> = {}): PersonListCursorBindingV1 =>
+const list = (scope: PersonListScopeV1 = { kind: "only_me" }, changes: Partial<PersonListCursorBindingV1> = {}): PersonListCursorBindingV1 =>
   ({ scope, organization_id: ORGANIZATION, membership_id: MEMBERSHIP, ...changes });
 const open = (ref: string, changes: Partial<PersonOpenCursorBindingV1> = {}): PersonOpenCursorBindingV1 =>
   ({ ref: ref as PersonItemRefV1, organization_id: ORGANIZATION, membership_id: MEMBERSHIP, ...changes });
@@ -102,7 +102,7 @@ describe("person list and open cursors", () => {
   });
 
   it("refuses a cursor from another operation, version or ref", () => {
-    const projectCursor = encodeProjectCursorV1({ operation: "feed_v2", project_id: PROJECT_A, limit: 25, organization_id: ORGANIZATION, membership_id: MEMBERSHIP }, [TIME, NOTE]);
+    const projectCursor = encodeProjectCursorV1({ operation: "search_v2", project_id: PROJECT_A, canonical_query: "note", limit: 25, organization_id: ORGANIZATION, membership_id: MEMBERSHIP }, [2, TIME, NOTE]);
     refused(() => decodePersonListCursorV1(projectCursor, list({ kind: "project", project_id: PROJECT_A })));
     // The same fields framed as version 1 under the list binding.
     refused(() => decodePersonListCursorV1(frameCursorV1(1, listDigest(list()), ["", "", "", "", "", ""]), list()));
@@ -158,9 +158,9 @@ describe("person list and open cursors", () => {
   });
 
   it("decodes only positions: a time and an id the walk already emitted, never counts or other state", () => {
-    const positions = decodePersonListCursorV1(encodePersonListCursorV1(list({ kind: "mine" }), {
+    const positions = decodePersonListCursorV1(encodePersonListCursorV1(list({ kind: "project", project_id: PROJECT_B }), {
       note: after(TIME, NOTE), document: { state: "done" }, meeting: { state: "start" },
-    }), list({ kind: "mine" }));
+    }), list({ kind: "project", project_id: PROJECT_B }));
     expect(positions).toEqual({ note: { state: "after", added_at: TIME, id: NOTE }, document: { state: "done" }, meeting: { state: "start" } });
     for (const position of Object.values(positions)) expect(Object.keys(position).every((key) => ["state", "added_at", "id"].includes(key))).toBe(true);
     const framed = Buffer.from(encodePersonListCursorV1(list(), WORST), "base64url");

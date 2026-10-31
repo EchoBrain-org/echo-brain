@@ -107,18 +107,15 @@ function publicScope(scope: PersonAskScopeV2): EvidenceDeskScopeV1 {
   switch (scope.kind) {
     case "global": return Object.freeze({ kind: "global" });
     case "project": return Object.freeze({ kind: "project", project_id: scope.project_id }) as EvidenceDeskScopeV1;
-    case "mine": return Object.freeze({ kind: "mine" });
     default: return personUnknownScopeV1(scope);
   }
 }
 
 /** The records half of a scope. Every records call spreads this, so no scope can fall through to global. */
-function recordScope(scope: PersonAskScopeV2): Readonly<{ project_id?: never }> | Readonly<{ project_id: string }> | Readonly<{ mine: true }> {
+function recordScope(scope: PersonAskScopeV2): Readonly<{ project_id?: never }> | Readonly<{ project_id: string }> {
   switch (scope.kind) {
     case "global": return {};
     case "project": return { project_id: scope.project_id };
-    // The records route narrows to meetings the caller finally approved.
-    case "mine": return { mine: true as const };
     default: return personUnknownScopeV1(scope);
   }
 }

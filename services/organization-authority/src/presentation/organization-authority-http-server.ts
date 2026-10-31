@@ -18,11 +18,11 @@ import {
   validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
   validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectContextSearchResultV2,
-  validateProjectContextReadV2, validatePersonUploadContextId, validatePersonUpdateRequestId,
+  validateProjectContextSearchV1, validateProjectContextSearchResultV2,
+  validatePersonUpdateRequestId,
   validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
   validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
-  validatePersonUploadSearchV3, validatePersonUploadSearchResultV3, validatePersonUploadContentV3,
+  validatePersonUploadSearchV3, validatePersonUploadSearchResultV3,
 } from '@echo-brain/organization-api';
 import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
 import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
@@ -60,9 +60,6 @@ import type { PersonRecordSearchHttpApplicationV1 } from "./person-record-search
 import type { PersonEmployeeHttpApplication } from "./person-employee-http-application.js";
 import {
   PERSON_ANSWER_PATH_V7,
-  PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_CAPABILITIES_PATH_V1,
-  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_RUNS_PATH_V1,
   PERSON_DIAGNOSTICS_PATH_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
@@ -70,8 +67,6 @@ import {
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   validatePersonAnswerRequestV3,
-  validatePersonCapabilitiesV1,
-  validatePersonEvidenceOpenRequestV1,
   validatePersonRunsRequestV1,
   validatePersonDiagnosticsRequestV1,
   validatePersonResearchEvalReadRequestV1,
@@ -126,8 +121,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_ANSWER_PATH_V7}`,
   `POST ${PERSON_ASK_CHECK_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
-  `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
-  `GET ${PERSON_CAPABILITIES_PATH_V1}`,
   `GET ${PERSON_CHANGES_ROUTE_V1}`,
   `GET ${PERSON_PROJECT_ACTIVITY_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
@@ -163,8 +156,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees: PersonEmployeeHttpApplication;
   /**
-   * The evidence desk (`/v3/person/evidence/search` and `/open`, ADR-0022), composed with the answer model. Its Ask route,
-   * `/v3/person/ask`, was retired with `/v4` to `/v6`: Ask is `person_answer_v7`.
+   * The evidence desk's search (`/v3/person/evidence/search`, ADR-0022), which only the research-loop evaluation reads. Its
+   * open and its Ask route, `/v3/person/ask`, were retired: Ask is `person_answer_v7`.
    */
   readonly person_answer_v3: PersonAnswerV3HttpApplication;
   /**
@@ -211,10 +204,10 @@ function providerIngressRoutes(
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
       // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
-      // ADR-0048), so no adapter can mount one.
+      // ADR-0048; the capability read and the evidence desk's open), so no adapter can mount one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
         [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
-          '/v2/person/tools', '/v3/person/tools']
+          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open']
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -677,7 +670,7 @@ function projectResponse(response: ServerResponse, status: number, value: unknow
   json(response, status, value);
 }
 
-type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1, 'listProjectsV2' | 'readProjectV2' | 'readContextV2'>;
+type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1, 'listProjectsV2' | 'readProjectV2'>;
 const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   readonly operation: ProjectBodyOperation;
   readonly request: (value: unknown) => unknown;
@@ -696,7 +689,6 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
-  [`${PERSON_PROJECTS_PATH_V2}/context/feed`, { operation: 'feedV2', request: validateProjectContextBrowseV1, response: validateProjectContextFeedV2, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V2}/context/search`, { operation: 'searchV2', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV2, status: 200 }],
   // The one V2 notes route: the notes stored as V2, which no V3 read returns (ADR-0048).
   [`${PERSON_UPDATES_PATH_V2}/search`, { operation: 'searchUploads', request: validatePersonUploadSearchV2, response: validatePersonUploadSearchResultV2, status: 200 }],
@@ -725,10 +717,8 @@ async function projectRoute(
     ? url.pathname.slice(PERSON_UPDATES_PATH_V3.length + 1).split('/') : [];
   const list = url.pathname === PERSON_PROJECTS_PATH_V2;
   const readProject = projectPath.length === 1;
-  const readContext = projectPath.length === 3 && projectPath[1] === 'context';
   const status = uploadPath.length === 1;
-  const readUpload = uploadPath.length === 2 && uploadPath[0] === 'content';
-  if (!list && !readProject && !readContext && !status && !readUpload) return undefined;
+  if (!list && !readProject && !status) return undefined;
   const token = accessToken(request.headers.authorization);
   if ((!list && url.search !== '') || (await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES)).length !== 0) {
     throw new AuthorityOperationError('invalid_request', 'request failed');
@@ -737,17 +727,9 @@ async function projectRoute(
     const page = projectPage(url);
     return response => projectResponse(response, 200, application.listProjectsV2(token, page), validateProjectListV2);
   }
-  if (readProject || readContext) {
+  if (readProject) {
     const project = projectInput(validateProjectIdV1, projectPath[0]);
-    if (readContext) {
-      const context = projectInput(validatePersonUploadContextId, projectPath[2]);
-      return response => projectResponse(response, 200, application.readContextV2(token, project, context), validateProjectContextReadV2);
-    }
     return response => projectResponse(response, 200, application.readProjectV2(token, project), validateProjectSummaryV2);
-  }
-  if (readUpload) {
-    const context = projectInput(validatePersonUploadContextId, uploadPath[1]);
-    return response => projectResponse(response, 200, application.readUploadV3(token, context), validatePersonUploadContentV3);
   }
   const id = projectInput(validatePersonUpdateRequestId, uploadPath[0]);
   return response => projectResponse(response, 200, application.uploadStatusV3(token, id), validatePersonUpdateStatusResultV3);
@@ -764,7 +746,6 @@ export function createOrganizationAuthorityHttpServer(
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
-    [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     [PERSON_ASK_CHECK_PATH_V1, personCancellablePost(options.person_ask_check, validatePersonAskCheckRequestV1, (application, input) => application.check(input))],
     ...(options.person_research_eval === undefined ? [] : [
       [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],
@@ -1080,8 +1061,6 @@ export function createOrganizationAuthorityHttpServer(
           200,
           options.person_record_read.list({
             access_token: accessToken(request.headers.authorization),
-            ...(request.headers["x-echo-person-record-version"] === "2"
-              ? { include_source_metadata: true } : {}),
             ...(limit === undefined ? {} : { limit }),
             ...(exactRecord === undefined
               ? {}
@@ -1106,26 +1085,9 @@ export function createOrganizationAuthorityHttpServer(
         );
         return;
       }
-      if (
-        method === "GET" &&
-        url.pathname === PERSON_CAPABILITIES_PATH_V1 &&
-        url.search === ""
-      ) {
-        options.sessions.authenticateAccess({ access_token: accessToken(request.headers.authorization) });
-        if ((await rawBody(request)).byteLength !== 0) {
-          throw new AuthorityOperationError("invalid_request", "request is invalid");
-        }
-        json(response, 200, validatePersonCapabilitiesV1({
-          schema_version: 1,
-          kind: "echo-person-capabilities-v1",
-          // Kept for installed clients that still probe before asking.
-          agentic_ask_v1: true,
-        }));
-        return;
-      }
       const personGet = method === "GET" ? personReadGets.get(url.pathname) : undefined;
       if (personGet !== undefined) {
-        // Authenticated first, as capabilities is; the read takes no query and no body.
+        // Authenticated first; the read takes no query and no body.
         const access_token = accessToken(request.headers.authorization);
         options.sessions.authenticateAccess({ access_token });
         if (url.search !== "" || (await rawBody(request)).byteLength !== 0) {
@@ -1141,11 +1103,7 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (method === "POST" && url.search === "") {
         const personRead = personReadPosts.get(url.pathname);
-        if (personRead !== undefined) {
-          // Tells the route's own not-found from an Authority with no `/v7`. Set before body validation or application execution.
-          if (url.pathname === PERSON_ANSWER_PATH_V7) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '7');
-          await personRead(request, response); return;
-        }
+        if (personRead !== undefined) { await personRead(request, response); return; }
       }
       fail(response, 404, "not_found");
     } catch (error) {

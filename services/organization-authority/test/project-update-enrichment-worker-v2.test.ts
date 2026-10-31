@@ -77,7 +77,7 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
 
     await f.worker().runOnce(new AbortController().signal);
     expect(workState(f.database, receipt.context_id)).toEqual({ state: 'ready', search_hints: 'customer telephone preference' });
-    expect(f.application.readContextV2('member', projectId, receipt.context_id)).toMatchObject({ text: 'The customer prefers a telephone call.' });
+    expect(f.application.searchV2('member', { project_id: projectId, query: 'customer' }).items).toEqual([expect.objectContaining({ context_id: receipt.context_id, excerpt: 'The customer prefers a telephone call.' })]);
     expect(f.generation.structured_output.generate).toHaveBeenCalledTimes(1);
   });
 
@@ -93,7 +93,7 @@ describe('V2 project upload enrichment in the serialized Person worker', () => {
 
     await f.worker().runOnce(new AbortController().signal);
     expect(workState(f.database, receipt.context_id)).toEqual({ state: 'unavailable', search_hints: '' });
-    expect(f.application.readContextV2('member', projectId, receipt.context_id)).toMatchObject({ text: 'The customer prefers a telephone call.' });
+    expect(f.application.searchV2('member', { project_id: projectId, query: 'customer' }).items).toEqual([expect.objectContaining({ context_id: receipt.context_id, excerpt: 'The customer prefers a telephone call.' })]);
   });
 
   it('fails visibly before model handoff when immutable V2 source bytes are corrupt, then defers the item so the next cycle completes', async () => {

@@ -20,19 +20,15 @@ describe('research evaluation start request', () => {
     const findings = [{ finding: 'Firmware shows two decimals', expected: 'SW-22b updated', citations: [ticket, page, record] }];
     expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'sweep', input: { findings } })).toEqual({ schema_version: 1, trigger: 'sweep', input: { findings } });
     // The Authority's trigger definitions judge the name and the input; the API checks only their form.
-    expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'a_future_trigger', mine: true, input: { anything: [1, 'two', null, true, { nested: 3.5 }] } }))
-      .toMatchObject({ trigger: 'a_future_trigger', mine: true });
-  });
-
-  it('still accepts Ask\'s legacy question field, with the product question limits, as the envelope', () => {
-    expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'ask', budget: 'live', project_id: project, question: 'Why is the DVT gate on hold?' }))
-      .toEqual({ schema_version: 1, trigger: 'ask', budget: 'live', project_id: project, input: { question: 'Why is the DVT gate on hold?' } });
-    expect(() => validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'ask', budget: 'live', question: 'x '.repeat(130).trim() })).toThrow(expect.objectContaining({ name: 'PersonQueryInputError', code: 'query_too_long' }));
+    expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'a_future_trigger', input: { anything: [1, 'two', null, true, { nested: 3.5 }] } }))
+      .toEqual({ schema_version: 1, trigger: 'a_future_trigger', input: { anything: [1, 'two', null, true, { nested: 3.5 }] } });
   });
 
   it('refuses a malformed envelope', () => {
     const deep = (depth: number): unknown => depth === 0 ? 'leaf' : { next: deep(depth - 1) };
     const bad: unknown[] = [
+      // Ask's retired form, its question beside the trigger, is not an envelope.
+      { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Why is the DVT gate on hold?' },
       { schema_version: 1, trigger: 'ask', budget: 'live', question: 'q', input: { question: 'q' } },
       { schema_version: 1, trigger: 'check', budget: 'soon', input: { record } },
       { schema_version: 1, trigger: 'check', input: { record }, record },
@@ -47,6 +43,8 @@ describe('research evaluation start request', () => {
       { schema_version: 1, trigger: 'drift-2', input: {} },
       { schema_version: 1, trigger: 'x'.repeat(65), input: {} },
       { schema_version: 1, trigger: 7, input: {} },
+      // The retired mine scope, alone or with a project.
+      { schema_version: 1, trigger: 'ask', mine: true, input: { question: 'q' } },
       { schema_version: 1, trigger: 'ask', mine: true, project_id: project, input: { question: 'q' } },
       { schema_version: 2, trigger: 'ask', input: { question: 'q' } },
     ];

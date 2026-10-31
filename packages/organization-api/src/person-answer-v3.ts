@@ -84,8 +84,9 @@ function validatePersonSourceReadScopeV1(value: unknown, label = 'Ask response s
 }
 
 /**
- * An Ask, evidence-desk or list scope. Unlike a source read it may be mine:
- * the caller's own items, always a subset of global.
+ * An Ask or evidence-desk scope, as an answer or a desk names it. Its mine kind,
+ * the caller's own items, is one no Person request asks for any more: the Ask,
+ * list and research evaluation requests take global or a project only.
  */
 export function validatePersonAnswerScopeV3(value: unknown, label = 'Ask response scope'): PersonAnswerScopeV3 {
   const input = object(value, label);

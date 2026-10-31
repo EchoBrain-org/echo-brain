@@ -5,6 +5,7 @@ import { canonicalSourceContentV1, sourceContentSha256V1, sourceItemIdV1, assert
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonListStoreScopeV1 } from '../../../application/ports/person-list-v1.js';
+import type { PersonAskScopeV2 } from '../../../application/ports/person-original-context-retrieval-v1.js';
 import { personOriginalGrantedProjectIdsV1 } from './person-original-access-v1.js';
 import { HAND_IN_SOURCE_ADAPTER_ID_V1 } from './person-hand-in-meetings-v1.js';
 
@@ -32,7 +33,7 @@ export function importedMeetingTextV1(meeting: MeetingDocument): string {
 }
 /**
  * Read view over existing custody. There is no second meeting body or derived-content table.
- * Unapproved imported notes are readable by their importing person only, in global and Mine scope
+ * Unapproved imported notes are readable by their importing person only, in global scope
  * (ADR-0046), and so are in the list's Only me (ADR-0049). A suggested project only pre-ticks the
  * review's destinations; project scope never includes unapproved notes. Approved records are what
  * project members read from a meeting.
@@ -41,7 +42,7 @@ export class SqlitePersonImportedMeetingsV1 {
   constructor(private readonly database: Database.Database) {
     database.function('echo_imported_meeting_id_v1', { deterministic: true }, (source, revision) => `cap_${canonicalSha256({ source, revision }).slice(7)}`);
   }
-  rows(actor: PersonAccessAuthorization, scope: PersonListStoreScopeV1, exact?: { readonly source_id: string; readonly revision_id: string } | { readonly ids: readonly string[] }): readonly ImportedMeetingTextV1[] {
+  rows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2 | PersonListStoreScopeV1, exact?: { readonly source_id: string; readonly revision_id: string } | { readonly ids: readonly string[] }): readonly ImportedMeetingTextV1[] {
     if (scope.kind === 'project') {
       if (!personOriginalGrantedProjectIdsV1(this.database, actor).includes(scope.project_id)) throw new AuthorityOperationError('unauthorized', 'Project access unavailable');
       return [];

@@ -44,12 +44,10 @@ import {
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
 const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
 /**
- * The evidence desk and the capability read (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the
- * Ask routes before it, `/v3` to `/v6` with the V4 to V7 answers, were retired.
+ * The evidence desk search (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the Ask routes before
+ * it, `/v3` to `/v6` with the V4 to V7 answers, were retired, and so were the capability read and the desk's open.
  */
 export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
-export const PERSON_EVIDENCE_OPEN_PATH_V1 = '/v3/person/evidence/open';
-export const PERSON_CAPABILITIES_PATH_V1 = '/v3/person/capabilities';
 
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
@@ -83,10 +81,7 @@ export type PersonAnswerEvidenceCitationV4 = PersonAnswerCitationV3;
 export interface PersonAnswerRequestV3 {
   readonly schema_version: 3;
   readonly question: string;
-  /** Exclusive with `mine`. */
   readonly project_id?: ProjectIdV1;
-  /** Only what the asker added: their notes and uploads, and meetings they approved (ADR-0024). */
-  readonly mine?: true;
   /** A capture prepared by this actor for this ordinary Ask. */
   readonly capture_id?: PersonDiagnosticCaptureIdV1;
   /** The asker's previous turn (ADR-0047): the asker's own context, never evidence, and never stored. */
@@ -165,12 +160,6 @@ export interface PersonEvidenceDeskResponseV1 {
   readonly items: readonly PersonEvidenceDeskItemV1[];
   readonly truncated: boolean;
   readonly notice?: string;
-}
-
-export interface PersonCapabilitiesV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-person-capabilities-v1';
-  readonly agentic_ask_v1: boolean;
 }
 
 function text(value: unknown, label: string, maximumBytes: number, multiline = false): asserts value is string {
@@ -372,10 +361,9 @@ function boundedRequest<T>(result: T, label: string): T {
 
 export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerRequestV3 {
   const input = object(value, 'Ask request');
-  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'mine') ? ['mine'] : []), ...(Object.hasOwn(input, 'capture_id') ? ['capture_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : [])], 'Ask request');
+  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'capture_id') ? ['capture_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
-  if (Object.hasOwn(input, 'mine') && (input.mine !== true || Object.hasOwn(input, 'project_id'))) fail('Ask request scope is invalid');
-  const request = boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}), ...(Object.hasOwn(input, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(input.capture_id) } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: previousTurn(input.previous) } : {}) }, 'Ask request');
+  const request = boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(input.capture_id) } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: previousTurn(input.previous) } : {}) }, 'Ask request');
   // Ask again asks the earlier question itself (ADR-0047), and its answer names that question: one of another is refused.
   if (request.previous?.purpose === 'ask_again' && request.previous.question !== request.question) fail('Ask previous question is not the question asked again');
   return request;
@@ -523,11 +511,4 @@ export function validatePersonEvidenceDeskResponseV1(value: unknown): PersonEvid
   const result = { schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: scope(input.scope), items: Object.freeze(items), truncated: input.truncated, ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}) };
   if (canonicalJsonBytes(result).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) fail('Evidence desk response exceeds JSON byte bound');
   return Object.freeze(result) as PersonEvidenceDeskResponseV1;
-}
-
-export function validatePersonCapabilitiesV1(value: unknown): PersonCapabilitiesV1 {
-  const input = object(value, 'Person capabilities');
-  assertExactKeys(input, ['schema_version', 'kind', 'agentic_ask_v1'], 'Person capabilities');
-  if (input.schema_version !== 1 || input.kind !== 'echo-person-capabilities-v1' || typeof input.agentic_ask_v1 !== 'boolean') fail('Person capabilities is invalid');
-  return Object.freeze({ schema_version: 1, kind: 'echo-person-capabilities-v1', agentic_ask_v1: input.agentic_ask_v1 });
 }

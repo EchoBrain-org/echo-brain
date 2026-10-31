@@ -6,7 +6,7 @@ import {
   PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS,
   validatePersonDocumentUploadMetadataV2, validatePersonDocumentIdV1, validatePersonUpdateRequestId,
   validateProjectIdV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV2,
-  validatePersonDocumentTextV1, validatePersonDocumentSearchResultV2,
+  validatePersonDocumentSearchResultV2,
   type PersonDocumentUploadMetadataV2,
   validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1,
 } from '@echo-brain/organization-api';
@@ -124,8 +124,7 @@ export function createPersonDocumentsHttpHandlerV1(
     const status = method === 'GET' && path.length === 2 && path[0] === 'requests';
     const read = method === 'GET' && path.length === 1;
     const original = method === 'GET' && path.length === 2 && path[1] === 'original';
-    const text = method === 'GET' && path.length === 2 && path[1] === 'text';
-    if (!upload && !search && !association && !status && !read && !original && !text) return false;
+    if (!upload && !search && !association && !status && !read && !original) return false;
     const token = bearer(request);
     if ((upload || search || association || status) && url.search !== '') invalid();
     if (upload) {
@@ -183,7 +182,7 @@ export function createPersonDocumentsHttpHandlerV1(
     const id = validate(() => validatePersonDocumentIdV1(path[0]));
     const parameters = new Map<string, string>();
     for (const [key, value] of url.searchParams) {
-      if ((key !== 'project_id' && !(text && key === 'cursor')) || parameters.has(key)) invalid();
+      if (key !== 'project_id' || parameters.has(key)) invalid();
       parameters.set(key, value);
     }
     const project = parameters.get('project_id');
@@ -220,11 +219,6 @@ export function createPersonDocumentsHttpHandlerV1(
       });
       response.end(result.bytes);
       } catch (error) { release(); throw error; }
-    } else if (text) {
-      const cursor = parameters.get('cursor');
-      const value = application.text(token, id, { ...scope, ...(cursor === undefined ? {} : { cursor }) });
-      output(value, validatePersonDocumentTextV1, value.document_id === id);
-      json(response, 200, value, validatePersonDocumentTextV1);
     } else {
       const value = application.readV2(token, id, scope);
       output(value, validatePersonDocumentMetadataV2, value.document_id === id);

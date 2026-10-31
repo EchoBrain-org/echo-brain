@@ -4,7 +4,6 @@ export {
   type PersonAuthorityClientOptions,
   type PersonAnswerV8,
   type PersonEvidenceDeskV1,
-  type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
   type PersonAskSourceEvidenceV1,
   type PersonAskProgressSinkV3,

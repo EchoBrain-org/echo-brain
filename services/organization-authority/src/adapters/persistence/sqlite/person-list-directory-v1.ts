@@ -33,14 +33,6 @@ export class SqlitePersonListDirectoryV1 implements PersonListDirectoryPortV1 {
     });
   }
 
-  me(actor: PersonAccessAuthorization): { readonly display_name: string } | undefined {
-    const row = this.database.prepare(`SELECT principal.display_name FROM authority_memberships m
-      JOIN authority_principals principal ON principal.principal_id=m.principal_id
-      WHERE m.organization_id=? AND m.membership_id=? AND m.principal_id=? AND m.membership_type=? AND m.status='active'`)
-      .get(actor.organization_id, actor.membership_id, actor.principal_id, actor.membership_type) as { readonly display_name: string } | undefined;
-    return row === undefined ? undefined : Object.freeze({ display_name: row.display_name });
-  }
-
   /** Content-free: the response digest, a count and the stores' receipts. */
   audit(entry: Parameters<PersonListDirectoryPortV1["audit"]>[0]): Sha256Digest {
     if (!Number.isSafeInteger(entry.released_count) || entry.released_count < 0 || entry.released_count > PERSON_LIST_PAGE_SIZE_V1) {

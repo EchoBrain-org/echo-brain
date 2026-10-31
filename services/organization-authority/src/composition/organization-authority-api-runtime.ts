@@ -312,7 +312,7 @@ export async function startOrganizationAuthorityApiRuntime(
       record: recordDatabase,
       audit: readAudit,
       capture_projects: captureProjects,
-      // Mine needs the approver; the person list names it.
+      // The person list and open name a meeting's approver.
       ...personMeetingReleaseOptionsV1({
         record_approver: dependencies.record_approver,
         memberships,
@@ -413,7 +413,6 @@ export async function startOrganizationAuthorityApiRuntime(
       person_list: createPersonListRouteV1({
         organization_id: metadata.organization_id,
         sessions,
-        tools: personTools,
         directory: new SqlitePersonListDirectoryV1(database),
         originals: originalItems,
         meetings: recordSearch,

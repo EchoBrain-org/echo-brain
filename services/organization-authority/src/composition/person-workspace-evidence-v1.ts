@@ -59,7 +59,7 @@ interface CreatePersonWorkspaceEvidenceSourcesV1Options {
   readonly access_token: string;
   /** The asker's session now. The sources are bound to the person it names at creation; every call and check reads it again. */
   readonly authenticate: () => PersonAccessAuthorization;
-  /** Never Mine: Mine reads only what the asker added. In a project, only that project and its members. */
+  /** In a project, only that project and its members. */
   readonly scope: { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
   /** One audit for the request, shared by the three sources (`SqlitePersonAgenticAskAuditV1.forWorkspaceRequest`). */
   readonly audit: PersonWorkspaceReleaseAuditV1;

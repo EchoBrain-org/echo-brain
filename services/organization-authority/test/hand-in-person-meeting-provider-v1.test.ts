@@ -155,9 +155,9 @@ describe('the hand-in meeting source', () => {
     expect(found.items).toHaveLength(1);
     expect(() => originals.revalidateDeskRelease({ access_token: 'member', release: found })).not.toThrow();
     // The person supplied the transcript, so it is the text they open, whole.
-    expect(originals.deskOpen({ access_token: 'member', scope: { kind: 'mine' }, citation: found.items[0]!.citation }).items[0]?.text)
+    expect(originals.deskOpen({ access_token: 'member', scope: { kind: 'global' }, citation: found.items[0]!.citation }).items[0]?.text)
       .toContain('Mina Patel: The kiln trial slips a week.\n\nRafael Moreno: Then the glaze order waits.');
-    expect(originals.deskSearch({ access_token: 'member', scope: { kind: 'mine' }, query: 'glaze' }).items).toHaveLength(1);
+    expect(originals.deskSearch({ access_token: 'member', scope: { kind: 'global' }, query: 'glaze' }).items).toHaveLength(1);
     // Nobody else reads it, the owner included.
     expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'kiln glaze' }).items).toEqual([]);
   });

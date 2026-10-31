@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonDocumentMetadataV2, validatePersonDocumentTextV1, validatePersonDocumentSearchResultV2, type PersonDocumentUploadMetadataV2 } from '@echo-brain/organization-api';
+import { validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV2, type PersonDocumentUploadMetadataV2 } from '@echo-brain/organization-api';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
+import { SqlitePersonOriginalItemsV1 } from '../src/adapters/persistence/sqlite/person-original-items-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { extractDocument } from '../src/adapters/documents/document-extraction.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
@@ -27,15 +28,21 @@ function input(bytes:Uint8Array,changes:Partial<PersonDocumentUploadMetadataV2>=
 function storedV1(db:Database.Database,actor:AuthorityPersonMembershipBinding,bytes:Uint8Array,changes:Partial<Parameters<typeof insertStoredDocumentV1>[2]>={}){return insertStoredDocumentV1(db,actor,{filename:'SCOUT-PRD.md',title:'SCOUT product requirements',audience:{kind:'team'},project_id:PROJECT_ALPHA,...changes},bytes);}
 function search(project_id:typeof PROJECT_ALPHA|null=null,query=''){return {schema_version:2,kind:'echo-person-document-search-v2',project_id,query,limit:20,cursor:null};}
 function result(claim:{source_sha256:string},text:string){return {status:'ready' as const,sourceSha256:claim.source_sha256,extractorVersion:'fixture-1',chunks:[{anchor_kind:'paragraph' as const,anchor_start:1,text}],message:null};}
+/** A document's extracted text as `person open --ref document:<id>` reads it (ADR-0024): every page's chunk texts, in order. */
+function opened(db:Database.Database,token:string,documentId:string):string[][]{
+ const items=new SqlitePersonOriginalItemsV1(db,{authenticateAccess:({access_token})=>authorization(access_token==='member'?MEMBER:access_token==='returned'?RETURNED_MEMBER:OWNER)},OWNER.organization_id);
+ const pages:string[][]=[];
+ for(let from:number|undefined;;){const page=items.open({access_token:token,ref:{kind:'document',id:documentId as `doc_${string}`},...(from===undefined?{}:{from_ordinal:from})});if(page.kind!=='document')throw new Error('expected a document');pages.push(page.chunks.map(chunk=>chunk.text));if(page.next_ordinal===null)return pages;from=page.next_ordinal;}
+}
 describe('Document custody and retrieval V1',()=>{
  it('retains an ordinary >8KiB PRD, exact download, immutable receipt replay and paged end-of-document search',()=>{
   const {app,repository,db}=setup();const bytes=Buffer.from('SCOUT requirement '.repeat(1600)+'terminal-needle');const request=input(bytes);const receipt=app.uploadV2('owner',request,bytes);
   expect(app.uploadV2('owner',request,bytes)).toEqual(receipt);expect(Buffer.from(app.originalV2('member',receipt.document_id).bytes).equals(bytes)).toBe(true);
   const claim=repository.claimExtraction()!;expect(Buffer.from(claim.bytes).equals(bytes)).toBe(true);const text=bytes.toString(),chunks=Array.from({length:Math.ceil(text.length/3072)},(_,index)=>({anchor_kind:'paragraph' as const,anchor_start:index+1,text:text.slice(index*3072,(index+1)*3072)}));expect(repository.completeExtraction(claim,{...result(claim,'x'),chunks})).toBe(true);
-  const page=validatePersonDocumentTextV1(app.text('member',receipt.document_id));expect(page.next_cursor).not.toBeNull();let cursor=page.next_cursor,remaining='';while(cursor!==null){const next=app.text('member',receipt.document_id,{cursor});remaining+=next.chunks.map(c=>c.text).join('');cursor=next.next_cursor;}expect(remaining).toContain('terminal-needle');
+  const pages=opened(db,'member',receipt.document_id);expect(pages.length).toBeGreaterThan(1);expect(pages.flat().join('')).toBe(text);
   const found=validatePersonDocumentSearchResultV2(app.searchV2('member',search(PROJECT_ALPHA,'terminal-needle')));expect(found.documents[0]?.document_id).toBe(receipt.document_id);expect(found.documents[0]?.anchor).toEqual({kind:'paragraph',start:chunks.length});expect(app.uploadV2('owner',request,bytes)).toEqual(receipt);
   expect(()=>app.uploadV2('owner',{...request,title:'changed'},bytes)).toThrow(expect.objectContaining({code:'conflict'}));
-  const audit=db.prepare(`SELECT body_json FROM authority_person_document_read_audit_v1`).all() as {body_json:string}[];expect(audit.length).toBeGreaterThan(3);expect(audit.every(x=>!x.body_json.includes('terminal-needle')&&!x.body_json.includes('SCOUT requirement'))).toBe(true);
+  const audit=db.prepare(`SELECT body_json FROM authority_person_document_read_audit_v1 UNION ALL SELECT body_json FROM authority_person_upload_read_audit_v1`).all() as {body_json:string}[];expect(audit.length).toBeGreaterThan(3);expect(audit.every(x=>!x.body_json.includes('terminal-needle')&&!x.body_json.includes('SCOUT requirement'))).toBe(true);
  });
  it('filters private/project audiences before search and treats association independently',()=>{
   const {app}=setup();const bytes=Buffer.from('private needle');
@@ -68,22 +75,22 @@ describe('Document custody and retrieval V1',()=>{
   expect(db.prepare('SELECT count(*) n FROM authority_person_document_read_audit_v1').get()).toEqual({n:0});
  });
  it('keeps originals for explicit extraction failures and only permits the current lease to finish',()=>{
-  const {app,repository,setTime}=setup();const bytes=Buffer.from('%PDF-not-valid');const doc=app.uploadV2('owner',input(bytes,{filename:'scan.pdf'}),bytes);const old=repository.claimExtraction()!;expect(repository.claimExtraction()).toBeUndefined();
+  const {app,repository,setTime,db}=setup();const bytes=Buffer.from('%PDF-not-valid');const doc=app.uploadV2('owner',input(bytes,{filename:'scan.pdf'}),bytes);const old=repository.claimExtraction()!;expect(repository.claimExtraction()).toBeUndefined();
   setTime('2026-09-21T22:02:01.000Z');const fresh=repository.claimExtraction()!;expect(fresh.lease_token).not.toBe(old.lease_token);expect(repository.completeExtraction(old,{...result(old,'text')})).toBe(false);
-  expect(repository.completeExtraction(fresh,{...result(fresh,'text'),status:'malformed',chunks:[],message:'Invalid PDF'})).toBe(true);expect(validatePersonDocumentMetadataV2(app.readV2('owner',doc.document_id)).extraction_state).toBe('malformed');expect(app.originalV2('owner',doc.document_id).bytes).toEqual(bytes);expect(app.text('owner',doc.document_id).chunks).toEqual([]);
+  expect(repository.completeExtraction(fresh,{...result(fresh,'text'),status:'malformed',chunks:[],message:'Invalid PDF'})).toBe(true);expect(validatePersonDocumentMetadataV2(app.readV2('owner',doc.document_id)).extraction_state).toBe('malformed');expect(app.originalV2('owner',doc.document_id).bytes).toEqual(bytes);expect(opened(db,'owner',doc.document_id)).toEqual([[]]);
  });
  it('continues project-owned extraction after uploader removal and releases history to new exact-tenure members',()=>{
   const {app,repository,db}=setup();const bytes=Buffer.from('claim content');const doc=app.uploadV2('member',input(bytes,{audience:{kind:'project',project_id:PROJECT_ALPHA}}),bytes);const claim=repository.claimExtraction()!;
   db.prepare(`UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE membership_id=? AND project_id=?`).run(PROJECT_CONTEXT_NOW,MEMBER.membership_id,PROJECT_ALPHA);
   revokeMembership(db,MEMBER);addMembership(db,RETURNED_MEMBER,'Returned','member@example.test');
   expect(repository.completeExtraction(claim,result(claim,'historical-hardware'))).toBe(true);expect(app.readV2('owner',doc.document_id).extraction_state).toBe('ready');expect(app.originalV2('owner',doc.document_id).bytes).toEqual(bytes);
-  expect(()=>app.text('returned',doc.document_id)).toThrow(expect.objectContaining({code:'not_found'}));grant(db,PROJECT_ALPHA,RETURNED_MEMBER);
-  expect(app.text('returned',doc.document_id,{project_id:PROJECT_ALPHA}).chunks[0]?.text).toBe('historical-hardware');expect(app.originalV2('returned',doc.document_id,{project_id:PROJECT_ALPHA}).bytes).toEqual(bytes);expect(app.searchV2('returned',search(PROJECT_ALPHA,'historical-hardware')).documents[0]?.document_id).toBe(doc.document_id);
+  expect(()=>opened(db,'returned',doc.document_id)).toThrow(expect.objectContaining({code:'not_found'}));grant(db,PROJECT_ALPHA,RETURNED_MEMBER);
+  expect(opened(db,'returned',doc.document_id)).toEqual([['historical-hardware']]);expect(app.originalV2('returned',doc.document_id,{project_id:PROJECT_ALPHA}).bytes).toEqual(bytes);expect(app.searchV2('returned',search(PROJECT_ALPHA,'historical-hardware')).documents[0]?.document_id).toBe(doc.document_id);
   expect(()=>app.readV2('member',doc.document_id)).toThrow(expect.objectContaining({code:'unauthorized'}));
  });
  it('claims pending project content after uploader departure while keeping associated private content private',()=>{
   const {app,repository,db}=setup();const bytes=Buffer.from('pending project');const shared=app.uploadV2('member',input(bytes,{audience:{kind:'project',project_id:PROJECT_ALPHA}}),bytes);
-  revokeMembership(db,MEMBER);const claim=repository.claimExtraction();expect(claim?.document_id).toBe(shared.document_id);expect(repository.completeExtraction(claim!,result(claim!,'pending history'))).toBe(true);expect(app.text('owner',shared.document_id).chunks[0]?.text).toBe('pending history');
+  revokeMembership(db,MEMBER);const claim=repository.claimExtraction();expect(claim?.document_id).toBe(shared.document_id);expect(repository.completeExtraction(claim!,result(claim!,'pending history'))).toBe(true);expect(opened(db,'owner',shared.document_id)).toEqual([['pending history']]);
   const privateDoc=app.uploadV2('owner',input(bytes,{audience:{kind:'only_me'}}),bytes);const privateClaim=repository.claimExtraction()!;expect(repository.completeExtraction(privateClaim,result(privateClaim,'private history'))).toBe(true);
   addMembership(db,RETURNED_MEMBER,'Returned','member@example.test');grant(db,PROJECT_ALPHA,RETURNED_MEMBER);expect(()=>app.originalV2('returned',privateDoc.document_id)).toThrow(expect.objectContaining({code:'not_found'}));
  });
@@ -134,7 +141,7 @@ describe('Document custody and retrieval V1',()=>{
  it('retries transient extraction with bounded backoff without publishing failed-attempt content',()=>{
   const {app,repository,setTime,db}=setup();const bytes=Buffer.from('retry original');const doc=app.uploadV2('owner',input(bytes),bytes);const first=repository.claimExtraction()!;
   expect(repository.completeExtraction(first,{...result(first,''),status:'unavailable',chunks:[],message:'Temporary parser failure'})).toBe(true);expect(app.readV2('owner',doc.document_id).extraction_state).toBe('extracting');expect(repository.claimExtraction()).toBeUndefined();expect(db.prepare('SELECT count(*) n FROM authority_person_document_text_v1').get()).toEqual({n:0});
-  setTime('2026-09-21T22:02:01.000Z');const second=repository.claimExtraction()!;expect(second.lease_token).not.toBe(first.lease_token);expect(repository.completeExtraction(first,result(first,'stale'))).toBe(false);expect(repository.completeExtraction(second,result(second,'recovered content'))).toBe(true);expect(app.text('owner',doc.document_id).chunks[0]?.text).toBe('recovered content');expect(app.originalV2('owner',doc.document_id).bytes).toEqual(bytes);
+  setTime('2026-09-21T22:02:01.000Z');const second=repository.claimExtraction()!;expect(second.lease_token).not.toBe(first.lease_token);expect(repository.completeExtraction(first,result(first,'stale'))).toBe(false);expect(repository.completeExtraction(second,result(second,'recovered content'))).toBe(true);expect(opened(db,'owner',doc.document_id)).toEqual([['recovered content']]);expect(app.originalV2('owner',doc.document_id).bytes).toEqual(bytes);
  });
  it('keeps shared team processing independent of departed contributor but cancels private work',()=>{
   const {app,repository,db}=setup();const bytes=Buffer.from('scope');const team=app.uploadV2('member',input(bytes,{audience:{kind:'team'}}),bytes);const privateDoc=app.uploadV2('member',input(bytes,{audience:{kind:'only_me'}}),bytes);
@@ -145,7 +152,7 @@ describe('Document custody and retrieval V1',()=>{
  it('caps transient retries and never overwrites terminal extracted evidence',()=>{
   const {app,repository,setTime,db}=setup();const bytes=Buffer.from('bounded retries');const doc=app.uploadV2('owner',input(bytes),bytes);let finalClaim;
   for(let attempt=0;attempt<3;attempt++){setTime(`2026-09-21T22:0${attempt+1}:00.000Z`);const claim=repository.claimExtraction()!;expect(claim).toBeDefined();expect(repository.completeExtraction(claim,{...result(claim,''),status:'timed_out',chunks:[],message:'Timeout'})).toBe(true);finalClaim=claim;}
-  expect(app.readV2('owner',doc.document_id)).toMatchObject({extraction_state:'timed_out',extraction_detail:'Extraction timed out after 3 attempts'});expect(repository.claimExtraction()).toBeUndefined();expect(repository.completeExtraction(finalClaim!,result(finalClaim!,'late rewrite'))).toBe(false);expect(app.text('owner',doc.document_id).chunks).toEqual([]);expect(db.prepare('SELECT count(*) n FROM authority_source_representations_v1').get()).toEqual({n:1});
+  expect(app.readV2('owner',doc.document_id)).toMatchObject({extraction_state:'timed_out',extraction_detail:'Extraction timed out after 3 attempts'});expect(repository.claimExtraction()).toBeUndefined();expect(repository.completeExtraction(finalClaim!,result(finalClaim!,'late rewrite'))).toBe(false);expect(opened(db,'owner',doc.document_id)).toEqual([[]]);expect(db.prepare('SELECT count(*) n FROM authority_source_representations_v1').get()).toEqual({n:1});
  });
  it('atomically retains source revision and representation and rebuilds provenance from verified custody',()=>{
   const {app,repository,db}=setup();const bytes=Buffer.from('atomic representation');const doc=app.uploadV2('owner',input(bytes,{audience:{kind:'project',project_id:PROJECT_ALPHA}}),bytes);const claim=repository.claimExtraction()!;
@@ -173,8 +180,8 @@ describe('Document custody and retrieval V1',()=>{
   expect(db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:10});
  });
  it('preserves ordinary words across defensive text chunk boundaries',()=>{
-  const {app,repository}=setup();const bytes=Buffer.from('word boundary source');const doc=app.uploadV2('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;const first='a '.repeat(1532),second='a '.repeat(2)+'hardware',text=first+second;repository.completeExtraction(claim,{...result(claim,first),chunks:[{anchor_kind:'paragraph',anchor_start:1,text:first},{anchor_kind:'paragraph',anchor_start:2,text:second}]});
-  const found=app.searchV2('member',search(PROJECT_ALPHA,'hardware'));expect(found.documents[0]?.document_id).toBe(doc.document_id);expect(app.text('member',doc.document_id).chunks.map(c=>c.text).join('')).toBe(text);
+  const {app,repository,db}=setup();const bytes=Buffer.from('word boundary source');const doc=app.uploadV2('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;const first='a '.repeat(1532),second='a '.repeat(2)+'hardware',text=first+second;repository.completeExtraction(claim,{...result(claim,first),chunks:[{anchor_kind:'paragraph',anchor_start:1,text:first},{anchor_kind:'paragraph',anchor_start:2,text:second}]});
+  const found=app.searchV2('member',search(PROJECT_ALPHA,'hardware'));expect(found.documents[0]?.document_id).toBe(doc.document_id);expect(opened(db,'member',doc.document_id).flat().join('')).toBe(text);
  });
  it('indexes the tail of 5,000 packed hard-wrapped lines and keeps the phrase in one searchable chunk',async()=>{
   const {app,repository}=setup();const bytes=Buffer.from(Array.from({length:5000},(_,index)=>index===4999?'tail-marker':'hardware\nrequirements').join('\n'));const doc=app.uploadV2('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;
@@ -187,7 +194,8 @@ describe('Document custody and retrieval V1',()=>{
   const found=validatePersonDocumentSearchResultV2(app.searchV2('member',search(PROJECT_ALPHA,'needle')));expect(found.documents[0]?.document_id).toBe(doc.document_id);expect(found.documents[0]?.excerpt).toBe(text);
  });
  it('paginates escaped/control text within serialized wire bounds without dropping content',()=>{
-  const {app,repository}=setup();const bytes=Buffer.from('bounded text');const receipt=app.uploadV2('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;const text='\u0001'.repeat(8000)+'😀ending';repository.completeExtraction(claim,{...result(claim,text.slice(0,3072)),chunks:[{anchor_kind:'paragraph',anchor_start:1,text:text.slice(0,3072)},{anchor_kind:'paragraph',anchor_start:2,text:text.slice(3072,6144)},{anchor_kind:'paragraph',anchor_start:3,text:text.slice(6144)}]});
-  let cursor:string|null=null;let all='';do{const page=validatePersonDocumentTextV1(app.text('owner',receipt.document_id,{cursor}));expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(24*1024);all+=page.chunks.map(c=>c.text).join('');cursor=page.next_cursor;}while(cursor);expect(all).toBe(text);
+  const {app,repository,db}=setup();const bytes=Buffer.from('bounded text');const receipt=app.uploadV2('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;const text='\u0001'.repeat(8000)+'😀ending';repository.completeExtraction(claim,{...result(claim,text.slice(0,3072)),chunks:[{anchor_kind:'paragraph',anchor_start:1,text:text.slice(0,3072)},{anchor_kind:'paragraph',anchor_start:2,text:text.slice(3072,6144)},{anchor_kind:'paragraph',anchor_start:3,text:text.slice(6144)}]});
+  // Each escaped chunk alone is near the open page's canonical bound, so every chunk is its own page.
+  const pages=opened(db,'owner',receipt.document_id);expect(pages.map(page=>page.length)).toEqual([1,1,1]);expect(pages.flat().join('')).toBe(text);
  });
 });

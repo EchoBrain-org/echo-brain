@@ -1,7 +1,7 @@
 import { sha256Digest, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type { OrganizationRecordDecisionBriefV1 } from "@echo-brain/organization-protocol";
 import { afterEach, describe, expect, it } from "vitest";
-import type { PersonMeetingPartPositionV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
+import type { PersonListStoreScopeV1, PersonMeetingPartPositionV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import { releasableBodyV1 } from "../src/application/person-item-text-v1.js";
 import { validatePersonOpenResponseV1 } from "@echo-brain/organization-api";
@@ -135,7 +135,8 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     expect(w.route({ memberships: undefined }).openMeeting({ access_token: "emp_a", record_sha256: w.digest("detail") }).meeting).not.toHaveProperty("approved_by");
     // Evidence quotes never leave, from open or from the list (N-17).
     expect(JSON.stringify(pages(route, "owner", w.digest("detail")))).not.toContain(QUOTE);
-    const listed = route.collectMeetings({ access_token: "owner", scope: { kind: "global" }, after: null, limit: 26 });
+    const listed = route.collectMeetings({ access_token: "owner", scope: { kind: "project", project_id: SHARED }, after: null, limit: 26 });
+    expect(listed.status === "ok" ? listed.rows.map((row) => row.id) : []).toContain(w.digest("detail"));
     expect(JSON.stringify(listed)).not.toContain(QUOTE);
   });
 
@@ -220,11 +221,16 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
   it("opens every listed row with the identical row", async () => {
     const w = await world();
     const route = w.route();
-    for (const token of ["owner", "emp_a", "emp_b"] as const) {
-      const listed = route.collectMeetings({ access_token: token, scope: { kind: "global" }, after: null, limit: 26 });
-      if (listed.status !== "ok") throw new Error("expected rows");
-      expect(listed.rows.length).toBeGreaterThan(5);
-      for (const row of listed.rows) {
+    const scopes: readonly PersonListStoreScopeV1[] = [{ kind: "project", project_id: SHARED }, { kind: "only_me" }];
+    for (const token of ["owner", "emp_a"] as const) {
+      const rows = scopes.flatMap((scope) => {
+        const listed = route.collectMeetings({ access_token: token, scope, after: null, limit: 26 });
+        if (listed.status !== "ok") throw new Error("expected rows");
+        return listed.rows;
+      });
+      // SHARED's meetings and the reader's own Only me approval: every visibility a list shows.
+      expect(new Set(rows.map((row) => row.visibility))).toEqual(new Set(["project", "projects", "approver_only"]));
+      for (const row of rows) {
         const opened: PersonStoreMeetingRowV1 = route.openMeeting({ access_token: token, record_sha256: row.id }).row;
         expect(opened).toEqual(row);
       }

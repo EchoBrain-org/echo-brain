@@ -53,7 +53,7 @@ function captureFixture() {
   const originals = {
     deskAuthorize, revalidateDeskRelease,
     deskSearch: vi.fn(() => ({ items: [note], truncated: false, receipt: canonicalSha256('note release'),
-      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
+      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'global' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
     })),
   };
   const replies: unknown[] = [];
@@ -126,7 +126,7 @@ describe('person diagnostics HTTP integration', () => {
     const initial = validatePersonDiagnosticsResultV1('read', await (await post(base, PERSON_DIAGNOSTICS_PATH_V1, readRequest)).json());
     expect(initial.status).toBe('prepared'); expect(initial).not.toHaveProperty('trace');
     expect((await post(base, PERSON_DIAGNOSTICS_PATH_V1, readRequest, 'other')).status).toBe(404);
-    const answer = await post(base, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'Is the PVT fixture ready?', mine: true, capture_id: receipt.capture_id });
+    const answer = await post(base, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'Is the PVT fixture ready?', capture_id: receipt.capture_id });
     expect(answer.status).toBe(200);
     expect(await answer.json()).toMatchObject({ schema_version: 8, outcome: 'answered', parts: [{ statements: [{ text: 'The PVT fixture is ready and Manufacturing approved it.' }] }] });
     const fencesBeforeRead = f.originals.revalidateDeskRelease.mock.calls.length;
