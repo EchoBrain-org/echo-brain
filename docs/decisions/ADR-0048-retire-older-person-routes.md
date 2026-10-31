@@ -116,8 +116,8 @@ Retire them, and keep what reads stored data.
 
 Update (2026-10-31): what this record left out is retired too.
 `GET /v3/person/capabilities` answers the ordinary 404 and stays reserved
-against provider adapters. `/v7` no longer sets `x-echo-person-ask-route`, and
-the client no longer turns a 404 from Ask or the Ask source check into
+against provider adapters. The client no longer reads `x-echo-person-ask-route`
+and no longer turns a 404 from Ask or the Ask source check into
 `not_supported`: it is `not_found`, as from any other read (the desktop's own
 handling went with the Ask timeline, [ADR-0047](ADR-0047-ask-timeline.md)).
 `GET /v1/person/records` always carries `source_metadata`, so the client sends
@@ -126,6 +126,13 @@ list's global scope are retired
 ([ADR-0024](ADR-0024-person-list-open-and-mine-scope.md)), and so are
 `POST /v3/person/evidence/open` and the `person evidence` commands;
 `POST /v3/person/evidence/search` stays for the research-loop evaluation.
+These ship in the release order below, the Authority first. `/v7` keeps
+sending `x-echo-person-ask-route` for one more release, because released
+clients refuse a progress stream without it and the desktop always asks with
+progress; it goes once the update floor passes this release. So a desktop that
+has not updated keeps working. Until it updates, an installed CLI is refused
+`person ask --mine` and a `person list` with neither `--project` nor
+`--only-me`, and its `person evidence open` gets `not_found`.
 
 ## Migration, rollback, and evidence
 

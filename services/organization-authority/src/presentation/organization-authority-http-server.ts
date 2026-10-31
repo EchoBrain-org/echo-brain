@@ -1103,7 +1103,13 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (method === "POST" && url.search === "") {
         const personRead = personReadPosts.get(url.pathname);
-        if (personRead !== undefined) { await personRead(request, response); return; }
+        if (personRead !== undefined) {
+          // Released clients (feed seq 20 and older) refuse a /v7 progress stream without this header and read a /v7 404
+          // without it as an Authority with no /v7; the current client ignores it. Set before any validation, so every /v7
+          // response carries it. Drop it once the update floor passes this release.
+          if (url.pathname === PERSON_ANSWER_PATH_V7) response.setHeader('x-echo-person-ask-route', '7');
+          await personRead(request, response); return;
+        }
       }
       fail(response, 404, "not_found");
     } catch (error) {

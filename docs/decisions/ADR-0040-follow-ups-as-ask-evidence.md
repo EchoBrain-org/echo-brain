@@ -239,5 +239,7 @@ follow-ups their own dates and links, and its V8 answer on `/v7` cites them too.
 The staging research evaluation's question goal now runs Ask as `/v7` does, so
 it does measure follow-ups; the evidence note above predates that.
 
-Update (2026-10-31): no Ask route sets `x-echo-person-ask-route` any more.
-`/v7` dropped it, and a 404 from Ask is the Authority's own `not_found`.
+Update (2026-10-31): the client no longer reads `x-echo-person-ask-route`, and
+a 404 from Ask is the Authority's own `not_found`. `/v7` keeps sending the
+header for one more release, because released clients refuse a progress
+stream without it.

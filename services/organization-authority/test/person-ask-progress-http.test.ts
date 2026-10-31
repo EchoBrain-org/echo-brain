@@ -90,12 +90,15 @@ describe('Ask progress over HTTP', () => {
     const base = await origin(f);
     const plain = await ask(base, { progress: null });
     expect(plain.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    // Released clients refuse a progress stream without the route header; it stays on JSON answers and streams for them.
+    expect(plain.headers.get('x-echo-person-ask-route')).toBe('7');
     const json = validatePersonAnswerResponseV8(await plain.json());
 
     const streamed = await ask(base);
     expect(streamed.status).toBe(200);
     expect(streamed.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
     expect(streamed.headers.get('cache-control')).toBe('no-store');
+    expect(streamed.headers.get('x-echo-person-ask-route')).toBe('7');
     expect(streamed.headers.has('content-length')).toBe(false);
     const raw = await streamed.text();
     const events = decode(raw);
