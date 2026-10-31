@@ -46,7 +46,7 @@ npm run client-update:staging -- plan --hosting s3 \
 Planning creates a CloudFormation change set and captures its exact template
 digest, resource inventory, source commit, and change-set ARN in a mode-0600
 receipt. It provisions no bucket. Review that named change set before execution.
-S3 is the default and the only supported lane for new plans and execution.
+S3 is the default and the only lane.
 Planning may use a committed feature branch; execution
 requires that exact source to be merged into fetched `origin/main`.
 If the result is `planning`, repeat `plan --hosting s3` with the same output path
@@ -68,16 +68,62 @@ Execution and status infer the hosting lane from the receipt. The resulting
 S3 outputs identify the bucket and HTTPS `feed_url`; no DNS or certificate setup
 is needed.
 
-## Existing CloudFront operation
+## Remove the retired CloudFront stack
 
-The original `staging-feed-v1.template.json` operation
-(`echo-client-update-staging-v1`) rolled back before creating CloudFront
-resources; the tool can still inspect its receipt. Preserve that stack, bucket,
-and receipt unchanged: do not delete or reuse them, reset the receipt, or retry
-an uncertain execution. Its approval does not cover the S3-only stack.
-`plan --hosting cloudfront` and `execute` with a CloudFront receipt refuse with
-`hosting_retired`; use `status --receipt <existing-receipt>` for inspection.
-Status returns its observation without rewriting the archived receipt.
+The first feed operation, stack `echo-client-update-staging-v1`, rolled back
+before it created any CloudFront resource. Its lane is retired: the tool no
+longer plans, executes or inspects it, and refuses its receipt as
+`receipt_invalid`. The rolled-back stack, and the bucket its template retains
+on rollback, may still exist in the staging account. Remove them with this
+human procedure, using the `echo-prod` profile after review. Coding agents do
+not run it.
+
+1. Inspect read-only. If the stack exists, it must be `ROLLBACK_COMPLETE` with
+   every resource other than `FeedBucket` absent or `DELETE_COMPLETE`; stop
+   otherwise. The retained bucket is `FeedBucket`'s physical ID or, if the stack
+   is gone, the bucket the last command lists. If there is neither stack nor
+   bucket, nothing remains.
+
+   ```sh
+   aws cloudformation describe-stacks --profile echo-prod --region us-west-2 \
+     --stack-name echo-client-update-staging-v1 --query 'Stacks[0].StackStatus'
+   aws cloudformation describe-stack-resources --profile echo-prod \
+     --region us-west-2 --stack-name echo-client-update-staging-v1 \
+     --query 'StackResources[*].{LogicalId:LogicalResourceId,Type:ResourceType,Status:ResourceStatus,PhysicalId:PhysicalResourceId}'
+   aws s3api list-buckets --profile echo-prod \
+     --query "Buckets[?starts_with(Name, 'echo-client-update-staging-v1-feedbucket-')].Name"
+   ```
+
+2. Confirm the retained bucket is empty. Stop unless its name starts with
+   `echo-client-update-staging-v1-feedbucket-` and the listing shows no version
+   and no delete marker:
+
+   ```sh
+   retired_bucket='<retained bucket name from step 1>'
+   aws s3api list-object-versions --profile echo-prod --region us-west-2 \
+     --bucket "$retired_bucket" --max-items 1
+   ```
+
+3. If the stack exists, delete it and wait. The rolled-back stack holds no live
+   resource, and the retained bucket is outside it:
+
+   ```sh
+   aws cloudformation delete-stack --profile echo-prod --region us-west-2 \
+     --stack-name echo-client-update-staging-v1
+   aws cloudformation wait stack-delete-complete --profile echo-prod \
+     --region us-west-2 --stack-name echo-client-update-staging-v1
+   ```
+
+4. Delete the empty retained bucket. The call fails on a bucket that still
+   holds anything:
+
+   ```sh
+   aws s3api delete-bucket --profile echo-prod --region us-west-2 \
+     --bucket "$retired_bucket"
+   ```
+
+Record only the stack status and timestamps. The operation's private receipt is
+history; no tool reads it. The S3 stack above is the only feed.
 
 ## Sign and publish the first release
 
