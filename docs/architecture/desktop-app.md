@@ -60,7 +60,7 @@ copy that a unit test proves equivalent.
 
 | Screen | Code | What it is for |
 | --- | --- | --- |
-| Home | `screens/home.tsx`, `screens/altitude.tsx` | What needs you, grouped by kind, then your projects; zoom into a project or a person |
+| Home | `screens/home.tsx`, `screens/altitude.tsx` | What needs you, grouped by kind, then your projects; zoom into a project or a person. Home always opens at its top. |
 | Decision | `screens/decision.tsx`, `card.tsx`, `impact-card.tsx` | Approve a meeting, route each item, see its impact checks |
 | Ask | `screens/ask.tsx` | Question bar with suggestions, the thread, the source pane |
 | Project | `screens/project.tsx`, `items.tsx`, `project-settings.tsx`, `people.tsx` | The project feed, settings, Tools mappings and members |

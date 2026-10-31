@@ -195,8 +195,10 @@ Deeper: [component catalog](../components/README.md),
    A failure is held for an operator-authorized retry, never repeated silently.
 4. The approval core freezes one proposal for the meeting.
 5. The person decides on the desktop decision page, routing each item to Only
-   me, up to 20 projects, those projects privately, or Don't keep. The optional
-   Slack copy approves everything as suggested. The first decision wins.
+   me, up to 20 projects, those projects privately, or Don't keep. The CLI can
+   decide too (`person tools meetings`, recorded as a desktop decision). The
+   optional Slack copy approves everything as suggested. The first decision
+   wins.
 6. The publisher appends one signed record per destination group to the record
    log and queues one impact check per record. Items marked Don't keep write no
    record.
@@ -322,8 +324,12 @@ Owners: [deploy/organization-authority/README.md](../../deploy/organization-auth
 ## Beta limits and known debt
 
 - **Search ceiling.** One search generation admits at most 1,024 approved
-  items and 32 permission segments (`READABLE_SEARCH_ADMISSION_BUDGET_V1`).
-  Per-item routing and Only me add segments quickly. See the
+  items and 32 permission segments (`READABLE_SEARCH_ADMISSION_BUDGET_V1`):
+  one segment for the organization, one per approver with Only me items, and
+  one per distinct set of audience projects. Past either limit the rebuild
+  throws. A running service keeps serving the previous generation, so new
+  approvals stop reaching search, lists and Ask; the next restart fails before
+  the API starts listening. See the
   [scaling decision guide](scaling-decision-guide.md).
 - **One process, one volume, no migrations.** A baseline change means fresh
   state.
