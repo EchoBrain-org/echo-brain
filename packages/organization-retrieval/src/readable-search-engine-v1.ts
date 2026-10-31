@@ -936,17 +936,17 @@ export function buildReadableSearchGenerationV1(
   );
   ensurePrivateDirectory(root, "readable-search engine root");
   ensurePrivateDirectory(generations, "readable-search generations directory");
-  for (const name of readdirSync(generations))
+  // Staging sits beside `generations/`, outside the tree the state-lineage
+  // guard verifies, so a process killed mid-build still starts. The next build
+  // removes what it left.
+  for (const name of readdirSync(root))
     if (STAGING_DIRECTORY.test(name)) {
-      const orphan = join(generations, name);
-      assertWithin(orphan, generations, "readable-search engine staging");
+      const orphan = join(root, name);
+      assertWithin(orphan, root, "readable-search engine staging");
       ensurePrivateDirectory(orphan, "readable-search engine staging");
       rmSync(orphan, { recursive: true, force: false });
     }
-  const staging = join(
-    generations,
-    `.staging-${randomBytes(16).toString("hex")}`,
-  );
+  const staging = join(root, `.staging-${randomBytes(16).toString("hex")}`);
   mkdirSync(staging, { mode: 0o700 });
   try {
     ensurePrivateDirectory(
@@ -1081,6 +1081,7 @@ export function buildReadableSearchGenerationV1(
     } else {
       renameSync(staging, finalDirectory);
       fsyncPath(generations);
+      fsyncPath(root);
     }
     return {
       generation_directory: finalDirectory,
@@ -1127,13 +1128,13 @@ export function retireReadableSearchGenerationsV1(input: {
   // state directory. Flush the directory, so that commit cannot roll back
   // after the generations it replaced are gone.
   fsyncPath(input.state_directory);
+  // Staging leftovers beside these belong to the builder, which removes them
+  // before its next build.
   for (const name of readdirSync(root))
     if (RETIRED_GENERATION.test(name)) remove(join(root, name));
   let retired = 0;
   for (const name of readdirSync(generations)) {
-    // The builder owns staging debris and removes it before its next build.
-    if (name === input.keep_generation_id || STAGING_DIRECTORY.test(name))
-      continue;
+    if (name === input.keep_generation_id) continue;
     const debris = join(root, `.retired-${randomBytes(16).toString("hex")}`);
     renameSync(join(generations, name), debris);
     fsyncPath(generations);
