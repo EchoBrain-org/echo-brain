@@ -42,35 +42,13 @@ interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 
 }
 
 /**
- * ADR-0037: upstream hosts that garbled this model's output in the 2026-09-30
- * per-host replay, even at temperature 0. Slugs, as provider.ignore takes them;
- * the evidence is per model, so the list is too.
+ * Claude Sonnet 5.5 requires reasoning and does not advertise temperature
+ * support (ADR-0037). Medium effort shares the completion budget with the
+ * visible JSON. Reserve 4,096 extra tokens even for small background calls, at
+ * most 8,192 combined. This is headroom, not a separate provider-enforced
+ * reasoning-token budget.
  */
-const OPENROUTER_IGNORED_PROVIDERS_BY_MODEL: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  "deepseek/deepseek-v3.2": Object.freeze(["friendli", "atlas-cloud"]),
-});
-
-const CLAUDE_SONNET_5_5_MODEL = "anthropic/claude-sonnet-5.5";
-
-/**
- * Sonnet 5.5 requires reasoning and does not advertise temperature support.
- * Medium effort shares the completion budget with the visible JSON. Reserve
- * 4,096 extra tokens even for small background calls, at most 8,192 combined.
- * This is headroom, not a separate provider-enforced reasoning-token budget.
- * Other models retain the byte-for-byte legacy sampling and output settings.
- */
-function modelRequestCompatibility(input: StructuredGenerationInput): Readonly<Record<string, unknown>> {
-  return input.model === CLAUDE_SONNET_5_5_MODEL
-    ? Object.freeze({
-        max_tokens: input.max_output_tokens + 4_096,
-        reasoning: Object.freeze({ effort: "medium" }),
-      })
-    : Object.freeze({
-        max_tokens: input.max_output_tokens,
-        // ADR-0037: structured protocol output; sampling only adds variance.
-        temperature: 0,
-      });
-}
+const REASONING_HEADROOM_TOKENS = 4_096;
 
 /**
  * Upstream host display names recorded as themselves: the hosts OpenRouter
@@ -360,7 +338,6 @@ export function createOpenRouterStructuredGenerationAdapter(
     const timeoutSignal = AbortSignal.timeout(input.timeout_ms);
     const signals: AbortSignal[] = [timeoutSignal];
     if (input.signal !== undefined) signals.push(input.signal);
-    const ignored = OPENROUTER_IGNORED_PROVIDERS_BY_MODEL[input.model];
     const request: RequestInit = {
       method: "POST",
       headers: {
@@ -377,13 +354,14 @@ export function createOpenRouterStructuredGenerationAdapter(
           { role: "user", content: input.user_prompt },
         ],
         stream: false,
-        ...modelRequestCompatibility(input),
+        max_tokens: input.max_output_tokens + REASONING_HEADROOM_TOKENS,
+        reasoning: { effort: "medium" },
         response_format: {
           type: "json_schema",
           json_schema: {
             name: "echo_layer4",
             strict: true,
-            schema: input.model === CLAUDE_SONNET_5_5_MODEL ? claudeStructuredSchema(input.schema) : input.schema,
+            schema: claudeStructuredSchema(input.schema),
           },
         },
         provider: {
@@ -393,7 +371,6 @@ export function createOpenRouterStructuredGenerationAdapter(
           // deadline, and OpenRouter's default price-weighted routing picked
           // slow providers; route to the fastest provider that qualifies.
           sort: "throughput",
-          ...(ignored === undefined ? {} : { ignore: ignored }),
         },
       }),
     };

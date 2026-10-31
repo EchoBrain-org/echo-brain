@@ -98,10 +98,7 @@ export function routeDiagnosticAdapter(credentialFile, requestedRoute, observedP
     credential_resolver: (reference) => reference === credentialReference ? credential : undefined,
     fetch_impl: async (url, init) => {
       const request = JSON.parse(String(init?.body));
-      // Production ignores hosts measured as garbling output (ADR-0037); a route still ignored would leave no host to serve the call.
-      const { ignore = [], ...provider } = request.provider ?? {};
-      const ignored = ignore.filter((slug) => slug !== requestedRoute);
-      request.provider = { ...provider, ...(ignored.length === 0 ? {} : { ignore: ignored }), only: [requestedRoute], allow_fallbacks: false };
+      request.provider = { ...request.provider, only: [requestedRoute], allow_fallbacks: false };
       const response = await upstream(url, { ...init, body: JSON.stringify(request) });
       try {
         const payload = await response.clone().json();
