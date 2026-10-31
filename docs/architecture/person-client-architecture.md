@@ -50,13 +50,14 @@ while one is running join it, with at most one follow-up load. A release
 package carries the release's exact Person-client tarball; other packages carry
 one packed from `HEAD` by `tools/pack-person-client.mjs`.
 
-Home's footer links to **Only me**
-([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)), a page that reads
-`person list --only-me`: everything only the person can read, filed in a
+The sidebar's **Only me** row
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)) opens a page that
+reads `person list --only-me`: everything only the person can read, filed in a
 project or not (their only-me notes and uploads, the meetings they imported,
-and approved meetings kept for them alone), newest first, a filed row with the
-names of their projects it is in, no row with a lock, and More for the next
-page. A project page reads `person list --project`, and the reader opens every
+and approved meetings kept for them alone), newest first, one flat row each (a
+shape for its kind, its title, a tile for each project it is filed in, named
+on hover, and how long ago it was added), no row with a lock, and More for the
+next page. A project page reads `person list --project`, and the reader opens every
 list row and live match with `person open --ref`, joining a meeting's split
 parts across pages; Ask's sources still read as described under Ask below.
 Only me's bar is Home's (all context); its ⊕, and a file dropped on it, start

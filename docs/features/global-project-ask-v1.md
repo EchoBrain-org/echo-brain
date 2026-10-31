@@ -28,9 +28,10 @@ a narrowing of global scope, never another view: a teammate's item is excluded
 even when the person can read it. "My" in a question is only a search hint; it
 does not select Mine. Its citations carry a `ref`, which `person open` reads
 under global scope. The desktop no longer offers Mine
-([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)): Home links to
-**Only me**, every item only the person can read, filed in a project or not
-(`person list --only-me`), and Ask from Home covers it. The CLI keeps `--mine`.
+([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)): the sidebar's
+**Only me** row opens every item only the person can read, filed in a project
+or not (`person list --only-me`), and Ask from Home covers it. The CLI keeps
+`--mine`.
 
 The separate Find saved context entry is removed. File browsing is not a
 prerequisite for asking. Owner administration is **People & invites**, under
