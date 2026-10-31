@@ -32,7 +32,7 @@ function nonEmptyString(value: unknown, label: string): asserts value is string 
   }
 }
 
-export function isCanonicalTimestamp(value: unknown): value is string {
+function isCanonicalTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   const milliseconds = new Date(value).getTime();
   return (

@@ -8,10 +8,8 @@ export type {
   OrganizationPersonSessionV2,
 } from './contracts.js';
 export {
-  MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_BODY_BYTES,
   isOrganizationApiValidationError,
-  OrganizationApiValidationError,
   validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse,
   validateOrganizationAuthorityOrigin,

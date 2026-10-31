@@ -12,7 +12,7 @@ import type {
 } from "@echo-brain/federation-protocol";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
 
-export const MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES = 16 * 1024;
+const MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES = 16 * 1024;
 
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 

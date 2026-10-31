@@ -16,8 +16,8 @@ import {
   type ExtractionAttemptStoreV1,
 } from '../../admitted-meeting-processing/extraction-attempt-store-v1.js';
 
-export const EXTRACTION_ATTEMPT_STORE_APPLICATION_ID_V1 = 0x45454154; // EEAT
-export const EXTRACTION_ATTEMPT_STORE_SCHEMA_VERSION_V1 = 1;
+const EXTRACTION_ATTEMPT_STORE_APPLICATION_ID_V1 = 0x45454154; // EEAT
+const EXTRACTION_ATTEMPT_STORE_SCHEMA_VERSION_V1 = 1;
 
 const KEY_WHERE = 'admission_sha256 = ? AND review_lineage_id = ? AND review_input_sha256 = ?';
 const MAX_ATTEMPT = 2_147_483_647;

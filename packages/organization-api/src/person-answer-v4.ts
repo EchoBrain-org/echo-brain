@@ -42,7 +42,7 @@ import {
 } from './validation.js';
 
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
-export const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
+const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
 /**
  * The evidence desk and the capability read (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the
  * Ask routes before it, `/v3` to `/v6` with the V4 to V7 answers, were retired.

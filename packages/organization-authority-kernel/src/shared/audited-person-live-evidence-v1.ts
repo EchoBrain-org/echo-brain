@@ -12,7 +12,7 @@ import type {
   PersonLiveEvidenceResultV1, PersonLiveEvidenceSourceV1, PersonLiveEvidenceValueV1, PersonLiveEvidenceCoordinatesV1,
 } from './person-live-evidence-v1.js';
 
-export const PERSON_LIVE_EVIDENCE_MAX_ITEMS_V1 = 50;
+const PERSON_LIVE_EVIDENCE_MAX_ITEMS_V1 = 50;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const ERROR_CODES = new Set(['conflict', 'invalid_request', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable']);
 /** Each attribute a live item may carry, with its UTF-8 bound: a tool item's owner, due date and status, a container's key and tool. */

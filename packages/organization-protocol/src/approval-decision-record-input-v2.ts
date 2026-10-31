@@ -25,7 +25,7 @@ export const APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2 = 'echo-approval-decision
 /** approved_payload.surface of every snapshot the approval core freezes. approval-core-v1.ts aliases it as APPROVAL_SNAPSHOT_SURFACE_V1. */
 export const APPROVAL_DECISION_SNAPSHOT_SURFACE_V1 = 'echo-approval-core';
 /** The kind a destination's record approval id is derived under. */
-export const APPROVAL_ROUTE_KIND_V1 = 'echo-approval-route-v1';
+const APPROVAL_ROUTE_KIND_V1 = 'echo-approval-route-v1';
 export type ApprovalDecisionSurfaceV1 = 'desktop' | 'slack';
 /** Only me (restricted reviewer) or projects. Team (organization-member-readable) is not a choice (spec 1 ruling 2) and is refused. */
 export type ApprovalDecisionPolicyIdV1 = typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;

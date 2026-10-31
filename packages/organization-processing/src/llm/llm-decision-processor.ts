@@ -28,7 +28,7 @@ import {
   type LlmProviderClient,
 } from "./llm-provider.js";
 
-export const LLM_DECISION_PROCESSOR_ADAPTER_ID = 'llm';
+const LLM_DECISION_PROCESSOR_ADAPTER_ID = 'llm';
 export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '2.0.0';
 /** Bump with the adapter version whenever prompt/output semantics change. */
 export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v11';

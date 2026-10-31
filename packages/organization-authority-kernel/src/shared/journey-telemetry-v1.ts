@@ -6,18 +6,18 @@ import {
 } from "./telemetry-vocabulary-v1.js";
 
 /** Content-free operational event emitted by the sole live Authority producer. */
-export const JOURNEY_TELEMETRY_SCHEMA_VERSION_V1 = 2 as const;
-export const JOURNEY_TELEMETRY_KIND_V1 = "echo-authority-journey-stage-v1" as const;
+const JOURNEY_TELEMETRY_SCHEMA_VERSION_V1 = 2 as const;
+const JOURNEY_TELEMETRY_KIND_V1 = "echo-authority-journey-stage-v1" as const;
 
-export const JOURNEY_ENVIRONMENTS_V1 = Object.freeze(["staging", "production"] as const);
+const JOURNEY_ENVIRONMENTS_V1 = Object.freeze(["staging", "production"] as const);
 export type JourneyEnvironmentV1 = (typeof JOURNEY_ENVIRONMENTS_V1)[number];
-export const JOURNEY_WORKFLOWS_V1 = Object.freeze(["core_runtime"] as const);
+const JOURNEY_WORKFLOWS_V1 = Object.freeze(["core_runtime"] as const);
 export type JourneyWorkflowV1 = (typeof JOURNEY_WORKFLOWS_V1)[number];
-export const JOURNEY_STAGES_V1 = Object.freeze(["core_operation"] as const);
+const JOURNEY_STAGES_V1 = Object.freeze(["core_operation"] as const);
 export type JourneyStageV1 = (typeof JOURNEY_STAGES_V1)[number];
-export const JOURNEY_EVENTS_V1 = Object.freeze(["started", "succeeded", "failed"] as const);
+const JOURNEY_EVENTS_V1 = Object.freeze(["started", "succeeded", "failed"] as const);
 export type JourneyEventV1 = (typeof JOURNEY_EVENTS_V1)[number];
-export const JOURNEY_FAILURE_CLASSES_V1 = Object.freeze([
+const JOURNEY_FAILURE_CLASSES_V1 = Object.freeze([
   "authorization",
   "invalid_request",
   "invalid_contract",
@@ -219,7 +219,7 @@ export function recanonicalizeJourneyTelemetryEventV1(
   }, vocabulary);
 }
 
-export function observeJourneyTelemetryBestEffortV1(
+function observeJourneyTelemetryBestEffortV1(
   observer: JourneyTelemetryObserverV1 | undefined,
   event: JourneyTelemetryEventV1,
   vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1,

@@ -6,7 +6,7 @@ import { emitCoreRuntimeDiagnosticV1, type CoreRuntimeDiagnosticEventV1, type Co
 export { coreRuntimeDiagnosticErrorKindV1, type CoreRuntimeDiagnosticErrorKindV1, type CoreRuntimeDiagnosticEventV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeDiagnosticObserverV1 } from './core-runtime-diagnostics-v1.js';
 
 /** Fixed core-runtime boundaries carried by the existing journey transport. */
-export const CORE_RUNTIME_PHASES_V1 = [
+const CORE_RUNTIME_PHASES_V1 = [
   "person_tools_status", "person_tool_delivery", "person_tool_completion",
   "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor",
   "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery",
@@ -22,7 +22,7 @@ export const CORE_RUNTIME_PHASES_V1 = [
   "evidence_search", "evidence_open", "evidence_list", "evidence_revalidate", "evidence_connection",
 ] as const;
 export type CoreRuntimePhaseV1 = (typeof CORE_RUNTIME_PHASES_V1)[number];
-export const CORE_RUNTIME_COUNT_KEYS_V1 = [
+const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "event_loop_delay_max_us", "active_models", "gate_wait_ms", "pending_depth", "oldest_age_ms", "scheduled_delay_ms", "wake_lateness_ms",
   "input_bytes", "output_bytes", "record_count", "atom_count",
   "included_count", "excluded_count",
@@ -42,13 +42,13 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "upstream_retry_after_seconds", "upstream_rate_limit", "upstream_rate_remaining", "upstream_rate_reset_unix_seconds",
 ] as const;
 export type CoreRuntimeCountsV1 = Partial<Record<(typeof CORE_RUNTIME_COUNT_KEYS_V1)[number], number | null>>;
-export const CORE_RUNTIME_RESULTS_V1 = ["held", "unrepresentable", "current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", ...PERSON_ANSWER_OUTCOMES_V8] as const;
-export const CORE_RUNTIME_GROUNDING_STAGES_V1 = ["evidence_id", "evidence_duplicate", "evidence_quote", "due_before_meeting", "decided_question_only", "rationale_supports"] as const;
-export const CORE_RUNTIME_UPSTREAM_SERVICES_V1 = ["nango", "jira", "confluence", "granola", "other"] as const;
-export const CORE_RUNTIME_UPSTREAM_OPERATIONS_V1 = ["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"] as const;
-export const CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1 = ["burst", "global_quota", "tenant_quota", "per_issue_write", "other"] as const;
-export const CORE_RUNTIME_RESEARCH_STOP_REASONS_V1 = Object.freeze(['finished', 'empty_catalog', 'no_progress', 'step_limit', 'budget', 'unusable_step'] as const);
-export const CORE_RUNTIME_RESEARCH_ADMISSIONS_V1 = Object.freeze(['post_revalidation_no_time'] as const);
+const CORE_RUNTIME_RESULTS_V1 = ["held", "unrepresentable", "current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "invalid_request", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure", "verified", "unlinked", "not_configured", "out_of_scope", "empty", "returned", ...PERSON_ANSWER_OUTCOMES_V8] as const;
+const CORE_RUNTIME_GROUNDING_STAGES_V1 = ["evidence_id", "evidence_duplicate", "evidence_quote", "due_before_meeting", "decided_question_only", "rationale_supports"] as const;
+const CORE_RUNTIME_UPSTREAM_SERVICES_V1 = ["nango", "jira", "confluence", "granola", "other"] as const;
+const CORE_RUNTIME_UPSTREAM_OPERATIONS_V1 = ["connection_read", "connection_list", "connect_session", "connection_delete", "provider_read"] as const;
+const CORE_RUNTIME_UPSTREAM_RATE_LIMIT_REASONS_V1 = ["burst", "global_quota", "tenant_quota", "per_issue_write", "other"] as const;
+const CORE_RUNTIME_RESEARCH_STOP_REASONS_V1 = Object.freeze(['finished', 'empty_catalog', 'no_progress', 'step_limit', 'budget', 'unusable_step'] as const);
+const CORE_RUNTIME_RESEARCH_ADMISSIONS_V1 = Object.freeze(['post_revalidation_no_time'] as const);
 /**
  * Code's corrections of model output: each name counts how often code changed, dropped or answered for what a model
  * returned, so a correction can go once it stops firing on the current models (RB-OPERATIONS-001 defines each name).

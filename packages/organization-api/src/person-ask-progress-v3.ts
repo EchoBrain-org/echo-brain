@@ -51,7 +51,7 @@ export const PERSON_ASK_RECEIPT_ROWS_MAX_V1 = 64;
 export const PERSON_ASK_RECEIPT_MAX_BYTES_V1 = 64 * 1024;
 export const PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1 = 300_000;
 /** Canonical JSON bytes of any one event, the answer event included. */
-export const PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1 = 192 * 1024;
+const PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1 = 192 * 1024;
 /** Characters of one stream line the decoder buffers before it fails closed. */
 export const PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1 = 256 * 1024;
 /**
