@@ -23,7 +23,7 @@ const row = (owner = mina): OpenItemView => ({
   state_set_by: mina, owner_set_at: null, owner_set_by: null, send_included: true,
   check: { verdict: 'still_open', checked_at: '2026-10-16T09:00:00.000Z', checked_by: 'Mina Patel' }, can: { set_state: true, assign: true }, reach: 'not_read',
 });
-const receipt: AskReceipt = { looked_through: 1, elapsed_ms: 31_000, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 }, { type: 'read', items: [followUp] }] };
+const receipt: AskReceipt = { looked_through: 1, rows: [{ type: 'searched', sources: [{ kind: 'follow_ups' }], found: 1 }, { type: 'read', items: [followUp] }] };
 const answer: Answer = {
   text: 'The launch checklist is still open.', scope: { kind: 'global' }, sources: [followUp], outcome: 'answered', receipt,
   parts: [{ question: 'What are my open tasks?', status: 'answered', statements: [{ text: 'The launch checklist is still open.', citation_indexes: [0], private: false }] }],

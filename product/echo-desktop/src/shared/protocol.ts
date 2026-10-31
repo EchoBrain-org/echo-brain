@@ -79,8 +79,6 @@ export interface ListItem {
   readonly projects: readonly string[];
   /** A document's kind and size, from the bytes the Authority checked, and where its text stands. */
   readonly document?: { readonly type: DocumentSummary['type']; readonly size: number; readonly extraction: Extraction };
-  /** A meeting's own date (YYYY-MM-DD), when it has one. */
-  readonly meeting_date?: string;
 }
 
 /** Newest first. Meetings still being indexed are held for a later read. */
@@ -319,12 +317,11 @@ export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readon
  * What an answered Ask looked through, rebuilt by the Authority from the
  * items that passed its final check: how many items it looked through (from
  * progress V3, ADR-0043, the rows it was shown as well as what it read in
- * full; before, only what it read in full), how long it took, and its
- * searches and reads in order, neighbours of a type already merged.
+ * full; before, only what it read in full), and its searches and reads in
+ * order, neighbours of a type already merged.
  */
 export interface AskReceipt {
   readonly looked_through: number;
-  readonly elapsed_ms: number;
   readonly rows: readonly (AskSearched | AskRead)[];
 }
 
