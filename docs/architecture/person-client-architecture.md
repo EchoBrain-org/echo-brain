@@ -311,11 +311,14 @@ person who runs them; an agent has no membership of its own
 
 - `person status` says who is signed in, from local state only.
 - `person list` is the map: the newest notes, documents and approved meetings
-  the person can read now, 25 per page, with no text and no counts. Its first
-  page names the person, their connected tools and their projects.
-  `--project <project-id>` narrows it to one joined project, `--mine` to
-  what the person added or approved, and `--only-me` to everything only the
-  person can read, filed in a project or not.
+  the person can read now, 25 per page, with no text and no counts; each row
+  carries a ref, title, time, who can read it and the person's projects it is
+  filed in. Its first page names the person, their connected tools and their
+  projects. `--project <project-id>` narrows it to one joined project, `--mine`
+  to what the person added or approved, and `--only-me` to everything only the
+  person can read, filed in a project or not. The three flags are exclusive,
+  and a list or open request is validated before any session or network use
+  ([`person-list-cli.test.ts`](../../tests/person-client/person-list-cli.test.ts)).
 - Pass `next_cursor` back as `--cursor` with the same scope; `null` is the end.
 - `notice: "meetings_unavailable"` means meetings are still being indexed and
   come on a later page. A first page with no items and that notice is not the
@@ -331,7 +334,8 @@ person who runs them; an agent has no membership of its own
   ([ADR-0042](../decisions/ADR-0042-research-tool-contract.md)).
   Documents, imported meetings and approved meetings page with `--cursor` and
   the same ref. Anything the person cannot read is `not_found`.
-- `person ask --question <text>` answers with citations in the same scopes.
+- `person ask --question <text>` answers with citations in the same scopes,
+  except `--only-me`, which only `list` takes.
 - With a valid session, a 401 on `--project` means the person is not a member
   or the project does not exist.
 
