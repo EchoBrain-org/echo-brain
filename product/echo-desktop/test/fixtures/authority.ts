@@ -780,7 +780,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
   // Ask progress (ADR-0039). The fixture answer's meeting is Tuesday sync, whose decision d1 an answer cites by its atom id.
   const TUESDAY = desktop.record.record_sha256;
-  const atomOf = (signal: string) => digestOf(JSON.stringify({ kind: 'echo-organization-record-atom', record_hash: TUESDAY, signal_id: signal }));
+  const atomOf = (signal: string) => organizationApi.personRecordAtomIdV1(TUESDAY, signal);
   if (mode.startsWith('ask-progress')) {
     // The meeting opens by its ref too, on its own page. The decision Ask cites is its second.
     const brief = desktop.record.brief as unknown as { decisions: Record<string, unknown>[]; actions: { text: string }[]; rationales: { text: string }[] };

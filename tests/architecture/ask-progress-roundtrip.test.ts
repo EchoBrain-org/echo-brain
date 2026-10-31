@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3, validatePersonRunsRequestV1, validatePersonRunsResultV1,
+  personRecordAtomIdV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3, validatePersonRunsRequestV1, validatePersonRunsResultV1,
   type PersonAnswerCitationV8, type PersonAskProgressStepEventV3,
 } from '@echo-brain/organization-api';
 import { derivedAtomIdentity } from '../../packages/organization-record/src/application/atom-identity.js';
@@ -63,7 +63,7 @@ interface Store {
   };
 }
 interface Views {
-  answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json; atomId(record: string, signal: string): string;
+  answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json;
   openItemView(item: unknown): Json;
 }
 interface ProgressView { PROGRESS_AFTER_MS: number; searchedWords(row: Row): string }
@@ -189,8 +189,8 @@ describe('Ask progress from the Authority through the Person client to the deskt
   it('streams each step to the page while the Authority works on /v7, then folds into the audited receipt, and opens what it named', async () => {
     const { f, store, views, lines, refused, runs, audits, asked } = await app();
     try {
-      // The desktop's atom ids are the Authority's own.
-      expect(views.atomId(f.seeded.approved_record_sha256, 'd1')).toBe(derivedAtomIdentity(f.seeded.approved_record_sha256, 'd1'));
+      // The atom ids the Person client gives a cited record's items (organization-api's) are the Authority's own.
+      expect(personRecordAtomIdV1(f.seeded.approved_record_sha256, 'd1')).toBe(derivedAtomIdentity(f.seeded.approved_record_sha256, 'd1'));
 
       // While the Authority is inside the writer's model call, the page already shows what it searched and read.
       let writing: { progress: Progress; lines: number; runs: number } | undefined;

@@ -23,7 +23,7 @@ import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timeli
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
-  NotReadable, pastedView, projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
+  pastedView, projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -267,7 +267,6 @@ async function forAccount<T>(
   try {
     return ok(view(run.stdout));
   } catch (error) {
-    if (error instanceof NotReadable) return code('not_found', write, requestId);
     // A write that succeeded with a reply we cannot read may well have landed.
     if (error instanceof ViewError) {
       return fail({ code: 'invalid_output', retryable: true, ...(write ? { mutation_outcome: 'unknown' as const } : {}),

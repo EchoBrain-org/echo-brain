@@ -20,9 +20,9 @@ describe('the command an Ask runs', () => {
     expect(askArgv('What did we agree?', { kind: 'mine' })).toEqual([...asked, '--mine']);
   });
 
-  it('reads what it cites: a meeting by its record, a passage where it was asked', () => {
+  it('reads what it cites: a meeting by its record, as Ask cites it, a passage where it was asked', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
-    expect(askRecordArgv({ record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' })).toEqual(['records', `--record-sha256=${sha('2')}`]);
+    expect(askRecordArgv({ record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' })).toEqual(['records', `--record-sha256=${sha('2')}`, '--brief']);
     const ref = { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha('6') };
     const passage = ['ask-source', `--source-id=${ref.source_id}`, '--revision-id=r1', `--source-sha256=${sha('4')}`, `--representation-sha256=${sha('5')}`, `--anchor-sha256=${sha('6')}`];
     expect(askSourceArgv(ref, { kind: 'global' })).toEqual(passage);
