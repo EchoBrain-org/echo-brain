@@ -4,8 +4,16 @@ export const CONFLUENCE_CLOUD_ID=/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/
 export const CONFLUENCE_ID = /^[1-9][0-9]{0,19}$/;
 const API_ORIGIN = 'https://api.atlassian.com';
 const validation = createPersonProviderValidationV1('confluence', CONFLUENCE_CLOUD_ID, 'Confluence live evidence operation could not be completed');
-export const { record: confluenceRecord, array: confluenceArray, string: confluenceString, copyBinding: copyConfluenceBindingV1 } = validation;
+export const { record: confluenceRecord, array: confluenceArray, copyBinding: copyConfluenceBindingV1 } = validation;
 export function confluenceFailure(code: PersonProviderFailureCodeV1): never { return validation.failure(code); }
+/**
+ * A Confluence string within `maximum` UTF-16 code units, also as the provider's string the shared Atlassian modules call.
+ * The shared check counts UTF-8 bytes, so it allows three per code unit, the most one takes: no string within `maximum`
+ * code units is refused.
+ */
+export function confluenceString(value: unknown, maximum = 1024, pattern?: RegExp): string {
+  return validation.string(value, maximum * 3, pattern);
+}
 /**
  * The opaque cursor of a Confluence next link to `path`, by its public wiki or OAuth proxy path, never the link itself:
  * a next link repeats limit, status and space selectors, and only the cursor goes on to our own pinned request.

@@ -542,8 +542,8 @@ describe('Confluence live reader through the audited evidence source', () => {
   });
 
   it('bounds Unicode labels before the shared audit boundary and preserves source identity', async () => {
-    // 1,000 UTF-8 bytes: inside the 1,024-byte title bound, four times the 256-byte label bound.
-    const title = '需求😊'.repeat(100);
+    // 480 UTF-16 code units, 1,200 UTF-8 bytes: inside the 1,024-code-unit title bound, over four times the 256-byte label bound.
+    const title = '需求😊'.repeat(120);
     const f = await fixture({ pages: [page({ title })] });
     const found = await f.source.list({});
     expect(Buffer.byteLength(found.items[0]!.label, 'utf8')).toBeLessThanOrEqual(256);
