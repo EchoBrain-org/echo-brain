@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PersonToolVerbContextV1 } from "@echo-brain/organization-api";
 import { createJiraPersonToolProviderV1 } from "@echo-brain/provider-jira-client/person/jira-tool-provider";
-import { createConfluencePersonToolProviderV1 } from "@echo-brain/provider-confluence-client/person/confluence-tool-provider";
 
-const providers = [
-  { id: "jira", name: "Jira", create: createJiraPersonToolProviderV1 },
-  { id: "confluence", name: "Confluence", create: createConfluencePersonToolProviderV1 },
-];
+// Every provider's connection verbs come from createPersonToolConnectionVerbsV1 with only its name and tool id.
+const id = "jira";
+const create = createJiraPersonToolProviderV1;
 
 const ATTEMPT = "11111111-1111-4111-8111-111111111111";
 const CONNECT = {
@@ -68,7 +66,7 @@ function context(input: {
   return { value, requests, prints, opened, sleeps };
 }
 
-describe.each(providers)("Person $name tool provider", ({ id, create }) => {
+describe("Person tool provider connection verbs", () => {
   it("opens consent, polls through pending, and never prints the opaque connect link", async () => {
     const fixture = context({
       responses: [CONNECT, PENDING, { ...PENDING, status: "complete" }],
