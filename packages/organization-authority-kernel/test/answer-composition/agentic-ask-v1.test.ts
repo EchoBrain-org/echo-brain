@@ -456,7 +456,6 @@ describe("agentic Ask: research loop", () => {
   it.each<EvidenceDeskPortV1["scope"]>([
     { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000002" },
     { kind: "global" },
-    { kind: "mine" },
   ])("keeps the writer's explicit no-match response uncited in $kind scope", async scope => {
     const question = "What did we decide for synthetic staging release clean-v1-20260930-mine-03b922f?";
     const passage = item("software-review", "The SCOUT release requires an explicit transition table before architecture drafting.", {
@@ -919,11 +918,7 @@ describe("agentic Ask: research loop", () => {
     expect(script.prompt(0).scope).toContain("Only sources in source_catalog are available");
   });
 
-  it("tells the model a mine scope reads only what the asker added, never shared live sources or shared transcripts (ADR-0024)", async () => {
-    const script = scripted([finish([missing()]), finish([missing()])]);
-    const result = await ask({ desk: desk({ scope: { kind: "mine" } }), model: script.model }).answer({ question: "What did I decide?" });
-    expect(script.prompt(0).scope).toBe("only what the asker added: their own notes and uploaded documents, and meetings they approved; shared live sources and shared transcripts are not read");
-    expect(result.scope).toEqual({ kind: "mine" });
+  it("tells the model a global scope reads everything the asker can read", async () => {
     const global = scripted([finish([missing()]), finish([missing()])]);
     await ask({ desk: desk({}), model: global.model }).answer({ question: "What did I decide?" });
     expect(global.prompt(0).scope).toBe("everything the asker can read");

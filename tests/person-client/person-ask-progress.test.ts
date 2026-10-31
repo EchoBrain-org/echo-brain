@@ -247,7 +247,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     expect(progress).toEqual([]);
     expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
     // A JSON body is still bound to the V8 validator and the scope.
-    for (const body of [{ ...answer(), receipt: receipt() }, answer({ kind: 'mine' }), { ...answer(), schema_version: 7, kind: 'echo-clean-person-answer-v7' }]) {
+    for (const body of [{ ...answer(), receipt: receipt() }, answerProjectV8(), { ...answer(), schema_version: 7, kind: 'echo-clean-person-answer-v7' }]) {
       await expect(authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(body))).askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined))
         .rejects.toMatchObject({ code: 'invalid_response' });
     }

@@ -134,17 +134,18 @@ describe('Agentic Ask V1 public contracts', () => {
     }).items[0]?.label).toBe('🧪'.repeat(200));
   });
 
-  it('echoes a mine scope on answers and desk responses, but never a mine scope with a project', () => {
+  it('refuses the retired mine scope on answers and desk responses, alone or with a project', () => {
     const answer = (scope: unknown) => ({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered',
       citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
       parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
     });
     const desk = (scope: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope, truncated: false, items: [] });
-    expect(validatePersonAnswerResponseV8(answer({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
-    expect(validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
-    expect(() => validatePersonAnswerResponseV8(answer({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
-    expect(() => validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
+    for (const scope of [{ kind: 'mine' }, { kind: 'mine', project_id }]) {
+      expect(() => validatePersonAnswerResponseV8(answer(scope))).toThrow('Ask response scope is invalid');
+      expect(() => validatePersonEvidenceDeskResponseV1(desk(scope))).toThrow('Ask response scope is invalid');
+    }
+    expect(validatePersonEvidenceDeskResponseV1(desk({ kind: 'global' })).scope).toEqual({ kind: 'global' });
     expect(() => validatePersonAnswerResponseV8(answer({ kind: 'everyone' }))).toThrow('Ask response scope is invalid');
   });
 

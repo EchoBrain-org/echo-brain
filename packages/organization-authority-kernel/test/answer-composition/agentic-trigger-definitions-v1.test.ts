@@ -18,7 +18,7 @@ const definition = (name: string) => {
   return found;
 };
 const PROJECT = { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" } as const;
-const brief = (name: string, input: unknown, scope: { readonly kind: "global" | "project" | "mine" } = PROJECT) => { const value = definition(name); return value.brief(value.parseEvent(input), scope); };
+const brief = (name: string, input: unknown, scope: { readonly kind: "global" | "project" } = PROJECT) => { const value = definition(name); return value.brief(value.parseEvent(input), scope); };
 /** A task brief's goal as the model sees it, with its starting ids. */
 const filled = (value: AgenticBriefV1, ids: readonly (string | null)[]) => value.goal.kind === "task" ? fillAgenticTaskV1(value.goal.task, ids, value.goal.data) : "";
 const refused = (name: string, input: unknown) => {

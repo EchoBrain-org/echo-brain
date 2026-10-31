@@ -22,10 +22,7 @@ const PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 = 3 * 1024;
 
 export type PersonAnswerScopeV3 =
   | { readonly kind: 'global' }
-  | { readonly kind: 'project'; readonly project_id: ProjectIdV1 }
-  | { readonly kind: 'mine' };
-/** A cited original is read under global or project scope. mine ⊆ global, so a mine answer's citations open under global. */
-export type PersonSourceReadScopeV1 = Exclude<PersonAnswerScopeV3, { readonly kind: 'mine' }>;
+  | { readonly kind: 'project'; readonly project_id: ProjectIdV1 };
 
 export type PersonAnswerCitationV3 =
   | {
@@ -63,36 +60,26 @@ export interface PersonSourceEvidenceCitationV1 {
 
 export interface PersonSourceEvidenceReadRequestV1 {
   readonly schema_version: 1;
-  readonly scope: PersonSourceReadScopeV1;
+  readonly scope: PersonAnswerScopeV3;
   readonly citation: PersonSourceEvidenceCitationV1;
 }
 
 export interface PersonSourceEvidenceV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-person-source-evidence-v1';
-  readonly scope: PersonSourceReadScopeV1;
+  readonly scope: PersonAnswerScopeV3;
   /** The server derives this label from the immutable retained source. */
   readonly citation: PersonSourceEvidenceCitationV1 & { readonly label: string };
   /** Bounded canonical evidence packet, not the original file or a mutable latest version. */
   readonly text: string;
 }
 
-/** A cited original is read under global or project scope, never mine. */
-function validatePersonSourceReadScopeV1(value: unknown, label = 'Ask response scope'): PersonSourceReadScopeV1 {
-  if (object(value, label).kind === 'mine') fail(`${label} is invalid`);
-  return validatePersonAnswerScopeV3(value, label) as PersonSourceReadScopeV1;
-}
-
-/**
- * An Ask or evidence-desk scope, as an answer or a desk names it. Its mine kind,
- * the caller's own items, is one no Person request asks for any more: the Ask,
- * list and research evaluation requests take global or a project only.
- */
+/** An Ask or evidence-desk scope, as an answer, a desk or a cited original's read names it: global or one project. */
 export function validatePersonAnswerScopeV3(value: unknown, label = 'Ask response scope'): PersonAnswerScopeV3 {
   const input = object(value, label);
-  if (input.kind === 'global' || input.kind === 'mine') {
+  if (input.kind === 'global') {
     assertExactKeys(input, ['kind'], label);
-    return Object.freeze(input.kind === 'global' ? { kind: 'global' } : { kind: 'mine' });
+    return Object.freeze({ kind: 'global' });
   }
   if (input.kind === 'project') {
     assertExactKeys(input, ['kind', 'project_id'], label);
@@ -158,7 +145,7 @@ export function validatePersonSourceEvidenceReadRequestV1(value: unknown): Perso
   if (input.schema_version !== 1) fail('Ask source evidence request schema_version is unsupported');
   const result: PersonSourceEvidenceReadRequestV1 = {
     schema_version: 1,
-    scope: validatePersonSourceReadScopeV1(input.scope),
+    scope: validatePersonAnswerScopeV3(input.scope),
     citation: validatePersonSourceRevisionCitationV1(input.citation, 'absent', 'Ask source evidence citation') as PersonSourceEvidenceCitationV1,
   };
   if (canonicalJsonBytes(result).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) {
@@ -176,7 +163,7 @@ export function validatePersonSourceEvidenceV1(value: unknown): PersonSourceEvid
   const result: PersonSourceEvidenceV1 = {
     schema_version: 1,
     kind: 'echo-person-source-evidence-v1',
-    scope: validatePersonSourceReadScopeV1(input.scope),
+    scope: validatePersonAnswerScopeV3(input.scope),
     citation: validatePersonSourceRevisionCitationV1(input.citation, 'required', 'Ask source evidence citation') as PersonSourceEvidenceCitationV1 & { readonly label: string },
     text: input.text as string,
   };

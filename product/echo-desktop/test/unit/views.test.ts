@@ -761,11 +761,11 @@ describe('a streamed answer\'s receipt (ADR-0039, ADR-0040, ADR-0043)', () => {
     }
   });
 
-  it('reads a Mine answer as any other, with its receipt when it streamed', () => {
+  it('refuses a Mine answer, a scope no Ask answers any more, with or without its receipt', () => {
     const mine = { kind: 'mine' } as const;
     const answer = { ...v8([named]), scope: mine };
-    expect(answerView({ ok: true, result: answer }, mine)).toMatchObject({ scope: mine, sources: [namedSource] });
-    expect(answerView({ ok: true, result: answer, receipt: meetings }, mine).receipt).toEqual({ looked_through: 14, rows: namedMeeting });
+    expect(() => answerView({ ok: true, result: answer }, mine)).toThrow(ViewError);
+    expect(() => answerView({ ok: true, result: answer, receipt: meetings }, mine)).toThrow(ViewError);
   });
 });
 

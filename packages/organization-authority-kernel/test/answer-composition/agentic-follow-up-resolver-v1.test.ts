@@ -186,12 +186,11 @@ describe("where a resolved follow-up starts, and the answer that asks which one 
   const previous: PersonAnswerPreviousV1 = { ...PREVIOUS, citations: [ticket("THERM-482", "10482"), decision, followUp, project] };
 
   it("starts research from what research can open, reported when it cannot be read and skipped when its tool cannot be read for now; never a live tool item in Mine", () => {
-    expect(agenticFollowUpStartingV1(previous, [0, 1, 2, 3], { kind: "global" })).toEqual([
+    expect(agenticFollowUpStartingV1(previous, [0, 1, 2, 3])).toEqual([
       { citation: previous.citations[0]!.citation, if_unreadable: "skip" }, { citation: decision.citation, if_unreadable: "skip" },
     ]);
-    expect(agenticFollowUpStartingV1(previous, [1], { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000001" })).toEqual([{ citation: decision.citation, if_unreadable: "skip" }]);
-    expect(agenticFollowUpStartingV1(previous, [0, 1], { kind: "mine" })).toEqual([{ citation: decision.citation, if_unreadable: "skip" }]);
-    expect(agenticFollowUpStartingV1(previous, [], { kind: "global" })).toEqual([]);
+    expect(agenticFollowUpStartingV1(previous, [1])).toEqual([{ citation: decision.citation, if_unreadable: "skip" }]);
+    expect(agenticFollowUpStartingV1(previous, [])).toEqual([]);
   });
 
   it("asks which one with no part and no citation", () => {
