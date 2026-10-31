@@ -5,7 +5,8 @@ import {
 import { createApprovalDecisionPolicyProjectorV1, projectApprovalDecisionApproverV1 } from './approval-decision-projection-v1.js';
 
 /**
- * Every record protocol this Authority appends or reads. V15 resets the record log, so no historical protocol is retained.
+ * Every record protocol this Authority appends or reads. It appends only approval-decision V2 records; the human-act V1 codec
+ * and its person policy projector stay registered so the readers still accept that protocol, which nothing in production writes.
  * The composition root, the test fixtures, the staging canary test and the eval harness all import this one list.
  */
 export const AUTHORITY_RECORD_INPUT_CODECS_V1 = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, APPROVAL_DECISION_RECORD_INPUT_CODEC_V2]);
