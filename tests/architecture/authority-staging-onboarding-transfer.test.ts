@@ -41,10 +41,11 @@ const REUSABLE_INPUT_FILES = [
   "release.json",
   "runtime-profile.json",
 ];
-// The four staging fixture notes the transfer accepts, named as demo/meetings holds them.
+// The four staging fixture notes the transfer accepts, named as demo/meetings holds them
+// (only its .json files: a local .DS_Store is no note).
 const STAGING_SYNTHETIC_MEETING_FILES = readdirSync(
   join(import.meta.dirname, "../../demo/meetings"),
-).sort();
+).filter((name) => name.endsWith(".json")).sort();
 const temporary: string[] = [];
 
 function privateDirectory(label: string) {

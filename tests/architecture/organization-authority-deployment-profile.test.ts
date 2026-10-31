@@ -407,7 +407,8 @@ sys.exit(os.waitstatus_to_exitcode(status))
   };
 }
 
-const REHEARSAL_MEETING_FILES = readdirSync(resolve(REPO, "demo/meetings")).sort();
+// Only the fixture notes: a local .DS_Store in demo/meetings is no meeting.
+const REHEARSAL_MEETING_FILES = readdirSync(resolve(REPO, "demo/meetings")).filter((name) => name.endsWith(".json")).sort();
 
 function rehearsalInputs(
   fixture: ReturnType<typeof preparedStatusFixture>,
@@ -2148,7 +2149,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       // creating a second Compose/runtime lane or forwarding its evaluator.
       const meetings = join(root, "meetings");
       mkdirSync(meetings, { mode: 0o700 });
-      for (const name of readdirSync(join(REPO, "demo/meetings"))) {
+      for (const name of REHEARSAL_MEETING_FILES) {
         const contents = readFileSync(join(REPO, "demo/meetings", name), "utf8")
           .replaceAll("owner@example.test", "founder@example.com");
         writeFileSync(join(meetings, name), contents, { mode: 0o600 });
