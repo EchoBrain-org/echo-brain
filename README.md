@@ -277,6 +277,7 @@ own the passed assertions and exact-run evidence.
 | `up`        | Creates a disposable host and attaches the retained data volume. `--require-authority` binds a retained restart to resume the accepted Authority before CloudFormation signals ready, then gates it on the independently pinned public descriptor. |
 | `down`      | Stops the host safely and removes only disposable host resources. The edge and retained volume remain. Refuses before stopping anything while a staged release candidate, an operation lock or the staging release guard is present, because a retained `up` cannot clear them. |
 | `status`    | Reads AWS, host, and public-descriptor observations separately. An edge observation alone is never proof that the host or Authority is ready.                                      |
+| `backup`    | Plans or executes the sibling AWS Backup stack for the retained data volume, after proving the volume's identity and encryption from EC2 and KMS. Selects that one volume, keeps daily points for 35 days, and alarms after 30 hours without a completed job. Never removes or replaces a backup resource; [RB-OPERATIONS-004](docs/operations/RB-OPERATIONS-004-authority-staging-data-volume-backup.md) owns the review and the restore rehearsal. |
 
 Prerequisites: an `echo-prod` IAM Identity Center session, `asm-exec`, the
 exact ARM64 Ubuntu AMI ID, and the ECR repository. Use neither `aws login` nor
@@ -287,7 +288,7 @@ Copy the committed input outside the checkout and replace each placeholder
 with the reviewed staging values. The hostname must be in the selected
 Cloudflare zone. A single `operationId` identifies one reviewed plan and its
 execute: do not change it between those two commands. Set a new `operationId`
-before each later `slot-init`, `up`, or `down` plan.
+before each later `slot-init`, `up`, `down`, or `backup` plan.
 
 ```bash
 install -d -m 0700 /absolute/private/authority-staging
@@ -365,6 +366,14 @@ npm run authority:staging -- up \
 # Read only. In healthy state, this also checks the Cloudflare edge.
 npm run authority:staging -- status \
   --input /absolute/private/authority-staging/input.json
+
+# Back up the retained data volume. Needs `backup.alertTopicArn`: the staging
+# observability stack's AlertTopicArn output. Review the named change set,
+# then execute it with the unchanged operationId.
+npm run authority:staging -- backup \
+  --input /absolute/private/authority-staging/input.json
+npm run authority:staging -- backup \
+  --input /absolute/private/authority-staging/input.json --execute
 ```
 
 A retained-volume `up` starts from a new root disk: only `clean-data/` is
