@@ -24,15 +24,11 @@ describe('research evaluation start request', () => {
       .toMatchObject({ trigger: 'a_future_trigger', mine: true });
   });
 
-  it('still accepts Ask\'s legacy question field, with the product question limits, as the envelope', () => {
-    expect(validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'ask', budget: 'live', project_id: project, question: 'Why is the DVT gate on hold?' }))
-      .toEqual({ schema_version: 1, trigger: 'ask', budget: 'live', project_id: project, input: { question: 'Why is the DVT gate on hold?' } });
-    expect(() => validatePersonResearchEvalStartRequestV1({ schema_version: 1, trigger: 'ask', budget: 'live', question: 'x '.repeat(130).trim() })).toThrow(expect.objectContaining({ name: 'PersonQueryInputError', code: 'query_too_long' }));
-  });
-
   it('refuses a malformed envelope', () => {
     const deep = (depth: number): unknown => depth === 0 ? 'leaf' : { next: deep(depth - 1) };
     const bad: unknown[] = [
+      // Ask's retired form, its question beside the trigger, is not an envelope.
+      { schema_version: 1, trigger: 'ask', budget: 'live', question: 'Why is the DVT gate on hold?' },
       { schema_version: 1, trigger: 'ask', budget: 'live', question: 'q', input: { question: 'q' } },
       { schema_version: 1, trigger: 'check', budget: 'soon', input: { record } },
       { schema_version: 1, trigger: 'check', input: { record }, record },

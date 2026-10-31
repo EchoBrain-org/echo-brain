@@ -1,7 +1,6 @@
 import { validatePersonAnswerResponseV8 } from './person-answer-v4.js';
 import type { PersonAnswerResponseV8 } from './person-answer-v8.js';
 import { validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
-import { validatePersonQueryText } from './person-query.js';
 import { validatePersonSweepResultV1, type PersonSweepResultV1 } from './person-sweep-result-v1.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { asEnumerableRecord, fail, MAX_ORGANIZATION_API_BODY_BYTES, utf8ByteLength } from './validation.js';
@@ -111,14 +110,11 @@ function jsonValue(value: unknown, depth: number, maximumDepth = MAX_INPUT_DEPTH
 
 export function validatePersonResearchEvalStartRequestV1(value: unknown): PersonResearchEvalStartRequestV1 {
   const request = asEnumerableRecord(value, 'Research evaluation start request');
-  // Ask's legacy form, `question` beside the trigger: kept for one release so pre-envelope runners keep working.
-  // Remove it once the staging evaluation runner sends the `input` envelope.
-  const legacy = Object.hasOwn(request, 'question');
-  exactKeys(request, ['schema_version', 'trigger', legacy ? 'question' : 'input'], ['budget', 'project_id', 'mine'], 'Research evaluation start request');
+  exactKeys(request, ['schema_version', 'trigger', 'input'], ['budget', 'project_id', 'mine'], 'Research evaluation start request');
   if (request.schema_version !== 1) fail('Research evaluation start request version is invalid');
   const trigger = request.trigger;
   if (typeof trigger !== 'string' || !TRIGGER.test(trigger)) fail('Research evaluation trigger is invalid');
-  const input = legacy ? { question: validatePersonQueryText(request.question) } : asEnumerableRecord(request.input, 'Research evaluation input');
+  const input = asEnumerableRecord(request.input, 'Research evaluation input');
   jsonValue(input, 0);
   if (utf8ByteLength(JSON.stringify(input)) > MAX_ORGANIZATION_API_BODY_BYTES) fail('Research evaluation input is too large');
   if (Object.hasOwn(request, 'budget') && request.budget !== 'live' && request.budget !== 'background') fail('Research evaluation budget is invalid');
