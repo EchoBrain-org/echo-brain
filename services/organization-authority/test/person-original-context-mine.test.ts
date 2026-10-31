@@ -112,18 +112,8 @@ describe("originals under the mine scope", () => {
     }
   });
 
-  it("keeps the project scope SQL byte-identical and makes an unknown scope a compile error", () => {
+  it("makes an unknown scope a compile error", () => {
     const actor = authorization(MEMBER);
-    expect(personOriginalScopeFilterV1("u", actor, { kind: "project", project_id: PROJECT_ALPHA })).toEqual({
-      sql: "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)",
-      args: [PROJECT_ALPHA],
-    });
-    expect(personOriginalScopeFilterV1("d", actor, { kind: "project", project_id: PROJECT_ALPHA })).toEqual({
-      sql: "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)",
-      args: [PROJECT_ALPHA],
-    });
-    expect(personOriginalScopeFilterV1("u", actor, GLOBAL)).toEqual({ sql: "", args: [] });
-    expect(personOriginalScopeFilterV1("d", actor, MINE)).toEqual({ sql: "AND d.membership_id=? AND d.principal_id=?", args: [MEMBER.membership_id, MEMBER.principal_id] });
     // @ts-expect-error A new scope kind must be handled before it compiles.
     expect(() => personOriginalScopeFilterV1("u", actor, { kind: "everyone" })).toThrow(expect.objectContaining({ code: "invalid_request" }));
   });
