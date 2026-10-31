@@ -1,7 +1,9 @@
 # Global and project Ask
 
-Status: implementation candidate; live qualification is separate. The accepted
-direction is [ADR-0015](../decisions/ADR-0015-global-and-project-scoped-person-ask.md).
+Status: source-tested. Deployment, live qualification and release are separate
+claims, and no [qualification record](../qualification/README.md) covers this
+feature yet. The accepted direction is
+[ADR-0015](../decisions/ADR-0015-global-and-project-scoped-person-ask.md).
 
 ## User behavior
 

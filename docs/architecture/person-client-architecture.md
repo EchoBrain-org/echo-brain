@@ -353,15 +353,22 @@ container workflow.
 
 ## Deployment boundary
 
-This repository currently produces two independently operated artifacts:
+This repository produces these independently operated artifacts:
 
-- the single-organization Authority container, whose hosting and custody model
-  is defined by
-  [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md); and
-- the thin Person CLI tarball.
+- the single-organization Authority container image, whose hosting and
+  custody model is defined by
+  [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md), and
+  the staging host bundle (`npm run bundle:authority-staging-host`) that
+  carries the host's bootstrap, onboarding, update, backup and restore tools;
+- the thin Person CLI tarball;
+- the macOS arm64 and Linux x64 Person command-line kits, each with a pinned
+  Node runtime and that tarball; and
+- the desktop app's macOS arm64 `ECHO.app` ZIP and Linux x64 `.deb`, built
+  from the same release record and tarball.
 
-This list describes the Authority and Person-client release boundary, not
-every current or future machine interface.
+The signed client feed carries the two kits and the two desktop packages
+together. The [release procedure](../../deploy/release/README.md) builds and
+publishes them.
 
 The repository root is workspace orchestration only. It is private and has no
 runtime export or executable.

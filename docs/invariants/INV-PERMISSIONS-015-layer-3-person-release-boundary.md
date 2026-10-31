@@ -89,9 +89,10 @@ triggered by a query. Layer 4 receives no lower-layer handles and may pass
 citations only after checking that they are a subset of what Layer 3 released
 in that request.
 
-ADR-0019, as updated by ADR-0022, permits the V3 route to make bounded desk
+ADR-0019, as updated by ADR-0022, permits the `/v7` Ask to make bounded desk
 calls and at most 24 model calls, including retries and repairs, in one
-request. The desk pins the record
+request; a background trigger on the same loop (an impact check or a sweep)
+may make at most 48. The desk pins the record
 snapshot or fixes an explicitly original-only mode when the index starts
 behind. Every desk release is audited before bytes leave Layer 3. Before each
 model call, repairs included, recheck every item and metadata released since
@@ -198,10 +199,11 @@ Both original and approved-record citations bind the exact released evidence.
 Project scope additionally checks current membership and actual association
 without widening audience. An item its owner keeps for themself may still be
 filed in projects ([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)):
-a note or document with an `only_me` audience, or an approved meeting record
-under the restricted reviewer policy with no project audience; it is admitted
-to its owner alone and then narrowed by association like any other item, so no
-other member of the project lists, finds or cites it. Revalidate all evidence
+a note or document with an `only_me` audience, or a meeting item its reviewer
+kept privately under the restricted reviewer policy (its record shape is under
+[Current composition](../architecture/meeting-processing-core-and-adapters.md#current-composition));
+it is admitted to its owner alone and then narrowed by association like any
+other item, so no other member of the project lists, finds or cites it. Revalidate all evidence
 supplied to the answerer, including uncited sources, before response release. A
 revision or representation reference is provenance, not continuing permission
 to read it.
