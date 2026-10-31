@@ -1,7 +1,7 @@
 import { rmSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { PERSON_EVIDENCE_OPEN_PATH_V1, PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonAnswerResponseV8, validatePersonEvidenceDeskResponseV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonAnswerResponseV8, validatePersonEvidenceDeskResponseV1 } from '@echo-brain/organization-api';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
 import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
@@ -186,7 +186,7 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
   } finally { await f.close(); }
 });
 
-it('returns a meeting record through the public evidence search and open doors without its list label (ADR-0041, X21)', async () => {
+it('returns a meeting record through the public evidence search without its list label (ADR-0041, X21)', async () => {
   // The desk names a meeting record in Ask's list rows by a line of its own text; that label, like named dates and refs,
   // is internal research metadata, and the public desk contract carries none of it.
   const f = await allSourceFixture();
@@ -195,14 +195,9 @@ it('returns a meeting record through the public evidence search and open doors w
     expect(searched.status).toBe(200);
     const record = validatePersonEvidenceDeskResponseV1(searched.body).items.find(item => item.citation.kind === 'approved_record' && item.citation.record_sha256 === f.seeded.approved_record_sha256);
     expect(record).toMatchObject({ kind: 'decision', text: f.seeded.approved_text });
-    const opened = await f.post(PERSON_EVIDENCE_OPEN_PATH_V1, { schema_version: 1, citation: record!.citation });
-    expect(opened.status).toBe(200);
-    for (const response of [searched, opened]) {
-      const records = validatePersonEvidenceDeskResponseV1(response.body).items.filter(item => item.citation.kind === 'approved_record');
-      expect(records.length).toBeGreaterThan(0);
-      for (const item of records) for (const key of ['list_label', 'ref', 'dates', 'date_kind']) expect(item).not.toHaveProperty(key);
-      expect(JSON.stringify(response.body)).not.toContain(`${f.seeded.approved_text} (`);
-    }
+    const records = validatePersonEvidenceDeskResponseV1(searched.body).items.filter(item => item.citation.kind === 'approved_record');
+    for (const item of records) for (const key of ['list_label', 'ref', 'dates', 'date_kind']) expect(item).not.toHaveProperty(key);
+    expect(JSON.stringify(searched.body)).not.toContain(`${f.seeded.approved_text} (`);
   } finally { await f.close(); }
 });
 

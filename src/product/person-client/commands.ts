@@ -84,9 +84,6 @@ const OPTIONS = {
   limit: { type: "string" },
   "open-browser": { type: "boolean" },
   "record-sha256": { type: "string" },
-  kind: { type: "string" },
-  item: { type: "string" },
-  neighbours: { type: "string" },
   mine: { type: "boolean" },
   "only-me": { type: "boolean" },
   ref: { type: "string" },
@@ -146,8 +143,6 @@ const RULES: Readonly<
   runs: { accepts: ["request"], requires: ["request"] },
   changes: {},
   "project-activity": {},
-  "evidence-search": { accepts: ["query", "project", "kind", "limit"], requires: [] },
-  "evidence-open": { accepts: ["item", "project", "neighbours"], requires: ["item"] },
   "ask-source": {
     accepts: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256", "document-id", "project"],
     requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
@@ -195,7 +190,6 @@ Commands:
   ask         Ask a question over context you may read.
   ask-check   Check whether what earlier answers cited changed, with no content.
   ask-source  Read one source-evidence packet an Ask citation names.
-  evidence    Search or open released Ask evidence.
   runs        Read and act on impact runs, their open items, and sweeps.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
@@ -275,18 +269,6 @@ Reads when something new last arrived in each of your active projects from someo
   changes: `usage: echo-brain person changes
 
 Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review), and how many seconds to wait before checking again. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line.
-`,
-  evidence: `usage: echo-brain person evidence <search|open> [options]
-
-Search or open released evidence under a fresh signed-in request. Use the citation JSON returned by search with open.
-`,
-  "evidence-search": `usage: echo-brain person evidence search [--query <text>] [--project <project-id>] [--kind <imported_meeting|decision|action|rationale|note|document_passage>] [--limit <1-50>]
-
-Without --query, lists readable evidence titles and kinds without body text.
-`,
-  "evidence-open": `usage: echo-brain person evidence open --item <citation-json> [--project <project-id>] [--neighbours <0-2>]
-
-Opens one cited evidence item under a fresh signed-in request. --item is the citation object from evidence search JSON.
 `,
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
@@ -501,7 +483,7 @@ function registerToolProviders(list: readonly PersonToolProviderV1[]) {
 
 /** Returns supported human CLI help without constructing a client or session. */
 function personClientCliHelp(argv: readonly string[], providers: readonly PersonToolProviderV1[]): string | undefined {
-  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents' || argv[0] === 'evidence') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
+  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
   if (argv.length === 3 && argv[0] === 'tools' && argv[2] === '--help') return toolVerbHelp(argv[1], providers);
   if (argv.length === 1 && argv[0] === "--help") return HELP.person;
   if (argv.length === 2 && argv[1] === "--help") return HELP[argv[0] ?? ""];
@@ -875,13 +857,12 @@ export async function runPersonClientCli(
   const employeeAction =
     argv[0] === "employee" ? EMPLOYEE_ACTIONS[argv[1] as keyof typeof EMPLOYEE_ACTIONS] : undefined;
   const documentAction = argv[0] === 'documents' ? `documents-${argv[1] ?? ''}` : undefined;
-  const evidenceAction = argv[0] === 'evidence' ? `evidence-${argv[1] ?? ''}` : undefined;
   const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
   // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of TOOL_VERBS.
   const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;
   const verbName = toolAction === undefined ? undefined : toolVerb(argv[1]);
-  const subcommandAction = documentAction ?? evidenceAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction;
+  const subcommandAction = documentAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction;
   const action = subcommandAction ?? (argv[0] ?? "");
   const rule = RULES[action] ?? (verbName === undefined ? undefined : { accepts: ['tool', ...Object.keys(toolOptions)], requires: ['tool'] });
   if (rule === undefined) {
@@ -1283,32 +1264,6 @@ export async function runPersonClientCli(
         // The bare project activity is the last line, as the desktop reads it.
         print(stdout, await client.projectActivity(dependencies.abort_signal));
         break;
-      case 'evidence-search': {
-        const project_id = optionalProject(values);
-        const kind = values.kind;
-        if (kind !== undefined && !['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'].includes(String(kind))) throw new Error('Invalid evidence kind');
-        const limit = values.limit === undefined ? undefined : Number(values.limit);
-        if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)) throw new Error('Invalid evidence limit');
-        print(stdout, { ok: true, result: await client.evidenceSearch({ schema_version: 1,
-          ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }),
-          ...(kind === undefined ? {} : { kinds: [kind as 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage'] as const }),
-          ...(limit === undefined ? {} : { limit }),
-          ...(project_id === undefined ? {} : { project_id }),
-        }, dependencies.abort_signal) });
-        break;
-      }
-      case 'evidence-open': {
-        let citation: unknown;
-        try { citation = JSON.parse(requiredText(values, 'item')); } catch { throw new Error('Evidence citation JSON is invalid'); }
-        const neighbours = values.neighbours === undefined ? undefined : Number(values.neighbours);
-        if (neighbours !== undefined && (!Number.isSafeInteger(neighbours) || neighbours < 0 || neighbours > 2)) throw new Error('Invalid evidence neighbours');
-        const project_id = optionalProject(values);
-        print(stdout, { ok: true, result: await client.evidenceOpen({ schema_version: 1, citation: citation as never,
-          ...(neighbours === undefined ? {} : { neighbours: neighbours as 0 | 1 | 2 }),
-          ...(project_id === undefined ? {} : { project_id }),
-        }, dependencies.abort_signal) });
-        break;
-      }
       case "ask-source": {
         const project_id = optionalProject(values);
         print(stdout, {

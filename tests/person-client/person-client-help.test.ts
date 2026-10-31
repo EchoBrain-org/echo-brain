@@ -39,7 +39,7 @@ function dispatchedActions(): string[] {
   if (rules === undefined || !ts.isObjectLiteralExpression(rules)) throw new Error("commands.ts no longer declares RULES");
   return rules.properties.map((property) => (property.name as ts.Identifier | ts.StringLiteral).text);
 }
-const GROUPS = ["documents", "projects", "updates", "evidence", "employee"];
+const GROUPS = ["documents", "projects", "updates", "employee"];
 /** `projects-read-v2` is typed `projects read-v2`; any other action is one word. */
 function command(action: string): string[] {
   const group = GROUPS.find((name) => action.startsWith(`${name}-`));
@@ -93,7 +93,7 @@ describe("Person client help", () => {
 
   it("refuses an unknown command, group command or tool verb, and its help, before any session or network use", async () => {
     // Retired commands are refused only because RULES no longer has them; these reach that refusal each way.
-    for (const argv of [["readable-search"], ["documents", "upload"], ["tools", "bogus"]].flatMap((name) => [name, [...name, "--help"]])) {
+    for (const argv of [["readable-search"], ["documents", "upload"], ["evidence", "search"], ["evidence", "open"], ["tools", "bogus"]].flatMap((name) => [name, [...name, "--help"]])) {
       const { code, stdout, stderr, network } = await run(argv);
       expect(code, argv.join(" ")).toBe(2);
       expect(stdout).toBe("");

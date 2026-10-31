@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   PERSON_ANSWER_PATH_V7,
-  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceDeskResponseV1,
@@ -273,21 +272,20 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
     } finally { await value.close(); }
   });
 
-  it("strips ref and the other internal research metadata from the evidence search and open doors, whose contract carries none", async () => {
+  it("strips ref and the other internal research metadata from the evidence search, whose contract carries none; its open is retired", async () => {
     const f = mineFixture();
     const value = await server({ application: f.desk, ask: f.route });
     try {
       const searched = await post(value.url, PERSON_EVIDENCE_SEARCH_PATH_V1, { schema_version: 1, query: "launch" });
       expect(searched.status).toBe(200);
-      const opened = await post(value.url, PERSON_EVIDENCE_OPEN_PATH_V1, { schema_version: 1, citation: f.note.citation });
-      expect(opened.status).toBe(200);
-      for (const response of [searched, opened]) {
-        const desk = validatePersonEvidenceDeskResponseV1(response.body);
-        expect(desk.items.map((item) => item.citation)).toEqual([f.cited]);
-        // A meeting record's list label, like named dates, is internal too (ADR-0041); the all-source door test releases one.
-        for (const key of ["ref", "dates", "date_kind", "list_label"]) expect(desk.items[0]).not.toHaveProperty(key);
-        expect(JSON.stringify(response.body)).not.toContain(f.note.ref!);
-      }
+      const desk = validatePersonEvidenceDeskResponseV1(searched.body);
+      expect(desk.items.map((item) => item.citation)).toEqual([f.cited]);
+      // A meeting record's list label, like named dates, is internal too (ADR-0041); the all-source door test releases one.
+      for (const key of ["ref", "dates", "date_kind", "list_label"]) expect(desk.items[0]).not.toHaveProperty(key);
+      expect(JSON.stringify(searched.body)).not.toContain(f.note.ref!);
+      // The desk's open had no caller: it answers as a route that never existed.
+      expect(await post(value.url, "/v3/person/evidence/open", { schema_version: 1, citation: f.note.citation }))
+        .toEqual({ status: 404, body: { error: { code: "not_found", message: "request failed" } } });
     } finally { await value.close(); }
   });
 });

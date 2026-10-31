@@ -2,7 +2,6 @@ import { withPersonAskSnapshotRetryV1 } from './person-ask-snapshot-retry-v1.js'
 import {
   validatePersonEvidenceDeskResponseV1,
   type PersonEvidenceDeskResponseV1,
-  type PersonEvidenceOpenRequestV1,
   type PersonEvidenceSearchRequestV1,
 } from "@echo-brain/organization-api";
 import { AgenticAskDeadlineErrorV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
@@ -148,8 +147,9 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
 }
 
 /**
- * The evidence desk's two reads (ADR-0022): every operation gets a new request-bound desk. Its Ask, `/v3/person/ask`, was
- * retired; Ask is the live route (person-live-answer-route-v1.ts), which shares this module's request helpers.
+ * The evidence desk's search (ADR-0022): every search gets a new request-bound desk. Its open and its Ask,
+ * `/v3/person/ask`, were retired; Ask is the live route (person-live-answer-route-v1.ts), which shares this module's
+ * request helpers.
  */
 export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOptions): PersonAnswerV3HttpApplication {
   return Object.freeze({
@@ -159,16 +159,6 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
         ...(input.request.query === undefined ? {} : { query: input.request.query }),
         ...(input.request.kinds === undefined ? {} : { kinds: input.request.kinds }),
         ...(input.request.limit === undefined ? {} : { limit: input.request.limit }),
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-      });
-      await desk.revalidate({ ...(input.signal === undefined ? {} : { signal: input.signal }) });
-      return deskResponse(desk, result);
-    },
-    async openEvidence(input: { readonly access_token: string; readonly request: PersonEvidenceOpenRequestV1; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResponseV1> {
-      const desk = deskFor(options, input.access_token, input.request);
-      const result = await desk.openCitation({
-        citation: input.request.citation,
-        ...(input.request.neighbours === undefined ? {} : { neighbours: input.request.neighbours }),
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       await desk.revalidate({ ...(input.signal === undefined ? {} : { signal: input.signal }) });

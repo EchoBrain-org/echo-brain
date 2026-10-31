@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
@@ -21,7 +20,6 @@ const receipt_sha256 = `sha256:${'c'.repeat(64)}`;
 describe('Agentic Ask V1 public contracts', () => {
   it('defines the desk endpoints and the Ask request', () => {
     expect(PERSON_EVIDENCE_SEARCH_PATH_V1).toBe('/v3/person/evidence/search');
-    expect(PERSON_EVIDENCE_OPEN_PATH_V1).toBe('/v3/person/evidence/open');
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What changed?', project_id }))
       .toEqual({ schema_version: 3, question: 'What changed?', project_id });
   });

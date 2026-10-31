@@ -60,7 +60,6 @@ import type { PersonRecordSearchHttpApplicationV1 } from "./person-record-search
 import type { PersonEmployeeHttpApplication } from "./person-employee-http-application.js";
 import {
   PERSON_ANSWER_PATH_V7,
-  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_RUNS_PATH_V1,
   PERSON_DIAGNOSTICS_PATH_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
@@ -68,7 +67,6 @@ import {
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   validatePersonAnswerRequestV3,
-  validatePersonEvidenceOpenRequestV1,
   validatePersonRunsRequestV1,
   validatePersonDiagnosticsRequestV1,
   validatePersonResearchEvalReadRequestV1,
@@ -123,7 +121,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_ANSWER_PATH_V7}`,
   `POST ${PERSON_ASK_CHECK_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
-  `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CHANGES_ROUTE_V1}`,
   `GET ${PERSON_PROJECT_ACTIVITY_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
@@ -159,8 +156,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees: PersonEmployeeHttpApplication;
   /**
-   * The evidence desk (`/v3/person/evidence/search` and `/open`, ADR-0022), composed with the answer model. Its Ask route,
-   * `/v3/person/ask`, was retired with `/v4` to `/v6`: Ask is `person_answer_v7`.
+   * The evidence desk's search (`/v3/person/evidence/search`, ADR-0022), which only the research-loop evaluation reads. Its
+   * open and its Ask route, `/v3/person/ask`, were retired: Ask is `person_answer_v7`.
    */
   readonly person_answer_v3: PersonAnswerV3HttpApplication;
   /**
@@ -207,10 +204,10 @@ function providerIngressRoutes(
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
       // These Person families stay reserved, their retired paths too (V1 notes; V1 documents and the V2 and V3 tools lists,
-      // ADR-0048; the capability read), so no adapter can mount one.
+      // ADR-0048; the capability read and the evidence desk's open), so no adapter can mount one.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
         [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2,
-          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities']
+          '/v2/person/tools', '/v3/person/tools', '/v3/person/capabilities', '/v3/person/evidence/open']
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -749,7 +746,6 @@ export function createOrganizationAuthorityHttpServer(
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V7, personAskV7Post(options.person_answer_v7)],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
-    [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     [PERSON_ASK_CHECK_PATH_V1, personCancellablePost(options.person_ask_check, validatePersonAskCheckRequestV1, (application, input) => application.check(input))],
     ...(options.person_research_eval === undefined ? [] : [
       [PERSON_RESEARCH_EVAL_START_PATH_V1, personCancellablePost(options.person_research_eval, validatePersonResearchEvalStartRequestV1, (application, input) => application.start(input))],

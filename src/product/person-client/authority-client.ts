@@ -15,7 +15,6 @@ import {
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
   PERSON_ANSWER_PATH_V7,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
-  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
   PERSON_RESEARCH_EVAL_START_PATH_V1,
@@ -45,13 +44,11 @@ import {
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceSearchRequestV1,
-  validatePersonEvidenceOpenRequestV1,
   validatePersonEvidenceDeskResponseV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
   type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
   type PersonEvidenceSearchRequestV1,
-  type PersonEvidenceOpenRequestV1,
   type PersonEvidenceDeskResponseV1,
   type PersonSourceEvidenceReadRequestV1,
   type PersonSourceEvidenceV1,
@@ -112,7 +109,6 @@ export type { EmployeeRosterV1, PersonRecordListItemV1, PersonRecordListV1, Pers
  */
 export type PersonAnswerV8 = OrganizationPersonAnswerV8;
 export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
-export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
 export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonListV1 = PersonListResponseV1;
@@ -1148,19 +1144,10 @@ export class PersonAuthorityClient {
     });
   }
 
-  evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.evidenceDesk(PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonEvidenceSearchRequestV1, accessToken, value, signal);
-  }
-
-  evidenceOpen(accessToken: string, value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.evidenceDesk(PERSON_EVIDENCE_OPEN_PATH_V1, validatePersonEvidenceOpenRequestV1, accessToken, value, signal);
-  }
-
-  private async evidenceDesk<T extends { readonly project_id?: string }>(path: string, validate_request: (value: unknown) => T, accessToken: string,
-    value: T, signal: AbortSignal | undefined): Promise<PersonEvidenceDeskV1> {
-    const request = validate_request(value);
-    const response = await this.json({ path, body: request,
-      validate_request, validate_response: validatePersonEvidenceDeskResponseV1,
+  async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
+    const request = validatePersonEvidenceSearchRequestV1(value);
+    const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
+      validate_request: validatePersonEvidenceSearchRequestV1, validate_response: validatePersonEvidenceDeskResponseV1,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
     const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');

@@ -44,11 +44,10 @@ import {
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
 const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
 /**
- * The evidence desk (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the Ask routes before it,
- * `/v3` to `/v6` with the V4 to V7 answers, were retired, and so was the capability read.
+ * The evidence desk search (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the Ask routes before
+ * it, `/v3` to `/v6` with the V4 to V7 answers, were retired, and so were the capability read and the desk's open.
  */
 export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
-export const PERSON_EVIDENCE_OPEN_PATH_V1 = '/v3/person/evidence/open';
 
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
