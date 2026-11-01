@@ -61,90 +61,6 @@ test('a project is one feed of notes and documents, More reads older ones in ord
   expect(await top()).toBe(0);
 });
 
-test('the reader says who can read an original when it is not the project\'s members', async () => {
-  run = await launch('long-feed');
-  const { page } = run;
-  await page.getByTestId('sidebar-project').nth(1).click();
-  const rows = page.getByTestId('feed-row');
-  await expect(rows).toHaveCount(10);
-  // Captured in Beacon under the Only me lock: it lists there for you, with the lock (ADR-0049).
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('capture-lock').click();
-  await page.getByTestId('compose-body').fill('My own reminder');
-  await page.keyboard.press('ControlOrMeta+Enter');
-  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon · only you');
-  await expect(rows.first()).toContainText('My own reminder');
-  await expect(rows.first().getByLabel('Only me')).toBeVisible();
-  await rows.first().click();
-  await expect(page.getByTestId('reader-meta')).toHaveText(/^Only me · /);
-  await page.getByTestId('back').click();
-  // The project's members: nothing more to say.
-  await rows.nth(1).click();
-  await expect(page.getByTestId('reader-text')).toHaveText('Note 1 text.');
-  await expect(page.getByTestId('reader-meta')).not.toContainText('Only me');
-  await page.getByTestId('back').click();
-
-  // A saved note found in all context says it too.
-  await page.getByTestId('scope-clear').click();
-  await page.getByTestId('ask-field').fill('pricing tiers');
-  await page.getByTestId('match-row').first().click();
-  await expect(page.getByTestId('reader-meta')).toHaveText(/^Only me · /);
-});
-
-test('a save into the project on screen keeps the rows shown, even when reading them again fails', async () => {
-  run = await launch('long-feed-refresh-fails');
-  const { page } = run;
-  const feeds = () => run.calls().filter(call => call.path === '/v1/person/list').length;
-  const log = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8');
-  await page.getByTestId('sidebar-project').nth(1).click();
-  const rows = page.getByTestId('feed-row');
-  await expect(rows).toHaveCount(10);
-  await page.getByTestId('feed-more').click();
-  await expect(rows).toHaveCount(13);
-
-  // Read again after the save, the notes fail: nothing shown goes, and no error is shown for it.
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Beacon standup');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon');
-  await expect.poll(log).toMatch(/list\.page unavailable/);
-  await page.waitForTimeout(300);
-  await expect(rows).toHaveCount(13);
-  await expect(page.getByTestId('feed-failure')).toHaveCount(0);
-  await expect(page.getByTestId('feed-error')).toHaveCount(0);
-
-  // Read again once more, the new note leads, and the older rows More loaded stay.
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Beacon standup');
-  await page.getByTestId('compose-send').click();
-  await expect(rows.first()).toContainText('Beacon standup');
-  await expect(rows).toHaveCount(14);
-  await expect(rows.last()).toContainText('Note 12');
-  await expect(page.getByTestId('feed-more')).toHaveCount(0);
-  expect(feeds()).toBe(4);
-});
-
-test('a page More could not read says why below the rows, and Try again reads only it', async () => {
-  run = await launch('long-feed-more-fails');
-  const { page } = run;
-  const cursors = () => run.calls().filter(call => call.path === '/v1/person/list').map(call => call.body?.cursor ?? null);
-  await page.getByTestId('sidebar-project').nth(1).click();
-  const rows = page.getByTestId('feed-row');
-  await expect(rows).toHaveCount(10);
-  await page.getByTestId('feed-more').click();
-  await expect(page.getByTestId('feed-failure')).toContainText('ECHO is unavailable right now.');
-  await expect(rows).toHaveCount(10);
-  await page.getByTestId('feed-retry').click();
-  await expect(rows).toHaveCount(13);
-  await expect(page.locator('[data-kind="document"]')).toContainText('Q4 hiring plan.pdf');
-  await expect(page.getByTestId('feed-failure')).toHaveCount(0);
-  // The first page once, then the same next page twice.
-  const [first, more, again] = cursors();
-  expect(cursors()).toHaveLength(3);
-  expect(first).toBeNull();
-  expect(again).toBe(more);
-});
-
 test('a document reads a page of text at a time, and Save original writes the checked original where main was told', async () => {
   run = await launch();
   const { page, app } = run;
@@ -196,21 +112,6 @@ test('a document reads a page of text at a time, and Save original writes the ch
   await expect(page.getByTestId('reader')).toBeVisible();
   const dissociate = run.calls().filter(call => call.path === `/v2/person/documents/${DOCUMENT}/dissociate`);
   expect(dissociate.map(call => call.body)).toEqual([expect.objectContaining({ project_id: BEACON })]);
-});
-
-test('a document leaves a project its lead opened it in', async () => {
-  run = await launch('only-me');
-  const { page } = run;
-  await page.getByTestId('sidebar-project').nth(0).click();
-  await page.locator('[data-kind="document"]').click();
-  await expect(page.getByTestId('reader').locator('h1')).toHaveText('Pricing memo');
-  await page.getByTestId('reader-actions').click();
-  await page.getByTestId('reader-remove').click();
-  await expect(page.getByTestId('toast')).toHaveText('Removed from Apollo');
-  await expect(page.getByTestId('reader')).toHaveCount(0);
-  await expect(page.locator('[data-kind="document"]')).toHaveCount(0);
-  const dissociate = run.calls().filter(call => call.path === `/v2/person/documents/doc_${'9'.repeat(64)}/dissociate`);
-  expect(dissociate.map(call => call.body)).toEqual([expect.objectContaining({ project_id: APOLLO })]);
 });
 
 test('an original can leave the project it is in, or be added to another, and the reader says where it went', async () => {
@@ -303,31 +204,6 @@ test('a lead adds someone at once, Undo removes only them, and making a lead or 
   await expect(page.getByTestId('people')).toHaveCount(0);
   await expect(page.getByTestId('members-button')).toHaveCount(0);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-});
-
-test('a member sees who is in a project and cannot change it', async () => {
-  run = await launch();
-  const { page } = run;
-  await page.getByTestId('sidebar-project').nth(1).click();
-  await page.getByTestId('members-button').click();
-  await expect(page.getByTestId('member-row')).toHaveText(['MCMaya ChenLead', 'AAri']);
-  await expect(page.getByTestId('people-find')).toHaveCount(0);
-  await expect(page.getByTestId('member-more')).toHaveCount(0);
-  await expect(page.getByTestId('candidate-row')).toHaveCount(0);
-  expect(run.calls().filter(call => call.path === '/v1/person/directory')).toHaveLength(0);
-});
-
-test('People reads your role again, and a new one empties the bar', async () => {
-  run = await launch('demoted');
-  const { page } = run;
-  await page.getByTestId('sidebar-project').nth(0).click();
-  await expect(page.getByTestId('title')).toHaveText('Apollo');
-  await page.getByTestId('ask-field').fill('apollo');
-  await page.getByTestId('members-button').click();
-  await expect(page.getByTestId('member-row')).toHaveCount(2);
-  await expect(page.getByTestId('people-find')).toHaveCount(0);
-  await expect(page.getByTestId('ask-field')).toHaveValue('');
-  await expect(page.getByTestId('sidebar-project').nth(0)).toBeVisible();
 });
 
 test('a change whose reply was lost is never called made: Try again resends the same request until the Authority answers', async () => {

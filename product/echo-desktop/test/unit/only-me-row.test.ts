@@ -135,7 +135,7 @@ describe('the kind mark', () => {
 });
 
 describe('Only me', () => {
-  async function page(items: ListItem[], projects: Partial<State['projects']>, list: State['altitude']['list'] = null): Promise<Node> {
+  async function page(items: ListItem[], projects: Partial<State['projects']>, list: State['altitude']['list'] = null, extra: Partial<NonNullable<State['list']>> = {}): Promise<Node> {
     const { getState } = await import('../../src/renderer/store.js');
     const { OnlyMe } = await import('../../src/renderer/screens/only-me.js');
     const base = getState();
@@ -143,10 +143,21 @@ describe('Only me', () => {
       ...base, status: { client_version: 'test', signed_in: true, account: ACCOUNT },
       projects: { items: [APOLLO, BEACON], next: null, loading: false, ...projects },
       altitude: { ...base.altitude, list },
-      list: { scope: { kind: 'only-me' }, opened: 1, items, next: 'more', loading: false },
+      list: { scope: { kind: 'only-me' }, opened: 1, items, next: 'more', loading: false, ...extra },
     };
     return render(OnlyMe({ state })) as Node;
   }
+
+  it('shows a quiet empty list, or the precise failure with a retry when available', async () => {
+    const empty = await page([], {}, null, { next: null });
+    for (const id of ['only-me-row', 'only-me-error', 'only-me-more']) expect(byTestId(empty, id)).toHaveLength(0);
+    expect(byTestId(empty, 'only-me')[0]!.props['aria-busy']).toBe(false);
+    const failed = await page([], {}, null, { next: null, failure: { code: 'unavailable', retryable: true } });
+    expect(text(byTestId(failed, 'only-me-error'))).toContain('ECHO is unavailable right now. Try again.');
+    expect(text(byTestId(failed, 'only-me-retry'))).toBe('Try again');
+    const refused = await page([], {}, null, { next: null, failure: { code: 'unauthorized', retryable: false } });
+    expect(text(byTestId(refused, 'only-me-error'))).toContain('Your access changed. Sign in again.');
+  });
 
   it('lists every row newest first in the new row, with More after them', async () => {
     const tree = await page([item('Pricing decision'), item('Supplier call notes', { projects: ['Apollo'] })], {});

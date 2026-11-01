@@ -129,6 +129,19 @@ describe('project tool-read replies', () => {
  * first; then project ID), and More goes on from the last row read.
  */
 describe('project lists on foreground refresh', () => {
+  it('a role changed elsewhere is a change of access: the refresh empties the bar', async () => {
+    const store = await startStore();
+    store.setBarText('apollo');
+    await vi.advanceTimersByTimeAsync(300);
+    await flush();
+    expect(store.getState().matches).not.toBeNull();
+    active = [{ ...apollo, role: 'member' }];
+    await show(store);
+    expect(store.getState().projects.items[0]?.role).toBe('member');
+    expect(store.getState().barText).toBe('');
+    expect(store.getState().matches).toBeNull();
+  });
+
   /** Made after every numbered project. */
   const created = (name: string) => project(900, 30, { name, project_id: `prj_${name.toLowerCase().padEnd(8, '0')}-1111-4111-8111-111111111111`, created_at: '2026-10-01T00:00:00.000Z' });
   /** Three projects, and the window come forward with them moved: the refresh's list read is held. */

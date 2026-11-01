@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
+import { validatePersonRunsRequestV1 } from '@echo-brain/organization-api';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
 import { ACCOUNT, cover, digest, elements, EMPTY_SUMMARY, fail, flush, hide, ok, render, show, startStore as start, storeLifecycle, text, uncover } from './harness.js';
 import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
@@ -502,6 +503,17 @@ describe('Home rows', () => {
 });
 
 describe('Home decisions and impact checks', () => {
+  it('says when the meeting was already approved, or rejected, in Slack', async () => {
+    const store = await start();
+    for (const [decision, status] of [['approve', 'approved'], ['reject', 'rejected']] as const) {
+      await store.openDecision(approval);
+      await flush();
+      rpc.mockImplementationOnce(async () => ok({ status, decided_on: 'slack' }));
+      await store.decide(decision);
+      expect(store.getState().toast).toBe(`Already ${status} in Slack`);
+      expect(store.getState().route).toEqual({ page: 'home' });
+    }
+  });
   it('covers meeting rows and a private decision when another app is in front', async () => {
     const store = await start();
     cover(store);
@@ -882,6 +894,7 @@ describe('Sweeps from Home', () => {
     fx.run = impactRun('done');
     await vi.advanceTimersByTimeAsync(5_000);
     expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'mine' }]);
+    for (const request of [...requests('sweep'), ...requests('start')]) expect(() => validatePersonRunsRequestV1(request)).not.toThrow();
     expect(requests('start').at(-1)).toEqual({ schema_version: 1, operation: 'start', run_id: sweepRun('pending').run_id });
     expect(store.homeRows()).toEqual([]);
     // Home still says a sweep is due while it runs and once it is done: this Home load asks no more.
@@ -2025,6 +2038,23 @@ describe('Follow-up lists: current work first, results in place', () => {
 });
 
 describe('Check now', () => {
+  it('checks only the meeting whose follow-ups are open, then reads its results', async () => {
+    fx.granola = null;
+    fx.page = listPage();
+    fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
+    const store = await meetingList();
+    const checking = store.checkNow();
+    await flush();
+    expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'record', id: record }]);
+    expect(check(store)).toBe('checking');
+    fx.sweep = sweepRun('done');
+    fx.page = { ...listPage(), items: [item('1', 'landed')] };
+    await vi.advanceTimersByTimeAsync(5_000);
+    await checking;
+    expect(check(store)).toBeNull();
+    expect((store.followUpShown() as FollowUpList).items[0]?.check?.verdict).toBe('landed');
+    for (const request of [...requests('sweep'), ...requests('start')]) expect(() => validatePersonRunsRequestV1(request)).not.toThrow();
+  });
   const listPage = (): OpenItemsView => ({ items: [item('1')], next_cursor: null, stages: [],
     summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1, by_decision: [{ record_sha256: record, unsent: 0, open: 1, landed: 0, unreadable: 0 }] } });
   /** A project's follow-ups, open over its page. */
@@ -2041,6 +2071,7 @@ describe('Check now', () => {
     const store = await projectList();
     await store.checkNow();
     expect(requests('sweep')).toEqual([{ schema_version: 1, operation: 'sweep', scope: 'project', id: project.project_id }]);
+    for (const request of requests('sweep')) expect(() => validatePersonRunsRequestV1(request)).not.toThrow();
     expect(check(store)).toBe('nothing');
     fx.sweepAnswer = 'fails';
     await store.checkNow();

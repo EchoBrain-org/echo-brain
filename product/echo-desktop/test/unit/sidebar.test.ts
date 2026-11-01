@@ -3,8 +3,9 @@ import type { State } from '../../src/renderer/store.js';
 import type { UpdateState } from '../../src/shared/protocol.js';
 import { ACCOUNT, byTestId, elements, project, render, text } from './harness.js';
 
-const { loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome } = vi.hoisted(() => ({
+const { loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome, openCompose, openOrganization } = vi.hoisted(() => ({
   loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn(), openNewProject: vi.fn(), returnToAsk: vi.fn(), openOnlyMe: vi.fn(), openHome: vi.fn(),
+  openCompose: vi.fn(), openOrganization: vi.fn(),
 }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', async original => ({
@@ -13,7 +14,7 @@ vi.mock('preact/hooks', async original => ({
   useState: () => [true, vi.fn()],
 }));
 vi.mock('../../src/renderer/store.js', async original => ({
-  ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome,
+  ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome, openCompose, openOrganization,
 }));
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -218,6 +219,17 @@ async function updateRow(update: UpdateState, extra: Partial<State> = {}) {
 }
 
 describe('the update row', () => {
+  it('shows above the account row even when signed out', async () => {
+    const { getState } = await import('../../src/renderer/store.js');
+    const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
+    const tree = elements(render(Sidebar({ state: { ...getState(), status: { signed_in: false, account: null, client_version: 'test' },
+      update: { state: 'available', release: RELEASE } } })));
+    const update = tree.findIndex(node => node.props['data-testid'] === 'sidebar-update');
+    const account = tree.findIndex(node => node.props['data-testid'] === 'account-row');
+    expect(update).toBeGreaterThanOrEqual(0);
+    expect(account).toBeGreaterThan(update);
+    expect(text(tree[account])).toBe('Account · Sign in');
+  });
   it('is not there while there is no new version', async () => {
     expect((await updateRow({ state: 'none' })).shown).toBeNull();
   });
@@ -271,6 +283,49 @@ describe('the update row', () => {
       (holder.props[handler] as (event: unknown) => void)(event);
       expect(event.stopPropagation).toHaveBeenCalledOnce();
       expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('Capture and the account rows', () => {
+  it.each(['employee', 'owner'] as const)('names the account and offers People & invites only to an owner: %s', async role => {
+    const state = await projectFailure(false);
+    state.status = { client_version: 'test', signed_in: true, account: { ...ACCOUNT, role } };
+    const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
+    const tree = render(Sidebar({ state }));
+    const capture = byTestId(tree, 'sidebar-capture')[0]!;
+    expect(text(capture)).toBe(`Capture${navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E'}`);
+    (capture.props.onClick as () => void)();
+    expect(openCompose).toHaveBeenCalledExactlyOnceWith();
+    expect(byTestId(tree, 'account-row')[0]!.props).toMatchObject({ 'aria-label': `Account, Fixture, ${role}`, 'aria-haspopup': 'menu' });
+    const organization = byTestId(tree, 'sidebar-organization');
+    expect(organization).toHaveLength(role === 'owner' ? 1 : 0);
+    if (role === 'owner') {
+      expect(text(organization)).toBe('People & invites');
+      (organization[0]!.props.onClick as () => void)();
+      expect(openOrganization).toHaveBeenCalledExactlyOnceWith();
+    }
+  });
+
+  it('shows the sidebar by default and remembers the toggle across a reload', async () => {
+    const saved = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => saved.get(key) ?? null,
+      setItem: (key: string, value: string) => saved.set(key, value), removeItem: (key: string) => saved.delete(key) });
+    try {
+      vi.resetModules();
+      const first = await import('../../src/renderer/store.js');
+      expect(first.getState().sidebarOpen).toBe(true);
+      first.toggleSidebar();
+      expect(first.getState().sidebarOpen).toBe(false);
+      expect(saved.get('echo.sidebarOpen')).toBe('false');
+      vi.resetModules();
+      const reloaded = await import('../../src/renderer/store.js');
+      expect(reloaded.getState().sidebarOpen).toBe(false);
+      reloaded.toggleSidebar();
+      expect(saved.get('echo.sidebarOpen')).toBe('true');
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
     }
   });
 });

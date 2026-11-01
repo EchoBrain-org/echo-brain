@@ -83,6 +83,26 @@ describe('the stops', () => {
 });
 
 describe('My projects', () => {
+  it('zooms on a trackpad pinch, leaves ordinary scrolling alone, and waits before another zoom', async () => {
+    const { Altitude } = await import('../../src/renderer/screens/altitude.js');
+    const { getState } = await import('../../src/renderer/store.js');
+    const tree = render(Altitude({ state: await stateWith({ reads: READS }), top: null }));
+    const level = elements(tree).find(node => node.props.class === 'alt-level')!;
+    const preventDefault = vi.fn();
+    const wheel = (deltaY: number, timeStamp: number, zoom: string | null, ctrlKey = true) => {
+      (level.props.onWheel as (event: unknown) => void)({ ctrlKey, deltaY, timeStamp, preventDefault,
+        target: { closest: () => zoom ? { dataset: { zoom } } : null } });
+    };
+    wheel(-120, 10_000, `project:${THERMAL.project_id}`, false);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(getState().altitude.level).toBe('projects');
+    wheel(-120, 10_000, `project:${THERMAL.project_id}`);
+    expect(getState().altitude).toMatchObject({ level: 'project', project_id: THERMAL.project_id });
+    wheel(120, 10_200, null);
+    expect(getState().altitude.level).toBe('project');
+    wheel(120, 10_500, null);
+    expect(getState().altitude.level).toBe('projects');
+  });
   /** A row's part, by its class. */
   const part = (row: unknown, name: string) => elements(row).find(node => node.props.class === name);
 
