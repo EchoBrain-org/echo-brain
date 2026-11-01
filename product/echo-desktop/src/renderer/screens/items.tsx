@@ -20,12 +20,12 @@ const ICONS = { imported_meeting: Calendar, note: Note, document: Page, meeting:
  * that arrived since your previous visit is marked "New" for this visit
  * (ADR-0047). Only me draws its own row (only-me-row.tsx).
  */
-export function ItemRow({ item, testid, badge, fresh = false, onOpen }: {
-  item: ListItem; testid: string; badge?: string | null | undefined; fresh?: boolean; onOpen: () => void;
+export function ItemRow({ item, badge, fresh = false, onOpen }: {
+  item: ListItem; badge?: string | null | undefined; fresh?: boolean; onOpen: () => void;
 }) {
   const Icon = ICONS[item.ref.kind];
   return (
-    <button type="button" class="row item-row" data-testid={testid} data-kind={item.ref.kind} onClick={onOpen}>
+    <button type="button" class="row item-row" data-testid="feed-row" data-kind={item.ref.kind} onClick={onOpen}>
       <span class="item-icon" aria-hidden="true"><Icon /></span>
       {item.document ? (
         <span class="lines">

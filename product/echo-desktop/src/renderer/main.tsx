@@ -1,5 +1,5 @@
 import { render, type ComponentChildren } from 'preact';
-import { useEffect } from 'preact/hooks';
+import { useEffect, useLayoutEffect } from 'preact/hooks';
 import { on } from './api.js';
 import { itemTitle } from './needs.js';
 import { ConfirmSignOut } from './screens/account.js';
@@ -40,11 +40,17 @@ function sheetUp(): boolean {
 /** How long a toast that says something went well stays: one that warns stays until the next page. */
 const TOAST_MS = 8_000;
 
+/** Counts the person's clicks and keys, so a caret waiting for a frame can tell they acted before it came. */
+let inputs = 0;
+for (const type of ['pointerdown', 'keydown'] as const) document.addEventListener(type, () => { inputs += 1; }, true);
+
 /** The caret waits in the ask bar whenever the window comes forward, unless a sheet is up. */
 function focusBar(): void {
   if (sheetUp()) return;
-  // A sheet can open before the next frame (a drop, ⌘⇧E): it keeps the focus.
-  requestAnimationFrame(() => { if (!sheetUp()) document.getElementById('ask-field')?.focus(); });
+  const seen = inputs;
+  // A sheet can open before the next frame (a drop, ⌘⇧E), and on a busy machine that frame can be half a second away, long
+  // enough to click or type somewhere: either keeps the focus. Focus the page itself moved in the meantime does not.
+  requestAnimationFrame(() => { if (!sheetUp() && inputs === seen) document.getElementById('ask-field')?.focus(); });
 }
 
 /**
@@ -98,10 +104,10 @@ function App() {
 
   // Capture closed (saved, or put away): the caret goes back to the bar.
   const capturing = Boolean(state.compose && !state.compose.hidden);
-  useEffect(() => { if (!capturing) focusBar(); }, [capturing]);
+  useLayoutEffect(() => { if (!capturing) focusBar(); }, [capturing]);
   // New project stepped aside or closed: the caret goes to the bar of the project it opened.
   const making = sheetShown(state)?.kind === 'new-project';
-  useEffect(() => { if (!making) focusBar(); }, [making]);
+  useLayoutEffect(() => { if (!making) focusBar(); }, [making]);
 
   // A toast that says something went well goes by itself, counted while it can be seen.
   useEffect(() => {
@@ -170,7 +176,7 @@ function App() {
   const covered = pageCovered(state);
   // Home itself, nothing over it: the title row holds its stops where a page's name would be (One place to look v1). Never under
   // the cover, since a stop names a project or a person.
-  const homeShows = !covered && !state.ask && !view && !listDecision && !state.reader && state.route.page === 'home';
+  const homeShows = !covered && !state.ask && !view && !state.reader && state.route.page === 'home';
   const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : onlyMe ? 'Only me' : decision ? 'Decision'
     : state.route.page === 'follow-ups' ? 'Follow-ups' : null;
   // A follow-ups view names itself: Follow-ups, the meeting or the project; an item; a decision.

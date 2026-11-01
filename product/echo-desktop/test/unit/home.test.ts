@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonMeetingReviewV2, PersonRunV1 } from '@echo-brain/organization-api';
 import type { FollowUpList, ItemPage } from '../../src/renderer/store.js';
-import { ACCOUNT, cover, elements, EMPTY_SUMMARY, fail, flush, hide, ok, render, show, startStore as start, storeLifecycle, text, uncover } from './harness.js';
+import { ACCOUNT, cover, digest, elements, EMPTY_SUMMARY, fail, flush, hide, ok, render, show, startStore as start, storeLifecycle, text, uncover } from './harness.js';
 import type { HomeView, OpenItemsView, OpenItemView, ToolStatus } from '../../src/shared/protocol.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -76,6 +76,8 @@ const requests = (operation: string) => homeCalls().filter(([, params]) => param
 const project = { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Thermostat redesign', role: 'lead' as const, created_at: '2026-10-01T00:00:00.000Z', status: 'active' as const };
 
 type Store = Awaited<ReturnType<typeof start>>;
+/** Check now's state on the follow-ups shown. */
+const check = (store: Store) => (store.followUpShown() as FollowUpList | null)?.check;
 type Failure = { code: string; retryable: boolean; mutation_outcome?: 'unknown' };
 /**
  * The replies a test holds back (`held`): live reads (Home's, a list's, an item's), Home's rows reads, a list's rows reads, the
@@ -167,9 +169,8 @@ async function authority(method: string, params: { project_id?: string; request?
     case 'projects.activity': return ok({ items: [] });
     case 'ask.check': return fail('not_supported');
     // The change check: nothing moves unless a test says.
-    case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60, areas: { projects: `sha256:${'0'.repeat(64)}`,
-      follow_ups: `sha256:${'1'.repeat(64 - fx.moved.follow_ups)}${'a'.repeat(fx.moved.follow_ups)}`,
-      reviews: `sha256:${'2'.repeat(64 - fx.moved.reviews)}${'a'.repeat(fx.moved.reviews)}` } });
+    case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60,
+      areas: { projects: digest('projects'), follow_ups: digest(`f${fx.moved.follow_ups}`), reviews: digest(`r${fx.moved.reviews}`) } });
     case 'people.directory': return ok({ items: [RAFAEL], next_cursor: null });
     case 'account.tools':
       if (fx.failTools) return fail('transport_failed', { retryable: true });
@@ -303,6 +304,13 @@ async function expectQuiet() {
   const calls = polls().length;
   await vi.advanceTimersByTimeAsync(120_000);
   expect(polls()).toHaveLength(calls);
+}
+
+/** Signed in, with your approved meeting's impact check running. */
+async function checking() {
+  fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
+  fx.run = impactRun('running');
+  return start();
 }
 
 describe('Home rows', () => {
@@ -494,13 +502,6 @@ describe('Home rows', () => {
 });
 
 describe('Home decisions and impact checks', () => {
-  /** Signed in, with your approved meeting's impact check running. */
-  async function checking() {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    return start();
-  }
-
   it('covers meeting rows and a private decision when another app is in front', async () => {
     const store = await start();
     cover(store);
@@ -1037,12 +1038,6 @@ describe('Checks keep moving (one place to look v1)', () => {
     || (method === 'tools.meetings' && params.request?.operation === 'reviews') || (method === 'runs' && params.request.operation === 'home')).length;
   /** The runs started, oldest first. */
   const starts = () => requests('start').map(request => request.run_id);
-  /** Signed in, with your approved meeting's impact check running. */
-  async function checking() {
-    fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
-    fx.run = impactRun('running');
-    return start();
-  }
 
   it('keeps the queue moving on another page, reading the runs list alone, and goes quiet once nothing goes', async () => {
     const store = await checking();
@@ -1099,9 +1094,7 @@ describe('Checks keep moving (one place to look v1)', () => {
     expect(starts()).toEqual([]);
     if (how === 'another page opens') await store.openProject(project);
     else cover(store);
-    fx.hold.rows = false;
-    release('rows');
-    await flush();
+    await landLoad();
     expect(starts()).toEqual([impactRun('pending').run_id]);
     // The driver follows it from there, with the runs list alone.
     const lists = requests('list').length;
@@ -1121,7 +1114,7 @@ describe('Checks keep moving (one place to look v1)', () => {
     fx.moved.reviews = 1;
     return store;
   }
-  /** The held Home load lands, with the runs list it read before the approval. */
+  /** The held Home load lands, with the runs list it read. */
   async function landLoad() {
     fx.hold.rows = false;
     release('rows');
@@ -1239,10 +1232,9 @@ describe('Checks keep moving (one place to look v1)', () => {
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.run = impactRun('pending');
     fx.hold.start = true;
-    await start();
+    const store = await start();
     expect(starts()).toHaveLength(1);
     // Home is read again meanwhile (ECHO came back, say): its list still has the check queued.
-    const store = await import('../../src/renderer/store.js');
     await store.loadHome();
     await flush();
     expect(starts()).toHaveLength(1);
@@ -1421,7 +1413,6 @@ describe('Checks keep moving (one place to look v1)', () => {
     await store.openFollowUps('project', project.project_id, project.name);
     return store;
   }
-  const check = (store: Store) => (store.followUpShown() as FollowUpList | null)?.check;
 
   it.each(['project', 'Home'] as const)('starts what queued behind Check now\'s sweep once that sweep ends, on a list over %s', async over => {
     fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
@@ -2045,7 +2036,6 @@ describe('Check now', () => {
     await store.openFollowUps('project', project.project_id, project.name);
     return store;
   }
-  const check = (store: Store) => (store.followUpShown() as FollowUpList | null)?.check;
 
   it('says when nothing is open to check, and when the sweep could not be asked for', async () => {
     const store = await projectList();

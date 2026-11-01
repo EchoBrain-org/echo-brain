@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { Member } from '../../shared/protocol.js';
 import { identity, initials } from '../format.js';
 import { message } from '../messages.js';
@@ -19,7 +19,7 @@ export function Face({ person }: { person: Pick<Member, 'membership_id' | 'displ
 function Confirm({ sheet }: { sheet: PeopleSheet }) {
   const cancel = useRef<HTMLButtonElement>(null);
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { cancel.current?.focus(); }, []);
+  useLayoutEffect(() => { cancel.current?.focus(); }, []);
   const { action, person } = sheet.confirm!;
   const title = action === 'remove' ? `Remove ${person.display_name}?` : `Make ${person.display_name} a ${action}?`;
   const detail = action === 'remove' ? 'They lose access through this project.' : 'Leads manage who is in the project.';
@@ -129,7 +129,7 @@ export function People({ state, sheet }: { state: State; sheet: PeopleSheet }) {
   const box = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const lead = sheet.project.role === 'lead';
-  useEffect(() => { (field.current ?? box.current)?.focus(); }, [lead]);
+  useLayoutEffect(() => { (field.current ?? box.current)?.focus(); }, [lead]);
   const sending = state.change?.origin === 'people' && state.change.project.project_id === sheet.project.project_id &&
     state.change.status === 'sending';
   return (

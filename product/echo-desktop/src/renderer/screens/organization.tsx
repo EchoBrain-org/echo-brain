@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { Employee } from '../../shared/protocol.js';
 import { dateTime } from '../format.js';
 import { message } from '../messages.js';
@@ -24,7 +24,7 @@ function standing(employee: Employee): string {
 function ConfirmRevoke({ employee }: { employee: Employee }) {
   const cancel = useRef<HTMLButtonElement>(null);
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { cancel.current?.focus(); }, []);
+  useLayoutEffect(() => { cancel.current?.focus(); }, []);
   return (
     <div class="overlay" onClick={cancelRevoke}>
       <div class="sheet confirm" role="alertdialog" aria-labelledby="revoke-title" data-testid="revoke-confirm" ref={box}

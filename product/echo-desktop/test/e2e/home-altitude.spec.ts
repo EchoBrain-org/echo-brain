@@ -147,7 +147,7 @@ test('a reload opens the top, wherever Home was zoomed, and forgets where an old
   const page = await myProjects();
   await page.getByTestId('alt-project').first().click();
   await expect(page.getByTestId('alt-project-level')).toBeVisible();
-  await page.evaluate(() => localStorage.setItem('echo.home.altitude', JSON.stringify({ level: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' })));
+  await page.evaluate(id => localStorage.setItem('echo.home.altitude', JSON.stringify({ level: 'project', project_id: id })), APOLLO);
   await page.reload();
   await expect(page.getByTestId('alt-projects')).toBeVisible();
   await expect(top(page)).toBeVisible();
@@ -360,7 +360,8 @@ test('back on a row that Home’s read then moves to the top, the focus stays on
   await item.getByRole('button', { name: 'Mark done', exact: true }).click();
   await expect(page.getByTestId('follow-up-said')).toHaveText('Done · Undo');
   await page.getByTestId('follow-up-said').getByRole('button', { name: 'Undo', exact: true }).click();
-  await expect(page.getByTestId('follow-up-said')).not.toContainText('Done');
+  // Settled: Escape does nothing while a change is on its way, and the line empties as soon as Undo starts.
+  await expect(page.getByTestId('follow-up-said')).toHaveText('Reopened');
   // Back: the list as it was left, that row focused; Home's read then moves it to the top, and it keeps the focus.
   await page.keyboard.press('Escape');
   await expect(list(page)).toBeVisible();

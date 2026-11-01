@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpList, ItemPage, State } from '../../src/renderer/store.js';
 import type { OpenItemsView, OpenItemView } from '../../src/shared/protocol.js';
-import { followUp, ME, MINA, RAFAEL, sent } from './changes-fixture.js';
-import { ACCOUNT, byTestId, elements, EMPTY_SUMMARY, plainHooks, render, text, type Node } from './harness.js';
+import { followUp, id, ME, MINA, RAFAEL, sent } from './changes-fixture.js';
+import { ACCOUNT, byTestId, elements, EMPTY_SUMMARY, plainHooks, project, render, text, type Node } from './harness.js';
 
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', original => plainHooks(original));
@@ -68,7 +68,7 @@ describe('a meeting\'s list', () => {
 /** Now, in these tests: noon on the 14th. */
 const NOW = Date.parse('2026-10-14T12:00:00.000Z');
 const daysAgo = (count: number) => new Date(NOW - count * 86_400_000).toISOString();
-const PROJECT = { project_id: 'prj_11111111-1111-4111-8111-111111111111', name: 'Apollo', role: 'lead' as const, created_at: '2026-10-01T00:00:00.000Z', status: 'active' as const };
+const PROJECT = project(1, 1, { name: 'Apollo' });
 
 /**
  * Your Follow-ups page, as K draws it: Mina's ticket open nine days (late), Rafael's page open four (needs attention), yours open
@@ -105,7 +105,7 @@ describe('your Follow-ups page (One place to look v1, K)', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   const ownerButtons = (tree: Node) => byTestId(tree, 'follow-ups-owner');
-  const row = (tree: Node, n: number) => byTestId(tree, 'follow-up-row').find(node => node.props['data-item'] === followUp(n).item_id)!;
+  const row = (tree: Node, n: number) => byTestId(tree, 'follow-up-row').find(node => node.props['data-item'] === id(n))!;
   const part = (node: Node, cls: string) => elements(node).find(entry => String(entry.props.class ?? '').split(' ').includes(cls));
 
   it('has no page heading but for a screen reader, and says faintly under the list when ECHO last checked', async () => {
@@ -149,7 +149,7 @@ describe('your Follow-ups page (One place to look v1, K)', () => {
   it('lists current work as one list, what needs attention first, longest waiting first, and folds Done at the end', async () => {
     const tree = await yours();
     const current = elements(tree).find(node => node.props['aria-label'] === 'Follow-ups not done yet')!;
-    expect(byTestId(current, 'follow-up-row').map(node => node.props['data-item'])).toEqual([1, 2, 4, 5, 3].map(n => followUp(n).item_id));
+    expect(byTestId(current, 'follow-up-row').map(node => node.props['data-item'])).toEqual([1, 2, 4, 5, 3].map(id));
     const fold = elements(tree).find(node => node.props['aria-label'] === 'Done')!;
     const head = elements(fold).find(node => node.type === 'button')!;
     expect([head.props['aria-label'], head.props['aria-expanded'], byTestId(fold, 'follow-up-row').length]).toEqual(['Done · 1', false, 0]);
@@ -178,12 +178,12 @@ describe('your Follow-ups page (One place to look v1, K)', () => {
     expect(part(row(tree, 3), 'follow-up-kind')).toBeUndefined();
     // A tick only where you may send: your two not sent, none ticked until you tick it.
     const ticks = byTestId(tree, 'follow-up-row').flatMap(node => elements(node).filter(entry => entry.props.class === 'send-box').map(box => [node.props['data-item'], box.props.checked]));
-    expect(ticks).toEqual([[followUp(4).item_id, false], [followUp(5).item_id, false]]);
+    expect(ticks).toEqual([[id(4), false], [id(5), false]]);
   });
 
   it('shows only one owner\'s rows under a filter, open and closed, with their face pressed and no count on what it folds', async () => {
     const tree = await yours({ owner: RAFAEL.membership_id, expanded: { done: true } });
-    expect(byTestId(tree, 'follow-up-row').map(node => node.props['data-item'])).toEqual([2, 6].map(n => followUp(n).item_id));
+    expect(byTestId(tree, 'follow-up-row').map(node => node.props['data-item'])).toEqual([2, 6].map(id));
     expect(ownerButtons(tree).map(button => button.props['aria-pressed'])).toEqual([false, false, true, false, false]);
     expect(elements(tree).find(node => node.props['aria-expanded'] === true)!.props['aria-label']).toBe('Done');
     // An owner with no row left: everyone's again.

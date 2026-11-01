@@ -52,6 +52,47 @@ const DEFAULT_TEMPLATE_PATH = resolve(
   REPO,
   "deploy/organization-authority/authority-staging-host-v1.template.json",
 );
+const DATA_BACKUP_TEMPLATE_PATH = resolve(
+  REPO,
+  "deploy/organization-authority/authority-staging-data-backup-v1.template.json",
+);
+// The backup vault takes the backup stack's name, and AWS Backup vault names
+// stop at 50 characters.
+const DATA_BACKUP_STACK_SUFFIX = "-data-backup";
+const DATA_BACKUP_STACK_NAME_MAX = 50;
+// Cadence and retention are reviewed constants, not per-run input: changing
+// them is a code review that the account owner approves. They match the
+// root-volume recovery floor in RB-OPERATIONS-002.
+const DATA_BACKUP_SCHEDULE_EXPRESSION = "cron(0 9 ? * * *)";
+const DATA_BACKUP_RETENTION_DAYS = "35";
+const DATA_BACKUP_PARAMETER_KEYS = Object.freeze([
+  "DataVolumeId",
+  "DataVolumeKmsKeyArn",
+  "AlertTopicArn",
+  "BackupScheduleExpression",
+  "RecoveryPointRetentionDays",
+]);
+const DATA_BACKUP_LOGICAL_IDS = new Set([
+  "StagingDataBackupVault",
+  "StagingDataBackupServiceRole",
+  "StagingDataRestoreServiceRole",
+  "StagingDataBackupPlan",
+  "StagingDataVolumeSelection",
+  "StagingDataBackupMissedAlarm",
+]);
+// Cadence, retention and alert-topic changes modify these in place. Anything
+// else, such as a different volume or key, needs its own reviewed change.
+const DATA_BACKUP_MODIFIABLE_LOGICAL_IDS = new Set([
+  "StagingDataBackupPlan",
+  "StagingDataBackupMissedAlarm",
+]);
+const DATA_VOLUME_ID = /^vol-[a-f0-9]{8,17}$/;
+const KMS_KEY_ARN =
+  /^arn:(?:aws|aws-us-gov|aws-cn):kms:[a-z0-9-]+:[0-9]{12}:key\/[A-Za-z0-9-]+$/;
+const SNS_TOPIC_ARN =
+  /^arn:(?:aws|aws-us-gov|aws-cn):sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$/;
+const REGIONAL_ARN =
+  /^arn:(aws|aws-us-gov|aws-cn):[a-z0-9-]+:([a-z0-9-]+):([0-9]{12}):/;
 const CLEAN_DATA_MOUNT = "/srv/echo-authority-clean-v1/clean-data";
 const STAGING_AMI_ROOT_DEVICE = "/dev/sda1";
 const BASE_PARAMETERS = new Set([
@@ -207,8 +248,19 @@ function validateHostSetup(value) {
   });
 }
 
-function checkedTemplate() {
-  const templatePath = DEFAULT_TEMPLATE_PATH;
+function validateBackup(value) {
+  const raw = requiredObject(value, "backup_invalid");
+  onlyKeys(raw, new Set(["alertTopicArn"]), "backup_property_not_allowed");
+  return Object.freeze({
+    alertTopicArn: exactString(
+      raw.alertTopicArn,
+      SNS_TOPIC_ARN,
+      "backup_alert_topic_invalid",
+    ),
+  });
+}
+
+function checkedTemplate(templatePath = DEFAULT_TEMPLATE_PATH) {
   let metadata;
   let body;
   try {
@@ -244,6 +296,7 @@ export function validateStagingLifecycleInput(value) {
       "edge",
       "hostSetup",
       "authorityPinSha256",
+      "backup",
     ]),
     "input_property_not_allowed",
   );
@@ -276,6 +329,7 @@ export function validateStagingLifecycleInput(value) {
       SHA256_DIGEST,
       "authority_pin_invalid",
     );
+  if (raw.backup !== undefined) input.backup = validateBackup(raw.backup);
   return Object.freeze(input);
 }
 
@@ -460,11 +514,13 @@ async function assertStagingAmiRootDevice(input, dependencies) {
   }
 }
 
-async function describeExactStack(input, dependencies) {
+async function describeNamedStack(region, stackName, dependencies) {
   const describeStack = adapterFunction(dependencies, "describeStack");
-  return outputMap(
-    await describeStack({ region: input.region, stackName: input.stack.name }),
-  );
+  return outputMap(await describeStack({ region, stackName }));
+}
+
+async function describeExactStack(input, dependencies) {
+  return describeNamedStack(input.region, input.stack.name, dependencies);
 }
 
 function safeChangeActions(value) {
@@ -632,8 +688,14 @@ async function reviewedPlanStack(
   });
 }
 
-async function executePlannedStack(input, plan, dependencies) {
-  if (!plan.executable) return describeExactStack(input, dependencies);
+async function executePlannedStack(
+  input,
+  plan,
+  dependencies,
+  stackName = input.stack.name,
+) {
+  if (!plan.executable)
+    return describeNamedStack(input.region, stackName, dependencies);
   const executeChangeSet = adapterFunction(dependencies, "executeChangeSet");
   try {
     await executeChangeSet({
@@ -641,14 +703,18 @@ async function executePlannedStack(input, plan, dependencies) {
       changeSetType: plan.changeSetType,
       clientRequestToken: input.operationId,
       region: input.region,
-      stackName: input.stack.name,
+      stackName,
     });
   } catch (error) {
     if (error instanceof AwsCliError)
       throw new LifecycleError("change_set_execute_failed", error.safeEvents);
     refuse("change_set_execute_failed");
   }
-  const current = await describeExactStack(input, dependencies);
+  const current = await describeNamedStack(
+    input.region,
+    stackName,
+    dependencies,
+  );
   if (current === undefined) refuse("stack_missing_after_execute");
   if (current.updateRolledBack === true)
     refuse("change_set_execute_rolled_back");
@@ -1370,6 +1436,280 @@ async function runStatus(input, dependencies = {}) {
   });
 }
 
+function regionalArn(value, code) {
+  const match = typeof value === "string" ? REGIONAL_ARN.exec(value) : null;
+  if (match === null) refuse(code);
+  return Object.freeze({
+    partition: match[1],
+    region: match[2],
+    account: match[3],
+  });
+}
+
+/**
+ * Prove, from AWS rather than operator input, that the volume about to be
+ * selected is the slot's encrypted clean-data volume and that its key is
+ * usable in the same account. This is the source-encryption evidence gate of
+ * RB-OPERATIONS-002, run on every plan and execute.
+ */
+async function verifiedDataVolume(input, outputs, dependencies) {
+  const volumeId = exactString(
+    requiredOutput(outputs, "StagingDataVolumeId"),
+    DATA_VOLUME_ID,
+    "data_volume_id_invalid",
+  );
+  // The slot stack created this secret, so its ARN names the slot's account.
+  const slot = regionalArn(
+    requiredOutput(outputs, "AuthorityTunnelTokenSecretArn"),
+    "stack_outputs_invalid",
+  );
+  const describeVolume = ec2AdapterFunction(dependencies, "describeVolume");
+  const describeKey = dependencies?.kms?.describeKey;
+  if (typeof describeKey !== "function") refuse("kms_describeKey_required");
+  let volume;
+  try {
+    volume = await describeVolume({ region: input.region, volumeId });
+  } catch {
+    refuse("data_volume_unproven");
+  }
+  if (volume === null || typeof volume !== "object")
+    refuse("data_volume_unproven");
+  const tags = volume.tags ?? {};
+  if (
+    volume.volumeId !== volumeId ||
+    volume.availabilityZone !== input.stack.parameters.AvailabilityZone ||
+    !["available", "in-use"].includes(volume.state) ||
+    tags["aws:cloudformation:stack-name"] !== input.stack.name ||
+    tags["aws:cloudformation:logical-id"] !== "StagingDataVolume" ||
+    tags.Purpose !== "authority-clean-data" ||
+    tags.MountPath !== CLEAN_DATA_MOUNT
+  ) {
+    refuse("data_volume_identity_mismatch");
+  }
+  if (
+    volume.encrypted !== true ||
+    typeof volume.kmsKeyId !== "string" ||
+    !KMS_KEY_ARN.test(volume.kmsKeyId)
+  ) {
+    refuse("data_volume_not_encrypted");
+  }
+  const keyLocation = regionalArn(volume.kmsKeyId, "data_volume_not_encrypted");
+  if (
+    keyLocation.account !== slot.account ||
+    keyLocation.region !== input.region
+  ) {
+    refuse("data_volume_key_foreign");
+  }
+  let key;
+  try {
+    key = await describeKey({ region: input.region, keyId: volume.kmsKeyId });
+  } catch {
+    refuse("data_volume_key_unproven");
+  }
+  if (
+    key === null ||
+    typeof key !== "object" ||
+    key.arn !== volume.kmsKeyId ||
+    key.accountId !== slot.account ||
+    !["AWS", "CUSTOMER"].includes(key.keyManager) ||
+    key.keyState !== "Enabled" ||
+    key.enabled !== true ||
+    key.keyUsage !== "ENCRYPT_DECRYPT"
+  ) {
+    refuse("data_volume_key_unusable");
+  }
+  const selectedVolumeArn = [
+    `arn:${slot.partition}:ec2:${input.region}`,
+    slot.account,
+    `volume/${volumeId}`,
+  ].join(":");
+  return Object.freeze({
+    kmsKeyArn: key.arn,
+    selectedVolumeArn,
+    slot,
+    volumeId,
+    // Booleans and the key manager only: identifiers stay out of receipts.
+    evidence: Object.freeze({
+      encrypted: true,
+      key_enabled: true,
+      key_manager: key.keyManager,
+      same_account_key: true,
+      slot_clean_data_volume: true,
+    }),
+  });
+}
+
+async function provenAlertTopic(input, dependencies) {
+  const describeTopic = dependencies?.sns?.describeTopic;
+  if (typeof describeTopic !== "function") refuse("sns_describeTopic_required");
+  let topic;
+  try {
+    topic = await describeTopic({
+      region: input.region,
+      topicArn: input.backup.alertTopicArn,
+    });
+  } catch {
+    refuse("backup_alert_topic_unproven");
+  }
+  if (
+    topic === null ||
+    typeof topic !== "object" ||
+    topic.topicArn !== input.backup.alertTopicArn ||
+    !Number.isSafeInteger(topic.subscriptionsConfirmed) ||
+    topic.subscriptionsConfirmed < 0
+  ) {
+    refuse("backup_alert_topic_unproven");
+  }
+  return topic;
+}
+
+function dataBackupStackName(input) {
+  const name = `${input.stack.name}${DATA_BACKUP_STACK_SUFFIX}`;
+  if (name.length > DATA_BACKUP_STACK_NAME_MAX)
+    refuse("backup_stack_name_too_long");
+  return name;
+}
+
+function dataBackupChangeSetRequest(input, stackName, type, source) {
+  const template = checkedTemplate(DATA_BACKUP_TEMPLATE_PATH);
+  return Object.freeze({
+    capabilities: Object.freeze(["CAPABILITY_IAM"]),
+    changeSetName: changeSetName(input, "backup"),
+    changeSetType: type,
+    clientToken: input.operationId,
+    onStackFailure: type === "CREATE" ? "DO_NOTHING" : undefined,
+    parameterKeys: DATA_BACKUP_PARAMETER_KEYS,
+    parameters: Object.freeze({
+      DataVolumeId: source.volumeId,
+      DataVolumeKmsKeyArn: source.kmsKeyArn,
+      AlertTopicArn: input.backup.alertTopicArn,
+      BackupScheduleExpression: DATA_BACKUP_SCHEDULE_EXPRESSION,
+      RecoveryPointRetentionDays: DATA_BACKUP_RETENTION_DAYS,
+    }),
+    region: input.region,
+    stackName,
+    templatePath: template.path,
+    templateSha256: template.sha256,
+  });
+}
+
+/**
+ * A new or repaired stack may only add the reviewed inventory; an existing
+ * one may only retune its plan or alarm in place. Nothing is ever removed or
+ * replaced, so a change set can never drop recovery points' vault or roles.
+ */
+function assertDataBackupChangeBoundary(plan, existing) {
+  if (!plan.executable) return plan;
+  const creating =
+    existing === undefined ||
+    existing.pendingCreate === true ||
+    existing.failedCreate === true;
+  const added = new Set();
+  for (const change of plan.actions) {
+    const known = DATA_BACKUP_LOGICAL_IDS.has(change.logical_id);
+    const adds = creating && known && change.action === "Add";
+    const tunes =
+      change.action === "Modify" &&
+      change.replacement === false &&
+      (creating
+        ? known
+        : DATA_BACKUP_MODIFIABLE_LOGICAL_IDS.has(change.logical_id));
+    if (!adds && !tunes) refuse("change_set_backup_boundary_violation");
+    if (adds) added.add(change.logical_id);
+  }
+  if (
+    plan.changeSetType === "CREATE" &&
+    added.size !== DATA_BACKUP_LOGICAL_IDS.size
+  ) {
+    refuse("change_set_backup_boundary_violation");
+  }
+  return plan;
+}
+
+async function runBackup(input, { execute = false, ...dependencies } = {}) {
+  if (input.backup === undefined) refuse("backup_input_required");
+  const stackName = dataBackupStackName(input);
+  const slot = await initializedProtectedStack(input, dependencies);
+  const source = await verifiedDataVolume(input, slot.outputs, dependencies);
+  const topic = regionalArn(
+    input.backup.alertTopicArn,
+    "backup_alert_topic_invalid",
+  );
+  if (topic.account !== source.slot.account || topic.region !== input.region)
+    refuse("backup_alert_topic_foreign");
+  const alertTopic = await provenAlertTopic(input, dependencies);
+  const existing = await describeNamedStack(
+    input.region,
+    stackName,
+    dependencies,
+  );
+  if (execute && existing === undefined) refuse("backup_plan_required");
+  const request = dataBackupChangeSetRequest(
+    input,
+    stackName,
+    changeSetTypeFor(existing),
+    source,
+  );
+  const planChangeSet = adapterFunction(
+    dependencies,
+    execute ? "describeChangeSet" : "createChangeSet",
+  );
+  const plan = assertDataBackupChangeBoundary(
+    checkedChangeSet(await planChangeSet(request)),
+    existing,
+  );
+  const fields = {
+    backup_stack_name: stackName,
+    change_set_name: request.changeSetName,
+    change_set_actions: plan.actions,
+    change_set_created: plan.kind === "change_set",
+    change_set_ready_for_review: plan.executable,
+    no_changes: plan.kind === "no_changes",
+    data_volume: source.evidence,
+    // An alarm on a topic nobody confirmed reaches no one. Report it rather
+    // than withhold the backup itself.
+    alert_delivery_confirmed: alertTopic.subscriptionsConfirmed > 0,
+    retention_days: Number(DATA_BACKUP_RETENTION_DAYS),
+    schedule_expression: DATA_BACKUP_SCHEDULE_EXPRESSION,
+  };
+  if (!execute) return lifecycleReceipt(input, "backup", "planned", fields);
+
+  const ensureTerminationProtection = adapterFunction(
+    dependencies,
+    "ensureTerminationProtection",
+  );
+  const protectStack = async () => {
+    try {
+      await ensureTerminationProtection({ region: input.region, stackName });
+    } catch {
+      refuse("backup_termination_protection_failed");
+    }
+  };
+  // Protect a new stack's REVIEW_IN_PROGRESS shell before it holds anything.
+  if (plan.executable && plan.changeSetType === "CREATE") await protectStack();
+  const stack = await executePlannedStack(input, plan, dependencies, stackName);
+  if (stack.failedCreate) refuse("backup_failed_create_not_repaired");
+  await protectStack();
+  const protectedStack = await describeNamedStack(
+    input.region,
+    stackName,
+    dependencies,
+  );
+  if (protectedStack?.terminationProtection !== true)
+    refuse("backup_termination_protection_unproven");
+  if (
+    requiredOutput(protectedStack.outputs, "SelectedDataVolumeArn") !==
+    source.selectedVolumeArn
+  ) {
+    refuse("backup_selection_unproven");
+  }
+  return lifecycleReceipt(input, "backup", "executed", {
+    ...fields,
+    stack_status: protectedStack.status,
+    termination_protection: true,
+  });
+}
+
 /**
  * Execute one lifecycle action. `execute` defaults to false so a CloudFormation
  * change set is always available for review before it can mutate the slot.
@@ -1380,6 +1720,7 @@ export async function runAuthorityStaging(action, rawInput, dependencies = {}) {
   if (action === "up") return runUp(input, dependencies);
   if (action === "down") return runDown(input, dependencies);
   if (action === "status") return runStatus(input, dependencies);
+  if (action === "backup") return runBackup(input, dependencies);
   refuse("usage");
 }
 
@@ -1594,18 +1935,16 @@ function parametersMatch(payload, expected) {
   // checked by assertReviewedSetupArtifact. Every other value must match.
   // In particular, accepting a subset would let an already-existing same-name
   // change set smuggle in an onboarding-transfer grant while still matching
-  // the host lifecycle parameters.
+  // the host lifecycle parameters. The data-backup stack names its own vector.
+  const parameterKeys = expected.parameterKeys ?? TEMPLATE_PARAMETER_KEYS;
   const expectedEntries = Object.entries(expected.parameters);
   if (
-    expectedEntries.length !== TEMPLATE_PARAMETER_KEYS.length ||
-    !TEMPLATE_PARAMETER_KEYS.every((key) =>
-      Object.hasOwn(expected.parameters, key),
-    )
+    expectedEntries.length !== parameterKeys.length ||
+    !parameterKeys.every((key) => Object.hasOwn(expected.parameters, key))
   ) {
     return false;
   }
-  if (payload.Parameters.length !== TEMPLATE_PARAMETER_KEYS.length)
-    return false;
+  if (payload.Parameters.length !== parameterKeys.length) return false;
 
   const actual = new Map();
   for (const item of payload.Parameters) {
@@ -1617,7 +1956,7 @@ function parametersMatch(payload, expected) {
     if (actual.has(key)) return false;
     actual.set(key, value);
   }
-  if (!TEMPLATE_PARAMETER_KEYS.every((key) => actual.has(key))) return false;
+  if (!parameterKeys.every((key) => actual.has(key))) return false;
   const dynamicHostSetup =
     expected.parameters.HostEnabled === "true" &&
     HOST_SETUP_PARAMETER_KEYS.every(
@@ -2010,6 +2349,109 @@ export function createAwsCliAdapters() {
           state: image.State,
         });
       },
+      async describeVolume({ region, volumeId }) {
+        const result = await awsJson([
+          "ec2",
+          "describe-volumes",
+          "--region",
+          region,
+          "--volume-ids",
+          volumeId,
+          "--output",
+          "json",
+        ]);
+        const volumes = result.Volumes;
+        if (!Array.isArray(volumes) || volumes.length !== 1)
+          throw new AwsCliError("volume_response_invalid");
+        const volume = volumes[0];
+        if (
+          volume === null ||
+          typeof volume !== "object" ||
+          typeof volume.VolumeId !== "string" ||
+          typeof volume.AvailabilityZone !== "string" ||
+          typeof volume.State !== "string" ||
+          typeof volume.Encrypted !== "boolean"
+        ) {
+          throw new AwsCliError("volume_response_invalid");
+        }
+        const tags = {};
+        for (const tag of Array.isArray(volume.Tags) ? volume.Tags : []) {
+          if (typeof tag?.Key === "string" && typeof tag?.Value === "string")
+            tags[tag.Key] = tag.Value;
+        }
+        return Object.freeze({
+          availabilityZone: volume.AvailabilityZone,
+          encrypted: volume.Encrypted,
+          kmsKeyId:
+            typeof volume.KmsKeyId === "string" ? volume.KmsKeyId : undefined,
+          state: volume.State,
+          tags: Object.freeze(tags),
+          volumeId: volume.VolumeId,
+        });
+      },
+    }),
+    kms: Object.freeze({
+      async describeKey({ keyId, region }) {
+        const result = await awsJson([
+          "kms",
+          "describe-key",
+          "--region",
+          region,
+          "--key-id",
+          keyId,
+          "--output",
+          "json",
+        ]);
+        const key = result.KeyMetadata;
+        if (
+          key === null ||
+          typeof key !== "object" ||
+          typeof key.Arn !== "string" ||
+          typeof key.AWSAccountId !== "string" ||
+          typeof key.KeyManager !== "string" ||
+          typeof key.KeyState !== "string" ||
+          typeof key.Enabled !== "boolean" ||
+          typeof key.KeyUsage !== "string"
+        ) {
+          throw new AwsCliError("key_response_invalid");
+        }
+        return Object.freeze({
+          accountId: key.AWSAccountId,
+          arn: key.Arn,
+          enabled: key.Enabled,
+          keyManager: key.KeyManager,
+          keyState: key.KeyState,
+          keyUsage: key.KeyUsage,
+        });
+      },
+    }),
+    sns: Object.freeze({
+      async describeTopic({ region, topicArn }) {
+        const result = await awsJson([
+          "sns",
+          "get-topic-attributes",
+          "--region",
+          region,
+          "--topic-arn",
+          topicArn,
+          "--output",
+          "json",
+        ]);
+        const attributes = result.Attributes;
+        const confirmed = Number(attributes?.SubscriptionsConfirmed);
+        if (
+          typeof attributes?.TopicArn !== "string" ||
+          typeof attributes.SubscriptionsConfirmed !== "string" ||
+          !Number.isSafeInteger(confirmed) ||
+          confirmed < 0
+        ) {
+          throw new AwsCliError("topic_response_invalid");
+        }
+        return Object.freeze({
+          subscriptionsConfirmed: confirmed,
+          topicArn: attributes.TopicArn,
+        });
+      },
     }),
     s3: Object.freeze({
       async uploadObject({ bucket, key, path, region, sha256 }) {
@@ -2161,7 +2603,8 @@ export function createAwsCliAdapters() {
 
 function parseCli(argv) {
   const [action, ...rest] = argv;
-  if (!["slot-init", "up", "down", "status"].includes(action)) refuse("usage");
+  if (!["slot-init", "up", "down", "status", "backup"].includes(action))
+    refuse("usage");
   let inputPath;
   let execute = false;
   let initializeBlankDataVolume = false;
@@ -2229,8 +2672,10 @@ async function main(argv = process.argv.slice(2), dependencies = {}) {
     ...dependencies,
     cloudFormation: dependencies.cloudFormation ?? defaults.cloudFormation,
     ec2: dependencies.ec2 ?? defaults.ec2,
+    kms: dependencies.kms ?? defaults.kms,
     putSecretValue: dependencies.putSecretValue ?? defaults.putSecretValue,
     s3: dependencies.s3 ?? defaults.s3,
+    sns: dependencies.sns ?? defaults.sns,
     ssm: dependencies.ssm ?? defaults.ssm,
     execute,
     initializeBlankDataVolume,

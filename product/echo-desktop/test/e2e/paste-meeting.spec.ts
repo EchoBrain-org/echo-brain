@@ -137,6 +137,26 @@ test('a pasted whole day opens its card on its day, east of UTC+11 too, through 
   expect(run.calls().filter(call => call.path === '/v1/person/meetings' && call.body?.operation === 'review_open').map(call => call.body?.tool_id)).toEqual(['hand-in']);
 });
 
+test('a field you go to as the sheet opens keeps the caret, however slowly the window draws', async () => {
+  run = await launch('hand-in');
+  const { page } = run;
+  await page.getByTestId('sidebar-tools').click();
+  // A busy machine can take half a second to draw the next frame while scripts run at full speed.
+  await page.evaluate(() => { window.requestAnimationFrame = callback => window.setTimeout(() => callback(performance.now()), 500); });
+  // The sheet opens and Notes takes the caret within the same moment: whatever the sheet put off to a frame comes after.
+  await page.evaluate(async () => {
+    document.querySelector<HTMLElement>('[data-tool="hand-in"] [data-testid="tool-paste"]')!.click();
+    let notes: HTMLTextAreaElement | null = null;
+    while (!(notes = document.querySelector('[data-testid="paste-sheet"] textarea'))) await new Promise(resolveTick => setTimeout(resolveTick, 0));
+    notes.focus();
+  });
+  await page.waitForTimeout(700);
+  await page.keyboard.type('Decision: move the pilot to Friday.');
+  const sheet = page.getByTestId('paste-sheet');
+  await expect(sheet.getByLabel('Notes', { exact: true })).toHaveValue('Decision: move the pilot to Friday.');
+  await expect(sheet.getByLabel('Title', { exact: true })).toHaveValue('');
+});
+
 test('a meeting names at most 20 projects across its items: past that, each chip offers only the projects it names, and says why', async () => {
   // Twenty-two projects, ten a page.
   run = await launch('hand-in-many-projects');

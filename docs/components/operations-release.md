@@ -29,6 +29,7 @@ runbook_ids:
   - RB-OPERATIONS-001
   - RB-OPERATIONS-002
   - RB-OPERATIONS-003
+  - RB-OPERATIONS-004
 playbook_ids:
   - PB-OPERATIONS-001
 qualification_ids:
@@ -103,6 +104,7 @@ identity no longer matches.
 - [Minimal Authority observability runbook](../operations/RB-OPERATIONS-001-authority-observability.md)
 - [Authority root-volume recovery-floor runbook](../operations/RB-OPERATIONS-002-authority-recovery-floor.md)
 - [Canonical source and immutable release runbook](../operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md)
+- [Staging clean-data volume backup runbook](../operations/RB-OPERATIONS-004-authority-staging-data-volume-backup.md)
 - [Qualification and evidence](../qualification/README.md)
 - [Client updates](../features/client-updates-v1.md) and the
   [client update feed procedure](../../deploy/client-updates/README.md)
@@ -122,3 +124,7 @@ the later data-volume/foundation decision. The recovery template cannot
 establish these deployed-volume facts. Its qualifying backup stop/start is a durable,
 script-managed transaction with external backup acknowledgement and
 accepted-tuple/public-descriptor restart proof; it has not yet been rehearsed.
+That floor covers the pre-slot EC2 host only. The staging slot keeps
+`clean-data/` on its retained data volume, which `authority:staging backup`
+enrolls through a sibling exact-selection backup stack and the same evidence
+gate; RB-OPERATIONS-004 owns that procedure and its restore rehearsal.
