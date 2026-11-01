@@ -102,8 +102,8 @@ it('keeps staging Jira connections in the state directory and reuses each Person
       return validateOrganizationPersonToolsV4(await response.json()).tools;
     };
     const catalog = await tools();
-    // The staging origin also serves the owner's synthetic meetings for the release canary.
-    expect(catalog.map(tool => tool.tool_id).sort()).toEqual(['granola', 'hand-in', 'jira', 'slack', 'synthetic']);
+    // Internal staging canaries and retired manual intake are not connected work apps.
+    expect(catalog.map(tool => tool.tool_id).sort()).toEqual(['granola', 'jira', 'slack']);
     expect(catalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'enabled', personal_status: 'linked', external_scope_id: FIXTURE_CLOUD })]));
     // Each Person can connect Jira, without seeing or using the owner's grant.
     const invited = await post('/v1/person/employees', { name: 'Fixture Employee', email: 'employee@example.test' });
@@ -118,7 +118,7 @@ it('keeps staging Jira connections in the state directory and reuses each Person
     const page = await (await fetch(`http://127.0.0.1:${runtime.address.port}/v2/session/oidc/callback?state=${encodeURIComponent(seams.oidcState())}&code=employee`)).text();
     const employee = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
     const employeeCatalog = await tools(employee);
-    expect(employeeCatalog.map(tool => tool.tool_id).sort()).toEqual(['granola', 'hand-in', 'jira', 'slack', 'synthetic']);
+    expect(employeeCatalog.map(tool => tool.tool_id).sort()).toEqual(['granola', 'jira', 'slack']);
     expect(employeeCatalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'enabled', personal_status: 'unlinked', external_scope_id: null, external_subject_id: null })]));
     const employeeConnect = await post('/v1/person/tools/jira/connect', { schema_version: 1 }, employee);
     expect(employeeConnect.status).toBe(201);

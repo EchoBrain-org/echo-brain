@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
-import { PERSON_HAND_IN_MEETING_ID_V1, PERSON_HAND_IN_TOOL_ID_V1, validatePersonHandInMeetingV1 } from '@echo-brain/organization-api';
+import { PERSON_HAND_IN_MEETING_ID_V1, PERSON_HAND_IN_TOOL_ID_V1 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { AdapterError, assertCanonicalMeetingDocument, type MeetingDocument, type MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
@@ -89,9 +89,8 @@ export function handInMeetingDocumentV1(identity: MeetingSourceAdapter['identity
 }
 
 /**
- * The pasted-meeting source: every member hands meetings in from any tool, with no connection step. A submitted
- * payload is kept in the Authority with its queued import, in one transaction, and the source builds the meeting from
- * it. One source per person; no folders and no browsing.
+ * Compatibility source for meetings handed in before manual meeting intake was retired. Existing queued payloads,
+ * custody and approvals retain their original source identity. This provider is hidden and accepts no new submission.
  */
 export function createHandInPersonMeetingProviderV1(options: { readonly database: Database.Database }): PersonMeetingProviderV1 {
   const store = new SqlitePersonHandInMeetingsV1(options.database);
@@ -101,7 +100,7 @@ export function createHandInPersonMeetingProviderV1(options: { readonly database
     async accept() { throw new AuthorityOperationError('not_found', 'Hand-in meeting route unavailable'); },
   });
   const provider: PersonMeetingProviderV1 = {
-    id: PERSON_HAND_IN_TOOL_ID_V1, normalizer_version: NORMALIZER_VERSION, custodian_assurance: HAND_IN_CUSTODIAN_ASSURANCE_V1, submitters: 'members',
+    id: PERSON_HAND_IN_TOOL_ID_V1, listed: false, normalizer_version: NORMALIZER_VERSION, custodian_assurance: HAND_IN_CUSTODIAN_ASSURANCE_V1, submitters: 'members',
     connection_http,
     // A cancelled hand-in's payload goes with its queued import, unless the meeting was already admitted.
     forget: (setting, meetingId) => store.forget(setting.source_key, meetingId),
@@ -109,7 +108,7 @@ export function createHandInPersonMeetingProviderV1(options: { readonly database
     cursor: Object.freeze({ read: readHandInCheckpointV1, write: writeHandInCheckpointV1, policy: CURSOR_POLICY, initial,
       watch: (checkpoint: PersonalMeetingCheckpointV1, watch: { readonly watch: string }): PersonalMeetingCheckpointV1 => watch.watch === 'off' ? checkpoint : invalidCursor(),
       ready: () => false }),
-    // Always linked: handing a meeting in needs no account anywhere else.
+    // Internal status only: retained custody has no external account to reconnect.
     tool: () => ({ tool_id: PERSON_HAND_IN_TOOL_ID_V1, display_name: 'Paste a meeting', availability: 'enabled', personal_status: 'linked',
       external_scope_id: null, external_subject_id: PERSON_HAND_IN_TOOL_ID_V1, organization_setup: null }),
     async open(person, current, signal) {
@@ -121,13 +120,6 @@ export function createHandInPersonMeetingProviderV1(options: { readonly database
         async folders() { return []; },
         async browse() { throw new AuthorityOperationError('not_found', 'Handed-in meetings have no folders'); },
         async preview() { throw new AuthorityOperationError('not_found', 'Handed-in meetings have no preview'); },
-        submit(meeting, setting) {
-          current();
-          if (setting.source_adapter_id !== HAND_IN_SOURCE_ADAPTER_ID_V1 || setting.source_adapter_instance_id !== identity.instance_id) {
-            throw new AuthorityOperationError('stale_access_state', 'Meeting source changed');
-          }
-          return store.save(setting.source_key, validatePersonHandInMeetingV1(meeting));
-        },
       };
     },
     source(setting, current) {

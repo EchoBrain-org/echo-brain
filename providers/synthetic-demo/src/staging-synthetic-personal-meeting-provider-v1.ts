@@ -202,6 +202,8 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
   });
   return Object.freeze({
     id: STAGING_SYNTHETIC_TOOL_ID_V1,
+    // Release rehearsal is an internal staging capability, not a connected work app.
+    listed: false,
     normalizer_version: NORMALIZER_VERSION,
     custodian_assurance: STAGING_SYNTHETIC_CUSTODIAN_ASSURANCE_V1,
     connection_http,

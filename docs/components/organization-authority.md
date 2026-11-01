@@ -123,9 +123,9 @@ centrally served retrieval generations. It may also hold governed pre-record
 meeting data from an exactly bound member identity and that member's own
 meeting source (a personal Nango grant under
 [ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md), the
-`hand-in` source through which a member pastes a meeting under
+retained or already queued `hand-in` meetings from the now-retired input under
 [ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md), or the
-staging synthetic source). Until approved, it is readable by its importer only.
+internal staging synthetic source). Until approved, it is readable by its importer only.
 That data remains in
 the pending approval boundary: it is not an organization record, retrieval
 input, or delivery payload until an audited resolution admits it. Central state

@@ -1,3 +1,4 @@
+import { personReviewCommandV1, validatePersonReviewRequestV1, type PersonReviewRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { DocumentFileError } from './document-file.js';
 import { validatePersonDocumentSearchV2, parseCanonicalAssociationProjectIdsJsonV1, validatePersonUploadAudienceV3 } from '@echo-brain/organization-api';
@@ -142,6 +143,7 @@ const RULES: Readonly<
   list: { accepts: ["project", "only-me", "cursor"] },
   open: { accepts: ["ref", "cursor"], requires: ["ref"] },
   runs: { accepts: ["request"], requires: ["request"] },
+  reviews: { accepts: ["request"], requires: ["request"] },
   changes: {},
   "project-activity": {},
   "ask-source": {
@@ -191,6 +193,7 @@ Commands:
   ask-check   Check whether what earlier answers cited changed, with no content.
   ask-source  Read one source-evidence packet an Ask citation names.
   runs        Read and act on impact runs, their open items, and sweeps.
+  reviews     List, open and decide your meeting reviews.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
   projects    Create projects, manage members, and browse permitted context.
@@ -218,11 +221,10 @@ Client provenance does not identify the Authority build serving requests. Status
 
 Renews the local session's access with the Authority and prints the account with its new access_expires_at and hard_reauthentication_at. The desktop runs it; other commands refresh on their own when access expires. A refresh past hard_reauthentication_at, or one that fails after leaving this machine, ends the session: sign in again with person login.
 `,
-  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings|submit> --tool <tool> [options]]
+  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings> --tool <tool> [options]]
 
 Without a verb, lists your organization's tools and your link to each; owners also see each tool's organization setup.
 setup (owners only) and connect open the tool's page in your browser and wait. A token is read only from standard input.
-submit --tool hand-in hands in a meeting from any tool, its text read from files.
 Run \`echo-brain person tools <verb> --help\` for each tool's options.
 `,
   logout: `usage: echo-brain person logout
@@ -249,6 +251,14 @@ notice "meetings_unavailable" means meetings are still being indexed and come on
   open: `usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]
 
 Reads one item under your current access: a note's full text, a document's extracted text, or a meeting's decisions, actions and rationales. Documents and meetings are paged. Refs come from person list and from ask citations. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
+`,
+  reviews: `usage: echo-brain person reviews --request <json>
+
+Reviews belong to you, independently of connected source tools. Requests use schema_version 1 and no tool_id:
+  reviews      list your meeting reviews
+  review_open  open one approval_id
+  review       decide with approval_id, command_id, snapshot_sha256, action (approve or reject), routes and owners
+Prints {ok:true,result:<operation result>}. Existing retained meetings remain reviewable after a source disconnects.
 `,
   runs: `usage: echo-brain person runs --request <json>
 
@@ -940,6 +950,7 @@ export async function runPersonClientCli(
   let listRequest: PersonListRequestV1 | undefined;
     let openRequest: PersonOpenRequestV1 | undefined;
     let runsRequest: PersonRunsRequestV1 | undefined;
+    let reviewRequest: PersonReviewRequestV1 | undefined;
     let askCheckRequest: PersonAskCheckRequestV1 | undefined;
     let askPrevious: PersonAnswerPreviousV1 | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
@@ -960,7 +971,7 @@ export async function runPersonClientCli(
       strict: true,
       tokens: true,
       allowPositionals: false,
-      options: { ...OPTIONS, ...(action === 'runs' || action === 'ask-check' ? RUNS_OPTIONS : {}), ...(verbName === undefined ? {} : { tool: { type: 'string' as const }, ...toolOptions }) },
+      options: { ...OPTIONS, ...(action === 'runs' || action === 'reviews' || action === 'ask-check' ? RUNS_OPTIONS : {}), ...(verbName === undefined ? {} : { tool: { type: 'string' as const }, ...toolOptions }) },
     });
     values = parsed.values as Record<Option, string | boolean | undefined>;
     if (isContextAction(action)) {
@@ -1057,6 +1068,7 @@ export async function runPersonClientCli(
         ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
       });
     }
+    if (action === 'reviews') reviewRequest = requestOf(values, validatePersonReviewRequestV1, 'Reviews');
     if (action === 'runs') runsRequest = requestOf(values, validatePersonRunsRequestV1, 'Runs');
     if (action === 'ask-check') askCheckRequest = requestOf(values, validatePersonAskCheckRequestV1, 'Ask check');
   } catch (error) {
@@ -1322,6 +1334,9 @@ export async function runPersonClientCli(
         break;
       case "open":
         print(stdout, { ok: true, result: await client.open(openRequest!, dependencies.abort_signal) });
+        break;
+      case 'reviews':
+        print(stdout, { ok: true, result: await personReviewCommandV1({ withToolSession: operation => client.withToolSession(operation, dependencies.abort_signal) }, reviewRequest!) });
         break;
       case 'runs':
         print(stdout, { ok: true, result: await client.runs(runsRequest!, dependencies.abort_signal) });

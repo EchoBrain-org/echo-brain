@@ -28,6 +28,12 @@ The founder accepted this record on 2026-10-31, as built in #360 (`915761c`)
 and #362 (`8cc3fff`). Acceptance does not mean the change is deployed or
 qualified.
 
+Implementation update, 2026-11-01: the Paste a meeting surface and new `hand-in`
+submissions described here are retired. Existing retained and queued hand-ins
+keep their custody, source identity and review access. Private intake and
+per-item audience rules remain unchanged; native review now has a
+provider-independent route. The decision below records the accepted design.
+
 ## Context and options
 
 Today a Granola folder watch must name a project, and that project's members

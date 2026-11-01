@@ -31,7 +31,7 @@ const homeReads = () => runs('home', request => request.read === 'rows');
 /** The Follow-ups list's reads of its rows. */
 const listRows = () => runs('items', request => request.scope === 'involved' && request.read === 'rows' && (request.states as string[] | undefined)?.join() !== 'open' && request.changed_since === undefined);
 type Store = Awaited<ReturnType<typeof startStore>>;
-const meetings = (operation: string) => calls('tools.meetings').filter(([, params]) => params.request.operation === operation).length;
+const meetings = (operation: string) => calls('reviews').filter(([, params]) => params.request.operation === operation).length;
 const lists = (status: 'active' | 'archived') => calls('projects.list').filter(([, params]) => (params.status ?? 'active') === status).length;
 const noticeTexts = () => calls('notice.show').map(([, params]) => params.text);
 
@@ -44,7 +44,7 @@ beforeEach(() => {
   rpc.mockImplementation(changesRpc({
     'app.status': () => ok({ signed_in: true, account }),
     'account.tools': () => ok({ tools: [{ tool_id: 'granola', name: 'Granola', status: 'linked' }] }),
-    'tools.meetings': params => {
+    'reviews': params => {
       const request = params.request as { operation: string };
       if (request.operation === 'reviews') return ok({ reviews: [] });
       if (request.operation === 'review_open') return ok((request as { approval_id?: string }).approval_id === 'apr_2' ? approved : proposal);

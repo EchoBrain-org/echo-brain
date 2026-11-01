@@ -156,7 +156,7 @@ describe('the decision card', () => {
 
   it('heads a whole day\'s card with its UTC date alone, the same day in any time zone, and a timed meeting\'s with its time', async () => {
     const top = (tree: Node) => text(elements(tree).find(node => node.props.class === 'card-top'));
-    // A meeting tool's all-day event is midnight UTC and a pasted day noon UTC: both are Oct 21, wherever this computer is.
+    // A meeting tool's all-day event is midnight UTC and another provider's noon UTC: both are Oct 21, wherever this computer is.
     for (const meeting_at of ['2026-10-21T00:00:00.000Z', '2026-10-21T12:00:00.000Z']) {
       expect(top(await page(decision({ open: { ...open, review: { ...review, meeting_at, all_day: true } } })))).toBe('Approve· Meeting · Oct 21');
     }

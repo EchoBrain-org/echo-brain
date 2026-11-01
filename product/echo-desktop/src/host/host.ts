@@ -1,7 +1,7 @@
 import {
-  PERSON_HAND_IN_TOOL_ID_V1, personHandInMeetingV1, validatePersonChangesV1, validatePersonDocumentIdV1, validatePersonItemRefV1, validatePersonMeetingRequestV2,
+  validatePersonChangesV1, validatePersonDocumentIdV1, validatePersonItemRefV1, validatePersonMeetingRequestV2,
   validatePersonMeetingResultV2, validatePersonRunsRequestV1, validatePersonRunsResultV1, validatePersonUpdateRequestId, validatePersonUploadContextId, validateProjectIdV1,
-  type PersonHandInMeetingV1,
+  validatePersonReviewRequestV1, validatePersonReviewResultV1,
 } from '@echo-brain/organization-api';
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
@@ -23,7 +23,7 @@ import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timeli
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
-  pastedView, projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
+  projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -78,9 +78,10 @@ async function load(): Promise<ClientModules> {
     dependencies, now,
   };
 }
-// A note's or pasted meeting's text left behind by a host that was stopped
-// mid-send. Only an hour old, well past a send's time limit: another host (the
-// installed app, a dev or test run) may be sending from its folder now.
+// Private input text left behind by a host stopped mid-send. Retired meeting
+// input folders are included so upgrades clean up any old leftovers. Only an
+// hour old, well past a send's time limit: another host (the installed app, a
+// dev or test run) may be sending from its folder now.
 try {
   for (const name of readdirSync(tmpdir())) {
     if (!name.startsWith('echo-note-') && !name.startsWith('echo-meeting-')) continue;
@@ -710,29 +711,12 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       return forAccount(method, expect, ['tools', 'meetings', option('tool', request.tool_id), option('request', JSON.stringify(request))],
         stdout => validatePersonMeetingResultV2(request.operation, (lastJson(stdout) as { result: unknown }).result), undefined, undefined, isWriteCall(method, params));
     }
-    // Paste a meeting. Its text goes to private files the client reads, as a note's does, never into its arguments; the
-    // host checks the meeting with the API's validator first, and the client makes the same canonical meeting again.
-    case 'meetings.handIn': {
-      const { expect, meeting: pasted, project_id } = params as Params<'meetings.handIn'>;
-      let meeting: PersonHandInMeetingV1;
-      try {
-        meeting = personHandInMeetingV1({ title: pasted.title, notes: pasted.notes, transcript: pasted.transcript,
-          ...(pasted.date === undefined ? {} : { date: pasted.date }), ...(pasted.started_at === undefined ? {} : { started_at: pasted.started_at }) });
-      } catch { return code('invalid_request', true); }
-      if (project_id !== null && !valid(validateProjectIdV1, project_id)) return code('invalid_request', true);
-      const folder = mkdtempSync(join(tmpdir(), 'echo-meeting-'));
-      try {
-        const notes = join(folder, 'notes.txt'), transcript = join(folder, 'transcript.txt');
-        if (meeting.notes !== '') writeFileSync(notes, meeting.notes, { mode: 0o600 });
-        if (meeting.transcript !== '') writeFileSync(transcript, meeting.transcript, { mode: 0o600 });
-        // A whole day goes as its date; a start goes as it is, and the client adds this machine's time zone.
-        const when = meeting.all_day === true ? [option('date', meeting.started_at!.slice(0, 10))] : meeting.started_at === undefined ? [] : [option('started-at', meeting.started_at)];
-        return await forAccount(method, expect, ['tools', 'submit', option('tool', PERSON_HAND_IN_TOOL_ID_V1), option('meeting-title', meeting.title),
-          ...(meeting.notes === '' ? [] : [option('notes-file', notes)]), ...(meeting.transcript === '' ? [] : [option('transcript-file', transcript)]), ...when,
-          ...(project_id === null ? [] : [option('echo-project', project_id)]), '--retain'], stdout => pastedView(lastJson(stdout)));
-      } finally {
-        rmSync(folder, { recursive: true, force: true });
-      }
+    case 'reviews': {
+      const { expect, request: raw } = params as Params<'reviews'>;
+      let request;
+      try { request = validatePersonReviewRequestV1(raw); } catch { return code('invalid_request', true); }
+      return forAccount(method, expect, ['reviews', option('request', JSON.stringify(request))],
+        stdout => validatePersonReviewResultV1(request.operation, unwrap(lastJson(stdout))), undefined, undefined, isWriteCall(method, params));
     }
     // Impact checks of your own approvals, and the open items they found. Start
     // and retry change a run, send, set_state and assign change items; the item

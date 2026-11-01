@@ -13,6 +13,12 @@ adds the shared open items and sweep runs of
 replaces V12; it is fresh state only, like V12. Text below that names V12
 describes this design as written.
 
+Surface retirement, 2026-11-01: the synthetic staging provider remains internal
+to release qualification and no longer appears in the public tools catalog,
+superseding ruling R8's permission to list it. Paste a meeting is retired;
+retained and queued hand-ins remain governed by their original custody.
+Native reviews use provider-independent `person reviews` requests.
+
 ## Goal
 
 A meeting is approved once, in one place in the code, whichever screen the

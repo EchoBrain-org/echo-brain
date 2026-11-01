@@ -1,14 +1,14 @@
 import type {
-  PersonImpactStageV1, PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingReviewV2, PersonOpenItemStateV1, PersonRunV1, PersonRunsRequestV1,
+  PersonImpactStageV1, PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingReviewV2, PersonReviewOperationV1, PersonReviewResultsV1, PersonOpenItemStateV1, PersonRunV1, PersonRunsRequestV1,
 } from '@echo-brain/organization-api';
 // All renderer state and the actions that change it. Every request carries the
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
   Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskChoice, AskedScope, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
-  ContextContent, DocumentText, Employee, Expect, ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
+  ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
-  RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, PastedMeeting, UpdateState,
+  RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
@@ -782,9 +782,8 @@ function applyStatus(status: AppStatus): void {
   weeklySignIn(next);
   // Signed out: the sign-in page covers everything until someone signs in. Only me, and what was read in it, goes.
   if (!next) {
-    // A sign-out the host lost mid-way did happen: the account goes as it would have. Any other sign-out still drops what
-    // a screen keeps beside its sheet, as the sheet goes, even one the cover has away.
-    if (signOutPending) { signOutPending = null; forgetAccount(); } else dropAccountKeeps();
+    // A sign-out the host lost mid-way did happen: the account goes as it would have.
+    if (signOutPending) { signOutPending = null; forgetAccount(); }
     // No one to check for: signing in again starts over, learning what is there, and reads the timeline again. No run starts
     // for no one either, even from a list on its way.
     freshness.stop();
@@ -871,16 +870,9 @@ export async function signInAgain(): Promise<void> {
   await signIn(account.authority);
 }
 
-/** How each screen drops what it keeps of an account beside the state, such as Paste a meeting's draft under the cover. */
-const accountKeeps: (() => void)[] = [];
-/** Registers how a screen drops what it keeps of an account: whenever that account goes (forgotten, switched or signed out). */
-export function onAccountGone(drop: () => void): void { accountKeeps.push(drop); }
-function dropAccountKeeps(): void { for (const drop of accountKeeps) drop(); }
-
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
 function forgetAccount(): void {
   forgetTimeline();
-  dropAccountKeeps();
   // Cleanup belongs to the previous account, even after status has changed. The host may refuse it once that session
   // is gone; never try an old request or connection with the newly signed-in account's authority.
   const account = lastAccount;
@@ -1140,24 +1132,16 @@ function outcomeUnknown(failure: Failure, resend: boolean): boolean {
   return resend || failure.mutation_outcome === 'unknown';
 }
 
-/** Account-fenced command for a personal meeting tool, Granola unless named. No provider token enters the renderer. */
-export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }, tool_id = 'granola'): Promise<PersonMeetingResultsV2[K]> {
+/** Account-fenced command for a personal meeting tool. No provider token enters the renderer. */
+export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }, tool_id: string): Promise<PersonMeetingResultsV2[K]> {
   return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id } }),
     isWriteCall('tools.meetings', { request: operation }), meetingMessage);
 }
 
-/**
- * Account-fenced Paste a meeting. Its sheet stays up while it is on its way, as Disconnect's does. Pasting the same
- * meeting again is safe: it answers the same id and adds nothing.
- */
-export async function handInMeeting(meeting: PastedMeeting, project_id: string | null): Promise<{ meeting_id: string }> {
-  const pasting = (sheet: Sheet | null): sheet is ToolManageSheet => sheet?.kind === 'tool-manage' && sheet.tool.tool_id === 'hand-in';
-  if (pasting(state.sheet)) set({ sheet: { ...state.sheet, busy: true } });
-  try {
-    return await fencedCommand<{ meeting_id: string }>(account => rpc('meetings.handIn', { expect: account, meeting, project_id }), true);
-  } finally {
-    if (pasting(state.sheet)) set({ sheet: { ...state.sheet, busy: false } });
-  }
+/** Reviews belong to the person, independent of any connected import tool. */
+export function reviewsCommand<K extends PersonReviewOperationV1['operation']>(operation: PersonReviewOperationV1 & { readonly operation: K }): Promise<PersonReviewResultsV1[K]> {
+  return fencedCommand<PersonReviewResultsV1[K]>(account => rpc('reviews', { expect: account, request: { ...operation, schema_version: 1 } }),
+    isWriteCall('reviews', { request: operation }));
 }
 
 /** Account-fenced runs request: your own approvals' checks, and the open items you can see. */
@@ -5306,8 +5290,6 @@ interface HomeState {
   seq: number;
   loading: boolean;
   failure?: Failure;
-  /** Meeting review is available; shared open items do not depend on it. */
-  meetings: boolean;
   /** Each part keeps its last good value when a later read of it fails. */
   reviews: readonly PersonMeetingReviewV2[];
   runs: readonly PersonRunV1[];
@@ -5753,12 +5735,10 @@ async function loadHomeOnce(fresh: boolean): Promise<void> {
   stopRunPolling();
   homeLoads += 1;
   const mine = ++seq;
-  const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { meetings: false, reviews: [], runs: [], open: null, live: {}, reading: false };
+  const previous: Omit<HomeState, 'seq' | 'loading'> = state.home ?? { reviews: [], runs: [], open: null, live: {}, reading: false };
   // An earlier load's live read, still on its way, is no longer Home's: it says nothing of this one's.
   set({ home: { ...previous, seq: mine, loading: true, failure: undefined, reading: false } });
-  // The tools are read beside everything else: only the meeting reviews wait on them, since an owner can receive items from
-  // someone else's decision without Granola.
-  await readHome(mine, false, fresh, rpc('account.tools', { expect: account }));
+  await readHome(mine, false, fresh);
 }
 
 /** The last read of what waits on you failed: the next poll reads it again. */
@@ -5790,36 +5770,6 @@ function swept(runs: readonly PersonRunV1[]): boolean {
   return sweepOwed !== null && !runs.some(run => run.run_id === sweepOwed && going(run));
 }
 
-/** Tools that could not be read: they fail Home's load, which says so with their own failure. */
-class ToolsFailed extends CommandFailed {}
-
-/** The meeting tools, in the order Home reads reviews through them: a review is the person's, whichever tool brought it. */
-const MEETING_TOOLS = ['granola', 'hand-in'] as const;
-/** The meeting tool Home reads reviews through, as its last load learned; a card opens and decides through it too. */
-let reviewTool: string = MEETING_TOOLS[0];
-
-/**
- * The meeting reviews, when a meeting tool is there: Granola, or Paste a
- * meeting. A load learns that from the tools (`tools`), read beside Home's
- * other reads; a poll keeps what its load learned. Tools that cannot be read
- * fail this part (`ToolsFailed`).
- */
-async function readReviews(mine: number, tools: Promise<Result<ConnectedTools>> | undefined): Promise<readonly PersonMeetingReviewV2[]> {
-  if (tools) {
-    const answer = await tools;
-    if (!answer.ok) {
-      accountLost(answer.failure);
-      throw new ToolsFailed(answer.failure);
-    }
-    const tool = MEETING_TOOLS.find(id => answer.value.tools.some(entry => entry.tool_id === id && entry.status !== 'unavailable'));
-    const home = homeShown(mine);
-    if (!home) return [];
-    if (tool !== undefined) reviewTool = tool;
-    set({ home: { ...home, meetings: tool !== undefined } });
-  }
-  return state.home?.meetings ? (await meetingCommand({ operation: 'reviews' }, reviewTool)).reviews : [];
-}
-
 /**
  * The reviews, your runs and what waits on you, read side by side, each
  * shown as soon as it is read, so quick rows never wait for slow ones. Each
@@ -5831,7 +5781,7 @@ async function readReviews(mine: number, tools: Promise<Result<ConnectedTools>> 
  * Its runs drive only if no drive or look of the driver's began since it did:
  * that one goes by a newer list, which this read's must not undo (R3).
  */
-async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promise<Result<ConnectedTools>>): Promise<void> {
+async function readHome(mine: number, poll: boolean, fresh = true): Promise<void> {
   const account = expect();
   const before = state.home?.runs ?? [];
   const ran = runSeq;
@@ -5844,7 +5794,7 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
     },
     (reason: unknown) => ({ status: 'rejected' as const, reason }));
   const ended = (runs: readonly PersonRunV1[]) => checkEnded(before, runs) || swept(runs);
-  const reviewsRead = shown(readReviews(mine, tools), reviews => ({ reviews }));
+  const reviewsRead = shown(reviewsCommand({ operation: 'reviews' }).then(value => value.reviews), reviews => ({ reviews }));
   const runsRead = shown(runsCommand({ schema_version: 1, operation: 'list' }), value => {
     // Shown, the list no longer shows the check going: what it found is owed from now, whichever read brings it.
     if (ended(value.runs)) resultOwed = true;
@@ -5855,30 +5805,31 @@ async function readHome(mine: number, poll: boolean, fresh = true, tools?: Promi
   const checkSwept = runs.status === 'fulfilled' && swept(runs.value.runs);
   if (waiting === null && homeShown(mine) && (openUnread || resultOwed)) waiting = readWaiting(mine, true);
   const unread = waiting ? await waiting.rows : undefined;
-  const toolsFailure = reviews.status === 'rejected' && reviews.reason instanceof ToolsFailed ? reviews.reason.failure : undefined;
+  const reviewsFailure = reviews.status === 'rejected' ? failureOf(reviews.reason) : undefined;
+  const loadFailure = poll ? undefined : reviewsFailure;
   // A read that is no longer Home's shows nothing, so it settles nothing Home owes either. Home was left or covered while it
   // was on its way: unless a newer Home load, drive or look drives, the runs it read still do, for the account it read them for (R1, R3).
   const home = homeShown(mine);
   if (!home) {
-    // Tools that answered lift their hold, though Home was left before they did: this load was the Try again it waits for (R4).
+    // Reviews that answered lift their hold, though Home was left before they did: this load was the Try again it waits for (R4).
     // Only while it is still Home's newest load: a newer one (after a sign-out and in, even as the same person) holds its own.
-    if (tools && !toolsFailure && state.home?.seq === mine && sameExpect(expect(), account)) runsHeld = false;
-    if (runSeq === ran && !toolsFailure && !runsHeld && sameExpect(expect(), account) && runsGo()) {
+    if (!poll && !loadFailure && state.home?.seq === mine && sameExpect(expect(), account)) runsHeld = false;
+    if (runSeq === ran && !loadFailure && !runsHeld && sameExpect(expect(), account) && runsGo()) {
       const publishing = reviews.status === 'fulfilled' && reviews.value.some(review => review.status === 'publishing');
       if (runs.status === 'fulfilled') endedOffHome(runs.value.runs);
       void driveRuns(runs.status === 'fulfilled' ? runs.value.runs : runsSeen, publishing, runs.status === 'rejected' ? failureOf(runs.reason) : undefined);
     }
     return;
   }
-  set({ home: { ...home, loading: false, failure: reviews.status === 'fulfilled' ? undefined : poll ? home.failure : toolsFailure ?? { code: 'unavailable', retryable: true } } });
+  set({ home: { ...home, loading: false, failure: reviews.status === 'fulfilled' ? undefined : poll ? home.failure : reviewsFailure ?? { code: 'unavailable', retryable: true } } });
   if (checkSwept) sweepOwed = null;
   if (waiting) openUnread = unread !== undefined;
   // A check that ended owes a read of what it found (set as its list showed); only a read that brings its rows pays it.
   if (waiting && unread === undefined) resultOwed = false;
   updateDecisionRuns(home.runs);
-  // Tools that could not be read fail the load, as Home says: it waits for Try again, and no run starts meanwhile, on any page.
-  if (tools) runsHeld = toolsFailure !== undefined;
-  if (toolsFailure) return;
+  // Reviews that could not be read fail the load, as Home says: it waits for Try again, and no run starts meanwhile, on any page.
+  if (!poll) runsHeld = reviewsFailure !== undefined;
+  if (loadFailure) return;
   // The next poll waits longer after a failed runs read, or a failed read of what a check found.
   const failed = runs.status === 'rejected' ? failureOf(runs.reason) : resultOwed ? unread : undefined;
   if (runSeq === ran) void driveRuns(home.runs, home.reviews.some(review => review.status === 'publishing'), failed, waiting?.sweepDue);
@@ -5946,7 +5897,7 @@ const RUN_POLL_MS = 5_000;
 const RUN_POLL_MAX_MS = 60_000;
 /** The runs list the driver last went by, whoever read it: Home's state keeps its own (R3). */
 let runsSeen: readonly PersonRunV1[] = [];
-/** Home could not read the tools: as Home says, no run starts by itself until a Home load reads them (Try again). */
+/** Home could not read reviews: as Home says, no run starts by itself until a Home load reads them (Try again). */
 let runsHeld = false;
 /** The driver's own look on its way, if any: a kick meanwhile has nothing to add. */
 let looking: Promise<void> | null = null;
@@ -5981,7 +5932,7 @@ function pollRuns(mine: number, delay: number): void {
 /**
  * Looks at the runs now, when nothing else is about to (R4): on sign-in, on
  * coming back, when the reviews move (a meeting approved or published), and
- * once Check now stops following its sweep. Not while Home's tools failed, a
+ * once Check now stops following its sweep. Not while Home's reviews failed, a
  * look is armed or on its way, or a Home load (which drives) is on its way
  * while Home is seen.
  */
@@ -6250,7 +6201,7 @@ function choicesOf(open: ReviewOpen): Pick<DecisionState, 'routes' | 'owners'> {
 async function readDecision(mine: number, approval_id: string, again = false): Promise<void> {
   let open: ReviewOpen;
   try {
-    open = await meetingCommand({ operation: 'review_open', approval_id }, reviewTool);
+    open = await reviewsCommand({ operation: 'review_open', approval_id });
   } catch (error) {
     const decision = decisionShown(mine);
     if (decision && !again) set({ decision: { ...decision, loading: false, failure: error instanceof Error ? error.message : 'The decision could not be read.' } });
@@ -6377,7 +6328,7 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
   const items = decision.open.items;
   const owner = (item: ReviewOpen['items'][number]) => (decision.owners[item.signal_id] ?? '').trim();
   try {
-    const result = await meetingCommand({
+    const result = await reviewsCommand({
       operation: 'review', approval_id: decision.approval_id, command_id: decision.command, snapshot_sha256: decision.open.snapshot_sha256, action,
       // Projects with the lock go as `private: true`; no other route says it.
       routes: action === 'approve' ? items.map(item => {
@@ -6386,7 +6337,7 @@ export async function decide(action: 'approve' | 'reject'): Promise<void> {
       }) : [],
       owners: action === 'approve' ? items.flatMap(item => (item.owner_editable && (decision.routes[item.signal_id] ?? null) !== null && owner(item)
         ? [{ signal_id: item.signal_id, owner: owner(item) }] : [])) : [],
-    }, reviewTool);
+    });
     if (!decisionShown(mine)) return;
     const toast = result.decided_on === 'slack' ? `Already ${result.status === 'rejected' ? 'rejected' : 'approved'} in Slack`
       : result.status === 'rejected' ? 'Rejected' : 'Approved · checking what it changes';

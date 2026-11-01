@@ -8,10 +8,6 @@ import {
 import { trapTab } from './compose.js';
 import { Close } from './icons.js';
 import { Meetings } from './meetings.js';
-import { PasteMeeting } from './paste-meeting.js';
-
-/** The tool any member pastes a meeting into, from any meeting tool. */
-const PASTE_TOOL_ID = 'hand-in';
 
 /** Sections in the order they show; an empty one is left out. */
 const SECTIONS: readonly { label: string; status: ToolStatus }[] = [
@@ -27,19 +23,6 @@ function Mark({ tool }: { tool: ConnectedTool }) {
 }
 
 function ToolRow({ tool }: { tool: ConnectedTool }) {
-  // Paste a meeting needs no account: it opens its sheet, with nothing to connect or disconnect.
-  if (tool.tool_id === PASTE_TOOL_ID) return (
-    <div class={`tool-row ${tool.status}`} data-testid="tool-row" data-tool={tool.tool_id}>
-      <Mark tool={tool} />
-      <span class="lines">
-        <span class="name">{tool.name}</span>
-        {tool.status === 'unavailable' && <span class="state" data-testid="tool-state">{TOOL_STATES.unavailable}</span>}
-      </span>
-      {tool.status !== 'unavailable' && (
-        <button type="button" class="plain-button" data-testid="tool-paste" onClick={() => manageTool(tool)}>Paste</button>
-      )}
-    </div>
-  );
   return (
     <div class={`tool-row ${tool.status}`} data-testid="tool-row" data-tool={tool.tool_id}>
       <Mark tool={tool} />
@@ -133,9 +116,9 @@ export function useMinuteTick(): void {
   }, []);
 }
 
-/** A tool's sheet: Paste a meeting's own, or Manage. */
+/** Manage one connected work app. */
 export function ToolManage({ sheet }: { sheet: ToolManageSheet }) {
-  return sheet.tool.tool_id === PASTE_TOOL_ID ? <PasteMeeting tool={sheet.tool} /> : <ConnectionManage sheet={sheet} />;
+  return <ConnectionManage sheet={sheet} />;
 }
 
 /** Manage: Disconnect removes only your own connection. Granola's sheet also sets up the folder ECHO watches. */
@@ -153,7 +136,7 @@ function ConnectionManage({ sheet }: { sheet: ToolManageSheet }) {
           <h2 id="tool-manage-title">{tool.name}</h2>
           <button type="button" class="circle small" aria-label="Close" onClick={closeSheet} disabled={sheet.busy}><Close /></button>
         </div>
-        {meetings ? <div class="sheet-scroll"><Meetings /></div>
+        {meetings ? <div class="sheet-scroll"><Meetings toolId={tool.tool_id} /></div>
           : <p>Disconnecting removes only your own {tool.name} connection; you can connect again later.</p>}
         {sheet.failure && <p class="error" aria-live="polite">{message(sheet.failure)}</p>}
         <div class={`choices${meetings ? ' between' : ''}`}>

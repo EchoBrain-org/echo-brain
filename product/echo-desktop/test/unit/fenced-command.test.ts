@@ -19,8 +19,9 @@ beforeEach(() => {
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
     'app.status': () => ok(signedOut ? { signed_in: false, account: null } : { signed_in: true, account: ACCOUNT }),
-    'tools.meetings': params => {
+    'reviews': params => {
       const request = params.request as { operation: string };
+      if (request.operation === 'reviews') return ok({ reviews: [] });
       if (request.operation === 'review_open') return ok(opened);
       if (request.operation === 'review') return ok({ status: 'approved', decided_on: 'desktop' });
       throw new Error(`Unexpected meeting operation: ${request.operation}`);
@@ -34,7 +35,7 @@ describe('a meeting command answered while another app is in front', () => {
     await store.openDecision('apr_1');
     await flush();
     expect(store.getState().decision?.open).not.toBeNull();
-    const review = held.hold('tools.meetings');
+    const review = held.hold('reviews');
     const deciding = store.decide('approve');
     await flush();
     cover(store);
@@ -49,7 +50,7 @@ describe('a meeting command answered while another app is in front', () => {
 
   it('the decision read while away shows once ECHO is back', async () => {
     const store = await startStore();
-    const open = held.hold('tools.meetings');
+    const open = held.hold('reviews');
     const opening = store.openDecision('apr_1');
     await flush();
     cover(store);
@@ -72,7 +73,7 @@ describe('a write answered after the account changed', () => {
     const store = await startStore();
     await store.openDecision('apr_1');
     await flush();
-    const review = held.hold('tools.meetings');
+    const review = held.hold('reviews');
     const deciding = store.decide('approve');
     await flush();
     signedOut = true;
@@ -84,7 +85,7 @@ describe('a write answered after the account changed', () => {
 
   it('a read answered after the account changed is refused, with no outcome to settle', async () => {
     const store = await startStore();
-    const open = held.hold('tools.meetings');
+    const open = held.hold('reviews');
     const opening = store.openDecision('apr_1');
     await flush();
     signedOut = true;

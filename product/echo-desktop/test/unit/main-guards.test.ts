@@ -41,7 +41,7 @@ describe('a call no host answered', () => {
 
   it('counts a read of runs or meetings as a read, and any other operation of them as a write', () => {
     expect(isWriteCall('runs', { request: { operation: 'items' } })).toBe(false);
-    expect(isWriteCall('tools.meetings', { request: { operation: 'review_open' } })).toBe(false);
+    expect(isWriteCall('reviews', { request: { operation: 'review_open' } })).toBe(false);
     expect(isWriteCall('runs', { request: { operation: 'send' } })).toBe(true);
     expect(isWriteCall('runs', { request: null })).toBe(true);
     expect(isWriteCall('projects.list', {})).toBe(false);

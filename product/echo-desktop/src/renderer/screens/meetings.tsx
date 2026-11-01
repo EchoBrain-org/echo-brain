@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { PersonMeetingHomeV2, PersonMeetingResultsV2, PersonMeetingWatchV2 } from '@echo-brain/organization-api';
+import type { PersonMeetingHomeV2, PersonMeetingOperationV2, PersonMeetingResultsV2, PersonMeetingWatchV2 } from '@echo-brain/organization-api';
 import { dateTime } from '../format.js';
 import { loadHome, loadProjects, meetingCommand, useStore } from '../store.js';
 import { Passage } from './ask.js';
@@ -34,7 +34,8 @@ function Select({ label, value, disabled, onChange, children }: {
  * hand. Browsing never saves meeting content; only Add to ECHO and automatic import do, with your consent given once.
  * Imported meetings stay yours until you approve items from them: a suggested project only pre-ticks where they go.
  */
-export function Meetings() {
+export function Meetings({ toolId }: { toolId: string }) {
+  const command = <K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }) => meetingCommand<K>(operation, toolId);
   const state = useStore();
   const alive = useRef(true);
   const [home, setHome] = useState<PersonMeetingHomeV2 | null>(null);
@@ -57,11 +58,11 @@ export function Meetings() {
   /** Your recent meetings, or one folder's, newest first. */
   async function browse(folder: string) {
     setMeetings([]); setPreview(null);
-    const result = await meetingCommand({ operation: 'browse', folder_id: folder || null });
+    const result = await command({ operation: 'browse', folder_id: folder || null });
     if (alive.current) setMeetings(result.meetings);
   }
   async function refresh(initialize = false) {
-    const next = await meetingCommand({ operation: 'home' }).catch((error: unknown) => { setHome(null); throw error; });
+    const next = await command({ operation: 'home' }).catch((error: unknown) => { setHome(null); throw error; });
     if (!alive.current) return;
     setHome(next); show(next.sources.find(s => s.watch !== 'off'));
     if (initialize && next.connected) {
@@ -91,11 +92,11 @@ export function Meetings() {
   const unsaved = mode !== 'off' && (!watch || mode !== watch.watch || (mode === 'folder' && watchFolder !== (watch.folder_id ?? '')) || suggest !== (watch.project_id ?? ''));
 
   const saveWatch = () => void run(async () => {
-    await meetingCommand({ operation: 'watch', watch: mode, folder_id: mode === 'folder' ? watchFolder : null, project_id: suggest || null, settings_sha256: home!.settings_sha256, retain: true });
+    await command({ operation: 'watch', watch: mode, folder_id: mode === 'folder' ? watchFolder : null, project_id: suggest || null, settings_sha256: home!.settings_sha256, retain: true });
     await refresh(); if (alive.current) setNotice('Saved.');
   });
   const stopWatch = () => void run(async () => {
-    await meetingCommand({ operation: 'watch', watch: 'off', folder_id: null, project_id: null, settings_sha256: home!.settings_sha256, retain: true });
+    await command({ operation: 'watch', watch: 'off', folder_id: null, project_id: null, settings_sha256: home!.settings_sha256, retain: true });
     // A new watch starts from nothing: no folder and no suggestion.
     await refresh(); if (alive.current) { setMode('off'); setWatchFolder(''); setSuggest(''); }
   });
@@ -129,7 +130,7 @@ export function Meetings() {
       {home.sources.map(s => <div key={s.source_key} class="source-notes">
         {s.error && <div class="error">{s.error}</div>}
         {s.pending_imports.map(id => <div key={id} class="notice-line">Import queued
-          <button type="button" class="link-button" disabled={busy} onClick={() => void run(async () => { await meetingCommand({ operation: 'cancel_import', source_key: s.source_key, meeting_id: id }); await refresh(); })}>Cancel</button></div>)}
+          <button type="button" class="link-button" disabled={busy} onClick={() => void run(async () => { await command({ operation: 'cancel_import', source_key: s.source_key, meeting_id: id }); await refresh(); })}>Cancel</button></div>)}
       </div>)}
       <label class="check consent"><input type="checkbox" checked={retain} disabled={busy} onChange={e => setRetain(e.currentTarget.checked)} />
         <span>I allow ECHO to retain notes and transcripts from these meetings and process them.</span></label>
@@ -150,7 +151,7 @@ export function Meetings() {
         {meetings.map(m => {
           const open = preview?.id === m.id;
           return <button type="button" key={m.id} class={`row item-row meeting-row${open ? ' current' : ''}`} disabled={busy} aria-expanded={open} aria-label={m.title} onClick={() => void run(async () => {
-            const result = await meetingCommand({ operation: 'open', meeting_id: m.id }); if (alive.current) setPreview(result);
+            const result = await command({ operation: 'open', meeting_id: m.id }); if (alive.current) setPreview(result);
           })}>
             <span class="item-icon" aria-hidden="true"><Calendar /></span>
             <span class="name">{m.title}</span>
@@ -165,7 +166,7 @@ export function Meetings() {
         {preview.truncated && <div class="notice-line">Preview shortened. Add to ECHO keeps the full meeting.</div>}
         <div class="choices start">
           <button type="button" class="primary-button small" disabled={busy || !retain} onClick={() => void run(async () => {
-            await meetingCommand({ operation: 'import', meeting_id: preview.id, project_id: project || null, retain: true }); await refresh();
+            await command({ operation: 'import', meeting_id: preview.id, project_id: project || null, retain: true }); await refresh();
             if (alive.current) { setPreview(null); setNotice('Added.'); void loadHome(); }
           })}>Add to ECHO</button>
           <span class="notice-line">{[project ? `Suggests ${projectName(project)}` : '', retain ? '' : 'Allow retention above first'].filter(part => part !== '').join(' · ')}</span>

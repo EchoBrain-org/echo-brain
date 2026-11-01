@@ -10,6 +10,13 @@ Shipped is not deployed or qualified.
 later added items kept private inside a project, and replaced section 2.5's
 destination chip with a place button and an Only me lock.
 
+Surface retirement, 2026-11-01: the Paste a meeting UI and new `hand-in`
+submissions described below are retired, without moving them into Capture.
+Previously retained and queued hand-ins keep their source identity and custody.
+Native reviews now use provider-independent `person reviews` requests, so they
+remain available without a connected meeting tool. The remainder records the
+original intake and routing design.
+
 ## Goal
 
 Meetings enter ECHO automatically and stay private. Sharing is a choice made

@@ -15,7 +15,6 @@ import { addMembership, authorization, seedProject, seedProjectMember } from './
 import { decisions } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
 
 const project = 'prj_00000000-0000-4000-8000-000000000003';
-const foreignProject = 'prj_00000000-0000-4000-8000-000000000023';
 /** A fictional meeting, its text canonical as clients send it. */
 const meeting: PersonHandInMeetingV1 = { title: 'Supplier sync', notes: '# Decisions\nMove the pilot to Friday.\n\nAction: Mina sends the revised quote.',
   transcript: 'Mina Patel: I will send the revised quote.\nRafael Moreno: Thanks.\n\nRafael Moreno: Friday works for the pilot.', started_at: '2026-10-21T12:00:00.000Z', all_day: true };
@@ -46,9 +45,10 @@ async function fixture(options: { readonly quiet?: boolean } = {}) {
   ledgers.push(ledger);
   const extracted: MeetingDocument[] = [];
   const handIn = createHandInPersonMeetingProviderV1({ database: f.db });
+  const commitments = (instance_id: string) => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') });
   const create = (providers: readonly PersonMeetingProviderV1[] = [handIn]) => createPersonMeetingRuntimeV1({ database: f.db, approval: f.context, providers, sessions,
     processor: { processor_adapter_id: 'llm', assert_admission_commitments() {},
-      current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }),
+      current_commitments: commitments,
       create_processor(admission) {
         const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
@@ -67,35 +67,43 @@ async function fixture(options: { readonly quiet?: boolean } = {}) {
     return response.body as PersonMeetingResultsV2[K];
   };
   const intake = new SqlitePersonMeetingIntakeV1(f.db, handIn.cursor);
+  // Seed state written by the retired release, without reopening its public submission capability.
+  const seedExisting = async (value: PersonHandInMeetingV1 = meeting, project_id: string | null = null, who: keyof typeof actors = 'member') => {
+    const person = actors[who], current = () => { intake.currentPerson(person, project_id); };
+    const session = await handIn.open(person, current);
+    return f.db.transaction(() => {
+      const setting = intake.ensure({ person, identity: session.identity, normalizer_version: handIn.normalizer_version, custodian: session.custodian,
+        custodian_assurance: handIn.custodian_assurance!, processor: commitments(`personal-${canonicalSha256(person).slice(7, 39)}`), current });
+      const meeting_id = new SqlitePersonHandInMeetingsV1(f.db).save(setting.source_key, value);
+      intake.enqueue(setting, meeting_id, project_id, current);
+      return { meeting_id };
+    }).immediate();
+  };
   const processUntilIdle = async (runtime: ReturnType<typeof create>) => {
     for (let pass = 0; pass < 10 && intake.list().some(s => intake.checkpoint(s.source_key).manual.length > 0); pass++) await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
   };
   const count = (table: string) => f.db.prepare(`SELECT count(*) FROM ${table}`).pluck().get();
-  return { ...f, owner, member, sessions, handIn, create, call, grantProject, intake, processUntilIdle, count, extracted };
+  return { ...f, owner, member, sessions, handIn, create, call, grantProject, intake, seedExisting, processUntilIdle, count, extracted };
 }
 
-describe('the hand-in meeting source', () => {
-  it('takes a member\'s meeting into private custody like any other: one payload and one import, then one review', async () => {
-    const f = await fixture(), runtime = f.create();
+describe('the retired hand-in meeting source', () => {
+  it('finishes an existing import and publishes its reviewed record across runtime restarts', async () => {
+    const f = await fixture();
     f.grantProject(project, 'member');
-    const submit = { operation: 'submit', meeting, project_id: project, retain: true } as const;
     const id = handInMeetingIdV1(meeting);
-    await expect(f.call(runtime, submit)).resolves.toEqual({ status: 'queued', meeting_id: id });
-    // The same meeting again is the same meeting: no second payload, no second import.
-    await expect(f.call(runtime, submit)).resolves.toEqual({ status: 'queued', meeting_id: id });
+    await expect(f.seedExisting(meeting, project)).resolves.toEqual({ meeting_id: id });
     const [source] = f.intake.list(f.member);
     expect(f.intake.list(f.owner)).toEqual([]);
     expect(source).toMatchObject({ source_adapter_id: HAND_IN_SOURCE_ADAPTER_ID_V1, watch: 'off', folder_id: null });
     expect(f.intake.checkpoint(source!.source_key).manual).toEqual([id]);
     expect(f.db.prepare('SELECT source_key, external_id, payload_json, payload_sha256 FROM authority_person_hand_in_meetings_v1').all())
       .toEqual([{ source_key: source!.source_key, external_id: id, payload_json: canonicalJson(meeting), payload_sha256: canonicalSha256(meeting) }]);
-    expect(f.db.prepare('SELECT source_custodian_assurance FROM authority_live_source_admission_v2 WHERE source_key=?').pluck().get(source!.source_key)).toBe('person_hand_in');
 
+    let runtime = f.create();
+    expect(await runtime.tools('member')).toEqual([]);
     await f.processUntilIdle(runtime);
     expect(f.extracted).toHaveLength(1);
     const [document] = f.extracted;
-    // Honest custody: the text as handed in, its origin imported, the transcript a block per paragraph, nothing synthetic.
-    // A whole day is read in UTC, so no reader moves it to another day.
     expect(document!.time).toEqual({ actual_start_at: '2026-10-21T12:00:00.000Z', timezone: 'UTC', all_day: true });
     expect(document).toMatchObject({ id, title: 'Supplier sync', participants: [], content: [
       { id: `${id}:notes`, kind: 'note', origin: 'imported', text: meeting.notes },
@@ -104,65 +112,72 @@ describe('the hand-in meeting source', () => {
     ] });
     expect(JSON.stringify(document).toLowerCase()).not.toContain('synthetic');
     const [review] = (await f.call(runtime, { operation: 'reviews' })).reviews;
-    expect(review).toMatchObject({ title: 'Supplier sync', status: 'pending', project_ids: [project], first_line: 'Move the pilot to Friday.', meeting_at: '2026-10-21T12:00:00.000Z',
-      all_day: true });
-    // The card reads the same row: its day, and no time of day.
-    expect((await f.call(runtime, { operation: 'review_open', approval_id: review!.approval_id })).review).toEqual(review);
+    expect(review).toMatchObject({ title: 'Supplier sync', status: 'pending', project_ids: [project], meeting_at: '2026-10-21T12:00:00.000Z', all_day: true });
     expect((await f.call(runtime, { operation: 'reviews' }, 'owner')).reviews).toEqual([]);
-
-    // Handed in once more after processing: the frozen result is reused, so no second extraction and no second card.
-    await f.call(runtime, submit);
-    await f.processUntilIdle(runtime);
+    runtime = f.create();
+    const opened = await f.call(runtime, { operation: 'review_open', approval_id: review!.approval_id });
+    await f.call(runtime, { operation: 'review', approval_id: review!.approval_id, snapshot_sha256: opened.snapshot_sha256,
+      command_id: 'retired-hand-in-review', action: 'approve', routes: opened.items.map(item => ({ signal_id: item.signal_id, project_ids: [project] })), owners: [] });
+    // A restart after the decision must still select this source's cursor policy when publishing.
+    runtime = f.create();
+    await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
+    expect(f.record.prepare('SELECT count(*) FROM organization_record_log').pluck().get()).toBe(1);
+    await f.create().processing.recoverV4Appends(new AbortController().signal);
+    expect(f.record.prepare('SELECT count(*) FROM organization_record_log').pluck().get()).toBe(1);
     expect(f.extracted).toHaveLength(1);
-    expect((await f.call(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
     expect(f.count('authority_person_hand_in_meetings_v1')).toBe(1);
   });
 
-  it('forgets a cancelled paste with its import, and keeps one an admitted source revision holds', async () => {
+  it('lets a person cancel a pre-existing queued import without deleting admitted custody', async () => {
     const f = await fixture(), runtime = f.create();
-    const submit = { operation: 'submit', meeting, project_id: null, retain: true } as const;
-    const { meeting_id: id } = await f.call(runtime, submit);
+    const { meeting_id: id } = await f.seedExisting();
     const [source] = f.intake.list(f.member);
     const cancel = { operation: 'cancel_import', source_key: source!.source_key, meeting_id: id } as const;
     await expect(f.call(runtime, cancel)).resolves.toEqual({ status: 'cancelled' });
-    // Cancelled before it was pulled: its payload went with its import, so nothing of it is left to remove.
     expect(f.intake.checkpoint(source!.source_key).manual).toEqual([]);
     expect(f.count('authority_person_hand_in_meetings_v1')).toBe(0);
-    // Pasted again, it is kept again and processed.
-    await expect(f.call(runtime, submit)).resolves.toEqual({ status: 'queued', meeting_id: id });
+    // A separate legacy queue already admitted its payload before cancellation.
+    await f.seedExisting();
     await f.processUntilIdle(runtime);
-    expect(f.extracted).toHaveLength(1);
-    // Admitted, it stays: pasted once more and cancelled, its import goes but its payload stays with the revision that holds it.
-    await f.call(runtime, submit);
+    await f.seedExisting();
     await expect(f.call(runtime, cancel)).resolves.toEqual({ status: 'cancelled' });
-    expect(f.intake.checkpoint(source!.source_key).manual).toEqual([]);
     expect(new SqlitePersonHandInMeetingsV1(f.db).get(source!.source_key, id)).toMatchObject({ external_id: id, meeting });
     expect(() => f.db.prepare('DELETE FROM authority_person_hand_in_meetings_v1').run()).toThrow('handed-in meeting deletion is denied');
-    // Forgetting outside the cancel's transaction is refused.
     expect(() => new SqlitePersonHandInMeetingsV1(f.db).forget(source!.source_key, id)).toThrow('only with its cancelled import');
   });
 
-  it('lets its importer find and open a transcript-only paste that makes no card, and no one else', async () => {
-    const f = await fixture({ quiet: true }), runtime = f.create();
+  it('keeps a retained transcript-only meeting searchable and readable only by its importer', async () => {
+    const f = await fixture({ quiet: true });
     const pasted: PersonHandInMeetingV1 = { title: 'Kiln trial', notes: '', transcript: 'Mina Patel: The kiln trial slips a week.\n\nRafael Moreno: Then the glaze order waits.' };
-    await f.call(runtime, { operation: 'submit', meeting: pasted, project_id: null, retain: true });
+    await f.seedExisting(pasted);
+    const runtime = f.create();
     await f.processUntilIdle(runtime);
     expect(f.extracted).toHaveLength(1);
-    // No decision and no action: no card, and the meeting stays in its importer's custody.
     expect((await f.call(runtime, { operation: 'reviews' })).reviews).toEqual([]);
     const originals = new SqlitePersonOriginalContextRetrievalV1(f.db, f.sessions, f.member.organization_id);
     const found = originals.deskSearch({ access_token: 'member', scope: { kind: 'global' }, query: 'kiln glaze', kinds: ['imported_meeting'] });
     expect(found.items).toHaveLength(1);
     expect(() => originals.revalidateDeskRelease({ access_token: 'member', release: found })).not.toThrow();
-    // The person supplied the transcript, so it is the text they open, whole.
     expect(originals.deskOpen({ access_token: 'member', scope: { kind: 'global' }, citation: found.items[0]!.citation }).items[0]?.text)
-      .toContain('Mina Patel: The kiln trial slips a week.\n\nRafael Moreno: Then the glaze order waits.');
-    expect(originals.deskSearch({ access_token: 'member', scope: { kind: 'global' }, query: 'glaze' }).items).toHaveLength(1);
-    // Nobody else reads it, the owner included.
+      .toContain(pasted.transcript);
     expect(originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'kiln glaze' }).items).toEqual([]);
   });
 
-  it('is open to every member while the staging synthetic source stays owner-only', async () => {
+  it('refuses new submissions by owners and members without keeping or queuing data', async () => {
+    const f = await fixture(), runtime = f.create();
+    for (const who of ['owner', 'member'] as const) {
+      await expect(f.call(runtime, { operation: 'submit', meeting, project_id: null, retain: true }, who)).rejects.toMatchObject({ code: 'not_found' });
+      expect((await f.handIn.open(f[who], () => undefined)).submit).toBeUndefined();
+    }
+    await expect(f.call(runtime, { operation: 'browse', folder_id: 'folder' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.call(runtime, { operation: 'open', meeting_id: handInMeetingIdV1(meeting) })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.call(runtime, { operation: 'import', meeting_id: handInMeetingIdV1(meeting), project_id: null, retain: true })).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.count('authority_person_hand_in_meetings_v1')).toBe(0);
+    expect(f.intake.list()).toEqual([]);
+    expect(await runtime.tools('member')).toEqual([]);
+  });
+
+  it('keeps hidden staging submissions owner-only while retired intake remains unavailable', async () => {
     const f = await fixture(), storage = new Database(':memory:');
     try {
       const synthetic = createStagingSyntheticPersonalMeetingProviderV1({ custom_store: new StagingSyntheticMeetingStoreV1(storage) });
@@ -170,61 +185,24 @@ describe('the hand-in meeting source', () => {
       const custom = { operation: 'submit', meeting: { id: 'synthetic-custom-supplier', title: 'Supplier sync', notes: 'Move the pilot to Friday.', transcript: '' }, project_id: null, retain: true } as const;
       await expect(f.call(runtime, custom, 'member', 'synthetic')).rejects.toMatchObject({ code: 'unauthorized' });
       await expect(f.call(runtime, custom, 'owner', 'synthetic')).resolves.toEqual({ status: 'queued', meeting_id: 'synthetic-custom-supplier' });
-      await expect(f.call(runtime, { operation: 'submit', meeting, project_id: null, retain: true }, 'member')).resolves.toMatchObject({ status: 'queued' });
-      await expect(f.call(runtime, { operation: 'submit', meeting, project_id: null, retain: true }, 'owner')).resolves.toMatchObject({ status: 'queued' });
-      // Each person's meeting is their own, in their own source.
-      expect(f.db.prepare('SELECT count(DISTINCT source_key) FROM authority_person_hand_in_meetings_v1').pluck().get()).toBe(2);
-      const tools = await runtime.tools('member');
-      expect(tools.find(tool => tool.tool_id === 'hand-in')).toEqual({ tool_id: 'hand-in', display_name: 'Paste a meeting', availability: 'enabled', personal_status: 'linked',
-        external_scope_id: null, external_subject_id: 'hand-in', organization_setup: null });
+      expect(f.count('authority_person_hand_in_meetings_v1')).toBe(0);
+      expect(await runtime.tools('member')).toEqual([]);
     } finally { storage.close(); }
   });
 
-  it('refuses a suggestion outside the member\'s projects, and folders, previews and imports, keeping nothing', async () => {
-    const f = await fixture(), runtime = f.create();
-    f.grantProject(foreignProject, 'owner');
-    await expect(f.call(runtime, { operation: 'submit', meeting, project_id: foreignProject, retain: true })).rejects.toMatchObject({ code: 'unauthorized' });
-    await expect(f.call(runtime, { operation: 'browse', folder_id: 'folder' })).rejects.toMatchObject({ code: 'not_found' });
-    await expect(f.call(runtime, { operation: 'open', meeting_id: handInMeetingIdV1(meeting) })).rejects.toMatchObject({ code: 'not_found' });
-    await expect(f.call(runtime, { operation: 'import', meeting_id: handInMeetingIdV1(meeting), project_id: null, retain: true })).rejects.toMatchObject({ code: 'not_found' });
-    expect(f.count('authority_person_hand_in_meetings_v1')).toBe(0);
-    expect(f.intake.list()).toEqual([]);
-    // Always linked, with no account elsewhere to name.
-    expect(await f.call(runtime, { operation: 'home' })).toMatchObject({ connected: true, email: null, workspace: null });
-  });
-
-  it('keeps a payload only with its queued import: a full queue refuses the next meeting and keeps nothing of it', async () => {
-    const f = await fixture(), runtime = f.create();
-    const ids: string[] = [];
-    for (let index = 0; index < 50; index++) {
-      ids.push((await f.call(runtime, { operation: 'submit', meeting: { ...meeting, title: `Supplier sync ${index + 1}` }, project_id: null, retain: true })).meeting_id);
-    }
-    await expect(f.call(runtime, { operation: 'submit', meeting: { ...meeting, title: 'Supplier sync 51' }, project_id: null, retain: true })).rejects.toMatchObject({ code: 'rate_limited' });
-    expect(f.count('authority_person_hand_in_meetings_v1')).toBe(50);
-    const [source] = f.intake.list(f.member);
-    expect(f.intake.checkpoint(source!.source_key).manual).toEqual(ids);
-    // A meeting already waiting is still taken: it queues nothing new.
-    await expect(f.call(runtime, { operation: 'submit', meeting: { ...meeting, title: 'Supplier sync 1' }, project_id: null, retain: true })).resolves.toEqual({ status: 'queued', meeting_id: ids[0] });
-    expect(() => new SqlitePersonHandInMeetingsV1(f.db).save(source!.source_key, meeting)).toThrow('only with its queued import');
-  });
-
-  it('pulls only a kept, intact payload, and refuses an id queued without one', async () => {
-    const f = await fixture(), runtime = f.create();
-    const { meeting_id } = await f.call(runtime, { operation: 'submit', meeting, project_id: null, retain: true });
+  it('pulls only a kept, intact legacy payload, and refuses an id queued without one', async () => {
+    const f = await fixture();
+    const { meeting_id } = await f.seedExisting();
     const [setting] = f.intake.list(f.member);
     const store = new SqlitePersonHandInMeetingsV1(f.db);
-    const kept = store.get(setting!.source_key, meeting_id)!;
-    expect(kept).toMatchObject({ external_id: meeting_id, meeting, payload_sha256: canonicalSha256(meeting) });
+    expect(store.get(setting!.source_key, meeting_id)).toMatchObject({ external_id: meeting_id, meeting, payload_sha256: canonicalSha256(meeting) });
     expect(store.get(setting!.source_key, `hand-in-${'0'.repeat(64)}`)).toBeUndefined();
     const source = f.handIn.source(setting!, () => undefined);
     const pulled = await source.pull({ cursor: writeHandInCheckpointV1({ manual: [meeting_id] }) });
     expect(pulled.meetings).toHaveLength(1);
     expect(readHandInCheckpointV1(pulled.next_cursor!).manual).toEqual([]);
-    // Pulling again builds the same meeting and revision.
     expect((await source.pull({ cursor: writeHandInCheckpointV1({ manual: [meeting_id] }) })).meetings).toEqual(pulled.meetings);
-    const orphan = `hand-in-${'1'.repeat(64)}`;
-    await expect(source.pull({ cursor: writeHandInCheckpointV1({ manual: [orphan] }) })).rejects.toBeInstanceOf(AdapterError);
-    // A payload whose bytes are not the canonical ones its id names is refused when read.
+    await expect(source.pull({ cursor: writeHandInCheckpointV1({ manual: [`hand-in-${'1'.repeat(64)}`] }) })).rejects.toBeInstanceOf(AdapterError);
     const other = { ...meeting, title: 'Vendor sync' }, digest = canonicalSha256(other);
     f.db.prepare('INSERT INTO authority_person_hand_in_meetings_v1 VALUES (?,?,?,?,?)').run(setting!.source_key, `hand-in-${digest.slice(7)}`, JSON.stringify(other, null, 2), digest, new Date().toISOString());
     expect(() => store.get(setting!.source_key, `hand-in-${digest.slice(7)}`)).toThrow('integrity');

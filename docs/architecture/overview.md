@@ -40,7 +40,7 @@ flowchart LR
   through the repository's reviewed CLIs and bounded SSM commands
   ([operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md)).
 - **What comes in.** Only each person's own sources: their Granola meetings,
-  meetings they paste in (`hand-in`), and on staging a synthetic source. There is
+  and on staging an internal synthetic source for release qualification. There is
   no organization-wide meeting source. Jira and Confluence are read live, with
   the asker's own connection, at question time. Slack is an approval surface
   only; Ask never reads Slack.
@@ -111,7 +111,7 @@ migrates: a changed baseline means fresh state.
 | --- | --- | --- |
 | HTTP edge | `src/presentation/organization-authority-http-server.ts` | Routes, request limits, the Ask progress stream; never opens SQLite |
 | Identity and sessions | `src/application/person-identity-sessions.ts`, `adapters/oidc/`, kernel `domain/person-session-rules.ts` | Google OIDC sign-in, rotating sessions (12 h access, re-sign-in after 7 days), membership and revocation on every request |
-| Meeting intake | `composition/person-meeting-runtime-v1.ts` | Up to three lanes over personal sources: Granola, pasted meetings, the staging synthetic source |
+| Meeting intake | `composition/person-meeting-runtime-v1.ts` | Personal Granola intake and the internal staging synthetic source; compatibility processing for already queued hand-ins |
 | Extraction | `packages/organization-processing` (`admitted-meeting-processing/meeting-processing-cycle-v1.ts`, `llm/llm-decision-processor.ts`), `providers/openrouter` | One model extraction per meeting; failures are held, and paid attempts are recorded in `extraction-attempts.sqlite` |
 | Approval and publication | `composition/approval-core-v1.ts`, `composition/approval-publisher-v1.ts`, `providers/slack/server` | One frozen proposal per meeting, first decision wins; one signed record per destination group |
 | Organization record | `packages/organization-record` | Append-only `record-log.sqlite` and the permission-aware Person reader |

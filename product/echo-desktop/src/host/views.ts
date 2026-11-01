@@ -10,7 +10,6 @@ import type {
   RecordSection, SourceEvidence, SourceRef, ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus, HomeView, OpenItemView, OpenItemsView,
 } from '../shared/protocol.js';
 import {
-  PERSON_HAND_IN_MEETING_ID_V1, validatePersonMeetingResultV2,
   validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
   validatePersonUploadSearchResultV2, validatePersonUploadSearchResultV3, validateProjectContextSearchResultV2, validateProjectCreateReceiptV1, validateProjectListV2,
@@ -608,13 +607,6 @@ function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean
 export function evidenceView(raw: unknown): SourceEvidence {
   const evidence = validated(validatePersonSourceEvidenceV1, unwrap(raw));
   return { label: evidence.citation.label, text: evidence.text };
-}
-
-/** Paste a meeting's reply: only the id the meeting's content derives, the same for the same meeting. */
-export function pastedView(raw: unknown): { meeting_id: string } {
-  const { meeting_id: meetingId } = validated(value => validatePersonMeetingResultV2('submit', value), unwrap(raw));
-  if (!PERSON_HAND_IN_MEETING_ID_V1.test(meetingId)) throw new ViewError();
-  return { meeting_id: meetingId };
 }
 
 /** Connected tools: each tool's id, name and your connection. External workspace and account ids stay behind. */

@@ -134,6 +134,13 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
     if (!('body' in response)) throw new Error('Expected JSON');
     return response.body as PersonMeetingResultsV2[K];
   };
+  const reviewCall = async <K extends 'reviews' | 'review_open' | 'review'>(runtime: ReturnType<typeof create>, op: PersonMeetingOperationV2 & { operation: K }, token = 'owner') => {
+    const application = runtime.applications.find(value => value.routes.some(route => route.route_id === 'personal-reviews'));
+    if (!application) throw new Error('Provider-neutral review route is missing');
+    const response = await application.accept({ route_id: 'personal-reviews', method: 'POST', path: '/v1/person/reviews', headers: { authorization: `Bearer ${token}` }, content_type: 'application/json', raw_body: Buffer.from(JSON.stringify({ schema_version: 1, ...op })) });
+    if (!('body' in response)) throw new Error('Expected JSON');
+    return response.body as PersonMeetingResultsV2[K];
+  };
   let grants = 0;
   const join = (project_id: string, member: keyof typeof actors) => {
     const actor = actors[member], type = member === 'owner' ? 'owner' : 'employee';
@@ -187,7 +194,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   /** Routes for every item of an open review, each to one destination (null = not kept, [] = Only me) or as chosen per item. */
   const routes = (opened: PersonMeetingResultsV2['review_open'], to: readonly string[] | null | ((item: PersonMeetingResultsV2['review_open']['items'][number]) => readonly string[] | null) = []) =>
     opened.items.map(item => ({ signal_id: item.signal_id, project_ids: typeof to === 'function' ? to(item) : to }));
-  return { ...f, person, sessions, create, call, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, browsed, watched, fullWindow: (value = true) => { windowFull = value; }, fakeProvider, sources, intake, processUntilIdle, pendingReview, routes, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
+  return { ...f, person, sessions, create, call, reviewCall, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, browsed, watched, fullWindow: (value = true) => { windowFull = value; }, fakeProvider, sources, intake, processUntilIdle, pendingReview, routes, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: (error: unknown = new Error('extraction failed')) => { failExtraction = error; },
     ledger, pulls: () => pulls, revise: (value: string) => { edition = value; },
     held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
@@ -246,6 +253,28 @@ describe('personal meeting intake uses the shared processing path', () => {
       f.db.prepare('UPDATE authority_person_meeting_sources_v2 SET settings_revision=settings_revision+1 WHERE source_key=?').run(source.source_key);
       expect(await read()).not.toHaveProperty('trace');
     } finally { diagnostics.close(); runtime.close(); f.db.close(); }
+  });
+
+  it('reviews hidden sources without selecting or connecting a provider', async () => {
+    const f = await fixture();
+    const runtime = f.create([{ ...f.fakeProvider('meeting-fixture', 'fixture-meeting-source'), listed: false }]);
+    expect(await runtime.tools('owner')).toEqual([]);
+    await expect(f.reviewCall(runtime, { operation: 'reviews', tool_id: 'meeting-fixture' } as never)).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(f.reviewCall(runtime, { operation: 'home' } as never)).rejects.toMatchObject({ code: 'invalid_request' });
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true }, 'owner', 'meeting-fixture');
+    await f.processUntilIdle(runtime);
+    const [pending] = (await f.call(runtime, { operation: 'reviews' }, 'owner', 'meeting-fixture')).reviews;
+    const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id }, 'owner', 'meeting-fixture');
+    f.disconnect();
+    const listing = await f.reviewCall(runtime, { operation: 'reviews' });
+    expect(listing.reviews.map(row => row.approval_id)).toEqual([pending!.approval_id]);
+    expect(await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id })).toEqual(opened);
+    await expect(f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id }, 'other')).rejects.toMatchObject({ code: 'not_found' });
+    const decision = { operation: 'review' as const, approval_id: pending!.approval_id, command_id: 'neutral-review', snapshot_sha256: opened.snapshot_sha256,
+      action: 'approve' as const, routes: f.routes(opened), owners: [] };
+    await expect(f.reviewCall(runtime, decision, 'other')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.reviewCall(runtime, { ...decision, snapshot_sha256: canonicalSha256('outdated') })).rejects.toMatchObject({ code: 'stale_access_state' });
+    for (let attempt = 0; attempt < 2; attempt++) await expect(f.reviewCall(runtime, decision)).resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
   });
 
   it('submits a custom synthetic meeting through extraction, one human review and one after-record trigger, surviving retries', async () => {

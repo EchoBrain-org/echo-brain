@@ -21,8 +21,9 @@ The Person CLI dispatches `person tools <verb> --tool <id>` through
 client fragment, with only the authenticated `PersonToolHostV1` transport supplied
 by the product. Slack, Jira and Confluence use this seam through client-only
 workspaces that keep their server dependencies out of the installed Person
-client; the Person client composes the Granola, hand-in (paste a meeting) and
-staging synthetic meeting tools itself.
+client; the Person client composes the Granola meeting tool itself. Paste a
+meeting is retired. The staging synthetic meeting provider remains internal to
+release qualification and does not appear in the public tools catalog.
 
 Provider-owned HTTP applications mount through the Authority's generic
 `person_tool_connections` collection. Route collision checks and body/response
@@ -60,7 +61,10 @@ unknown fields, duplicate capabilities and inconsistent state.
 Only the schema and validator exist: no endpoint exposes this status, and the
 Person tools responses report identity link status, not read status. Slack's
 owner-only organization setup state remains independent of this personal read
-state.
+state. Slack's provider-owned display name is `Slack (approval notifications)`:
+its link supports approval delivery, not a searchable knowledge source. Listing
+tools reads saved connection state; it does not probe provider availability or
+refresh consent.
 
 ## Live evidence
 
@@ -202,7 +206,7 @@ enter only through a person's own sources; no organization meeting source
 exists. Personal Granola OAuth is specified by the
 [Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)
 and [ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md);
-private intake, watches and pasted meetings by
+private intake and watches by
 [ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md).
 The shared personal connection lifecycle, bounded JSON/MCP transport, Authority
 source processing, native review and original-context readers own the workflow.
@@ -210,8 +214,13 @@ Granola supplies verified account/workspace, folder enumeration, a paged
 `list_meetings` window and meeting normalization. A watch is off, the person's
 own meetings or one folder, over the last 7 days; a project named with it is
 only a suggestion. Imported notes are labeled unapproved and readable by their
-importer alone; nothing shares a transcript. The `hand-in` source takes a
-meeting pasted from any tool through the same custody.
+importer alone; nothing shares a transcript. The former `hand-in` input is
+retired, including its Paste a meeting UI. Existing retained meetings keep
+their custody and audience. `POST /v1/person/reviews` takes `schema_version: 1`
+and `reviews`, `review_open` or `review` operations without a `tool_id`; the
+Person CLI exposes it as `person reviews --request <JSON>`. Reading and deciding
+an existing review requires no connected meeting tool. The older meeting route
+continues to accept its existing review operations.
 
 Granola network cost is explicit. A watch pass lists its window (one call per
 200 meetings, at most 200) and reads in detail only a meeting that is new or

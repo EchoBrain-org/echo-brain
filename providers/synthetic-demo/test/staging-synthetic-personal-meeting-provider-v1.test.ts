@@ -101,10 +101,11 @@ describe("staging synthetic personal meeting provider", () => {
     await expect(readStagingSyntheticMeetingFixturesV1(fixtures(["fictional-planning", "fictional-planning"]))).rejects.toThrow("distinct lowercase ids");
   });
 
-  it("keeps a checkpoint of queued imports only and reports a linked staging tool", async () => {
+  it("keeps queued imports and internal staging access without advertising a connected work app", async () => {
     expect(() => writeStagingSyntheticCheckpointV1({ folder: null, manual: [] } as never)).toThrow("cursor is invalid");
     expect(() => readStagingSyntheticCheckpointV1("granola-watch-v1:{}")).toThrow("cursor is invalid");
     const { provider, session } = await source();
+    expect(provider.listed).toBe(false);
     expect(provider.tool("token")).toMatchObject({ tool_id: "synthetic", personal_status: "linked" });
     await expect(session.folders()).resolves.toEqual([]);
     await expect(session.browse("folder")).rejects.toMatchObject({ code: "not_found" });

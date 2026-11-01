@@ -11,8 +11,18 @@ It does not accept the proposed design or ADRs by implication.
 The organization Granola acquisition and rehearsal paths described below were
 retired by the [Personal Granola cleanup](2026-10-05-personal-granola-sprint-v1.md).
 This document preserves their implementation evidence as historical context.
-Shared capture transforms, custody, approval and personal connector code remain;
-tool capture libraries have no active production registration.
+Custody, approval and personal connector code remain; the dormant tool capture
+libraries and shared capture contracts were removed on 2026-10-19.
+
+**Current surface update, 2026-11-01:** Paste a meeting is retired, not moved
+into Capture. Meeting reviews are independent of a connected meeting tool.
+The synthetic staging provider remains available to release qualification but
+is hidden from the public tools catalog. Slack is labeled for approval
+notifications and supplies no knowledge-source reads. Its bounded own-DM
+reads remain for identity verification and approval-delivery recovery.
+References below to Slack cross-source fixtures and capture adapters describe
+the historical implementation; current cross-source tests use Jira and
+Confluence readers. See the [current connector contracts](../architecture/connector-contracts.md).
 
 ## Implemented path
 

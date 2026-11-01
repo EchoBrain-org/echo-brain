@@ -227,10 +227,9 @@ function ownerChoices(input: unknown): asserts input is readonly { readonly sign
     seen.add(item.signal_id);
   }
 }
-export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingRequestV2 {
-  const row = asEnumerableRecord(value, label), operation = row.operation as PersonMeetingOperationV2['operation'];
-  if (!Object.hasOwn(fields, operation) || row.schema_version !== 2) fail(label);
-  assertExactKeys(row, ['schema_version', 'tool_id', 'operation', ...fields[operation]], label); text(row.tool_id, 64);
+/** The same review fields serve both the legacy meeting route and the person-owned review route. */
+export type PersonMeetingReviewOperationV2 = Extract<PersonMeetingOperationV2, { readonly operation: 'reviews' | 'review_open' | 'review' }>;
+function validateMeetingOperationFields(row: Record<string, unknown>, operation: PersonMeetingOperationV2['operation']): void {
   for (const key of fields[operation]) {
     const item = row[key];
     if (key === 'retain') { if (item !== true) fail('Meeting retention consent is required'); }
@@ -252,6 +251,19 @@ export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingReq
       : review.routes.every(route => route.project_ids === null) || new Set(review.routes.flatMap(route => route.project_ids ?? [])).size > 20) fail(label);
   }
   if (operation === 'watch' && !watchShape(row.watch, row.folder_id, row.project_id)) fail(label);
+}
+export function validatePersonMeetingReviewOperationV2(value: unknown): PersonMeetingReviewOperationV2 {
+  const row = asEnumerableRecord(value, label), operation = row.operation as PersonMeetingReviewOperationV2['operation'];
+  if (!['reviews', 'review_open', 'review'].includes(operation)) fail(label);
+  assertExactKeys(row, ['operation', ...fields[operation]], label);
+  validateMeetingOperationFields(row, operation);
+  return Object.freeze({ ...row }) as PersonMeetingReviewOperationV2;
+}
+export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingRequestV2 {
+  const row = asEnumerableRecord(value, label), operation = row.operation as PersonMeetingOperationV2['operation'];
+  if (!Object.hasOwn(fields, operation) || row.schema_version !== 2) fail(label);
+  assertExactKeys(row, ['schema_version', 'tool_id', 'operation', ...fields[operation]], label); text(row.tool_id, 64);
+  validateMeetingOperationFields(row, operation);
   return Object.freeze({ ...row }) as PersonMeetingRequestV2;
 }
 /** Transport and UTF-8 bounds apply before parsing; typed response checks also run at the Authority. */
