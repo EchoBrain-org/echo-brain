@@ -128,14 +128,89 @@ aws cloudformation describe-stacks \
 ```
 
 Expected evidence is a complete stack, one alert topic, one public check
-function, one Authority log group, and six alarms: four that notify and the two
-attributed comparison alarms with actions disabled (see Runtime metric and
-alarm attribution).
+function, one Authority log group, and four alarms that notify the topic: two
+on the public check and two on this host's runtime metrics (see Runtime metric
+and alarm attribution).
 
-Open the Amazon SNS confirmation email and confirm it. Then verify that the
-subscription is `Confirmed` in the SNS console or `Confirmed` rather than
-`PendingConfirmation` in the topic subscription attributes. A deployed stack
-with an unconfirmed destination is not operationally complete.
+Open the Amazon SNS confirmation email ("AWS Notification - Subscription
+Confirmation") and choose **Confirm subscription** within 48 hours. SNS
+[deletes an email subscription](https://docs.aws.amazon.com/sns/latest/dg/sns-email-notifications.html)
+that is still unconfirmed after 48 hours, and CloudFormation is not told: the
+stack keeps listing `AlertEmailSubscription` as `CREATE_COMPLETE`, and drift
+detection does not support `AWS::SNS::Subscription`. A new stack, including
+one re-created with its slot, and a re-created subscription each send a new
+email with a new 48-hour window; an earlier confirmation does not carry over.
+
+Verify the topic, not the stack:
+
+```sh
+alert_topic=$(aws cloudformation describe-stacks \
+  --profile echo-prod \
+  --region "$observability_region" \
+  --stack-name "$observability_stack" \
+  --query "Stacks[0].Outputs[?OutputKey=='AlertTopicArn'].OutputValue | [0]" \
+  --output text)
+
+aws sns get-topic-attributes \
+  --profile echo-prod \
+  --region "$observability_region" \
+  --topic-arn "$alert_topic" \
+  --query 'Attributes.{Confirmed:SubscriptionsConfirmed,Pending:SubscriptionsPending}'
+```
+
+Expected evidence is `Confirmed` `1` and `Pending` `0`. `Pending` `1` is still
+waiting for the email. `0` and `0` means the subscription expired or was
+removed: [re-create it](#re-create-an-expired-email-subscription). A deployed
+stack with an unconfirmed destination is not operationally complete.
+
+#### Re-create an expired email subscription
+
+An ordinary update cannot bring the subscription back: the unchanged template
+has nothing to change, and a drift-aware change set re-creates only resource
+types that support drift detection. Use two change sets on the existing stack.
+The first removes `AlertEmailSubscription`; the second adds it back from the
+committed template, which sends a new confirmation email. Both keep the stack's
+parameters, so nobody types the address, and the stack ends on the committed
+template. Execute the second change set only when the address owner can confirm
+within 48 hours.
+
+```sh
+removal_change=alert-subscription-remove-$(date -u +%Y%m%d)
+restore_change=alert-subscription-add-$(date -u +%Y%m%d)
+removal_template=$(mktemp)
+
+node -e 'const fs = require("node:fs"); const template = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); delete template.Resources.AlertEmailSubscription; fs.writeFileSync(process.argv[2], JSON.stringify(template));' \
+  deploy/organization-authority/authority-observability-v1.template.json \
+  "$removal_template"
+
+aws cloudformation create-change-set \
+  --profile echo-prod \
+  --region "$observability_region" \
+  --stack-name "$observability_stack" \
+  --change-set-name "$removal_change" \
+  --change-set-type UPDATE \
+  --capabilities CAPABILITY_IAM \
+  --template-body "file://$removal_template" \
+  --parameters \
+    ParameterKey=AuthorityHost,UsePreviousValue=true \
+    ParameterKey=AuthorityHostRoleName,UsePreviousValue=true \
+    ParameterKey=AlertEmail,UsePreviousValue=true
+```
+
+Wait for the change set and review it with the step 1 `describe-change-set`
+query. Expected evidence is exactly one change: `Remove` of
+`AlertEmailSubscription` (`AWS::SNS::Subscription`). Execute it and wait for
+`stack-update-complete`. When the subscription had already expired, the stack
+events show its `DELETE_IN_PROGRESS` with `Resource does not exist`, then
+`DELETE_COMPLETE`.
+
+Create the second change set the same way, with
+`--change-set-name "$restore_change"` and the committed
+`--template-body file://deploy/organization-authority/authority-observability-v1.template.json`.
+Expected evidence is exactly one change: `Add` of `AlertEmailSubscription`.
+Delete either change set if it shows anything else. Execute it, wait for
+`stack-update-complete` and remove `"$removal_template"`. Confirm the email,
+repeat the topic check above, then rehearse delivery with step 4.
 
 ### 3. Bind the Authority deployment to the retained log group
 
@@ -233,9 +308,9 @@ output passed grounding or became an approval candidate.
 
 Do not place or infer meeting/provider content, identifiers, credentials,
 prompts, raw errors, or stack traces from these fields. The legacy
-`echo-clean-live-worker-failed-v1` event remains only for the existing aggregate
-metric and alarm. It is not part of new lifecycle diagnosis, and this slice
-does not add alarms, a status API, correlation, or close #87.
+`echo-clean-live-worker-failed-v1` event remains only for the host's
+worker-failure metric and alarm. It is not part of new lifecycle diagnosis,
+and this slice does not add alarms, a status API, correlation, or close #87.
 
 #### Inspect the shared trace transport heartbeat
 
@@ -874,20 +949,45 @@ before 2026-10-19 also carry `content_capture` counters and
 
 #### Runtime metric and alarm attribution
 
-Legacy `EchoBrain/AuthorityOperations` metrics have no dimensions and can mix
-source log groups. An alarm email cannot identify the host. The received recovery
-email concerned `echo-authority-observability-v1-authority-alerts`, a different
-topic from the earlier empty-subscription inspection; this is not evidence for
-replacing or deleting subscriptions.
+Each stack's two runtime alarms read only its own host. Its metric filters
+write `WorkerFailure` and `RuntimeReady` from its own log group to
+`EchoBrain/AuthorityOperations/${AuthorityHost}`, and each alarm's description
+names the host, the log group and the stack, so an alarm email identifies the
+host. `RuntimeMonitoringAttribution` lists the stack, host, log group, metric
+namespace, both runtime alarms and the ALARM/OK topic. Offline proofs establish
+no live attribution or four-meeting candidate acceptance.
 
-The runtime template preserves legacy filters/actions and adds matching filters
-under `EchoBrain/AuthorityOperations/${AuthorityHost}`. Both comparison alarms
-have `ActionsEnabled: false`. `RuntimeMonitoringAttribution` identifies the stack,
-host, log group, metric namespaces, alarms and ALARM/OK topic. Before changing
-alert routing, the operator must verify that chain through the confirmed
-subscription, compare both metrics, and record recovery delivery. Keep legacy
-actions effective until the reviewed transition. No live attribution or
-four-meeting candidate acceptance is established by offline proofs.
+A stack not yet updated to this template still alarms on the legacy
+`EchoBrain/AuthorityOperations` metrics, which have no dimensions. One metric
+sums every log group whose stack still filters into it, every legacy alarm on
+it changes state together, and an alarm email cannot identify the host. A
+legacy alarm that stays in `ALARM` while the stack's attributed comparison
+alarm, where it has one, stays `OK` is counting another host's events. It is
+not stuck: with `TreatMissingData` `notBreaching` it returns to `OK` after a
+period with no datapoints, so a long `ALARM` means datapoints keep arriving.
+Its state reason still shows the datapoint of its last transition, not the
+latest one. While another host holds it in `ALARM`, it cannot report a new
+failure on this host. To attribute it, compare the legacy and attributed
+metrics, list the log groups of the metric filters that write the legacy
+metric, and count each group's `echo-clean-live-worker-failed-v1` events
+without reading their bodies.
+
+Move such a stack to the attributed alarms only after its topic shows a
+confirmed subscription (step 2) and step 4 has delivered both emails. Create
+the change set as in step 1, with all three parameters `UsePreviousValue=true`.
+For a stack on the previous template, expected evidence is exactly six changes:
+`Remove` of `WorkerFailureMetricFilter`, `RuntimeReadyMetricFilter`,
+`RepeatedWorkerFailureAlarm` and `RepeatedRuntimeReadyAlarm`, and `Modify`
+without replacement of `AttributedWorkerFailureAlarm` and
+`AttributedRuntimeReadyAlarm`. A stack from before the attributed alarms
+instead shows eight: the same four `Remove` and an `Add` of both attributed
+filters and both attributed alarms. Execute it, then rehearse step 6. Removing
+a stack's legacy filters also stops it adding to the legacy metrics that older
+stacks still alarm on.
+
+An empty alert topic means its email subscription expired or was removed.
+Restore it through the [two reviewed change sets](#re-create-an-expired-email-subscription),
+not by subscribing outside CloudFormation.
 
 Metric namespace/name/dimensions must match between filters and alarms. References:
 [metric concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html),
@@ -1009,10 +1109,11 @@ aws logs put-log-events \
     timestamp="$rehearsal_epoch_ms",message='{"schema_version":1,"kind":"echo-clean-live-worker-failed-v1"}'
 ```
 
-Expected evidence is a `WorkerFailure` metric value of three, the repeated
-worker-failure alarm entering `ALARM`, and the alarm later returning to `OK`
-when the five-minute evaluation window clears. Do not synthesize an exception
-containing product data.
+Expected evidence is a `WorkerFailure` value of three in
+`EchoBrain/AuthorityOperations/<authority-host>`, the alarm named by the
+`RepeatedWorkerFailureAlarmName` output entering `ALARM` with an alarm email,
+and its return to `OK` with a recovery email once the five-minute period
+clears. Do not synthesize an exception containing product data.
 
 ### 7. Rehearse the real public failure path
 
@@ -1065,7 +1166,7 @@ Record only:
 
 - exact source commit and stack status;
 - Region, stack name, logical resource names, and timestamps;
-- SNS subscription confirmed or pending;
+- the alert topic's confirmed and pending subscription counts;
 - alarm and recovery timestamps;
 - terminal Authority status booleans;
 - whether the synthetic and real failure paths were observed.

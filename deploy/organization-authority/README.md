@@ -54,7 +54,8 @@ deployment paths under `./release/` in `/srv/echo-authority-clean-v1`.
 Deploy
 [`authority-observability-v1.template.json`](./authority-observability-v1.template.json)
 before the first `prepare`. It takes the public Authority host, the existing
-EC2 host-role name, and one alert email. Confirm the SNS email subscription.
+EC2 host-role name, and one alert email. Confirm the SNS email subscription
+within 48 hours; SNS deletes it unconfirmed after that.
 The stack output `DockerRuntimeLogGroupName` must equal
 `/echo-brain/authority/<authority-host>`. Use
 [RB-OPERATIONS-001](../../docs/operations/RB-OPERATIONS-001-authority-observability.md)
