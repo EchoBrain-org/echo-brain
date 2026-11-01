@@ -2658,7 +2658,7 @@ function parseCli(argv) {
   });
 }
 
-async function main(argv = process.argv.slice(2), dependencies = {}) {
+export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const {
     action,
     execute,
