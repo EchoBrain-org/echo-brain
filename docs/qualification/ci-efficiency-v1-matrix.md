@@ -7,7 +7,7 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-26
 reviewed_at: 2026-08-26
-reviewed_ref: 67830de61dc3afcf5bcc0cabfdf803d5e6604ec2
+reviewed_ref: de27b1058f71490d19332f63410760f58143937e
 matrix_version: 1
 assertion_ids:
   - CIEFFV1-001
@@ -26,6 +26,11 @@ workflow revision. It does not qualify a production artifact, enable a release,
 or change the permanent workflow. It separates runner and BuildKit-cache effects
 by holding the source, proof graph, and Authority inputs constant within each
 cohort.
+
+Update (2026-10-31): `reviewed_ref` now names `de27b10`, the `main` commit
+that added this matrix, because the temporary revision it first named is no
+longer retained. See
+[QUAL-20260826-034420-001](QUAL-20260826-034420-001-authority-ci-efficiency-v1.md).
 
 | Assertion ID | Assertion |
 | --- | --- |

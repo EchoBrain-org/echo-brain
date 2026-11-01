@@ -8,7 +8,7 @@ component_ids:
   - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-29
 reviewed_at: 2026-08-29
-reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
+reviewed_ref: dd244af3d550471de779f3f4afd335a79b64e926
 origin: review
 evidence_status: scenario-defined
 status: mitigating
@@ -19,16 +19,16 @@ invariant_ids:
 evidence_ids:
   - EVID-JOB-AB-LEDGER-001
 implementation_refs:
-  - commit:b9a9891209dfa2841fb9273671fdb93c540b201f
+  - commit:dd244af3d550471de779f3f4afd335a79b64e926
 regression_test_refs:
-  - tests/architecture/workspace-boundaries.test.ts@b9a9891209dfa2841fb9273671fdb93c540b201f
-  - services/organization-authority/test/authority-live-source-baseline-v3.test.ts@b9a9891209dfa2841fb9273671fdb93c540b201f
-  - services/organization-authority/test/processing/clean-v1/live-only-source-cycle.test.ts@b9a9891209dfa2841fb9273671fdb93c540b201f
-  - services/organization-authority/test/open-clean-live-runtime.test.ts@b9a9891209dfa2841fb9273671fdb93c540b201f
-  - services/organization-authority/test/composition/openrouter-clean-live-processor-runtime.test.ts@b9a9891209dfa2841fb9273671fdb93c540b201f
-  - services/organization-authority/test/composition/openrouter-clean-layer4-runtime.test.ts@b9a9891209dfa2841fb9273671fdb93c540b201f
-  - services/organization-authority/test/quality/synthetic-meeting-evaluator.test.ts@b9a9891209dfa2841fb9273671fdb93c540b201f
-  - services/organization-record/test/record-log-v4-append.test.ts@b9a9891209dfa2841fb9273671fdb93c540b201f
+  - tests/architecture/workspace-boundaries.test.ts@dd244af3d550471de779f3f4afd335a79b64e926
+  - services/organization-authority/test/authority-live-source-baseline-v3.test.ts@dd244af3d550471de779f3f4afd335a79b64e926
+  - services/organization-authority/test/processing/clean-v1/live-only-source-cycle.test.ts@dd244af3d550471de779f3f4afd335a79b64e926
+  - services/organization-authority/test/open-clean-live-runtime.test.ts@dd244af3d550471de779f3f4afd335a79b64e926
+  - services/organization-authority/test/composition/openrouter-clean-live-processor-runtime.test.ts@dd244af3d550471de779f3f4afd335a79b64e926
+  - services/organization-authority/test/composition/openrouter-clean-layer4-runtime.test.ts@dd244af3d550471de779f3f4afd335a79b64e926
+  - services/organization-authority/test/quality/synthetic-meeting-evaluator.test.ts@dd244af3d550471de779f3f4afd335a79b64e926
+  - services/organization-record/test/record-log-v4-append.test.ts@dd244af3d550471de779f3f4afd335a79b64e926
 ---
 
 # FP-ADAPTERS-005: The first provider becomes the architecture
@@ -87,3 +87,9 @@ full provider qualification is still pending, static checks cannot detect every
 semantic leak, and initial-owner onboarding plus the compatibility CLI still
 intentionally select the concrete OpenRouter and Slack product
 profile.
+
+Update (2026-10-31): this record first cited `b9a9891`, a pre-rebase copy
+of the repair that only git tags kept reachable. Those tags were deleted, so
+it now cites `dd244af`, the same change as it landed on `main`. The patch is
+identical, and the eight regression test files are byte-identical at both
+commits. The review itself is unchanged.
