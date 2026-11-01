@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { message } from '../messages.js';
 import { closeSigninForm, showAccountMenu, signIn, type State } from '../store.js';
 
@@ -46,7 +46,7 @@ export function SignedOut({ state }: { state: State }) {
 function SignInForm({ state }: { state: State }) {
   const [url, setUrl] = useState(remembered);
   const field = useRef<HTMLInputElement>(null);
-  useEffect(() => { field.current?.focus(); }, []);
+  useLayoutEffect(() => { field.current?.focus(); }, []);
   const waiting = state.signin.phase === 'waiting';
   const valid = /^https:\/\/[^\s/]+/.test(url.trim());
   return (

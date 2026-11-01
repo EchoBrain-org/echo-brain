@@ -1,5 +1,5 @@
 import { createPortal } from 'preact/compat';
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { message, toolMessage } from '../messages.js';
 import {
@@ -277,7 +277,7 @@ function ProjectTools({ state }: { state: State }) {
   const sheet = settings.tools!;
   const box = useRef<HTMLDivElement>(null);
   const lead = settings.project.role === 'lead';
-  useEffect(() => { box.current?.focus(); }, []);
+  useLayoutEffect(() => { box.current?.focus(); }, []);
   const savable = projectToolsSavable(settings);
   const save = () => { if (savable) void saveProjectTools(); };
   const tools = PROJECT_MAPPING_TOOLS.filter(tool => {
@@ -328,7 +328,7 @@ function Rename({ state }: { state: State }) {
   const field = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const valid = projectRenameValid(settings.rename!, settings.project.name);
-  useEffect(() => { field.current?.focus(); }, []);
+  useLayoutEffect(() => { field.current?.focus(); }, []);
   return (
     <div class="overlay" onClick={cancelProjectSettingsAction}>
       <div class="sheet confirm project-setting-sheet" role="dialog" aria-labelledby="rename-project-title" ref={box}
@@ -351,7 +351,7 @@ function Confirm({ state }: { state: State }) {
   const action = settings.confirm!;
   const cancel = useRef<HTMLButtonElement>(null);
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { cancel.current?.focus(); }, []);
+  useLayoutEffect(() => { cancel.current?.focus(); }, []);
   const leave = action === 'leave';
   const archive = action === 'archive';
   const title = leave ? `Leave ${settings.project.name}?` : archive ? `Archive ${settings.project.name}?` : `Restore ${settings.project.name}?`;
@@ -379,7 +379,7 @@ function Write({ state }: { state: State }) {
   const settings = state.projectSettings!;
   const write = settings.write!;
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => { box.current?.focus(); }, []);
+  useLayoutEffect(() => { box.current?.focus(); }, []);
   const conflict = write.operation === 'leave' && write.failure?.code === 'conflict';
   const text = write.status === 'sending' ? 'Saving project settings…' : write.status === 'unknown' && write.dismissConfirm ? 'Dismiss it? It may still have been made.'
     : write.status === 'unknown' ? 'This may not have been sent.'

@@ -149,3 +149,41 @@ test('hidden tests ignore native window focus changes but honor explicit conceal
   await emit(app, 'echo-test:resume');
   await expect(toast).toHaveText('Saved for you');
 });
+
+/**
+ * Brings the window forward with the page's frames held, as a busy machine does, until the caret's move to the bar waits
+ * for the next one. The returned function lets that frame come.
+ */
+async function forwardWithFramesHeld(): Promise<() => Promise<void>> {
+  const { page, app } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.evaluate(() => {
+    const held: FrameRequestCallback[] = [];
+    Object.assign(window, { held });
+    window.requestAnimationFrame = callback => held.push(callback);
+  });
+  await emit(app, 'echo-test:conceal');
+  await emit(app, 'echo-test:resume');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { held: FrameRequestCallback[] }).held.some(callback => String(callback).includes('ask-field')))).toBe(true);
+  return () => page.evaluate(() => { for (const callback of (window as unknown as { held: FrameRequestCallback[] }).held.splice(0)) callback(performance.now()); });
+}
+
+test('the caret goes back to the bar as the window comes forward, but not over a key you press before the next frame', async () => {
+  run = await launch();
+  const { page } = run;
+  const frame = await forwardWithFramesHeld();
+  await page.keyboard.press('Tab');
+  const tabbed = await page.evaluate(() => { document.activeElement?.setAttribute('data-tabbed', ''); return document.activeElement?.id ?? ''; });
+  expect(tabbed).not.toBe('ask-field');
+  await frame();
+  await expect(page.locator('[data-tabbed]')).toBeFocused();
+});
+
+test('focus the page moves by itself before the next frame does not keep the caret from the bar', async () => {
+  run = await launch();
+  const { page } = run;
+  const frame = await forwardWithFramesHeld();
+  await page.getByTestId('sidebar-project').first().focus();
+  await frame();
+  await expect(page.locator('#ask-field')).toBeFocused();
+});

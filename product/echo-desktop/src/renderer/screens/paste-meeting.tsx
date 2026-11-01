@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { MAX_PASTED_MEETING_BYTES, pastedMeetingAsSent, type ConnectedTool, type PastedMeeting } from '../../shared/protocol.js';
 import { closeSheet, getState, handInMeeting, loadHome, loadProjects, onAccountGone, useStore } from '../store.js';
 import { trapTab } from './compose.js';
@@ -69,7 +69,8 @@ export function PasteMeeting({ tool }: { tool: ConnectedTool }) {
   const [, render] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   const title = useRef<HTMLInputElement>(null);
-  useEffect(() => {
+  // As the sheet appears, not a frame later: a late focus takes the caret from a field the person has already clicked into.
+  useLayoutEffect(() => {
     shown = () => render(count => count + 1);
     title.current?.focus();
     return () => {

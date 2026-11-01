@@ -360,7 +360,8 @@ test('back on a row that Home’s read then moves to the top, the focus stays on
   await item.getByRole('button', { name: 'Mark done', exact: true }).click();
   await expect(page.getByTestId('follow-up-said')).toHaveText('Done · Undo');
   await page.getByTestId('follow-up-said').getByRole('button', { name: 'Undo', exact: true }).click();
-  await expect(page.getByTestId('follow-up-said')).not.toContainText('Done');
+  // Settled: Escape does nothing while a change is on its way, and the line empties as soon as Undo starts.
+  await expect(page.getByTestId('follow-up-said')).toHaveText('Reopened');
   // Back: the list as it was left, that row focused; Home's read then moves it to the top, and it keeps the focus.
   await page.keyboard.press('Escape');
   await expect(list(page)).toBeVisible();
