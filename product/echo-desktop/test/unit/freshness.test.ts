@@ -309,6 +309,25 @@ describe('what a moved area reads again (R3)', () => {
     expect(calls('list.page')).toHaveLength(feeds);
   });
 
+
+  it('projects: a project made elsewhere joins the sidebar, and the decision page keeps its choices', async () => {
+    const store = await startStore();
+    authority.reviews = ['apr_1:pending'];
+    await nextCheck();
+    await store.openDecision('apr_1');
+    await flush();
+    store.setDecisionOwner('s1', 'Rafael M.');
+    store.setDecisionRoute('s1', null);
+    const opened = meetings('review_open');
+    authority.active = [project(9, 29, { name: 'Thermostat redesign' }), apollo];
+    await nextCheck();
+    expect(store.getState().projects.items.map(row => row.name)).toContain('Thermostat redesign');
+    expect(store.getState().decision).toMatchObject({ routes: { s1: null }, owners: { s1: 'Rafael M.' } });
+    expect(meetings('review_open')).toBe(opened);
+    expect(meetings('review')).toBe(0);
+    expect(calls('projects.create')).toHaveLength(0);
+  });
+
   it('reviews: Home, and the decision page, keeping the choices made on it', async () => {
     const store = await startStore();
     const reviews = meetings('reviews');

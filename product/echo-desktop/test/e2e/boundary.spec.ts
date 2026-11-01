@@ -25,6 +25,10 @@ test('the page can never name a file path', async () => {
         expect, request_id: crypto.randomUUID(), file_handle: 'made-up', file: '/etc/hosts', title: 'x', audience: { kind: 'only-me' },
       }),
       odd: await rpc('../../<script>', {}),
+      // A retired or malformed scope must never fall through to an Ask across everything.
+      asks: await Promise.all([{ kind: 'mine' }, { kind: 'unknown' }, null].map(scope => rpc('ask.run', {
+        expect, question: 'What did I note?', scope, cancel_id: crypto.randomUUID(),
+      }))),
       invitation: await rpc('signin.invitation', { invitation_handle: 'made-up', invitation: '/etc/hosts' }),
       // Save original… writes only where main's own dialog was told, and suggests only a file name.
       save: await rpc('documents.save', { expect, document_id: `doc_${'e'.repeat(64)}`, save_handle: 'made-up', out: '/tmp/echo-anywhere.pdf' }),
@@ -50,6 +54,8 @@ test('the page can never name a file path', async () => {
   }
   expect(run.calls().some(call => call.path === '/v1/person/employees')).toBe(false);
   expect(run.calls().some(call => call.path.startsWith('/v2/session/'))).toBe(false);
+  for (const reply of replies.asks) expect(reply).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
+  expect(run.calls().some(call => call.path === '/v7/person/ask')).toBe(false);
   expect(replies.odd).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
   expect(run.calls().some(call => call.path.includes('document'))).toBe(false);
   // The log names only methods the app knows.

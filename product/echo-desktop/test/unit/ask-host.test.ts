@@ -12,12 +12,11 @@ const decision = { citation: { kind: 'approved_record', atom_id: sha('1'), recor
 const line = (value: unknown) => JSON.stringify(value);
 
 describe('the command an Ask runs', () => {
-  it('asks every Ask, Mine included, on /v7 with its progress (the host pins every call to the page\'s account)', () => {
+  it('asks every Ask, global or in a project, on /v7 with its progress (the host pins every call to the page\'s account)', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
     const asked = ['ask', '--question=What did we agree?', '--progress'];
     expect(askArgv('What did we agree?', { kind: 'global' })).toEqual(asked);
     expect(askArgv('What did we agree?', { kind: 'project', project_id: project })).toEqual([...asked, `--project=${project}`]);
-    expect(askArgv('What did we agree?', { kind: 'mine' })).toEqual([...asked, '--mine']);
   });
 
   it('reads what it cites: a meeting by its record, as Ask cites it, a passage where it was asked', () => {

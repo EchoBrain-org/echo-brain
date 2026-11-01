@@ -3,9 +3,9 @@
 // then the meetings ECHO shows there, then the question for any week; at most
 // three, each once) and the count toward a question's 240 characters.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Answer, HomeView, ListItem, OpenItemView } from '../../src/shared/protocol.js';
+import type { Answer, AskScope, HomeView, Match, ListItem, OpenItemView } from '../../src/shared/protocol.js';
 import { COUNT_FROM, decidedIn, MAX_QUESTION, MAX_SUGGESTIONS, questionCount, suggestedQuestions, weekQuestion } from '../../src/renderer/bar.js';
-import { ACCOUNT, EMPTY_SUMMARY, fileOf, flush, Held, ok, project, rpcFor, startStore, storeLifecycle, timelineFiles } from './harness.js';
+import { ACCOUNT, EMPTY_SUMMARY, cover, fail, fileOf, flush, Held, ok, project, rpcFor, startStore, storeLifecycle, timelineFiles, uncover } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -175,5 +175,75 @@ describe('what an empty bar suggests', () => {
     const asked = rpc.mock.calls.filter(([method]) => method === 'ask.run').map(([, params]) => params as { question: string; scope: unknown });
     expect(asked).toEqual([expect.objectContaining({ question: 'What did we decide this week?', scope: { kind: 'global' } })]);
     expect(store.getState().barText).toBe('');
+  });
+});
+
+describe('live matches', () => {
+  const m1: Match = { context_id: 'ctx_1', title: 'Pricing decision from Tuesday sync', excerpt: 'Apollo moves to pricing tiers.', received_at: '2026-10-19T10:00:00.000Z' };
+  const m2: Match = { ...m1, context_id: 'ctx_2', title: 'Apollo update', excerpt: 'We agreed to ship.' };
+  const searches = () => rpc.mock.calls.filter(([method]) => method === 'search.run').map(([, params]) => params);
+  const typed = async (store: Awaited<ReturnType<typeof startStore>>, value: string) => {
+    store.setBarText(value);
+    await vi.advanceTimersByTimeAsync(300);
+    await flush();
+  };
+  beforeEach(() => {
+    const fallback = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (method, params) => method === 'search.run' ? ok({ items: params.query === 'apollo' ? [m1, m2] : [m1] })
+      : method === 'open.ref' ? ok({ kind: 'note', content: { context_id: m2.context_id, title: m2.title, text: m2.excerpt,
+        received_at: m2.received_at, audience: 'project', project_ids: [] } }) : fallback(method, params));
+  });
+
+  it('keeps Home search through a match, another app and a capture, and narrows it on a sidebar click', async () => {
+    const store = await startStore();
+    await typed(store, 'apollo');
+    expect(store.getState().matches).toMatchObject({ query: 'apollo', scope: { kind: 'global' }, loading: false });
+    expect(store.matchesShown()).toBe(true);
+    await store.openMatch(m2);
+    expect(store.getState().reader).not.toBeNull();
+    expect(store.matchesShown()).toBe(false);
+    await typed(store, 'pricing tiers');
+    expect(store.getState().reader).toBeNull();
+    expect(store.matchesShown()).toBe(true);
+    await typed(store, 'apollo');
+    const before = searches().length;
+    cover(store);
+    expect(store.getState().matches).toBeNull();
+    expect(store.pageCovered()).toBe(true);
+    expect(store.getState().barText).toBe('apollo');
+    await uncover(store);
+    await flush();
+    expect(searches()).toHaveLength(before + 1);
+    expect(searches().at(-1)).toMatchObject({ query: 'apollo', scope: { kind: 'global' } });
+    expect(store.matchesShown()).toBe(true);
+    store.openCapture();
+    expect(store.matchesShown()).toBe(false);
+    store.closeCompose();
+    expect(store.getState().barText).toBe('apollo');
+    expect(store.matchesShown()).toBe(true);
+    await store.openProject(apollo);
+    await flush();
+    expect(store.getState().barScope).toEqual({ kind: 'project', project_id: apollo.project_id });
+    expect(store.getState().barText).toBe('apollo');
+    expect(searches().at(-1)).toMatchObject({ query: 'apollo', scope: { kind: 'project', project_id: apollo.project_id } });
+  });
+
+  it('keeps the text through an outage and retries; a refused project search empties the bar', async () => {
+    const fallback = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (method, params) => method === 'search.run'
+      ? (params.scope as AskScope).kind === 'project' ? fail('unauthorized') : fail('unavailable', { retryable: true }) : fallback(method, params));
+    const store = await startStore();
+    await typed(store, 'apollo');
+    expect(store.getState().matches?.failure?.code).toBe('unavailable');
+    expect(store.getState().barText).toBe('apollo');
+    store.searchAgain();
+    await flush();
+    expect(searches()).toHaveLength(2);
+    expect(store.getState().barText).toBe('apollo');
+    await store.openProject(apollo);
+    await flush();
+    expect(store.getState().barText).toBe('');
+    expect(store.getState().matches).toBeNull();
+    expect(store.getState().route.page).toBe('project');
   });
 });

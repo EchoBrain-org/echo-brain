@@ -6,6 +6,8 @@ import { byTestId, elements, EMPTY_SUMMARY, plainHooks, render, text, type Node 
 
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', original => plainHooks(original));
+const { retryImpact } = vi.hoisted(() => ({ retryImpact: vi.fn() }));
+vi.mock('../../src/renderer/store.js', async original => ({ ...await original<typeof import('../../src/renderer/store.js')>(), retryImpact }));
 
 const THERM = 'prj_11111111-1111-4111-8111-111111111111';
 const ECHO = 'prj_22222222-2222-4222-8222-222222222222';
@@ -179,6 +181,13 @@ describe('the decision card', () => {
     expect(impacts.map(node => node.props['aria-label'])).toEqual(['Impact · THERM', 'Impact · No project, only me']);
     expect(text(impacts[0])).toContain('Follow-ups');
     expect(text(impacts[1])).toContain('Try again');
+    retryImpact.mockClear();
+    expect(elements(impacts[0]).filter(node => node.type === 'button' && text(node) === 'Try again')).toHaveLength(0);
+    const retry = elements(impacts[1]).find(node => node.type === 'button' && text(node) === 'Try again')!;
+    (retry.props.onClick as () => void)();
+    expect(retryImpact).toHaveBeenCalledExactlyOnceWith('run_00000000-0000-4000-8000-000000000042');
+    expect(text(await page(decision({ open: decided, runs: [run('41', records[0]!.approval_id, 'done'), run('42', records[1]!.approval_id, 'done')] }))))
+      .toContain('What did it change?');
     expect(byTestId(tree, 'route-final').map(node => text(node))).toEqual(['THERM', 'Not kept', 'No project']);
     // In no project only you read it: its chip carries the lock, as the place it went says.
     expect(byTestId(tree, 'route-final').map(node => [node.props.title, byTestId(node, 'route-final-lock').length])).toEqual([

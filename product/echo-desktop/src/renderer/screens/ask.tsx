@@ -918,9 +918,7 @@ function Item({ item, on }: { item: RecordItem; on: boolean }) {
 
 const SECTIONS = [['decisions', 'Decisions', 'decision'], ['actions', 'Actions', 'action'], ['rationales', 'Rationale', 'rationale']] as const;
 
-const VISIBILITY: Record<ApprovedRecord['visibility'], string> = {
-  organization: 'Visible to active organization members', project: 'Visible to project members', approver: 'Only the approver',
-};
+const VISIBILITY: Record<ApprovedRecord['visibility'], string> = { project: 'Visible to project members', approver: 'Only the approver' };
 
 /** Whether an item of a record is lit: by its section, its place there, and the item. */
 export type LitItem = (section: RecordSectionKey, index: number, item: RecordItem) => boolean;

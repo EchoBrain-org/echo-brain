@@ -21,7 +21,7 @@ function readersWord(audience: Visibility | undefined): string | null {
 }
 
 /** A meeting's readers, as its row marks them: only its approver can read an approver-only meeting. */
-const RECORD_AUDIENCE: Record<ApprovedRecord['visibility'], Visibility> = { approver: 'only-me', organization: 'team', project: 'project' };
+const RECORD_AUDIENCE: Record<ApprovedRecord['visibility'], Visibility> = { approver: 'only-me', project: 'project' };
 
 /** What Save original… came to. */
 function saveLine(reader: ReaderState): { text: string; error: boolean } | null {

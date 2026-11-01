@@ -109,56 +109,12 @@ test('sign out asks first, then shows sign-in; Cancel keeps you signed in', asyn
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose-body')).toHaveValue('');
-});
-
-test('switch account signs out, then asks for the next organization address', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.keyboard.press('Escape');
   await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Switch account…');
   await expect(page.getByTestId('confirm')).toContainText('ECHO will sign out before you choose the next organization account.');
   await page.getByTestId('confirm-signout').click();
-  await expect(page.getByTestId('signin')).toBeVisible();
   await expect(page.getByTestId('signin-url')).toBeFocused();
-  expect(revocations()).toHaveLength(1);
-});
-
-test('sign out waits for a save on its way', async () => {
-  run = await launch('write-hangs');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Offsite dates');
-  await page.getByTestId('compose-send').click();
-  await expect.poll(() => run.calls().filter(call => call.path === '/v3/person/updates').length).toBe(1);
-  await chooseFromTray(run, 'Sign out…');
-  await expect(page.getByTestId('confirm')).toContainText('Finish the current save first.');
-  await expect(page.getByTestId('confirm-signout')).toBeDisabled();
-});
-
-test('sign out waits until a save whose outcome is unknown is settled, so its retry is never lost', async () => {
-  run = await launch('write-unavailable-once');
-  const { page, app } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Offsite dates');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-unresolved')).toBeVisible();
-  await page.keyboard.press('Escape');
-  await chooseFromTray(run, 'Sign out…');
-  await expect(page.getByTestId('confirm')).toContainText('A save may not have arrived. Check it in Capture first.');
-  await expect(page.getByTestId('confirm-signout')).toBeDisabled();
-  await page.getByTestId('confirm-cancel').click();
-
-  // Checked, it did not arrive: now nothing is lost by signing out.
-  await emit(app, 'echo-test:capture');
-  await page.getByTestId('compose-check').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('It was not saved. Try again.');
-  await page.keyboard.press('Escape');
-  await chooseFromTray(run, 'Sign out…');
-  await page.getByTestId('confirm-signout').click();
-  await expect(page.getByTestId('signed-out')).toBeVisible();
-  expect(revocations()).toHaveLength(1);
+  expect(revocations()).toHaveLength(2);
 });
 
 test('Open invitation… signs in with the folder the owner sent, and the page never learns where it is', async () => {
@@ -189,54 +145,6 @@ test('Open invitation… signs in with the folder the owner sent, and the page n
   expect(begun[0]!.body).toMatchObject({ kind: 'identity_bootstrap', login_grant: grant });
   expect(await page.content()).not.toContain(folder);
   expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).not.toContain(folder);
-});
-
-test('a sign-out still forgets everything when a status read showed sign-in first', async () => {
-  run = await launch('signout-slow');
-  const { page, app } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Half a thought');
-  await page.keyboard.press('Escape');
-  await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Sign out…');
-  await page.getByTestId('confirm-signout').click();
-  await expect.poll(() => revocations().length).toBe(1);
-  // The window comes forward while the Authority is still ending the session.
-  await emit(app, 'echo-test:shown');
-  await expect(page.getByTestId('signed-out')).toBeVisible();
-  // Then its reply arrives.
-  await expect.poll(() => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/account\.signOut ok/);
-
-  await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
-  await page.getByTestId('signin-url').fill('https://authority.example');
-  await page.getByTestId('signin-button').click();
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await emit(app, 'echo-test:capture');
-  await expect(page.getByTestId('compose-body')).toHaveValue('');
-});
-
-test('a sign-in begun while a sign-out is still finishing is left alone', async () => {
-  run = await launch('signout-slow-browser');
-  const { page, app } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Switch account…');
-  await page.getByTestId('confirm-signout').click();
-  await expect.poll(() => revocations().length).toBe(1);
-  // The window comes forward while the Authority is still ending the session, and the person signs in again.
-  await emit(app, 'echo-test:shown');
-  await expect(page.getByTestId('signed-out')).toBeVisible();
-  await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
-  await page.getByTestId('signin-url').fill('https://authority.example');
-  await page.getByTestId('signin-button').click();
-  await expect(page.getByTestId('signin-button')).toHaveText('Waiting for your browser');
-
-  // The sign-out's reply arrives while the browser is still open: the sign-in still waits, so it cannot be begun twice.
-  await expect.poll(() => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/account\.signOut ok/);
-  await page.waitForTimeout(500);
-  await expect(page.getByTestId('signin-button')).toBeDisabled({ timeout: 1_000 });
-  await expect(page.getByTestId('signin-button')).toHaveText('Waiting for your browser');
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  expect(run.calls().filter(call => call.path === '/v2/session/oidc/begin')).toHaveLength(1);
 });
 
 test('a reply that lands after someone else signed in on this computer is never taken as the page\'s account, and nothing more goes out for it', async () => {

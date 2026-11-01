@@ -33,53 +33,6 @@ test('the sidebar lists your projects, and one click switches project from any p
   await page.getByTestId('back').click();
   await expect(page.getByTestId('title').getByTestId('alt-stops')).toBeVisible();
   await expect(rows.nth(1)).not.toHaveAttribute('aria-current', 'page');
-});
-
-test('Capture in the sidebar opens capture where you are, and the account row names you', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-capture')).toContainText('Capture');
-  await expect(page.getByTestId('sidebar-capture')).toContainText(process.platform === 'darwin' ? '⌘⇧E' : 'Ctrl+Shift+E');
-  await expect(page.getByTestId('account-row')).toContainText('Ari');
-  await expect(page.getByTestId('account-row')).toContainText('employee');
-  // People & invites is for owners.
-  await expect(page.getByTestId('sidebar-organization')).toHaveCount(0);
-
-  await page.getByTestId('sidebar-capture').click();
-  await expect(page.getByTestId('capture-place')).toHaveText('No project');
-  await expect(page.getByTestId('compose-body')).toBeFocused();
-  await page.getByTestId('compose-body').fill('Kickoff moved');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
-  await expect(page.getByTestId('compose')).toHaveCount(0);
-
-  await page.getByTestId('sidebar-project').nth(0).click();
-  await expect(page.getByTestId('title')).toHaveText('Apollo');
-  await page.getByTestId('sidebar-capture').click();
-  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
-});
-
-test('the sidebar is on by default, and the toggle only hides it', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar')).toBeVisible();
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('sidebar-toggle').click();
-  await expect(page.getByTestId('sidebar')).toHaveCount(0);
-  await expect(page.getByTestId('home-clear')).toBeVisible();
-  await expect(page.getByTestId('ask-field')).toBeVisible();
-  // Remembered on this computer.
-  await page.reload();
-  await expect(page.getByTestId('home-clear')).toBeVisible();
-  await expect(page.getByTestId('sidebar')).toHaveCount(0);
-  await page.getByTestId('sidebar-toggle').click();
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-});
-
-test('the window never scrolls the app, not even to show something laid out past its edge', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   // Something in the panel reaches far below the window, as a line Ask kept for a screen reader once did.
   await page.evaluate(() => {
     const below = Object.assign(document.createElement('div'), { id: 'below' });

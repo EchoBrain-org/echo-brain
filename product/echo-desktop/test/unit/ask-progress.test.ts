@@ -3,10 +3,11 @@
 // the receipt an answer keeps.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, AskReceipt, Expect } from '../../src/shared/protocol.js';
-import { ACCOUNT, asking as askingWith, fail, flush, Held, latestTurn, ok, paneTurn, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { ACCOUNT, asking as askingWith, byTestId, elements, fail, flush, Held, latestTurn, ok, paneTurn, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
+vi.mock('preact/hooks', original => plainHooks(original));
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 const EXPECT: Expect = { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id };
@@ -22,7 +23,7 @@ const answer = (withReceipt = true): Answer => ({
   parts: [{ question: 'What did we agree?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }] }],
   ...(withReceipt ? { receipt } : {}),
 });
-const record = { title: 'Tuesday sync', all_day: false, participants: [], participants_more: false, visibility: 'organization',
+const record = { title: 'Tuesday sync', all_day: false, participants: [], participants_more: false, visibility: 'project',
   decisions: { items: [{ text: 'Ship it.', excerpts: [], atom_id: sha('1') }], more: false }, actions: { items: [], more: false }, rationales: { items: [], more: false } };
 
 let held: Held;
@@ -118,12 +119,15 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
       'ask.record': () => ok(page([{ ...first, atom_id: sha('9') }, { ...cited, atom_id: sha('1') }])),
       'open.ref': params => ok(params.cursor === undefined ? { kind: 'meeting', record: page([first]), next_cursor: 'page-2' } : { kind: 'meeting', record: page([cited]), next_cursor: null }),
     }, () => ({ active: [project(1, 30, { name: 'Apollo' })], archived: [] })));
-    const { store, release } = await asking();
+    const { store, release, pane } = await asking();
     vi.advanceTimersByTime(3_000);
     release(ok(answer()));
     await flush();
     store.chooseSource(0, null, paneTurn(store));
     await flush();
+    const lit = (tree: unknown) => elements(tree).filter(node =>
+      String(node.props.class ?? '').split(' ').includes('record-item') && String(node.props.class ?? '').split(' ').includes('on'));
+    expect(lit(pane()).map(text)).toEqual(['Cited: Ship it.']);
     store.openFullPage();
     await flush();
     expect(store.getState().ask).toBeNull();
@@ -131,6 +135,9 @@ describe('a name opens beside Ask, and Ask keeps running', () => {
     expect(calls('open.ref').map(params => params.cursor)).toEqual([undefined, 'page-2']);
     expect(store.getState().reader).toMatchObject({ ref: { kind: 'meeting', id: sha('2') }, cited: [{ section: 'decisions', index: 1 }], recordNext: null });
     expect(store.getState().reader?.record?.decisions.items.map(item => item.text)).toEqual(['Hold monthly plans.', 'Ship it.']);
+
+    const { Reader } = await import('../../src/renderer/screens/reader.js');
+    expect(lit(render(Reader({ state: store.getState(), reader: store.getState().reader!, backTo: 'Home' }))).map(text)).toEqual(['Cited: Ship it.']);
 
     // The same meeting opened from a list lights nothing.
     store.closeReader();
@@ -263,5 +270,74 @@ describe('the receipt above an answer', () => {
     await flush();
     expect(latestTurn(store)).toMatchObject({ question: 'What did we agree?' });
     expect(latestTurn(store)?.receipt).toBeUndefined();
+  });
+});
+
+describe('the cited evidence as it reads now', () => {
+  it('says a cited record you can no longer read is gone, with no Try again that cannot work', async () => {
+    rpc.mockImplementation(rpcFor(held, { 'ask.record': () => fail('not_found') }, () => ({ active: [], archived: [] })));
+    const { store, release, pane, thread } = await asking();
+    release(ok(answer(false)));
+    await flush();
+    store.toggleSourceList(paneTurn(store));
+    expect(text(byTestId(thread(), 'source-row'))).toBe('1Tuesday sync');
+    store.chooseSource(0, null, paneTurn(store));
+    await flush();
+    expect(text(byTestId(pane(), 'source-error'))).toBe('This is no longer available to you.');
+    expect(elements(pane()).filter(node => node.type === 'button').map(text)).not.toContain('Try again');
+    expect(calls('ask.record')).toHaveLength(2);
+  });
+
+  it('shows each cited passage of one file as the file reads, and lights the one a sentence cites', async () => {
+    const first: AnswerSource = { ...note, label: 'Apollo-launch-plan-v2.md' };
+    const second: AnswerSource = { ...first, ref: { ...coordinates, anchor_sha256: sha('a') } } as AnswerSource;
+    rpc.mockImplementation(rpcFor(held, { 'ask.record': () => ok(record), 'ask.source': params => ok({ label: first.label,
+      text: (params.ref as { anchor_sha256: string }).anchor_sha256 === sha('a')
+        ? 'Apollo-launch-plan-v2.md ## Pricing\n\n- **Monthly** plans follow the launch.' : 'We agreed to ship.' }) }, () => ({ active: [], archived: [] })));
+    const { store, release, pane } = await asking();
+    release(ok({ ...answer(false), sources: [decision, first, second], parts: [{ question: 'What did we agree?', status: 'answered', statements: [
+      { text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0, 1], private: false },
+      { text: 'Monthly plans follow the launch.', citation_indexes: [2], private: false },
+    ] }] }));
+    await flush();
+    store.chooseSource(1, '0.1', paneTurn(store));
+    await flush();
+    expect(elements(pane()).filter(node => node.type === 'h2').map(text)).toEqual(['Apollo launch plan']);
+    expect(text(byTestId(pane(), 'source-meta'))).toBe('v2 · 2 passages cited');
+    const lit = () => byTestId(pane(), 'evidence-text').map(node => String(node.props.class ?? '').split(' ').includes('on'));
+    expect(lit()).toEqual([false, true]);
+    expect(elements(byTestId(pane(), 'evidence-text')[1]).filter(node => node.type === 'h3').map(text)).toEqual(['Pricing']);
+    expect(text(pane())).not.toContain('Apollo-launch-plan-v2.md');
+    expect(calls('ask.source')).toHaveLength(2);
+    store.chooseSource(1, null, paneTurn(store));
+    await flush();
+    expect(lit()).toEqual([false, false]);
+  });
+
+  it('says a passage could not be read, and Try again reads it again', async () => {
+    let reads = 0;
+    rpc.mockImplementation(rpcFor(held, { 'ask.source': () => ++reads === 1 ? fail('unavailable', { retryable: true }) : ok({ label: note.label, text: 'We agreed to ship.' }) }, () => ({ active: [], archived: [] })));
+    const { store, release, pane } = await asking();
+    release(ok({ ...answer(false), sources: [note] }));
+    await flush();
+    store.chooseSource(0, null, paneTurn(store));
+    await flush();
+    expect(text(byTestId(pane(), 'source-error'))).toBe('ECHO is unavailable right now. Try again.');
+    expect(byTestId(pane(), 'evidence-text')).toHaveLength(0);
+    expect(text(byTestId(pane(), 'retry-evidence'))).toBe('Try again');
+    store.retryEvidence();
+    await flush();
+    expect(text(byTestId(pane(), 'evidence-text'))).toBe('We agreed to ship.');
+    expect(calls('ask.source')).toHaveLength(2);
+  });
+
+  it('shows at most 2,000 characters of a passage', async () => {
+    rpc.mockImplementation(rpcFor(held, { 'ask.source': () => ok({ label: note.label, text: 'x'.repeat(3_000) }) }, () => ({ active: [], archived: [] })));
+    const { store, release, pane } = await asking();
+    release(ok({ ...answer(false), sources: [note] }));
+    await flush();
+    store.chooseSource(0, null, paneTurn(store));
+    await flush();
+    expect(text(byTestId(pane(), 'evidence-text'))).toBe(`${'x'.repeat(2_000)}…`);
   });
 });

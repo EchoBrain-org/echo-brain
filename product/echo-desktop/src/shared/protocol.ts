@@ -201,7 +201,13 @@ export interface Matches {
  * Ask is always explicitly scoped; there is no default. Mine (only what you added) is never asked from the desktop any
  * more (ADR-0049): it stays for the turns kept on this computer that were asked in it.
  */
-export type AskScope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'mine' };
+export type AskScope = { readonly kind: 'global' } | ProjectScope | { readonly kind: 'mine' };
+
+/** An Ask in one project: the bar's chip. */
+export type ProjectScope = { readonly kind: 'project'; readonly project_id: string };
+
+/** A scope the desktop asks in: everything you can read, or one project. */
+export type AskedScope = Exclude<AskScope, { readonly kind: 'mine' }>;
 
 /** Immutable coordinates of one answer source; opaque to the renderer. */
 export interface SourceRef {
@@ -489,7 +495,7 @@ export interface ApprovedRecord {
   /** At most 32 names; `participants_more` says others were left out. */
   readonly participants: readonly string[];
   readonly participants_more: boolean;
-  readonly visibility: 'organization' | 'project' | 'approver';
+  readonly visibility: 'project' | 'approver';
   readonly decisions: RecordSection;
   readonly actions: RecordSection;
   readonly rationales: RecordSection;
@@ -756,7 +762,7 @@ export interface HostMethods {
     result: Receipt;
   };
   /** `previous`: the earlier turn a follow-up or Ask again carries (C3). */
-  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious }; result: Answer };
+  'ask.run': { params: { expect: Expect; question: string; scope: AskedScope; cancel_id: string; previous?: AskPrevious }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
   /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */

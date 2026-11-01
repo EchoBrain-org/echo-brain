@@ -1423,3 +1423,80 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     expect(store.getState().toast).toBe('ECHO is unavailable right now. Try again.');
   });
 });
+
+
+describe('follow-ups from the bar', () => {
+  it('keeps every follow-up in the project, and only carries an earlier turn while Ask is open', async () => {
+    const store = await startStore();
+    await store.openProject(apollo);
+    for (const question of ['First?', 'Second?', 'Third?']) await store.ask(question);
+    store.closeAsk();
+    await store.ask('Fourth?');
+    expect(calls('ask.run').map(call => call.scope)).toEqual([inApollo, inApollo, inApollo, inApollo]);
+    expect(calls('ask.run').map(call => (call.previous as AskPrevious | undefined)?.question)).toEqual([undefined, 'First?', 'Second?', undefined]);
+    expect(kept().map(turn => turn.text)).toEqual(['First?', 'Second?', 'Third?', 'Fourth?']);
+  });
+
+  it('asks one follow-up at a time, drops a cancelled late answer, and retries a failed one after the answer before', async () => {
+    const store = await startStore();
+    await store.ask('First?');
+    const late = held.hold('ask.run');
+    void store.ask('Second?');
+    await flush();
+    store.setBarText('Third?');
+    store.submitBar();
+    expect(store.getState().barText).toBe('Third?');
+    expect(calls('ask.run').map(call => call.question)).toEqual(['First?', 'Second?']);
+    store.cancelAsk();
+    expect(latestTurn(store)?.text).toBe('First?');
+    late(ok(answerOf('Second?', [], [['A late answer.', []]])));
+    await flush();
+    expect(kept().map(turn => turn.text)).toEqual(['First?']);
+    const failing = held.hold('ask.run');
+    store.submitBar();
+    await flush();
+    failing(fail('unavailable', { retryable: true }));
+    await flush();
+    expect(store.getState().ask?.failed).toMatchObject({ question: 'Third?', failure: { code: 'unavailable' } });
+    expect(latestTurn(store)?.text).toBe('First?');
+    const shown = (await view())(store);
+    expect(text(byTestId(shown, 'ask-error'))).toBe('ECHO is unavailable right now. Try again.');
+    expect(text(byTestId(shown, 'ask-failed'))).toContain('Third?');
+    expect(byTestId(shown, 'ask-retry')).toHaveLength(1);
+    store.retryAsk();
+    await flush();
+    expect(kept().map(turn => turn.text)).toEqual(['First?', 'Third?']);
+    expect(calls('ask.run').map(call => call.question)).toEqual(['First?', 'Second?', 'Third?', 'Third?']);
+    expect(store.getState().ask?.failed).toBeFalsy();
+  });
+
+  it('offers, never makes, one ask across everything when a project question finds nothing', async () => {
+    rpc.mockImplementation(rpcFor(held, {
+      'ask.run': params => (params.scope as AskScope).kind === 'project'
+        ? ok(answerOf(String(params.question), [], [], { scope: inApollo, outcome: 'not_found',
+          parts: [{ question: String(params.question), status: 'not_found', statements: [], gap: 'Not found.' }] }))
+        : ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is open.', [0]]])),
+    }, () => ({ active: [apollo], archived: [] })));
+    const store = await startStore();
+    await store.openProject(apollo);
+    const question = 'What did we agree on pricing?';
+    await store.ask(question);
+    await flush();
+    const show = await view();
+    const shown = show(store);
+    expect(text(byTestId(shown, 'project-empty'))).toContain('Nothing in Apollo matched.');
+    expect(byTestId(shown, 'answer-empty')).toHaveLength(0);
+    expect(byTestId(shown, 'sources-toggle')).toHaveLength(0);
+    expect(text(shown)).not.toContain('Not found.');
+    expect(calls('ask.run').map(call => call.scope)).toEqual([inApollo]);
+    click(byTestId(shown, 'ask-everywhere')[0]);
+    await flush();
+    expect(calls('ask.run')[1]).toMatchObject({ question, scope: { kind: 'global' } });
+    expect(calls('ask.run')[1]).not.toHaveProperty('previous');
+    expect(store.getState().barScope).toEqual({ kind: 'global' });
+    expect(store.chipName()).toBeNull();
+    expect(text(byTestId(show(store), 'project-empty'))).toBe('Nothing in Apollo matched.');
+    expect(byTestId(show(store), 'ask-everywhere')).toHaveLength(0);
+    expect(kept().map(turn => turn.text)).toEqual([question, question]);
+  });
+});

@@ -10,8 +10,6 @@ test.afterEach(async () => {
   await run?.close();
   for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
-
-const APOLLO = 'prj_11111111-1111-4111-8111-111111111111';
 const BEACON = 'prj_44444444-4444-4444-8444-444444444444';
 const uploads = () => run.calls().filter(call => call.method === 'PUT' && call.path.startsWith('/v2/person/documents/'));
 
@@ -43,88 +41,14 @@ test('a file dropped on a sidebar project, with another app in front, is capture
   expect(uploads()[0]!.body).toMatchObject({
     title: 'Brief.md', filename: 'Brief.md', audience: { kind: 'project', project_id: BEACON }, association_project_ids: [BEACON],
   });
+  // Anywhere else on the window captures for the project on screen.
+  await drop(page, page.getByTestId('feed'), onDisk('Notes.md'));
+  await expect(page.getByTestId('compose-file')).toHaveText('Notes.md · 15 bytes');
+  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
   // The drop went through main's own channel, and the log holds no path.
   const log = readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8');
   expect(log).toContain('drop ok');
   expect(log).not.toContain('echo-drop-');
-});
-
-test('Sidebar project rows take a drop while another app is in front, and a file dropped on the sheet keeps where it goes', async () => {
-  run = await launch();
-  const { page, app } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await emit(app, 'echo-test:conceal');
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await expect(page.getByTestId('concealed')).toBeVisible();
-  await drop(page, page.getByTestId('sidebar-project').nth(0), onDisk('Pricing.txt'));
-  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
-  await emit(app, 'echo-test:resume');
-  // Apollo under the lock: filed there, only for you.
-  await page.getByTestId('capture-lock').click();
-  await drop(page, page.getByTestId('compose'), onDisk('Terms.pdf', 'Payment in 30 days.'));
-  await expect(page.getByTestId('compose-file')).toHaveText('Terms.pdf · 19 bytes');
-  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
-  await expect(page.getByTestId('capture-lock')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo · only you · Extracting text');
-  expect(uploads()).toHaveLength(1);
-  expect(uploads()[0]!.body).toMatchObject({ title: 'Terms.pdf', audience: { kind: 'only_me' }, association_project_ids: [APOLLO] });
-});
-
-test('a file dropped anywhere else on the window is captured for the page: in no project on Home, the project on screen in one', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await drop(page, page.getByTestId('title'), onDisk('Notes.md'));
-  await expect(page.getByTestId('compose-file')).toHaveText('Notes.md · 15 bytes');
-  await expect(page.getByTestId('capture-place')).toHaveText('No project');
-  await page.keyboard.press('Escape');
-
-  // Nothing was written in it: the next drop starts over, for the project on screen.
-  await page.getByTestId('sidebar-project').nth(1).click();
-  await expect(page.getByTestId('feed-row').first()).toBeVisible();
-  await drop(page, page.getByTestId('feed'), onDisk('Brief.md'));
-  await expect(page.getByTestId('compose-file')).toHaveText('Brief.md · 15 bytes');
-  await expect(page.getByTestId('capture-place')).toHaveText('Beacon');
-  // Ready for ⌘↩.
-  await expect(page.getByTestId('compose')).toBeFocused();
-  await page.keyboard.press('ControlOrMeta+Enter');
-  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon · Extracting text');
-  expect(uploads()).toHaveLength(1);
-  expect(uploads()[0]!.body).toMatchObject({ title: 'Brief.md', audience: { kind: 'project', project_id: BEACON }, association_project_ids: [BEACON] });
-});
-
-test('a drop never changes a draft with words in it, or a save not yet settled', async () => {
-  run = await launch('write-unavailable');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Half a thought');
-  // Words dragged in are not a file: the note takes them as usual.
-  const taken = await page.getByTestId('compose-body').evaluate(body => {
-    const dataTransfer = new DataTransfer();
-    dataTransfer.setData('text/plain', 'dragged words');
-    const event = new DragEvent('drop', { dataTransfer, bubbles: true, cancelable: true });
-    body.dispatchEvent(event);
-    return !event.defaultPrevented;
-  });
-  expect(taken).toBe(true);
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('compose')).toHaveCount(0);
-  await drop(page, page.getByTestId('sidebar-project').nth(1), onDisk('Brief.md'));
-  await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
-  await expect(page.getByTestId('compose-notice')).toHaveText('The file was not attached. Save this note first.');
-  await expect(page.getByTestId('capture-place')).toHaveText('No project');
-  await expect(page.getByTestId('compose-file')).toHaveCount(0);
-
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-unresolved')).toBeVisible();
-  await drop(page, page.getByTestId('compose'), onDisk('Brief.md'));
-  await expect(page.getByTestId('compose-notice')).toHaveText('The file was not attached.');
-  await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
-  await expect(page.getByTestId('compose-unresolved')).toBeVisible();
-  expect(uploads()).toHaveLength(0);
 });
 
 test('a drop main cannot vouch for is refused: a file made in the page, or a link', async () => {

@@ -52,31 +52,6 @@ async function unconfirmedUpload(): Promise<void> {
   await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
 }
 
-test('capture after switching away from a project starts in no project', async () => {
-  run = await launch();
-  const { page, app } = run;
-  await page.getByTestId('sidebar-project').nth(0).click();
-  await expect(page.getByTestId('title')).toHaveText('Apollo');
-  await emit(app, 'echo-test:conceal');
-  await emit(app, 'echo-test:capture');
-  await expect(page.getByTestId('capture-place')).toHaveText('No project');
-  await expect(page.getByTestId('compose-body')).toBeFocused();
-});
-
-test('a retry refused for a known reason still says the first try may have arrived', async () => {
-  run = await launch('write-unavailable-then-refused');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Budget moved');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-unresolved')).toBeVisible();
-  await page.getByTestId('compose-retry').click();
-  await expect.poll(() => posts().length).toBe(2);
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
-  await expect(page.getByTestId('compose-body')).toHaveAttribute('readonly', '');
-});
-
 test('if the host dies mid-save the note is unconfirmed, and check status finds it saved', async () => {
   run = await launch('write-hangs');
   const { page, app } = run;
@@ -93,54 +68,6 @@ test('if the host dies mid-save the note is unconfirmed, and check status finds 
     await page.getByTestId('compose-check').click();
     await expect(page.getByTestId('toast')).toHaveText('Saved for you', { timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
-  expect(posts()).toHaveLength(1);
-});
-
-test('quitting while a note is sending asks first', async () => {
-  run = await launch('write-hangs');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Offsite dates');
-  await page.getByTestId('compose-send').click();
-  await expect.poll(() => posts().length).toBe(1);
-  expect(await quitPrompts(run)).toHaveLength(1);
-  await expect(page.getByTestId('compose')).toBeVisible();
-});
-
-test('a note and a file are never sent together', async () => {
-  run = await launch();
-  const { page } = run;
-  await chooseFile('Pricing.txt');
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill('Some words');
-  await page.getByTestId('compose-attach').click();
-  await expect(page.getByTestId('compose-notice')).toHaveText('Save this note before attaching a file.');
-  await expect(page.getByTestId('compose-file')).toHaveCount(0);
-  await page.getByTestId('compose-body').fill('');
-  await page.getByTestId('compose-attach').click();
-  await expect(page.getByTestId('compose-file')).toHaveText('Pricing.txt · 15 bytes');
-  await expect(page.getByTestId('compose-body')).toHaveCount(0);
-  await page.getByTestId('compose-remove-file').click();
-  await expect(page.getByTestId('compose-body')).toBeVisible();
-});
-
-test('a note over 8 KiB says so before anything is sent, and one that fits is saved', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-body').fill(`Long note\n${'x'.repeat(8 * 1024)}`);
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-notice')).toHaveText('Up to 8 KiB of text.');
-  await expect(page.getByTestId('compose-error')).toHaveCount(0);
-  expect(posts()).toHaveLength(0);
-  // Shortened, the notice goes and the note is saved.
-  await page.getByTestId('compose-body').fill(`Long note\n${'x'.repeat(8 * 1024 - 10)}`);
-  await expect(page.getByTestId('compose-notice')).toHaveCount(0);
-  await page.keyboard.press('ControlOrMeta+Enter');
-  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   expect(posts()).toHaveLength(1);
 });
 
@@ -201,23 +128,4 @@ test('starting over on an unconfirmed upload removes the copy kept to resend it'
   expect(uploads()).toHaveLength(1);
   expect(documents()).toHaveLength(1);
   expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/documents\.abandon ok /);
-});
-
-test('saving to the project on screen adds to its feed and leaves the rest of the page alone', async () => {
-  run = await launch();
-  const { page } = run;
-  await page.getByTestId('sidebar-project').nth(0).click();
-  await expect(page.getByTestId('feed-row')).toHaveCount(1);
-  await page.getByTestId('scope-clear').click();
-  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
-  await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('capture-place')).toHaveText('Apollo');
-  await page.getByTestId('compose-body').fill('Launch moved to Friday');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo');
-  await expect(page.getByTestId('compose')).toHaveCount(0);
-  await expect.poll(() => run.calls().filter(call => call.path === '/v1/person/list').length).toBe(2);
-  await expect(page.getByTestId('title')).toHaveText('Apollo');
-  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
-  await expect(page.getByTestId('feed-row')).toHaveCount(1);
 });

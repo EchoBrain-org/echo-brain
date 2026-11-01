@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ACCOUNT, fail, flush, Held, ok, project, rpcFor, startStore, storeLifecycle } from './harness.js';
+import { ACCOUNT, byTestId, fail, flush, Held, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
+vi.mock('preact/hooks', original => plainHooks(original));
 
 const apollo = project(1, 30, { name: 'Apollo' });
 const ann = { membership_id: 'mem_aaaaaaaa-1111-4111-8111-111111111111', display_name: 'Ann' };
@@ -228,5 +229,88 @@ describe('another account signing in', () => {
     expect(rpc).toHaveBeenCalledWith('tools.cancel', { tool_id: 'jira', attempt_id: 'att_1', expect: { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id } });
     await vi.advanceTimersByTimeAsync(2500);
     await connecting;
+  });
+});
+
+
+describe('project permissions and dialogs', () => {
+  it('a member sees who is in a project without being offered changes', async () => {
+    const member = { ...apollo, role: 'member' as const };
+    const store = await startStore();
+    members = [ann];
+    await store.openProject(member);
+    held.hold('projects.read')(ok(member));
+    await store.openPeople(); await flush();
+    expect(directories).toEqual([]);
+    expect(store.canManage()).toBe(false);
+    const { People } = await import('../../src/renderer/screens/people.js');
+    const shown = render(People({ state: store.getState(), sheet: store.findingSheet()! }));
+    expect(text(byTestId(shown, 'member-row'))).toContain('Ann');
+    for (const id of ['people-find', 'member-more', 'candidate-row']) expect(byTestId(shown, id)).toHaveLength(0);
+  });
+
+  it('People reads the role again: a new role empties the bar', async () => {
+    const store = await startStore(); await store.openProject(apollo); store.setBarText('apollo');
+    held.hold('projects.read')(ok({ ...apollo, role: 'member' }));
+    await store.openPeople(); await flush();
+    expect(store.getState()).toMatchObject({ barText: '', route: { page: 'project', project: { role: 'member' } } });
+    expect(store.getState().projects.items[0]?.role).toBe('member');
+    expect(store.findingSheet()?.project?.role).toBe('member');
+    expect(directories).toEqual([]);
+  });
+
+  it('More people appends the next page with its cursor, excluding yourself and chosen people', async () => {
+    const store = await startStore();
+    held.hold('people.directory')(ok({ items: [{ membership_id: ACCOUNT.membership_id, display_name: 'You' }, ...Array.from({ length: 9 }, (_, i) => ({ membership_id: `person-${i}`, display_name: `Person ${i}` }))], next_cursor: 'dir|' }));
+    store.openNewProject(); await flush();
+    expect(store.pickable()).toHaveLength(9);
+    await store.findPeople(true); await flush();
+    expect(directories).toEqual([{ query: undefined, cursor: 'dir|' }]);
+    expect(store.pickable()).toHaveLength(11);
+    const last = store.pickable().at(-1)!; store.pickPerson(last);
+    expect(store.pickable()).toHaveLength(10);
+    expect(store.getState().sheet).toMatchObject({ kind: 'new-project', picks: [{ person: last }] });
+  });
+
+  it.each(['sidebar', 'header'] as const)('Capture or sign out dismisses the %s menu, and closing either does not restore it', async origin => {
+    const store = await startStore(); await store.openProject(apollo);
+    store.toggleProjectSettings(apollo, origin); expect(store.getState().projectSettings?.menu).toBe(true);
+    store.openCapture(); expect(store.getState().compose?.hidden).toBe(false); expect(store.getState().projectSettings?.menu).toBeFalsy();
+    store.closeCompose(); expect(store.getState().projectSettings?.menu).toBeFalsy();
+    store.toggleProjectSettings(apollo, origin); store.accountCommand('signout');
+    expect(store.getState().sheet?.kind).toBe('signout'); expect(store.getState().projectSettings?.menu).toBeFalsy();
+    store.closeSheet(); expect(store.getState().sheet).toBeNull(); expect(store.getState().projectSettings?.menu).toBeFalsy();
+    expect(rpc.mock.calls.filter(([method]) => ['projects.rename', 'projects.archive', 'projects.leave'].includes(method))).toHaveLength(0);
+  });
+
+  it('Rename and project Tools stay in front: Capture opens nothing under them', async () => {
+    const store = await startStore(); await store.openProject(apollo);
+    store.toggleProjectSettings(apollo, 'header'); store.beginProjectRename();
+    expect(store.projectSettingsModal()).toBe(true); store.openCapture(); expect(store.getState().compose).toBeNull();
+    store.cancelProjectSettingsAction(); expect(store.getState().projectSettings?.rename).toBeNull();
+    expect(store.getState().route).toMatchObject({ page: 'project', project: apollo });
+    store.openProjectTools(apollo); await flush(); store.openCapture();
+    expect(store.getState().compose).toBeNull(); expect(store.getState().projectSettings?.tools).toBeDefined();
+  });
+
+  it('Rename sends nothing for an empty or unchanged name', async () => {
+    const store = await startStore(); await store.openProject(apollo);
+    expect(store.projectRenameValid('Apollo', 'Apollo')).toBe(false);
+    expect(store.projectRenameValid('   ', 'Apollo')).toBe(false);
+    expect(store.projectRenameValid(' Apollo 2 ', 'Apollo')).toBe(true);
+    store.toggleProjectSettings(apollo, 'header'); store.beginProjectRename(); store.setProjectRename('   '); store.confirmProjectSetting(); await flush();
+    expect(rpc.mock.calls.filter(([method]) => method === 'projects.rename')).toHaveLength(0);
+    expect(store.getState().projectSettings?.rename).toBe('   ');
+  });
+
+  it('a last lead is told to promote another lead before leaving, and stays', async () => {
+    const store = await startStore(); await store.openProject(apollo);
+    held.hold('projects.leave')(fail('conflict', { mutation_outcome: 'not_submitted' }));
+    store.toggleProjectSettings(apollo, 'header'); store.askProjectSetting('leave'); store.confirmProjectSetting(); await flush();
+    expect(store.getState().projectSettings?.write).toMatchObject({ operation: 'leave', status: 'failed', failure: { code: 'conflict' } });
+    const { ProjectSettings } = await import('../../src/renderer/screens/project-settings.js');
+    expect(text(byTestId(render(ProjectSettings({ state: store.getState() })), 'project-settings-error'))).toBe('Promote another lead before leaving this project.');
+    expect(store.getState().route).toMatchObject({ page: 'project', project: apollo });
+    expect(store.getState().projects.items).toContainEqual(apollo);
   });
 });

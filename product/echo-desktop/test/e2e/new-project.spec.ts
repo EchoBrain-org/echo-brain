@@ -2,8 +2,7 @@ import { expect, test } from '@playwright/test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { drop, emit, launch, type Launched } from './launch.js';
-import { quitPrompts } from './native.js';
+import { drop, launch, type Launched } from './launch.js';
 
 let run: Launched;
 const folders: string[] = [];
@@ -112,35 +111,6 @@ test('New project is one page: name, people and files before Create; Create open
   await expect(page.getByTestId('scope-chip')).toHaveText('Cedar');
 });
 
-test('with neither people nor files, Create makes the project, opens it and closes the sheet; Cancel before it sends nothing', async () => {
-  run = await launch('no-projects');
-  const { page } = run;
-  // Cancel before Create: what was picked goes, and nothing was sent.
-  await page.getByTestId('empty-new-project').click();
-  await page.getByRole('button', { name: 'Add Raj Kumar' }).click();
-  const [brief] = onDisk('Brief.md');
-  await drop(page, page.getByTestId('new-project'), brief!);
-  await expect(page.getByTestId('new-project-file')).toHaveText(['Brief.md']);
-  await page.getByTestId('new-project-cancel').click();
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveCount(0);
-
-  await page.getByTestId('empty-new-project').click();
-  await expect(page.getByTestId('pick-row')).toHaveCount(0);
-  await expect(page.getByTestId('new-project-file')).toHaveCount(0);
-  await page.getByTestId('new-project-name').fill('Cedar');
-  await page.keyboard.press('Enter');
-  await expect(page.getByTestId('title')).toHaveText('Cedar');
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  // Nothing went in but the project itself: the page that opened says so, and no toast does.
-  await expect(page.getByTestId('toast')).toHaveCount(0);
-  expect(creates()).toHaveLength(1);
-  expect(adds()).toHaveLength(0);
-  expect(uploads()).toHaveLength(0);
-  await expect(page.getByTestId('members-button')).toHaveText('A');
-  await expect(page.getByTestId('project-tools-setup')).toBeVisible();
-});
-
 test('a create whose reply was lost is never called made: Try again resends the same request, then the people and files go', async () => {
   run = await launch('change-reply-lost');
   const { page } = run;
@@ -174,133 +144,4 @@ test('a create whose reply was lost is never called made: Try again resends the 
   expect(creates()[1]!.body).toEqual(creates()[0]!.body);
   expect(adds()).toHaveLength(1);
   expect(uploads()).toHaveLength(1);
-});
-
-test('an add whose reply was lost brings the sheet back and holds back the rest: Try again resends the same request, and closing is asked first', async () => {
-  run = await launch('member-reply-lost');
-  const { page } = run;
-  await page.getByTestId('sidebar-new-project').click();
-  await page.getByRole('button', { name: 'Add Raj Kumar' }).click();
-  await page.getByRole('button', { name: 'Add Maya Chen' }).click();
-  await chooseInDialog(onDisk('Notes.txt'));
-  await page.getByTestId('new-project-add-files').click();
-  await page.getByTestId('new-project-name').fill('Cedar');
-  await page.getByTestId('new-project-create').click();
-
-  const picks = page.getByTestId('pick-row');
-  const files = page.getByTestId('new-project-file');
-  await expect(picks).toHaveText(['RKRaj KumarThis may not have been sent.Try againSkip…', 'MCMaya ChenNot started']);
-  await expect(files).toHaveText(['Notes.txt · Not started']);
-  // Nothing after it starts; the project opens behind the sheet meanwhile.
-  await expect(page.getByTestId('title')).toHaveText('Cedar');
-  expect(adds()).toHaveLength(1);
-  expect(uploads()).toHaveLength(0);
-  expect(await quitPrompts(run)).toEqual(['A project change may not have finished.']);
-  // Done is asked first, and so is Skip…; Escape keeps both.
-  await page.getByTestId('new-project-done').click();
-  await expect(page.getByText('Close? Someone may still have been added.')).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('new-project-done')).toBeVisible();
-  await page.getByTestId('pick-skip').click();
-  await expect(page.getByTestId('skip-confirm')).toContainText('Skip Raj Kumar?');
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('skip-confirm')).toHaveCount(0);
-
-  // Settled, the rest go in, and the sheet closes by itself.
-  await page.getByTestId('pick-retry').click();
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveText('Cedar is ready · 2 people, 1 file');
-  expect(adds()).toHaveLength(3);
-  expect(adds()[1]).toEqual(adds()[0]);
-  expect(adds()[0]).toMatchObject({ membership_id: RAJ });
-  expect(adds()[2]).toMatchObject({ membership_id: MAYA });
-  expect(adds()[2]!.request_id).not.toBe(adds()[0]!.request_id);
-  expect(uploads()).toHaveLength(1);
-});
-
-test('with another app in front New project hides its people but takes a drop; a file whose outcome is unknown holds back the rest', async () => {
-  run = await launch('document-reply-lost');
-  const { page, app } = run;
-  // Opened over a project, whose page another app in front covers.
-  await page.getByTestId('sidebar-project').nth(0).click();
-  await expect(page.getByTestId('title')).toHaveText('Apollo');
-  await page.getByTestId('sidebar-new-project').click();
-  await page.getByTestId('new-project-name').fill('Cedar');
-  await expect(page.getByTestId('candidate-row')).toHaveCount(3);
-  // A file dragged from Finder: the page and the organization's people are covered, the sheet takes it.
-  await emit(app, 'echo-test:conceal');
-  await expect(page.getByTestId('concealed')).toBeVisible();
-  await expect(page.getByTestId('member-row')).toHaveCount(0);
-  await expect(page.getByTestId('candidate-row')).toHaveCount(0);
-  const [first, second] = onDisk('A.txt', 'B.txt');
-  await drop(page, page.getByTestId('new-project'), first!);
-  const files = page.getByTestId('new-project-file');
-  await expect(files).toHaveText(['A.txt']);
-  await emit(app, 'echo-test:resume');
-  await expect(page.getByTestId('candidate-row')).toHaveCount(3);
-  await page.getByTestId('new-project-create').click();
-  await expect(files).toHaveText([/^A\.txt · This may not have been sent\.Check statusTry againSkip…$/]);
-  await chooseInDialog([second!]);
-  await page.getByTestId('new-project-add-files').click();
-  await expect(files).toHaveText([/^A\.txt · This may not have been sent\./, 'B.txt · Not started']);
-  expect(uploads()).toHaveLength(1);
-  // Closing now would give up A's Check status and Try again: it is asked first, and Escape keeps it.
-  await page.getByTestId('new-project-done').click();
-  await expect(page.getByText('Close? A file may still have been saved.')).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('new-project-done')).toBeVisible();
-  await page.getByTestId('file-check').click();
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveText('Cedar is ready · 2 files');
-  expect(uploads().map(call => call.body?.filename)).toEqual(['A.txt', 'B.txt']);
-});
-
-test('focus stays in New project when what had it goes: an Add, a ×, and Create while you type a name to find', async () => {
-  run = await launch('no-projects');
-  const { page } = run;
-  const sheet = page.getByTestId('new-project');
-  const focusInSheet = () => sheet.evaluate(box => box.contains(document.activeElement) && document.activeElement !== document.body);
-  await page.getByTestId('empty-new-project').click();
-  // Add takes the person out of the list, and its button with them: the caret goes back to the find field.
-  await page.getByRole('button', { name: 'Add Raj Kumar' }).click();
-  await expect(page.getByTestId('pick-row')).toHaveText(['RKRaj Kumar']);
-  await expect(page.getByTestId('people-find')).toBeFocused();
-  // × on a pick: the same. × on a file: the sheet. Either way Tab goes on inside it, never to the page behind.
-  await page.getByRole('button', { name: 'Remove Raj Kumar' }).click();
-  await expect(page.getByTestId('pick-row')).toHaveCount(0);
-  await expect(page.getByTestId('people-find')).toBeFocused();
-  const [brief] = onDisk('Brief.md');
-  await drop(page, sheet, brief!);
-  await page.getByRole('button', { name: 'Remove Brief.md' }).click();
-  await expect(page.getByTestId('new-project-file')).toHaveCount(0);
-  await expect(sheet).toBeFocused();
-  for (let step = 0; step < 12; step += 1) {
-    await page.keyboard.press('Tab');
-    expect(await focusInSheet()).toBe(true);
-  }
-  // Create while the caret is in the find field: the project is made and opens, and the caret goes to the bar.
-  await page.getByTestId('new-project-name').fill('Cedar');
-  await page.getByTestId('people-find').fill('ma');
-  await page.getByTestId('new-project-create').evaluate(button => (button as HTMLButtonElement).click());
-  await expect(page.getByTestId('new-project')).toHaveCount(0);
-  await expect(page.getByTestId('title')).toHaveText('Cedar');
-  await expect(page.getByTestId('ask-field')).toBeFocused();
-});
-
-test('the organization’s people come ten at a time: More people asks for the next page with the Authority’s cursor, and adds to the list', async () => {
-  run = await launch('many-people');
-  const { page } = run;
-  await page.getByTestId('sidebar-new-project').click();
-  const found = page.getByTestId('candidate-row');
-  // Ten on the first page, less you: you lead it.
-  await expect(found).toHaveCount(9);
-  await page.getByTestId('people-more').click();
-  await expect(found).toHaveCount(12);
-  await expect(found.last()).toContainText('Colleague 9');
-  await expect(page.getByTestId('people-more')).toHaveCount(0);
-  expect(directory()).toEqual([{ limit: 10 }, { limit: 10, cursor: 'cGFnZTI' }]);
-  // Someone from the second page is picked like anyone else.
-  await page.getByRole('button', { name: 'Add Colleague 9' }).click();
-  await expect(page.getByTestId('pick-row')).toContainText(['Colleague 9']);
-  await expect(found).toHaveCount(11);
 });

@@ -29,7 +29,7 @@ describe('a follow-ups list', () => {
 });
 
 /** Pilot planning's list, read to its end: three not sent and ticked, one open, and (counted only) one dismissed. */
-async function meeting(): Promise<Node> {
+async function meeting(patch: Partial<Pick<FollowUpList, 'summary' | 'check'>> = {}): Promise<Node> {
   const { getState } = await import('../../src/renderer/store.js');
   const { FollowUps } = await import('../../src/renderer/screens/follow-ups.js');
   const unsent = [1, 2, 3].map(n => followUp(n, { state: 'unsent', sent_at: null, state_set_at: null, state_set_by: null, send_included: null }));
@@ -38,12 +38,18 @@ async function meeting(): Promise<Node> {
     kind: 'list', seq: 1, scope: 'record', id: items[0]!.decision!.record_sha256, title: 'Pilot planning', loading: false, items, live: {}, reading: false,
     reads: [{ parts: ['active'], pages: [{ cursor: null, ids: items.map(item => item.item_id) }], next: null }],
     summary: { ...EMPTY_SUMMARY, unsent: 3, open: 1, not_relevant: 1, decisions: 1 }, stage: null,
-    ticks: Object.fromEntries(unsent.map(item => [item.item_id, true])), sends: {}, check: null, expanded: {}, busy: false, said: null, picker: null, stale: false,
+    ticks: Object.fromEntries(unsent.map(item => [item.item_id, true])), sends: {}, check: null, expanded: {}, busy: false, said: null, picker: null, stale: false, ...patch,
   };
   return render(FollowUps({ state: getState(), list })) as Node;
 }
 
 describe('a meeting\'s list', () => {
+  it('offers Check now only for open follow-ups, and says when the check is running', async () => {
+    const buttons = (tree: Node) => elements(tree).filter(node => node.type === 'button' && text(node) === 'Check now');
+    expect(buttons(await meeting())).toHaveLength(1);
+    expect(buttons(await meeting({ summary: EMPTY_SUMMARY }))).toHaveLength(0);
+    expect(text(await meeting({ check: 'checking' }))).toContain('Checking…');
+  });
   it('says under its title how far its follow-ups have come, dismissed ones left out, with a bar of the same', async () => {
     const tree = await meeting();
     const head = elements(tree).find(node => node.type === 'header')!;

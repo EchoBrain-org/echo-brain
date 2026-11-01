@@ -36,7 +36,7 @@ const DESKTOP = resolve(import.meta.dirname, '../../product/echo-desktop/src');
 const desktop = <T>(path: string): Promise<T> => import(/* @vite-ignore */ join(DESKTOP, path)) as Promise<T>;
 
 type Json = Record<string, unknown>;
-type Scope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'mine' };
+type Scope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
 type Expect = { readonly authority: string; readonly membership_id: string };
 interface CliRun { readonly exit: number; readonly stdout: string; readonly stderr: string; readonly overflow: boolean }
 type Source = Json & { readonly kind: 'record' | 'original' | 'follow_up' | 'ticket' | 'page' | 'project' | 'person' | 'tool' | 'container'; readonly label: string };

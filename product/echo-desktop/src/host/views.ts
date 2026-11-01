@@ -588,6 +588,8 @@ function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean
   const meeting = page.meeting;
   const participants = meeting?.participants.map(shownText) ?? [];
   if (new Set(participants).size !== participants.length) throw new ViewError();
+  // Its approver or a project's members read an approved meeting: no record is organization-wide since the Team policy went.
+  if (item.visibility === 'team') throw new ViewError();
   const approver = sourceText(meeting?.approved_by);
   return {
     title: item.title, added_at: item.added_at,
@@ -596,7 +598,7 @@ function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean
     all_day: meeting?.all_day === true,
     ...(approver === undefined ? {} : { approved_by: approver }),
     participants, participants_more: meeting?.participants_more === true,
-    visibility: item.visibility === 'team' ? 'organization' : item.visibility === 'project' ? 'project' : 'approver',
+    visibility: item.visibility === 'project' ? 'project' : 'approver',
     decisions: { items: sections.decisions, more: false },
     actions: { items: sections.actions, more: false },
     rationales: { items: sections.rationales, more: false },

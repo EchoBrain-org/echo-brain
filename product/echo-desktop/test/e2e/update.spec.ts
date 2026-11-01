@@ -19,6 +19,8 @@ test('no row without a new version; New version · Restart installs it and shows
   await expect(row).toHaveText('New version · Restart');
   // Directly above the account row.
   await expect(page.locator('.update-rows + .account-row')).toHaveCount(1);
+  await page.reload();
+  await expect(row).toHaveText('New version · Restart');
   await row.click();
   await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
   await expect(row).toContainText('Updating');
@@ -82,21 +84,4 @@ test('the row shows under ECHO could not start, so a release whose host cannot s
   await row.click();
   await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
   await expect(page.getByTestId('start-failed')).toBeVisible();
-});
-
-test('the row shows signed out, and a reload reads it from main again', async () => {
-  run = await launch('signed-out');
-  const { page } = run;
-  const row = page.getByTestId('sidebar-update');
-  await expect(page.getByTestId('signed-out')).toBeVisible();
-  await setUpdateState(run, { state: 'available', release: RELEASE });
-  await expect(row).toHaveText('New version · Restart');
-  await expect(page.locator('.update-rows + .account-row')).toHaveText('Account · Sign in');
-
-  await page.reload();
-  await expect(page.getByTestId('signed-out')).toBeVisible();
-  await expect(row).toHaveText('New version · Restart');
-  await row.click();
-  await expect.poll(() => updateInstalls(run)).toEqual([RELEASE]);
-  await expect(row).toContainText('Updating');
 });

@@ -614,6 +614,8 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     }
     case 'ask.run': {
       const { expect, question, scope, cancel_id, previous: earlier } = params as Params<'ask.run'>;
+      // A retired or malformed scope is refused, never widened to all accessible context.
+      if (scope?.kind !== 'global' && scope?.kind !== 'project') return code('invalid_request');
       const text = askText(question);
       // The earlier turn a follow-up or Ask again carries, checked as the client checks it (C3): one it would refuse is refused here.
       const previous = earlier === undefined ? undefined : askPrevious(earlier, text, scope);

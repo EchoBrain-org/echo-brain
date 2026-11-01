@@ -355,8 +355,8 @@ describe('an item opened by its ref', () => {
       rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [] }] },
     } });
     expect(JSON.stringify(view)).not.toMatch(/sha256|prj_/);
-    const team = openView(meetingPage([], { item: row(`meeting:${RECORD}`, { visibility: 'team' }) }), ref, true);
-    expect(team.kind === 'meeting' && team.record.visibility).toBe('organization');
+    // No approved meeting is organization-wide since the Team policy went.
+    expect(() => openView(meetingPage([], { item: row(`meeting:${RECORD}`, { visibility: 'team' }) }), ref, true)).toThrow(ViewError);
     const project = openView(meetingPage([], { item: row(`meeting:${RECORD}`, { visibility: 'project' }) }), ref, true);
     expect(project.kind === 'meeting' && project.record.visibility).toBe('project');
   });
