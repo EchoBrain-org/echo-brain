@@ -7,11 +7,11 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-26
 reviewed_at: 2026-08-26
-reviewed_ref: 67830de61dc3afcf5bcc0cabfdf803d5e6604ec2
+reviewed_ref: de27b1058f71490d19332f63410760f58143937e
 run_status: completed
 result: passed
 stop_reason: not-applicable
-source_commit: 67830de61dc3afcf5bcc0cabfdf803d5e6604ec2
+source_commit: 0d39fdc38c7d27cd7c59990386ff57492ca9af02
 artifact_digest: not-applicable
 configuration_identity: opaque:CI-EFFICIENCY-MEASUREMENT-20260826-001
 state_identity: not-applicable
@@ -40,6 +40,13 @@ temporary revision adds manual-dispatch controls only: runner selection and
 cache mode/scope. It preserves the existing three proof jobs and the `CI
 required checks` aggregate. It is evidence tooling only and must not merge into
 the sprint branch.
+
+Update (2026-10-31): only an evidence tag kept `67830de` reachable. That tag
+was deleted, so the temporary revision is no longer retained. `source_commit`
+now names its base `0d39fdc`, which has the same source, because `67830de`
+changed only `.github/workflows/ci.yml`. `reviewed_ref` names `de27b10`, the
+`main` commit that added this record. The linked workflow runs still show the
+measured revision.
 
 The 20 measured workflows all completed successfully. One successful
 native/no-cache smoke run preceded them, and one successful native cache-writer
