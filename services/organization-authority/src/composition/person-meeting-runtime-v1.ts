@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePersonMeetingResultV2,
+  PERSON_REVIEWS_PATH_V1, validatePersonReviewRequestV1, validatePersonReviewResultV1, type PersonReviewOperationV1,
   type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonSubmittedMeetingV2 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -33,17 +34,12 @@ import type { PersonHttpRuntimeResourcesV1 } from './organization-authority-api-
 
 export interface PersonMeetingProviderV1 {
   readonly id: string; readonly normalizer_version: string;
+  /** Internal sources keep their processing/review support without appearing as user connectors. */
+  readonly listed?: boolean;
   /** The admission label for this provider's custodian; defaults to a person's own OAuth account. */
   readonly custodian_assurance?: string;
-  /** `members` takes submitted meetings from every active member (the hand-in tool); otherwise only owners submit (the staging synthetic source). */
-  readonly submitters?: 'members';
   readonly connection_http: ProviderHttpApplicationV1;
   readonly cursor: PersonalMeetingCheckpointCodecV1 & { readonly policy: AdmittedMeetingSourceCursorPolicyV1 };
-  /**
-   * Optional: forgets what a cancelled import kept (a handed-in payload no admitted source revision holds). It runs
-   * inside the Authority transaction that drops the import from its source's queue, and needs no provider session.
-   */
-  forget?(setting: MeetingIntakeSettingV1, meetingId: string): void;
   tool(token: string): OrganizationPersonToolV4;
   open(person: MeetingIntakePersonV1, current: () => void, signal?: AbortSignal): Promise<{
     readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown; readonly email: string | null; readonly workspace: string | null;
@@ -57,11 +53,8 @@ export interface PersonMeetingProviderV1 {
      */
     watchable?(watch: PersonalMeetingWatchV1): Promise<void>;
     preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
-    /**
-     * Optional: keeps a submitted meeting for the person's source and returns the id its import is queued under. It runs
-     * inside the Authority transaction that queues that import, so a payload kept in the Authority commits with it.
-     */
-    submit?(meeting: PersonSubmittedMeetingV2, setting: MeetingIntakeSettingV1): string;
+    /** Optional: creates a meeting in the source and returns its immutable id for queuing. */
+    submit?(meeting: PersonSubmittedMeetingV2): string;
   }>;
   source(setting: MeetingIntakeSettingV1, current: () => void): MeetingSourceAdapter & { requireCurrent(): void };
 }
@@ -385,64 +378,73 @@ export function createPersonMeetingRuntimeV1(options: {
         project_ids: decided ? route?.project_ids ?? null : view.project_ids, ...(route?.private === true ? { private: true as const } : {}) };
     });
   }
+  /** One person-owned review application, shared by the neutral route and legacy meeting requests. */
+  async function reviewResult(input: PersonReviewOperationV1, token: string, person: MeetingIntakePersonV1, current: () => void): Promise<unknown> {
+    // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
+    const reviewer = allowed(() => intake.currentPerson(person)) ? person : null;
+    if (input.operation === 'reviews') return { reviews: reviewer === null ? [] : (await approvals()).proposals(reviewer).map(reviewView) };
+    if (!reviewer) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
+    const approvalCore = await approvals();
+    // review_open also takes one of the proposal's published records' own approval ids (a run's event_ref, which a
+    // follow-ups list links): it opens the proposal's review, under the proposal's approval id. A decision never does.
+    const byRecord = (id: string) => { const proposal = proposalOfRecord(person, id); return proposal === undefined ? undefined : approvalCore.proposal(proposal); };
+    const view = approvalCore.proposal(input.approval_id) ?? (input.operation === 'review_open' ? byRecord(input.approval_id) : undefined);
+    if (!view || view.reviewer.organization_id !== person.organization_id || view.reviewer.principal_id !== person.principal_id
+      || view.reviewer.membership_id !== person.membership_id) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
+    if (input.operation === 'review_open') return observeCoreRuntimeSyncV1('approval_review', () => {
+      annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', view.approval_id), approval_surface: 'desktop' });
+      const projects = new SqlitePersonListDirectoryV1(db).joinedProjects(options.sessions.authenticateAccess({ access_token: token })).projects;
+      const names = new Map(projects.filter(project => project.status === 'active').map(project => [project.project_id, project.name]));
+      const review = approvalReviewV1(view.snapshot_json);
+      const items = reviewItems(view, new Map(approvalCore.ownerProposals(view.approval_id).map(owner => [owner.signal_id, owner.proposed])));
+      // Names for the projects the items name, as far as the reviewer can read them: a suggestion is never access.
+      const named = [...new Set(items.flatMap(item => item.project_ids ?? []))].sort();
+      const row = reviewView(view);
+      const opened = { review: row, snapshot_sha256: view.snapshot_sha256, participants: review.participants, items, reasons: review.reasons,
+        suggested_projects: named.flatMap(project_id => {
+          const name = names.get(project_id as `prj_${string}`); return name === undefined ? [] : [{ project_id: project_id as `prj_${string}`, name }];
+        }), records: row.records };
+      annotateCoreRuntimeV1({ result: 'returned' });
+      return opened;
+    });
+    const action = input;
+    const decided = approvalCore.decide('desktop', { approval_id: action.approval_id, command_id: action.command_id, snapshot_sha256: action.snapshot_sha256 as `sha256:${string}`,
+      action: action.action, routes: action.routes, owners: action.owners }, () => {
+      current(); const a = authenticate(token);
+      return { actor: { organization_id: a.organization_id, principal_id: a.principal_id, membership_id: a.membership_id }, evidence: { kind: 'person-session', sha256: a.authorization_sha256 } };
+    });
+    if (decided.kind === 'already_decided') return { status: decided.status, decided_on: decided.surface };
+    if (decided.kind === 'stale') throw new AuthorityOperationError('stale_access_state', 'Meeting review has changed');
+    return { status: decided.status, decided_on: decided.surface };
+  }
   const application: ProviderHttpApplicationV1 = {
-    routes: [{ route_id: 'personal-meetings', method: 'POST', path: PERSON_MEETINGS_PATH_V2 }],
+    routes: [{ route_id: 'personal-meetings', method: 'POST', path: PERSON_MEETINGS_PATH_V2 },
+      { route_id: 'personal-reviews', method: 'POST', path: PERSON_REVIEWS_PATH_V1 }],
     async accept(request) {
-      if (request.route_id !== 'personal-meetings') throw new AuthorityOperationError('not_found', 'Meeting route unavailable');
+      if (request.route_id !== 'personal-meetings' && request.route_id !== 'personal-reviews') throw new AuthorityOperationError('not_found', 'Meeting route unavailable');
       const header = request.headers.authorization;
       if (!header?.startsWith('Bearer ') || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.content_type ?? '')) throw new AuthorityOperationError('invalid_request', 'Invalid meeting request');
       const token = header.slice(7), authorization = authenticate(token), person = meetingIntakePersonV1(authorization);
       const current = () => { request.signal?.throwIfAborted(); if (canonicalSha256(authenticate(token)) !== canonicalSha256(authorization)) throw new AuthorityOperationError('stale_access_state', 'Person session changed'); };
+      if (request.route_id === 'personal-reviews') {
+        let input;
+        try { input = validatePersonReviewRequestV1(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.raw_body))); }
+        catch { throw new AuthorityOperationError('invalid_request', 'Invalid review request'); }
+        const body = await reviewResult(input, token, person, current); current();
+        return { status: 200, body: validatePersonReviewResultV1(input.operation, body) };
+      }
       let input;
       try { input = validatePersonMeetingRequestV2(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.raw_body))); }
       catch { throw new AuthorityOperationError('invalid_request', 'Invalid meeting request'); }
       const provider = providers.find(p => p.id === input.tool_id);
       if (!provider) throw new AuthorityOperationError('not_found', 'Meeting tool unavailable');
       const result = async (): Promise<unknown> => {
-        if (input.operation === 'reviews' || input.operation === 'review_open' || input.operation === 'review') {
-          // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
-          const reviewer = allowed(() => intake.currentPerson(person)) ? person : null;
-          if (input.operation === 'reviews') return { reviews: reviewer === null ? [] : (await approvals()).proposals(reviewer).map(reviewView) };
-          if (!reviewer) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
-          const approvalCore = await approvals();
-          // review_open also takes one of the proposal's published records' own approval ids (a run's event_ref, which a
-          // follow-ups list links): it opens the proposal's review, under the proposal's approval id. A decision never does.
-          const byRecord = (id: string) => { const proposal = proposalOfRecord(person, id); return proposal === undefined ? undefined : approvalCore.proposal(proposal); };
-          const view = approvalCore.proposal(input.approval_id) ?? (input.operation === 'review_open' ? byRecord(input.approval_id) : undefined);
-          if (!view || view.reviewer.organization_id !== person.organization_id || view.reviewer.principal_id !== person.principal_id
-            || view.reviewer.membership_id !== person.membership_id) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
-          if (input.operation === 'review_open') return observeCoreRuntimeSyncV1('approval_review', () => {
-            annotateCoreRuntimeV1({ approval_id: coreRuntimeIdentityV1('approval', view.approval_id), approval_surface: 'desktop' });
-            const projects = new SqlitePersonListDirectoryV1(db).joinedProjects(options.sessions.authenticateAccess({ access_token: token })).projects;
-            const names = new Map(projects.filter(project => project.status === 'active').map(project => [project.project_id, project.name]));
-            const review = approvalReviewV1(view.snapshot_json);
-            const items = reviewItems(view, new Map(approvalCore.ownerProposals(view.approval_id).map(owner => [owner.signal_id, owner.proposed])));
-            // Names for the projects the items name, as far as the reviewer can read them: a suggestion is never access.
-            const named = [...new Set(items.flatMap(item => item.project_ids ?? []))].sort();
-            const row = reviewView(view);
-            const opened = { review: row, snapshot_sha256: view.snapshot_sha256, participants: review.participants, items, reasons: review.reasons,
-              suggested_projects: named.flatMap(project_id => {
-                const name = names.get(project_id as `prj_${string}`); return name === undefined ? [] : [{ project_id: project_id as `prj_${string}`, name }];
-              }), records: row.records };
-            annotateCoreRuntimeV1({ result: 'returned' });
-            return opened;
-          });
-          const action = input;
-          const decided = approvalCore.decide('desktop', { approval_id: action.approval_id, command_id: action.command_id, snapshot_sha256: action.snapshot_sha256 as `sha256:${string}`,
-            action: action.action, routes: action.routes, owners: action.owners }, () => {
-            current(); const a = authenticate(token);
-            return { actor: { organization_id: a.organization_id, principal_id: a.principal_id, membership_id: a.membership_id }, evidence: { kind: 'person-session', sha256: a.authorization_sha256 } };
-          });
-          if (decided.kind === 'already_decided') return { status: decided.status, decided_on: decided.surface };
-          if (decided.kind === 'stale') throw new AuthorityOperationError('stale_access_state', 'Meeting review has changed');
-          return { status: decided.status, decided_on: decided.surface };
-        }
+        if (input.operation === 'reviews' || input.operation === 'review_open' || input.operation === 'review') return reviewResult(input, token, person, current);
         if (input.operation === 'cancel_import') {
           const setting = intake.list(person).find(s => s.source_key === input.source_key);
           if (!setting) throw new AuthorityOperationError('not_found', 'Meeting import unavailable');
           const owner = ownerOf(setting.source_adapter_id);
-          // What the import kept goes with it, in the same transaction: a handed-in payload no admitted revision holds.
-          db.transaction(() => { owner.intake.cancelImport(setting, input.meeting_id, current); owner.provider.forget?.(setting, input.meeting_id); }).immediate();
+          owner.intake.cancelImport(setting, input.meeting_id, current);
           observed.delete(setting.source_key); return { status: 'cancelled' };
         }
         // Stopping needs no provider session and no project access, and leaves no status from the stopped watch behind.
@@ -479,8 +481,8 @@ export function createPersonMeetingRuntimeV1(options: {
         const currentProject = () => {
           session.current(); current();
           if (intake.currentPerson(person, project).grant_sha256 !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting project access changed');
-          // Every active member hands meetings in; the staging synthetic source stays owner-only.
-          if (input.operation === 'submit' && provider.submitters !== 'members' && options.sessions.authenticateAccess({ access_token: token }).membership_type !== 'owner') {
+          // Creating a meeting through a source is owner-only.
+          if (input.operation === 'submit' && options.sessions.authenticateAccess({ access_token: token }).membership_type !== 'owner') {
             throw new AuthorityOperationError('unauthorized', 'Only an owner can submit meetings to this tool');
           }
         };
@@ -500,8 +502,8 @@ export function createPersonMeetingRuntimeV1(options: {
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
           const providerIntake = ownerOf(provider.cursor.policy.source_adapter_id).intake;
           const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, session, commitments: id => processor.current_commitments(id), current: currentProject });
-          // A submitted meeting is kept here, so its payload and its queued import commit together or not at all.
-          const submitted = input.operation === 'submit' ? session.submit!(input.meeting, setting) : null;
+          // The source owns submission persistence; its immutable id makes a queue retry safe.
+          const submitted = input.operation === 'submit' ? session.submit!(input.meeting) : null;
           // A watch's or an import's project is only a suggestion; neither changes the source.
           if (input.operation === 'watch') providerIntake.watch(setting, { watch: input.watch, folder_id: input.folder_id }, project, currentProject);
           else providerIntake.enqueue(setting, input.operation === 'submit' ? submitted! : input.meeting_id, project, currentProject);
@@ -525,7 +527,7 @@ export function createPersonMeetingRuntimeV1(options: {
   }
   return { applications: [...providers.map(p => p.connection_http), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,
     attachDiagnostics(value: PersonDiagnosticsV1) { diagnostics = value; },
-    tools: async (token: string) => providers.map(p => p.tool(token)), approvals,
+    tools: async (token: string) => providers.filter(p => p.listed !== false).map(p => p.tool(token)), approvals,
     /**
      * The change check's `reviews` area (desktop refresh and notifications v1, ADR-0036): each meeting `reviews` lists for a
      * person, by approval id and status only, behind the same membership check. The approval core is ready once this resolves,

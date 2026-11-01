@@ -10,6 +10,12 @@ dropped "Nothing changed since …" from the page, and folds away a turn asked
 again. [ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md) made a
 404 from C2's read `not_found`.
 
+Implementation update, 2026-11-01: Paste a meeting and its entire `hand-in`
+implementation are removed. References below to pasted meetings record the
+original design; current source-revision checks cover the remaining imported
+meeting sources. No hand-in compatibility processing remains. This requires
+fresh Authority V16 state; V15 is not migrated.
+
 ## What the founder asked for
 
 Ask was one question and one answer. Leaving the page threw the thread away,

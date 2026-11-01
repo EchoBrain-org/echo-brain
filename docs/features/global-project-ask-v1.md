@@ -79,9 +79,8 @@ grants its members nothing
 ([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md), which
 reverses
 [ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md)'s
-project read). A pasted meeting's transcript is part of its importer's notes;
-no meeting transcript reaches anyone else, because no approval shares one. The
-original upload and
+project read). Imported meeting transcripts are reserved for extraction and
+are excluded from Person reads; no approval shares a transcript. The original upload and
 extraction limits remain in [Project documents V1](project-documents-v1.md).
 Encrypted, scanned/no-text, failed, or still-extracting files do not acquire
 invented textual evidence. Partial extraction remains partial evidence.

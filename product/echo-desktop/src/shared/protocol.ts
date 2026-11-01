@@ -1,7 +1,7 @@
 import type {
   PersonAnswerBlockV1, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEvidenceCitationV8, PersonAnswerPreviousV1, PersonAnswerTableRowV1,
   PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
-  PersonMeetingResultsV2, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
+  PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
 // The only shapes that cross process boundaries. Everything here is
 // token-free: the person host builds these view models from the client's
@@ -566,39 +566,6 @@ export interface ConnectedTools {
   readonly tools: readonly ConnectedTool[];
 }
 
-/**
- * Paste a meeting, as the page sends it: the text as typed, and a whole day's date (YYYY-MM-DD) or a start (a UTC
- * timestamp), or neither. The host makes the text canonical and checks it with the meetings API's own validator.
- */
-export interface PastedMeeting {
-  readonly title: string;
-  readonly notes: string;
-  readonly transcript: string;
-  readonly date?: string;
-  readonly started_at?: string;
-}
-/** The meetings API's bound on a pasted meeting (PERSON_HAND_IN_MEETING_MAX_BYTES_V1), which the page checks before sending. */
-export const MAX_PASTED_MEETING_BYTES = 60 * 1024;
-/**
- * Pasted text as the meetings API keeps it (personHandInTextV1): line feeds only, other line breaks as line feeds, no
- * control but tab, NFC, trimmed. The host and the client make it with the API's own function; the page measures with this.
- */
-export function pastedText(value: string): string {
-  return value.replace(/\r\n?|[\u000b\u000c\u0085\u2028\u2029]/g, '\n').replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f]/g, '')
-    .normalize('NFC').trim();
-}
-/**
- * A pasted meeting as the client sends it (personHandInMeetingV1): canonical text, and a whole day as its date at noon UTC
- * or a start with this computer's time zone. Its JSON is what the meetings API bounds by MAX_PASTED_MEETING_BYTES.
- */
-export function pastedMeetingAsSent(meeting: PastedMeeting, timeZone: string): {
-  readonly title: string; readonly notes: string; readonly transcript: string; readonly started_at?: string; readonly time_zone?: string; readonly all_day?: true;
-} {
-  return { title: pastedText(meeting.title), notes: pastedText(meeting.notes), transcript: pastedText(meeting.transcript),
-    ...(meeting.date === undefined ? {} : { started_at: `${meeting.date}T12:00:00.000Z`, all_day: true as const }),
-    ...(meeting.started_at === undefined ? {} : { started_at: meeting.started_at, time_zone: timeZone }) };
-}
-
 /** What a status check says about a save whose outcome was unknown. */
 export interface WriteStatus {
   readonly state: 'saved' | 'not_saved' | 'unknown';
@@ -713,6 +680,7 @@ export interface RunsResults {
 }
 
 export interface HostMethods {
+  'reviews': { params: { expect: Expect; request: PersonReviewRequestV1 }; result: PersonReviewResultsV1[keyof PersonReviewResultsV1] };
   'runs': { params: { expect: Expect; request: PersonRunsRequestV1 }; result: RunsResults[keyof RunsResults] };
   'tools.meetings': { params: { expect: Expect; request: PersonMeetingRequestV2 }; result: PersonMeetingResultsV2[keyof PersonMeetingResultsV2] };
 
@@ -803,11 +771,6 @@ export interface HostMethods {
   'tools.cancel': { params: { expect: Expect; tool_id: string; attempt_id: string }; result: ToolAttemptStatus };
   /** Removes your own connection to the tool. */
   'tools.disconnect': { params: { expect: Expect; tool_id: string }; result: null };
-  /**
-   * Paste a meeting: the host writes its text to private files for the client, never to its arguments. The same meeting
-   * pasted again answers the same id; what it decided still needs your approval.
-   */
-  'meetings.handIn': { params: { expect: Expect; meeting: PastedMeeting; project_id: string | null }; result: { meeting_id: string } };
 }
 
 export interface MainMethods {
@@ -866,7 +829,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
   'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
   'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
-  'meetings.handIn': 90_000,
+  'reviews': 90_000,
   // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
   'timeline.read': 15_000, 'timeline.put': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
 };
@@ -878,11 +841,12 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
   'employees.revoke', 'tools.meetings', 'runs', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
-  'meetings.handIn',
+  'reviews',
 ]);
 /** Operations of a write method that only read. */
 const READ_OPERATIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   'tools.meetings': new Set<PersonMeetingRequestV2['operation']>(['home', 'reviews', 'browse', 'open', 'review_open']),
+  reviews: new Set<PersonReviewRequestV1['operation']>(['reviews', 'review_open']),
   runs: new Set<PersonRunsRequestV1['operation']>(['list', 'home', 'items', 'item']),
 };
 /** Whether a call may change what the Authority stores. An operation not known to only read counts as a write. */

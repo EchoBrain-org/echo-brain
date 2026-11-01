@@ -58,8 +58,8 @@ interface Contract {
   validatePersonProjectActivityV1(value: unknown): unknown;
   validatePersonRunsRequestV1(value: unknown): RunsRequest;
   validatePersonRunsResultV1(operation: string, value: unknown): unknown;
-  /** A meetings request, here a handed-in meeting's submit. */
-  validatePersonMeetingRequestV2(value: unknown): { operation: string; meeting?: Record<string, unknown>; project_id?: string | null };
+  /** Personal review requests never select a provider. */
+  validatePersonReviewRequestV1(value: unknown): unknown;
   /** Ask progress (ADR-0039): the header an Ask opts in with. */
   PERSON_ASK_PROGRESS_HEADER_V1: string;
   /**
@@ -346,17 +346,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }).operations;
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
-  let granolaImported = false, granolaApproved = false, granolaBaselineHomeReads = 0;
+  const syntheticReview = mode === 'synthetic-review';
+  let granolaImported = syntheticReview, granolaApproved = false, granolaBaselineHomeReads = 0;
   // The automatic import granola-preparing saved: what it watches and the project it suggests.
   let granolaWatch: { watch: string; folder_id: string | null; project_id: string | null } | undefined;
   let granolaReview: Record<string, unknown> | undefined;
   // The impact check of the approved meeting's first record: none until it is approved.
   let granolaRun: { state: 'pending' | 'running' | 'done' | 'failed'; error_code: string | null; retried: boolean } | null = null;
-  // Paste a meeting lists each meeting pasted, once per
-  // content: processed at once, it waits for review, its first line the decision and its second the action, each starting at
-  // the project it suggests.
-  const handIn = mode === 'hand-in';
-  const pasted: { meeting_id: string; title: string; lines: readonly [string, string]; meeting_at: string | null; all_day: boolean; project_ids: string[] }[] = [];
   // A check for each further destination of an approved meeting.
   let extraRuns: { run_id: string; record: { approval_id: string; project_ids: string[]; private?: true }; record_sha256: string; state: 'pending' | 'running' | 'done' | 'failed';
     error_code: string | null; retried: boolean }[] = [];
@@ -988,7 +984,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const projectsNow = listed().map(project => [project.project_id, project.name, projectStatus.get(project.project_id) ?? 'active', project.role]);
     const followUps = openItems.filter(item => visible(item) && (involved(item) || item.owner_set_by?.membership_id === ARI.membership_id))
       .map(item => [item.item_id, item.state, item.owner.membership_id, item.owner_set_at, item.state_set_at, item.sent_at]);
-    const reviews = [granolaImported, granolaApproved, granolaRun?.state ?? null, pasted.length, ...extraRuns.map(extra => extra.state)];
+    const reviews = [granolaImported, granolaApproved, granolaRun?.state ?? null, ...extraRuns.map(extra => extra.state)];
     // An hour unless the test says: a test's own reads never wait on, or race, a check it did not ask for.
     const seconds = elsewhere('changes-seconds') ? Number(readFileSync(join(home, 'changes-seconds'), 'utf8')) : 3600;
     return { kind: 'echo-person-changes-v1', areas: { projects: digest(projectsNow), follow_ups: digest(followUps), reviews: digest(reviews) },
@@ -1045,44 +1041,22 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return json({
         schema_version: 4, kind: 'echo-organization-person-tools', organization_id: session.organization_id, membership_id: session.membership_id,
         tools: [
-          slackLinked ? tool('slack', 'Slack', 'linked', 'T0123ABCD', 'U0123ABCD') : tool('slack', 'Slack', 'unlinked', 'T0123ABCD', null),
+          slackLinked ? tool('slack', 'Slack (approval notifications)', 'linked', 'T0123ABCD', 'U0123ABCD') : tool('slack', 'Slack (approval notifications)', 'unlinked', 'T0123ABCD', null),
           tool('jira', 'Jira', jiraLinked ? 'linked' : ('unlinked'), JIRA_CLOUD, jiraLinked ? 'atlassian-account-1' : null),
           tool('confluence', 'Confluence', confluenceLinked ? 'linked' : 'unlinked', CONFLUENCE_CLOUD, confluenceLinked ? 'atlassian-account-1' : null),
-          mode.startsWith('granola') && !sentToAri && !handIn ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
+          mode.startsWith('granola') && !sentToAri ? tool('granola', 'Granola', 'linked', 'workspace', 'ari@example.test') : { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
             external_scope_id: null, external_subject_id: null, organization_setup: null },
-          ...(handIn ? [tool('hand-in', 'Paste a meeting', 'linked', null, 'hand-in')] : []),
         ],
       });
     }
-    // Paste a meeting, checked with the contract's own validator. Its id is derived from its content, as the Authority's
-    // is, so the same meeting pasted again is the same meeting; its review waits on Home at once.
-    if (method === 'POST' && path === '/v1/person/meetings' && handIn && body?.tool_id === 'hand-in') {
-      const row = (entry: (typeof pasted)[number]) => ({ approval_id: `apr_${entry.meeting_id.slice('hand-in-'.length)}`, title: entry.title, project_ids: entry.project_ids,
-        status: 'pending', decided_on: null, first_line: entry.lines[0], action_count: 1, meeting_at: entry.meeting_at, all_day: entry.all_day, records: [] });
-      if (body.operation === 'reviews') return json({ reviews: pasted.map(row) });
-      // Its card: the decision and the action, each quoting its line and starting at the suggestion (Only me with none).
-      if (body.operation === 'review_open') {
-        const entry = pasted.find(item => row(item).approval_id === body.approval_id);
-        if (!entry) return failure('not_found', 404);
-        const item = (signal_id: string, kind: 'decision' | 'action', text: string) => ({ signal_id, kind, text, subject: null, status: kind === 'decision' ? 'decided' : null,
-          due_at: null, quotes: [text], owner: null, owner_editable: false, project_ids: entry.project_ids });
-        const names = new Map(listed().map(project => [project.project_id, project.name]));
-        return json({ review: row(entry), snapshot_sha256: digestOf(`pasted:${entry.meeting_id}`), participants: [],
-          items: [item('dec-1', 'decision', entry.lines[0]), item('act-1', 'action', entry.lines[1])], reasons: [],
-          suggested_projects: entry.project_ids.flatMap(project_id => { const name = names.get(project_id); return name === undefined ? [] : [{ project_id, name }]; }), records: [] });
+    const reviewsRequest = method === 'POST' && path === '/v1/person/reviews';
+    if (reviewsRequest) {
+      api.validatePersonReviewRequestV1(body);
+      if (!mode.startsWith('granola') && !syntheticReview) {
+        return body?.operation === 'reviews' ? json({ reviews: [] }) : failure('not_found', 404);
       }
-      if (body.operation !== 'submit') return failure('not_found', 404);
-      const request = api.validatePersonMeetingRequestV2(body);
-      const meeting = request.meeting as { title: string; notes: string; transcript: string; started_at?: string; all_day?: true };
-      const meeting_id = `hand-in-${createHash('sha256').update(JSON.stringify(meeting, Object.keys(meeting).sort())).digest('hex')}`;
-      if (!pasted.some(entry => entry.meeting_id === meeting_id)) {
-        const lines = (meeting.notes || meeting.transcript).split('\n').map(line => line.slice(0, 300));
-        pasted.push({ meeting_id, title: meeting.title, lines: [lines[0]!, lines[1] ?? 'Follow up on the meeting.'], meeting_at: meeting.started_at ?? null,
-          all_day: meeting.all_day === true, project_ids: request.project_id ? [request.project_id] : [] });
-      }
-      return json({ status: 'queued', meeting_id });
     }
-    if (method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) {
+    if ((method === 'POST' && path === '/v1/person/meetings' && mode.startsWith('granola')) || reviewsRequest) {
       const meetingId = '00000000-0000-4000-8000-000000000010';
       const folderId = '00000000-0000-4000-8000-000000000011';
       const decidedOn = granolaApproved ? ('desktop') : null;
@@ -1090,7 +1064,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const records = granolaApproved ? recordsOf(granolaReview) : [];
       const routed = new Map((granolaApproved && Array.isArray(granolaReview?.routes) ? granolaReview.routes as { signal_id: string; project_ids: string[] | null; private?: true }[] : [])
         .map(route => [route.signal_id, route]));
-      const review = { approval_id: 'apr_' + 'a'.repeat(64), title: 'Pilot planning',
+      const review = { approval_id: 'apr_' + 'a'.repeat(64), title: syntheticReview ? 'SYNTHETIC STAGING CANARY' : 'Pilot planning',
         project_ids: [...new Set(records.flatMap(record => record.project_ids))].sort(),
         status: granolaApproved ? 'approved' : 'pending', decided_on: decidedOn,
         first_line: 'Launch the pilot next week.', action_count: 2, meeting_at: '2026-10-06T16:00:00.000Z', all_day: false, records };

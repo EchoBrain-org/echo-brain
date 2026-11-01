@@ -122,11 +122,11 @@ describe('leaving a project', () => {
   });
 
   it('reads Home again, so a Home load dropped on the way there is not left busy', async () => {
-    const homeTools = held.hold('account.tools');
+    const homeReviews = held.hold('reviews');
     const store = await startStore();
     await store.openProject(apollo);
     await flush();
-    homeTools(ok({ tools: [] }));
+    homeReviews(ok({ reviews: [] }));
     await flush();
     expect(store.getState().home?.loading).toBe(true);
     store.toggleProjectSettings(apollo, 'sidebar');

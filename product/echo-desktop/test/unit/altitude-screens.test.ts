@@ -39,7 +39,7 @@ async function stateWith(altitude: Partial<AltitudeState>, projects: ProjectSumm
   return {
     ...getState(), status: { client_version: 'test', signed_in: true, account: ACCOUNT },
     projects: { items: projects, next: null, loading: false, ...list },
-    home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false, ...home },
+    home: { seq: 1, loading: false, reviews: [], runs: [], open: null, live: {}, reading: false, ...home },
     altitude: { level: 'projects', category: null, project_id: null, membership_id: null, name: null, reads: {}, live: {}, list: null, settled: true, reading: false,
       listFailure: null, listStale: false, ...altitude },
   };

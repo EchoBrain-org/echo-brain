@@ -100,7 +100,9 @@ token; the Authority never
 asks the owner for it directly. The install requests exactly four bot
 scopes: `chat:write`, `im:history`, `im:write`, and `users:read`. The bot only
 delivers private DMs: the DM-code link challenge and approval cards. The bot reads
-no channel, and Ask reads no Slack. The
+no public or private channel, and Ask reads no Slack. Bounded reads of its own
+DMs verify an identity-link challenge and reconcile uncertain approval-card
+delivery; these are not knowledge-source reads. The
 stored connection contract names those four scopes as required. Install and
 reconnect accept a granted superset, because a token installed before the
 retired public-channel option keeps `channels:history` and `channels:read`
@@ -238,7 +240,10 @@ the member's unlinked, linked, or revoked status. Failed reads return an
 error, never an inferred link status. The desktop app's Account > Connected
 tools page is bound to the signed-in membership and clears when it changes,
 including between two employees with the same display name. Ask and Sources
-retain their existing Authority permissions without a Slack link.
+retain their existing Authority permissions without a Slack link. The provider
+labels this tool `Slack (approval notifications)` to distinguish its purpose
+from personal data-source connections. The catalog status is the saved identity
+link, not a current content-read or provider-health check.
 
 Disconnect always targets the authenticated Person. It revokes that member's
 current link and returns the updated tool list; it does not touch the
@@ -316,9 +321,10 @@ those facts.
   only when the clicker's active identity link maps to the reviewer's
   membership, read again inside the decision transaction.
 - Meeting approvals are decided only through the Authority's approval core:
-  by a Person client (the desktop decision page, or `person tools meetings`
-  with a `review` request; both are recorded as surface `desktop`) or on the
-  Slack DM copy.
+  by a Person client through `POST /v1/person/reviews` (`person reviews --request
+  <JSON>`, recorded as surface `desktop`) or on the Slack DM copy. Native review
+  does not require a connected meeting provider. The older `person tools
+  meetings` review operations remain compatible.
 
 The Authority and control plane run in one process. No positive authorization
 result is cached.
@@ -348,12 +354,11 @@ when an accepted milestone has an externally observable behavior that cannot
 be implemented safely with the current model.
 
 No Teams, Granola, project-management, or other non-Slack organization-tool
-onboarding is implemented. The Person CLI dispatches the Granola, hand-in
-(paste a meeting), Slack, Jira and Confluence tools and the staging synthetic
-meeting tool ([connector contracts](connector-contracts.md)); Granola, Jira
-and Confluence are personal connections and hand-in needs no connection, so
-none of them is an organization tool. The server's Connected tools list merges
-the tools of every composed connector.
+onboarding is implemented. The Person CLI dispatches Granola, Slack, Jira and
+Confluence ([connector contracts](connector-contracts.md)); Granola, Jira and
+Confluence are personal connections, not organization tools. The staging
+synthetic meeting provider stays internal to release
+qualification and is omitted from the public Connected tools list.
 
 ## Schema growth rule
 

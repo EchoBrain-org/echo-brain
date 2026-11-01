@@ -84,7 +84,7 @@ type Failure = { code: string; retryable: boolean; mutation_outcome?: 'unknown' 
  * The replies a test holds back (`held`): live reads (Home's, a list's, an item's), Home's rows reads, a list's rows reads, the
  * tools read, sends and set_states; runs lists and the starts of impact checks.
  */
-type Hold = 'live' | 'rows' | 'listRows' | 'tools' | 'send' | 'setState' | 'list' | 'start';
+type Hold = 'live' | 'rows' | 'listRows' | 'reviews' | 'send' | 'setState' | 'list' | 'start';
 
 /** What the fake Authority holds and how it answers, as each test starts: a test changes `fx` to say otherwise. */
 const fresh = () => ({
@@ -108,8 +108,8 @@ const fresh = () => ({
   failNextLive: false,
   /** Live items reads to fail next (not rows only, not counts only). */
   failLiveItems: 0,
-  /** The tools read fails while set. */
-  failTools: false,
+  /** The reviews read fails while set. */
+  failReviews: false,
   sendFailure: null as Failure | null,
   /** A send of this run fails as `sendFailure` says; any other run's goes. Null: every send fails so. */
   sendFailsFor: null as string | null,
@@ -136,14 +136,14 @@ const fresh = () => ({
   assignFailure: null as Failure | null,
   readItem: null as OpenItemView | null,
   /** The kinds of reply held back while set, and the replies held, oldest first. */
-  hold: { live: false, rows: false, listRows: false, tools: false, send: false, setState: false, list: false, start: false } as Record<Hold, boolean>,
-  waiting: { live: [], rows: [], listRows: [], tools: [], send: [], setState: [], list: [], start: [] } as Record<Hold, (() => void)[]>,
+  hold: { live: false, rows: false, listRows: false, reviews: false, send: false, setState: false, list: false, start: false } as Record<Hold, boolean>,
+  waiting: { live: [], rows: [], listRows: [], reviews: [], send: [], setState: [], list: [], start: [] } as Record<Hold, (() => void)[]>,
 });
 let fx = fresh();
 
 /**
  * A reply, or, while the test holds its kind, one that waits until `release`. `answer` makes it when it goes: Home's reads and
- * the tools read answer what the test holds then; the other kinds are made when asked, and handed in made.
+ * the reviews read answer what the test holds then; the other kinds are made when asked, and handed in made.
  */
 function held(kind: Hold, answer: () => unknown): unknown {
   return fx.hold[kind] ? new Promise(resolve => { fx.waiting[kind].push(() => resolve(answer())); }) : answer();
@@ -173,15 +173,14 @@ async function authority(method: string, params: { project_id?: string; request?
     case 'changes.read': return ok({ kind: 'echo-person-changes-v1', check_again_after_seconds: 60,
       areas: { projects: digest('projects'), follow_ups: digest(`f${fx.moved.follow_ups}`), reviews: digest(`r${fx.moved.reviews}`) } });
     case 'people.directory': return ok({ items: [RAFAEL], next_cursor: null });
-    case 'account.tools':
-      if (fx.failTools) return fail('transport_failed', { retryable: true });
-      return held('tools', () => ok({ tools: fx.granola === null ? [] : [{ tool_id: 'granola', status: fx.granola }] }));
-    case 'tools.meetings': {
+    case 'account.tools': return ok({ tools: fx.granola === null ? [] : [{ tool_id: 'granola', status: fx.granola }] });
+    case 'reviews': {
       // Approved, the review names its one record unless the test says otherwise.
       const review = { ...fx.review, records: fx.review.status === 'approved' && fx.review.records.length === 0 ? [{ approval_id: recordApproval, project_ids: fx.review.project_ids }] : fx.review.records };
       if (params.request?.operation === 'reviews') {
+        if (fx.failReviews) return fail('transport_failed', { retryable: true });
         if (fx.failNextReviews) { fx.failNextReviews = false; return unavailable; }
-        return ok({ reviews: fx.listed ? [review] : [] });
+        return held('reviews', () => ok({ reviews: fx.listed ? [review] : [] }));
       }
       const decided = review.status !== 'pending' && review.status !== 'superseded';
       if (params.request?.operation === 'review_open') return fx.failOpen ? unavailable : ok({ review, snapshot_sha256: 'snapshot', participants: [], reasons: [],
@@ -317,12 +316,13 @@ async function checking() {
 describe('Home rows', () => {
   it.each([null, 'unavailable'] as const)('shows an owner item when Granola is %s, and its row opens its page over Home', async status => {
     fx.granola = status;
+    fx.listed = false;
     fx.home = { ...emptyHome(), items: [item('1')], waiting: 2 };
     const store = await start();
-    expect(store.getState().home).toMatchObject({ meetings: false, loading: false, open: { waiting: 2 } });
+    expect(store.getState().home).toMatchObject({ loading: false, open: { waiting: 2 } });
     expect(store.homeRows()).toMatchObject([{ kind: 'update', item: { item_id: item('1').item_id } }]);
     expect(store.needsCount()).toBe(1);
-    expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
+    expect(rpc.mock.calls.some(([method]) => method === 'reviews')).toBe(true);
     // The row's copy shows at once, then the item is read again.
     fx.readItem = { ...item('1'), expected: 'launch this week' };
     const row = store.homeRows()[0]!;
@@ -333,15 +333,15 @@ describe('Home rows', () => {
     expect(store.getState().route).toEqual({ page: 'home' });
   });
 
-  it('keeps open items when Granola becomes unavailable and stops reading meeting reviews', async () => {
+  it('keeps open items and meeting reviews when Granola becomes unavailable', async () => {
     fx.home = { ...emptyHome(), items: [item('1')] };
     const store = await start();
     expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
     fx.granola = 'unavailable';
     rpc.mockClear();
     await store.loadHome();
-    expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
-    expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
+    expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
+    expect(rpc.mock.calls.some(([method]) => method === 'reviews')).toBe(true);
     expect(operations()).toContain('home');
   });
 
@@ -354,7 +354,7 @@ describe('Home rows', () => {
     // The window comes forward (resume and shown) while that load waits: both join it.
     const joined = [store.loadHome(), store.loadHome()];
     await flush();
-    const loads = () => rpc.mock.calls.filter(([method]) => method === 'account.tools').length;
+    const loads = () => rpc.mock.calls.filter(([method, params]) => method === 'reviews' && params.request.operation === 'reviews').length;
     expect(loads()).toBe(1);
     fx.hold.rows = false;
     release('rows');
@@ -413,7 +413,7 @@ describe('Home rows', () => {
 
   it('takes the viewer from the account Home was read for', async () => {
     fx.home = { ...emptyHome(), items: [item('1', 'changed'), { ...item('2', 'changed'), owner: { membership_id: 'member', name: 'Fixture', active: true, match: 'jira_account' } }] };
-    fx.granola = null;
+    fx.listed = false;
     const store = await start();
     expect(store.homeRows().map(row => row.kind)).toEqual(['review', 'update']);
   });
@@ -455,7 +455,7 @@ describe('Home rows', () => {
 
   it('names a whole day by its UTC date, the same day in any time zone', async () => {
     const { ReviewLine } = await import('../../src/renderer/screens/home.js');
-    // A pasted day is noon UTC, a meeting tool's all-day event midnight UTC: either is Oct 21, from UTC-12 to UTC+14.
+    // An all-day event can be represented at noon or midnight UTC: either is Oct 21, from UTC-12 to UTC+14.
     for (const meeting_at of ['2026-10-21T12:00:00.000Z', '2026-10-21T00:00:00.000Z']) {
       const row = { kind: 'approve' as const, review: { ...meeting('a', 'pending'), title: 'Supplier sync', meeting_at, all_day: true } };
       expect(text(render(ReviewLine({ row })))).toBe('Decision · Supplier sync meeting, Oct 21');
@@ -530,7 +530,7 @@ describe('Home decisions and impact checks', () => {
     await store.openDecision(approval);
     await flush();
     store.setDecisionRoute('act-1', null);
-    const reviews = () => rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
+    const reviews = () => rpc.mock.calls.filter(([method, params]) => method === 'reviews' && params.request?.operation === 'review').map(([, params]) => params.request);
     rpc.mockImplementationOnce(async () => fail('timeout', { retryable: true, mutation_outcome: 'unknown' }));
     await store.decide('approve');
     expect(store.getState().decision).toMatchObject({ busy: false, unknown: true, failure: 'This may not have been sent.' });
@@ -574,7 +574,7 @@ describe('Home decisions and impact checks', () => {
     store.setDecisionOwner('act-1', ' R. Moreno ');
     rpc.mockImplementationOnce(async () => ok({ status: 'publishing', decided_on: 'desktop' }));
     await store.decide('approve');
-    const sent = rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
+    const sent = rpc.mock.calls.filter(([method, params]) => method === 'reviews' && params.request?.operation === 'review').map(([, params]) => params.request);
     expect(sent).toEqual([expect.objectContaining({ action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: null }, { signal_id: 'act-1', project_ids: many.slice(0, 20) }],
       owners: [{ signal_id: 'act-1', owner: 'R. Moreno' }] })]);
   });
@@ -660,7 +660,7 @@ describe('Home decisions and impact checks', () => {
     store.setDecisionRoute('act-1', to(therm));
     rpc.mockImplementationOnce(async () => ok({ status: 'publishing', decided_on: 'desktop' }));
     await store.decide('approve');
-    const sent = rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review').map(([, params]) => params.request);
+    const sent = rpc.mock.calls.filter(([method, params]) => method === 'reviews' && params.request?.operation === 'review').map(([, params]) => params.request);
     expect(sent).toEqual([expect.objectContaining({ action: 'approve', routes: [{ signal_id: 'dec-1', project_ids: [therm], private: true }, { signal_id: 'act-1', project_ids: [therm] }] })]);
   });
 
@@ -853,7 +853,7 @@ describe('Home decisions and impact checks', () => {
 describe('Sweeps from Home', () => {
   /** Signed in, with no meeting to review and a sweep of your own items due, which the Authority queues when asked. */
   async function dueSweep(items: OpenItemView[] = []) {
-    fx.granola = null;
+    fx.listed = false;
     fx.home = { ...emptyHome(), sweep_due: true, items };
     fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
     return start();
@@ -1003,7 +1003,7 @@ describe('Sweeps from Home', () => {
   });
 
   it('starts a queued run even when the read of what a check found failed (D6)', async () => {
-    fx.granola = null;
+    fx.listed = false;
     fx.run = impactRun('running');
     await start();
     expect(requests('start')).toEqual([]);
@@ -1028,7 +1028,7 @@ describe('Sweeps from Home', () => {
   });
 
   it.each(['fails', 'failed'] as const)('shows nothing for a sweep that %s, and soon stops looking', async how => {
-    fx.granola = null;
+    fx.listed = false;
     fx.home = { ...emptyHome(), sweep_due: true };
     fx.sweepAnswer = how === 'fails' ? 'fails' : { run_id: sweepRun('pending').run_id };
     fx.sweepStarts = 'failed';
@@ -1046,9 +1046,8 @@ describe('Sweeps from Home', () => {
 describe('Checks keep moving (one place to look v1)', () => {
   /** Another meeting's check, of a record of its own, queued behind Pilot planning's. */
   const further = (state: PersonRunV1['state']) => impactRun(state, '21', 'apr_' + 'e'.repeat(64));
-  /** Home's own reads: the tools, the meeting reviews and what waits on you. The driver makes none of them. */
-  const homeReads = () => rpc.mock.calls.filter(([method, params]) => method === 'account.tools'
-    || (method === 'tools.meetings' && params.request?.operation === 'reviews') || (method === 'runs' && params.request.operation === 'home')).length;
+  /** Home's own reads: the meeting reviews and what waits on you. The driver makes none of them. */
+  const homeReads = () => rpc.mock.calls.filter(([method, params]) => (method === 'reviews' && params.request?.operation === 'reviews') || (method === 'runs' && params.request.operation === 'home')).length;
   /** The runs started, oldest first. */
   const starts = () => requests('start').map(request => request.run_id);
 
@@ -1275,11 +1274,11 @@ describe('Checks keep moving (one place to look v1)', () => {
     expect(store.getState().route.page).toBe('project');
   });
 
-  it('starts nothing anywhere after Home could not read the tools, until a Home load reads them', async () => {
+  it('starts nothing anywhere after Home could not read the reviews, until a Home load reads them', async () => {
     fx.granola = 'linked';
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.run = impactRun('pending');
-    fx.failTools = true;
+    fx.failReviews = true;
     const store = await start();
     expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
     await store.openProject(project);
@@ -1289,53 +1288,53 @@ describe('Checks keep moving (one place to look v1)', () => {
     fx.moved.reviews = 1;
     await vi.advanceTimersByTimeAsync(60_000);
     expect([requests('list').length, starts()]).toEqual([lists, []]);
-    // Try again, on Home: the tools answer, and the check starts.
-    fx.failTools = false;
+    // Try again, on Home: the reviews answer, and the check starts.
+    fx.failReviews = false;
     store.goHome();
     await flush();
     expect(starts()).toEqual([impactRun('pending').run_id]);
   });
 
-  it.each(['another page opens', 'another app comes in front'] as const)('lifts the hold once Try again reads the tools, even when %s before they answer', async how => {
+  it.each(['another page opens', 'another app comes in front'] as const)('lifts the hold once Try again reads the reviews, even when %s before they answer', async how => {
     fx.granola = 'linked';
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.run = impactRun('pending');
-    fx.failTools = true;
+    fx.failReviews = true;
     const store = await start();
     expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
-    // Try again: the tools answer this time, but Home is left before they do.
-    fx.failTools = false;
-    fx.hold.tools = true;
+    // Try again: the reviews answer this time, but Home is left before they do.
+    fx.failReviews = false;
+    fx.hold.reviews = true;
     const again = store.loadHome();
     await flush();
     if (how === 'another page opens') await store.openProject(project);
     else cover(store);
-    fx.hold.tools = false;
-    release('tools');
+    fx.hold.reviews = false;
+    release('reviews');
     await again;
     await flush();
     expect(starts()).toEqual([impactRun('pending').run_id]);
   });
 
-  it('never lifts the next account\'s hold with the tools the last account\'s Try again read', async () => {
+  it('never lifts the next account\'s hold with the reviews the last account\'s Try again read', async () => {
     fx.granola = 'linked';
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.run = impactRun('pending');
-    fx.failTools = true;
+    fx.failReviews = true;
     const store = await start();
-    // Try again, its tools still on their way as another account signs in, whose own tools cannot be read.
-    fx.failTools = false;
-    fx.hold.tools = true;
+    // Try again, its reviews still on their way as another account signs in, whose own reviews cannot be read.
+    fx.failReviews = false;
+    fx.hold.reviews = true;
     void store.loadHome();
     await flush();
-    fx.hold.tools = false;
-    fx.failTools = true;
+    fx.hold.reviews = false;
+    fx.failReviews = true;
     fx.member = 'other';
     await store.refreshStatus();
     await flush();
     expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
-    // The last account's tools answer: the new account's hold stays, so a meeting approved elsewhere starts nothing.
-    release('tools');
+    // The last account's reviews answer: the new account's hold stays, so a meeting approved elsewhere starts nothing.
+    release('reviews');
     await flush();
     await store.openProject(project);
     fx.moved.reviews = 1;
@@ -1344,31 +1343,31 @@ describe('Checks keep moving (one place to look v1)', () => {
   });
 
   it.each(['on Home', 'after another page opens'] as const)(
-    'never lifts the hold of a load after signing out and back in as the same person with the tools that person\'s last Try again read, %s',
+    'never lifts the hold of a load after signing out and back in as the same person with the reviews that person\'s last Try again read, %s',
     async when => {
       fx.granola = 'linked';
       fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
       fx.run = impactRun('pending');
-      fx.failTools = true;
+      fx.failReviews = true;
       const store = await start();
-      // Try again, its tools still on their way as the person signs out, then back in, and the new load's tools cannot be read.
-      fx.failTools = false;
-      fx.hold.tools = true;
+      // Try again, its reviews still on their way as the person signs out, then back in, and the new load's reviews cannot be read.
+      fx.failReviews = false;
+      fx.hold.reviews = true;
       void store.loadHome();
       await flush();
-      fx.hold.tools = false;
+      fx.hold.reviews = false;
       store.accountCommand('signout');
       await store.signOut();
       await flush();
       expect(store.getState().status?.signed_in).toBe(false);
-      fx.failTools = true;
+      fx.failReviews = true;
       fx.signedIn = true;
       await store.refreshStatus();
       await flush();
       expect(store.getState().home?.failure).toMatchObject({ code: 'transport_failed' });
       if (when === 'after another page opens') await store.openProject(project);
-      // The earlier Try again's tools answer: the new load's hold stays, so a meeting approved elsewhere starts nothing.
-      release('tools');
+      // The earlier Try again's reviews answer: the new load's hold stays, so a meeting approved elsewhere starts nothing.
+      release('reviews');
       await flush();
       if (when === 'on Home') await store.openProject(project);
       fx.moved.reviews = 1;
@@ -1419,7 +1418,7 @@ describe('Checks keep moving (one place to look v1)', () => {
 
   /** A project's follow-ups, open over its page (or over Home), with nothing in flight. */
   async function projectList(over: 'project' | 'Home' = 'project') {
-    fx.granola = null;
+    fx.listed = false;
     fx.page = { items: [item('1')], next_cursor: null, stages: [], summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1 } };
     const store = await start();
     if (over === 'project') await store.openProject(project);
@@ -1468,7 +1467,7 @@ describe('Follow-up lists and item pages', () => {
   const other = 'run_00000000-0000-4000-8000-000000000021';
   const rafael = { membership_id: RAFAEL.membership_id, name: RAFAEL.display_name, active: true };
 
-  beforeEach(() => { fx.granola = null; });
+  beforeEach(() => { fx.listed = false; });
 
   it('ticks every Not sent row you may send on a meeting\'s first read', async () => {
     fx.page = listPage([unsent('1'), unsent('2'), { ...unsent('3'), can: { set_state: false, assign: false } }, item('4')]);
@@ -1700,7 +1699,7 @@ describe('Follow-up lists: current work first, results in place', () => {
   const done = (id: string): OpenItemView => ({ ...item(id), state: 'done', state_set_at: '2026-10-08T12:00:00.000Z' });
   const other = 'run_00000000-0000-4000-8000-000000000021';
 
-  beforeEach(() => { fx.granola = null; });
+  beforeEach(() => { fx.listed = false; });
 
   it('reads current work first, each closed group once it opens, each with its own More, and Try again repeats the read that failed', async () => {
     // Three closed rows older than all current work: a read of every status would show only them on its first page.
@@ -1964,7 +1963,7 @@ describe('Follow-up lists: current work first, results in place', () => {
   });
 
   /** The ids each review_open asked for, in order. */
-  const opens = () => rpc.mock.calls.filter(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'review_open')
+  const opens = () => rpc.mock.calls.filter(([method, params]) => method === 'reviews' && params.request?.operation === 'review_open')
     .map(([, params]) => params.request.approval_id);
 
   it('opens a decision from its list by the record\'s own id, past the newest reviews, and says so when it cannot be read', async () => {
@@ -1972,12 +1971,13 @@ describe('Follow-up lists: current work first, results in place', () => {
     fx.listed = false;
     fx.page = listPage([unsent('1')]);
     const store = await meetingList();
+    rpc.mockClear();
     await store.openListDecision();
     // The Authority answers the record's proposal: the page holds the proposal's own id, and no reviews list was needed.
     expect(opens()).toEqual([recordApproval]);
     expect(store.followUpShown()).toMatchObject({ kind: 'decision' });
     expect(store.getState().decision).toMatchObject({ approval_id: approval, loading: false, open: { review: { approval_id: approval } } });
-    expect(rpc.mock.calls.some(([method, params]) => method === 'tools.meetings' && params.request?.operation === 'reviews')).toBe(false);
+    expect(rpc.mock.calls.some(([method, params]) => method === 'reviews' && params.request?.operation === 'reviews')).toBe(false);
     // Back on the list, opened again while the review cannot be read: the page says why, rather than nothing happening.
     store.closeFollowUp();
     await flush();
@@ -2039,7 +2039,7 @@ describe('Follow-up lists: current work first, results in place', () => {
 
 describe('Check now', () => {
   it('checks only the meeting whose follow-ups are open, then reads its results', async () => {
-    fx.granola = null;
+    fx.listed = false;
     fx.page = listPage();
     fx.sweepAnswer = { run_id: sweepRun('pending').run_id };
     const store = await meetingList();
@@ -2059,7 +2059,7 @@ describe('Check now', () => {
     summary: { ...EMPTY_SUMMARY, open: 1, decisions: 1, by_decision: [{ record_sha256: record, unsent: 0, open: 1, landed: 0, unreadable: 0 }] } });
   /** A project's follow-ups, open over its page. */
   async function projectList() {
-    fx.granola = null;
+    fx.listed = false;
     fx.page = listPage();
     const store = await start();
     await store.openProject(project);
@@ -2100,7 +2100,7 @@ describe('Check now', () => {
   });
 
   it('has what it found read on Back by the lists under it, so your Follow-ups say when ECHO last checked', async () => {
-    fx.granola = null;
+    fx.listed = false;
     fx.page = listPage();
     const store = await start();
     await store.openYourFollowUps();
@@ -2207,7 +2207,7 @@ describe('Check now', () => {
   });
 
   it('learns from a meeting\'s check whether Try again is yours, reading no runs list', async () => {
-    fx.granola = null;
+    fx.listed = false;
     fx.page = { ...listPage(), items: [], stages: [{ record_sha256: record, run_id: impactRun('done').run_id, state: 'done', error_code: null, mine: true }],
       summary: { ...EMPTY_SUMMARY, unsent: 2, decisions: 1, by_decision: [{ record_sha256: record, unsent: 2, open: 0, landed: 0, unreadable: 0 }] } };
     const store = await start();
@@ -2239,7 +2239,7 @@ describe('Rows first, then what each says now', () => {
   const closedAs = (state: 'done' | 'not_relevant') => (id: string): OpenItemView => opened(id, { state, state_set_at: '2026-10-08T12:00:00.000Z' });
   const unsentOpened = (id: string): OpenItemView => ({ ...unsent(id), reach: 'opened', current: { source: ticket, says_now: `Says ${id}` } });
 
-  beforeEach(() => { fx.granola = null; });
+  beforeEach(() => { fx.listed = false; });
 
   it('shows a row with what a live read brought of it, every other field as its rows were last read', async () => {
     const { shownItem } = await import('../../src/renderer/store.js');
@@ -2308,27 +2308,27 @@ describe('Rows first, then what each says now', () => {
     expect(homeItems(store).map(entry => entry.reach)).toEqual(['opened', 'opened']);
   });
 
-  it('reads the tools beside Home\'s other reads: only the meeting reviews wait on them', async () => {
-    fx.granola = 'linked';
+  it('reads reviews beside Home\'s other reads, so slow approvals do not hold up open items', async () => {
+    fx.listed = true;
     fx.home = { ...emptyHome(), items: [opened('1')] };
-    fx.hold.tools = true;
+    fx.hold.reviews = true;
     const store = await start();
-    // Runs and what waits on you were read without waiting for the tools; the reviews were not read yet.
+    // Runs and what waits on you appear while the reviews request is still in flight.
     expect(operations()).toEqual(expect.arrayContaining(['list', 'home']));
-    expect(rpc.mock.calls.some(([method]) => method === 'tools.meetings')).toBe(false);
+    expect(rpc.mock.calls.some(([method]) => method === 'reviews')).toBe(true);
     expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
-    release('tools');
+    release('reviews');
     await flush();
     expect(store.homeRows().map(row => row.kind)).toEqual(['approve', 'update']);
-    expect(store.getState().home).toMatchObject({ meetings: true, loading: false });
+    expect(store.getState().home).toMatchObject({ loading: false });
   });
 
-  it('fails a load whose tools cannot be read, as before, keeping what else it read and starting no run until Try again', async () => {
+  it('fails a load whose reviews cannot be read, as before, keeping what else it read and starting no run until Try again', async () => {
     fx.granola = 'linked';
     fx.review = { ...fx.review, status: 'approved', decided_on: 'desktop' };
     fx.run = impactRun('pending');
     fx.home = { ...emptyHome(), items: [opened('1')] };
-    fx.failTools = true;
+    fx.failReviews = true;
     const store = await start();
     expect(store.getState().home).toMatchObject({ loading: false, reading: false, failure: { code: 'transport_failed' } });
     expect(store.homeRows().map(row => row.kind)).toEqual(['update']);
@@ -2336,8 +2336,8 @@ describe('Rows first, then what each says now', () => {
     const calls = rpc.mock.calls.length;
     await vi.advanceTimersByTimeAsync(120_000);
     expect(rpc.mock.calls.slice(calls).filter(([method, params]) => method === 'runs' && params.request.read !== 'rows')).toEqual([]);
-    // Try again: the tools answer, and the queued check starts.
-    fx.failTools = false;
+    // Try again: the reviews answer, and the queued check starts.
+    fx.failReviews = false;
     await store.loadHome();
     expect(store.getState().home?.failure).toBeUndefined();
     expect(requests('start')).toHaveLength(1);

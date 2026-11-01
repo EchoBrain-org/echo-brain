@@ -10,9 +10,8 @@ import a provider implementation.
   selects the OpenRouter bundle and the Slack pieces from the `providers/`
   workspaces, the staging synthetic personal source (release canary, or the
   selected fixed fixtures), the personal Granola meeting provider
-  (`granola-person-live-runtime-v1.ts`), the hand-in provider every member
-  pastes meetings through (`hand-in-person-meeting-provider-v1.ts`), and the
-  shared personal meeting runtime with the approval core, its after-record
+  (`granola-person-live-runtime-v1.ts`), and the shared personal meeting
+  runtime with the approval core, its after-record
   hook and optional Slack presenter. It adds the Jira and Confluence Person runtimes
   (`jira-person-live-runtime-v1.ts`, `confluence-person-live-runtime-v1.ts`)
   as live connectors only when the service CLI supplies their explicit
@@ -92,10 +91,9 @@ known layering debt:
 
 - `approval-core-v1.ts` and `approval-publisher-v1.ts`: the decision table and
   record publication (raw SQL);
-- `person-meeting-runtime-v1.ts`: the personal meeting lanes and the
-  `POST /v1/person/meetings` route (raw SQL and SQLite adapters);
-- `hand-in-person-meeting-provider-v1.ts`: the handed-in meeting source, which
-  keeps and reads payloads through `SqlitePersonHandInMeetingsV1`;
+- `person-meeting-runtime-v1.ts`: the personal meeting lanes, the
+  `POST /v1/person/meetings` route and the provider-independent
+  `POST /v1/person/reviews` route (raw SQL and SQLite adapters);
 - `person-trigger-runs-v1.ts`, `person-sweep-runs-v1.ts` and
   `person-open-items-v1.ts`: runs, sweeps and open items (typed against
   `Sqlite*` adapter classes, with `better-sqlite3` write callbacks);

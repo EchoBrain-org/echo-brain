@@ -71,7 +71,7 @@ copy that a unit test proves equivalent.
 | Follow-ups | `screens/follow-ups.tsx` | Follow-up lists and the item page |
 | Reader | `screens/reader.tsx` | Any item by reference |
 | Capture | `screens/compose.tsx`, `project-picker.tsx`, `new-project.tsx` | Notes, documents and new projects |
-| Tools | `screens/tools.tsx`, `meetings.tsx`, `paste-meeting.tsx` | Personal connections, Granola meetings, pasting a meeting |
+| Tools | `screens/tools.tsx`, `meetings.tsx` | Personal connections and Granola meetings; Slack is labeled for approval notifications |
 | Organization | `screens/organization.tsx` | People and invitations, for owners |
 | Sign-in | `screens/signin.tsx`, `account.tsx` | Invitation or returning sign-in, sign-out |
 

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
+import { AUTHORITY_BASELINE_SCHEMA_VERSION, authorityBaselineSha256 } from "../../src/adapters/persistence/sqlite/baseline.js";
 import {
   canonicalJson,
   canonicalSha256,
@@ -374,6 +375,23 @@ describe("state-lineage pre-open guard", () => {
       },
     });
     refuses(manifestDrift, "schema_version_mismatch", /schema version is not exactly 1/);
+  });
+
+  it("refuses retired V15 Authority state without changing any state file", () => {
+    const root = replaced("authority.sqlite", "authority", {
+      userVersion: 15,
+      manifestBody: { ...databaseManifestBody("authority"), database_schema_version: 15 },
+    });
+    const expected = expectation(root);
+    const paths = [join(root, STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME),
+      ...stateLineageDatabaseSlotsV2().filter(slot => slot.location.kind === "state_file")
+        .map(slot => join(root, slot.location.filename))];
+    const before = paths.map(path => readFileSync(path));
+    expectRefusal(() => verifyStateLineageBeforeOpen({ ...expected, expected_schemas: {
+      ...expected.expected_schemas,
+      authority: { database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION, schema_sha256: authorityBaselineSha256() },
+    } }), "schema_version_mismatch", /schema version is not exactly 16/);
+    expect(paths.map(path => readFileSync(path))).toEqual(before);
   });
 
   it("refuses an artifact/state schema-digest mismatch in either direction", () => {

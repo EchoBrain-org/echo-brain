@@ -237,13 +237,13 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
             const current = validateOrganizationPersonTools(await application.tools(token));
             const organizationSetup = setup.organizationSetupForCaller(token);
             const tools = current.tools.map(tool => Object.freeze({
-              tool_id: 'slack', display_name: 'Slack', availability: tool.availability,
+              tool_id: 'slack', display_name: 'Slack (approval notifications)', availability: tool.availability,
               personal_status: tool.personal_status, external_scope_id: tool.workspace_id,
               external_subject_id: tool.account_id, organization_setup: organizationSetup,
             }));
             // Slack is listed before any connection exists so an owner can set it up.
             if (tools.length > 0) return tools;
-            return [Object.freeze({ tool_id: 'slack', display_name: 'Slack', availability: 'unavailable' as const,
+            return [Object.freeze({ tool_id: 'slack', display_name: 'Slack (approval notifications)', availability: 'unavailable' as const,
               personal_status: 'unavailable' as const, external_scope_id: null, external_subject_id: null, organization_setup: organizationSetup })];
           },
           close: () => database.close(),

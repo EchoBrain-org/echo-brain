@@ -276,7 +276,7 @@ export function approvalProposalSummaryV1(snapshotJson: string): { readonly firs
   const line = (brief.decisions[0]?.text ?? brief.actions[0]?.text)?.replace(/[\s\p{Cc}]+/gu, ' ').trim().slice(0, 300).replace(/[\uD800-\uDBFF]$/, '');
   const time = brief.meeting.time, started = new Date(time?.actual_start_at ?? time?.scheduled_start_at ?? NaN);
   const meetingAt = Number.isNaN(started.getTime()) ? null : started.toISOString();
-  // A whole day's time only names its UTC date (a pasted day is noon UTC), so readers show that date and no clock time.
+  // A whole day's time only names its UTC date, so readers show that date and no clock time.
   return { first_line: line || null, action_count: brief.actions.length, meeting_at: meetingAt, all_day: meetingAt !== null && time?.all_day === true };
 }
 

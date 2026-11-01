@@ -10,6 +10,16 @@ Shipped is not deployed or qualified.
 later added items kept private inside a project, and replaced section 2.5's
 destination chip with a place button and an Only me lock.
 
+Implementation update, 2026-11-01: Paste a meeting and its `hand-in`
+implementation are removed completely, including the desktop and CLI entry
+points, API payloads, provider, storage and compatibility processing. The
+founder confirmed the feature was never used and all existing data is
+disposable. Removal requires fresh Authority V16 state; V15 is not migrated.
+Nothing moves into Capture. Granola and the internal staging
+synthetic source remain. Native reviews use provider-independent `person reviews`
+requests and remain available without a connected meeting tool. The remainder
+records the original intake and routing design; its hand-in sections are historical.
+
 ## Goal
 
 Meetings enter ECHO automatically and stay private. Sharing is a choice made

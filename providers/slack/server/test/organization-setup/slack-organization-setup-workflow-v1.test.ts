@@ -915,7 +915,7 @@ describe("Slack runtime bundle with organization setup", () => {
   it("serves setup over the provider routes, reports the owner's status, and writes no setup token to disk", async () => {
     const { opened, call, tools, directory } = open();
     try {
-      await expect(tools("owner")).resolves.toEqual([{ tool_id: "slack", display_name: "Slack", availability: "unavailable",
+      await expect(tools("owner")).resolves.toEqual([{ tool_id: "slack", display_name: "Slack (approval notifications)", availability: "unavailable",
         personal_status: "unavailable", external_scope_id: null, external_subject_id: null, organization_setup: "not_set_up" }]);
       await expect(call(ORGANIZATION_API_SLACK_SETUP_PATH_V1, "owner", SETUP_REQUEST)).resolves.toMatchObject({ status: 201, body: { organization_setup: "app_created" } });
       await expect(tools("owner")).resolves.toMatchObject([{ organization_setup: "app_created" }]);
@@ -937,7 +937,7 @@ describe("Slack runtime bundle with organization setup", () => {
     const health = new SlackConnectionHealthV1();
     const context = open({ connection_health: health });
     await installOverRoutes(context);
-    const enabled = { tool_id: "slack", display_name: "Slack", availability: "enabled", personal_status: "unlinked",
+    const enabled = { tool_id: "slack", display_name: "Slack (approval notifications)", availability: "enabled", personal_status: "unlinked",
       external_scope_id: "T01", external_subject_id: null };
     await expect(context.tools("owner")).resolves.toEqual([{ ...enabled, organization_setup: "connected" }]);
     await expect(context.tools("employee")).resolves.toEqual([{ ...enabled, organization_setup: null }]);

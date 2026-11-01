@@ -68,9 +68,9 @@ function seededWithSources(): Database.Database {
   return database;
 }
 
-describe("Authority baseline V15", () => {
+describe("Authority baseline V16", () => {
   it("is fresh-only and stamps the Authority application id", () => {
-    expect(authorityBaselineSha256()).toBe("sha256:75be5debcf8b18bc2aa329b8b85a39642dc3dd4b857e112dc95556cfbc97e04c");
+    expect(authorityBaselineSha256()).toBe("sha256:1a073ab8605995d5a832ed6f51443dd051eb34082e7549633e6df1d2e33dc7f2");
     const database = seeded();
     expect(() => applyAuthorityBaseline(database)).toThrow("completely empty");
     expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
@@ -79,12 +79,17 @@ describe("Authority baseline V15", () => {
     expect(database.pragma("foreign_key_check")).toEqual([]);
   });
 
-  it("stamps user_version 15 on a fresh database", () => {
+  it("stamps user_version 16 on a fresh database", () => {
     const database = new Database(":memory:");
     databases.push(database);
     applyAuthorityBaseline(database);
-    expect(database.pragma("user_version", { simple: true })).toBe(15);
-    expect(AUTHORITY_BASELINE_SCHEMA_VERSION).toBe(15);
+    expect(database.pragma("user_version", { simple: true })).toBe(16);
+    expect(AUTHORITY_BASELINE_SCHEMA_VERSION).toBe(16);
+  });
+
+  it("does not install storage for the removed pasted-meeting input", () => {
+    const database = seeded();
+    expect(database.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'authority_person_hand_in_meetings_%'").all()).toEqual([]);
   });
 
   it("refuses a nonempty database without mutating it", () => {

@@ -17,19 +17,19 @@ test('Connect waits on the browser, reads the attempt until it completes, and li
   await expect(page.getByTestId('tool-connect-waiting')).toContainText(/Waiting · expires in (29|30) min/);
   await expect(page.getByTestId('toast')).toHaveText('Jira connected', { timeout: 15_000 });
   await expect(page.getByTestId('tool-connect-sheet')).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'Connected' }).getByTestId('tool-row')).toHaveText(['SSlackConnectedManage', 'JJiraConnectedManage']);
+  await expect(page.getByRole('region', { name: 'Connected' }).getByTestId('tool-row')).toHaveText(['SSlack (approval notifications)ConnectedManage', 'JJiraConnectedManage']);
   await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['CConfluenceNot connectedConnect']);
   expect(await page.content()).not.toMatch(/T0123ABCD|U0123ABCD|atlassian-account/);
   await page.locator('[data-tool="slack"]').getByTestId('tool-manage').click();
-  await expect(page.getByTestId('tool-manage-sheet')).toContainText('Disconnecting removes only your own Slack connection');
+  await expect(page.getByTestId('tool-manage-sheet')).toContainText('Disconnecting removes only your own Slack (approval notifications) connection');
   await emit(run.app, 'echo-test:conceal');
   await expect(page.getByTestId('tool-manage-sheet')).toHaveCount(0);
   await emit(run.app, 'echo-test:resume');
-  await expect(page.getByTestId('tool-manage-sheet')).toContainText('Disconnecting removes only your own Slack connection');
+  await expect(page.getByTestId('tool-manage-sheet')).toContainText('Disconnecting removes only your own Slack (approval notifications) connection');
   await page.getByTestId('tool-disconnect').click();
-  await expect(page.getByTestId('toast')).toHaveText('Slack disconnected');
+  await expect(page.getByTestId('toast')).toHaveText('Slack (approval notifications) disconnected');
   await expect(page.getByTestId('tool-manage-sheet')).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['SSlackNot connectedConnect', 'CConfluenceNot connectedConnect']);
+  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['SSlack (approval notifications)Not connectedConnect', 'CConfluenceNot connectedConnect']);
   expect(toolCalls()).toEqual(['jira connect', 'jira status', 'jira status', 'slack disconnect']);
 });
 

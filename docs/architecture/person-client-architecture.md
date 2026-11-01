@@ -280,14 +280,14 @@ The desktop app's **Tools** page (the sidebar's Tools row, or **Account →
 Connected tools…**) lists every tool the Authority returns from `person tools`,
 grouped by the signed-in person's connection: needs attention (revoked),
 connected, available, and not turned on. The list names no tool itself, so a
-tool the Authority adds appears without desktop changes. Two rows differ.
+tool the Authority adds appears without desktop changes.
 Granola's Manage sheet adds its meeting watch: Off, My meetings (the meetings
 the person recorded in the last 7 days) or One folder (a filter), with an
 optional suggested project that only pre-ticks a review's destinations
 ([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)).
-**Paste a meeting** needs no account: its Paste opens a sheet for a meeting
-from any tool (a title, an optional date, notes and an optional transcript),
-which `person tools submit --tool hand-in` hands in.
+The staging synthetic provider stays internal and is not listed. Slack's provider-owned label identifies approval notifications;
+it is not an Ask data source. Home and the decision page read reviews through
+`person reviews --request <JSON>`, without requiring a connected meeting tool.
 Connect, Reconnect and Disconnect run the same Person CLI tools verbs as the
 terminal:
 `person tools connect --tool <id> --no-wait` opens the tool's page and returns

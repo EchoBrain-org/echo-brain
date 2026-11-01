@@ -121,6 +121,7 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
       case 'app.status': return ok({ signed_in: true, account: ACCOUNT });
       case 'app.setUnresolved': return ok(null);
       case 'account.tools': return ok({ tools: [] });
+      case 'reviews': return ok({ reviews: [] });
       case 'projects.list': return ok(keysetPage(params.status === 'archived' ? lists().archived : lists().active, params.cursor));
       case 'projects.members': case 'people.directory': return ok({ items: [], next_cursor: null });
       case 'list.page': return ok({ items: [], next_cursor: null, meetings_held: false });

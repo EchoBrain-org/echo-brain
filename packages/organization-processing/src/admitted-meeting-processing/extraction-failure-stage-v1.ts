@@ -10,7 +10,7 @@ import { EXTRACTION_ATTEMPT_FAILURE_CODES_V1 } from './extraction-attempt-store-
 
 /**
  * Why a held meeting's extraction failed. Structural codes only, never model output or
- * meeting text. The Authority V15 CHECK on
+ * meeting text. The Authority V16 CHECK on
  * authority_live_source_held_extractions_v1.failure_stage lists exactly these values in order.
  * The last three come from the attempt ledger, not from an error.
  */

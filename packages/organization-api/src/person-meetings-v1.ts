@@ -4,12 +4,6 @@ import { PERSON_TOOL_REQUEST_MAX_BYTES_V1, type PersonToolHostV1 } from './perso
 
 export const PERSON_MEETINGS_PATH_V2 = '/v1/person/meetings';
 export const PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1 = 48 * 1024;
-/** The tool every member hands a meeting in through, whatever tool recorded it. */
-export const PERSON_HAND_IN_TOOL_ID_V1 = 'hand-in';
-/** A handed-in meeting's JSON: with the request around it, it stays inside the Authority's 64 KiB provider-route body. */
-export const PERSON_HAND_IN_MEETING_MAX_BYTES_V1 = 60 * 1024;
-/** The id the Authority derives from a handed-in meeting's content: `hand-in-` and the hex of its canonical digest. */
-export const PERSON_HAND_IN_MEETING_ID_V1 = /^hand-in-[a-f0-9]{64}$/;
 /** Explicit content kinds; submitting notes never manufactures a transcript. */
 export interface PersonSyntheticMeetingV1 {
   readonly id: string; readonly title: string; readonly notes: string; readonly transcript: string;
@@ -20,17 +14,8 @@ export interface PersonSyntheticMeetingV1 {
  * suggestion; it grants no read.
  */
 export type PersonMeetingWatchV2 = 'off' | 'mine' | 'folder';
-/**
- * A meeting handed in from any tool. It has no id: the Authority derives one from its content, so the same meeting
- * handed in twice is one meeting. Its text is canonical (`personHandInTextV1`). Its time is a start, with an optional end
- * and zone, or a whole day: the date at noon UTC with `all_day`. Notes or a transcript may be empty, not both.
- */
-export interface PersonHandInMeetingV1 {
-  readonly title: string; readonly notes: string; readonly transcript: string;
-  readonly started_at?: string; readonly ended_at?: string; readonly time_zone?: string; readonly all_day?: true;
-}
-/** What `submit` carries: a synthetic meeting for the staging synthetic tool, a handed-in meeting for the hand-in tool. */
-export type PersonSubmittedMeetingV2 = PersonSyntheticMeetingV1 | PersonHandInMeetingV1;
+/** Custom submissions are reserved for the synthetic staging provider. */
+export type PersonSubmittedMeetingV2 = PersonSyntheticMeetingV1;
 export type PersonMeetingOperationV2 =
   | { readonly operation: 'home' } | { readonly operation: 'reviews' }
   /** `folder_id` null browses the person's own recent meetings. */
@@ -141,60 +126,6 @@ export function validatePersonSyntheticMeetingV1(value: unknown): PersonSyntheti
       utf8ByteLength(JSON.stringify(row)) > PERSON_SYNTHETIC_MEETING_MAX_BYTES_V1) fail('Invalid synthetic meeting');
   return Object.freeze({ ...row }) as unknown as PersonSyntheticMeetingV1;
 }
-/**
- * Text as a handed-in meeting keeps it: line feeds only, NFC, no edge whitespace. Every other line break (vertical tab,
- * form feed, NEL, U+2028, U+2029) becomes a line feed and every other control but tab goes, so text pasted from any tool
- * is never refused for a character no one sees. Clients send it, so equal text derives one id.
- */
-export function personHandInTextV1(value: string): string {
-  return value.replace(/\r\n?|[\u000b\u000c\u0085\u2028\u2029]/g, '\n').replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u0084\u0086-\u009f]/g, '')
-    .normalize('NFC').trim();
-}
-const handInLabel = 'Handed-in meeting';
-/** Canonical text with no control but tab and line feed; a title is also one line of 1 to `maximum` code units. */
-function handInText(value: unknown, maximum?: number): asserts value is string {
-  if (typeof value !== 'string' || value !== personHandInTextV1(value) || /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value) ||
-      (maximum !== undefined && (value.length === 0 || value.length > maximum || /[\t\n]/.test(value)))) fail(`Invalid ${handInLabel.toLowerCase()} text`);
-}
-export function validatePersonHandInMeetingV1(value: unknown): PersonHandInMeetingV1 {
-  const row = asEnumerableRecord(value, handInLabel);
-  assertExactKeys(row, ['title', 'notes', 'transcript', ...['started_at', 'ended_at', 'time_zone', 'all_day'].filter(key => Object.hasOwn(row, key))], handInLabel);
-  handInText(row.title, 200); handInText(row.notes); handInText(row.transcript);
-  if (row.notes === '' && row.transcript === '') fail('A handed-in meeting needs notes or a transcript');
-  if (utf8ByteLength(JSON.stringify(row)) > PERSON_HAND_IN_MEETING_MAX_BYTES_V1) fail('Handed-in meeting exceeds its bound');
-  if (row.started_at !== undefined) assertTimestamp(row.started_at, 'Handed-in meeting start');
-  // A whole day is its date at noon UTC, the same calendar day from UTC-11 to UTC+11, so a reader that shows it in local
-  // time keeps the day. It has no end or zone: one way to say it, so one id.
-  if (row.all_day !== undefined && (row.all_day !== true || typeof row.started_at !== 'string' || !row.started_at.endsWith('T12:00:00.000Z') ||
-      row.ended_at !== undefined || row.time_zone !== undefined)) fail('Invalid handed-in whole-day meeting');
-  if (row.ended_at !== undefined) {
-    assertTimestamp(row.ended_at, 'Handed-in meeting end');
-    if (row.started_at === undefined || Date.parse(row.ended_at) < Date.parse(row.started_at as string)) fail('Invalid handed-in meeting time range');
-  }
-  if (row.time_zone !== undefined) {
-    if (typeof row.time_zone !== 'string' || row.time_zone.length === 0 || row.time_zone.length > 100 || row.started_at === undefined) fail('Invalid handed-in meeting time zone');
-    try { new Intl.DateTimeFormat('en', { timeZone: row.time_zone }); } catch { fail('Invalid handed-in meeting time zone'); }
-  }
-  return Object.freeze({ ...row }) as unknown as PersonHandInMeetingV1;
-}
-/**
- * The meeting a hand-in sends, from text as a person gave it: canonical text, and either a start (a UTC timestamp, with
- * its zone) or a whole day's date (YYYY-MM-DD). Throws when the result is not a valid handed-in meeting.
- */
-export function personHandInMeetingV1(input: {
-  readonly title: string; readonly notes: string; readonly transcript: string;
-  readonly started_at?: string; readonly time_zone?: string; readonly date?: string;
-}): PersonHandInMeetingV1 {
-  if (input.date !== undefined && (input.started_at !== undefined || input.time_zone !== undefined || !/^\d{4}-\d{2}-\d{2}$/.test(input.date))) {
-    fail('A handed-in meeting takes a start or a whole day');
-  }
-  return validatePersonHandInMeetingV1({
-    title: personHandInTextV1(input.title), notes: personHandInTextV1(input.notes), transcript: personHandInTextV1(input.transcript),
-    ...(input.date === undefined ? {} : { started_at: `${input.date}T12:00:00.000Z`, all_day: true }),
-    ...(input.started_at === undefined ? {} : { started_at: input.started_at }),
-    ...(input.time_zone === undefined ? {} : { time_zone: input.time_zone }),
-  });
-}
 function projectIds(value: unknown): asserts value is readonly string[] {
   if (!Array.isArray(value) || value.length > 20) fail(label);
   let previous: string | undefined;
@@ -227,14 +158,13 @@ function ownerChoices(input: unknown): asserts input is readonly { readonly sign
     seen.add(item.signal_id);
   }
 }
-export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingRequestV2 {
-  const row = asEnumerableRecord(value, label), operation = row.operation as PersonMeetingOperationV2['operation'];
-  if (!Object.hasOwn(fields, operation) || row.schema_version !== 2) fail(label);
-  assertExactKeys(row, ['schema_version', 'tool_id', 'operation', ...fields[operation]], label); text(row.tool_id, 64);
+/** The same review fields serve both the legacy meeting route and the person-owned review route. */
+export type PersonMeetingReviewOperationV2 = Extract<PersonMeetingOperationV2, { readonly operation: 'reviews' | 'review_open' | 'review' }>;
+function validateMeetingOperationFields(row: Record<string, unknown>, operation: PersonMeetingOperationV2['operation']): void {
   for (const key of fields[operation]) {
     const item = row[key];
     if (key === 'retain') { if (item !== true) fail('Meeting retention consent is required'); }
-    else if (key === 'meeting') (row.tool_id === PERSON_HAND_IN_TOOL_ID_V1 ? validatePersonHandInMeetingV1 : validatePersonSyntheticMeetingV1)(item);
+    else if (key === 'meeting') validatePersonSyntheticMeetingV1(item);
     else if (key === 'routes') routes(item);
     else if (key === 'owners') ownerChoices(item);
     else if (key === 'watch') { if (!WATCHES.includes(item)) fail(label); }
@@ -242,7 +172,7 @@ export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingReq
     else { text(item); if (key.endsWith('_sha256')) digest(item); }
   }
   if ('project_id' in row && row.project_id !== null) validateProjectIdV1(row.project_id);
-  if (operation === 'submit' && row.tool_id !== 'synthetic' && row.tool_id !== PERSON_HAND_IN_TOOL_ID_V1) fail('Meetings are submitted through the hand-in tool');
+  if (operation === 'submit' && row.tool_id !== 'synthetic') fail('Custom meeting submission is available only through the synthetic staging tool');
   if (operation === 'review') {
     const review = row as PersonMeetingRequestV2 & { readonly operation: 'review' };
     text(row.command_id, 128);
@@ -252,6 +182,19 @@ export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingReq
       : review.routes.every(route => route.project_ids === null) || new Set(review.routes.flatMap(route => route.project_ids ?? [])).size > 20) fail(label);
   }
   if (operation === 'watch' && !watchShape(row.watch, row.folder_id, row.project_id)) fail(label);
+}
+export function validatePersonMeetingReviewOperationV2(value: unknown): PersonMeetingReviewOperationV2 {
+  const row = asEnumerableRecord(value, label), operation = row.operation as PersonMeetingReviewOperationV2['operation'];
+  if (!['reviews', 'review_open', 'review'].includes(operation)) fail(label);
+  assertExactKeys(row, ['operation', ...fields[operation]], label);
+  validateMeetingOperationFields(row, operation);
+  return Object.freeze({ ...row }) as PersonMeetingReviewOperationV2;
+}
+export function validatePersonMeetingRequestV2(value: unknown): PersonMeetingRequestV2 {
+  const row = asEnumerableRecord(value, label), operation = row.operation as PersonMeetingOperationV2['operation'];
+  if (!Object.hasOwn(fields, operation) || row.schema_version !== 2) fail(label);
+  assertExactKeys(row, ['schema_version', 'tool_id', 'operation', ...fields[operation]], label); text(row.tool_id, 64);
+  validateMeetingOperationFields(row, operation);
   return Object.freeze({ ...row }) as PersonMeetingRequestV2;
 }
 /** Transport and UTF-8 bounds apply before parsing; typed response checks also run at the Authority. */
@@ -337,14 +280,14 @@ export function validatePersonMeetingResultV2<K extends keyof PersonMeetingResul
   const statuses = { watch: ['saved'], import: ['queued'], submit: ['queued'], cancel_import: ['cancelled'], review: ['publishing','approved','rejected'] };
   if (operation === 'submit') {
     text(row.meeting_id, 128);
-    if (!/^synthetic-custom-[a-z0-9][a-z0-9-]*$/.test(row.meeting_id) && !PERSON_HAND_IN_MEETING_ID_V1.test(row.meeting_id)) fail('Invalid submitted meeting id');
+    if (!/^synthetic-custom-[a-z0-9][a-z0-9-]*$/.test(row.meeting_id)) fail('Invalid submitted meeting id');
   }
   if (operation in statuses && !(statuses[operation as keyof typeof statuses] as readonly unknown[]).includes(row.status)) fail('Invalid meeting outcome');
   if (operation === 'review' && !['desktop', 'slack'].includes(String(row.decided_on))) fail('Invalid meeting decision surface');
   return Object.freeze({ ...row }) as unknown as PersonMeetingResultsV2[K];
 }
 export function personMeetingCommandV2<K extends PersonMeetingOperationV2['operation']>(host: PersonToolHostV1, request: PersonMeetingRequestV2 & { readonly operation: K }): Promise<PersonMeetingResultsV2[K]> {
-  // A handed-in meeting is up to 60 KiB, past the ordinary 16 KiB request body.
+  // A custom staging meeting is up to 48 KiB, past the ordinary 16 KiB request body.
   return host.withToolSession(session => session.transport.json({ path: PERSON_MEETINGS_PATH_V2, body: validatePersonMeetingRequestV2(request), validate_request: validatePersonMeetingRequestV2,
     validate_response: value => validatePersonMeetingResultV2(request.operation, value), maximum_request_bytes: PERSON_TOOL_REQUEST_MAX_BYTES_V1, maximum_response_bytes: 128 * 1024, timeout_ms: 75_000 }));
 }

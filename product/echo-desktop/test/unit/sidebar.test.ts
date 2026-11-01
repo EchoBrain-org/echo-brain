@@ -25,7 +25,7 @@ async function projectFailure(archived: boolean): Promise<State> {
     ...getState(),
     status: { client_version: 'test', signed_in: true, account: ACCOUNT },
     [archived ? 'archivedProjects' : 'projects']: { items: [], next: null, loading: false, failure: { code: 'unavailable', retryable: true } },
-    home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
+    home: { seq: 1, loading: false, reviews: [], runs: [], open: null, live: {}, reading: false },
   };
 }
 
@@ -58,7 +58,7 @@ describe('New project', () => {
       ...getState(), route: { page: 'home' },
       status: { client_version: 'test', signed_in: true, account: ACCOUNT },
       projects: { items: [], next: null, loading: false },
-      home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
+      home: { seq: 1, loading: false, reviews: [], runs: [], open: null, live: {}, reading: false },
     };
   }
 
@@ -95,7 +95,7 @@ describe('your follow-ups (F9) and Only me', () => {
     return {
       ...getState(), route,
       status: { client_version: 'test', signed_in: true, account: ACCOUNT },
-      home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open, live: {}, reading: false },
+      home: { seq: 1, loading: false, reviews: [], runs: [], open, live: {}, reading: false },
     };
   }
   const rows = (state: State) => elements(Sidebar({ state })).filter(node => typeof node.props['data-testid'] === 'string' && node.props['data-testid'].startsWith('sidebar-'));
@@ -164,7 +164,7 @@ describe('Ask', () => {
     return {
       ...getState(), route, ask: open ? ask : null,
       status: { client_version: 'test', signed_in: true, account: { ...ACCOUNT, role: 'owner' } },
-      home: { seq: 1, loading: false, meetings: true, reviews: [], runs: [], open: null, live: {}, reading: false },
+      home: { seq: 1, loading: false, reviews: [], runs: [], open: null, live: {}, reading: false },
     };
   }
 

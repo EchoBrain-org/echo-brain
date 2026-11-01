@@ -24,7 +24,7 @@ function addOwner(db: Database.Database, organization_id: string, owner: typeof 
     VALUES (?, ?, ?, ?, 'active', ?, NULL, NULL, ?, ?)`).run(owner.membership_id, organization_id, owner.principal_id, employee_email === null ? 'owner' : 'employee', NOW, employee_email, employee_email && canonicalSha256(employee_email));
 }
 
-/** Fresh V15 state, one active owner membership, and the synthetic provider as the only personal provider. */
+/** Fresh V16 state, one active owner membership, and the synthetic provider as the only personal provider. */
 async function syntheticWorld(options: { readonly signals?: boolean; readonly hold?: Promise<void> } = {}) {
   const authority = testAuthority();
   const organization_id = authority.descriptor.organization_id;

@@ -208,8 +208,7 @@
       "allowed_imports": [
         "src/product/person-client/commands.ts",
         "src/product/person-client/client-update-cli.ts",
-        "src/product/person-client/synthetic-meeting-tool.ts",
-        "src/product/person-client/hand-in-meeting-tool.ts"
+        "src/product/person-client/synthetic-meeting-tool.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/provider-jira-client",
@@ -356,18 +355,6 @@
     {
       "name": "person-client-synthetic-meeting-tool",
       "from": "src/product/person-client/synthetic-meeting-tool.ts",
-      "allowed_imports": [
-        "src/product/person-client/update-file.ts"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/organization-api"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "person-client-hand-in-meeting-tool",
-      "from": "src/product/person-client/hand-in-meeting-tool.ts",
       "allowed_imports": [
         "src/product/person-client/update-file.ts"
       ],

@@ -40,7 +40,7 @@ flowchart LR
   through the repository's reviewed CLIs and bounded SSM commands
   ([operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md)).
 - **What comes in.** Only each person's own sources: their Granola meetings,
-  meetings they paste in (`hand-in`), and on staging a synthetic source. There is
+  and on staging an internal synthetic source for release qualification. There is
   no organization-wide meeting source. Jira and Confluence are read live, with
   the asker's own connection, at question time. Slack is an approval surface
   only; Ask never reads Slack.
@@ -111,7 +111,7 @@ migrates: a changed baseline means fresh state.
 | --- | --- | --- |
 | HTTP edge | `src/presentation/organization-authority-http-server.ts` | Routes, request limits, the Ask progress stream; never opens SQLite |
 | Identity and sessions | `src/application/person-identity-sessions.ts`, `adapters/oidc/`, kernel `domain/person-session-rules.ts` | Google OIDC sign-in, rotating sessions (12 h access, re-sign-in after 7 days), membership and revocation on every request |
-| Meeting intake | `composition/person-meeting-runtime-v1.ts` | Up to three lanes over personal sources: Granola, pasted meetings, the staging synthetic source |
+| Meeting intake | `composition/person-meeting-runtime-v1.ts` | Personal Granola intake and the internal staging synthetic source |
 | Extraction | `packages/organization-processing` (`admitted-meeting-processing/meeting-processing-cycle-v1.ts`, `llm/llm-decision-processor.ts`), `providers/openrouter` | One model extraction per meeting; failures are held, and paid attempts are recorded in `extraction-attempts.sqlite` |
 | Approval and publication | `composition/approval-core-v1.ts`, `composition/approval-publisher-v1.ts`, `providers/slack/server` | One frozen proposal per meeting, first decision wins; one signed record per destination group |
 | Organization record | `packages/organization-record` | Append-only `record-log.sqlite` and the permission-aware Person reader |
@@ -190,7 +190,7 @@ Deeper: [component catalog](../components/README.md),
 ### A meeting becomes records
 
 1. A person's source produces a meeting: the Granola watch (their meetings or
-   one folder, last 7 days), a pasted meeting, or the staging synthetic source.
+   one folder, last 7 days), or the staging synthetic source.
 2. The intake lanes admit it as that person's private source revision. Nobody
    else can read it.
 3. The processing cycle extracts decisions and follow-ups with one model call.
@@ -199,7 +199,7 @@ Deeper: [component catalog](../components/README.md),
 4. The approval core freezes one proposal for the meeting.
 5. The person decides on the desktop decision page, routing each item to Only
    me, up to 20 projects, those projects privately, or Don't keep. The CLI can
-   decide too (`person tools meetings`, recorded as a desktop decision). The
+   decide too (`person reviews`, recorded as a desktop decision). The
    optional Slack copy approves everything as suggested. The first decision
    wins.
 6. The publisher appends one signed record per destination group to the record

@@ -57,7 +57,7 @@ export function authorization(
 }
 
 /**
- * Creates the active V15 schema and a small single-organization tenancy.
+ * Creates the active V16 schema and a small single-organization tenancy.
  * A separate Authority database owns each organization, so cross-organization
  * regressions use absent foreign organization coordinates rather than inventing
  * an impossible second `authority_metadata` row.

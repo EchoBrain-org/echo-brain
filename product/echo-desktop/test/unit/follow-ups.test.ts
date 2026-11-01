@@ -100,7 +100,7 @@ async function yours(patch: Partial<Pick<FollowUpList, 'owner' | 'expanded' | 's
     summary: { ...EMPTY_SUMMARY, unsent: 2, open: 3, done: 1 }, stage: null, ticks: {}, sends: {}, check: null, expanded: {}, busy: false, said: null,
     picker: null, stale: false, ...patch,
   };
-  const home = { seq: 1, loading: false, meetings: true, reviews: [], runs: [], live: {}, reading: false,
+  const home = { seq: 1, loading: false, reviews: [], runs: [], live: {}, reading: false,
     open: { send: [], items: [], landed: 0, waiting: 2, last_checked_at: homeChecked, sweep_due: false } };
   const state = { ...getState(), status: { signed_in: true, account: ACCOUNT }, home, projects: { items: [PROJECT], next: null, loading: false } } as unknown as State;
   return render(FollowUps({ state, list })) as Node;
