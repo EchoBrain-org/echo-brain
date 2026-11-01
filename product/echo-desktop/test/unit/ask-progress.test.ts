@@ -22,7 +22,7 @@ const answer = (withReceipt = true): Answer => ({
   parts: [{ question: 'What did we agree?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }] }],
   ...(withReceipt ? { receipt } : {}),
 });
-const record = { title: 'Tuesday sync', all_day: false, participants: [], participants_more: false, visibility: 'organization',
+const record = { title: 'Tuesday sync', all_day: false, participants: [], participants_more: false, visibility: 'project',
   decisions: { items: [{ text: 'Ship it.', excerpts: [], atom_id: sha('1') }], more: false }, actions: { items: [], more: false }, rationales: { items: [], more: false } };
 
 let held: Held;

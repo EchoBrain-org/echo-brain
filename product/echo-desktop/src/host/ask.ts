@@ -5,22 +5,22 @@
 import {
   PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validatePersonQueryText, validateProjectIdV1,
 } from '@echo-brain/organization-api';
-import type { AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRef, SourceRef } from '../shared/protocol.js';
+import type { AskedScope, AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRef, SourceRef } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
 
 /**
  * The client command for an Ask of `text` (already askText's). Every Ask,
- * Mine as much as global or project, asks `/v7` with its progress; the host
- * pins it to the account the page shows, as every call: a client signed in as
- * another by then asks nothing and prints no step, so the page's account check
- * of each step is the client's own. A follow-up or Ask again carries the
- * earlier turn (`previous`, ADR-0047), already checked by askPrevious.
+ * global or project, asks `/v7` with its progress; the host pins it to the
+ * account the page shows, as every call: a client signed in as another by
+ * then asks nothing and prints no step, so the page's account check of each
+ * step is the client's own. A follow-up or Ask again carries the earlier turn
+ * (`previous`, ADR-0047), already checked by askPrevious.
  */
-export function askArgv(text: string, scope: AskScope, previous?: AskPrevious): string[] {
+export function askArgv(text: string, scope: AskedScope, previous?: AskPrevious): string[] {
   return ['ask', `--question=${text}`, '--progress',
-    ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : scope.kind === 'mine' ? ['--mine'] : []),
+    ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : []),
     ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`])];
 }
 
@@ -35,9 +35,9 @@ const checks = (validate: (value: unknown) => unknown, value: unknown): boolean 
  * own is the client's to report, as it does with or without the earlier turn,
  * so then the turn goes as it came.
  */
-export function askPrevious(value: unknown, question: string, scope: AskScope): AskPrevious | null {
+export function askPrevious(value: unknown, question: string, scope: AskedScope): AskPrevious | null {
   if (!checks(validatePersonQueryText, question) || (scope.kind === 'project' && !checks(validateProjectIdV1, scope.project_id))) return value as AskPrevious;
-  const where = scope.kind === 'project' ? { project_id: scope.project_id } : scope.kind === 'mine' ? { mine: true } : {};
+  const where = scope.kind === 'project' ? { project_id: scope.project_id } : {};
   try {
     const previous = validatePersonAnswerRequestV3({ schema_version: 3, question, ...where, previous: value }).previous!;
     return askText(previous.question) === previous.question ? value as AskPrevious : null;

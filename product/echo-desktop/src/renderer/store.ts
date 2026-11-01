@@ -5,9 +5,9 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskChoice, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool, ContextContent,
-  DocumentText, Employee, Expect, ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
-  ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
+  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskChoice, AskedScope, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  ContextContent, DocumentText, Employee, Expect, ConnectedTools, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
+  ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, PastedMeeting, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
@@ -35,7 +35,7 @@ type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | {
 /** A question, in the scope it was asked in. */
 export interface AskQuestion {
   question: string;
-  scope: AskScope;
+  scope: AskedScope;
 }
 
 /**
@@ -547,7 +547,7 @@ export interface State {
    * What the bar asks about, and searches: a project (the chip), or all
    * context; never Mine (ADR-0049). The page never moves with it.
    */
-  barScope: AskScope;
+  barScope: AskedScope;
   /** The bar's text. Only asking, Escape, or a real change of access empties it. */
   barText: string;
   matches: MatchesState | null;
@@ -3648,10 +3648,8 @@ export function widenScope(): void {
   void checkTimeline();
 }
 
-/** What a scope is called: all context, Mine, or the project by its name, as the sidebar has it. */
-export function scopeName(scope: AskScope, current: State = state): string {
-  if (scope.kind === 'global') return 'All accessible context';
-  if (scope.kind === 'mine') return 'Mine';
+/** What a project's turns are called: the project by its name, as the sidebar has it. */
+export function scopeName(scope: ProjectScope, current: State = state): string {
   const route = current.route;
   if (route.page === 'project' && route.project.project_id === scope.project_id) return route.project.name;
   return [...current.projects.items, ...current.archivedProjects.items].find(project => project.project_id === scope.project_id)?.name ?? 'Project';
@@ -3934,7 +3932,7 @@ export function fullTurns(view: AskState): readonly string[] {
  * under it (ADR-0039); with no answer, they go, and so does any item they
  * opened in the pane.
  */
-export async function ask(question: string, scope: AskScope = state.barScope, how?: AskHow): Promise<void> {
+export async function ask(question: string, scope: AskedScope = state.barScope, how?: AskHow): Promise<void> {
   const account = expect();
   const text = question.trim();
   const open = state.ask;
@@ -4019,7 +4017,7 @@ export function askProgress(notice: AskProgressNotice): void {
  * matched. Ask never widens on its own (ADR-0015); the reader may ask the same
  * question across everything they can read, with one tap.
  */
-export function foundNothingInProject(turn: TimelineTurn): boolean {
+export function foundNothingInProject(turn: TimelineTurn): turn is TimelineTurn & { readonly scope: ProjectScope } {
   return turn.scope.kind === 'project' && turn.answer.sources.length === 0;
 }
 
@@ -4155,7 +4153,7 @@ async function openAskAt(turn: TimelineTurn): Promise<void> {
   if (project?.status !== 'active') project = undefined;
   if (!sameScope(state.barScope, project ? scope : { kind: 'global' })) {
     if (!project) goHome();
-    else if (state.route.page === 'project' && state.route.project.project_id === project.project_id) set({ barScope: scope });
+    else if (state.route.page === 'project' && state.route.project.project_id === project.project_id) set({ barScope: { kind: 'project', project_id: project.project_id } });
     else void openProject(project);
   }
   set({ ask: newAsk() });

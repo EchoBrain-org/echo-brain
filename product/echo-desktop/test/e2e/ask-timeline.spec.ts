@@ -50,7 +50,6 @@ test('the timeline stays through navigation, on this computer only, each place s
   await expect(rows.getByTestId('timeline-question')).toHaveText('What did we agree?');
   await expect(rows).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByTestId('question')).toHaveText(['What is left in Apollo?', 'Who approved it?']);
-  await expect(page.getByTestId('ask-view')).not.toContainText('All accessible context');
   // A line opens its answer as it was.
   await rows.click();
   await expect(rows).toHaveAttribute('aria-expanded', 'true');

@@ -189,7 +189,7 @@ const LONG_ACTION = `Draft the renewal terms.${' Clause.'.repeat(872)}`;
 
 /** An approved meeting, as list and open release it. */
 interface Meeting {
-  record_sha256: string; title: string; added_at: string; meeting_date: string; visibility: 'only_me' | 'team' | 'project';
+  record_sha256: string; title: string; added_at: string; meeting_date: string; visibility: 'only_me' | 'project';
   project_ids: string[]; approver: string; started_at: string; timezone: string; participants: string[]; approved_by: string;
   atoms: { kind: 'decision' | 'action' | 'rationale'; text: string; status?: string; owner?: string }[];
 }
@@ -785,7 +785,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const brief = desktop.record.brief as unknown as { decisions: Record<string, unknown>[]; actions: { text: string }[]; rationales: { text: string }[] };
     brief.decisions.unshift({ id: 'd0', kind: 'decision', status: 'decided', text: 'Keep monthly plans until November.', evidence: [] });
     meetings.push({
-      record_sha256: TUESDAY, title: 'Tuesday sync', added_at: '2026-09-15T18:00:00.000Z', meeting_date: '2026-09-15', visibility: 'team', project_ids: [],
+      record_sha256: TUESDAY, title: 'Tuesday sync', added_at: '2026-09-15T18:00:00.000Z', meeting_date: '2026-09-15', visibility: 'project', project_ids: [],
       approver: 'mem_33333333-3333-4333-8333-333333333333', started_at: '2026-09-15T17:00:00.000Z', timezone: 'America/Los_Angeles',
       participants: ['Maya Chen', 'Ari'], approved_by: 'Maya Chen',
       atoms: [...brief.decisions.map(item => ({ kind: 'decision' as const, text: String(item.text) })), ...brief.actions.map(item => ({ kind: 'action' as const, text: item.text })),

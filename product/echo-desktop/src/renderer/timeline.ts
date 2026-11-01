@@ -4,7 +4,7 @@
 // empty bar suggests from it. Pure, for the store and its tests; the store
 // keeps the state and makes the calls.
 import type {
-  AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, CheckCitation, TimelineTurn,
+  AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskedScope, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
 import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
@@ -254,8 +254,8 @@ function within(text: string, max: number): string {
 }
 
 /** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes. */
-function bodyBytes(question: string, scope: AskScope, previous: AskPrevious): number {
-  const body = { schema_version: 3, question, ...(scope.kind === 'project' ? { project_id: scope.project_id } : scope.kind === 'mine' ? { mine: true } : {}), previous };
+function bodyBytes(question: string, scope: AskedScope, previous: AskPrevious): number {
+  const body = { schema_version: 3, question, ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}), previous };
   return new TextEncoder().encode(JSON.stringify(body)).length;
 }
 
@@ -280,7 +280,7 @@ export function answeredNow(turn: TimelineTurn): TurnChecks {
  * the question (C5). Sentences go from the end until the request, asking
  * `question` in `scope`, fits the Ask body's 16 KiB.
  */
-export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope): AskPrevious {
+export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskedScope): AskPrevious {
   const sources = turn.answer.sources;
   const read = (at: number) => sources[at] === undefined || checkOf(sources[at]) === undefined || known?.[at] === 'same' || known?.[at] === 'changed';
   const readable = known === null ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
