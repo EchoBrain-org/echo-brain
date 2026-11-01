@@ -150,22 +150,40 @@ test('hidden tests ignore native window focus changes but honor explicit conceal
   await expect(toast).toHaveText('Saved for you');
 });
 
-test('the caret goes back to the bar as the window comes forward, but not over a row you click before the next frame', async () => {
-  run = await launch();
+/**
+ * Brings the window forward with the page's frames held, as a busy machine does, until the caret's move to the bar waits
+ * for the next one. The returned function lets that frame come.
+ */
+async function forwardWithFramesHeld(): Promise<() => Promise<void>> {
   const { page, app } = run;
-  const row = page.getByTestId('sidebar-project').first();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  // Hold the page's frames, as a busy machine does, to see what waits for the next one.
   await page.evaluate(() => {
     const held: FrameRequestCallback[] = [];
     Object.assign(window, { held });
     window.requestAnimationFrame = callback => held.push(callback);
   });
-  const held = () => page.evaluate(() => (window as unknown as { held: FrameRequestCallback[] }).held.map(String));
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:resume');
-  await expect.poll(async () => (await held()).some(source => source.includes('ask-field'))).toBe(true);
-  await row.focus();
-  await page.evaluate(() => { for (const callback of (window as unknown as { held: FrameRequestCallback[] }).held.splice(0)) callback(performance.now()); });
-  await expect(row).toBeFocused();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { held: FrameRequestCallback[] }).held.some(callback => String(callback).includes('ask-field')))).toBe(true);
+  return () => page.evaluate(() => { for (const callback of (window as unknown as { held: FrameRequestCallback[] }).held.splice(0)) callback(performance.now()); });
+}
+
+test('the caret goes back to the bar as the window comes forward, but not over a key you press before the next frame', async () => {
+  run = await launch();
+  const { page } = run;
+  const frame = await forwardWithFramesHeld();
+  await page.keyboard.press('Tab');
+  const tabbed = await page.evaluate(() => { document.activeElement?.setAttribute('data-tabbed', ''); return document.activeElement?.id ?? ''; });
+  expect(tabbed).not.toBe('ask-field');
+  await frame();
+  await expect(page.locator('[data-tabbed]')).toBeFocused();
+});
+
+test('focus the page moves by itself before the next frame does not keep the caret from the bar', async () => {
+  run = await launch();
+  const { page } = run;
+  const frame = await forwardWithFramesHeld();
+  await page.getByTestId('sidebar-project').first().focus();
+  await frame();
+  await expect(page.locator('#ask-field')).toBeFocused();
 });

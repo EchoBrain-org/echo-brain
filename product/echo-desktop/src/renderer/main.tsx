@@ -40,13 +40,17 @@ function sheetUp(): boolean {
 /** How long a toast that says something went well stays: one that warns stays until the next page. */
 const TOAST_MS = 8_000;
 
+/** Counts the person's clicks and keys, so a caret waiting for a frame can tell they acted before it came. */
+let inputs = 0;
+for (const type of ['pointerdown', 'keydown'] as const) document.addEventListener(type, () => { inputs += 1; }, true);
+
 /** The caret waits in the ask bar whenever the window comes forward, unless a sheet is up. */
 function focusBar(): void {
   if (sheetUp()) return;
-  const was = document.activeElement;
+  const seen = inputs;
   // A sheet can open before the next frame (a drop, ⌘⇧E), and on a busy machine that frame can be half a second away, long
-  // enough to click a row: either keeps the focus.
-  requestAnimationFrame(() => { if (!sheetUp() && document.activeElement === was) document.getElementById('ask-field')?.focus(); });
+  // enough to click or type somewhere: either keeps the focus. Focus the page itself moved in the meantime does not.
+  requestAnimationFrame(() => { if (!sheetUp() && inputs === seen) document.getElementById('ask-field')?.focus(); });
 }
 
 /**
