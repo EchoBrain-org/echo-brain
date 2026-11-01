@@ -353,6 +353,14 @@ describe("CI workflow", () => {
         "arm64_non_public_immutable_helper",
         "bounded_bundle_bootstrap",
       ],
+      "authority-staging-data-backup-v1.guard": [
+        "exact_resource_inventory",
+        "retained_data_backup_vault",
+        "exact_data_volume_selection",
+        "exact_backup_and_restore_roles",
+        "bounded_schedule_and_retention",
+        "missed_backup_alarm",
+      ],
       "authority-staging-host-v1.guard": [
         "exact_staging_slot_inventory",
         "host_toggle_leaves_the_slot_boundary_persistent",
