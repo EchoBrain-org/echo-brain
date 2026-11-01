@@ -2,7 +2,7 @@ import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol"
 import type { PersonUploadAudienceV2, PersonUploadAudienceV3, ProjectIdV1 } from "@echo-brain/organization-api";
 
 /** The audience columns a stored note or document row carries. */
-export interface StoredUploadAudienceRowV1 {
+interface StoredUploadAudienceRowV1 {
   readonly organization_id: string;
   readonly membership_id: string;
   readonly audience_kind: string;

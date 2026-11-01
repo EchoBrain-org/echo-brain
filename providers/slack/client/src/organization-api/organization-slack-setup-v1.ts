@@ -21,7 +21,7 @@ export interface OrganizationSlackExistingAppV1 {
 }
 
 /** Owner only. The configuration token is used once in memory and never stored or echoed. */
-export interface OrganizationSlackSetupRequestV1 {
+interface OrganizationSlackSetupRequestV1 {
   request_id: string;
   configuration_token: string;
   existing_app?: OrganizationSlackExistingAppV1;
@@ -34,7 +34,7 @@ export interface OrganizationSlackSetupResponseV1 {
   organization_setup: 'app_created' | 'connected';
 }
 
-export interface OrganizationSlackInstallBeginRequestV1 {
+interface OrganizationSlackInstallBeginRequestV1 {
   request_id: string;
 }
 
@@ -46,7 +46,7 @@ export interface OrganizationSlackInstallBeginResponseV1 {
   expires_at: string;
 }
 
-export interface OrganizationSlackInstallAttemptRequestV1 {
+interface OrganizationSlackInstallAttemptRequestV1 {
   attempt_id: string;
 }
 

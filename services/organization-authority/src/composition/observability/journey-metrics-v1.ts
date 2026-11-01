@@ -18,12 +18,12 @@ function metricsNamespace(environment: OperationalJourneyEnvironmentV1): Journey
   throw new TypeError("Operational telemetry environment is invalid");
 }
 
-export interface JourneyEmfMetricDefinitionV1 {
+interface JourneyEmfMetricDefinitionV1 {
   readonly Name: string;
   readonly Unit: "Count" | "Milliseconds";
 }
 
-export interface JourneyMetricRecordV1 {
+interface JourneyMetricRecordV1 {
   readonly _aws: {
     readonly Timestamp: number;
     readonly CloudWatchMetrics: readonly [{

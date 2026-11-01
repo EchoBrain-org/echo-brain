@@ -13,7 +13,8 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
-import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
+import { MEMBER, OWNER, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, projectContextDatabase, seedProject, seedProjectMember } from "./fixtures/project-context-sqlite.js";
+import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
 /**
  * ADR-0023: a released upload names only the reader's current projects, and
@@ -32,23 +33,15 @@ afterEach(async () => {
   for (const database of databases.splice(0)) database.close();
 });
 
-function grant(database: Database.Database, projectId: string, actor: AuthorityPersonMembershipBinding, role: "lead" | "member"): void {
-  database.prepare(`INSERT INTO authority_project_memberships_v1
-    (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
-    VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`, projectId, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, role, PROJECT_CONTEXT_NOW);
-}
-
 function fixture() {
   const database = projectContextDatabase(); databases.push(database);
   const projects: readonly [string, AuthorityPersonMembershipBinding, readonly AuthorityPersonMembershipBinding[]][] = [
     [SHARED, OWNER, [MEMBER]], [OWNER_ONLY, OWNER, []], [MEMBER_ONLY, MEMBER, []], [SHARED_TOO, OWNER, [MEMBER]],
   ];
   for (const [projectId, lead, members] of projects) {
-    database.prepare(`INSERT INTO authority_projects_v1
-      (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
-      VALUES (?,?,?,?,?,?,?)`).run(projectId, lead.organization_id, projectId, PROJECT_CONTEXT_NOW, lead.principal_id, lead.membership_id, lead.membership_type);
-    grant(database, projectId, lead, "lead");
-    for (const member of members) grant(database, projectId, member, "member");
+    seedProject(database, projectId, lead);
+    seedProjectMember(database, projectId, lead, "lead");
+    for (const member of members) seedProjectMember(database, projectId, member, "member");
   }
   const authenticate = (token: string) => authorization(token === "member" ? MEMBER : OWNER);
   const documents = createPersonDocumentApplicationV1({ repository: new SqlitePersonDocumentRepositoryV1(database, () => PROJECT_CONTEXT_NOW), authenticate });
@@ -99,9 +92,10 @@ describe("released upload audiences name only the reader's current projects", ()
     const note = f.submitV3("owner", [SHARED, OWNER_ONLY, SHARED_TOO]);
     const visible: PersonUploadAudienceV3 = { kind: "projects", project_ids: [SHARED, SHARED_TOO] };
     expect(f.documents.readV2("member", saved.document_id).audience).toEqual(visible);
-    expect(f.updates.readUploadV3("member", note.context_id).audience).toEqual(visible);
+    const uploads = f.updates.searchUploadsV3("member", { query: "interface" });
+    expect(uploads.results).toEqual([expect.objectContaining({ context_id: note.context_id, audience: visible })]);
     expect(released(f.documents.readV2("member", saved.document_id))).not.toContain(OWNER_ONLY);
-    expect(released(f.updates.readUploadV3("member", note.context_id))).not.toContain(OWNER_ONLY);
+    expect(released(uploads)).not.toContain(OWNER_ONLY);
   });
 
   it.each([
@@ -111,20 +105,13 @@ describe("released upload audiences name only the reader's current projects", ()
     const f = fixture();
     const note = f.submitV3(uploader, audience);
     const own: PersonUploadAudienceV3 = { kind: "project", project_id: SHARED };
-    const feed = f.updates.feedV2(reader, { project_id: SHARED });
     const search = f.updates.searchV2(reader, { project_id: SHARED, query: "interface" });
-    const context = f.updates.readContextV2(reader, SHARED, note.context_id);
-    const content = f.updates.readUploadV3(reader, note.context_id);
     const uploads = f.updates.searchUploadsV3(reader, { query: "interface" });
-    const reads = [feed, search, context, content, uploads];
-    expect(feed.items.map(item => item.audience)).toEqual([own]);
-    expect(search.items.map(item => item.audience)).toEqual([own]);
-    expect(context.audience).toEqual(own);
-    expect(content.audience).toEqual(own);
-    expect(uploads.results.map(item => item.audience)).toEqual([own]);
-    for (const value of reads) expect(released(value)).not.toContain(hidden);
+    expect(search.items.map(item => [item.context_id, item.audience])).toEqual([[note.context_id, own]]);
+    expect(uploads.results.map(item => [item.context_id, item.audience])).toEqual([[note.context_id, own]]);
+    for (const value of [search, uploads]) expect(released(value)).not.toContain(hidden);
 
-    expect(f.updates.readUploadV3(uploader, note.context_id).audience).toEqual({ kind: "projects", project_ids: audience });
+    expect(f.updates.searchUploadsV3(uploader, { query: "interface" }).results.map(item => item.audience)).toEqual([{ kind: "projects", project_ids: audience }]);
   });
 });
 
@@ -184,7 +171,7 @@ describe("a note's V3 status applies the document receipt-visibility check", () 
 describe("the served V3 note routes release only the reader's view", () => {
   it("serves a collapsed audience to a non-member and a saved-only status to a departed uploader", async () => {
     const f = fixture();
-    const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: "https://issuer.example", project_context: f.updates });
+    const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ project_context: f.updates }));
     servers.push(server); server.listen(0, "127.0.0.1"); await once(server, "listening");
     const address = server.address(); if (address === null || typeof address === "string") throw new Error("missing test address");
     const get = async (path: string, token: string) => {
@@ -192,12 +179,19 @@ describe("the served V3 note routes release only the reader's view", () => {
       expect(response.status).toBe(200);
       return await response.json() as Record<string, unknown>;
     };
+    const post = async (path: string, body: unknown, token: string) => {
+      const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(200);
+      return await response.json() as Record<string, unknown>;
+    };
     const note = f.submitV3("owner", [SHARED, OWNER_ONLY]);
-    const content = await get(`/v3/person/updates/content/${note.context_id}`, "member");
-    expect(content.audience).toEqual({ kind: "project", project_id: SHARED });
-    expect(released(content)).not.toContain(OWNER_ONLY);
-    const context = await get(`/v2/person/projects/${SHARED}/context/${note.context_id}`, "member");
-    expect(context.audience).toEqual({ kind: "project", project_id: SHARED });
+    const uploads = await post("/v3/person/updates/search", { query: "interface" }, "member");
+    expect(uploads.results).toEqual([expect.objectContaining({ context_id: note.context_id, audience: { kind: "project", project_id: SHARED } })]);
+    expect(released(uploads)).not.toContain(OWNER_ONLY);
+    const found = await post("/v2/person/projects/context/search", { project_id: SHARED, query: "interface" }, "member");
+    expect(found.items).toEqual([expect.objectContaining({ context_id: note.context_id, audience: { kind: "project", project_id: SHARED } })]);
 
     expect(await get(`/v3/person/updates/${note.request_id}`, "owner")).toMatchObject({ kind: "echo-person-update-status-v3", audience: { kind: "projects", project_ids: [SHARED, OWNER_ONLY] } });
     f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")

@@ -3,7 +3,7 @@ import type { Answer, AnswerSource } from '../../src/shared/protocol.js';
 import {
   answerMarkdown, answerSentences, documentName, externalSourceProvider, lateForYou, MAX_SOURCES, passageBlocks, sourceGroups, statementGroups, tableDay,
 } from '../../src/renderer/answer.js';
-import { layoutAnswer } from '../../src/host/test-authority.js';
+import { layoutAnswer } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
 
 const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -14,7 +14,7 @@ const original = (source: string, anchor: string, label = 'SCOUT-Hardware-Review
   ref: { source_id: `source:${source.repeat(64)}`, revision_id: 'rev-1', source_sha256: digest('2'), representation_sha256: digest('3'), anchor_sha256: digest(anchor) },
 });
 const record = (digit: string): AnswerSource => ({
-  kind: 'record', label: 'Approved record 1', record: { record_sha256: digest(digit), policy_id: 'organization-member-readable-person-v2' }, atom_id: digest('a'),
+  kind: 'record', label: 'Approved record 1', record: { record_sha256: digest(digit), policy_id: 'project-members-readable-person-v1' }, atom_id: digest('a'),
 });
 const page = (id: string): AnswerSource => ({ kind: 'page', tool_id: 'confluence', label: 'Launch plan', permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${id}` });
 

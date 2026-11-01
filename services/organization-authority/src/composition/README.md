@@ -18,14 +18,11 @@ import a provider implementation.
   as live connectors only when the service CLI supplies their explicit
   configuration. Meetings come only from
   person-owned sources; there is no organization meeting source.
-- `organization-authority-service-cli.ts` instead opens
-  `staging-connector-rehearsal-runtime.ts` when the staging host selects a
-  connector rehearsal profile. That opt-in, staging-only root and its
-  protocol and selection modules (`staging-connector-rehearsal-*`) sit at the
-  top of this directory, not in `staging/`.
-- The connector rehearsal is a Jira-only, request-bound read verification.
-  The Slack bot reads nothing, and the rehearsal has no capture or storage
-  path.
+- `organization-authority-service-cli.ts` opens this one root on every
+  Authority. On staging, the fixed connector profile that
+  `staging-connector-rehearsal-selection.ts` reads only supplies the Jira and
+  Confluence configuration; Jira connections stay in the state directory, as
+  with explicit flags.
 - `organization-authority-runtime.ts` composes the provider-neutral runtime.
   `organization-authority-service-lifecycle.ts` owns startup, the worker,
   shutdown order and the writer gate. The gate covers only recovery and
@@ -63,11 +60,10 @@ import a provider implementation.
 - `organization-authority-state-bootstrap.ts`, `organization-authority-setup-cli.ts`
   and `organization-authority-reset-cli.ts` own stopped-state setup and reset.
 - The `person-*` modules wire Person routes and upload processing, the
-  `readable-search-*` modules own search generations, the `*-journey-*`
-  modules record Ask journeys, `staging/` holds the staging synthetic meeting
-  source selection and personal provider and the release canary with its
-  private socket control and client, and `synthetic-demo-*` is the no-write
-  demo extraction evaluator.
+  `readable-search-*` modules own search generations, `staging/` holds the
+  staging synthetic meeting source selection and personal provider and the
+  release canary with its private socket control and client, and
+  `synthetic-demo-*` is the no-write demo extraction evaluator.
 - `observability/` holds the journey metrics and telemetry transport and the
   optional staging LangSmith trace exporter (`langsmith-observer-v1.ts`,
   `langsmith-runtime-v1.ts`), which `organization-authority-service-cli.ts`
@@ -110,12 +106,18 @@ known layering debt:
 - `person-project-activity-v1.ts`: project activity (Ask timeline v1, C2),
   which opens its one read transaction the same way and also reads through
   `SqlitePersonProjectActivityV1`;
+- `person-ask-check-v1.ts`: the Ask source check (ADR-0047), which opens its
+  one read transaction the same way and is typed against
+  `SqliteProjectContextRepositoryV1`, `SqlitePersonOriginalContextRetrievalV1`,
+  `SqliteImpactItemsV1` and `SqliteOpenItemPeopleV1`;
 - `person-record-search-route.ts`: record list, search and open (raw SQL on
   record-log tables), with `person-record-read-route.ts` and
   `person-answer-v3-route.ts` (concrete SQLite audit adapters);
 - `person-follow-ups-evidence-v1.ts` and `person-workspace-evidence-v1.ts`:
   the follow-ups and workspace research sources (typed against
   `SqliteImpactItemsV1` and `SqliteOpenItemPeopleV1`);
+- `person-provider-state-v1.ts`: each person provider's own database, which
+  it opens and binds to the Authority lineage (raw SQL);
 - `staging/staging-synthetic-personal-canary-v1.ts`: the staging release
   canary (raw SQL on memberships, source progress, proposals and held
   extractions); and
@@ -124,7 +126,10 @@ known layering debt:
 
 The composition root itself also runs three raw-SQL lookups for the Slack
 approval click and presenter: the organization's active memberships, one
-reviewer's membership type and the reviewer's active projects.
+reviewer's membership type and the reviewer's active projects. The
+stopped-state roots run raw SQL too: `organization-authority-state-bootstrap.ts`,
+`organization-authority-setup-cli.ts` (with `person-onboarding-service.ts`) and
+the operator's `organization-authority-extraction-attempt-cli.ts`.
 
 A new module must not join this list quietly: add it here in the same change,
 or put its logic behind an application port.

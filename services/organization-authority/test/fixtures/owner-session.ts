@@ -6,12 +6,19 @@ import { expect } from 'vitest';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import type { OidcAuthorizationCodeResult, PersonSessionOidcConfiguration } from '@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies';
+import type { AnswerCompositionGenerationBindingV1 } from '@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1';
 import { SqlitePersonSessionRepository } from '../../src/adapters/persistence/sqlite/sqlite-person-session-repository.js';
 import { NodePersonSessionCrypto } from '../../src/adapters/security/node-person-session-crypto.js';
 import { SystemAuthorityClock } from '../../src/adapters/system/system-authority-clock.js';
 import { PersonIdentitySessionApplication, type BegunPersonOidcLogin, type IssuedPersonSession } from '../../src/application/person-identity-sessions.js';
 import { bootstrapOrganizationAuthorityState } from '../../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../../src/composition/person-onboarding-service.js';
+
+/** The answer model the Authority always binds, for a runtime whose test asks nothing. */
+export const UNUSED_ANSWER_MODEL: AnswerCompositionGenerationBindingV1 = {
+  structured_output: { generate: async () => { throw new Error('this test asks nothing'); } },
+  generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1_000 },
+};
 
 /** A loopback port that was free a moment ago. */
 export async function port(): Promise<number> {

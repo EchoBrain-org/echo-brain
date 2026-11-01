@@ -2,7 +2,7 @@ import { canonicalSha256, type JsonValue, type Sha256Digest } from '@echo-brain/
 import { asRecord, assertExactKeys, assertDigest, assertPositiveSafeInteger, assertTimestamp, canonicalSnapshot } from './validation-support.js';
 import { organizationProtocolValidationFailure as fail } from './validation-error.js';
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from './record-payload.js';
-import { approvedDecisionSnapshotV2Sha256, validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from './human-act-record-input-v1.js';
+import { approvedDecisionSnapshotV2Sha256, validateApprovedDecisionSnapshotV2, type ApprovedDecisionSnapshotV2 } from './approved-decision-snapshot-v2.js';
 import {
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, projectMembersReadablePersonPolicyContractSha256,
   restrictedReviewerPersonPolicyContractSha256,
@@ -25,9 +25,9 @@ export const APPROVAL_DECISION_PROVIDER_ACTION_KIND_V2 = 'echo-approval-decision
 /** approved_payload.surface of every snapshot the approval core freezes. approval-core-v1.ts aliases it as APPROVAL_SNAPSHOT_SURFACE_V1. */
 export const APPROVAL_DECISION_SNAPSHOT_SURFACE_V1 = 'echo-approval-core';
 /** The kind a destination's record approval id is derived under. */
-export const APPROVAL_ROUTE_KIND_V1 = 'echo-approval-route-v1';
+const APPROVAL_ROUTE_KIND_V1 = 'echo-approval-route-v1';
 export type ApprovalDecisionSurfaceV1 = 'desktop' | 'slack';
-/** Only me (restricted reviewer) or projects. Team (organization-member-readable) is not a choice (spec 1 ruling 2) and is refused. */
+/** Only me (restricted reviewer) or projects; any other policy is refused (spec 1 ruling 2). */
 export type ApprovalDecisionPolicyIdV1 = typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
 export interface ApprovalDecisionActionOwnerV1 { readonly signal_id: string; readonly owner: string }
 export interface ApprovalDecisionRefV2 {

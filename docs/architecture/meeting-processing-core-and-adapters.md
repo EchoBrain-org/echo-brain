@@ -300,19 +300,25 @@ cancellable attempts.
 ## Current composition
 
 The Organization Authority composition root selects OpenRouter with the pinned
-Claude Sonnet processing version as the decision processor, Slack for the
-optional approval DM copy, interactions and identity, and Authority SQLite
-state. Meetings enter only through a person's own sources, so ordinary startup
-requires no meeting source. A staging-only synthetic personal source exercises
-the retained meeting pipeline without Granola. It separately
-composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter
-Claude Sonnet 5.5 planner/answer model. This is an allowed selecting composition
-profile, not evidence that every active provider has completed qualification.
+processing model `anthropic/claude-sonnet-4.6` as the decision processor, Slack
+for the optional approval DM copy, interactions and identity, and Authority
+SQLite state. Meetings enter only through a person's own sources, so ordinary
+startup requires no meeting source. A staging-only synthetic personal source
+exercises the retained meeting pipeline without Granola. It separately
+composes the bounded Person `ask` path above Layer 3 with the pinned OpenRouter
+planner/answer model `anthropic/claude-sonnet-5.5`. On the staging Authority
+only, the connector rehearsal profile also selects the Claude Agent SDK
+research engine, still over OpenRouter, and a host operator may let one
+member's own Claude account research and write that member's Ask answers
+([Staging connector rehearsal](../../services/organization-authority/README.md#staging-connector-rehearsal),
+[Personal Claude staging research](../../deploy/organization-authority/README.md#personal-claude-staging-research)).
+This is an allowed selecting composition profile, not evidence that every
+active provider has completed qualification.
 
 The Jira live runtime (`jira-person-live-runtime-v1.ts`) is a selected,
 request-bound Person read capability. Global Ask reads tickets visible through
 the asker's own Jira connection; project Ask additionally requires the saved
-ECHO-to-Jira project mapping, and Mine excludes Jira. Jira data is read live for
+ECHO-to-Jira project mapping. Jira data is read live for
 the request and does not enter source admission or canonical meeting
 processing. Personal connector verification remains request-only.
 
@@ -322,7 +328,7 @@ connected person on the selected Confluence site, without an ECHO space or
 page allowlist. Project Ask narrows discovery to the saved ECHO-project to
 Confluence-space mapping and still checks the asker's permissions. A mapping
 does not grant access, and an unmapped project does not fall back to global
-Confluence discovery. Mine excludes external pages.
+Confluence discovery.
 
 Live pages have their own provider-neutral citation contract. They are not
 retained uploads, meeting records, or tickets. Discovery releases page metadata;

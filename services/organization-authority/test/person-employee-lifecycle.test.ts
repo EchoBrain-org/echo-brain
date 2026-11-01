@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
-import { ownerGenesis, signInHttpSession, syntheticOidcProvider } from "./fixtures/owner-session.js";
+import { UNUSED_ANSWER_MODEL, ownerGenesis, signInHttpSession, syntheticOidcProvider } from "./fixtures/owner-session.js";
 
 const roots: string[] = [];
 
@@ -45,7 +45,7 @@ describe("Person employee lifecycle", () => {
         client_authentication: { method: "none" },
         pkce_sealing_key: owner.pkce,
       },
-      { oidc_provider: provider },
+      { oidc_provider: provider, answer_composition_generation: UNUSED_ANSWER_MODEL },
     );
     try {
       const origin = `http://127.0.0.1:${String(runtime.address.port)}`;

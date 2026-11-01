@@ -12,19 +12,20 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { runPersonClientCli } from '../../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../../src/product/person-client/session-store.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
+import { SqlitePersonOriginalItemsV1 } from '../src/adapters/persistence/sqlite/person-original-items-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { createPersonDocumentUploadStagingV1 } from '../src/adapters/files/document-upload-staging-v1.js';
 import type { PersonDocumentApplicationV1 } from '../src/application/ports/document-v1.js';
 import type { PersonDocumentUploadStagingV1 } from '../src/application/ports/document-upload-staging-v1.js';
 import { createOrganizationAuthorityHttpServer, type OrganizationAuthorityHttpServerOptions } from '../src/presentation/organization-authority-http-server.js';
-import { addMembership, authorization, PROJECT_CONTEXT_NOW, PROJECT_ALPHA, PROJECT_BETA } from './fixtures/project-context-sqlite.js';
+import { addMembership, authorization, PROJECT_CONTEXT_NOW, PROJECT_ALPHA, PROJECT_BETA, seedProject, seedProjectMember } from './fixtures/project-context-sqlite.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 import { PersonDocumentProcessingV1 } from '../src/composition/person-document-processing-v1.js';
 import { pdf, zip, entries } from './document-extraction-fixtures.js';
 import { PEOPLE } from '../../../tests/fixtures/project-context-integration/scenario.js';
 const token='A'.repeat(43);const memberToken='B'.repeat(43);
 const closers:(()=>Promise<void>)[]=[];
 afterEach(async()=>{for(const close of closers.splice(0).reverse())await close();});
-const options=():OrganizationAuthorityHttpServerOptions=>({descriptor:{} as never,sessions:{} as never,oidc_provider:{} as never,expected_issuer:'https://issuer.example'});
 function input(bytes:Uint8Array,overrides:Partial<PersonDocumentUploadMetadataV2>={}):PersonDocumentUploadMetadataV2{return {schema_version:2,kind:'echo-person-document-upload-v2',request_id:randomUUID(),filename:'机器人-PRD.md',title:'SCOUT requirements',content_length:bytes.byteLength,sha256:sha256Digest(bytes),audience:{kind:'team'},association_project_ids:[PROJECT_ALPHA],...overrides};}
 function headers(value:PersonDocumentUploadMetadataV2,bearer=token){return {authorization:`Bearer ${bearer}`,'content-type':'application/octet-stream','content-length':String(value.content_length),'x-echo-document-metadata':Buffer.from(canonicalJson(value)).toString('base64url')};}
 async function fixture(extra:{decorate?:(app:PersonDocumentApplicationV1)=>PersonDocumentApplicationV1;closing?:()=>boolean;staging?:PersonDocumentUploadStagingV1;server?:Partial<OrganizationAuthorityHttpServerOptions>}={}){
@@ -32,15 +33,21 @@ async function fixture(extra:{decorate?:(app:PersonDocumentApplicationV1)=>Perso
  db.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_00000000-0000-4000-8000-000000000006',?,'Document HTTP fixture','{}',?,?)`).run(PEOPLE.alice.organization_id,PROJECT_CONTEXT_NOW,PROJECT_CONTEXT_NOW);
  db.prepare(`INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)`).run(PEOPLE.alice.organization_id,PROJECT_CONTEXT_NOW);
  for(const actor of [PEOPLE.alice,PEOPLE.bob])addMembership(db,actor,actor.principal_id,`${actor.principal_id}@example.test`);
- db.prepare(`INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)`).run(PROJECT_ALPHA,PEOPLE.alice.organization_id,'SCOUT',PROJECT_CONTEXT_NOW,PEOPLE.alice.principal_id,PEOPLE.alice.membership_id,PEOPLE.alice.membership_type);
- for(const actor of [PEOPLE.alice,PEOPLE.bob])db.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at) VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`,PROJECT_ALPHA,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,actor===PEOPLE.alice?'lead':'member',PROJECT_CONTEXT_NOW);
+ seedProject(db,PROJECT_ALPHA,PEOPLE.alice,{name:'SCOUT'});
+ for(const actor of [PEOPLE.alice,PEOPLE.bob])seedProjectMember(db,PROJECT_ALPHA,actor,actor===PEOPLE.alice?'lead':'member');
  const repository=new SqlitePersonDocumentRepositoryV1(db,()=>PROJECT_CONTEXT_NOW);const app=createPersonDocumentApplicationV1({repository,authenticate:value=>{if(value!==token&&value!==memberToken)throw new AuthorityOperationError('unauthorized','fixture secret');return authorization(value===token?PEOPLE.alice:PEOPLE.bob);}});
  const staging=extra.staging??createPersonDocumentUploadStagingV1({temporaryDirectory:directory});
- const server=createOrganizationAuthorityHttpServer({...options(),person_documents:extra.decorate?.(app)??app,document_upload_staging:staging,...(extra.closing?{is_closing:extra.closing}:{}),...extra.server});server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();if(!address||typeof address==='string')throw new Error('address unavailable');
+ const server=createOrganizationAuthorityHttpServer(authorityHttpServerOptions({person_documents:extra.decorate?.(app)??app,document_upload_staging:staging,...(extra.closing?{is_closing:extra.closing}:{}),...extra.server}));server.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address();if(!address||typeof address==='string')throw new Error('address unavailable');
  closers.push(async()=>{const closed=once(server,'close');server.close();server.closeAllConnections();await closed;await new Promise(resolve=>setImmediate(resolve));db.close();rmSync(directory,{recursive:true,force:true});});
  return {directory,db,app,repository,server,origin:`http://127.0.0.1:${address.port}`};
 }
 async function failure(response:Response,status=400,code='invalid_request'){expect(response.status).toBe(status);expect(await response.json()).toEqual({error:{code,message:'request failed'}});}
+/** A document's extracted text as `person open --ref document:<id>` reads it (ADR-0024) for `actor`: every page's chunks, in order. */
+function opened(db:Database.Database,actor:typeof PEOPLE.alice,documentId:string){
+ const items=new SqlitePersonOriginalItemsV1(db,{authenticateAccess:()=>authorization(actor)},actor.organization_id);
+ const pages:{anchor_kind:string;text:string}[][]=[];
+ for(let from:number|undefined;;){const page=items.open({access_token:'fixture',ref:{kind:'document',id:documentId as `doc_${string}`},...(from===undefined?{}:{from_ordinal:from})});if(page.kind!=='document')throw new Error('expected a document');pages.push(page.chunks.map(({anchor_kind,text})=>({anchor_kind,text})));if(page.next_ordinal===null)return pages;from=page.next_ordinal;}
+}
 function pending(origin:string,value:PersonDocumentUploadMetadataV2,override:Record<string,string|string[]>={}):{request:ClientRequest;response:Promise<{status:number;body:string}>}{
  let request!:ClientRequest;const response=new Promise<{status:number;body:string}>((resolve,reject)=>{request=httpRequest(`${origin}/v2/person/documents/${value.request_id}`,{method:'PUT',headers:{...headers(value),...override}},res=>{let body='';res.on('data',chunk=>{body+=String(chunk);});res.on('end',()=>resolve({status:res.statusCode!,body}));});request.on('error',reject);request.flushHeaders();});void response.catch(()=>undefined);return {request,response};
 }
@@ -50,8 +57,8 @@ async function upload(origin:string,bytes:Buffer,value=input(bytes)){const respo
 describe('document binary HTTP boundary and real service integration',()=>{
  it('serves one modern original through both project scopes and the union of current members without widening private uploads',async()=>{
   const h=await fixture(), bytes=Buffer.from('Shared hardware software interface');
-  h.db.prepare(`INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)`).run(PROJECT_BETA,PEOPLE.alice.organization_id,'Hardware',PROJECT_CONTEXT_NOW,PEOPLE.alice.principal_id,PEOPLE.alice.membership_id,PEOPLE.alice.membership_type);
-  const grantBeta=(actor:typeof PEOPLE.alice)=>h.db.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at) VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`,PROJECT_BETA,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,'member',PROJECT_CONTEXT_NOW);
+  seedProject(h.db,PROJECT_BETA,PEOPLE.alice,{name:'Hardware'});
+  const grantBeta=(actor:typeof PEOPLE.alice)=>seedProjectMember(h.db,PROJECT_BETA,actor,'member');
   grantBeta(PEOPLE.alice);
   const value:PersonDocumentUploadMetadataV2={schema_version:2,kind:'echo-person-document-upload-v2',request_id:randomUUID(),filename:'interface.md',title:'Interface',content_length:bytes.length,sha256:sha256Digest(bytes),association_project_ids:[PROJECT_ALPHA,PROJECT_BETA],audience:{kind:'projects',project_ids:[PROJECT_ALPHA,PROJECT_BETA]}};
   const put=async(metadata=value)=>fetch(`${h.origin}/v2/person/documents/${metadata.request_id}`,{method:'PUT',headers:headers(metadata),body:new Uint8Array(bytes)});
@@ -70,7 +77,7 @@ describe('document binary HTTP boundary and real service integration',()=>{
    const original=await get(`${saved.document_id}/original?project_id=${project}`);expect(original.status).toBe(200);expect(Buffer.from(await original.arrayBuffer())).toEqual(bytes);
   }
   const claim=h.repository.claimExtraction()!;h.repository.completeExtraction(claim,{status:'ready',sourceSha256:claim.source_sha256,extractorVersion:'fixture-v2',message:null,chunks:[{anchor_kind:'paragraph',anchor_start:1,text:bytes.toString()}]});
-  const text=await get(`${saved.document_id}/text?project_id=${PROJECT_BETA}`);expect(text.status).toBe(200);expect(await text.json()).toMatchObject({chunks:[{text:bytes.toString()}]});
+  expect(opened(h.db,PEOPLE.bob,saved.document_id)).toEqual([[{anchor_kind:'paragraph',text:bytes.toString()}]]);
   const search=await fetch(`${h.origin}/v2/person/documents/search`,{method:'POST',headers:{authorization:`Bearer ${memberToken}`,'content-type':'application/json'},body:JSON.stringify({schema_version:2,kind:'echo-person-document-search-v2',project_id:PROJECT_BETA,query:'interface',limit:20,cursor:null})});expect(search.status).toBe(200);expect(await search.json()).toMatchObject({schema_version:2,documents:[{document_id:saved.document_id}]});
   const privateResponse=await put({...value,request_id:randomUUID(),audience:{kind:'only_me'}});expect(privateResponse.status).toBe(201);const privateSaved=validatePersonDocumentReceiptV2(await privateResponse.json());
   await failure(await get(`${privateSaved.document_id}?project_id=${PROJECT_BETA}`),404,'not_found');
@@ -90,11 +97,11 @@ describe('document binary HTTP boundary and real service integration',()=>{
   await failure(await fetch(`${h.origin}/v2/person/documents/${value.request_id}`,{method:'PUT',headers:headers(value),body:new Uint8Array(bytes)}),409,'quota_exceeded');
   expect(h.db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:0});
  });
- it('uploads a Unicode-named >8KiB original and reads status, bounded text, indexed project search and exact bytes',async()=>{
+ it('uploads a Unicode-named >8KiB original and reads status, extracted text, indexed project search and exact bytes',async()=>{
   const h=await fixture();const bytes=Buffer.from('SCOUT requirement\n'.repeat(900)+'end-needle');const value=input(bytes);const receipt=await upload(h.origin,bytes,value);
   const status=await fetch(`${h.origin}/v2/person/documents/requests/${value.request_id}`,{headers:{authorization:`Bearer ${token}`}});expect(status.status).toBe(200);expect(await status.json()).toMatchObject({document_id:receipt.document_id,extraction_state:'extracting',filename:value.filename});
   const claim=h.repository.claimExtraction()!;h.repository.completeExtraction(claim,{status:'ready',sourceSha256:claim.source_sha256,extractorVersion:'http-fixture-1',message:null,chunks:Array.from({length:Math.ceil(bytes.length/3000)},(_,i)=>({anchor_kind:'paragraph' as const,anchor_start:i+1,text:bytes.toString().slice(i*3000,(i+1)*3000)}))});
-  let cursor:string|null=null;let extracted='';do{const response=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}/text?project_id=${PROJECT_ALPHA}${cursor?`&cursor=${cursor}`:''}`,{headers:{authorization:`Bearer ${memberToken}`}});expect(response.status).toBe(200);const page=await response.json() as {chunks:{text:string}[];next_cursor:string|null};extracted+=page.chunks.map(x=>x.text).join('');cursor=page.next_cursor;}while(cursor);expect(extracted).toBe(bytes.toString());
+  expect(opened(h.db,PEOPLE.bob,receipt.document_id).flat().map(chunk=>chunk.text).join('')).toBe(bytes.toString());
   const search=await fetch(`${h.origin}/v2/person/documents/search`,{method:'POST',headers:{authorization:`Bearer ${memberToken}`,'content-type':'application/json'},body:JSON.stringify({schema_version:2,kind:'echo-person-document-search-v2',project_id:PROJECT_ALPHA,query:'end-needle',limit:20,cursor:null})});expect(search.status).toBe(200);expect(await search.json()).toMatchObject({documents:[{document_id:receipt.document_id,request_id:null}]});
   const original=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}/original?project_id=${PROJECT_ALPHA}`,{headers:{authorization:`Bearer ${memberToken}`}});expect(original.status).toBe(200);expect(original.headers.get('x-echo-document-sha256')).toBe(value.sha256);expect(original.headers.get('content-disposition')).toContain(encodeURIComponent(value.filename));expect(Buffer.from(await original.arrayBuffer()).equals(bytes)).toBe(true);
   expect(readdirSync(h.directory)).toEqual([]);
@@ -104,7 +111,7 @@ describe('document binary HTTP boundary and real service integration',()=>{
   const uploaded=await fetch(`${h.origin}/v2/person/documents/${value.request_id}`,{method:'PUT',headers:headers(value),body:new Uint8Array(bytes)}); expect(uploaded.status).toBe(201); const receipt=validatePersonDocumentReceiptV2(await uploaded.json());
   const claim=h.repository.claimExtraction()!; h.repository.completeExtraction(claim,{status:'ready',sourceSha256:claim.source_sha256,extractorVersion:'v2-http',message:null,chunks:[{anchor_kind:'paragraph',anchor_start:1,text:bytes.toString()}]});
   const auth={authorization:`Bearer ${memberToken}`}; const read=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}?project_id=${PROJECT_ALPHA}`,{headers:auth}); expect(read.status).toBe(200); expect(validatePersonDocumentMetadataV2(await read.json())).toMatchObject({document_id:receipt.document_id,request_id:null,audience:{kind:'project',project_id:PROJECT_ALPHA},association_project_ids:[PROJECT_ALPHA]});
-  const text=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}/text?project_id=${PROJECT_ALPHA}`,{headers:auth});expect(text.status).toBe(200);expect((await text.json() as {chunks:{text:string}[]}).chunks[0]?.text).toContain('union document');
+  expect(opened(h.db,PEOPLE.bob,receipt.document_id)[0]?.[0]?.text).toContain('union document');
   const found=await fetch(`${h.origin}/v2/person/documents/search`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({schema_version:2,kind:'echo-person-document-search-v2',project_id:PROJECT_ALPHA,query:'union document',limit:20,cursor:null})});expect(found.status).toBe(200);expect(validatePersonDocumentSearchResultV2(await found.json()).documents).toHaveLength(1);
   const original=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}/original?project_id=${PROJECT_ALPHA}`,{headers:auth});expect(original.status).toBe(200);expect(Buffer.from(await original.arrayBuffer())).toEqual(bytes);
   h.db.exec(`CREATE TRIGGER document_v2_audit_failure BEFORE INSERT ON authority_person_document_read_audit_v1 BEGIN SELECT RAISE(ABORT,'audit unavailable'); END`);
@@ -127,7 +134,7 @@ describe('document binary HTTP boundary and real service integration',()=>{
   const h=await fixture();const bytes=makeBytes();const receipt=await upload(h.origin,bytes,input(bytes,{filename}));
   await new PersonDocumentProcessingV1(h.repository).runOnce(new AbortController().signal);
   const auth={authorization:`Bearer ${memberToken}`};const status=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}?project_id=${PROJECT_ALPHA}`,{headers:auth});expect(status.status).toBe(200);expect(await status.json()).toMatchObject({extraction_state:'ready',document_id:receipt.document_id});
-  const text=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}/text?project_id=${PROJECT_ALPHA}`,{headers:auth});expect(text.status).toBe(200);const page=await text.json() as {chunks:{text:string;anchor_kind:string}[]};expect(page.chunks.map(x=>x.text).join('')).toContain('SCOUT-END-SENTINEL');expect(page.chunks[0]?.anchor_kind).toBe(anchor);
+  const [page]=opened(h.db,PEOPLE.bob,receipt.document_id);expect(page!.map(x=>x.text).join('')).toContain('SCOUT-END-SENTINEL');expect(page![0]?.anchor_kind).toBe(anchor);
   const search=await fetch(`${h.origin}/v2/person/documents/search`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({schema_version:2,kind:'echo-person-document-search-v2',project_id:PROJECT_ALPHA,query:'SCOUT-END-SENTINEL',limit:20,cursor:null})});expect(search.status).toBe(200);expect(await search.json()).toMatchObject({documents:[{document_id:receipt.document_id,anchor:{kind:anchor,start:1}}]});
   const original=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}/original?project_id=${PROJECT_ALPHA}`,{headers:auth});expect(original.status).toBe(200);expect(Buffer.from(await original.arrayBuffer())).toEqual(bytes);
  });
@@ -175,12 +182,12 @@ describe('document binary HTTP boundary and real service integration',()=>{
  it('requires the current project association and grant on every scoped read and download',async()=>{
   const h=await fixture();const receipt=await upload(h.origin,Buffer.from('team-visible source'));const auth={authorization:`Bearer ${memberToken}`};
   h.db.prepare(`UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE membership_id=?`).run(PROJECT_CONTEXT_NOW,PEOPLE.bob.membership_id);
-  for(const suffix of ['','/text','/original'])await failure(await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}${suffix}?project_id=${PROJECT_ALPHA}`,{headers:auth}),404,'not_found');
+  for(const suffix of ['','/original'])await failure(await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}${suffix}?project_id=${PROJECT_ALPHA}`,{headers:auth}),404,'not_found');
   expect((await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}`,{headers:auth})).status).toBe(200);
   h.db.prepare('DELETE FROM authority_person_document_associations_v1 WHERE document_id=?').run(receipt.document_id);await failure(await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}?project_id=${PROJECT_ALPHA}`,{headers:{authorization:`Bearer ${token}`}}),404,'not_found');
  });
- it('rejects duplicate/unknown text query fields and duplicate JSON search keys',async()=>{
-  const h=await fixture();const receipt=await upload(h.origin,Buffer.from('query'));const auth={authorization:`Bearer ${token}`};for(const query of ['project_id=bad','project_id='+PROJECT_ALPHA+'&project_id='+PROJECT_ALPHA,'cursor=x&cursor=y','unknown=x'])await failure(await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}/text?${query}`,{headers:auth}));
+ it('rejects duplicate/unknown read query fields and duplicate JSON search keys',async()=>{
+  const h=await fixture();const receipt=await upload(h.origin,Buffer.from('query'));const auth={authorization:`Bearer ${token}`};for(const suffix of ['','/original'])for(const query of ['project_id=bad','project_id='+PROJECT_ALPHA+'&project_id='+PROJECT_ALPHA,'cursor=x','unknown=x'])await failure(await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}${suffix}?${query}`,{headers:auth}));
   await failure(await fetch(`${h.origin}/v2/person/documents/search`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:'{"schema_version":2,"schema_version":2,"kind":"echo-person-document-search-v2","project_id":null,"query":"","limit":20,"cursor":null}'}));
  });
  it('rejects invalid application output before release',async()=>{
@@ -193,9 +200,8 @@ describe('document binary HTTP boundary and real service integration',()=>{
   for(const path of ['/search',`/${receipt.document_id}/associate`])await failure(await fetch(v1+path,{method:'POST',headers:{...auth,'content-type':'application/json'},body:'{}'}),404,'not_found');
   expect(h.db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:1});
  });
- it('reserves the entire document family from provider ingress and requires paired staging composition',()=>{
-  for(const path of ['/v1/person/documents','/v1/person/documents/search','/v1/person/documents/arbitrary/original','/v2/person/documents/search','/v2/person/documents/arbitrary/original']){const application={routes:[{route_id:'collision',method:'POST' as const,path}],accept:async()=>({status:200 as const,body:{}})};for(const ingress of [{person_tool_connections:[application]},{person_external_identity_link:application},{person_tools:application}])expect(()=>createOrganizationAuthorityHttpServer({...options(),...ingress})).toThrow('collides with Authority route');}
-  expect(()=>createOrganizationAuthorityHttpServer({...options(),person_documents:{} as never})).toThrow('composed together');
+ it('reserves the entire document family from provider ingress',()=>{
+  for(const path of ['/v1/person/documents','/v1/person/documents/search','/v1/person/documents/arbitrary/original','/v2/person/documents/search','/v2/person/documents/arbitrary/original']){const application={routes:[{route_id:'collision',method:'POST' as const,path}],accept:async()=>({status:200 as const,body:{}})};for(const ingress of [{person_tool_connections:[application]},{person_external_identity_link:application},{person_tools:application}])expect(()=>createOrganizationAuthorityHttpServer(authorityHttpServerOptions(ingress))).toThrow('collides with Authority route');}
  });
  it('preserves the legacy 16KiB JSON request cap while admitting larger binary documents',async()=>{
   let calls=0;const h=await fixture({server:{project_context:{createProject(){calls++;return {schema_version:1,kind:'echo-project-create-receipt-v1',request_id:'00000000-0000-4000-8000-000000000001',project_id:PROJECT_ALPHA,name:'SCOUT',created_at:PROJECT_CONTEXT_NOW,role:'lead'};}} as never}});

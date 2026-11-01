@@ -2,13 +2,14 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type Database from "better-sqlite3";
 import type { PersonListStoreScopeV1 } from "../../../application/ports/person-list-v1.js";
+import type { PersonAskScopeV2 } from "../../../application/ports/person-original-context-retrieval-v1.js";
 
 /**
  * Ask's originals ACL, shared by Ask retrieval and the person list/open store
  * (ADR-0024) so the two can never disagree about who may read a note or a
  * document. `u` is a note custody row, `d` a document custody row.
  */
-export type PersonOriginalPrefixV1 = "u" | "d";
+type PersonOriginalPrefixV1 = "u" | "d";
 
 /** The caller's active project grants, as the ACL reads them. */
 export function personOriginalGrantedProjectIdsV1(database: Database.Database, actor: PersonAccessAuthorization): readonly string[] {
@@ -26,11 +27,10 @@ export function personOriginalAclV1(prefix: PersonOriginalPrefixV1, actor: Perso
 
 /**
  * The scope narrowing appended after the ACL. Project scope requires the
- * row's current association; mine requires the caller's own tenure, so it is
- * always a subset of global. The list's only_me (ADR-0049) requires the
+ * row's current association. The list's only_me (ADR-0049) requires the
  * caller's own tenure and an only_me audience, whatever the row's association.
  */
-export function personOriginalScopeFilterV1(prefix: PersonOriginalPrefixV1, actor: PersonAccessAuthorization, scope: PersonListStoreScopeV1): { readonly sql: string; readonly args: readonly string[] } {
+export function personOriginalScopeFilterV1(prefix: PersonOriginalPrefixV1, actor: PersonAccessAuthorization, scope: PersonAskScopeV2 | PersonListStoreScopeV1): { readonly sql: string; readonly args: readonly string[] } {
   switch (scope.kind) {
     case "global":
       return Object.freeze({ sql: "", args: [] });
@@ -41,8 +41,6 @@ export function personOriginalScopeFilterV1(prefix: PersonOriginalPrefixV1, acto
           : "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)",
         args: [scope.project_id],
       });
-    case "mine":
-      return Object.freeze({ sql: `AND ${prefix}.membership_id=? AND ${prefix}.principal_id=?`, args: [actor.membership_id, actor.principal_id] });
     case "only_me":
       return Object.freeze({ sql: `AND ${prefix}.audience_kind='only_me' AND ${prefix}.membership_id=? AND ${prefix}.principal_id=?`, args: [actor.membership_id, actor.principal_id] });
     default:

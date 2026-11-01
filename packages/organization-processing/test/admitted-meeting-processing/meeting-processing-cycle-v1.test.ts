@@ -297,8 +297,6 @@ class RecordingExtractionAttempts implements ExtractionAttemptStoreV1 {
 function source(batch: MeetingBatch): MeetingSourceAdapter {
   return {
     identity: SOURCE,
-    validateConfig: () => ({ ok: true, errors: [] }),
-    healthCheck: async () => healthy(),
     pull: async () => batch,
   };
 }

@@ -85,13 +85,12 @@ export interface PersonFollowUpsSourcesV1 {
   readonly on_live_failure?: OpenItemSourcesV1['on_live_failure'];
 }
 
-export interface CreatePersonFollowUpsEvidenceSourceV1Options {
+interface CreatePersonFollowUpsEvidenceSourceV1Options {
   readonly sources: PersonFollowUpsSourcesV1;
   /** The asker, as their session authorized them when the request's desk was bound. */
   readonly viewer: OpenItemViewerV1;
   /** The asker's session now; every call and check reads it again. */
   readonly authenticate: () => PersonAccessAuthorization;
-  /** Never Mine: Mine reads only what the asker added. */
   readonly scope: { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
   /**
    * The request's own desk. A follow-up's tool item opens through the tool

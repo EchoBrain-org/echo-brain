@@ -27,7 +27,7 @@ export interface ConfluencePersonLiveRuntimeSeamsV1 {
   readonly nango?: ConfluenceNangoV1;
   readonly fetch?: typeof fetch;
 }
-export interface OpenedConfluencePersonLiveRuntimeV1 {
+interface OpenedConfluencePersonLiveRuntimeV1 {
   readonly application: ConfluencePersonConnectionV1;
   readonly connection_http: ProviderHttpApplicationV1;
   /** The Ask source check's page versions and section digests (ADR-0047), read with the caller's own connection. */

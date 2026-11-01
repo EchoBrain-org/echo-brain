@@ -147,15 +147,6 @@ export function assertPersonDocumentOriginalV1(metadata: Pick<PersonDocumentUplo
 }
 
 export const PERSON_DOCUMENT_JSON_MAX_BYTES = 32 * 1024;
-export interface PersonDocumentTextChunkV1 {
-  readonly ordinal: number; readonly anchor_kind: 'page' | 'paragraph'; readonly anchor_start: number; readonly text: string;
-}
-export interface PersonDocumentTextV1 {
-  readonly schema_version: 1; readonly kind: 'echo-person-document-text-v1';
-  readonly document_id: string; readonly original_sha256: string; readonly extractor: string | null;
-  readonly extraction_state: PersonDocumentExtractionStateV1;
-  readonly chunks: readonly PersonDocumentTextChunkV1[]; readonly next_cursor: string | null;
-}
 /** A bounded query and an optional project view; results carry multi-project audience and current association coordinates. */
 export interface PersonDocumentSearchV2 {
   readonly schema_version: 2; readonly kind: 'echo-person-document-search-v2';
@@ -182,7 +173,7 @@ export function validatePersonDocumentSearchV2(value: unknown): PersonDocumentSe
 const documentStates = ['extracting','ready','partial','no_text','encrypted','malformed','limit_exceeded','timed_out','unsupported','unavailable'];
 const documentMedia = ['text/plain','text/markdown','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
 function exactDocumentKeys(value: Record<string, unknown>, keys: readonly string[]): void { if(Object.keys(value).sort().join()!==[...keys].sort().join())fail('Document response shape is invalid'); }
-function documentJsonBound(value: unknown, maximum = PERSON_DOCUMENT_JSON_MAX_BYTES): void { if(utf8Bytes(JSON.stringify(value))>maximum)fail('Document response exceeds its wire budget'); }
+function documentJsonBound(value: unknown): void { if(utf8Bytes(JSON.stringify(value))>PERSON_DOCUMENT_JSON_MAX_BYTES)fail('Document response exceeds its wire budget'); }
 /** Metadata withholds another uploader's request ID; the upload validators still check the rest. */
 const WITHHELD_REQUEST_ID = '00000000-0000-4000-8000-000000000000';
 function metadataRequestId(value: Record<string,unknown>): unknown { return value.request_id === null ? WITHHELD_REQUEST_ID : value.request_id; }
@@ -218,14 +209,6 @@ function documentExtractionFields(input: Record<string, unknown>): void {
 }
 function documentExtractor(value: unknown): void {
   if (value !== null && (typeof value !== 'string' || utf8Bytes(value) < 1 || utf8Bytes(value) > 512)) fail('Document extractor is invalid');
-}
-export function validatePersonDocumentTextV1(value: unknown): PersonDocumentTextV1 {
-  const input=plainObject(value);exactDocumentKeys(input,['schema_version','kind','document_id','original_sha256','extractor','extraction_state','chunks','next_cursor']);
-  if(input.schema_version!==1||input.kind!=='echo-person-document-text-v1'||typeof input.original_sha256!=='string'||!/^sha256:[0-9a-f]{64}$/.test(input.original_sha256)||!documentStates.includes(input.extraction_state as string))fail('Document text envelope is invalid');validatePersonDocumentIdV1(input.document_id);
-  documentExtractor(input.extractor);
-  if(!Array.isArray(input.chunks)||input.chunks.length>8)fail('Document text chunks are invalid');let prior=-1;
-  for(const value of input.chunks){const chunk=plainObject(value);exactDocumentKeys(chunk,['ordinal','anchor_kind','anchor_start','text']);if(!Number.isSafeInteger(chunk.ordinal)||(chunk.ordinal as number)<=prior||!['page','paragraph'].includes(chunk.anchor_kind as string)||!Number.isSafeInteger(chunk.anchor_start)||(chunk.anchor_start as number)<1||typeof chunk.text!=='string'||utf8Bytes(chunk.text)<1||utf8Bytes(chunk.text)>PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES)fail('Document text chunk is invalid');prior=chunk.ordinal as number;}
-  documentNextCursor(input.next_cursor);documentJsonBound(input,24*1024);return input as unknown as PersonDocumentTextV1;
 }
 function documentNextCursor(value: unknown): void { if(value!==null&&(typeof value!=='string'||value.length>1024||!/^[A-Za-z0-9_-]+$/.test(value)))fail('Document next cursor is invalid'); }
 export function validatePersonDocumentSearchResultV2(value: unknown): PersonDocumentSearchResultV2 {

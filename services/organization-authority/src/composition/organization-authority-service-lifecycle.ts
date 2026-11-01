@@ -19,7 +19,7 @@ import {
   type OrganizationAuthorityApiRuntimeDependencies,
   type RunningOrganizationAuthorityApiRuntime,
 } from "./organization-authority-api-runtime.js";
-import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
+import { clearReadableSearchActiveGenerationV1, readableSearchExceededLimitV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 
 /**
  * The narrow durable-work seam for the Organization Authority's admitted
@@ -65,14 +65,14 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   setWorkerLifecycle?(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void;
 }
 
-export interface OrganizationAuthorityServiceLifecycleConfig {
+interface OrganizationAuthorityServiceLifecycleConfig {
   readonly api: OrganizationAuthorityApiRuntimeConfig;
   readonly worker_interval_ms?: number;
 }
 
 export interface OrganizationAuthorityServiceLifecycleDependencies {
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
-  readonly api?: OrganizationAuthorityApiRuntimeDependencies;
+  readonly api: OrganizationAuthorityApiRuntimeDependencies;
   readonly processing: OrganizationAuthorityProcessingCycleV1;
   readonly additional_processing?: OrganizationAuthorityProcessingCycleV1;
   readonly start_api_runtime?: (
@@ -230,14 +230,23 @@ export async function startOrganizationAuthorityServiceLifecycle(
     // listener before that startup boundary succeeds. Clearing first makes
     // startup fully validate even a generation an earlier run left warm.
     clearHandle();
-    await lifecycle.runPhase(
-      "search_reconciliation",
-      async () => dependencies.processing.reconcileReadableSearchGeneration?.(startup.signal),
-      startup.signal,
-      false,
-    );
+    try {
+      await lifecycle.runPhase(
+        "search_reconciliation",
+        async () => dependencies.processing.reconcileReadableSearchGeneration?.(startup.signal),
+        startup.signal,
+        false,
+      );
+    } catch (error) {
+      // The one exception: records past the search ceiling never keep the API
+      // down. The refused build touched nothing, record reads treat the
+      // published generation as a lag, and the search task reports the
+      // overflow on every later cycle, as it does once running.
+      if (readableSearchExceededLimitV1(error) === undefined) throw error;
+      try { dependencies.on_worker_error?.(error as Error); } catch { /* observational only */ }
+    }
     startup.signal.throwIfAborted();
-    api = await startApi(config.api, dependencies.api ?? {});
+    api = await startApi(config.api, dependencies.api);
     const startedApi = api;
     const reportError = (failure: unknown): void => {
       try {

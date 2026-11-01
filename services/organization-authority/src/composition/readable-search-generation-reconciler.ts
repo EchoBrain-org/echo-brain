@@ -76,6 +76,10 @@ export interface ReadableSearchGenerationReconcilerV1Options<
     generation: BuiltReadableSearchGenerationV1,
   ) => boolean;
   readonly invalidate_generation?: () => void;
+  /** Deletes every stored generation except the one just published; leftovers wait for the next publication. */
+  readonly retire_generations?: (generation_id: Sha256Digest) => void;
+  /** Observational only: deleting replaced generations failed, and the publication stands. */
+  readonly on_retire_failure?: (error: unknown) => void;
   readonly now?: () => string;
 }
 
@@ -281,6 +285,13 @@ export class ReadableSearchGenerationReconcilerV1<
           publishedAt,
         );
     })());
+    // Deleting what this publication replaced is housekeeping: a failure never
+    // undoes the publication, and the leftovers wait for the next one.
+    try {
+      this.options.retire_generations?.(built.generation_id);
+    } catch (error) {
+      try { this.options.on_retire_failure?.(error); } catch { /* observational only */ }
+    }
     annotateCoreRuntimeV1({ result: "published", generation: built.generation_id, counts: { published_head: builtHead.position } });
     return Object.freeze({
       status: "published",

@@ -9,7 +9,6 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import {
   AdapterError,
   assertCanonicalMeetingDocument,
-  type AdapterConfig,
   type MeetingDocument,
   type MeetingSourceAdapter,
 } from "@echo-brain/organization-processing/core";
@@ -243,9 +242,6 @@ export function createStagingSyntheticPersonalMeetingProviderV1(options: {
       if (identity.adapter_id !== STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1 || identity.version !== VERSION) throw new Error("staging synthetic source identity differs");
       return {
         identity,
-        validateConfig: (config: AdapterConfig) => config.adapter_id === identity.adapter_id && config.instance_id === identity.instance_id
-          ? { ok: true, errors: [] } : { ok: false, errors: ["staging synthetic source identity differs"] },
-        healthCheck: async () => ({ status: "healthy" as const, checked_at: new Date().toISOString(), message: "staging synthetic meetings" }),
         requireCurrent: current,
         async pull(request) {
           current();

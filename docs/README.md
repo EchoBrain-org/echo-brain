@@ -6,11 +6,21 @@ failures, operations, and proof for exact runs.
 
 ## Start here
 
-- New to ECHO: read the [workspace boundaries](architecture/organization-workspace-boundaries.md),
+- New to ECHO: start with the [system overview](architecture/overview.md). It
+  goes from the whole system down to components and links the maps below. Then
+  read the [workspace boundaries](architecture/organization-workspace-boundaries.md),
   [component catalog](components/README.md), and
   [component naming taxonomy](architecture/component-naming-taxonomy.md).
-- Working on the installed product: start with the
+- Working on the desktop app: start with the
+  [desktop app architecture](architecture/desktop-app.md) and the
+  [desktop README](../product/echo-desktop/README.md).
+- Working on the Person client or CLI: start with the
   [Person client architecture](architecture/person-client-architecture.md).
+- Working on Ask, research or impact checks: start with
+  [Ask and research](architecture/ask-and-research.md) and
+  [impact checks and open items](architecture/impact-checks-and-open-items.md).
+- Working on releases: the [client update feed](features/client-updates-v1.md)
+  and the [operations index](operations/README.md).
 - Working on meeting intake or extraction: start with the
   [meeting processing core and adapters](architecture/meeting-processing-core-and-adapters.md).
 - Working on identity or access: start with
@@ -35,6 +45,10 @@ linked by stable ID, and not copied between component pages.
 
 ## System maps
 
+- [System overview](architecture/overview.md)
+- [Desktop app](architecture/desktop-app.md)
+- [Ask and research](architecture/ask-and-research.md)
+- [Impact checks and open items](architecture/impact-checks-and-open-items.md)
 - [Workspace boundaries](architecture/organization-workspace-boundaries.md)
 - [Meeting processing core and adapters](architecture/meeting-processing-core-and-adapters.md)
 - [Person client architecture](architecture/person-client-architecture.md)

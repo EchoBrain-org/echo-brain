@@ -64,8 +64,10 @@ describe('ProjectContextApplicationV1', () => {
     expect(f.application.listProjectsV2('member', {}).items.map(item => item.project_id)).not.toContain(alpha.project_id);
     expect(f.application.listProjectsV2('member', { status: 'archived' }).items).toEqual([expect.objectContaining({ project_id: alpha.project_id, status: 'archived' })]);
     expect(f.application.readProjectV2('member', alpha.project_id)).toMatchObject({ status: 'archived' });
-    expect(f.application.readContextV2('member', alpha.project_id, alphaUpload.context_id).text).toContain('Existing project text');
-    expect(f.application.readUploadV3('member', betaUpload.context_id).text).toContain('Alternate project access');
+    expect(f.application.searchV2('member', { project_id: alpha.project_id, query: 'readable' }).items)
+      .toEqual([expect.objectContaining({ context_id: alphaUpload.context_id, excerpt: 'Existing project text remains readable.' })]);
+    expect(f.application.searchUploadsV3('member', { query: 'alternate' }).results)
+      .toEqual([expect.objectContaining({ context_id: betaUpload.context_id, excerpt: 'Alternate project access remains readable.' })]);
     expect(() => f.application.submitUploadV3('owner', {
       schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(117), title: 'Blocked', text: 'No new archive content.',
       association_project_ids: [alpha.project_id], audience: { kind: 'team' },
@@ -104,7 +106,7 @@ describe('ProjectContextApplicationV1', () => {
     const first = f.application.associateContext('owner', association);
     expect(f.application.associateContext('owner', association)).toEqual(first);
     expect(() => f.application.associateContext('owner', { ...association, request_id: requestId(25), project_id: beta.project_id })).toThrow(expect.objectContaining({ code: 'conflict' }));
-    expect(() => f.application.readContextV2('member', alpha.project_id, privateReceipt.context_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(f.application.searchV2('member', { project_id: alpha.project_id, query: 'private' }).items).toEqual([]);
     expect(() => f.application.dissociateContext('member', { schema_version: 1, kind: 'echo-project-context-dissociate-v1', request_id: requestId(26), project_id: alpha.project_id, context_id: privateReceipt.context_id })).toThrow(expect.objectContaining({ code: 'not_found' }));
     f.application.dissociateContext('owner', { schema_version: 1, kind: 'echo-project-context-dissociate-v1', request_id: requestId(27), project_id: alpha.project_id, context_id: privateReceipt.context_id });
     expect(f.application.associateContext('owner', association)).toEqual(first);
@@ -112,9 +114,10 @@ describe('ProjectContextApplicationV1', () => {
 
     const team = insertStoredNoteV2(f.database, OWNER, { request_id: requestId(28), title: 'Team', text: 'Team original', project_id: alphaId, audience: { kind: 'team' } });
     const scoped = insertStoredNoteV2(f.database, OWNER, { request_id: requestId(29), title: 'Project', text: 'Project original', project_id: alphaId, audience: { kind: 'project', project_id: alphaId } });
-    expect(f.application.feedV2('member', { project_id: alpha.project_id }).items.map(item => item.context_id).sort()).toEqual([scoped.context_id, team.context_id].sort());
-    expect(f.application.readContextV2('member', alpha.project_id, team.context_id).text).toBe('Team original');
-    expect(f.application.readContextV2('member', alpha.project_id, scoped.context_id).text).toBe('Project original');
+    const found = f.application.searchV2('member', { project_id: alpha.project_id, query: 'original' }).items;
+    expect(found.map(item => item.context_id).sort()).toEqual([scoped.context_id, team.context_id].sort());
+    expect(found.find(item => item.context_id === team.context_id)?.excerpt).toBe('Team original');
+    expect(found.find(item => item.context_id === scoped.context_id)?.excerpt).toBe('Project original');
     expect(f.application.searchUploads('member', { query: 'original' }).results.map(result => result.context_id).sort()).toEqual([scoped.context_id, team.context_id].sort());
   });
 
@@ -124,10 +127,11 @@ describe('ProjectContextApplicationV1', () => {
     const receipt = f.application.submitUploadV3('owner', { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(32), title: 'Project', text: 'Project original', association_project_ids: [alpha.project_id], audience: { kind: 'project', project_id: alpha.project_id } });
     f.application.removeMember('owner', { schema_version: 1, kind: 'echo-project-member-remove-v1', request_id: requestId(33), project_id: alpha.project_id, membership_id: MEMBER.membership_id });
     revokeMembership(f.database, MEMBER);
-    expect(() => f.application.readUploadV3('member', receipt.context_id)).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    expect(() => f.application.searchUploadsV3('member', { query: 'original' })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
     addMembership(f.database, RETURNED_MEMBER, 'Member returned', 'member@example.test');
     f.application.setMember('owner', memberSet(34, alpha.project_id, RETURNED_MEMBER.membership_id, 'member'));
-    expect(f.application.readUploadV3('returned', receipt.context_id)).toMatchObject({ text: 'Project original' });
+    expect(f.application.searchUploadsV3('returned', { query: 'original' }).results)
+      .toEqual([expect.objectContaining({ context_id: receipt.context_id, excerpt: 'Project original' })]);
     expect(f.database.prepare("SELECT count(*) AS n FROM authority_project_memberships_v1 WHERE project_id = ? AND principal_id = ? AND status = 'active'").get(alpha.project_id, MEMBER.principal_id)).toEqual({ n: 1 });
   });
 });

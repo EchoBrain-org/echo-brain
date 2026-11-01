@@ -443,6 +443,8 @@ Phase 2 is not complete while any of these blockers remains:
 
 - `phase1/replay-synthetic-green` leaves the real-corpus Phase-1 evidence gate
   open; the migration plan does not permit Phase-2 exit before Phase 1 exits.
+  Update (2026-10-31): that tag was deleted; it named commit `7948cde` on
+  `main`.
 - The additive session schema, OIDC verifier, session-family lifecycle,
   refresh replay handling, and bearer routes are implemented and race-tested
   offline, but no live issuer, client registration, redirect URI, tenant rule,

@@ -1,15 +1,10 @@
-import {
-  BoundedJsonResponseErrorV1,
-  readBoundedJsonResponseV1,
-} from "@echo-brain/provider-runtime/bounded-json-response-v1";
+import { callSlackWebApiV1, SlackWebApiTransportErrorV1, slackOAuthScopesV1, type SlackWebApiAnswerV1 } from "../../../../shared/slack-web-api-v1.js";
 
-const BASE_URL = "https://slack.com/api";
 const REQUEST_TIMEOUT_MS = 10_000;
-const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const HISTORY_PAGE_LIMIT = 200;
 const MAX_HISTORY_PAGES = 25;
 
-export type SlackApiErrorCode =
+type SlackApiErrorCode =
   "auth" | "rate_limited" | "transient" | "unknown_outcome" | "invalid";
 
 export class SlackApiError extends Error {
@@ -26,7 +21,7 @@ export class SlackApiError extends Error {
   }
 }
 
-export interface SlackPostMessageInput {
+interface SlackPostMessageInput {
   channel: string;
   text: string;
   blocks?: readonly unknown[];
@@ -43,7 +38,7 @@ export interface SlackPostMessageInput {
 }
 
 /** Input for changing the presentation of an existing bot-authored message. */
-export interface SlackUpdateMessageInput {
+interface SlackUpdateMessageInput {
   channel: string;
   ts: string;
   text: string;
@@ -56,20 +51,20 @@ export interface SlackUpdateMessageInput {
   mrkdwn?: boolean;
 }
 
-export interface SlackPostedMessage {
+interface SlackPostedMessage {
   channel: string;
   ts: string;
 }
 
 /** Provider evidence for one channel message during durable post recovery. */
-export interface SlackChannelMessage {
+interface SlackChannelMessage {
   ts: string;
   text: string;
   bot_id: string | null;
 }
 
 /** Stable provider identifiers proved across Slack's auth and bot APIs. */
-export interface SlackAuthIdentity {
+interface SlackAuthIdentity {
   team_id: string;
   enterprise_id: string | null;
   user_id: string;
@@ -77,7 +72,7 @@ export interface SlackAuthIdentity {
   app_id: string;
 }
 
-export interface SlackDirectMessage {
+interface SlackDirectMessage {
   channel_id: string;
   user_id: string;
 }
@@ -114,30 +109,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-async function readBoundedSlackJson(
-  response: Response,
-  method: string,
-  signal: AbortSignal,
-  transportFailureCode: SlackApiErrorCode,
-  sizeFailureCode: SlackApiErrorCode,
-): Promise<unknown> {
-  try {
-    return await readBoundedJsonResponseV1(response, {
-      maxBytes: MAXIMUM_RESPONSE_BYTES,
-      signal,
-    });
-  } catch (error) {
-    const oversized =
-      error instanceof BoundedJsonResponseErrorV1 && error.code === "oversized";
-    const code = oversized ? sizeFailureCode : transportFailureCode;
-    throw new SlackApiError(
-      code,
-      `Slack ${method} returned an ${oversized ? "oversized" : "unreadable"} body`,
-      code !== "invalid",
-    );
-  }
-}
-
 const SLACK_TEAM_ID_RE = /^T[A-Z0-9]{2,}$/;
 const SLACK_ENTERPRISE_ID_RE = /^E[A-Z0-9]{2,}$/;
 const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,}$/;
@@ -146,7 +117,6 @@ const SLACK_APP_ID_RE = /^A[A-Z0-9]{2,}$/;
 /** The bot posts, updates and reads only its own direct messages, never a channel. */
 const SLACK_DM_ID_RE = /^D[A-Z0-9]{2,}$/;
 const SLACK_MESSAGE_TS_RE = /^[0-9]{1,16}\.[0-9]{6}$/;
-const SLACK_SCOPE_RE = /^[a-z][a-z0-9:_-]{0,127}$/;
 const SLACK_IDENTITY_REQUIRED_SCOPE = "users:read";
 const SLACK_DIRECT_MESSAGE_OPEN_REQUIRED_SCOPE = "im:write";
 const SLACK_DIRECT_MESSAGE_HISTORY_REQUIRED_SCOPE = "im:history";
@@ -198,12 +168,8 @@ function requireSlackScopeEvidence(
       false,
     );
   }
-  const scopes = [...new Set(header.split(",").map((scope) => scope.trim()))]
-    .filter((scope) => scope.length > 0);
-  if (
-    scopes.length === 0 ||
-    scopes.some((scope) => !SLACK_SCOPE_RE.test(scope))
-  ) {
+  const scopes = slackOAuthScopesV1(header);
+  if (scopes === undefined) {
     throw new SlackApiError(
       "invalid",
       `Slack ${method} returned invalid OAuth scope evidence`,
@@ -220,9 +186,11 @@ function requireSlackScopeEvidence(
 }
 
 /**
- * Minimal capability-neutral Slack Web API client shared by Slack adapters.
- * Slack commonly reports failures as HTTP 200 with `{ok:false,error}`, so both
- * the transport status and the body envelope are checked on every call.
+ * The approval-delivery side of the one Slack Web API client
+ * (`shared/slack-web-api-v1.ts`): methods over one bot token, with this
+ * adapter's outcome vocabulary. Slack commonly reports failures as HTTP 200
+ * with `{ok:false,error}`, so both the transport status and the body envelope
+ * are checked on every call.
  */
 export class SlackWebApiClient {
   private readonly fetchImpl: typeof fetch;
@@ -640,7 +608,6 @@ export class SlackWebApiClient {
       requiredScope?: string;
     },
   ): Promise<Record<string, unknown>> {
-    const httpMethod = options.method ?? "POST";
     const transportFailureCode: SlackApiErrorCode =
       options.unknownOutcomeOnTransportFailure === true
         ? "unknown_outcome"
@@ -649,92 +616,74 @@ export class SlackWebApiClient {
       options.unknownOutcomeOnTransportFailure === true
         ? "unknown_outcome"
         : "invalid";
-    const controller = new AbortController();
-    const abortUpstream = () => controller.abort(options.signal?.reason);
-    options.signal?.addEventListener("abort", abortUpstream, { once: true });
-    if (options.signal?.aborted === true) abortUpstream();
-    const timer = setTimeout(
-      () => controller.abort(new Error(`Slack ${method} timed out`)),
-      REQUEST_TIMEOUT_MS,
-    );
+    let answer: SlackWebApiAnswerV1;
     try {
-      let url = `${BASE_URL}/${method}`;
-      const init: RequestInit = {
-        method: httpMethod,
-        signal: controller.signal,
-        // Slack API methods are not expected to redirect. Refusing redirects
-        // prevents fetch from forwarding the bearer credential to a different
-        // endpoint if Slack or a proxy responds with a redirect.
-        redirect: "error",
-        headers: { authorization: `Bearer ${this.token}` },
-      };
-      if (httpMethod === "GET") {
-        const query = new URLSearchParams();
-        for (const [key, value] of Object.entries(parameters)) {
-          query.set(key, String(value));
-        }
-        url = `${url}?${query.toString()}`;
-      } else {
-        init.headers = {
-          ...init.headers,
-          "content-type": "application/json; charset=utf-8",
-        };
-        init.body = JSON.stringify(parameters);
-      }
-      let response: Response;
-      try {
-        response = await this.fetchImpl(url, init);
-      } catch (error) {
-        throw new SlackApiError(
-          transportFailureCode,
-          `Slack ${method} transport failed: ${(error as Error).message}`,
-          true,
-        );
-      }
-
-      if (!response.ok) await response.body?.cancel().catch(() => undefined);
-      if (response.status === 429) {
-        const retryAfter = Number(response.headers.get("retry-after"));
-        throw new SlackApiError(
-          "rate_limited",
-          `Slack ${method} is rate limited`,
-          true,
-          Number.isFinite(retryAfter) && retryAfter > 0
-            ? retryAfter
-            : undefined,
-        );
-      }
-      if (response.status >= 500) {
-        throw new SlackApiError(
-          transportFailureCode,
-          `Slack ${method} failed with HTTP ${response.status}`,
-          true,
-        );
-      }
-      if (!response.ok) {
-        throw new SlackApiError(
-          "invalid",
-          `Slack ${method} failed with HTTP ${response.status}`,
-          false,
-        );
-      }
-      const body = await readBoundedSlackJson(
-        response,
+      answer = await callSlackWebApiV1({
+        token: this.token,
         method,
-        controller.signal,
-        transportFailureCode,
-        responseFailureCode,
+        parameters,
+        encoding: options.method === "GET" ? "query" : "json",
+        timeout_ms: REQUEST_TIMEOUT_MS,
+        fetch: this.fetchImpl,
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (!(error instanceof SlackWebApiTransportErrorV1)) throw error;
+      if (error.stage === "request") {
+        throw new SlackApiError(
+          transportFailureCode,
+          `Slack ${method} transport failed: ${error.message}`,
+          true,
+        );
+      }
+      const oversized = error.code === "oversized";
+      const code = oversized ? responseFailureCode : transportFailureCode;
+      throw new SlackApiError(
+        code,
+        `Slack ${method} returned an ${oversized ? "oversized" : "unreadable"} body`,
+        code !== "invalid",
       );
-      if (!isPlainObject(body)) {
+    }
+    switch (answer.kind) {
+      case "http_error": {
+        if (answer.status === 429) {
+          const retryAfter = Number(answer.headers.get("retry-after"));
+          throw new SlackApiError(
+            "rate_limited",
+            `Slack ${method} is rate limited`,
+            true,
+            Number.isFinite(retryAfter) && retryAfter > 0
+              ? retryAfter
+              : undefined,
+          );
+        }
+        throw answer.status >= 500
+          ? new SlackApiError(
+              transportFailureCode,
+              `Slack ${method} failed with HTTP ${answer.status}`,
+              true,
+            )
+          : new SlackApiError(
+              "invalid",
+              `Slack ${method} failed with HTTP ${answer.status}`,
+              false,
+            );
+      }
+      case "empty":
+        throw new SlackApiError(
+          transportFailureCode,
+          `Slack ${method} returned an unreadable body`,
+          true,
+        );
+      case "not_object":
         throw new SlackApiError(
           responseFailureCode,
           `Slack ${method} returned an unexpected body`,
           responseFailureCode === "unknown_outcome",
         );
-      }
-      if (body["ok"] !== true) {
-        const error = isNonEmptyString(body["error"])
-          ? body["error"]
+      case "slack_error": {
+        const error = isNonEmptyString(answer.error)
+          ? answer.error
           : "unknown_error";
         const [code, retryable]: [SlackApiErrorCode, boolean] =
           AUTH_ERRORS.has(error) ? ["auth", false]
@@ -749,20 +698,15 @@ export class SlackWebApiClient {
           error,
         );
       }
-      if (options.requiredScope !== undefined) {
-        requireSlackScopeEvidence(
-          response.headers.get("x-oauth-scopes"),
-          options.requiredScope,
-          method,
-        );
-      }
-      return body;
-    } finally {
-      // Keep both deadline and upstream cancellation connected until the
-      // complete response body has been consumed, not merely until headers
-      // arrive. Fetch resolves as soon as headers are available.
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", abortUpstream);
+      case "ok":
+        if (options.requiredScope !== undefined) {
+          requireSlackScopeEvidence(
+            answer.headers.get("x-oauth-scopes"),
+            options.requiredScope,
+            method,
+          );
+        }
+        return answer.body;
     }
   }
 }

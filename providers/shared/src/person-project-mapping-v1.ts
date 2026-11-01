@@ -5,7 +5,7 @@ import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type {
-  PersonConnectorReadBindingV1, PersonLiveEvidenceAuditV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceSourceV1,
+  PersonConnectorReadBindingV1, PersonLiveEvidenceAuditV1, PersonLiveEvidenceCitationV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceSourceV1,
 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { createPersonConnectionLifecycleV1, PersonConnectionAuthenticatedFetchV1 } from './person-connection-lifecycle-v1.js';
 import type { PersonConnectionStoreV1 } from './person-connection-store-v1.js';
@@ -148,41 +148,109 @@ export function createPersonProjectMappingAccessV1<T extends ScopedProjectMappin
     const pinned = canonicalSha256([...names]);
     return Object.freeze({ names, current: () => { if (canonicalSha256([...byContainer(mapped())]) !== pinned) failure('stale_access_state'); } });
   }
+  /** One ECHO project's saved mapping, for anyone the project grants; the person and the grant are re-checked after the read. */
+  function read(tool: { readonly lifecycle: Pick<Lifecycle, 'actor'>; readonly validate: (request: unknown) => { readonly project_id: string } },
+    input: { readonly access_token: string; readonly request: unknown }): T {
+    const { person, requirePerson } = tool.lifecycle.actor(input.access_token);
+    const request = mappingInput(() => tool.validate(input.request));
+    const access = projectAccess(input.access_token, request.project_id);
+    const result = access.store.read(person.organization_id, request.project_id);
+    requirePerson(); access.current();
+    return result;
+  }
   /**
-   * A connected tool's containers as one request's audited live source (research tool contract v1), each naming the ECHO
-   * projects mapped to it that the asker can see. None without an active connection, or for an unmapped project; a
-   * project scope reads only the containers its saved mapping names. Every read is fenced on the person, the connection,
-   * the scope's mapping and grant, and the ECHO projects it named.
+   * Saves one ECHO project's mapping; only a project lead may. The exact command replays its saved result. A selection is
+   * resolved over the lead's own connection, opened behind the request's fence (person, grant, cancellation), before
+   * anything is saved; null clears the mapping without provider access. No asynchronous work runs between the final grant
+   * check and the atomic compare-and-set.
    */
-  async function containerSource(tool: {
-    /** The provider site (cloud) the connection reads, and the tool's project read request validator. */
-    readonly scope_id: string; readonly validate: (request: unknown) => { readonly project_id: string };
-    readonly lifecycle: Pick<ReturnType<typeof createPersonConnectionLifecycleV1>, 'actor' | 'tags' | 'authenticated'>;
-    readonly store: Pick<PersonConnectionStoreV1, 'current' | 'requireCurrent'>;
-    /** The containers one saved mapping on this site maps. */
-    readonly containers: (mapping: NonNullable<T['mapping']>) => readonly string[];
-    /** The tool's container reader over the asker's connection; in a project scope, pinned to the scope's saved mapping. */
-    readonly reader: (input: {
-      readonly binding: PersonConnectorReadBindingV1; readonly fetch: PersonConnectionAuthenticatedFetchV1; readonly expected_origin: string;
-      readonly signal: AbortSignal | undefined; readonly echo_projects: () => ReadonlyMap<string, readonly string[]>;
-    }, mapping: NonNullable<T['mapping']> | undefined) => Promise<PersonLiveEvidenceReaderV1<PersonToolContainerCitationV1>>;
-  }, input: {
-    readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonToolContainerCitationV1>; readonly signal?: AbortSignal;
-  }): Promise<PersonLiveEvidenceSourceV1<PersonToolContainerCitationV1> | undefined> {
+  async function set<R extends { readonly project_id: string; readonly expected_revision: string | null }, S>(tool: {
+    readonly lifecycle: Pick<Lifecycle, 'actor' | 'open'>; readonly validate: (request: unknown) => R;
+    /** What the request maps the project to on the provider, or null to remove the mapping. */
+    readonly selection: (request: R) => S | null;
+    /** The mapping to save for a selection, verified with the opened connection. */
+    readonly resolve: (selection: S, connection: ReturnType<Lifecycle['open']>, signal: AbortSignal | undefined) => Promise<NonNullable<T['mapping']>>;
+  }, input: { readonly access_token: string; readonly request: unknown; readonly signal?: AbortSignal }): Promise<T> {
+    const { person, requirePerson } = tool.lifecycle.actor(input.access_token);
+    const request = mappingInput(() => tool.validate(input.request));
+    const access = projectAccess(input.access_token, request.project_id, true);
+    const current = () => { requirePerson(); access.current(); input.signal?.throwIfAborted(); };
+    current();
+    const command = canonicalSha256({ person, request });
+    const replay = access.store.prepare(person.organization_id, request.project_id, request.expected_revision, command);
+    if (replay !== undefined) return replay;
+    let mapping: NonNullable<T['mapping']> | null = null;
+    const selection = tool.selection(request);
+    if (selection !== null) {
+      // The connection's fence runs the request's first, then the connection's own binding check.
+      const connection = tool.lifecycle.open(person, current);
+      mapping = await tool.resolve(selection, connection, input.signal);
+      connection.current();
+    }
+    current();
+    // No asynchronous work between the final grant check and the atomic CAS.
+    return access.store.set(person.organization_id, request.project_id, request.expected_revision, command, mapping as T['mapping']);
+  }
+  /**
+   * One request's audited live source over the asker's own connection. None without an active connection, or for an
+   * unmapped project; a project scope reads only what its saved mapping names. Every read is fenced on the person, the
+   * connection, the scope's mapping and grant and, with `containers`, the ECHO projects the containers name.
+   */
+  async function liveSource<C extends PersonLiveEvidenceCitationV1>(tool: PersonLiveSourceToolV1 & {
+    readonly reader: (input: PersonLiveReadV1 & { readonly echo_projects: () => ReadonlyMap<string, readonly string[]> },
+      mapping: NonNullable<T['mapping']> | undefined) => Promise<PersonLiveEvidenceReaderV1<C>>;
+  }, input: PersonLiveSourceInputV1<C>, containers?: (mapping: NonNullable<T['mapping']>) => readonly string[]): Promise<PersonLiveEvidenceSourceV1<C> | undefined> {
     const { actor, tags, authenticated } = tool.lifecycle;
     const { person, requirePerson } = actor(input.access_token);
     const scope = projectScope(input.access_token, person.organization_id, input.project_id, tool.scope_id, tool.validate);
     if (scope === null) return undefined;
     const stored = tool.store.current(person);
     if (stored === undefined || !stored.active) return undefined;
-    const named = containerProjects(input.access_token, person.organization_id, mapping => mapping.cloud_id === tool.scope_id ? tool.containers(mapping) : []);
-    const current = () => { requirePerson(); tool.store.requireCurrent(stored.binding); scope?.current(); named.current(); };
+    const named = containers === undefined ? undefined
+      : containerProjects(input.access_token, person.organization_id, mapping => mapping.cloud_id === tool.scope_id ? containers(mapping) : []);
+    const current = () => { requirePerson(); tool.store.requireCurrent(stored.binding); scope?.current(); named?.current(); };
     current();
     const reader = await tool.reader({ binding: stored.binding, fetch: authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current),
-      expected_origin: stored.site, signal: input.signal, echo_projects: () => named.names }, scope?.mapping);
+      expected_origin: stored.site, signal: input.signal, echo_projects: () => named?.names ?? new Map() }, scope?.mapping);
     current();
     return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current },
       access: { tool_id: provider.id, external_scope_id: tool.scope_id, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
   }
-  return { projectAccess, mappingInput, projectScope, containerProjects, containerSource };
+  /** A connected tool's items (tickets, pages) as one request's audited live source; a project scope reads only its mapping. */
+  function source<C extends PersonLiveEvidenceCitationV1>(tool: PersonLiveSourceToolV1 & {
+    /** The tool's item reader over the asker's connection; in a project scope, pinned to the scope's saved mapping. */
+    readonly reader: (input: PersonLiveReadV1, mapping: NonNullable<T['mapping']> | undefined) => Promise<PersonLiveEvidenceReaderV1<C>>;
+  }, input: PersonLiveSourceInputV1<C>): Promise<PersonLiveEvidenceSourceV1<C> | undefined> {
+    return liveSource(tool, input);
+  }
+  /**
+   * A connected tool's containers as one request's audited live source (research tool contract v1), each naming the ECHO
+   * projects mapped to it that the asker can see. A project scope reads only the containers its saved mapping names.
+   */
+  function containerSource(tool: PersonLiveSourceToolV1 & {
+    /** The containers one saved mapping on this site maps. */
+    readonly containers: (mapping: NonNullable<T['mapping']>) => readonly string[];
+    /** The tool's container reader over the asker's connection; in a project scope, pinned to the scope's saved mapping. */
+    readonly reader: (input: PersonLiveReadV1 & { readonly echo_projects: () => ReadonlyMap<string, readonly string[]> },
+      mapping: NonNullable<T['mapping']> | undefined) => Promise<PersonLiveEvidenceReaderV1<PersonToolContainerCitationV1>>;
+  }, input: PersonLiveSourceInputV1<PersonToolContainerCitationV1>): Promise<PersonLiveEvidenceSourceV1<PersonToolContainerCitationV1> | undefined> {
+    return liveSource(tool, input, tool.containers);
+  }
+  return { projectAccess, mappingInput, projectScope, containerProjects, read, set, source, containerSource };
+}
+
+type Lifecycle = ReturnType<typeof createPersonConnectionLifecycleV1>;
+/** What a live source reads: the provider site (cloud) the connection reads, the project read validator, the lifecycle and store. */
+export interface PersonLiveSourceToolV1 {
+  readonly scope_id: string; readonly validate: (request: unknown) => { readonly project_id: string };
+  readonly lifecycle: Pick<Lifecycle, 'actor' | 'tags' | 'authenticated'>;
+  readonly store: Pick<PersonConnectionStoreV1, 'current' | 'requireCurrent'>;
+}
+/** What a tool's live reader is given: the asker's binding and authenticated transport, the verified site and the request's signal. */
+export interface PersonLiveReadV1 {
+  readonly binding: PersonConnectorReadBindingV1; readonly fetch: PersonConnectionAuthenticatedFetchV1; readonly expected_origin: string;
+  readonly signal: AbortSignal | undefined;
+}
+export interface PersonLiveSourceInputV1<C extends PersonLiveEvidenceCitationV1> {
+  readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<C>; readonly signal?: AbortSignal;
 }

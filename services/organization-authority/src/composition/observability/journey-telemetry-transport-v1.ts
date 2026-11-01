@@ -15,7 +15,7 @@ import {
 } from "./journey-metrics-v1.js";
 import { isCanonicalUtcTimestampV1 } from "../../application/canonical-utc-timestamp-v1.js";
 
-export const JOURNEY_TELEMETRY_LIVENESS_SCHEMA_VERSION_V1 = 1 as const;
+const JOURNEY_TELEMETRY_LIVENESS_SCHEMA_VERSION_V1 = 1 as const;
 export const JOURNEY_TELEMETRY_LIVENESS_KIND_V1 =
   "echo-authority-journey-telemetry-liveness-v1" as const;
 export const JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1 = 60_000;
@@ -26,13 +26,13 @@ export interface JourneyTelemetryIdentityV1 {
 }
 
 /** Exhaustive local rejection origins. No caller-controlled keys or error values. */
-export interface TelemetryRejectionCountsV1 {
+interface TelemetryRejectionCountsV1 {
   readonly journey_observer: { readonly invalid_journey_event: number };
   /** Historical health shape; this obsolete producer never reports failures. */
   readonly meeting_approval_observer: { readonly observation_callback_failure: number };
 }
 
-export interface JourneyTelemetryLivenessEventV1 {
+interface JourneyTelemetryLivenessEventV1 {
   readonly schema_version: typeof JOURNEY_TELEMETRY_LIVENESS_SCHEMA_VERSION_V1;
   readonly kind: typeof JOURNEY_TELEMETRY_LIVENESS_KIND_V1;
   readonly observed_at: string;
@@ -45,9 +45,9 @@ export interface JourneyTelemetryLivenessEventV1 {
   readonly rejection_counts?: TelemetryRejectionCountsV1;
 }
 
-export type JourneyTelemetryWriterV1 = (line: string) => void | Promise<void>;
+type JourneyTelemetryWriterV1 = (line: string) => void | Promise<void>;
 
-export interface JourneyTelemetrySchedulerV1 {
+interface JourneyTelemetrySchedulerV1 {
   set_interval(callback: () => void, interval_ms: number): unknown;
   clear_interval(id: unknown): void;
 }
@@ -62,7 +62,7 @@ export interface JourneyTelemetryTransportOptionsV1 {
   readonly vocabulary?: TelemetryVocabularyV1;
 }
 
-export interface JourneyTelemetryTransportV1 {
+interface JourneyTelemetryTransportV1 {
   readonly environment: OperationalJourneyEnvironmentV1 | null;
   /** False only when the deploy identity is unsafe to emit. */
   readonly enabled: boolean;

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS, assertPersonDocumentOriginalV1,
-  detectPersonDocumentMediaTypeV1, validatePersonDocumentTextV1,
+  detectPersonDocumentMediaTypeV1,
   validatePersonDocumentUploadMetadataV2, validatePersonDocumentSavedV2, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2,
   validatePersonDocumentMetadataV2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2,
 } from '../src/person-documents-v1.js';
@@ -32,11 +32,8 @@ describe('person document originals', () => {
     expect(detectPersonDocumentMediaTypeV1(new TextEncoder().encode('PKCE flow notes'), 'pkce-notes.md')).toBe('text/markdown');
     expect(detectPersonDocumentMediaTypeV1(new TextEncoder().encode('PKI rollout plan'), 'pki.txt')).toBe('text/plain');
   });
-  it('publishes and enforces the shared extracted-text chunk bound', () => {
-    const text = { schema_version: 1, kind: 'echo-person-document-text-v1', document_id: `doc_${'a'.repeat(64)}`, original_sha256: `sha256:${'b'.repeat(64)}`, extractor: 'fixture', extraction_state: 'ready', chunks: [{ ordinal: 0, anchor_kind: 'paragraph', anchor_start: 1, text: 'a'.repeat(PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES) }], next_cursor: null };
+  it('publishes the shared extracted-text chunk bound', () => {
     expect(PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES).toBe(3072);
-    expect(validatePersonDocumentTextV1(text)).toEqual(text);
-    expect(() => validatePersonDocumentTextV1({ ...text, chunks: [{ ...text.chunks[0], text: 'a'.repeat(PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES + 1) }] })).toThrow(/chunk/);
   });
   it('publishes bounded document-transfer timing policy', () => {
     expect(PERSON_DOCUMENT_TRANSFER_DEADLINE_MS).toBe(10 * 60 * 1000);

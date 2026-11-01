@@ -1,7 +1,7 @@
 import { observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { AdapterError } from "../core/contracts/adapter.js";
 
-export const MEETING_PROCESSING_WORKER_PHASES_V1 = Object.freeze([
+const MEETING_PROCESSING_WORKER_PHASES_V1 = Object.freeze([
   "recovery",
   "source_intake",
   "extraction",

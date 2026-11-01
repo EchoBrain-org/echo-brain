@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import { PERSON_ANSWER_ROUTE_HEADER_V5, type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
+import { type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -203,7 +203,7 @@ function v8Answer(input: { readonly scope?: unknown; readonly text?: string; rea
   };
 }
 const RECORD_CITATION = {
-  citation: { kind: "approved_record", atom_id: `sha256:${"c".repeat(64)}`, record_sha256: `sha256:${"b".repeat(64)}`, policy_id: "organization-member-readable-person-v2" },
+  citation: { kind: "approved_record", atom_id: `sha256:${"c".repeat(64)}`, record_sha256: `sha256:${"b".repeat(64)}`, policy_id: "project-members-readable-person-v1" },
   kind: "decision", label: "Pricing review", visibility: "team",
 };
 const SOURCE_CITATION = {
@@ -643,14 +643,14 @@ describe("Person client", () => {
     { record_approved_by: { display_name: "Maya Chen" } },
     {},
     undefined,
-  ])("retrieves one exact readable cited record, negotiating optional source metadata with older Authorities: %j", async (metadata) => {
+  ])("retrieves one exact readable cited record with the source metadata it carries, asking with no version header: %j", async (metadata) => {
     await withHome(async (home) => {
       const recordSha256 = `sha256:${"d".repeat(64)}` as const;
       const client = await signedInClient(home, async (input, init) => {
         const url = new URL(String(input));
         expect(url.pathname + url.search).toBe(`/v1/person/records?record_sha256=${recordSha256}`);
         expect(init?.method).toBe("GET");
-        expect(new Headers(init?.headers).get("x-echo-person-record-version")).toBe("2");
+        expect(new Headers(init?.headers).has("x-echo-person-record-version")).toBe(false);
         return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [{
           position: 1, approval_id: fixtureId("apr", 1), record_sha256: recordSha256,
           envelope: { approved: true }, ...(metadata === undefined ? {} : { source_metadata: metadata }),
@@ -722,7 +722,7 @@ describe("Person client", () => {
               record_sha256: `sha256:${"b".repeat(64)}`,
               kind: "decision",
               text: "Use simple pricing.",
-              policy_id: "organization-member-readable-person-v2",
+              policy_id: "project-members-readable-person-v1",
             },
           ],
         });
@@ -784,16 +784,14 @@ describe("Person client", () => {
     });
   });
 
-  // Ask is one route, /v7, in every scope, Mine included: an Authority without it fails with not_supported, and no other
-  // route is asked.
+  // Ask is one route, /v7, in every scope: its 404 is not_found, as any other read's, and no other route is asked.
   it.each([
     { argv: [], body: {} },
-    { argv: ["--mine"], body: { mine: true } },
     { argv: ["--project", "prj_00000000-0000-4000-8000-000000000019"], body: { project_id: "prj_00000000-0000-4000-8000-000000000019" } },
-  ])("asks $argv on /v7 alone, and fails with not_supported on an Authority without it", async ({ argv, body }) => {
+  ])("asks $argv on /v7 alone, and fails its 404 as not_found", async ({ argv, body }) => {
     await withHome(async home => {
       await installFixtureSession(home);
-      const scope = "mine" in body ? { kind: "mine" } : "project_id" in body ? { kind: "project", project_id: body.project_id } : { kind: "global" };
+      const scope = "project_id" in body ? { kind: "project", project_id: body.project_id } : { kind: "global" };
       const answer = v8PageAnswer({ scope });
       for (const served of [true, false]) {
         const asked: unknown[] = [];
@@ -801,7 +799,7 @@ describe("Person client", () => {
           home_directory: home, now: () => NOW,
           fetch: async (input, init) => {
             asked.push([new URL(String(input)).pathname, JSON.parse(String(init?.body)), new Headers(init?.headers).has("x-echo-ask-progress")]);
-            return served ? json(answer) : json({ error: { code: "not_found", message: "route absent" } }, 404);
+            return served ? json(answer) : json({ error: { code: "not_found", message: "request failed" } }, 404);
           },
         });
         if (served) {
@@ -809,23 +807,10 @@ describe("Person client", () => {
           expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: answer });
         } else {
           expect(result.code).toBe(1);
-          expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, action: "ask", code: "not_supported", status: 404 });
+          expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, action: "ask", code: "not_found", status: 404 });
         }
         expect(asked).toEqual([["/v7/person/ask", { schema_version: 3, question: "What did we decide?", ...body }, false]]);
       }
-    });
-  });
-
-  it.each([["--live"], ["--tickets"], ["--live", "--tickets"]])("refuses the retired Ask flags %j before transport", async (...flags) => {
-    await withHome(async home => {
-      await installFixtureSession(home);
-      let called = false;
-      const result = await runCli(["ask", "--question", "What did we decide?", ...flags], {
-        home_directory: home, now: () => NOW, fetch: async () => { called = true; throw new Error("must not call"); },
-      });
-      expect(result.code).toBe(2);
-      expect(called).toBe(false);
-      expect(JSON.parse(result.stderr)).toEqual({ ok: false, error: `Unknown option '${flags[0]}'` });
     });
   });
 
@@ -862,7 +847,7 @@ describe("Person client", () => {
         expect(Math.abs(Date.now() - Date.parse(headers.get('x-echo-client-now')!))).toBeLessThan(5_000);
         expect(headers.get('x-echo-answer-layout')).toBe('1');
         return json({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
-          citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
+          citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'project-members-readable-person-v1' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
           direct: { text: 'The launch date moved.', citation_indexes: [0], private: false },
           parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch date moved.', citation_indexes: [0], private: false }] }],
         });
@@ -890,7 +875,7 @@ describe("Person client", () => {
     });
   });
 
-  // A diagnostic capture rides on the Ask: an Authority without /v7 fails it with not_supported, and nothing else is asked.
+  // A diagnostic capture rides on the Ask: a 404 fails it as not_found, and nothing else is asked.
   it.each([{ served: true }, { served: false }])('carries a capture on /v7 alone (served: $served)', async ({ served }) => {
     await withHome(async home => {
       const asked: unknown[] = [];
@@ -898,11 +883,11 @@ describe("Person client", () => {
       const answer = v8PageAnswer();
       const client = await signedInClient(home, async (input, init) => {
         asked.push([new URL(String(input)).pathname, JSON.parse(String(init?.body)).capture_id]);
-        return served ? json(answer) : json({ error: { code: 'not_found', message: 'route absent' } }, 404);
+        return served ? json(answer) : json({ error: { code: 'not_found', message: 'request failed' } }, 404);
       });
       const ask = client.askWithLiveSources('What changed?', undefined, undefined, capture_id);
       if (served) await expect(ask).resolves.toEqual(answer);
-      else await expect(ask).rejects.toMatchObject({ code: 'not_supported', status: 404 });
+      else await expect(ask).rejects.toMatchObject({ code: 'not_found', status: 404 });
       expect(asked).toEqual([['/v7/person/ask', capture_id]]);
     });
   });
@@ -920,23 +905,17 @@ describe("Person client", () => {
   });
 
   it.each([
-    // The route header, with /v7's own number or another value: the route matched, so it is the route's own failure.
-    { name: 'a matched-route provider 404', marker: '7', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
-    { name: 'an unknown route marker', marker: 'future', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
-    { name: 'a malformed unmarked 404', marker: undefined, body: { unsupported: true }, code: 'invalid_response' },
-    { name: 'an unmarked 404 with another error code', marker: undefined, body: { error: { code: 'unavailable', message: 'request failed' } }, code: 'unavailable' },
-    // Only a not_found 404 with no route header is an Authority without /v7.
-    { name: 'an unmarked not_found 404', marker: undefined, body: { error: { code: 'not_found', message: 'route absent' } }, code: 'not_supported' },
-  ])('reads $name from /v7 as $code, and asks nothing else', async ({ marker, body, code }) => {
+    { name: 'a provider 404', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
+    { name: 'a malformed 404', body: { unsupported: true }, code: 'invalid_response' },
+    { name: 'a 404 with another error code', body: { error: { code: 'unavailable', message: 'request failed' } }, code: 'unavailable' },
+  ])('reads $name from /v7 as $code, and asks nothing else', async ({ body, code }) => {
     for (const progress of [false, true]) {
       await withHome(async home => {
         const paths: string[] = [];
         const client = fixtureClient(home, async input => {
           const path = new URL(String(input)).pathname; paths.push(path);
           if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
-          const response = json(body, 404);
-          if (marker !== undefined) response.headers.set(PERSON_ANSWER_ROUTE_HEADER_V5, marker);
-          return response;
+          return json(body, 404);
         });
         await client.installSession('https://authority.example', ROTATED_SESSION);
         const asked = progress ? client.askWithLiveProgress('What is current?', undefined, undefined, () => undefined) : client.askWithLiveSources('What is current?');

@@ -11,19 +11,19 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, HOST_TIMEOUT_MS, isWriteCall, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
-import { lost, refreshStops } from './session.js';
+import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openItemsView, openItemView, openView, projectMatchesView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectPageView, projectSettingsView, projectView,
-  NotReadable, pastedView, projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
+  pastedView, projectActivityView, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -68,7 +68,7 @@ async function load(): Promise<ClientModules> {
   if (__ECHO_TEST_HOOK__ && process.env.ECHO_DESKTOP_TEST_FIXTURES) {
     // Belt and braces with main: the fixture never writes into the real home.
     if (sameFolder(home!, homedir())) throw new Error('The test Authority needs a private ECHO_HOME');
-    const test = await import('./test-authority.js');
+    const test = await import('../../test/fixtures/authority.js');
     const hook = test.installTestAuthority(home!, process.env.ECHO_DESKTOP_TEST_FIXTURES, sessions.PersonSessionStore);
     Object.assign(dependencies, hook.dependencies);
     now = hook.now;
@@ -93,22 +93,6 @@ try {
 const modules = load();
 modules.catch(error => { console.error('person host failed to load the client:', error); });
 
-/** Per-method limits; the client enforces its own shorter network timeouts. */
-const TIMEOUT_MS: Record<HostMethodName, number> = {
-  'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000, 'changes.read': 15_000,
-  'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
-  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
-  'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
-  'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
-  'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
-  'employees.reissue': 45_000, 'employees.revoke': 45_000,
-  'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000, 'projects.confluenceRead': 45_000, 'projects.confluenceSet': 90_000, 'projects.confluenceSpaces': 45_000,
-  'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
-  'meetings.handIn': 90_000,
-  // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
-  'timeline.read': 15_000, 'timeline.put': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
-};
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put']);
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -142,7 +126,7 @@ function valid(validate: (value: unknown) => unknown, value: unknown): boolean {
 
 /** Values the page supplied go in `--name=value` form: a leading '-' stays text. */
 function option(name: string, value: string): string { return `--${name}=${value}`; }
-/** The client's own account binding for document writes. */
+/** The client's own account pin: every account-scoped call carries the account the page shows. */
 function expected(expect: Expect): string[] {
   return [option('expected-membership-id', expect.membership_id), option('expected-authority', expect.authority)];
 }
@@ -171,7 +155,7 @@ function refreshDue(store: SessionStore, now: number, ahead: number): boolean {
 
 async function gated<T>(run: () => Promise<T>, method: HostMethodName, refreshFailed?: (refresh: CliRun) => T): Promise<T> {
   const { store, now } = await modules;
-  const ahead = TIMEOUT_MS[method] + 60_000;
+  const ahead = HOST_TIMEOUT_MS[method] + 60_000;
   while (exclusive) await exclusive;
   if (!LOCAL.has(method) && refreshDue(store, now(), ahead)) {
     let release!: () => void;
@@ -247,37 +231,42 @@ function sameAccount(current: AppStatus | null, expect: Expect): boolean {
   return current?.account?.authority === expect.authority && current.account.membership_id === expect.membership_id;
 }
 
-/** Runs a command for the account the renderer is showing, never another. */
+/**
+ * Runs a command for the account the renderer is showing, never another: the
+ * client takes that account as its pin and refuses the run under any other, or
+ * none, before it sends anything and again once it ends. While another process
+ * refreshes, the client reads as signed out: a run refused for that before it
+ * went out runs again once the refresh is over (at most 3 s).
+ */
 async function forAccount<T>(
   method: HostMethodName, expect: Expect, argv: readonly string[], view: (stdout: string) => T, requestId?: string, abortSignal?: AbortSignal,
   write = WRITE_METHODS.has(method), onLine?: (line: string) => void,
 ): Promise<Result<T>> {
-  const before = await status();
-  if (!sameAccount(before, expect)) return code(lost(before), write, requestId);
   if (write && requestId !== undefined) inFlight.add(requestId);
   let run: CliRun;
+  let refused: ReturnType<typeof pinRefusal>;
   try {
-    run = await cli(argv, onLine, abortSignal === undefined ? {} : { abort_signal: abortSignal });
+    for (let attempt = 0; ; attempt += 1) {
+      run = await cli([...argv, ...expected(expect)], onLine, abortSignal === undefined ? {} : { abort_signal: abortSignal });
+      refused = pinRefusal(run);
+      if (refused?.code !== 'signed_out' || refused.sent || attempt >= 6 || !(await refreshRunningElsewhere())) break;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
   } finally {
     if (write && requestId !== undefined) inFlight.delete(requestId);
   }
-  const after = await status();
-  if (!sameAccount(after, expect)) {
-    // Signed out by the call's own refresh, it says why. A write may have gone
-    // out before the session ended or switched; never call it saved or not.
-    return fail({ code: lost(after), retryable: false, ...(write ? { mutation_outcome: 'unknown' as const } : {}),
+  if (refused) {
+    // Signed out by the call's own refresh, it says why. Refused once it ended, a
+    // write may have gone out before the session ended or switched: never call it saved or not.
+    return fail({ code: refused.code, retryable: false, ...(write ? { mutation_outcome: refused.sent ? 'unknown' as const : 'not_submitted' as const } : {}),
       ...(requestId === undefined ? {} : { request_id: requestId }) });
   }
   if (run.overflow) return code('invalid_output', write, requestId);
   if (__ECHO_TEST_HOOK__ && run.exit !== 0) console.error(`[client] ${argv[0]} ${argv[1] ?? ''} failed: ${run.stderr.slice(0, 600)}`);
-  if (run.exit !== 0) {
-    const fallback = after?.signed_in === false ? 'signed_out' : 'failed';
-    return fail(failureView(lastJson(run.stderr), fallback, write, requestId));
-  }
+  if (run.exit !== 0) return fail(failureView(lastJson(run.stderr), 'failed', write, requestId));
   try {
     return ok(view(run.stdout));
   } catch (error) {
-    if (error instanceof NotReadable) return code('not_found', write, requestId);
     // A write that succeeded with a reply we cannot read may well have landed.
     if (error instanceof ViewError) {
       return fail({ code: 'invalid_output', retryable: true, ...(write ? { mutation_outcome: 'unknown' as const } : {}),
@@ -391,7 +380,7 @@ function pageable(projectId: unknown, cursor: unknown): boolean {
 }
 
 /** The command for one project change, or null for anything the page should not have sent. */
-function changeArgs(change: ProjectChange | undefined, requestId: string, expect: Expect): string[] | null {
+function changeArgs(change: ProjectChange | undefined, requestId: string): string[] | null {
   if (!change || typeof change !== 'object' || !valid(validateProjectIdV1, change.project_id)) return null;
   const common = [option('project-id', change.project_id), option('request-id', requestId)];
   switch (change.kind) {
@@ -409,7 +398,7 @@ function changeArgs(change: ProjectChange | undefined, requestId: string, expect
     case 'document-associate':
     case 'document-dissociate':
       if (!valid(validatePersonDocumentIdV1, change.document_id)) return null;
-      return ['documents', change.kind.slice('document-'.length), ...common, option('document-id', change.document_id), ...expected(expect)];
+      return ['documents', change.kind.slice('document-'.length), ...common, option('document-id', change.document_id)];
     default:
       return null;
   }
@@ -526,7 +515,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
     case 'projects.change': {
       const { expect, request_id, change } = params as Params<'projects.change'>;
       if (!valid(validatePersonUpdateRequestId, request_id)) return code('invalid_request');
-      const argv = changeArgs(change, request_id, expect);
+      const argv = changeArgs(change, request_id);
       if (!argv) return code('invalid_request', true, request_id);
       return forAccount(method, expect, argv, stdout => changeView(lastJson(stdout), request_id, change), request_id);
     }
@@ -609,19 +598,18 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const readers = audienceArgs(audience, project_ids);
       if (typeof file !== 'string' || safeTitle === '' || readers === null) return code('invalid_request', true, request_id);
       return forAccount(method, expect, [
-        'documents', 'upload-v2', option('file', file), option('title', safeTitle), option('request-id', request_id),
-        ...readers, ...expected(expect),
+        'documents', 'upload-v2', option('file', file), option('title', safeTitle), option('request-id', request_id), ...readers,
       ], stdout => receiptView(unwrap(lastJson(stdout)), request_id, audience), request_id);
     }
     case 'documents.retry': {
       const { expect, request_id, audience } = params as Params<'documents.retry'>;
-      return forAccount(method, expect, ['documents', 'retry', option('request-id', request_id), ...expected(expect)],
+      return forAccount(method, expect, ['documents', 'retry', option('request-id', request_id)],
         stdout => receiptView(unwrap(lastJson(stdout)), request_id, audience), request_id);
     }
     case 'documents.abandon': {
       const { expect, request_id } = params as Params<'documents.abandon'>;
       if (!valid(validatePersonUpdateRequestId, request_id)) return code('invalid_request');
-      return forAccount(method, expect, ['documents', 'abandon', option('request-id', request_id), ...expected(expect)],
+      return forAccount(method, expect, ['documents', 'abandon', option('request-id', request_id)],
         stdout => abandonView(lastJson(stdout), request_id));
     }
     case 'ask.run': {
@@ -635,7 +623,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
-      return forAccount(method, expect, askArgv(text, scope, expect, previous), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
+      return forAccount(method, expect, askArgv(text, scope, previous), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
     }
     case 'timeline.read': {
       const { expect } = params as Params<'timeline.read'>;
@@ -828,7 +816,7 @@ port.on('message', ({ data }) => {
   let expired = false;
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<Result<unknown>>(resolve => {
-    timer = setTimeout(() => { expired = true; abort?.abort(); resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[method]);
+    timer = setTimeout(() => { expired = true; abort?.abort(); resolve(code('timeout', write, requestId)); }, HOST_TIMEOUT_MS[method]);
   });
   // Sign-in still runs after a refresh with no answer: it replaces the
   // session, and sign-out ends it either way. Any other call was not made,

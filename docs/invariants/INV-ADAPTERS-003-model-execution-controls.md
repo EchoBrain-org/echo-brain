@@ -53,7 +53,7 @@ the only current model provider:
   hard-coded wire controls enter that identity only through a manual
   `LLM_DECISION_PROCESSOR_ADAPTER_VERSION` bump.
 
-The Ask adapter pins one thinking control: reasoning effort `medium` for its
-default model, Claude Sonnet 5.5, which takes no temperature
-(`modelRequestCompatibility` in the adapter). The decision processor pins none,
-so every new model/provider pair still needs its own conformance probe.
+The Ask adapter pins one thinking control: reasoning effort `medium`, sent in
+its request body on every call. Its model, Claude Sonnet 5.5, takes no
+temperature, so the adapter sends none. The decision processor pins none, so
+every new model/provider pair still needs its own conformance probe.

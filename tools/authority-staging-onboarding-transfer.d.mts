@@ -6,15 +6,6 @@ export type OnboardingTransferArtifact = Readonly<{
   sha256: string;
 }>;
 
-/** Private receipt lifecycle. SSM-submitted states may only be reconciled. */
-export type OnboardingTransferReceiptState =
-  | "uploading"
-  | "uploaded"
-  | "planned"
-  | "ssm_submitting"
-  | "ssm_submitted"
-  | "remote_prepared";
-
 export type OnboardingTransferAws = Readonly<{
   json(args: readonly string[]): unknown;
   noOutput(args: readonly string[]): void;

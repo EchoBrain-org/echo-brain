@@ -3,10 +3,10 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3, validatePersonRunsRequestV1, validatePersonRunsResultV1,
+  personRecordAtomIdV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3, validatePersonRunsRequestV1, validatePersonRunsResultV1,
   type PersonAnswerCitationV8, type PersonAskProgressStepEventV3,
 } from '@echo-brain/organization-api';
-import { derivedAtomIdentity } from '@echo-brain/organization-record/application/atom-identity';
+import { derivedAtomIdentity } from '../../packages/organization-record/src/application/atom-identity.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import {
@@ -63,7 +63,7 @@ interface Store {
   };
 }
 interface Views {
-  answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json; atomId(record: string, signal: string): string;
+  answerView(raw: unknown, scope: Scope): Json; recordView(raw: unknown, asked: Json): Json; evidenceView(raw: unknown): Json;
   openItemView(item: unknown): Json;
 }
 interface ProgressView { PROGRESS_AFTER_MS: number; searchedWords(row: Row): string }
@@ -101,7 +101,7 @@ async function app() {
   const [{ runCli, lastJson }, ask, views, { askText }, progress, { openerOf }] = await Promise.all([
     desktop<{ runCli(cli: unknown, argv: readonly string[], dependencies: Json, onLine?: (line: string) => void): Promise<CliRun>; lastJson(text: string): unknown }>('host/cli.ts'),
     desktop<{
-      askArgv(text: string, scope: Scope, expect: Expect): string[]; askRecordArgv(record: Json): string[]; askSourceArgv(ref: Json, scope: Scope): string[];
+      askArgv(text: string, scope: Scope): string[]; askRecordArgv(record: Json): string[]; askSourceArgv(ref: Json, scope: Scope): string[];
       askProgressLines(cancelId: string, expect: Expect, signal: AbortSignal, post: (notice: Notice) => void, refused?: () => void): (line: string) => void;
     }>('host/ask.ts'),
     desktop<Views>('host/views.ts'),
@@ -131,7 +131,9 @@ async function app() {
   /** The host's live Asks, by the page's cancel id. */
   const asks = new Map<string, AbortController>();
   let store!: Store;
-  // As the host's forAccount does: output its view refuses is a failure the page shows, never a throw.
+  // As the host's forAccount does: every command pinned to the page's account, and output its view refuses a failure the
+  // page shows, never a throw.
+  const pinned = (argv: readonly string[]) => [...argv, `--expected-membership-id=${account.membership_id}`, `--expected-authority=${account.authority}`];
   const viewed = (run: CliRun, view: (raw: unknown) => Json) => {
     try { return run.exit === 0 ? ok(view(lastJson(run.stdout))) : { ok: false, failure: { code: 'failed', retryable: false } }; }
     catch { return { ok: false, failure: { code: 'invalid_output', retryable: true } }; }
@@ -144,7 +146,7 @@ async function app() {
       const abort = new AbortController();
       asks.set(params.cancel_id as string, abort);
       const read = ask.askProgressLines(params.cancel_id as string, account, abort.signal, notice => { notices.push(notice); store.askProgress(notice); }, refused);
-      const run = await runCli(runPersonClientCli, ask.askArgv(askText(params.question as string), scope, account), { ...client, abort_signal: abort.signal },
+      const run = await runCli(runPersonClientCli, pinned(ask.askArgv(askText(params.question as string), scope)), { ...client, abort_signal: abort.signal },
         line => { lines.push(line); read(line); });
       runs.push(run);
       if (run.exit !== 0) return { ok: false, failure: { code: abort.signal.aborted ? 'cancelled' : 'failed', retryable: true } };
@@ -154,12 +156,12 @@ async function app() {
       return viewed(run, raw => views.answerView(raw, scope));
     }
     if (method === 'ask.cancel') { asks.get(params.cancel_id as string)?.abort(); return ok(null); }
-    if (method === 'ask.record') return viewed(await runCli(runPersonClientCli, ask.askRecordArgv(params.record as Json), client), raw => views.recordView(raw, params.record as Json));
-    if (method === 'ask.source') return viewed(await runCli(runPersonClientCli, ask.askSourceArgv(params.ref as Json, params.scope as Scope), client), views.evidenceView);
+    if (method === 'ask.record') return viewed(await runCli(runPersonClientCli, pinned(ask.askRecordArgv(params.record as Json)), client), raw => views.recordView(raw, params.record as Json));
+    if (method === 'ask.source') return viewed(await runCli(runPersonClientCli, pinned(ask.askSourceArgv(params.ref as Json, params.scope as Scope)), client), views.evidenceView);
     // A follow-up's row, as the host reads one: the runs command, its result validated, the item as the page has it.
     if (method === 'runs' && (params.request as Json).operation === 'item') {
       const request = validatePersonRunsRequestV1(params.request);
-      return viewed(await runCli(runPersonClientCli, ['runs', `--request=${JSON.stringify(request)}`], client),
+      return viewed(await runCli(runPersonClientCli, pinned(['runs', `--request=${JSON.stringify(request)}`]), client),
         raw => views.openItemView((validatePersonRunsResultV1('item', (raw as { result: unknown }).result) as { item: unknown }).item));
     }
     return quiet(method, account);
@@ -187,8 +189,8 @@ describe('Ask progress from the Authority through the Person client to the deskt
   it('streams each step to the page while the Authority works on /v7, then folds into the audited receipt, and opens what it named', async () => {
     const { f, store, views, lines, refused, runs, audits, asked } = await app();
     try {
-      // The desktop's atom ids are the Authority's own.
-      expect(views.atomId(f.seeded.approved_record_sha256, 'd1')).toBe(derivedAtomIdentity(f.seeded.approved_record_sha256, 'd1'));
+      // The atom ids the Person client gives a cited record's items (organization-api's) are the Authority's own.
+      expect(personRecordAtomIdV1(f.seeded.approved_record_sha256, 'd1')).toBe(derivedAtomIdentity(f.seeded.approved_record_sha256, 'd1'));
 
       // While the Authority is inside the writer's model call, the page already shows what it searched and read.
       let writing: { progress: Progress; lines: number; runs: number } | undefined;

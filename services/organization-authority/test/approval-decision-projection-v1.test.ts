@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalJson, canonicalSha256, type JsonValue } from '@echo-brain/federation-protocol';
 import {
-  APPROVAL_DECISION_FIELD_V2, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, createRecordEnvelopeFactoryV4, createRecordReceiptFactoryV2,
-  organizationAuthorityPinSha256, organizationMemberReadablePersonPolicyContractSha256, projectMembersReadablePersonPolicyContractSha256, verifyOrganizationAuthorityPin,
-  validateApprovalDecisionRecordInputV2, approvalRecordIdV2, APPROVAL_DECISION_CONSEQUENCE_KIND_V1,
+  APPROVAL_DECISION_FIELD_V2, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, createRecordEnvelopeFactoryV4, createRecordReceiptFactoryV2,
+  organizationAuthorityPinSha256, projectMembersReadablePersonPolicyContractSha256, verifyOrganizationAuthorityPin,
+  validateApprovalDecisionRecordInputV2, approvalRecordIdV2, APPROVAL_DECISION_CONSEQUENCE_KIND_V1, validateApprovedDecisionSnapshotV2,
 } from '@echo-brain/organization-protocol';
-import { validateApprovedDecisionSnapshotV2 } from '@echo-brain/organization-protocol/record-codec-support-v4';
 import { approvalCoreFixture, type ApprovalCoreFixtureV1 } from './fixtures/approval-core.js';
 import type { ApprovalDecisionBodyV1, ApprovalRouteV1 } from '../src/composition/approval-core-v1.js';
 import {
@@ -190,8 +189,9 @@ describe('approval decision projection', () => {
     const f = await approvalCoreFixture();
     f.core.decide('desktop', f.approve(), () => f.session);
     const [built] = buildApprovalDecisionRecordsV1(source(f));
+    // A project policy for an Only-me choice, or the retired organization-wide (Team) policy, which no record carries.
     for (const [policy_id, policy_contract_sha256] of [[PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, projectMembersReadablePersonPolicyContractSha256()],
-      [ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, organizationMemberReadablePersonPolicyContractSha256()]] as const) {
+      ["organization-member-readable-person-v2", canonicalSha256("retired team policy")]] as const) {
       const event = clone(built!.human_act_record_input.event) as unknown as Mutable;
       const consequence = { ...(event.policy_consequence as Mutable), kind: APPROVAL_DECISION_CONSEQUENCE_KIND_V1, policy_id };
       Object.assign(event, { policy_id, policy_contract_sha256, policy_consequence: consequence, policy_consequence_sha256: canonicalSha256(consequence as JsonValue) });

@@ -12,6 +12,8 @@ import {
   addMembership,
   projectContextDatabase,
   revokeMembership,
+  seedProject,
+  seedProjectMember,
 } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
@@ -32,11 +34,7 @@ function open(): Database.Database {
 }
 
 function addProject(database: Database.Database, projectId: string = PROJECT_ALPHA): void {
-  database.prepare(`
-    INSERT INTO authority_projects_v1
-      (project_id, organization_id, name, created_at, creator_principal_id, creator_membership_id, creator_membership_type)
-    VALUES (?, ?, 'Project', ?, ?, ?, ?)
-  `).run(projectId, OWNER.organization_id, PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type);
+  seedProject(database, projectId, OWNER, { name: 'Project' });
 }
 
 function grantProjectMembership(
@@ -45,11 +43,7 @@ function grantProjectMembership(
   actor = OWNER,
   id = 'pgm_11111111-1111-4111-8111-111111111111',
 ): void {
-  database.prepare(`
-    INSERT INTO authority_project_memberships_v1
-      (project_membership_id, project_id, organization_id, principal_id, membership_id, membership_type, role, status, granted_at, revoked_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'member', 'active', ?, NULL)
-  `).run(id, projectId, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, PROJECT_CONTEXT_NOW);
+  seedProjectMember(database, projectId, actor, 'member', { id });
 }
 
 /** A V2 upload (request version 3 for a projects audience); only a single-project audience sets audience_project_id. */

@@ -12,6 +12,7 @@ import { createOrganizationAuthorityHttpServer } from '../../src/presentation/or
 import { createPersonUpdateProcessingV1 } from '../../src/composition/person-update-processing-v1.js';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../../src/adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { authorization, PROJECT_CONTEXT_NOW } from '../fixtures/project-context-sqlite.js';
+import { authorityHttpServerOptions } from '../fixtures/authority-http-server.js';
 import { SyntheticProjectHarness, PEOPLE } from './synthetic-harness.js';
 
 type Person = keyof typeof PEOPLE;
@@ -22,16 +23,17 @@ const homes = new Map<Person, string>();
 const labels = new Map<string, Person>();
 const requests: string[] = [];
 
+/** Unsupported, the project routes answer not_found, as an Authority without them does. */
 async function start(supported = true) {
   const app = createProjectContextApplicationV1({ repository: h.repository, authenticate: value => {
     const person = labels.get(value);
     if (!person) throw new AuthorityOperationError('unauthorized', 'request failed');
     return authorization(PEOPLE[person]);
   } });
-  server = createOrganizationAuthorityHttpServer({
-    descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never,
-    expected_issuer: 'https://issuer.example', ...(supported ? { project_context: app } : {}),
-  });
+  const notFound = () => { throw new AuthorityOperationError('not_found', 'request failed'); };
+  server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
+    project_context: supported ? app : { listProjectsV2: notFound, readProjectV2: notFound, submitUploadV3: notFound } as never,
+  }));
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();

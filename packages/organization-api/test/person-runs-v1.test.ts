@@ -20,7 +20,7 @@ const run = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const record = {
-  citation: { kind: 'approved_record', atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' },
+  citation: { kind: 'approved_record', atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'project-members-readable-person-v1' },
   kind: 'decision', label: 'Gate review: display precision', visibility: 'team',
 };
 const ticket = {

@@ -1,7 +1,7 @@
 import { rmSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { PERSON_EVIDENCE_OPEN_PATH_V1, PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonAnswerResponseV8, validatePersonEvidenceDeskResponseV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonAnswerResponseV8, validatePersonEvidenceDeskResponseV1 } from '@echo-brain/organization-api';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
 import type { PersonContextProjectNamesV1, PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { JIRA_LIVE_CONNECTOR_V1, JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
@@ -122,27 +122,17 @@ describe('one runtime without live connectors', () => {
   afterAll(async () => { await runtime?.close(); shared.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
   beforeEach(() => { generate.mockClear(); });
 
-  // Ask is mounted with the runtime's follow-up and workspace sources: outside Mine its catalog lists them (ADR-0040).
-  it.each([{ mine: false }, { mine: true }])('serves Ask with no live connectors (mine=$mine)', async ({ mine }) => {
+  // Ask is mounted with the runtime's follow-up and workspace sources: its catalog lists them (ADR-0040).
+  it('serves Ask with no live connectors', async () => {
     const response = await fetch(`${origin}/v7/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ schema_version: 3, question: 'What changed?', ...(mine ? { mine: true } : {}) }),
+      body: JSON.stringify({ schema_version: 3, question: 'What changed?' }),
     });
     expect(response.status).toBe(200);
-    expect(response.headers.get('x-echo-person-ask-route')).toBe('7');
-    expect(await response.json()).toMatchObject({ schema_version: 8, scope: { kind: mine ? 'mine' : 'global' }, citations: [] });
+    expect(await response.json()).toMatchObject({ schema_version: 8, scope: { kind: 'global' }, citations: [] });
     expect(generate).toHaveBeenCalled();
     const [prompt] = generate.mock.calls[0] as unknown as [{ readonly user_prompt: string }];
     const catalog = (JSON.parse(prompt.user_prompt) as { source_catalog?: { source: string }[] }).source_catalog?.map(entry => entry.source) ?? [];
-    for (const source of ['follow_ups', 'projects', 'people', 'tools']) expect([source, catalog.includes(source)]).toEqual([source, !mine]);
-  });
-
-  it.each([3, 4, 5, 6])('has no /v%i Ask route any more', async version => {
-    const response = await fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ schema_version: 3, question: 'What changed?' }),
-    });
-    expect(response.status).toBe(404);
-    expect(response.headers.has('x-echo-person-ask-route')).toBe(false);
-    expect(generate).not.toHaveBeenCalled();
+    for (const source of ['follow_ups', 'projects', 'people', 'tools']) expect([source, catalog.includes(source)]).toEqual([source, true]);
   });
 });
 
@@ -153,7 +143,7 @@ it('closes already opened connectors if a later registered connector fails to st
     descriptor: { source_id, selector: source_id, kind: 'page', description: 'Live pages', metadata_only_list: true },
     scopes: ['global'],
   });
-  await expect(startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors: [
+  await expect(startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, answer_composition_generation: finishingModel().answer_composition_generation, live_connectors: [
     { ...definition('first'), open: () => ({ application: { source: async () => undefined }, close }) },
     { ...definition('second'), open: () => { throw new Error('connector startup failed'); } },
   ] })).rejects.toThrow('connector startup failed');
@@ -196,7 +186,7 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
   } finally { await f.close(); }
 });
 
-it('returns a meeting record through the public evidence search and open doors without its list label (ADR-0041, X21)', async () => {
+it('returns a meeting record through the public evidence search without its list label (ADR-0041, X21)', async () => {
   // The desk names a meeting record in Ask's list rows by a line of its own text; that label, like named dates and refs,
   // is internal research metadata, and the public desk contract carries none of it.
   const f = await allSourceFixture();
@@ -205,14 +195,9 @@ it('returns a meeting record through the public evidence search and open doors w
     expect(searched.status).toBe(200);
     const record = validatePersonEvidenceDeskResponseV1(searched.body).items.find(item => item.citation.kind === 'approved_record' && item.citation.record_sha256 === f.seeded.approved_record_sha256);
     expect(record).toMatchObject({ kind: 'decision', text: f.seeded.approved_text });
-    const opened = await f.post(PERSON_EVIDENCE_OPEN_PATH_V1, { schema_version: 1, citation: record!.citation });
-    expect(opened.status).toBe(200);
-    for (const response of [searched, opened]) {
-      const records = validatePersonEvidenceDeskResponseV1(response.body).items.filter(item => item.citation.kind === 'approved_record');
-      expect(records.length).toBeGreaterThan(0);
-      for (const item of records) for (const key of ['list_label', 'ref', 'dates', 'date_kind']) expect(item).not.toHaveProperty(key);
-      expect(JSON.stringify(response.body)).not.toContain(`${f.seeded.approved_text} (`);
-    }
+    const records = validatePersonEvidenceDeskResponseV1(searched.body).items.filter(item => item.citation.kind === 'approved_record');
+    for (const item of records) for (const key of ['list_label', 'ref', 'dates', 'date_kind']) expect(item).not.toHaveProperty(key);
+    expect(JSON.stringify(searched.body)).not.toContain(`${f.seeded.approved_text} (`);
   } finally { await f.close(); }
 });
 

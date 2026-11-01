@@ -6,7 +6,7 @@ import type { ProviderHttpApplicationV1, ProviderHttpRequestV1 } from '@echo-bra
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
 type Command = { readonly access_token: string; readonly signal?: AbortSignal };
-export interface PersonConnectionHttpPortV1 {
+interface PersonConnectionHttpPortV1 {
   connect(input: Command): Promise<unknown>;
   status(input: Command & { readonly attempt: string }): Promise<unknown>;
   cancel(input: Command & { readonly attempt: string }): Promise<unknown>;

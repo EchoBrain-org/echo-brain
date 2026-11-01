@@ -31,7 +31,7 @@ import { validateOrganizationAuthorityDescriptor } from "@echo-brain/organizatio
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import type { OrganizationAuthoritySigner } from "@echo-brain/organization-authority-kernel/application/ports/organization-authority-signer";
 
-export const FILE_ORGANIZATION_AUTHORITY_KEY_FILENAME =
+const FILE_ORGANIZATION_AUTHORITY_KEY_FILENAME =
   "authority-development-key.v1.json";
 const MAX_KEY_FILE_BYTES = 8 * 1024;
 

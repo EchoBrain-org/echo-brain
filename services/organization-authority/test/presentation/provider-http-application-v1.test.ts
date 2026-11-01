@@ -5,23 +5,20 @@ import { PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1, type PrivateSlackApprovalIn
 import { createPrivateSlackApprovalHttpAdapterV1 } from "../../../../providers/slack/server/src/private-approval/private-slack-approval-http-adapter-v1.js";
 import type { ProviderHttpApplicationV1, ProviderHttpResponseV1 } from "../../../../packages/organization-authority-kernel/src/application/ports/provider-http-application-v1.js";
 import { PERSON_SESSION_OIDC_BEGIN_PATH } from "../../src/presentation/person-identity-session-http-application.js";
+import { authorityHttpServerOptions } from "../fixtures/authority-http-server.js";
 
 function serverOptions(input: {
   readonly approval?: ProviderHttpApplicationV1;
   readonly external_identity?: ProviderHttpApplicationV1;
 } = {}) {
-  return {
-    descriptor: {} as never,
-    sessions: {} as never,
-    oidc_provider: {} as never,
-    expected_issuer: "https://issuer.example",
+  return authorityHttpServerOptions({
     ...(input.approval === undefined
       ? {}
       : { person_tool_connections: [input.approval] }),
     ...(input.external_identity === undefined
       ? {}
       : { person_external_identity_link: input.external_identity }),
-  };
+  });
 }
 
 async function listen(

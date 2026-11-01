@@ -21,7 +21,7 @@ import type { EvidenceDatesV1 } from './temporal-query-v1.js';
 export const FOLLOW_UP_EVIDENCE_KIND_V1 = 'follow_up' as const;
 /** The source id and the selector the research model uses. */
 export const FOLLOW_UPS_SOURCE_ID_V1 = 'follow_ups' as const;
-export const FOLLOW_UPS_SELECTOR_V1 = 'follow_ups' as const;
+const FOLLOW_UPS_SELECTOR_V1 = 'follow_ups' as const;
 /** A status group a follow-ups list takes. */
 export type FollowUpListStatusV1 = 'open' | 'done';
 /**

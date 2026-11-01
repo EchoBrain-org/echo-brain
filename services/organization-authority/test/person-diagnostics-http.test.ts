@@ -14,6 +14,7 @@ import { createOrganizationAuthorityHttpServer } from '../src/presentation/organ
 import type { PersonDiagnosticsHttpApplicationV1 } from '../src/presentation/person-diagnostics-http-application.js';
 import type { PersonAnswerV7HttpApplication } from '../src/presentation/person-live-answer-http-application.js';
 import type { PersonTriggerRunsHttpApplicationV1 } from '../src/presentation/person-trigger-runs-http-application.js';
+import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
 
 const capture_id = 'cap_00000000-0000-4000-8000-000000000001';
 const run_id = 'run_00000000-0000-4000-8000-000000000002';
@@ -26,10 +27,10 @@ afterEach(async () => {
   for (const registry of registries.splice(0)) registry.close();
 });
 async function origin(input: { diagnostics?: PersonDiagnosticsHttpApplicationV1; ask?: PersonAnswerV7HttpApplication; runs?: PersonTriggerRunsHttpApplicationV1 }) {
-  const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
     ...(input.diagnostics === undefined ? {} : { person_diagnostics: input.diagnostics }),
     ...(input.ask === undefined ? {} : { person_answer_v7: input.ask }), ...(input.runs === undefined ? {} : { person_trigger_runs: input.runs }),
-  });
+  }));
   servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
   return `http://127.0.0.1:${address.port}`;
@@ -52,7 +53,7 @@ function captureFixture() {
   const originals = {
     deskAuthorize, revalidateDeskRelease,
     deskSearch: vi.fn(() => ({ items: [note], truncated: false, receipt: canonicalSha256('note release'),
-      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'mine' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
+      release: { authorization: { principal_id: 'principal-owner', membership_id: 'membership-owner', session_family_id: 'session-owner', checked_at }, scope: { kind: 'global' }, grants_sha256: canonicalSha256([]), released_atoms: [] },
     })),
   };
   const replies: unknown[] = [];
@@ -94,9 +95,9 @@ describe('person diagnostics HTTP integration', () => {
   });
 
   it('reserves the diagnostics endpoint against provider route collisions', () => {
-    expect(() => createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example',
+    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
       person_tools: { routes: [{ route_id: 'collision', method: 'POST', path: PERSON_DIAGNOSTICS_PATH_V1 }], accept: async () => ({ status: 200, body: {} }) },
-    })).toThrow('collides with Authority route');
+    }))).toThrow('collides with Authority route');
   });
 
   it('forwards capture selection on the ordinary Ask and run start routes, rejecting it for retry/view', async () => {
@@ -125,7 +126,7 @@ describe('person diagnostics HTTP integration', () => {
     const initial = validatePersonDiagnosticsResultV1('read', await (await post(base, PERSON_DIAGNOSTICS_PATH_V1, readRequest)).json());
     expect(initial.status).toBe('prepared'); expect(initial).not.toHaveProperty('trace');
     expect((await post(base, PERSON_DIAGNOSTICS_PATH_V1, readRequest, 'other')).status).toBe(404);
-    const answer = await post(base, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'Is the PVT fixture ready?', mine: true, capture_id: receipt.capture_id });
+    const answer = await post(base, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'Is the PVT fixture ready?', capture_id: receipt.capture_id });
     expect(answer.status).toBe(200);
     expect(await answer.json()).toMatchObject({ schema_version: 8, outcome: 'answered', parts: [{ statements: [{ text: 'The PVT fixture is ready and Manufacturing approved it.' }] }] });
     const fencesBeforeRead = f.originals.revalidateDeskRelease.mock.calls.length;

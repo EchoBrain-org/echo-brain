@@ -42,14 +42,8 @@ const documentRow = {
   projects: [{ project_id: PROJECT_A, name: 'Apollo' }], media_type: 'application/pdf', extraction_state: 'ready', size_bytes: 1_245_184,
 };
 const meetingRow = { ref: MEETING, kind: 'meeting', title: 'Pricing review', added_at: '2026-09-21T18:00:00.000Z', visibility: 'team', projects: [], meeting_date: '2026-09-21' };
-const globalHeader = {
-  me: { display_name: 'Maya Chen', membership_type: 'employee' },
-  connected: [{ tool: 'slack', status: 'linked' }],
-  projects: [{ project_id: PROJECT_A, name: 'Apollo', role: 'member', status: 'active' }],
-  projects_more: false,
-};
 const page = (fields: Record<string, unknown> = {}) => ({
-  schema_version: 1, kind: 'echo-person-list-v1', scope: { kind: 'mine' }, items: [noteRow, documentRow, meetingRow], next_cursor: null, ...fields,
+  schema_version: 1, kind: 'echo-person-list-v1', scope: { kind: 'only_me' }, items: [noteRow, documentRow, meetingRow], next_cursor: null, ...fields,
 });
 const withRow = (index: number, fields: Record<string, unknown>) =>
   page({ items: [noteRow, documentRow, meetingRow].map((row, at) => (at === index ? { ...row, ...fields } : row)) });
@@ -89,22 +83,26 @@ describe('Person list and open public contracts', () => {
     expect(PERSON_OPEN_PATH_V1).toBe('/v1/person/open');
   });
 
-  it('accepts one scope and an opaque cursor, and nothing else', () => {
+  it('accepts exactly one scope, a project or only_me, and an opaque cursor, and nothing else', () => {
     for (const request of [
-      { schema_version: 1 }, { schema_version: 1, project_id: PROJECT_A }, { schema_version: 1, mine: true }, { schema_version: 1, only_me: true },
-      { schema_version: 1, cursor: 'AnR3_-9' }, { schema_version: 1, mine: true, cursor: 'A'.repeat(512) }, { schema_version: 1, only_me: true, cursor: 'AnR3_-9' },
+      { schema_version: 1, project_id: PROJECT_A }, { schema_version: 1, only_me: true },
+      { schema_version: 1, project_id: PROJECT_A, cursor: 'A'.repeat(512) }, { schema_version: 1, only_me: true, cursor: 'AnR3_-9' },
     ]) expect(validatePersonListRequestV1(request)).toEqual(request);
+    // No scope was the retired global list: a request names its project or only_me.
+    for (const request of [{ schema_version: 1 }, { schema_version: 1, cursor: 'AnR3_-9' }, { schema_version: 1, only_me: true, project_id: PROJECT_A }]) {
+      expect(() => validatePersonListRequestV1(request)).toThrow('Person list request scope is invalid');
+    }
     for (const request of [
-      { schema_version: 1, project_id: PROJECT_A, mine: true },
-      { schema_version: 1, only_me: true, mine: true }, { schema_version: 1, only_me: true, project_id: PROJECT_A },
+      // The retired mine scope, alone or with another.
+      { schema_version: 1, mine: true }, { schema_version: 1, mine: true, cursor: 'A'.repeat(512) },
+      { schema_version: 1, project_id: PROJECT_A, mine: true }, { schema_version: 1, only_me: true, mine: true },
       { schema_version: 1, only_me: true, mine: true, project_id: PROJECT_A },
       { schema_version: 1, only_me: false }, { schema_version: 1, only_me: 'true' }, { schema_version: 1, onlyMe: true },
-      { schema_version: 1, mine: false }, { schema_version: 1, mine: 'true' },
-      { schema_version: 1, kind: 'note' }, { schema_version: 1, limit: 25 }, { schema_version: 1, query: 'pricing' },
-      { schema_version: 1, since: '2026-09-01' }, { schema_version: 1, scope: { kind: 'global' } },
-      { schema_version: 1, cursor: '' }, { schema_version: 1, cursor: 'A'.repeat(513) },
-      { schema_version: 1, cursor: 'AnR3=' }, { schema_version: 1, cursor: 'An+R3' }, { schema_version: 1, cursor: 'An/R3' },
-      { schema_version: 2 }, { schema_version: 1, project_id: 'prj_not-a-project' },
+      { schema_version: 1, only_me: true, kind: 'note' }, { schema_version: 1, only_me: true, limit: 25 }, { schema_version: 1, only_me: true, query: 'pricing' },
+      { schema_version: 1, only_me: true, since: '2026-09-01' }, { schema_version: 1, scope: { kind: 'global' } }, { schema_version: 1, scope: { kind: 'only_me' } },
+      { schema_version: 1, only_me: true, cursor: '' }, { schema_version: 1, only_me: true, cursor: 'A'.repeat(513) },
+      { schema_version: 1, only_me: true, cursor: 'AnR3=' }, { schema_version: 1, project_id: PROJECT_A, cursor: 'An+R3' }, { schema_version: 1, project_id: PROJECT_A, cursor: 'An/R3' },
+      { schema_version: 2, only_me: true }, { schema_version: 1, project_id: 'prj_not-a-project' },
     ]) expect(() => validatePersonListRequestV1(request)).toThrow();
   });
 
@@ -126,24 +124,21 @@ describe('Person list and open public contracts', () => {
     ]) expect(() => validatePersonOpenRequestV1(request)).toThrow();
   });
 
-  it('carries the global header whole on a global page and never elsewhere', () => {
-    expect(validatePersonListResponseV1(page({ scope: { kind: 'global' }, ...globalHeader }))).toMatchObject(globalHeader);
-    expect(validatePersonListResponseV1(page({ scope: { kind: 'global' } }))).not.toHaveProperty('me');
-    for (const key of Object.keys(globalHeader)) {
-      expect(() => validatePersonListResponseV1(page({ scope: { kind: 'global' }, ...without(globalHeader, key) }))).toThrow('header is invalid');
-    }
-    for (const scope of [{ kind: 'mine' }, { kind: 'only_me' }, { kind: 'project', project_id: PROJECT_A }]) {
-      expect(() => validatePersonListResponseV1(page({ scope, ...globalHeader }))).toThrow('header is invalid');
-      expect(() => validatePersonListResponseV1(page({ scope, me: globalHeader.me, connected: [], projects: [], projects_more: false }))).toThrow();
-    }
+  it('carries the project header on a project page only, and has no global or mine page', () => {
     const project = { project_id: PROJECT_A, name: 'Apollo', role: 'lead', status: 'active' };
     expect(validatePersonListResponseV1(page({ scope: { kind: 'project', project_id: PROJECT_A }, project })).project).toEqual(project);
     expect(validatePersonListResponseV1(page({ scope: { kind: 'project', project_id: PROJECT_A } }))).not.toHaveProperty('project');
     expect(() => validatePersonListResponseV1(page({ scope: { kind: 'project', project_id: PROJECT_B }, project }))).toThrow('inconsistent');
-    expect(() => validatePersonListResponseV1(page({ scope: { kind: 'global' }, ...globalHeader, project }))).toThrow('header is invalid');
-    expect(() => validatePersonListResponseV1(page({ scope: { kind: 'mine' }, project }))).toThrow('header is invalid');
     expect(() => validatePersonListResponseV1(page({ scope: { kind: 'only_me' }, project }))).toThrow('header is invalid');
-    expect(() => validatePersonListResponseV1(page({ scope: { kind: 'mine', project_id: PROJECT_A } }))).toThrow();
+    // The retired global and mine scopes, and the global page's me, connected and projects header, are refused on every page.
+    for (const scope of [{ kind: 'global' }, { kind: 'mine' }, { kind: 'mine', project_id: PROJECT_A }]) {
+      expect(() => validatePersonListResponseV1(page({ scope }))).toThrow('Person list scope is invalid');
+    }
+    const retired = { me: { display_name: 'Maya Chen', membership_type: 'employee' }, connected: [{ tool: 'slack', status: 'linked' }], projects: [project], projects_more: false };
+    for (const scope of [{ kind: 'only_me' }, { kind: 'project', project_id: PROJECT_A }]) {
+      expect(() => validatePersonListResponseV1(page({ scope, ...retired }))).toThrow('unexpected shape');
+      for (const [key, value] of Object.entries(retired)) expect(() => validatePersonListResponseV1(page({ scope, [key]: value }))).toThrow('unexpected shape');
+    }
   });
 
   it('echoes only_me, a scope the list alone takes, exactly (ADR-0049)', () => {
@@ -153,24 +148,6 @@ describe('Person list and open public contracts', () => {
     }
     // Ask's scope is unchanged: it never takes only_me.
     expect(() => validatePersonAnswerScopeV3({ kind: 'only_me' })).toThrow();
-  });
-
-  it('bounds and orders the header lists', () => {
-    const projects = (count: number, status = (_: number) => 'active') =>
-      Array.from({ length: count }, (_, index) => ({ project_id: projectId(index + 1), name: `Project ${index}`, role: 'member', status: status(index) }));
-    const header = (fields: Record<string, unknown>) => page({ scope: { kind: 'global' }, ...globalHeader, ...fields });
-    expect(validatePersonListResponseV1(header({ projects: projects(50), projects_more: true })).projects).toHaveLength(50);
-    expect(validatePersonListResponseV1(header({ projects: projects(3, (index) => (index === 0 ? 'active' : 'archived')) })).projects).toHaveLength(3);
-    expect(() => validatePersonListResponseV1(header({ projects: projects(49), projects_more: true }))).toThrow('projects_more');
-    expect(() => validatePersonListResponseV1(header({ projects: projects(51) }))).toThrow('projects is invalid');
-    expect(() => validatePersonListResponseV1(header({ projects: projects(3, (index) => (index === 1 ? 'archived' : 'active')) }))).toThrow('out of order');
-    expect(() => validatePersonListResponseV1(header({ projects: [...projects(1), ...projects(1)] }))).toThrow('duplicates');
-    const tools = (count: number) => Array.from({ length: count }, (_, index) => ({ tool: `tool-${index}`, status: 'unlinked' }));
-    expect(validatePersonListResponseV1(header({ connected: tools(32) })).connected).toHaveLength(32);
-    expect(() => validatePersonListResponseV1(header({ connected: tools(33) }))).toThrow('connected is invalid');
-    expect(() => validatePersonListResponseV1(header({ connected: [...tools(1), ...tools(1)] }))).toThrow('duplicates');
-    expect(() => validatePersonListResponseV1(header({ connected: [{ tool: 'slack', status: 'linked', external_subject_id: 'U1' }] }))).toThrow();
-    expect(() => validatePersonListResponseV1(header({ me: { ...globalHeader.me, membership_id: 'mem_1' } }))).toThrow();
   });
 
   it('validates rows exactly, newest first, with the three-token visibility', () => {
@@ -227,7 +204,7 @@ describe('Person list and open public contracts', () => {
     // Project create/rename and document upload allow these; refusing them would fail whole pages.
     const name = 'Apollo\u2028Beta';
     expect(validatePersonListResponseV1(withRow(1, { projects: [{ project_id: PROJECT_A, name }] })).items[1]!.projects[0]!.name).toBe(name);
-    expect(validatePersonListResponseV1(page({ scope: { kind: 'global' }, ...globalHeader, projects: [{ ...globalHeader.projects[0], name }] })).projects![0]!.name).toBe(name);
+    expect(validatePersonListResponseV1(page({ scope: { kind: 'project', project_id: PROJECT_A }, project: { project_id: PROJECT_A, name, role: 'member', status: 'active' } })).project!.name).toBe(name);
     for (const bad of [' Apollo', 'Apollo\n', 'A'.repeat(201)]) {
       expect(() => validatePersonListResponseV1(withRow(1, { projects: [{ project_id: PROJECT_A, name: bad }] }))).toThrow('name');
     }
@@ -333,12 +310,11 @@ describe('Person list and open public contracts', () => {
       ref: `document:doc_${hex(index)}`, kind: 'document', title: quotes(200), added_at: '2026-09-21T21:30:00.000Z', visibility: 'project', projects,
       media_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', extraction_state: 'limit_exceeded', size_bytes: 25 * 1024 * 1024,
     }));
+    // A first project page carries the largest header there is: the project.
     const worst = {
-      schema_version: 1, kind: 'echo-person-list-v1', scope: { kind: 'global' },
-      me: { display_name: quotes(200), membership_type: 'employee' },
-      connected: Array.from({ length: 32 }, (_, index) => ({ tool: `t${String(index).padStart(63, '-')}`, status: 'unavailable' })),
-      projects: Array.from({ length: 50 }, (_, index) => ({ project_id: projectId(index + 1), name: quotes(200), role: 'member', status: 'archived' })),
-      projects_more: true, items, next_cursor: 'A'.repeat(512), notice: 'meetings_unavailable',
+      schema_version: 1, kind: 'echo-person-list-v1', scope: { kind: 'project', project_id: PROJECT_A },
+      project: { project_id: PROJECT_A, name: quotes(200), role: 'member', status: 'archived' },
+      items, next_cursor: 'A'.repeat(512), notice: 'meetings_unavailable',
     };
     const response = validatePersonListResponseV1(worst);
     expect(response.items).toHaveLength(25);

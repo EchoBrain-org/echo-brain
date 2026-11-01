@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_ASK_PROGRESS_HEADER_V1,
   formatPersonAskProgressEventV3,
   validatePersonAskProgressResultLineV3,
@@ -44,11 +43,9 @@ const clarified = {
   schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'clarify' as const, citations: [], parts: [], question: QUESTION,
   choices: [{ label: 'THERM-482', question: RESOLVED }, { label: 'MECH-214', question: 'What are the details on MECH-214?' }],
 };
-const V7_HEADERS = { [PERSON_ANSWER_ROUTE_HEADER_V5]: '7' };
 const json = (value: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', ...headers } });
-const noRoute = () => json({ error: { code: 'not_found', message: 'route absent' } }, 404);
 const stream = (events: readonly PersonAskProgressEventV3[]) => new Response(events.map(event => formatPersonAskProgressEventV3(event)).join(''),
-  { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', ...V7_HEADERS } });
+  { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
 const pathOf = (input: unknown) => new URL(String(input)).pathname;
 const bodyOf = (init: RequestInit | undefined) => JSON.parse(String(init?.body)) as Record<string, unknown>;
 
@@ -85,13 +82,13 @@ describe('the previous turn on the Person client (ADR-0047)', () => {
     expect(bodyOf(init)).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
   });
 
-  it('asks /v7 alone in JSON too: an Authority without the route, or one that refuses the turn, fails the Ask', async () => {
+  it('asks /v7 alone in JSON too: a 404, or a refused turn, fails the Ask with its own code', async () => {
     const answer = answered({ question: RESOLVED });
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer, 200, V7_HEADERS));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer));
     await expect(client(fetch).askWithLiveSources(QUESTION, undefined, undefined, undefined, PREVIOUS)).resolves.toEqual(answer);
     expect(fetch.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
     expect(bodyOf(fetch.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
-    for (const [reply, code, status] of [[noRoute(), 'not_supported', 404], [json({ error: { code: 'invalid_request', message: 'request failed' } }, 400, V7_HEADERS), 'invalid_request', 400]] as const) {
+    for (const [reply, code, status] of [[json({ error: { code: 'not_found', message: 'request failed' } }, 404), 'not_found', 404], [json({ error: { code: 'invalid_request', message: 'request failed' } }, 400), 'invalid_request', 400]] as const) {
       for (const ask of [
         (fetch: typeof globalThis.fetch) => client(fetch).askWithLiveSources(QUESTION, undefined, undefined, undefined, PREVIOUS),
         (fetch: typeof globalThis.fetch) => client(fetch).askWithLiveProgress(QUESTION, undefined, undefined, () => undefined, {}, PREVIOUS),
@@ -105,7 +102,7 @@ describe('the previous turn on the Person client (ADR-0047)', () => {
 
   it('refuses an answer that names a question, a since or choices when the Ask did not send the turn', async () => {
     for (const answer of [answered({ question: RESOLVED }), answered({ question: RESOLVED, since: { statements: [] } }), clarified]) {
-      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer, 200, V7_HEADERS));
+      const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer));
       await expect(client(fetch).askWithLiveSources(QUESTION)).rejects.toMatchObject({ code: 'invalid_response' });
       const streamed = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: { looked_through: 0, elapsed_ms: 1, rows: [] } }]));
       await expect(client(streamed).askWithLiveProgress(QUESTION, undefined, undefined, () => undefined)).rejects.toMatchObject({ code: 'invalid_response' });
@@ -121,11 +118,12 @@ describe('person ask --previous (ADR-0047)', () => {
     expect(await progress.run(['ask', `--question=${QUESTION}`, '--progress', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(0);
     expect(validatePersonAskProgressResultLineV3(lines(progress.output.stdout).at(-1))).toMatchObject({ result: { question: RESOLVED } });
     expect(bodyOf(streamed.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS });
-    const plain = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer, 200, V7_HEADERS));
+    const plain = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json(answer));
     const once = cli(plain);
-    expect(await once.run(['ask', `--question=${PREVIOUS.question}`, '--mine', `--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })}`])).toBe(1);
-    // A Mine Ask is answered in its own scope; this answer's global scope is refused, but the request carried the turn and the scope.
-    expect(bodyOf(plain.mock.calls[0]![1])).toEqual({ schema_version: 3, question: PREVIOUS.question, mine: true, previous: { ...PREVIOUS, purpose: 'ask_again' } });
+    const project_id = 'prj_00000000-0000-4000-8000-000000000001';
+    expect(await once.run(['ask', `--question=${PREVIOUS.question}`, '--project', project_id, `--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })}`])).toBe(1);
+    // A project Ask is answered in its own scope; this answer's global scope is refused, but the request carried the turn and the scope.
+    expect(bodyOf(plain.mock.calls[0]![1])).toEqual({ schema_version: 3, question: PREVIOUS.question, project_id, previous: { ...PREVIOUS, purpose: 'ask_again' } });
   });
 
   it('refuses a turn it cannot send before anything is sent, as invalid_request, so a caller can ask without it', async () => {
@@ -145,7 +143,7 @@ describe('person ask --previous (ADR-0047)', () => {
   });
 
   it('reports an Authority that refuses the turn as invalid_request', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'invalid_request', message: 'request failed' } }, 400, V7_HEADERS));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(json({ error: { code: 'invalid_request', message: 'request failed' } }, 400));
     const run = cli(fetch);
     expect(await run.run(['ask', `--question=${QUESTION}`, '--progress', `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(1);
     expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_request', status: 400 });

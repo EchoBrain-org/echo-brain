@@ -47,7 +47,7 @@ export function createAtlassianVerificationBatchV1<T>(verify: (signal?: AbortSig
   };
 }
 
-export function atlassianSiteOriginV1(provider: AtlassianPersonProviderV1, value: unknown): string {
+function atlassianSiteOriginV1(provider: AtlassianPersonProviderV1, value: unknown): string {
   const raw = provider.string(value, provider.id === 'jira' ? 256 : 2048);
   let url: URL;
   try { url = new URL(raw); } catch { provider.failure('invalid_output'); }

@@ -3,12 +3,11 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readStagingConnectorRehearsalSelection } from '../src/composition/staging-connector-rehearsal-selection.js';
-import { STAGING_CONNECTOR_REHEARSAL_POLICY_V3 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 
 const profile = {
   schema_version: 3,
   kind: 'echo-staging-connector-rehearsal-profile-v3',
-  read_policy: STAGING_CONNECTOR_REHEARSAL_POLICY_V3,
+  read_policy: 'initial-owner-jira-pointer-v3',
   jira: { cloud_id: '11111111-1111-4111-8111-111111111111', integration_key: 'jira-test', project: 'TEST' },
 };
 const release_id = 'clean-v1-connector-test';
@@ -24,16 +23,32 @@ function prepared() {
     environment: { ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: path, ECHO_CLEAN_AUTHORITY_HOST: 'authority-staging.echobrain.org', ECHO_CLEAN_RELEASE_ID: release_id } } };
 }
 
-describe('staging rehearsal opt-in selection', () => {
+describe('staging connector profile selection', () => {
   it('leaves ordinary profiles disabled without reading any file', () => {
     expect(readStagingConnectorRehearsalSelection({ state_directory: '/missing', authority_url: 'https://authority.echobrain.org', environment: {} })).toBeUndefined();
   });
   it('reads the private profile only for the fixed staging identity', () => {
     const { input } = prepared();
-    expect(readStagingConnectorRehearsalSelection(input)).toEqual({ profile, release_id, authority_host: 'authority-staging.echobrain.org' });
+    expect(readStagingConnectorRehearsalSelection(input)).toEqual(profile);
     expect(() => readStagingConnectorRehearsalSelection({ ...input, authority_url: 'https://authority.echobrain.org' })).toThrow();
     expect(() => readStagingConnectorRehearsalSelection({ ...input, environment: { ...input.environment, ECHO_CLEAN_AUTHORITY_HOST: 'authority.echobrain.org' } })).toThrow();
     expect(() => readStagingConnectorRehearsalSelection({ ...input, environment: { ...input.environment, ECHO_CLEAN_RELEASE_ID: '' } })).toThrow();
+  });
+  it('rejects retired profile versions and fields', () => {
+    const { path, input } = prepared();
+    for (const invalid of [
+      { ...profile, schema_version: 2 },
+      { ...profile, read_policy: 'retain-everything' },
+      { ...profile, capture_policy: 'retain-everything' },
+      { ...profile, predecessor_profile_sha256: `sha256:${'0'.repeat(64)}` },
+      { ...profile, jira: { ...profile.jira, cloud_id: 'not-a-cloud-id' } },
+      { ...profile, jira: { ...profile.jira, project: 'KAN OR project=PRIVATE' } },
+      { ...profile, slack: { channel_id: 'G01234567' } },
+      { ...profile, slack: { channel_id: 'C01234567', token: 'must-not-enter-profile' } },
+    ]) {
+      writeFileSync(path, JSON.stringify(invalid), { mode: 0o600 });
+      expect(() => readStagingConnectorRehearsalSelection(input)).toThrow('Staging connector rehearsal value is invalid');
+    }
   });
   it('rejects loose permissions, alternate paths, symlinks and oversized profiles', () => {
     const { path, input } = prepared();

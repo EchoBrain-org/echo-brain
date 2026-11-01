@@ -11,8 +11,17 @@ or private-key implementation.
 
 - Person OIDC login, session refresh, and session revocation routes and DTOs.
 - Authority descriptors.
-- Person tool discovery, query, update, upload-audience, project-context,
-  document, document-association, and answer contracts.
+- Person tools and tool connections, query, updates, upload audience,
+  project context, documents, and document associations.
+- Ask: the request, the V8 answer with its citations (approved records,
+  sources, tickets, pages, follow-ups, workspace items), answer layout, the
+  previous turn, progress events, the source check, cited-original reads,
+  and the evidence desk.
+- Lists and opens, meetings, runs and open items, impact cards, sweep
+  results, changes, project activity, diagnostics, connector access, and the
+  staging research evaluation.
+- The record list and record search, and the owner's employee roster and
+  invitations.
 
 The package depends only on the federation and organization protocol packages.
 Database rows and Authority domain objects never become transport types.

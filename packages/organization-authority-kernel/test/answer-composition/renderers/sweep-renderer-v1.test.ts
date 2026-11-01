@@ -17,7 +17,7 @@ import { EMPTY_BUNDLE, checked, generation, scriptedGate } from "../fixtures/age
  * item; code reports the rest, and lays the result out.
  */
 const RECORD = canonicalSha256({ record: "display-review" });
-const DECISION = { kind: "approved_record" as const, atom_id: canonicalSha256({ atom: "decision" }), record_sha256: RECORD, policy_id: "organization-member-readable-person-v2" as const };
+const DECISION = { kind: "approved_record" as const, atom_id: canonicalSha256({ atom: "decision" }), record_sha256: RECORD, policy_id: "project-members-readable-person-v1" as const };
 const ticketCitation = (key: string, text: string) => ({
   kind: "ticket" as const, tool_id: "jira", external_scope_id: "cloud-one", ticket_id: key.replace(/\D/gu, ""), permalink: `https://tickets.example.test/browse/${key}`, text_sha256: sha256Digest(text),
 });

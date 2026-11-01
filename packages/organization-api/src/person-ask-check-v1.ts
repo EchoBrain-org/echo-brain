@@ -21,7 +21,7 @@ export const PERSON_ASK_CHECK_KIND_V1 = 'echo-person-ask-check-v1';
 /** The evidence citations a check reads; any other kind is `invalid_request`. */
 export const PERSON_ASK_CHECK_CITATION_KINDS_V1 = Object.freeze(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page'] as const);
 export type PersonAskCheckCitationKindV1 = (typeof PERSON_ASK_CHECK_CITATION_KINDS_V1)[number];
-export const PERSON_ASK_CHECK_STATES_V1 = Object.freeze(['same', 'changed', 'unreadable', 'unknown'] as const);
+const PERSON_ASK_CHECK_STATES_V1 = Object.freeze(['same', 'changed', 'unreadable', 'unknown'] as const);
 export type PersonAskCheckStateV1 = (typeof PERSON_ASK_CHECK_STATES_V1)[number];
 
 /** 1 to 100 items, and a request body of at most 64 KiB of canonical JSON. */

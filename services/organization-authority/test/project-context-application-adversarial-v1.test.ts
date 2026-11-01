@@ -48,11 +48,8 @@ const reads: ReadonlyArray<{
   { name: 'roster', run: (app, s) => app.listMembers('person', { project_id: s.project.project_id }) },
   { name: 'directory', run: (app, s) => app.searchDirectory('person', { project_id: s.project.project_id, query: 'member' }) },
   { name: 'organization directory', run: app => app.searchOrganizationDirectory('person', { query: 'member' }) },
-  { name: 'feed', run: (app, s) => app.feedV2('person', { project_id: s.project.project_id }) },
   { name: 'project search', run: (app, s) => app.searchV2('person', { project_id: s.project.project_id, query: 'needle' }) },
-  { name: 'project original', run: (app, s) => app.readContextV2('person', s.project.project_id, s.upload.context_id) },
   { name: 'upload status', run: (app, s) => app.uploadStatusV3('person', s.upload.request_id) },
-  { name: 'upload original', run: (app, s) => app.readUploadV3('person', s.upload.context_id) },
   { name: 'upload search', run: app => app.searchUploadsV3('person', { query: 'needle' }) },
   // The notes stored as V2 have only their search left (ADR-0048); this V3 note is not one of them.
   { name: 'V2 upload search', run: app => app.searchUploads('person', { query: 'needle' }) },
@@ -110,7 +107,7 @@ describe('project application final release boundary', () => {
         }),
       },
     });
-    const response = application.feedV2('person', { project_id: state.project.project_id });
+    const response = application.searchV2('person', { project_id: state.project.project_id, query: 'needle' });
     expect(response).toBe(audited);
     expect(Object.isFrozen(response.items)).toBe(true);
     expect(Object.isFrozen(response.items[0])).toBe(true);
@@ -121,10 +118,12 @@ describe('project application final release boundary', () => {
     const state = fixture();
     state.database.exec(`CREATE TRIGGER fixture_reject_audit BEFORE INSERT ON authority_project_read_audit_v1
       BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END`);
-    expect(() => state.application.readUploadV3('person', state.upload.context_id)).toThrow('fixture audit failure');
+    expect(() => state.application.searchUploadsV3('person', { query: 'needle' })).toThrow('fixture audit failure');
     expect(audits(state.database)).toBe(0);
     state.database.exec('DROP TRIGGER fixture_reject_audit');
-    expect(state.application.readUploadV3('person', state.upload.context_id).text).toBe('Immutable original needle.');
+    expect(state.application.searchUploadsV3('person', { query: 'needle' }).results).toEqual([
+      expect.objectContaining({ context_id: state.upload.context_id, excerpt: 'Immutable original needle.' }),
+    ]);
   });
 
   it('releases nothing when COMMIT fails after a successful audit append', () => {
@@ -136,7 +135,7 @@ describe('project application final release boundary', () => {
       CREATE TRIGGER fixture_fail_commit AFTER INSERT ON authority_project_read_audit_v1
       BEGIN INSERT INTO fixture_commit_child(parent_id) VALUES (1); END;
     `);
-    expect(() => state.application.readUploadV3('person', state.upload.context_id)).toThrow('FOREIGN KEY constraint failed');
+    expect(() => state.application.searchUploadsV3('person', { query: 'needle' })).toThrow('FOREIGN KEY constraint failed');
     expect(state.database.inTransaction).toBe(false);
     expect(audits(state.database)).toBe(0);
     expect(state.database.prepare('SELECT count(*) AS n FROM fixture_commit_child').get()).toEqual({ n: 0 });
@@ -154,7 +153,7 @@ describe('project application final release boundary', () => {
         return authorization(MEMBER);
       },
     });
-    expect(() => application.readContextV2('person', state.project.project_id, state.upload.context_id))
+    expect(() => application.searchV2('person', { project_id: state.project.project_id, query: 'needle' }))
       .toThrow(expect.objectContaining({ code: 'not_found' }));
     expect(calls).toBe(2);
     expect(audits(state.database)).toBe(0);
@@ -172,7 +171,7 @@ describe('project application final release boundary', () => {
     const state = fixture();
     const authenticate = vi.fn(() => authorization(OWNER, changes)).mockImplementationOnce(() => authorization());
     const application = createProjectContextApplicationV1({ authenticate, repository: state.repository });
-    expect(() => application.readUploadV3('person', state.upload.context_id))
+    expect(() => application.searchUploadsV3('person', { query: 'needle' }))
       .toThrow(expect.objectContaining({ code: 'stale_access_state' }));
     expect(audits(state.database)).toBe(0);
   });
@@ -227,22 +226,21 @@ describe('project application final release boundary', () => {
     const read = vi.spyOn(state.repository, 'withReadTransaction');
     for (const action of [
       () => state.application.readProjectV2('person', 'not-a-project'),
-      () => state.application.readContextV2('person', state.project.project_id, 'not-a-context'),
-      () => state.application.readContextV2('person', 'not-a-project', state.upload.context_id),
       () => state.application.uploadStatusV3('person', 'not-a-request'),
-      () => state.application.readUploadV3('person', 'not-a-context'),
     ]) expect(action).toThrow(expect.objectContaining({ code: 'invalid_request', message: 'request failed' }));
     expect(read).not.toHaveBeenCalled();
 
     const member = createProjectContextApplicationV1({ authenticate: () => authorization(MEMBER), repository: state.repository });
-    const privateReceipt = state.application.submitUploadV3('person', {
-      schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(5),
-      title: 'Private needle', text: 'Hidden original.', audience: { kind: 'only_me' }, association_project_ids: [state.project.project_id],
+    const privateProject = state.application.createProject('person', {
+      schema_version: 1, kind: 'echo-project-create-v1', request_id: requestId(5), name: 'Private project',
     });
-    for (const contextId of [privateReceipt.context_id, `ctx_${'f'.repeat(64)}`]) {
-      expect(() => member.readUploadV3('person', contextId))
+    for (const projectId of [privateProject.project_id, 'prj_ffffffff-ffff-4fff-8fff-ffffffffffff']) {
+      expect(() => member.readProjectV2('person', projectId))
         .toThrow(expect.objectContaining({ code: 'not_found', message: 'request failed' }));
-      expect(() => member.readContextV2('person', state.project.project_id, contextId))
+    }
+    // Another person's note and an unknown request ID are the same not_found.
+    for (const id of [state.upload.request_id, requestId(99)]) {
+      expect(() => member.uploadStatusV3('person', id))
         .toThrow(expect.objectContaining({ code: 'not_found', message: 'request failed' }));
     }
     expect(audits(state.database)).toBe(0);

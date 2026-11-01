@@ -9,6 +9,7 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import { createPersonRecordReadRouteV1, type CreatePersonRecordReadRouteV1Options } from "../src/composition/person-record-read-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonRecordReadHttpApplicationV1 } from "../src/presentation/person-record-read-http-application.js";
+import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 const databases: ReturnType<typeof openAuthorityDatabase>[] = [];
@@ -112,18 +113,14 @@ describe("Person V4 record read route", () => {
     };
   }
 
-  it("optionally resolves the exact record approver without changing the signed envelope or legacy response", () => {
+  it("resolves the exact record approver without changing the signed envelope", () => {
     const membership = vi.fn(() => approver);
     const record = metadataRecord();
     const project = vi.fn(projectedApprover);
-    const value = setup([authorization(), authorization(), authorization(), authorization()], {
+    const value = setup(undefined, {
       records: { list: () => [record] }, record_approver: project, memberships: { membership },
     });
-    const legacy = value.route.list({ access_token: "bearer-only" });
-    expect(legacy.records[0]).not.toHaveProperty("source_metadata");
-    expect(membership).not.toHaveBeenCalled();
-    expect(project).not.toHaveBeenCalled();
-    const enriched = value.route.list({ access_token: "bearer-only", include_source_metadata: true });
+    const enriched = value.route.list({ access_token: "bearer-only" });
     expect(membership).toHaveBeenCalledExactlyOnceWith("membership_approver");
     expect(project).toHaveBeenCalledExactlyOnceWith(record.envelope);
     expect(enriched.records[0]?.source_metadata).toEqual({ record_approved_by: { display_name: "Maya Chen" } });
@@ -142,7 +139,7 @@ describe("Person V4 record read route", () => {
     } } };
     const membership = vi.fn(() => approver);
     const value = setup(undefined, { records: { list: () => [unknown] }, memberships: { membership } });
-    expect(value.route.list({ access_token: "bearer-only", include_source_metadata: true }).records[0]?.source_metadata).toEqual({});
+    expect(value.route.list({ access_token: "bearer-only" }).records[0]?.source_metadata).toEqual({});
     expect(membership).not.toHaveBeenCalled();
   });
 
@@ -155,7 +152,7 @@ describe("Person V4 record read route", () => {
       record_approver: () => ({ ...projectedApprover(), [coordinate]: "another-record" }),
       memberships: { membership },
     });
-    expect(value.route.list({ access_token: "bearer-only", include_source_metadata: true }).records[0]?.source_metadata).toEqual({});
+    expect(value.route.list({ access_token: "bearer-only" }).records[0]?.source_metadata).toEqual({});
     expect(membership).not.toHaveBeenCalled();
   });
 
@@ -168,20 +165,20 @@ describe("Person V4 record read route", () => {
     { ...approver, display_name: "spoof\u202ename" },
   ])("omits unavailable or mismatched approver metadata: %j", (resolved) => {
     const value = setup(undefined, { records: { list: () => [metadataRecord()] }, record_approver: projectedApprover, memberships: { membership: () => resolved } });
-    expect(value.route.list({ access_token: "bearer-only", include_source_metadata: true }).records[0]?.source_metadata).toEqual({});
+    expect(value.route.list({ access_token: "bearer-only" }).records[0]?.source_metadata).toEqual({});
   });
 
   it("does not look up names for inaccessible records and withholds metadata when caller membership changes", () => {
     const membership = vi.fn(() => approver);
     const project = vi.fn(projectedApprover);
     const empty = setup(undefined, { records: { list: () => [] }, record_approver: project, memberships: { membership } });
-    expect(empty.route.list({ access_token: "bearer-only", include_source_metadata: true }).records).toEqual([]);
+    expect(empty.route.list({ access_token: "bearer-only" }).records).toEqual([]);
     expect(project).not.toHaveBeenCalled();
     expect(membership).not.toHaveBeenCalled();
     const changed = setup([authorization(), authorization({ membership_id: "changed" })], {
       records: { list: () => [metadataRecord()] }, record_approver: projectedApprover, memberships: { membership },
     });
-    expect(() => changed.route.list({ access_token: "bearer-only", include_source_metadata: true })).toThrow("person authentication failed");
+    expect(() => changed.route.list({ access_token: "bearer-only" })).toThrow("person authentication failed");
     expect(changed.authority.prepare("SELECT count(*) AS count FROM authority_person_read_decision_audit_v2").get()).toEqual({ count: 0 });
   });
 
@@ -212,6 +209,8 @@ describe("Person V4 record read route", () => {
           approval_id: "approval_7",
           record_sha256: digest("record-7"),
           envelope: { record: "approved" },
+          // No approver projector is composed here, so no name resolves.
+          source_metadata: {},
         },
       ],
     });
@@ -272,13 +271,7 @@ describe("Person V4 record read route", () => {
 });
 
 async function startRecordServer(application: PersonRecordReadHttpApplicationV1) {
-  const server = createOrganizationAuthorityHttpServer({
-    descriptor: {} as never,
-    sessions: {} as never,
-    oidc_provider: {} as never,
-    expected_issuer: "https://issuer.example",
-    person_record_read: application,
-  });
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_record_read: application }));
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -311,11 +304,6 @@ describe("Person exact record HTTP query", () => {
         expect(response.status).toBe(400);
       }
       expect(list).toHaveBeenCalledTimes(1);
-      const enriched = await fetch(`${server.url}/v1/person/records?record_sha256=${record_sha256}`, {
-        headers: { ...headers, "x-echo-person-record-version": "2" },
-      });
-      expect(enriched.status).toBe(200);
-      expect(list).toHaveBeenLastCalledWith({ access_token: "bearer-only", record_sha256, include_source_metadata: true });
     } finally {
       await server.close();
     }

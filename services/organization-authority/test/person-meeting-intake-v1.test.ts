@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1, readGranolaCheckpointV1, writeGranolaCheckpointV1, type GranolaCheckpointV1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
-import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, projectContextDatabase, revokeMembership, seedProject, seedProjectMember } from './fixtures/project-context-sqlite.js';
 
 const FOREIGN = 'prj_33333333-3333-4333-8333-333333333333';
 const ARCHIVED = 'prj_44444444-4444-4444-8444-444444444444';
@@ -20,11 +20,8 @@ function world() {
   const db = projectContextDatabase(); opened.push(db);
   let membership = 0;
   const project = (project_id: string, members: readonly (typeof OWNER)[], status: 'active' | 'archived' = 'active') => {
-    db.prepare('INSERT INTO authority_projects_v1 VALUES (?,?,?,?,?,?,?,?)').run(project_id, OWNER.organization_id, project_id.slice(4, 12), status, PROJECT_CONTEXT_NOW, OWNER.principal_id, OWNER.membership_id, 'owner');
-    for (const actor of members) {
-      db.prepare("INSERT INTO authority_project_memberships_v1 VALUES (?,?,?,?,?,?,'member','active',?,NULL)")
-        .run(`pgm_00000000-0000-4000-8000-${String(++membership).padStart(12, '0')}`, project_id, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, PROJECT_CONTEXT_NOW);
-    }
+    seedProject(db, project_id, OWNER, { name: project_id.slice(4, 12), status });
+    for (const actor of members) seedProjectMember(db, project_id, actor, 'member', { id: `pgm_00000000-0000-4000-8000-${String(++membership).padStart(12, '0')}` });
   };
   project(PROJECT_ALPHA, [OWNER]); project(PROJECT_BETA, [OWNER]); project(FOREIGN, [MEMBER]); project(ARCHIVED, [OWNER], 'archived');
   const intake = new SqlitePersonMeetingIntakeV1(db, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1);

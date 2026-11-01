@@ -17,14 +17,10 @@ import { personRecordRunScopeV1, type PersonRecordProjectsV1 } from './person-re
 import type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 import { taskLiveSourcesV1 } from './person-open-items-v1.js';
-import { checkRetainedResultReleaseV1, retainedResultFailureV1, type RetainedResultFailureCodeV1, type RetainedResultFailureV1 } from './person-retained-result-v1.js';
+import { RETAINED_RESULT_REREAD_MS_V1, RETAINED_RESULT_TTL_MS_V1, checkRetainedResultReleaseV1, retainedResultFailureV1, type RetainedResultFailureCodeV1, type RetainedResultFailureV1 } from './person-retained-result-v1.js';
 
 export type { PersonResearchEvalHttpApplicationV1 } from '../presentation/person-research-eval-http-application.js';
 
-/** Completed results wait this long for the runner, then are dropped unread. */
-export const PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 = 15 * 60_000;
-/** After a result is first read it stays this long, so a lost response can be read again. */
-export const PERSON_RESEARCH_EVAL_REREAD_MS_V1 = 60_000;
 const PURGE_INTERVAL_MS = 60_000;
 
 export interface CreatePersonResearchEvalOptionsV1 extends CreatePersonLiveAnswerRouteOptionsV1 {
@@ -111,9 +107,8 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       const defined = definition.brief(event, { kind: 'global' });
       // Ask's writer runs Ask's own brief, rebuilt from the question: anything more in a question brief would be dropped, so it is refused.
       if (defined.goal.kind === 'question' && defined.starting.length > 0) throw new AuthorityOperationError('invalid_request', 'Research evaluation brief is invalid');
-      // Only a person's question reads their own additions alone; a task's starting items are shared evidence.
       // A record's run reads where the record is, so its request names no scope.
-      if ((request.mine === true && defined.goal.kind !== 'question') || (definition.scope === 'record_project' && (request.mine === true || request.project_id !== undefined))) {
+      if (definition.scope === 'record_project' && request.project_id !== undefined) {
         throw new AuthorityOperationError('invalid_request', 'Research evaluation scope is invalid');
       }
       purge();
@@ -167,7 +162,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
           run.status = 'failed';
           throw error;
         } finally {
-          run.expires_at = now() + PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1;
+          run.expires_at = now() + RETAINED_RESULT_TTL_MS_V1;
         }
       }).catch(() => undefined); // The terminal failure is retained above for its authenticated reader.
       return Object.freeze({ schema_version: 1 as const, kind: 'echo-person-research-eval-run-v1' as const, run_id: runId, status: 'running' as const });
@@ -181,7 +176,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       if (run.status === 'running') return Object.freeze({ ...base, status: 'running' as const });
       if (run.status === 'failed') {
         // Failed evaluation reads contain only the closed error response.
-        run.expires_at = Math.min(run.expires_at, now() + PERSON_RESEARCH_EVAL_REREAD_MS_V1);
+        run.expires_at = Math.min(run.expires_at, now() + RETAINED_RESULT_REREAD_MS_V1);
         return Object.freeze({ ...base, status: 'failed' as const, error: run.error! });
       }
       // Access is rechecked before evidence leaves the Authority, as for every Ask response.
@@ -193,7 +188,7 @@ export function createPersonResearchEvalV1(options: CreatePersonResearchEvalOpti
       });
       if (refused !== undefined) return Object.freeze({ ...base, status: 'failed' as const, error: refused });
       // Only a delivered result starts the short, non-extending reread window.
-      run.expires_at = Math.min(run.expires_at, now() + PERSON_RESEARCH_EVAL_REREAD_MS_V1);
+      run.expires_at = Math.min(run.expires_at, now() + RETAINED_RESULT_REREAD_MS_V1);
       return Object.freeze({ ...base, status: 'completed' as const, research: JSON.parse(JSON.stringify(run.research)) as Readonly<Record<string, unknown>>,
         ...(run.ask === undefined ? {} : { ask: run.ask }), ...(run.rendered === undefined ? {} : { rendered: run.rendered }) });
     },

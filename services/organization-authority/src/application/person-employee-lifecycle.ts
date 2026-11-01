@@ -12,7 +12,7 @@ import type {
   PersonIdentitySessionApplication,
 } from "./person-identity-sessions.js";
 
-export interface IssuedEmployeeInvitation {
+interface IssuedEmployeeInvitation {
   readonly login_grant: string;
   readonly expires_at: string;
 }
@@ -23,7 +23,7 @@ export interface EmployeeRosterV1 {
   readonly employees: readonly EmployeeRosterEntry[];
 }
 
-export interface EmployeeIdentityFactory {
+interface EmployeeIdentityFactory {
   next(prefix: "prn" | "mem"): string;
 }
 

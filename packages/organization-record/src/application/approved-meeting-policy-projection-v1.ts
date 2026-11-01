@@ -1,6 +1,6 @@
 import { sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { derivedAtomIdentity } from './atom-identity.js';
-import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, type PersonPolicyFactItemKindV2, type PersonPolicyFactProjectionV2, type PersonPolicyFactRowV2, type PersonPolicyIdV2 } from './person-policy-fact-contracts-v2.js';
+import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, type PersonPolicyFactItemKindV2, type PersonPolicyFactProjectionV2, type PersonPolicyFactRowV2, type PersonPolicyIdV2 } from './person-policy-fact-contracts-v2.js';
 import type { RecordPolicyFactEnvelopeV1, RecordPolicyFactResolutionRefV1 } from './record-policy-fact-projection-v1.js';
 function fail(detail: string): never { throw new Error('Approved meeting policy projection: ' + detail); }
 function object(value: unknown, label: string): Record<string, unknown> { if (value === null || typeof value !== 'object' || Array.isArray(value)) fail(label + ' must be an object'); return value as Record<string, unknown>; }
@@ -24,11 +24,11 @@ export function projectApprovedMeetingPolicyFactsV1(input: {
 }): PersonPolicyFactProjectionV2 {
   if (!Number.isSafeInteger(input.record_position) || input.record_position < 1) fail('record position is invalid');
   const ref = input.reference;
+  if (ref.selected_policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID && ref.selected_policy_id !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) fail('policy is unsupported');
   const facts: PersonPolicyFactRowV2[] = signals(input.event).map((signal, atom_order) => {
     const common = { authority_id: ref.authority_id, organization_id: ref.organization_id, state_lineage_id: ref.state_lineage_id, approval_id: ref.approval_id, action: "approve" as const, policy_id: ref.selected_policy_id!, policy_contract_sha256: ref.policy_contract_sha256!, record_position: input.record_position, record_sha256: input.envelope.record_sha256, atom_order, signal_id_sha256: sha256Digest(signal.id), atom_id: derivedAtomIdentity(input.envelope.record_sha256, signal.id), item_kind: signal.kind, audit_event_id: ref.audit_event_id, audit_sequence: ref.audit_sequence, audit_entry_sha256: ref.audit_entry_sha256, provider_action_sha256: ref.provider_action_sha256, authorization_proof_sha256: ref.authorization_proof_sha256 };
     if (ref.selected_policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) return Object.freeze({ ...common, policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID });
-    if (ref.selected_policy_id === "restricted-reviewer-person-v2") return Object.freeze({ ...common, policy_id: ref.selected_policy_id, reviewer_principal_id: ref.final_approver.principal_id, reviewer_membership_id: ref.final_approver.membership_id });
-    return Object.freeze({ ...common, policy_id: "organization-member-readable-person-v2" as const });
+    return Object.freeze({ ...common, policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID, reviewer_principal_id: ref.final_approver.principal_id, reviewer_membership_id: ref.final_approver.membership_id });
   });
   return Object.freeze({ facts: Object.freeze(facts), policy_fact_outcome: Object.freeze({ kind: "appended", policy_id: ref.selected_policy_id! }) });
 }

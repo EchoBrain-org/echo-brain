@@ -3,6 +3,7 @@ import { validatePersonEvidenceOpenRequestV1, type PersonAnswerCitationV3 } from
 import type { EvidenceDeskKindV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2, PersonLiveSourceDescriptorV2 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v2';
 import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_LIMITS_V1, FOLLOW_UPS_SOURCE_ID_V1 } from '@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1';
+import { LOCAL_SOURCE_KINDS_V1 } from '@echo-brain/organization-authority-kernel/shared/source-capabilities-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
@@ -137,7 +138,7 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       if (requestedKinds?.includes(FOLLOW_UP_EVIDENCE_KIND_V1) === true && followUpSource === undefined) refused();
       if (requestedKinds?.some(workspaceKind) === true && workspaceSources === undefined) refused();
       if (selectedSource !== undefined && requestedKinds?.some(kind => kind !== selectedSource.descriptor.kind)) refused();
-      const localKinds = selectedId === 'meeting' ? ['imported_meeting', 'decision', 'action', 'rationale', 'note'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : undefined;
+      const localKinds = selectedId === 'meeting' ? LOCAL_SOURCE_KINDS_V1.meeting : selectedId === 'document' ? LOCAL_SOURCE_KINDS_V1.document : undefined;
       const kinds = (requestedKinds ?? localKinds)?.filter((kind): kind is EvidenceDeskKindV1 => !LIVE_ONLY_KINDS.has(kind) && kind !== FOLLOW_UP_EVIDENCE_KIND_V1 && !workspaceKind(kind));
       type Page = { readonly source: Source; readonly result: EvidenceDeskResultV2 };
       type Unavailable = { readonly notice: string; readonly result?: undefined; readonly failure: unknown };

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { globSync, readFileSync } from "node:fs";
+import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { JOB_OUTPUTS, TESTED_TREE } from "../../tools/ci-select-jobs.mjs";
@@ -297,7 +297,6 @@ describe("CI workflow", () => {
     const scripts = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")).scripts;
     expect(scripts["check:docs"]).toBe("node tools/check-docs.mjs");
     expect(scripts.check).toContain("npm run check:docs");
-    expect(legCommands("static")).toContain("npm run check:architecture-boundaries && npm run check:docs");
   });
 
   it("executes exact recovery-template validation as an independent proof", () => {
@@ -310,11 +309,17 @@ describe("CI workflow", () => {
     );
     expect(recovery).toContain('python-version: "3.10"');
     expect(recovery).toContain("npm run check:authority-recovery-infrastructure");
+    // Every committed Guard policy validates its same-named template.
+    const deployment = resolve(REPO, "deploy/organization-authority");
+    const guards = globSync("*.guard", { cwd: deployment });
+    expect(guards.length).toBeGreaterThan(0);
+    for (const guard of guards) {
+      const template = guard.replace(/\.guard$/, ".template.json");
+      expect(existsSync(resolve(deployment, template)), template).toBe(true);
+      expect(validator).toContain(`"${guard}"`);
+      expect(validator).toContain(`"${template}"`);
+    }
     for (const required of [
-      "authority-current-host-recovery-v1.template.json",
-      "authority-current-host-recovery-v1.guard",
-      "authority-recovery-helper-v1.template.json",
-      "authority-recovery-helper-v1.guard",
       "authority-current-host-recovery-v1.validation-tools.json",
       "downloadVerified",
       '"--output-format"',
@@ -324,6 +329,62 @@ describe("CI workflow", () => {
     ]) {
       expect(validator).toContain(required);
     }
+  });
+
+  it("pins each Guard policy's rule names, so dropping or renaming a rule fails", () => {
+    // The Guard policies are the stacks' only shape lock; their rule bodies stay in deploy/.
+    const deployment = resolve(REPO, "deploy/organization-authority");
+    const rules = (guard: string) =>
+      [...readFileSync(resolve(deployment, guard), "utf8").matchAll(/^rule (\w+)/gm)].map((match) => match[1]);
+    expect(Object.fromEntries(globSync("*.guard", { cwd: deployment }).sort().map((guard) => [guard, rules(guard)]))).toEqual({
+      "authority-current-host-recovery-v1.guard": [
+        "exact_resource_inventory",
+        "retained_recovery_vault",
+        "exact_root_volume_selection",
+        "exact_backup_and_restore_roles",
+        "bounded_schedule_and_retention",
+      ],
+      "authority-recovery-helper-v1.guard": [
+        "exact_helper_inventory",
+        "isolated_subnet_and_route_table",
+        "no_ingress_and_endpoint_only_egress",
+        "endpoint_boundary",
+        "helper_role_has_no_operational_or_secret_access",
+        "arm64_non_public_immutable_helper",
+        "bounded_bundle_bootstrap",
+      ],
+      "authority-staging-data-backup-v1.guard": [
+        "exact_resource_inventory",
+        "retained_data_backup_vault",
+        "exact_data_volume_selection",
+        "exact_backup_and_restore_roles",
+        "bounded_schedule_and_retention",
+        "missed_backup_alarm",
+      ],
+      "authority-staging-host-v1.guard": [
+        "exact_staging_slot_inventory",
+        "host_toggle_leaves_the_slot_boundary_persistent",
+        "network_has_no_ingress_and_required_bootstrap_and_tunnel_egress",
+        "retained_state_and_trusted_delivery",
+        "onboarding_transfer_is_exact_and_temporary",
+        "onboarding_transfer_bucket_denies_untrusted_writes",
+        "arm64_host_is_disposable_and_requires_imdsv2",
+        "role_can_read_only_exact_bundle_and_own_secret",
+        "readiness_waits_for_the_retained_volume",
+        "wait_condition_curl_uses_empty_content_type",
+      ],
+      "authority-staging-journey-observability-v1.guard": [
+        "exact_staging_journey_overview_inventory",
+        "staging_only_input_boundary",
+        "has_no_platform_or_data_resources",
+        "metric_filter_is_staging_worker_liveness_only",
+        "all_alarms_have_staging_namespace_and_explicit_delivery_behavior",
+        "exact_staging_alarm_thresholds",
+        "dashboard_is_owned_by_this_stack_and_has_a_literal_body",
+        "dashboard_covers_canonical_research_and_historical_ask",
+        "dashboard_has_no_custom_widget",
+      ],
+    });
   });
 
   it("makes the dependency install depend only on the lockfile and workspace manifests", () => {

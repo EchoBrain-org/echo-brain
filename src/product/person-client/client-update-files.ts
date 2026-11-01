@@ -7,7 +7,7 @@ export function safeUpdateDirectory(path: string): void {
   const state = lstatSync(path);
   if (!state.isDirectory() || state.isSymbolicLink() || state.uid !== process.getuid?.() || (state.mode & 0o077) !== 0) rejectUpdate('unsafe_installation');
 }
-export function assertUpdatePath(path: string): void {
+function assertUpdatePath(path: string): void {
   const absolute = resolve(path);
   if (absolute !== path) rejectUpdate('unsafe_installation');
   let cursor = absolute;

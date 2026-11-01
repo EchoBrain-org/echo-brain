@@ -11,6 +11,7 @@ Organization Authority implementations of application ports:
 - `system/` owns the Authority clock.
 
 The signer keeps its V1 key filename `authority-development-key.v1.json` for
-compatibility; that filename is not the component identity. Authority database
-opening and migrations live in `packages/organization-authority-kernel`, and
-provider adapters live in the `providers/` workspaces.
+compatibility; that filename is not the component identity. The Authority
+database opener, which never migrates state, and the baselines live in
+`packages/organization-authority-kernel`, and provider adapters live in the
+`providers/` workspaces.

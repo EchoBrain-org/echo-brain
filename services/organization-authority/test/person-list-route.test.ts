@@ -1,6 +1,5 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
-  OrganizationPersonToolV4,
   PersonListRequestV1,
   PersonListResponseV1,
   PersonOpenDocumentV1,
@@ -41,15 +40,18 @@ const document = (n: number, added_at: string, extra: Partial<PersonStoreDocumen
 const meeting = (n: number, added_at: string, extra: Partial<PersonStoreMeetingRowV1> = {}): PersonStoreMeetingRowV1 =>
   ({ kind: "meeting", id: `sha256:${hex(n)}`, title: `Meeting ${n}`, added_at, visibility: "team", association_project_ids: [], ...extra });
 const ref = (row: Row): string => `${row.kind}:${row.id}`;
+/** The scope most of these pages list, and a row filed in it. */
+const ALPHA = { project_id: PROJECT_ALPHA } as const;
+const FILED = { association_project_ids: [PROJECT_ALPHA] } as const;
 
 /** added_at DESC, then ref ASC. */
 function order(left: Row, right: Row): number {
   if (left.added_at !== right.added_at) return left.added_at > right.added_at ? -1 : 1;
   return ref(left) < ref(right) ? -1 : ref(left) > ref(right) ? 1 : 0;
 }
-function inScope(row: Row, scope: PersonListStoreScopeV1, mine: ReadonlySet<string>): boolean {
+function inScope(row: Row, scope: PersonListStoreScopeV1): boolean {
   if (scope.kind === "only_me") return row.visibility === "only_me" || row.visibility === "approver_only";
-  return scope.kind === "global" || (scope.kind === "mine" ? mine.has(row.id) : row.association_project_ids.includes(scope.project_id as never));
+  return row.association_project_ids.includes(scope.project_id as never);
 }
 function afterPosition(row: Row, after: PersonItemPositionV1 | null): boolean {
   return after === null || row.added_at < after.added_at || (row.added_at === after.added_at && row.id > after.id);
@@ -68,14 +70,12 @@ interface Options {
   readonly notes?: readonly PersonStoreNoteRowV1[];
   readonly documents?: readonly PersonStoreDocumentRowV1[];
   readonly meetings?: readonly PersonStoreMeetingRowV1[];
-  readonly mine?: readonly string[];
   readonly projects?: readonly PersonListJoinedProjectV1[];
 }
 
 function fixture(options: Options = {}) {
   const world = {
     notes: [...(options.notes ?? [])], documents: [...(options.documents ?? [])], meetings: [...(options.meetings ?? [])],
-    mine: new Set(options.mine ?? []),
     projects: [...(options.projects ?? [
       { project_id: PROJECT_ALPHA, name: "Alpha", role: "lead", status: "active" },
       { project_id: PROJECT_BETA, name: "Beta", role: "member", status: "archived" },
@@ -92,11 +92,10 @@ function fixture(options: Options = {}) {
     commit?: () => void;
     revalidate?: () => void;
     open?: () => void;
-    tools?: () => void;
   } = {};
   const record = (method: string, input: object) => calls.push({ method, input: { ...input } as Readonly<Record<string, unknown>> });
   const page = <T extends Row>(rows: readonly T[], scope: PersonListStoreScopeV1, after: PersonItemPositionV1 | null, limit: number): T[] =>
-    [...rows].filter((row) => inScope(row, scope, world.mine)).sort(order).filter((row) => afterPosition(row, after)).slice(0, limit);
+    [...rows].filter((row) => inScope(row, scope)).sort(order).filter((row) => afterPosition(row, after)).slice(0, limit);
   const receipt = (value: unknown): Sha256Digest => canonicalSha256({ receipt: value as never });
 
   const originals: PersonOriginalItemsPortV1 = {
@@ -179,16 +178,10 @@ function fixture(options: Options = {}) {
         names_sha256: canonicalSha256(world.projects as never),
       };
     },
-    me: () => ({ display_name: "Maya Chen" }),
     audit(entry) {
       audits.push(entry);
       return canonicalSha256({ audit: audits.length });
     },
-  };
-  const tools = async (): Promise<readonly OrganizationPersonToolV4[]> => {
-    record("tools", {});
-    hooks.tools?.();
-    return [{ tool_id: "slack", display_name: "Slack", availability: "enabled", personal_status: "linked", external_scope_id: "T0SECRETSCOPE", external_subject_id: "U0SECRETSUBJECT", organization_setup: null }];
   };
   const tokens = { owner: OWNER, member: MEMBER } as const;
   const sessions = {
@@ -198,8 +191,8 @@ function fixture(options: Options = {}) {
       return authorization(actor, { session_state_sha256: canonicalSha256(world.session) });
     },
   };
-  const route = createPersonListRouteV1({ organization_id: OWNER.organization_id, sessions, tools, directory, originals, meetings });
-  const list = (request: Omit<PersonListRequestV1, "schema_version"> = {}, access_token = "owner", signal?: AbortSignal) =>
+  const route = createPersonListRouteV1({ organization_id: OWNER.organization_id, sessions, directory, originals, meetings });
+  const list = (request: Omit<PersonListRequestV1, "schema_version">, access_token = "owner", signal?: AbortSignal) =>
     route.list({ access_token, request: { schema_version: 1, ...request }, ...(signal === undefined ? {} : { signal }) });
   const open = (value: PersonItemRefV1, cursor?: string, access_token = "owner") =>
     route.open({ access_token, request: { schema_version: 1, ref: value, ...(cursor === undefined ? {} : { cursor }) } });
@@ -217,7 +210,7 @@ const PARTS: readonly { readonly atom_order: number; readonly part: number; read
 ];
 
 type Fixture = ReturnType<typeof fixture>;
-async function walk(f: Fixture, request: Omit<PersonListRequestV1, "schema_version" | "cursor"> = {}, access_token = "owner"): Promise<PersonListResponseV1[]> {
+async function walk(f: Fixture, request: Omit<PersonListRequestV1, "schema_version" | "cursor">, access_token = "owner"): Promise<PersonListResponseV1[]> {
   const pages: PersonListResponseV1[] = [];
   let cursor: string | null | undefined;
   do {
@@ -232,13 +225,13 @@ const decode = (cursor: string, scope: PersonListResponseV1["scope"], actor = OW
   decodePersonListCursorV1(cursor, { scope, organization_id: actor.organization_id, membership_id: actor.membership_id });
 
 describe("person list route", () => {
-  it("merges three sources with tied times into one global order over many pages, with no gap or duplicate", async () => {
+  it("merges three sources with tied times into one order over many pages, with no gap or duplicate", async () => {
     const f = fixture({
-      notes: Array.from({ length: 30 }, (_, n) => note(n, T(n % 7))),
-      documents: Array.from({ length: 27 }, (_, n) => document(n, T(n % 5))),
-      meetings: Array.from({ length: 26 }, (_, n) => meeting(n, T(n % 6))),
+      notes: Array.from({ length: 30 }, (_, n) => note(n, T(n % 7), FILED)),
+      documents: Array.from({ length: 27 }, (_, n) => document(n, T(n % 5), FILED)),
+      meetings: Array.from({ length: 26 }, (_, n) => meeting(n, T(n % 6), FILED)),
     });
-    const pages = await walk(f);
+    const pages = await walk(f, ALPHA);
     expect(pages.length).toBe(4);
     expect(pages.slice(0, -1).every((page) => page.items.length === 25 && page.next_cursor !== null)).toBe(true);
     expect(pages.at(-1)!.next_cursor).toBeNull();
@@ -265,10 +258,10 @@ describe("person list route", () => {
 
   it("keeps a source at its last emitted row, and at its start when nothing of it left", async () => {
     const f = fixture({
-      notes: Array.from({ length: 30 }, (_, n) => note(n, T(100 + n))),
-      documents: Array.from({ length: 5 }, (_, n) => document(n, T(n))),
+      notes: Array.from({ length: 30 }, (_, n) => note(n, T(100 + n), FILED)),
+      documents: Array.from({ length: 5 }, (_, n) => document(n, T(n), FILED)),
     });
-    const first = await f.list();
+    const first = await f.list(ALPHA);
     expect(first.items.map((item) => item.kind)).toEqual(Array(25).fill("note"));
     const positions = decode(first.next_cursor!, first.scope);
     const lastNote = [...f.world.notes].sort(order)[24]!;
@@ -279,22 +272,19 @@ describe("person list route", () => {
     });
     expect(f.called("commit").at(-1)!.input).toEqual({ notes: 25, documents: 0 });
     expect(f.called("commitMeetings").at(-1)!.input).toEqual({ count: 0 });
-    const second = await f.list({ cursor: first.next_cursor! });
+    const second = await f.list({ ...ALPHA, cursor: first.next_cursor! });
     expect(second.items.map((item) => item.kind)).toEqual([...Array(5).fill("note"), ...Array(5).fill("document")]);
     expect(second.next_cursor).toBeNull();
     expect(f.called("collectMeetings")).toHaveLength(1);
   });
 
-  it("passes mine to both stores, and project scope as the project", async () => {
-    const f = fixture({ notes: [note(1, T(1)), note(2, T(2))], meetings: [meeting(1, T(3))], mine: [`ctx_${hex(1)}`] });
-    const mine = await f.list({ mine: true });
-    expect(mine.scope).toEqual({ kind: "mine" });
-    expect(mine.items.map((item) => item.ref)).toEqual([`note:ctx_${hex(1)}`]);
-    expect(f.called("collect")[0]!.input.scope).toEqual({ kind: "mine" });
-    expect(f.called("collectMeetings")[0]!.input.scope).toEqual({ kind: "mine" });
-    await f.list({ project_id: PROJECT_ALPHA });
-    expect(f.called("collect")[1]!.input.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
-    expect(f.called("collectMeetings")[1]!.input.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
+  it("passes project scope to both stores as the project, and lists only its rows", async () => {
+    const f = fixture({ notes: [note(1, T(1), FILED), note(2, T(2))], meetings: [meeting(1, T(3), { association_project_ids: [PROJECT_BETA] })] });
+    const project = await f.list(ALPHA);
+    expect(project.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
+    expect(project.items.map((item) => item.ref)).toEqual([`note:ctx_${hex(1)}`]);
+    expect(f.called("collect")[0]!.input.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
+    expect(f.called("collectMeetings")[0]!.input.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
   });
 
   it("passes only_me to both stores, with no header, and lists filed rows with their projects (ADR-0049)", async () => {
@@ -302,7 +292,6 @@ describe("person list route", () => {
       notes: [note(1, T(5), { visibility: "only_me", association_project_ids: [PROJECT_ALPHA] }), note(2, T(4)), note(3, T(3), { visibility: "only_me" })],
       documents: [document(1, T(2), { visibility: "only_me", association_project_ids: [UNJOINED] })],
       meetings: [meeting(1, T(1), { visibility: "approver_only" }), meeting(2, T(6), { visibility: "project", association_project_ids: [PROJECT_ALPHA] })],
-      mine: [`ctx_${hex(1)}`, `ctx_${hex(2)}`, `sha256:${hex(2)}`],
     });
     const page = await f.list({ only_me: true });
     expect(page.scope).toEqual({ kind: "only_me" });
@@ -313,7 +302,6 @@ describe("person list route", () => {
     expect(page.items.map((item) => item.projects)).toEqual([[{ project_id: PROJECT_ALPHA, name: "Alpha" }], [], [], []]);
     expect(f.called("collect")[0]!.input.scope).toEqual({ kind: "only_me" });
     expect(f.called("collectMeetings")[0]!.input.scope).toEqual({ kind: "only_me" });
-    expect(f.called("tools")).toEqual([]);
     expect(f.audits).toMatchObject([{ operation: "person_list", scope_kind: "only_me", released_count: 4 }]);
 
     // A store row someone else may read is outside only_me: nothing is released or audited.
@@ -323,15 +311,16 @@ describe("person list route", () => {
     expect(shared.called("commit")).toEqual([]);
     expect(shared.audits).toEqual([]);
 
-    // One scope at most, even for a request past the contract, before any store.
+    // Exactly one scope, even for a request past the contract, before any store: none was the retired global
+    // list, and the retired mine is no scope at all.
     const g = fixture();
-    for (const request of [{ only_me: true, mine: true }, { only_me: true, project_id: PROJECT_ALPHA }, { mine: true, project_id: PROJECT_ALPHA }] as const) {
+    for (const request of [{}, { mine: true } as never, { only_me: true, project_id: PROJECT_ALPHA }] as const) {
       expect(await rejected(g.list(request))).toEqual({ code: "invalid_request", message: "request failed" });
     }
     expect(g.calls).toEqual([]);
   });
 
-  it("denies a project the caller has not joined, or that does not exist, before any store or tool", async () => {
+  it("denies a project the caller has not joined, or that does not exist, before any store", async () => {
     const f = fixture({ notes: [note(1, T(1), { association_project_ids: [UNJOINED] })] });
     const denials = [await rejected(f.list({ project_id: UNJOINED })), await rejected(f.list({ project_id: NONEXISTENT }))];
     expect(denials).toEqual([{ code: "unauthorized", message: "person authentication failed" }, { code: "unauthorized", message: "person authentication failed" }]);
@@ -339,34 +328,18 @@ describe("person list route", () => {
     expect(f.audits).toEqual([]);
   });
 
-  it("carries the header on each scope's first page only, and never a tool's external ids", async () => {
-    const many = Array.from({ length: 51 }, (_, index) => ({
-      project_id: `prj_${hex(index).slice(-8)}-0000-4000-8000-000000000000`, name: `Project ${index}`, role: "member", status: index < 40 ? "active" : "archived",
-    }) as PersonListJoinedProjectV1);
-    const f = fixture({ notes: Array.from({ length: 26 }, (_, n) => note(n, T(n))), projects: many });
-    const global = await f.list();
-    expect(global.me).toEqual({ display_name: "Maya Chen", membership_type: "owner" });
-    expect(global.connected).toEqual([{ tool: "slack", status: "linked" }]);
-    expect(JSON.stringify(global)).not.toMatch(/SECRET|Slack/);
-    expect(global.projects).toEqual(many.slice(0, 50));
-    expect(global.projects_more).toBe(true);
-    expect(global.project).toBeUndefined();
-    const next = await f.list({ cursor: global.next_cursor! });
-    expect(Object.keys(next).sort()).toEqual(["items", "kind", "next_cursor", "schema_version", "scope"]);
-    expect(f.called("tools")).toHaveLength(1);
-
-    const g = fixture({ notes: Array.from({ length: 26 }, (_, n) => note(n, T(n), { association_project_ids: [PROJECT_ALPHA] })) });
-    const project = await g.list({ project_id: PROJECT_ALPHA });
+  it("carries the project header on a project's first page only, and none on only_me", async () => {
+    const g = fixture({ notes: Array.from({ length: 26 }, (_, n) => note(n, T(n), { visibility: "only_me", association_project_ids: [PROJECT_ALPHA] })) });
+    const project = await g.list(ALPHA);
     expect(project.project).toEqual({ project_id: PROJECT_ALPHA, name: "Alpha", role: "lead", status: "active" });
-    expect(project.me).toBeUndefined();
-    const projectNext = await g.list({ project_id: PROJECT_ALPHA, cursor: project.next_cursor! });
-    expect(projectNext.project).toBeUndefined();
-    const mine = await g.list({ mine: true });
-    expect(Object.keys(mine).sort()).toEqual(["items", "kind", "next_cursor", "schema_version", "scope"]);
-    expect(g.called("tools")).toHaveLength(0);
-    const few = await fixture().list();
-    expect(few.projects_more).toBe(false);
-    expect(few.projects!.map((item) => item.status)).toEqual(["active", "archived"]);
+    expect(Object.keys(project).sort()).toEqual(["items", "kind", "next_cursor", "project", "schema_version", "scope"]);
+    const projectNext = await g.list({ ...ALPHA, cursor: project.next_cursor! });
+    expect(Object.keys(projectNext).sort()).toEqual(["items", "kind", "next_cursor", "schema_version", "scope"]);
+    // The header names the listed project, archived as it is.
+    expect((await g.list({ project_id: PROJECT_BETA })).project).toEqual({ project_id: PROJECT_BETA, name: "Beta", role: "member", status: "archived" });
+    const onlyMe = await g.list({ only_me: true });
+    expect(onlyMe.items).toHaveLength(25);
+    expect(Object.keys(onlyMe).sort()).toEqual(["items", "kind", "next_cursor", "schema_version", "scope"]);
   });
 
   it("drops an unjoined project from rows, header and cursor, and collapses visibility and titles", async () => {
@@ -375,71 +348,77 @@ describe("person list route", () => {
         note(1, T(5), { association_project_ids: [PROJECT_BETA, UNJOINED, PROJECT_ALPHA], visibility: "projects", title: "x".repeat(250) }),
         note(2, T(4), { visibility: "only_me", title: null }),
       ],
-      documents: [document(1, T(3), { visibility: "project", association_project_ids: [UNJOINED], title: " \u0007 " })],
-      meetings: [meeting(1, T(2), { visibility: "approver_only", title: null, meeting_date: "2026-09-01" }), meeting(2, T(1), { visibility: "projects" })],
+      documents: [document(1, T(3), { visibility: "project", association_project_ids: [UNJOINED, PROJECT_ALPHA], title: " \u0007 " })],
+      meetings: [meeting(1, T(2), { visibility: "approver_only", title: null, meeting_date: "2026-09-01" }), meeting(2, T(1), { visibility: "projects", ...FILED })],
     });
-    const page = await f.list();
-    const [first, second, third, fourth, fifth] = page.items;
+    const project = await f.list(ALPHA);
+    expect(project.items).toHaveLength(3);
+    const [note1, document1, meeting2] = project.items;
     // Joined order (active Alpha before archived Beta), with the snapshot's names.
-    expect(first!.projects).toEqual([{ project_id: PROJECT_ALPHA, name: "Alpha" }, { project_id: PROJECT_BETA, name: "Beta" }]);
-    expect(first).toMatchObject({ visibility: "project", title: `${"x".repeat(197)}…` });
-    expect(Buffer.byteLength(first!.title)).toBe(200);
-    expect(second).toMatchObject({ visibility: "only_me", title: "Untitled", projects: [] });
-    expect(third).toMatchObject({ visibility: "project", title: "Untitled", projects: [] });
-    expect(fourth).toMatchObject({ visibility: "only_me", title: "Approved meeting", meeting_date: "2026-09-01" });
-    expect(fifth).toMatchObject({ visibility: "project" });
-    expect(JSON.stringify(page)).not.toContain(UNJOINED);
-    expect(JSON.stringify(page)).not.toMatch(/approver_only|"projects"\s*:\s*"|visibility":"projects"/);
+    expect(note1!.projects).toEqual([{ project_id: PROJECT_ALPHA, name: "Alpha" }, { project_id: PROJECT_BETA, name: "Beta" }]);
+    expect(note1).toMatchObject({ visibility: "project", title: `${"x".repeat(197)}…` });
+    expect(Buffer.byteLength(note1!.title)).toBe(200);
+    expect(document1).toMatchObject({ visibility: "project", title: "Untitled", projects: [{ project_id: PROJECT_ALPHA, name: "Alpha" }] });
+    expect(meeting2).toMatchObject({ visibility: "project" });
+    const onlyMe = await f.list({ only_me: true });
+    expect(onlyMe.items).toHaveLength(2);
+    const [note2, meeting1] = onlyMe.items;
+    expect(note2).toMatchObject({ visibility: "only_me", title: "Untitled", projects: [] });
+    expect(meeting1).toMatchObject({ visibility: "only_me", title: "Approved meeting", meeting_date: "2026-09-01" });
+    for (const page of [project, onlyMe]) {
+      expect(JSON.stringify(page)).not.toContain(UNJOINED);
+      expect(JSON.stringify(page)).not.toMatch(/approver_only|"projects"\s*:\s*"|visibility":"projects"/);
+    }
   });
 
   it("rejects a misordered store page, a repeated cursor row, and a project row outside its association as invalid output", async () => {
-    const reversed = fixture({ notes: [note(1, T(2)), note(2, T(1))] });
+    const reversed = fixture({ notes: [note(1, T(2), FILED), note(2, T(1), FILED)] });
     reversed.hooks.collect = (rows) => ({ ...rows, notes: [...rows.notes].reverse() });
-    expect(await rejected(reversed.list())).toMatchObject({ code: "invalid_output" });
-    const tie = fixture({ notes: [note(2, T(1)), note(1, T(1))] });
+    expect(await rejected(reversed.list(ALPHA))).toMatchObject({ code: "invalid_output" });
+    const tie = fixture({ notes: [note(2, T(1), FILED), note(1, T(1), FILED)] });
     tie.hooks.collect = (rows) => ({ ...rows, notes: [...rows.notes].reverse() });
-    expect(await rejected(tie.list())).toMatchObject({ code: "invalid_output" });
+    expect(await rejected(tie.list(ALPHA))).toMatchObject({ code: "invalid_output" });
     const outside = fixture({ meetings: [meeting(1, T(1), { association_project_ids: [PROJECT_ALPHA] })] });
     outside.hooks.meetings = (rows) => rows.map((row) => ({ ...row, association_project_ids: [] }));
-    expect(await rejected(outside.list({ project_id: PROJECT_ALPHA }))).toMatchObject({ code: "invalid_output" });
-    const replayed = fixture({ notes: Array.from({ length: 26 }, (_, n) => note(n, T(n))) });
-    const first = await replayed.list();
+    expect(await rejected(outside.list(ALPHA))).toMatchObject({ code: "invalid_output" });
+    const replayed = fixture({ notes: Array.from({ length: 26 }, (_, n) => note(n, T(n), FILED)) });
+    const first = await replayed.list(ALPHA);
     replayed.hooks.collect = (rows) => ({ ...rows, notes: [[...replayed.world.notes].sort(order)[24]!, ...rows.notes] });
-    expect(await rejected(replayed.list({ cursor: first.next_cursor! }))).toMatchObject({ code: "invalid_output" });
-    const wrongKind = fixture({ notes: [note(1, T(1))] });
+    expect(await rejected(replayed.list({ ...ALPHA, cursor: first.next_cursor! }))).toMatchObject({ code: "invalid_output" });
+    const wrongKind = fixture({ notes: [note(1, T(1), FILED)] });
     wrongKind.hooks.collect = (rows) => ({ ...rows, documents: rows.notes as never });
-    expect(await rejected(wrongKind.list())).toMatchObject({ code: "invalid_output" });
+    expect(await rejected(wrongKind.list(ALPHA))).toMatchObject({ code: "invalid_output" });
     for (const f of [reversed, tie, outside, replayed, wrongKind]) expect(f.audits.length).toBeLessThanOrEqual(1);
     expect(reversed.called("commit")).toEqual([]);
   });
 
   it("holds meetings with a notice, never skips them, and refuses a later page that could only wait", async () => {
-    const f = fixture({ notes: Array.from({ length: 26 }, (_, n) => note(n, T(100 + n))), meetings: [meeting(1, T(50)), meeting(2, T(200))] });
+    const f = fixture({ notes: Array.from({ length: 26 }, (_, n) => note(n, T(100 + n), FILED)), meetings: [meeting(1, T(50), FILED), meeting(2, T(200), FILED)] });
     f.world.held = true;
-    const first = await f.list();
+    const first = await f.list(ALPHA);
     expect(first.notice).toBe("meetings_unavailable");
-    expect(first.me).toBeDefined();
+    expect(first.project).toBeDefined();
     expect(decode(first.next_cursor!, first.scope).meeting).toEqual({ state: "start" });
     expect(f.called("commitMeetings")).toEqual([]);
-    const second = await f.list({ cursor: first.next_cursor! });
+    const second = await f.list({ ...ALPHA, cursor: first.next_cursor! });
     expect(second.items).toHaveLength(1);
     expect(second.notice).toBe("meetings_unavailable");
     const waiting = second.next_cursor!;
     expect(decode(waiting, second.scope)).toEqual({ note: { state: "done" }, document: { state: "done" }, meeting: { state: "start" } });
-    expect(await rejected(f.list({ cursor: waiting }))).toMatchObject({ code: "unavailable" });
+    expect(await rejected(f.list({ ...ALPHA, cursor: waiting }))).toMatchObject({ code: "unavailable" });
     expect(f.audits).toHaveLength(2);
     f.world.held = false;
-    const resumed = await f.list({ cursor: waiting });
+    const resumed = await f.list({ ...ALPHA, cursor: waiting });
     expect(resumed.items.map((item) => item.ref)).toEqual([`meeting:sha256:${hex(2)}`, `meeting:sha256:${hex(1)}`]);
     expect(resumed.notice).toBeUndefined();
     expect(resumed.next_cursor).toBeNull();
 
-    const empty = fixture({ meetings: [meeting(1, T(1))] });
+    const empty = fixture({ meetings: [meeting(1, T(1), FILED)] });
     empty.world.held = true;
-    const page = await empty.list();
-    expect(page).toMatchObject({ items: [], notice: "meetings_unavailable", me: { display_name: "Maya Chen" } });
+    const page = await empty.list(ALPHA);
+    expect(page).toMatchObject({ items: [], notice: "meetings_unavailable", project: { project_id: PROJECT_ALPHA, name: "Alpha" } });
     expect(page.next_cursor).not.toBeNull();
-    expect(await rejected(empty.list({ cursor: page.next_cursor! }))).toMatchObject({ code: "unavailable" });
+    expect(await rejected(empty.list({ ...ALPHA, cursor: page.next_cursor! }))).toMatchObject({ code: "unavailable" });
   });
 
   it("releases nothing when the session, the grants or a store's access changed, and retries on a rename only", async () => {
@@ -451,32 +430,37 @@ describe("person list route", () => {
       ["rename", (f) => { f.hooks.commit = () => { f.world.projects = f.world.projects.map((project) => ({ ...project, name: `${project.name} renamed` })); }; }, "unavailable"],
     ];
     for (const [name, arrange, code] of cases) {
-      const f = fixture({ notes: [note(1, T(1))] });
+      const f = fixture({ notes: [note(1, T(1), FILED)] });
       arrange(f);
-      expect({ name, ...(await rejected(f.list())) }).toMatchObject({ name, code });
+      expect({ name, ...(await rejected(f.list(ALPHA))) }).toMatchObject({ name, code });
       expect(f.audits).toEqual([]);
     }
   });
 
   it("audits the exact response digest with each store's receipt, and nothing when the caller left", async () => {
-    const f = fixture({ notes: [note(1, T(2))], meetings: [meeting(1, T(1))] });
-    const page = await f.list();
+    const f = fixture({ notes: [note(1, T(2), FILED)], meetings: [meeting(1, T(1), FILED)] });
+    const page = await f.list(ALPHA);
     expect(f.audits).toHaveLength(1);
     const [audit] = f.audits;
-    expect(audit).toMatchObject({ operation: "person_list", scope_kind: "global", response_sha256: canonicalSha256(page as never), released_count: 2 });
+    expect(audit).toMatchObject({ operation: "person_list", scope_kind: "project", response_sha256: canonicalSha256(page as never), released_count: 2 });
     expect(audit!.store_receipts).toHaveLength(2);
     expect(f.called("revalidate").map((call) => call.input.receipt)).toEqual([audit!.store_receipts[0]]);
     expect(f.called("revalidateMeetingRelease").map((call) => call.input.receipt)).toEqual([audit!.store_receipts[1]]);
     const none = fixture();
-    await none.list({ mine: true });
-    expect(none.audits[0]).toMatchObject({ scope_kind: "mine", released_count: 0, store_receipts: [] });
+    await none.list({ only_me: true });
+    expect(none.audits[0]).toMatchObject({ scope_kind: "only_me", released_count: 0, store_receipts: [] });
 
+    // A caller who left mid-page: the stores ran, but the page is never audited.
     const controller = new AbortController();
-    const aborted = fixture({ notes: [note(1, T(1))] });
-    aborted.hooks.tools = () => controller.abort();
-    await expect(aborted.list({}, "owner", controller.signal)).rejects.toThrow();
+    const aborted = fixture({ notes: [note(1, T(1), FILED)] });
+    aborted.hooks.revalidate = () => controller.abort();
+    await expect(aborted.list(ALPHA, "owner", controller.signal)).rejects.toThrow();
     expect(aborted.audits).toEqual([]);
-    expect(aborted.called("commit")).toEqual([]);
+    // One who left before the list reads nothing.
+    const left = fixture({ notes: [note(1, T(1), FILED)] });
+    await expect(left.list(ALPHA, "owner", AbortSignal.abort())).rejects.toThrow();
+    expect(left.calls).toEqual([]);
+    expect(left.audits).toEqual([]);
   });
 
   it("opens each kind through its own store, with the cursor bound to its ref", async () => {
@@ -557,16 +541,16 @@ describe("person list route", () => {
   });
 
   it("refuses an open cursor from another ref, person or operation as a bad request", async () => {
-    const f = fixture({ documents: [document(1, T(1)), document(2, T(1))], notes: Array.from({ length: 26 }, (_, n) => note(n, T(n))) });
+    const f = fixture({ documents: [document(1, T(1)), document(2, T(1))], notes: Array.from({ length: 26 }, (_, n) => note(n, T(n), FILED)) });
     const page = await f.open(`document:doc_${hex(1)}`) as PersonOpenResponseV1;
     expect(page.next_cursor).not.toBeNull();
     await expect(f.open(`document:doc_${hex(2)}`, page.next_cursor!)).rejects.toMatchObject({ code: "invalid_request" });
     await expect(f.open(`document:doc_${hex(1)}`, page.next_cursor!, "member")).rejects.toMatchObject({ code: "invalid_request" });
-    const listed = await f.list();
+    const listed = await f.list(ALPHA);
     await expect(f.open(`document:doc_${hex(1)}`, listed.next_cursor!)).rejects.toMatchObject({ code: "invalid_request" });
-    await expect(f.list({ cursor: page.next_cursor! })).rejects.toMatchObject({ code: "invalid_request" });
-    await expect(f.list({ mine: true, cursor: listed.next_cursor! })).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(f.list({ ...ALPHA, cursor: page.next_cursor! })).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(f.list({ project_id: PROJECT_BETA, cursor: listed.next_cursor! })).rejects.toMatchObject({ code: "invalid_request" });
     await expect(f.list({ only_me: true, cursor: listed.next_cursor! })).rejects.toMatchObject({ code: "invalid_request" });
-    await expect(f.list({ cursor: listed.next_cursor! }, "member")).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(f.list({ ...ALPHA, cursor: listed.next_cursor! }, "member")).rejects.toMatchObject({ code: "invalid_request" });
   });
 });

@@ -52,7 +52,7 @@ export interface PersonUploadSearchResultV2 {
   }[];
 }
 
-export function validatePersonUploadAudienceV2(value: unknown): PersonUploadAudienceV2 {
+function validatePersonUploadAudienceV2(value: unknown): PersonUploadAudienceV2 {
   return validateProjectContextAudienceV1(value);
 }
 function coordinates(record: Record<string, unknown>): { project_id: ProjectIdV1 | null; audience: PersonUploadAudienceV2 } {

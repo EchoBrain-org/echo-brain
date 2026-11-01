@@ -524,6 +524,9 @@ agentic Ask is on wherever an answer model is configured, and the tag
 `ask-v2-final` is the last release with V2
 ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md)).
 
+Update (2026-10-31): the git tags were deleted; `ask-v2-final` named commit
+`2aa0072` on `main`.
+
 ### Qualification
 
 - **Answer quality.**

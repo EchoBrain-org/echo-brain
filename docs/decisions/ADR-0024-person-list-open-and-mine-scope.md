@@ -33,6 +33,16 @@ this record on 2026-09-30, in the change that merges the implementation, as
 requires before any new release path ships. `reviewed_ref` is the source the
 design was checked against; it is not an implementation claim.
 
+**Amended 2026-10-31 (search ceiling).** The founder raised the generation's
+admission ceiling to 8,192 atoms, so the record bound below becomes 8,192, and
+the record metadata cache now holds that many records. At 1,024 entries it
+emptied itself on every page past 1,024 records, and a warm mine page then cost
+as much as a cold one. The opt-in benchmark, which now seeds the ceiling,
+measured page 1 over 8,192 single-atom records on one development Mac:
+global 58.9 ms cold and 11.0 ms warm, mine 818.5 ms cold and 9.9 ms warm, all
+inside the revisit thresholds. Approved meetings carry several atoms per record,
+so real lists stay well below that.
+
 ## Context and options
 
 Nothing today lists what a person can read or has added:
@@ -520,3 +530,10 @@ fallbacks: Ask goes to `/v7` alone. On 2026-10-26
 [ADR-0049](ADR-0049-only-me-is-a-lock.md) removed Mine from the desktop: its
 page, sidebar row and Ask scope. The Authority and the CLI keep `--mine`. The
 person list also gained a list-only Only me scope.
+
+Update (2026-10-31): the founder approved retiring the rest of the mine scope.
+`person ask` and `person list` no longer take `--mine`; the Ask request, the
+evidence desk, the research core and the shared answer scope know only global
+and one project, and a request that names mine is refused. The list's global
+scope went with it: a list takes exactly one of a project and Only me, and no
+first page names the person, their connected tools and their projects.

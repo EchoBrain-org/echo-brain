@@ -1,5 +1,4 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { validatePersonAnswerScopeV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
 import {
   PERSON_DOCUMENT_MAX_ORIGINAL_BYTES,
   PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES,
@@ -19,10 +18,8 @@ import { asEnumerableRecord as object, assertExactKeys, assertTimestamp, fail, u
 export const PERSON_LIST_PATH_V1 = '/v1/person/list';
 export const PERSON_OPEN_PATH_V1 = '/v1/person/open';
 export const PERSON_LIST_PAGE_SIZE_V1 = 25;
-export const PERSON_LIST_HEADER_PROJECTS_MAX_V1 = 50;
 /** Equals the association cap, so a row never hides a joined project. */
-export const PERSON_LIST_ROW_PROJECTS_MAX_V1 = 20;
-export const PERSON_LIST_CONNECTED_MAX_V1 = 32;
+const PERSON_LIST_ROW_PROJECTS_MAX_V1 = 20;
 export const PERSON_LIST_TEXT_MAX_BYTES_V1 = 200;
 export const PERSON_LIST_RESPONSE_MAX_BYTES_V1 = 320 * 1024;
 export const PERSON_OPEN_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
@@ -30,7 +27,7 @@ export const PERSON_OPEN_ATOMS_MAX_V1 = 25;
 /** Server page budget for the canonical JSON of one page's atoms array. */
 export const PERSON_OPEN_ATOMS_BUDGET_BYTES_V1 = 32 * 1024;
 export const PERSON_OPEN_ATOM_PART_MAX_BYTES_V1 = 3 * 1024;
-export const PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1 = 8;
+const PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1 = 8;
 export const PERSON_OPEN_PARTICIPANTS_MAX_V1 = 32;
 export const PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1 = 'meetings_unavailable';
 
@@ -43,10 +40,11 @@ export type PersonItemRefV1 = PersonImportedMeetingRefV1 | PersonNoteRefV1 | Per
 export type PersonListVisibilityV1 = 'only_me' | 'team' | 'project';
 export type PersonListNoticeV1 = 'meetings_unavailable';
 /**
- * Ask's scopes, and only_me, which the list alone takes (ADR-0049): every item
- * whose only reader is the caller, filed in a project or not.
+ * One project the caller belongs to, or only_me (ADR-0049): every item whose
+ * only reader is the caller, filed in a project or not. These are the scopes the
+ * desktop lists; the list has no global or mine scope.
  */
-export type PersonListScopeV1 = PersonAnswerScopeV3 | { readonly kind: 'only_me' };
+export type PersonListScopeV1 = { readonly kind: 'project'; readonly project_id: ProjectIdV1 } | { readonly kind: 'only_me' };
 
 export interface PersonListProjectRefV1 { readonly project_id: ProjectIdV1; readonly name: string }
 interface PersonListRowBaseV1 {
@@ -76,18 +74,12 @@ export interface PersonListMeetingRowV1 extends PersonListRowBaseV1 {
 }
 export type PersonListRowV1 = PersonListImportedMeetingRowV1 | PersonListNoteRowV1 | PersonListDocumentRowV1 | PersonListMeetingRowV1;
 
-/** project_id, mine and only_me are exclusive; none of them means global. */
+/** Exactly one of project_id and only_me. */
 export interface PersonListRequestV1 {
   readonly schema_version: 1;
   readonly project_id?: ProjectIdV1;
-  readonly mine?: true;
   readonly only_me?: true;
   readonly cursor?: string;
-}
-export interface PersonListMeV1 { readonly display_name: string; readonly membership_type: 'owner' | 'employee' }
-export interface PersonListConnectedToolV1 {
-  readonly tool: string;
-  readonly status: 'unlinked' | 'linked' | 'revoked' | 'unavailable';
 }
 export interface PersonListProjectV1 {
   readonly project_id: ProjectIdV1;
@@ -96,18 +88,13 @@ export interface PersonListProjectV1 {
   readonly status: ProjectStatusV2;
 }
 /**
- * The first global page carries me, connected, projects and projects_more
- * together; the first project page may carry project; mine and only_me pages
- * carry no header. Which page is first is known only to the caller.
+ * The first project page may carry project; an only_me page carries no header.
+ * Which page is first is known only to the caller.
  */
 export interface PersonListResponseV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-person-list-v1';
   readonly scope: PersonListScopeV1;
-  readonly me?: PersonListMeV1;
-  readonly connected?: readonly PersonListConnectedToolV1[];
-  readonly projects?: readonly PersonListProjectV1[];
-  readonly projects_more?: boolean;
   readonly project?: PersonListProjectV1;
   readonly items: readonly PersonListRowV1[];
   readonly next_cursor: string | null;
@@ -175,7 +162,6 @@ const MEETING_REF = /^meeting:sha256:[0-9a-f]{64}$/;
 const CURSOR = /^[A-Za-z0-9_-]{1,512}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const TIMEZONE = /^[A-Za-z0-9_+\-/]{1,64}$/;
-const TOOL_ID = /^[a-z][a-z0-9-]{0,63}$/;
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const LINE_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 /** Project names and upload filenames may hold interior line and paragraph separators (project-context-v1.ts, person-documents-v1.ts). */
@@ -189,10 +175,8 @@ const MEDIA_TYPES: readonly string[] = Object.keys({
 const EXTRACTION_STATES: readonly string[] = Object.keys({
   extracting: true, ready: true, partial: true, no_text: true, encrypted: true, malformed: true, limit_exceeded: true, timed_out: true, unsupported: true, unavailable: true,
 } satisfies Record<PersonDocumentExtractionStateV1, true>);
-const TOOL_STATUSES: readonly string[] = ['unlinked', 'linked', 'revoked', 'unavailable'];
 const ATOM_KINDS: readonly string[] = ['decision', 'action', 'rationale'];
 const DECISION_STATUSES: readonly string[] = ['proposed', 'decided', 'unresolved'];
-const GLOBAL_HEADER = ['me', 'connected', 'projects', 'projects_more'] as const;
 
 function optionalKeys(input: Record<string, unknown>, keys: readonly string[]): string[] {
   return keys.filter((key) => Object.hasOwn(input, key));
@@ -304,56 +288,26 @@ function listProject(value: unknown, label: string): PersonListProjectV1 {
   return Object.freeze({ project_id, name: input.name, role: input.role, status: input.status });
 }
 
-function me(value: unknown): PersonListMeV1 {
-  const input = object(value, 'Person list me');
-  assertExactKeys(input, ['display_name', 'membership_type'], 'Person list me');
-  line(input.display_name, 'Person list me display_name', PERSON_LIST_TEXT_MAX_BYTES_V1);
-  if (input.membership_type !== 'owner' && input.membership_type !== 'employee') fail('Person list me membership_type is invalid');
-  return Object.freeze({ display_name: input.display_name, membership_type: input.membership_type });
-}
-
-function connected(value: unknown): readonly PersonListConnectedToolV1[] {
-  if (!Array.isArray(value) || value.length > PERSON_LIST_CONNECTED_MAX_V1) fail('Person list connected is invalid');
-  const tools = value.map((item) => {
-    const input = object(item, 'Person list connected tool');
-    assertExactKeys(input, ['tool', 'status'], 'Person list connected tool');
-    if (typeof input.tool !== 'string' || !TOOL_ID.test(input.tool)) fail('Person list connected tool is invalid');
-    if (!TOOL_STATUSES.includes(input.status as string)) fail('Person list connected tool status is invalid');
-    return Object.freeze({ tool: input.tool, status: input.status as PersonListConnectedToolV1['status'] });
-  });
-  if (new Set(tools.map((tool) => tool.tool)).size !== tools.length) fail('Person list connected contains duplicates');
-  return Object.freeze(tools);
-}
-
-function headerProjects(value: unknown): readonly PersonListProjectV1[] {
-  if (!Array.isArray(value) || value.length > PERSON_LIST_HEADER_PROJECTS_MAX_V1) fail('Person list projects is invalid');
-  const projects = value.map((item) => listProject(item, 'Person list project'));
-  if (new Set(projects.map((project) => project.project_id)).size !== projects.length) fail('Person list projects contains duplicates');
-  if (projects.some((project, index) => index > 0 && project.status === 'active' && projects[index - 1]!.status === 'archived')) {
-    fail('Person list projects are out of order');
-  }
-  return Object.freeze(projects);
-}
-
-/** Ask's scope validator never accepts only_me, so the list checks that one itself. */
 function listScope(value: unknown): PersonListScopeV1 {
   const input = object(value, 'Person list scope');
-  if (input.kind !== 'only_me') return validatePersonAnswerScopeV3(input, 'Person list scope');
+  if (input.kind === 'project') {
+    assertExactKeys(input, ['kind', 'project_id'], 'Person list scope');
+    return Object.freeze({ kind: 'project' as const, project_id: validateProjectIdV1(input.project_id, 'Person list scope project_id') });
+  }
+  if (input.kind !== 'only_me') fail('Person list scope is invalid');
   assertExactKeys(input, ['kind'], 'Person list scope');
   return Object.freeze({ kind: 'only_me' as const });
 }
 
 export function validatePersonListRequestV1(value: unknown): PersonListRequestV1 {
   const input = object(value, 'Person list request');
-  assertExactKeys(input, ['schema_version', ...optionalKeys(input, ['project_id', 'mine', 'only_me', 'cursor'])], 'Person list request');
+  assertExactKeys(input, ['schema_version', ...optionalKeys(input, ['project_id', 'only_me', 'cursor'])], 'Person list request');
   if (input.schema_version !== 1) fail('Person list request schema_version is unsupported');
-  if (Object.hasOwn(input, 'mine') && input.mine !== true) fail('Person list request mine is invalid');
   if (Object.hasOwn(input, 'only_me') && input.only_me !== true) fail('Person list request only_me is invalid');
-  if (optionalKeys(input, ['project_id', 'mine', 'only_me']).length > 1) fail('Person list request scope is invalid');
+  if (optionalKeys(input, ['project_id', 'only_me']).length !== 1) fail('Person list request scope is invalid');
   return Object.freeze({
     schema_version: 1 as const,
     ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Person list request project_id') } : {}),
-    ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}),
     ...(Object.hasOwn(input, 'only_me') ? { only_me: true as const } : {}),
     ...(Object.hasOwn(input, 'cursor') ? { cursor: cursor(input.cursor, 'Person list request cursor') } : {}),
   });
@@ -362,10 +316,8 @@ export function validatePersonListRequestV1(value: unknown): PersonListRequestV1
 export function validatePersonListResponseV1(value: unknown): PersonListResponseV1 {
   const input = object(value, 'Person list response');
   const scope = listScope(input.scope);
-  const header = optionalKeys(input, GLOBAL_HEADER);
-  if (header.length !== 0 && (scope.kind !== 'global' || header.length !== GLOBAL_HEADER.length)) fail('Person list header is invalid');
   if (Object.hasOwn(input, 'project') && scope.kind !== 'project') fail('Person list header is invalid');
-  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'items', 'next_cursor', ...header, ...optionalKeys(input, ['project', 'notice'])], 'Person list response');
+  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'items', 'next_cursor', ...optionalKeys(input, ['project', 'notice'])], 'Person list response');
   if (input.schema_version !== 1 || input.kind !== 'echo-person-list-v1') fail('Person list response is invalid');
   if (!Array.isArray(input.items) || input.items.length > PERSON_LIST_PAGE_SIZE_V1) fail('Person list items is invalid');
   const items = input.items.map((item) => row(item, 'Person list row'));
@@ -380,15 +332,9 @@ export function validatePersonListResponseV1(value: unknown): PersonListResponse
     project = listProject(input.project, 'Person list scope project');
     if (scope.kind !== 'project' || project.project_id !== scope.project_id) fail('Person list scope project is inconsistent');
   }
-  let globalHeader: Pick<PersonListResponseV1, 'me' | 'connected' | 'projects' | 'projects_more'> = {};
-  if (header.length !== 0) {
-    const projects = headerProjects(input.projects);
-    if (typeof input.projects_more !== 'boolean' || (input.projects_more && projects.length !== PERSON_LIST_HEADER_PROJECTS_MAX_V1)) fail('Person list projects_more is invalid');
-    globalHeader = { me: me(input.me), connected: connected(input.connected), projects, projects_more: input.projects_more };
-  }
   if (Object.hasOwn(input, 'notice') && input.notice !== PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1) fail('Person list notice is invalid');
   return bounded<PersonListResponseV1>({
-    schema_version: 1, kind: 'echo-person-list-v1', scope, ...globalHeader, ...(project === undefined ? {} : { project }),
+    schema_version: 1, kind: 'echo-person-list-v1', scope, ...(project === undefined ? {} : { project }),
     items: Object.freeze(items), next_cursor: input.next_cursor === null ? null : cursor(input.next_cursor, 'Person list next_cursor'),
     ...(Object.hasOwn(input, 'notice') ? { notice: PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1 } : {}),
   }, PERSON_LIST_RESPONSE_MAX_BYTES_V1, 'Person list response');

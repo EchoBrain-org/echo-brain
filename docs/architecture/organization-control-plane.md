@@ -19,7 +19,7 @@ paths below are relative to its `organization-control-plane/` folder:
 | Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack `auth.test` checks of an install and the DM-code person link |
 | Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
 | `security/file-secret-store` | The private secret store for the organization's Slack app credential bundle: client ID/secret, signing secret, and Nango connection ID ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)) |
-| Slack provider `slack-approval-integration-v1` | What the Slack approval plug-in uses: the control database opener (`openOrganizationControlDatabase`), the active Slack connection read (`readActiveSlackConnectionV1`), and the Slack identity-link lookups that pick, recheck and click-match an approval card's target (`resolveSlackDmApprovalTargetV1`, `isCurrentSlackDmApprovalTargetV1`, `matchSlackApprovalClickActorV1`) |
+| Slack provider `slack-approval-integration-v1` | What the Slack approval plug-in uses: the active Slack connection read (`readActiveSlackConnectionV1`), and the Slack identity-link lookups that pick, recheck and click-match an approval card's target (`resolveSlackDmApprovalTargetV1`, `isCurrentSlackDmApprovalTargetV1`, `matchSlackApprovalClickActorV1`) |
 | `organization-control-database-v1` | Opening the control database and applying the current V4 baseline |
 | `record-visibility-policy-contracts-v1` | The restricted reviewer (Only me) policy identifier, consequence text and contract digests, and the Person approval policy and digest types |
 
@@ -43,16 +43,18 @@ paths below are relative to its `organization-control-plane/` folder:
 | --- | --- | --- |
 | Organization Authority | Customer | Principal, membership, role, Person session, processing, and revocation truth |
 | Organization control plane | Customer | Verified provider connection and Person provider identity links |
-| Organization record | Customer | The append-only log of human-approved decisions and rejections, and the deterministic graph derived from it |
+| Organization record | Customer | The append-only log of human-approved records, one per destination group of an approved meeting |
 | Authority processing | Customer | Meetings, decisions, server processing, pending approval, and delivery evidence |
 | Person client | Person | One private Authority session and bounded authenticated requests |
 | Future ECHO entitlement | ECHO | Pseudonymous organization-wide deny/revoke only |
 
 Decision ownership is split deliberately. Authority processing owns the
-meeting and pre-record decision state; the organization record owns the
-org-wide act once a human approved or rejected it. The control plane owns
-neither: it holds verified provider connections and identity links only. No
-control-plane table exists for approvals or records.
+meeting and every decision before a record exists: pending proposals,
+approvals and rejections are Authority approval state
+(`authority_approval_decisions_v1`), and a rejection writes no record. The
+organization record owns the org-wide act once a human approved it. The
+control plane owns neither: it holds verified provider connections and
+identity links only. No control-plane table exists for approvals or records.
 
 The future ECHO entitlement cannot create a customer membership, grant an
 adapter permission, resolve a customer secret, or read customer organization
@@ -313,9 +315,10 @@ those facts.
 - Never reuse a provider event as authorization. A verified Slack click decides
   only when the clicker's active identity link maps to the reviewer's
   membership, read again inside the decision transaction.
-- Meeting approvals are decided only through the Authority's approval core,
-  from the desktop app or the Slack DM copy. The Person CLI ships no approve or
-  reject command.
+- Meeting approvals are decided only through the Authority's approval core:
+  by a Person client (the desktop decision page, or `person tools meetings`
+  with a `review` request; both are recorded as surface `desktop`) or on the
+  Slack DM copy.
 
 The Authority and control plane run in one process. No positive authorization
 result is cached.
@@ -345,11 +348,12 @@ when an accepted milestone has an externally observable behavior that cannot
 be implemented safely with the current model.
 
 No Teams, Granola, project-management, or other non-Slack organization-tool
-onboarding is implemented. The Person CLI dispatches the Granola, Slack, Jira
-and Confluence tools and the staging synthetic meeting tool
-([connector contracts](connector-contracts.md)); Granola, Jira and Confluence
-are personal connections, not organization tools. The server's Connected tools
-list merges the tools of every composed connector.
+onboarding is implemented. The Person CLI dispatches the Granola, hand-in
+(paste a meeting), Slack, Jira and Confluence tools and the staging synthetic
+meeting tool ([connector contracts](connector-contracts.md)); Granola, Jira
+and Confluence are personal connections and hand-in needs no connection, so
+none of them is an organization tool. The server's Connected tools list merges
+the tools of every composed connector.
 
 ## Schema growth rule
 

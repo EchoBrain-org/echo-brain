@@ -1,10 +1,9 @@
 import { validatePersonDiagnosticCaptureIdV1, type PersonDiagnosticCaptureIdV1 } from './person-diagnostics-v1.js';
 import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validatePersonPageCitationV1 } from './person-page-citation-v1.js';
-import type { PersonAnswerCitationV6 } from './person-answer-v6.js';
 import {
   PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
-  type PersonEvidenceKindV5,
+  type PersonAnswerCitationV6, type PersonEvidenceKindV5,
 } from './person-answer-v8.js';
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
 import { PERSON_WORKSPACE_CITATION_KINDS_V1, validatePersonWorkspaceCitationV1 } from './person-workspace-citation-v1.js';
@@ -43,14 +42,12 @@ import {
 } from './validation.js';
 
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
-export const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
+const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
 /**
- * The evidence desk and the capability read (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the
- * Ask routes before it, `/v3` to `/v6` with the V4 to V7 answers, were retired.
+ * The evidence desk search (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the Ask routes before
+ * it, `/v3` to `/v6` with the V4 to V7 answers, were retired, and so were the capability read and the desk's open.
  */
 export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
-export const PERSON_EVIDENCE_OPEN_PATH_V1 = '/v3/person/evidence/open';
-export const PERSON_CAPABILITIES_PATH_V1 = '/v3/person/capabilities';
 
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
@@ -84,10 +81,7 @@ export type PersonAnswerEvidenceCitationV4 = PersonAnswerCitationV3;
 export interface PersonAnswerRequestV3 {
   readonly schema_version: 3;
   readonly question: string;
-  /** Exclusive with `mine`. */
   readonly project_id?: ProjectIdV1;
-  /** Only what the asker added: their notes and uploads, and meetings they approved (ADR-0024). */
-  readonly mine?: true;
   /** A capture prepared by this actor for this ordinary Ask. */
   readonly capture_id?: PersonDiagnosticCaptureIdV1;
   /** The asker's previous turn (ADR-0047): the asker's own context, never evidence, and never stored. */
@@ -168,12 +162,6 @@ export interface PersonEvidenceDeskResponseV1 {
   readonly notice?: string;
 }
 
-export interface PersonCapabilitiesV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-person-capabilities-v1';
-  readonly agentic_ask_v1: boolean;
-}
-
 function text(value: unknown, label: string, maximumBytes: number, multiline = false): asserts value is string {
   const controls = multiline ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u : /[\p{Cc}\p{Zl}\p{Zp}]/u;
   if (
@@ -218,7 +206,7 @@ function citation(value: unknown): PersonAnswerCitationV3 {
     assertExactKeys(input, ['kind', 'atom_id', 'record_sha256', 'policy_id'], 'Ask citation');
     assertDigest(input.atom_id, 'Ask approved-record citation atom_id');
     assertDigest(input.record_sha256, 'Ask approved-record citation record_sha256');
-    if (!['organization-member-readable-person-v2', 'restricted-reviewer-person-v2', 'project-members-readable-person-v1'].includes(input.policy_id as string)) fail('Ask approved-record citation policy_id is invalid');
+    if (!['restricted-reviewer-person-v2', 'project-members-readable-person-v1'].includes(input.policy_id as string)) fail('Ask approved-record citation policy_id is invalid');
     return Object.freeze({ kind: 'approved_record', atom_id: input.atom_id as `sha256:${string}`, record_sha256: input.record_sha256 as `sha256:${string}`, policy_id: input.policy_id as ApprovedRecordPolicyV3 });
   }
   if (input.kind === 'source_revision') return validatePersonSourceRevisionCitationV1(input, 'optional');
@@ -373,10 +361,9 @@ function boundedRequest<T>(result: T, label: string): T {
 
 export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerRequestV3 {
   const input = object(value, 'Ask request');
-  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'mine') ? ['mine'] : []), ...(Object.hasOwn(input, 'capture_id') ? ['capture_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : [])], 'Ask request');
+  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'capture_id') ? ['capture_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
-  if (Object.hasOwn(input, 'mine') && (input.mine !== true || Object.hasOwn(input, 'project_id'))) fail('Ask request scope is invalid');
-  const request = boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}), ...(Object.hasOwn(input, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(input.capture_id) } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: previousTurn(input.previous) } : {}) }, 'Ask request');
+  const request = boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'capture_id') ? { capture_id: validatePersonDiagnosticCaptureIdV1(input.capture_id) } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: previousTurn(input.previous) } : {}) }, 'Ask request');
   // Ask again asks the earlier question itself (ADR-0047), and its answer names that question: one of another is refused.
   if (request.previous?.purpose === 'ask_again' && request.previous.question !== request.question) fail('Ask previous question is not the question asked again');
   return request;
@@ -524,11 +511,4 @@ export function validatePersonEvidenceDeskResponseV1(value: unknown): PersonEvid
   const result = { schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: scope(input.scope), items: Object.freeze(items), truncated: input.truncated, ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}) };
   if (canonicalJsonBytes(result).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) fail('Evidence desk response exceeds JSON byte bound');
   return Object.freeze(result) as PersonEvidenceDeskResponseV1;
-}
-
-export function validatePersonCapabilitiesV1(value: unknown): PersonCapabilitiesV1 {
-  const input = object(value, 'Person capabilities');
-  assertExactKeys(input, ['schema_version', 'kind', 'agentic_ask_v1'], 'Person capabilities');
-  if (input.schema_version !== 1 || input.kind !== 'echo-person-capabilities-v1' || typeof input.agentic_ask_v1 !== 'boolean') fail('Person capabilities is invalid');
-  return Object.freeze({ schema_version: 1, kind: 'echo-person-capabilities-v1', agentic_ask_v1: input.agentic_ask_v1 });
 }

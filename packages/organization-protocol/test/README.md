@@ -7,7 +7,7 @@ The package suite covers the current public protocol responsibilities:
   verification;
 - approval payload validation against the decision-brief conformance fixture;
 - Person content-policy reader selectors and frozen consequence digests;
-- provider-neutral human-action input and the registered input-codec seam;
+- the approval-decision record input and the registered input-codec seam;
 - version-4 record envelope provenance, lineage, predecessor, semantic
   idempotency, digest, and detached-signature joins;
 - version-2 append receipt position, record-head, event, policy-fact, and

@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { expect, vi } from 'vitest';
-import { PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_V1 } from '@echo-brain/organization-api';
+import { PERSON_ASK_PROGRESS_HEADER_V1 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { SqlitePersonAgenticAskAuditV1 } from '../../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
@@ -9,7 +9,8 @@ import { SqlitePersonSessionRepository } from '../../src/adapters/persistence/sq
 import { JIRA_LIVE_CONNECTOR_V1 } from '../../src/composition/person-live-connector-registry-v1.js';
 import type { CreatePersonLiveAnswerRouteOptionsV1 } from '../../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../../src/composition/person-record-search-route.js';
-import { createOrganizationAuthorityHttpServer } from '../../src/presentation/organization-authority-http-server.js';
+import { createOrganizationAuthorityHttpServer, type OrganizationAuthorityHttpServerOptions } from '../../src/presentation/organization-authority-http-server.js';
+import { authorityHttpServerOptions } from './authority-http-server.js';
 import type { FixturePerson, OpenItemsFixtureV1 } from './open-items.js';
 
 /** The streamed Ask route over HTTP, behind the real server, over the open-items Authority state (ADR-0039, ADR-0040). */
@@ -80,8 +81,8 @@ export function myOpenTasksPlanner(probes: readonly (readonly unknown[])[] = [],
 }
 
 /** Serves the given person routes behind the real server; its origin. */
-export async function serveAsk(routes: Omit<Parameters<typeof createOrganizationAuthorityHttpServer>[0], 'descriptor' | 'sessions' | 'oidc_provider' | 'expected_issuer'>): Promise<string> {
-  const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example', ...routes });
+export async function serveAsk(routes: Partial<OrganizationAuthorityHttpServerOptions>): Promise<string> {
+  const server = createOrganizationAuthorityHttpServer(authorityHttpServerOptions(routes));
   servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
   return `http://127.0.0.1:${address.port}`;
@@ -91,38 +92,30 @@ export async function serveAsk(routes: Omit<Parameters<typeof createOrganization
  * A client's Ask of `question` on `path` as `token` (Mina unless told otherwise), asking for `progress` unless told
  * otherwise; `progress: null` sends no progress header, `headers` adds others, and `body` replaces the request.
  */
-export function askClient(defaults: { readonly path: string; readonly progress: string; readonly question: string; readonly token?: string; readonly mine?: true }) {
-  return (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: string; readonly mine?: true; readonly body?: unknown; readonly signal?: AbortSignal;
+export function askClient(defaults: { readonly path: string; readonly progress: string; readonly question: string; readonly token?: string }) {
+  return (base: string, input: { readonly path?: string; readonly progress?: string | null; readonly token?: string; readonly body?: unknown; readonly signal?: AbortSignal;
     readonly headers?: Readonly<Record<string, string>> } = {}) => fetch(`${base}${input.path ?? defaults.path}`, {
     method: 'POST', ...(input.signal === undefined ? {} : { signal: input.signal }),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${input.token ?? defaults.token ?? 'mina'}`,
       ...(input.progress === null ? {} : { [PERSON_ASK_PROGRESS_HEADER_V1]: input.progress ?? defaults.progress }), ...input.headers },
-    body: JSON.stringify(input.body ?? { schema_version: 3, question: defaults.question, ...((input.mine ?? defaults.mine) === true ? { mine: true } : {}) }),
+    body: JSON.stringify(input.body ?? { schema_version: 3, question: defaults.question }),
   });
 }
 
 /**
  * What the streamed Ask route answers in JSON: a progress value other than its own gets the answer `validate` accepts,
- * and a failure before the stream starts is the ordinary JSON error with the route header, so a client never takes it
- * for an Authority without the route.
+ * and a failure before the stream starts is the ordinary JSON error.
  */
 export async function expectJsonAskFallbacks(ask: ReturnType<typeof askClient>, base: string,
-  route: { readonly header: string; readonly others: readonly string[]; readonly validate: (value: unknown) => unknown }): Promise<void> {
+  route: { readonly others: readonly string[]; readonly validate: (value: unknown) => unknown }): Promise<void> {
   for (const progress of route.others) {
     const response = await ask(base, { progress });
     expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
     route.validate(await response.json());
   }
   const unauthenticated = await ask(base, { token: 'stranger' });
-  expect([unauthenticated.status, unauthenticated.headers.get('content-type'), unauthenticated.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)])
-    .toEqual([401, 'application/json; charset=utf-8', route.header]);
-}
-
-/** The streamed Ask route, when the Authority did not compose its Ask, answers unavailable, still route-matched. */
-export async function expectAskRouteUnavailable(ask: ReturnType<typeof askClient>, base: string, header: string): Promise<void> {
-  const response = await ask(base);
-  expect([response.status, response.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)]).toEqual([503, header]);
-  await expect(response.json()).resolves.toEqual({ error: { code: 'unavailable', message: 'request failed' } });
+  expect([unauthenticated.status, unauthenticated.headers.get('content-type')]).toEqual([401, 'application/json; charset=utf-8']);
+  await expect(unauthenticated.json()).resolves.toEqual({ error: { code: 'unauthorized', message: 'request failed' } });
 }
 
 /** Every event of a whole progress stream. */

@@ -10,7 +10,7 @@ component_ids:
 created_at: 2026-10-19
 reviewed_at: 2026-10-19
 reviewed_ref: afde76a0c6304d068ca220317ab3d7f731c1e8dc
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -23,9 +23,9 @@ updates:
 The founder asked on 2026-10-19 for the receipt to say plainly what Ask
 looked at. The
 [research tool contract design](../product/2026-10-19-research-tool-contract-v1.md)
-left both fixes below out of research ("Not in this design"). This record is
-proposed until the founder confirms the wording. It does not mean the change
-is deployed or qualified.
+left both fixes below out of research ("Not in this design"). The founder
+accepted this record on 2026-10-31, as built in `a31a514` and `afde76a`
+(#342). Acceptance does not mean the change is deployed or qualified.
 
 ## Context and options
 

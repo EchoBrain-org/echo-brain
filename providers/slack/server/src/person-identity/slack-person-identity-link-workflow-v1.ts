@@ -89,7 +89,7 @@ export interface SlackPersonIdentityLinkRepositoryPort {
   slackTokenRejected(tool: ActiveSlackOrganizationTool): boolean;
 }
 
-export interface SlackPersonIdentityLinkWorkflowOptionsV1 {
+interface SlackPersonIdentityLinkWorkflowOptionsV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly authentication: SlackPersonIdentityLinkAuthenticationPort;

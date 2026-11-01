@@ -13,10 +13,6 @@ export interface StoredHandInMeetingV1 {
 
 /** The id a payload digest derives: the same meeting handed in twice is one meeting. */
 const idOf = (digest: string) => `hand-in-${digest.slice(7)}`;
-/** The id a handed-in meeting's canonical content derives. */
-export function handInMeetingIdV1(meeting: PersonHandInMeetingV1): string {
-  return idOf(canonicalSha256(validatePersonHandInMeetingV1(meeting)));
-}
 
 /**
  * The payloads people hand in (`authority_person_hand_in_meetings_v1`), each kept once per source and content-derived

@@ -32,7 +32,7 @@ interface ExpectedMeetingV1 {
   readonly must_not_be_current_decisions: readonly ExpectedSignalV1[];
 }
 
-export interface NorthstarPreSlackFindingV1 {
+interface NorthstarPreSlackFindingV1 {
   readonly meeting_id: string;
   readonly expected_evidence_block_ids: readonly string[];
   readonly actual_evidence_block_ids?: readonly string[];
@@ -40,7 +40,7 @@ export interface NorthstarPreSlackFindingV1 {
   readonly actual_value?: string | null;
 }
 
-export interface NorthstarPreSlackEvaluationV1 {
+interface NorthstarPreSlackEvaluationV1 {
   readonly schema_version: 1;
   readonly kind: "echo-synthetic-demo-pre-slack-evaluation-v1";
   readonly processed_meeting_count: number;
@@ -55,7 +55,7 @@ export interface NorthstarPreSlackEvaluationV1 {
   readonly passed: boolean;
 }
 
-export interface NorthstarPreSlackExtractionFailureV1 {
+interface NorthstarPreSlackExtractionFailureV1 {
   readonly meeting_id: string | null;
   readonly step:
     | "decision_processor.health_check"
@@ -74,7 +74,7 @@ export interface NorthstarPreSlackExtractionFailureV1 {
   readonly grounding_stage?: ExtractionGroundingFailureStage;
 }
 
-export interface NorthstarPreSlackEvaluatorInputV1 {
+interface NorthstarPreSlackEvaluatorInputV1 {
   readonly meetings: readonly MeetingDocument[];
   readonly expectations: unknown;
   readonly processor: DecisionProcessorAdapter;

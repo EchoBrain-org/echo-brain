@@ -4,7 +4,8 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { describe, expect, it, vi } from 'vitest';
-import { createPersonResearchEvalV1, PERSON_RESEARCH_EVAL_REREAD_MS_V1, PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 } from '../src/composition/person-research-eval-v1.js';
+import { createPersonResearchEvalV1 } from '../src/composition/person-research-eval-v1.js';
+import { RETAINED_RESULT_REREAD_MS_V1, RETAINED_RESULT_TTL_MS_V1 } from '../src/composition/person-retained-result-v1.js';
 import type { CreatePersonResearchEvalOptionsV1 } from '../src/composition/person-research-eval-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../src/composition/person-record-search-route.js';
 import { JIRA_PROJECTS_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
@@ -17,12 +18,12 @@ vi.mock('@echo-brain/organization-authority-kernel/answer-composition/agentic-tr
   return { ...real, AGENTIC_TRIGGER_DEFINITIONS_V1: Object.freeze([...real.AGENTIC_TRIGGER_DEFINITIONS_V1, started]) };
 });
 
-const record = { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'organization-member-readable-person-v2' as const };
+const record = { kind: 'approved_record' as const, atom_id: canonicalSha256('atom'), record_sha256: canonicalSha256('record'), policy_id: 'project-members-readable-person-v1' as const };
 const PROJECT = 'prj_00000000-0000-4000-8000-000000000001' as const;
 const OTHER_PROJECT = 'prj_00000000-0000-4000-8000-000000000002' as const;
 const member = (name: string) => ({ organization_id: 'organization-1', principal_id: `principal-${name}`, membership_id: `member-${name}`, session_family_id: `family-${name}` });
 const ask = (question: string) => ({ schema_version: 1 as const, trigger: 'ask', budget: 'live' as const, input: { question } });
-const approved = (extra: { readonly budget?: 'live' | 'background'; readonly project_id?: `prj_${string}`; readonly mine?: true } = {}) => ({ schema_version: 1 as const, trigger: 'approved_record', input: { record }, ...extra });
+const approved = (extra: { readonly budget?: 'live' | 'background'; readonly project_id?: `prj_${string}` } = {}) => ({ schema_version: 1 as const, trigger: 'approved_record', input: { record }, ...extra });
 /** The record route's open of `record`: one readable decision. */
 const openedRecord = () => ({
   response: { schema_version: 2, kind: 'echo-person-record-search-v2', items: [] },
@@ -104,7 +105,7 @@ describe('staging research evaluation runs', () => {
     expect(result).toMatchObject({ status: 'completed', research: { kind: 'echo-agentic-research-result-v1', trigger: 'ask', stop: { reason: 'unusable_step' } }, ask: { writer_evidence: [], response: { schema_version: 8 } } });
     expect(result).not.toHaveProperty('rendered');
     expect((await h.read('token-a', receipt.run_id)).status).toBe('completed');
-    h.advance(PERSON_RESEARCH_EVAL_REREAD_MS_V1 + 1);
+    h.advance(RETAINED_RESULT_REREAD_MS_V1 + 1);
     await expect(h.read('token-a', receipt.run_id)).rejects.toMatchObject({ code: 'not_found' });
     // The only durable trace is the loop's content-free audit.
     expect(h.audits).toHaveLength(1);
@@ -182,7 +183,7 @@ describe('staging research evaluation runs', () => {
     const run = await h.application.start({ access_token: 'token-a', request: ask('Later?') });
     await vi.waitFor(() => expect(h.generate).toHaveBeenCalled());
     await new Promise(resolve => setTimeout(resolve, 20));
-    h.advance(PERSON_RESEARCH_EVAL_RESULT_TTL_MS_V1 + 1);
+    h.advance(RETAINED_RESULT_TTL_MS_V1 + 1);
     await expect(h.read('token-a', run.run_id)).rejects.toMatchObject({ code: 'not_found' });
   });
 
@@ -267,7 +268,7 @@ describe('staging research evaluation runs', () => {
     expect(h.audits).toEqual([expect.objectContaining({ trigger: 'sweep', outcome: 'answered' })]);
   });
 
-  it("refuses an unknown trigger, input its definition rejects, the mine scope beyond Ask, a scope for a record's run, and a question brief Ask's writer would not run as given, before any run starts", async () => {
+  it("refuses an unknown trigger, input its definition rejects, a scope for a record's run, and a question brief Ask's writer would not run as given, before any run starts", async () => {
     const h = harness({ recordProjects: () => [PROJECT] });
     for (const request of [
       { schema_version: 1 as const, trigger: 'drift', input: {} },
@@ -275,8 +276,6 @@ describe('staging research evaluation runs', () => {
       { schema_version: 1 as const, trigger: 'approved_record', input: { record: { ...record, kind: 'ticket' } } },
       { schema_version: 1 as const, trigger: 'sweep', input: { findings: [] } },
       { schema_version: 1 as const, trigger: 'ask', input: { question: 'x '.repeat(130).trim() } },
-      { schema_version: 1 as const, trigger: 'sweep', mine: true as const, input: { findings: [{ finding: 'f', expected: 'e', citations: [record] }] } },
-      approved({ mine: true }),
       approved({ project_id: PROJECT }),
       { schema_version: 1 as const, trigger: 'ask_with_start', input: { question: 'Why?' } },
     ]) await expect(h.application.start({ access_token: 'token-a', request }), JSON.stringify(request)).rejects.toMatchObject({ code: 'invalid_request' });

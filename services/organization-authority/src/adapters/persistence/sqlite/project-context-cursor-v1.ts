@@ -3,7 +3,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import { isCanonicalUtcMillisTimestampV1 } from '../../../application/canonical-utc-timestamp-v1.js';
 
 export interface ProjectCursorScopeV1 {
-  readonly operation: 'project_list_v2' | 'members' | 'directory' | 'organization_directory' | 'feed_v2' | 'search_v2';
+  readonly operation: 'project_list_v2' | 'members' | 'directory' | 'organization_directory' | 'search_v2';
   readonly project_id?: string;
   readonly status?: 'active' | 'archived';
   readonly canonical_query?: string;
@@ -11,7 +11,7 @@ export interface ProjectCursorScopeV1 {
   readonly organization_id: string;
   readonly membership_id: string;
 }
-export type ProjectCursorPositionV1 = readonly [string, string] | readonly [number, string, string];
+type ProjectCursorPositionV1 = readonly [string, string] | readonly [number, string, string];
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const projectId = new RegExp(`^prj_${UUID}$`);
@@ -32,7 +32,7 @@ function position(fields: readonly string[], scope: ProjectCursorScopeV1): Proje
   const [first, second] = fields as [string, string];
   if (scope.operation === 'members' || scope.operation === 'directory' || scope.operation === 'organization_directory') {
     if (!displayName(first) || !membershipId.test(second)) invalid();
-  } else if (!isCanonicalUtcMillisTimestampV1(first) || !(scope.operation === 'project_list_v2' ? projectId : contextId).test(second)) invalid();
+  } else if (!isCanonicalUtcMillisTimestampV1(first) || !projectId.test(second)) invalid();
   return [first, second];
 }
 function binding(scope: ProjectCursorScopeV1): Buffer {

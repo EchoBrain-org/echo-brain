@@ -123,28 +123,18 @@ submit-v3/status-v3 remain content-free. The carrier and
 optional metadata do not settle the final context shape. See the
 [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
-Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as
-updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md), on `/v7`
-alone since [ADR-0047](../decisions/ADR-0047-ask-timeline.md) retired the Ask
-routes before it: the `/v7` Ask and the shared evidence desk are composed
-whenever an answer model is configured, with no capability switch. Live
-qualification is separate.
+The ADRs that specify Ask, and how the Authority composes it, are in
+[CMP-ORGANIZATION-AUTHORITY](organization-authority.md).
 
-`person list [--project <project-id> | --mine | --only-me] [--cursor <next_cursor>]`
-and `person open --ref <ref> [--cursor <next_cursor>]` read the Authority's
-[ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md) routes and
-print one JSON line. List rows carry a ref, title, time, who can read it and
-the caller's projects it is filed in, never text; open pages a note, document,
-imported meeting or approved meeting by that ref. `person list --only-me`
-lists everything only the caller can read, filed in a project or not
-([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)); Ask has no such
-scope. `person ask --mine` narrows Ask to what the caller added or approved,
-and every citation that carries a `ref` opens with `person open`. `--project`,
-`--mine` and `--only-me` are exclusive, and the request is validated before
-any session or network use
-([`person-list-cli.test.ts`](../../tests/person-client/person-list-cli.test.ts)).
+`person list` and `person open --ref` read the Authority's
+[ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md) routes
+and print one JSON line; their command contract is under
+[Agents](../architecture/person-client-architecture.md#agents), and their
+enforcement in the [served-path table](permissions.md#served-paths).
 
-`person changes` takes no options and reads the Authority's change check
+`person changes` takes no options but the
+[account pin](../architecture/person-client-architecture.md#account-and-answer-sources)
+and reads the Authority's change check
 ([ADR-0036](../decisions/ADR-0036-person-change-check.md)) under the signed-in
 session. It prints `echo-person-changes-v1` (one fingerprint each for
 `projects`, `follow_ups` and `reviews`, and `check_again_after_seconds`) as
@@ -154,7 +144,8 @@ serves the check, so a failure keeps the code the Authority sent, a 404's
 ([ADR-0048](../decisions/ADR-0048-retire-older-person-routes.md),
 [`person-changes.test.ts`](../../tests/person-client/person-changes.test.ts)).
 
-`person project-activity` takes no options and reads the Authority's project
+`person project-activity` takes no options but the account pin and reads the
+Authority's project
 activity ([Ask timeline v1](../product/2026-10-25-ask-timeline-v1.md) C2) under
 the signed-in session. It prints `echo-person-project-activity-v1` (for each
 active project, when something new last arrived from someone else that the

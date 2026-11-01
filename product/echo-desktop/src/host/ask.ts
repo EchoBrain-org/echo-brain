@@ -11,15 +11,15 @@ import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
 
 /**
- * The client command for an Ask of `text` (already askText's), for the
- * account the page shows. Every Ask, Mine as much as global or project, asks
- * `/v7` with its progress, pinned to that account: a client signed in as
- * another by then asks nothing and prints no step, so the page's account
- * check of each step is the client's own. A follow-up or Ask again carries
- * the earlier turn (`previous`, ADR-0047), already checked by askPrevious.
+ * The client command for an Ask of `text` (already askText's). Every Ask,
+ * Mine as much as global or project, asks `/v7` with its progress; the host
+ * pins it to the account the page shows, as every call: a client signed in as
+ * another by then asks nothing and prints no step, so the page's account check
+ * of each step is the client's own. A follow-up or Ask again carries the
+ * earlier turn (`previous`, ADR-0047), already checked by askPrevious.
  */
-export function askArgv(text: string, scope: AskScope, expect: Expect, previous?: AskPrevious): string[] {
-  return ['ask', `--question=${text}`, '--progress', `--expected-membership-id=${expect.membership_id}`, `--expected-authority=${expect.authority}`,
+export function askArgv(text: string, scope: AskScope, previous?: AskPrevious): string[] {
+  return ['ask', `--question=${text}`, '--progress',
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : scope.kind === 'mine' ? ['--mine'] : []),
     ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`])];
 }
@@ -57,9 +57,9 @@ export function askCheckArgv(request: string): string[] {
   return ['ask-check', `--request=${request}`];
 }
 
-/** The client command that reads a cited meeting's approved record, for the pane to light the cited items. */
+/** The client command that reads a cited meeting's approved record as Ask cites it, each item with its atom id, for the pane to light the cited items. */
 export function askRecordArgv(record: RecordRef): string[] {
-  return ['records', `--record-sha256=${record.record_sha256}`];
+  return ['records', `--record-sha256=${record.record_sha256}`, '--brief'];
 }
 
 /**

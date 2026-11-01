@@ -49,14 +49,14 @@ separately.
 | [ADR-0024](ADR-0024-person-list-open-and-mine-scope.md) | Person list, open by ref, and the mine scope | accepted |
 | [ADR-0025](ADR-0025-nango-holds-slack-connection-credentials.md) | Nango holds Slack connection credentials | accepted |
 | [ADR-0026](ADR-0026-jira-person-live-evidence-nango.md) | Person-bound Jira live evidence with Nango custody | accepted |
-| [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md) | Rebind a lost Nango Slack connection under the same credential handle | proposed |
+| [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md) | Rebind a lost Nango Slack connection under the same credential handle | accepted |
 | [ADR-0028](ADR-0028-broadened-layer-1-source-captures.md) | Layer 1 holds the people directory, signed record log and source captures | withdrawn |
 | [ADR-0029](ADR-0029-capture-and-derive-foundation.md) | Project-scoped capture and exact derivation inputs | withdrawn |
 | [ADR-0030](ADR-0030-personal-meeting-custody-and-review.md) | Personal Granola custody and shared in-app meeting review | accepted |
 | [ADR-0031](ADR-0031-unified-meeting-approval-core.md) | One meeting approval core with optional surfaces | accepted |
 | [ADR-0032](ADR-0032-stored-trigger-runs.md) | Stored trigger runs keep pointers and judgments, not outside text | accepted |
-| [ADR-0033](ADR-0033-shared-open-items.md) | Open items are one shared row per affected item, seen by the decision's audience | proposed |
-| [ADR-0034](ADR-0034-confluence-person-live-page-evidence.md) | Person-bound Confluence live page evidence with Nango custody | proposed |
+| [ADR-0033](ADR-0033-shared-open-items.md) | Open items are one shared row per affected item, seen by the decision's audience | accepted |
+| [ADR-0034](ADR-0034-confluence-person-live-page-evidence.md) | Person-bound Confluence live page evidence with Nango custody | accepted |
 | [ADR-0035](ADR-0035-desktop-updates-from-the-signed-feed.md) | The desktop app updates itself from the signed client feed | accepted |
 | [ADR-0036](ADR-0036-person-change-check.md) | A Person change check tells the desktop what moved in their own view | accepted |
 | [ADR-0037](ADR-0037-openrouter-routing-for-research-calls.md) | Research model calls skip measured bad hosts, run at temperature 0 and record the serving host | accepted |
@@ -65,13 +65,13 @@ separately.
 | [ADR-0040](ADR-0040-follow-ups-as-ask-evidence.md) | Follow-ups are an Ask source, seen exactly as Home shows them | accepted |
 | [ADR-0041](ADR-0041-complete-lists-as-ask-evidence.md) | A complete list is Ask evidence of which items exist | accepted |
 | [ADR-0042](ADR-0042-research-tool-contract.md) | Ask reads every source by what it declares, and reaches the asker's workspace | accepted |
-| [ADR-0043](ADR-0043-ask-receipt-counts-what-research-looked-through.md) | The Ask receipt counts every item research looked through | proposed |
+| [ADR-0043](ADR-0043-ask-receipt-counts-what-research-looked-through.md) | The Ask receipt counts every item research looked through | accepted |
 | [ADR-0044](ADR-0044-search-rebuilds-make-no-model-call.md) | Search rebuilds make no model call; the related-atom projection is removed | accepted |
-| [ADR-0045](ADR-0045-ask-answer-layout.md) | An Ask answer carries its layout, and the desktop sets its type | proposed |
-| [ADR-0046](ADR-0046-private-meetings-and-item-routing.md) | Meetings stay private until each item is approved to its destination | proposed |
-| [ADR-0047](ADR-0047-ask-timeline.md) | Ask keeps a device-only timeline that says what changed, and answers follow-ups | proposed |
-| [ADR-0048](ADR-0048-retire-older-person-routes.md) | Retire the older Person routes and fallbacks kept only for compatibility | proposed |
-| [ADR-0049](ADR-0049-only-me-is-a-lock.md) | Only me is a lock on an item, Ask shows one thread per place, and Mine goes | proposed |
+| [ADR-0045](ADR-0045-ask-answer-layout.md) | An Ask answer carries its layout, and the desktop sets its type | accepted |
+| [ADR-0046](ADR-0046-private-meetings-and-item-routing.md) | Meetings stay private until each item is approved to its destination | accepted |
+| [ADR-0047](ADR-0047-ask-timeline.md) | Ask keeps a device-only timeline that says what changed, and answers follow-ups | accepted |
+| [ADR-0048](ADR-0048-retire-older-person-routes.md) | Retire the older Person routes and fallbacks kept only for compatibility | accepted |
+| [ADR-0049](ADR-0049-only-me-is-a-lock.md) | Only me is a lock on an item, Ask shows one thread per place, and Mine goes | accepted |
 | [ADR-0050](ADR-0050-update-floor-only-rises.md) | The update floor only rises, and the desktop says when updates are off | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and

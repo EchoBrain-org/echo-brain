@@ -13,7 +13,7 @@ import { installMacosClientUpdate } from './client-update-macos.js';
 import { type UpdateInstallerInput } from './client-update-kit.js';
 import { createHash } from 'node:crypto';
 
-export interface ClientUpdateState {
+interface ClientUpdateState {
   schema_version: 1;
   config_sha256: string;
   checkpoint: UpdateCheckpoint | null;
@@ -47,7 +47,7 @@ export interface ClientUpdateInstallation {
   archive_name: string;
   download_timeout_ms: number;
 }
-export interface ClientUpdateDependencies {
+interface ClientUpdateDependencies {
   root: string;
   platform: UpdatePlatform;
   running_release?: string;

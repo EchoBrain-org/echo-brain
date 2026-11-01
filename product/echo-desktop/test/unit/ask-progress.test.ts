@@ -11,10 +11,10 @@ vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 const EXPECT: Expect = { authority: ACCOUNT.authority, membership_id: ACCOUNT.membership_id };
 const coordinates = { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha('6') };
-const decision: AnswerSource = { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha('1') };
+const decision: AnswerSource = { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' }, atom_id: sha('1') };
 const note: AnswerSource = { kind: 'original', label: 'Launch notes', ref: coordinates, item: { kind: 'note', id: `ctx_${'8'.repeat(64)}` } };
 const ticket: AnswerSource = { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink: 'https://example.atlassian.net/browse/ECHO-7' };
-const receipt: AskReceipt = { looked_through: 3, elapsed_ms: 48_000, rows: [
+const receipt: AskReceipt = { looked_through: 3, rows: [
   { type: 'searched', sources: [{ kind: 'meetings' }], found: 3 }, { type: 'read', items: [decision, note, ticket] },
 ] };
 const answer = (withReceipt = true): Answer => ({
@@ -248,12 +248,12 @@ describe('the receipt above an answer', () => {
     expect(latestTurn(quick.store)?.receipt).toEqual(receipt);
   });
 
-  it('times the wait by the page\'s clock: an Authority that researched under three seconds still keeps the receipt of a longer wait', async () => {
+  it('times the wait by the page\'s clock, and keeps it with the receipt', async () => {
     const { store, release } = await asking();
     vi.advanceTimersByTime(3_400);
-    release(ok({ ...answer(), receipt: { ...receipt, elapsed_ms: 1_800 } }));
+    release(ok(answer()));
     await flush();
-    expect(latestTurn(store)).toMatchObject({ receipt: { elapsed_ms: 1_800 }, took: 3_400 });
+    expect(latestTurn(store)).toMatchObject({ receipt, took: 3_400 });
   });
 
   it('an Authority that answers without streaming sends none, and the answer shows without a receipt', async () => {

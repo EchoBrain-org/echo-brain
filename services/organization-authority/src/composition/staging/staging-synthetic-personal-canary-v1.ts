@@ -11,7 +11,7 @@ export type { StagingSyntheticCanaryOutcomeV1 };
 const MAXIMUM_PASSES = 5;
 
 /** The single active owner of this Authority's organization holds the staging synthetic source. */
-export function stagingSyntheticOwnerV1(database: Database.Database): MeetingIntakePersonV1 {
+function stagingSyntheticOwnerV1(database: Database.Database): MeetingIntakePersonV1 {
   const owners = database.prepare(`SELECT membership.organization_id, membership.principal_id, membership.membership_id
       FROM authority_memberships AS membership
       JOIN authority_metadata AS metadata ON metadata.organization_id = membership.organization_id

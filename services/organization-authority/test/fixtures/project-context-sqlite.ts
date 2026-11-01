@@ -104,6 +104,33 @@ export function addMembership(
   );
 }
 
+/** Seeds an active project as `creator` made it, named after its id and created at PROJECT_CONTEXT_NOW unless told otherwise. */
+export function seedProject(
+  database: Database.Database,
+  projectId: string,
+  creator: AuthorityPersonMembershipBinding,
+  options: { readonly name?: string; readonly status?: "active" | "archived"; readonly created_at?: string } = {},
+): void {
+  database.prepare(`INSERT INTO authority_projects_v1
+    (project_id,organization_id,name,status,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
+    VALUES (?,?,?,?,?,?,?,?)`).run(projectId, creator.organization_id, options.name ?? projectId, options.status ?? "active",
+    options.created_at ?? PROJECT_CONTEXT_NOW, creator.principal_id, creator.membership_id, creator.membership_type);
+}
+
+/** Seeds an active project grant, under a fresh id and granted at PROJECT_CONTEXT_NOW unless told otherwise. */
+export function seedProjectMember(
+  database: Database.Database,
+  projectId: string,
+  member: AuthorityPersonMembershipBinding,
+  role: "lead" | "member",
+  options: { readonly id?: string; readonly granted_at?: string } = {},
+): void {
+  database.prepare(`INSERT INTO authority_project_memberships_v1
+    (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
+    VALUES (?,?,?,?,?,?,?,'active',?)`).run(options.id ?? `pgm_${randomUUID()}`, projectId, member.organization_id,
+    member.principal_id, member.membership_id, member.membership_type, role, options.granted_at ?? PROJECT_CONTEXT_NOW);
+}
+
 /**
  * A note as the retired V2 submit stored it (ADR-0048), for the reads that still find stored V2 notes: its search, the
  * person list and open, Ask and enrichment. The same rows, context ID, payload digest and receipt the submit wrote, with

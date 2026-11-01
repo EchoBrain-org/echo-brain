@@ -1,8 +1,6 @@
-import { Buffer } from "node:buffer";
 import type {
   OrganizationRecordApprovalPayloadV1,
   OrganizationRecordDecisionBriefV1,
-  OrganizationRecordRejectionPayloadV1,
   OrganizationRecordSignalV1,
   OrganizationRecordSourceLocatorV1,
 } from "./contracts.js";
@@ -20,9 +18,6 @@ import { organizationProtocolValidationFailure } from "./validation-error.js";
  * other organization protocol document keeps the 16 KiB default.
  */
 export const MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES = 256 * 1024;
-
-/** The rejection reason is organization-visible content, so it is bounded. */
-export const MAX_ORGANIZATION_RECORD_REJECTION_REASON_BYTES = 2 * 1024;
 
 const MAX_RECORD_PARTICIPANTS = 10_000;
 const MAX_RECORD_SIGNAL_LINKS = 1_000;
@@ -413,9 +408,9 @@ function assertRationaleLinks(
 }
 
 /**
- * Restates the `DecisionBrief` shape core produces. Core imports no packages,
- * so this package owns its own validator, exercised by the test-only payload
- * conformance fixture.
+ * Restates the `DecisionBrief` shape processing core produces. Neither package
+ * may import the other, so this package owns its own validator, exercised by
+ * the test-only payload conformance fixture.
  */
 function assertOrganizationRecordDecisionBrief(
   value: unknown,
@@ -583,34 +578,5 @@ export function assertOrganizationRecordApprovalPayload(
     organizationProtocolValidationFailure(
       `${label}.surface must be a canonical surface name`,
     );
-  }
-}
-
-export function assertOrganizationRecordRejectionPayload(
-  value: unknown,
-  label: string,
-): asserts value is OrganizationRecordRejectionPayloadV1 {
-  const payload = asRecord(value, label);
-  assertExactKeys(
-    payload,
-    ["source", "meeting_id", "rejected_at", "reason", "reconsider_after"],
-    label,
-  );
-  assertOrganizationRecordSourceLocator(payload.source, `${label}.source`);
-  assertNonEmptyString(payload.meeting_id, `${label}.meeting_id`);
-  assertTimestamp(payload.rejected_at, `${label}.rejected_at`);
-  if (payload.reason !== null) {
-    assertNonEmptyString(payload.reason, `${label}.reason`);
-    if (
-      Buffer.byteLength(payload.reason as string, "utf8") >
-      MAX_ORGANIZATION_RECORD_REJECTION_REASON_BYTES
-    ) {
-      organizationProtocolValidationFailure(
-        `${label}.reason must be at most ${MAX_ORGANIZATION_RECORD_REJECTION_REASON_BYTES} UTF-8 bytes`,
-      );
-    }
-  }
-  if (payload.reconsider_after !== null) {
-    assertTimestamp(payload.reconsider_after, `${label}.reconsider_after`);
   }
 }

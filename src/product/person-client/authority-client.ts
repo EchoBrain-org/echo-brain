@@ -4,7 +4,9 @@ import { PERSON_CHANGES_ROUTE_V1, validatePersonChangesV1, type PersonChangesV1 
 import { PERSON_PROJECT_ACTIVITY_PATH_V1, validatePersonProjectActivityV1, type PersonProjectActivityV1 } from '@echo-brain/organization-api';
 import { PERSON_ASK_CHECK_LIMITS_V1, PERSON_ASK_CHECK_PATH_V1, validatePersonAskCheckRequestV1, validatePersonAskCheckV1, type PersonAskCheckRequestV1, type PersonAskCheckV1 } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
-import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
+import { PERSON_RECORDS_PATH_V1, validatePersonRecordListV1, validatePersonRecordSearchRequestV2, validatePersonRecordSearchV2, type PersonRecordListV1, type PersonRecordSearchV2 } from '@echo-brain/organization-api';
+import { PERSON_EMPLOYEES_PATH_V1, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, type EmployeeInvitationV1, type EmployeeRosterV1 } from '@echo-brain/organization-api';
+import { PersonQueryInputError } from "@echo-brain/organization-api";
 import {
   PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
   createPersonAskProgressDecoderV3, type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV3, type PersonAskReceiptV3,
@@ -12,9 +14,7 @@ import {
 import {
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
   PERSON_ANSWER_PATH_V7,
-  PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
-  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1,
   PERSON_RESEARCH_EVAL_READ_PATH_V1,
   PERSON_RESEARCH_EVAL_START_PATH_V1,
@@ -44,13 +44,11 @@ import {
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceSearchRequestV1,
-  validatePersonEvidenceOpenRequestV1,
   validatePersonEvidenceDeskResponseV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
   type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
   type PersonEvidenceSearchRequestV1,
-  type PersonEvidenceOpenRequestV1,
   type PersonEvidenceDeskResponseV1,
   type PersonSourceEvidenceReadRequestV1,
   type PersonSourceEvidenceV1,
@@ -95,7 +93,7 @@ import {
 } from '@echo-brain/organization-api';
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
-import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isCanonicalPersonEmail, isExpectedPersonEmail, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
+import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const ASK_TIMEOUT_MS = 135_000;
@@ -103,58 +101,7 @@ const ASK_TIMEOUT_MS = 135_000;
 const ASK_CHECK_TIMEOUT_MS = 30_000;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
-const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
-const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
-export interface EmployeeInvitationV1 {
-  readonly login_grant: string;
-  readonly expires_at: string;
-}
-
-export interface EmployeeRosterV1 {
-  readonly schema_version: 1;
-  readonly kind: "echo-clean-person-employee-roster-v1";
-  readonly employees: readonly EmployeeRosterItemV1[];
-}
-
-export interface EmployeeRosterItemV1 {
-  readonly email: string;
-  readonly display_name: string;
-  readonly membership_status: "active" | "revoked";
-  readonly invitation_state: "pending" | "expired" | "redeemed" | "none";
-}
-
-export interface PersonRecordListV1 {
-  readonly schema_version: 1;
-  readonly kind: "echo-clean-person-record-list-v1";
-  readonly records: readonly PersonRecordListItemV1[];
-}
-
-export interface PersonRecordListItemV1 {
-  readonly position: number;
-  readonly approval_id: string;
-  readonly record_sha256: `sha256:${string}`;
-  readonly envelope: Readonly<Record<string, unknown>>;
-  readonly source_metadata?: {
-    readonly record_approved_by?: { readonly display_name: string };
-  };
-}
-
-export interface PersonRecordSearchV2 {
-  readonly schema_version: 2;
-  readonly kind: "echo-clean-person-record-search-v2";
-  readonly items: readonly PersonRecordSearchItemV1[];
-}
-
-export interface PersonRecordSearchItemV1 {
-  readonly atom_id: `sha256:${string}`;
-  readonly record_sha256: `sha256:${string}`;
-  readonly kind: "decision" | "action" | "rationale";
-  readonly text: string;
-  readonly policy_id:
-    | "organization-member-readable-person-v2"
-    | "restricted-reviewer-person-v2"
-    | "project-members-readable-person-v1";
-}
+export type { EmployeeRosterV1, PersonRecordListItemV1, PersonRecordListV1, PersonRecordSearchItemV1, PersonRecordSearchV2 } from '@echo-brain/organization-api';
 
 /**
  * The Ask's answer, on `/v7`: it may cite live tickets and pages, follow-ups (ADR-0040), and projects, people, tools and
@@ -162,7 +109,6 @@ export interface PersonRecordSearchItemV1 {
  */
 export type PersonAnswerV8 = OrganizationPersonAnswerV8;
 export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
-export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
 export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonListV1 = PersonListResponseV1;
@@ -186,19 +132,16 @@ export type PersonAskProgressSinkV3 = (event: PersonAskProgressStepEventV3) => v
 export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
   readonly unsent: boolean;
-  /** The Ask route answered it, with its route header: never an Authority without the route. */
-  readonly routeMatched: boolean;
 
   constructor(
     public readonly code: string,
     public readonly status: number | null,
     message: string,
-    options: { readonly unsent?: boolean; readonly routeMatched?: boolean } = {},
+    options: { readonly unsent?: boolean } = {},
   ) {
     super(message);
     this.name = "PersonAuthorityClientError";
     this.unsent = options.unsent === true;
-    this.routeMatched = options.routeMatched === true;
   }
 }
 
@@ -380,8 +323,7 @@ function lostAskStream(): PersonAuthorityClientError {
  * the Authority sees the disconnect and stops the Ask.
  */
 async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3): Promise<PersonAskProgressTerminalEventV3> {
-  // Only `/v7` streams, and it marks the stream as its own, so an in-band 404 is never a missing route.
-  if (response.status !== 200 || response.body === null || !response.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)) {
+  if (response.status !== 200 || response.body === null) {
     throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
   }
   const reader = response.body.getReader();
@@ -432,12 +374,12 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
   return terminal!;
 }
 
-type AskScope = ProjectIdV1 | { readonly mine: true } | undefined;
+type AskScope = ProjectIdV1 | undefined;
 
 /** The Ask's V3 request, which may carry the asker's previous turn (ADR-0047). */
 function askRequest(question: string, scope: AskScope, captureId: PersonDiagnosticCaptureIdV1 | undefined, previous?: PersonAnswerPreviousV1) {
   return validatePersonAnswerRequestV3({ schema_version: 3, question,
-    ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}), ...(captureId === undefined ? {} : { capture_id: captureId }),
+    ...(scope === undefined ? {} : { project_id: scope }), ...(captureId === undefined ? {} : { capture_id: captureId }),
     ...(previous === undefined ? {} : { previous }) });
 }
 
@@ -452,7 +394,7 @@ function askHeaders(): Readonly<Record<string, string>> {
  * question, say what is different since or ask which one (ADR-0047).
  */
 function inAskScope<T extends { readonly scope: unknown }>(response: T, scope: AskScope, previous?: PersonAnswerPreviousV1): T {
-  const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
+  const expectedScope = scope === undefined ? { kind: 'global' } : { kind: 'project', project_id: scope };
   if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
   }
@@ -482,271 +424,6 @@ function validateSuccess<T>(
       "Person Authority returned a malformed response",
     );
   }
-}
-
-function asPlainRecord(
-  value: unknown,
-  message: string,
-): Readonly<Record<string, unknown>> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(message);
-  }
-  return value as Readonly<Record<string, unknown>>;
-}
-
-function exactKeys(
-  value: Readonly<Record<string, unknown>>,
-  keys: readonly string[],
-  message: string,
-): void {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((key, index) => key !== expected[index])
-  ) {
-    throw new Error(message);
-  }
-}
-
-function validatePersonRecordList(
-  value: unknown,
-): PersonRecordListV1 {
-  const response = asPlainRecord(value, "record list response is invalid");
-  exactKeys(
-    response,
-    ["schema_version", "kind", "records"],
-    "record list response is invalid",
-  );
-  if (
-    response.schema_version !== 1 ||
-    response.kind !== "echo-clean-person-record-list-v1" ||
-    !Array.isArray(response.records) ||
-    response.records.length > 100
-  ) {
-    throw new Error("record list response is invalid");
-  }
-  let previousPosition = Number.POSITIVE_INFINITY;
-  const records = response.records.map((value) => {
-    const record = asPlainRecord(value, "record list item is invalid");
-    exactKeys(
-      record,
-      ["position", "approval_id", "record_sha256", "envelope",
-        ...(record.source_metadata === undefined ? [] : ["source_metadata"])],
-      "record list item is invalid",
-    );
-    if (
-      typeof record.position !== "number" ||
-      !Number.isSafeInteger(record.position) ||
-      record.position < 1 ||
-      record.position >= previousPosition ||
-      typeof record.approval_id !== "string" ||
-      record.approval_id.length === 0 ||
-      record.approval_id.length > 256 ||
-      typeof record.record_sha256 !== "string" ||
-      !/^sha256:[a-f0-9]{64}$/.test(record.record_sha256)
-    ) {
-      throw new Error("record list item is invalid");
-    }
-    const envelope = asPlainRecord(
-      record.envelope,
-      "record list item is invalid",
-    );
-    previousPosition = record.position;
-    return Object.freeze({
-      position: record.position,
-      approval_id: record.approval_id,
-      record_sha256: record.record_sha256 as `sha256:${string}`,
-      envelope,
-      ...(record.source_metadata === undefined ? {} : {
-        source_metadata: validateSourceMetadata(record.source_metadata),
-      }),
-    });
-  });
-  return Object.freeze({
-    schema_version: 1,
-    kind: "echo-clean-person-record-list-v1",
-    records: Object.freeze(records),
-  });
-}
-
-function validateSourceMetadata(value: unknown): NonNullable<PersonRecordListItemV1["source_metadata"]> {
-  const metadata = asPlainRecord(value, "source metadata is invalid");
-  exactKeys(metadata, metadata.record_approved_by === undefined ? [] : ["record_approved_by"], "source metadata is invalid");
-  if (metadata.record_approved_by === undefined) return Object.freeze({});
-  const approver = asPlainRecord(metadata.record_approved_by, "source approver is invalid");
-  exactKeys(approver, ["display_name"], "source approver is invalid");
-  if (typeof approver.display_name !== "string" || approver.display_name.trim().length === 0 ||
-    approver.display_name.length > 200 || /[\p{Cc}\p{Cf}]/u.test(approver.display_name)) {
-    throw new Error("source approver is invalid");
-  }
-  return Object.freeze({ record_approved_by: Object.freeze({ display_name: approver.display_name }) });
-}
-
-function validatePersonRecordSearchRequest(value: unknown): {
-  readonly query: string;
-  readonly limit?: number;
-} {
-  const request = asPlainRecord(value, "record search request is invalid");
-  const keys = Object.keys(request).sort();
-  const query = validatePersonQueryText(request.query);
-  if (
-    keys.length < 1 || keys.length > 2 || !keys.includes("query") ||
-    keys.some(key => key !== "query" && key !== "limit") ||
-    (request.limit !== undefined &&
-      (!Number.isSafeInteger(request.limit) ||
-        (request.limit as number) < 1 ||
-        (request.limit as number) > 10))
-  ) {
-    throw new PersonQueryInputError("invalid_limit", "Search --limit must be an integer from 1 to 10");
-  }
-  return Object.freeze({
-    query,
-    ...(request.limit === undefined
-      ? {}
-      : { limit: request.limit as number }),
-  });
-}
-
-function validatePersonRecordSearch(
-  value: unknown,
-): PersonRecordSearchV2 {
-  const response = asPlainRecord(value, "record search response is invalid");
-  exactKeys(
-    response,
-    ["schema_version", "kind", "items"],
-    "record search response is invalid",
-  );
-  if (
-    response.schema_version !== 2 ||
-    response.kind !== "echo-clean-person-record-search-v2" ||
-    !Array.isArray(response.items) ||
-    response.items.length > 10
-  ) {
-    throw new Error("record search response is invalid");
-  }
-  const items = response.items.map((value) => {
-    const item = asPlainRecord(value, "record search item is invalid");
-    exactKeys(
-      item,
-      ["atom_id", "record_sha256", "kind", "text", "policy_id"],
-      "record search item is invalid",
-    );
-    if (
-      typeof item.atom_id !== "string" ||
-      !/^sha256:[a-f0-9]{64}$/.test(item.atom_id) ||
-      typeof item.record_sha256 !== "string" ||
-      !/^sha256:[a-f0-9]{64}$/.test(item.record_sha256) ||
-      (item.kind !== "decision" &&
-        item.kind !== "action" &&
-        item.kind !== "rationale") ||
-      typeof item.text !== "string" ||
-      item.text.length === 0 ||
-      item.text !== item.text.normalize("NFC") ||
-      (item.policy_id !== "organization-member-readable-person-v2" &&
-        item.policy_id !== "restricted-reviewer-person-v2" &&
-        item.policy_id !== "project-members-readable-person-v1")
-    ) {
-      throw new Error("record search item is invalid");
-    }
-    return Object.freeze({
-      atom_id: item.atom_id as `sha256:${string}`,
-      record_sha256: item.record_sha256 as `sha256:${string}`,
-      kind: item.kind,
-      text: item.text,
-      policy_id: item.policy_id,
-    });
-  });
-  return Object.freeze({
-    schema_version: 2,
-    kind: "echo-clean-person-record-search-v2",
-    items: Object.freeze(items),
-  });
-}
-
-function validateEmployeeInvitation(value: unknown): EmployeeInvitationV1 {
-  const response = asPlainRecord(value, "employee invitation response is invalid");
-  exactKeys(response, ["login_grant", "expires_at"], "employee invitation response is invalid");
-  if (
-    typeof response.login_grant !== "string" ||
-    !/^[A-Za-z0-9_-]{43}$/.test(response.login_grant) ||
-    Buffer.from(response.login_grant, "base64url").length !== 32 ||
-    typeof response.expires_at !== "string" ||
-    !Number.isFinite(Date.parse(response.expires_at)) ||
-    new Date(Date.parse(response.expires_at)).toISOString() !== response.expires_at
-  ) {
-    throw new Error("employee invitation response is invalid");
-  }
-  return Object.freeze({
-    login_grant: response.login_grant,
-    expires_at: response.expires_at,
-  });
-}
-
-function validateEmployeeRoster(value: unknown): EmployeeRosterV1 {
-  const response = asPlainRecord(value, "employee roster response is invalid");
-  exactKeys(
-    response,
-    ["schema_version", "kind", "employees"],
-    "employee roster response is invalid",
-  );
-  if (
-    response.schema_version !== 1 ||
-    response.kind !== "echo-clean-person-employee-roster-v1" ||
-    !Array.isArray(response.employees)
-  ) {
-    throw new Error("employee roster response is invalid");
-  }
-  const employees = response.employees.map((value) => {
-    const employee = asPlainRecord(value, "employee roster item is invalid");
-    exactKeys(
-      employee,
-      ["email", "display_name", "membership_status", "invitation_state"],
-      "employee roster item is invalid",
-    );
-    if (
-      !isCanonicalPersonEmail(employee.email) ||
-      typeof employee.display_name !== "string" ||
-      employee.display_name.length < 1 ||
-      employee.display_name.length > 200 ||
-      employee.display_name !== employee.display_name.trim() ||
-      employee.display_name !== employee.display_name.normalize("NFC") ||
-      /[\u0000-\u001f\u007f]/.test(employee.display_name) ||
-      (employee.membership_status !== "active" && employee.membership_status !== "revoked") ||
-      (employee.invitation_state !== "pending" &&
-        employee.invitation_state !== "expired" &&
-        employee.invitation_state !== "redeemed" &&
-        employee.invitation_state !== "none")
-    ) {
-      throw new Error("employee roster item is invalid");
-    }
-    return Object.freeze({
-      email: employee.email,
-      display_name: employee.display_name,
-      membership_status: employee.membership_status,
-      invitation_state: employee.invitation_state,
-    }) as EmployeeRosterItemV1;
-  });
-  return Object.freeze({
-    schema_version: 1,
-    kind: "echo-clean-person-employee-roster-v1",
-    employees: Object.freeze(employees),
-  });
-}
-
-function employeeInviteRequest(value: unknown, includeName: boolean): Readonly<Record<string, string>> {
-  const request = asPlainRecord(value, "employee request is invalid");
-  exactKeys(request, includeName ? ["name", "email"] : ["email"], "employee request is invalid");
-  if (
-    typeof request.email !== "string" ||
-    (includeName
-      ? !isExpectedPersonEmail(request.email)
-      : !isCanonicalPersonEmail(request.email)) ||
-    (includeName && typeof request.name !== "string")
-  ) {
-    throw new Error("employee request is invalid");
-  }
-  return request as Readonly<Record<string, string>>;
 }
 
 interface JsonRequest {
@@ -871,7 +548,6 @@ export class PersonAuthorityClient {
         code,
         response.status,
         "Person Authority rejected the request",
-        { routeMatched: response.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5) },
       );
     }
     if (expectedStatus !== undefined && response.status !== expectedStatus) {
@@ -1336,8 +1012,7 @@ export class PersonAuthorityClient {
           ? PERSON_RECORDS_PATH_V1
           : `${PERSON_RECORDS_PATH_V1}?limit=${limit}`,
       access_token: accessToken,
-      validate_response: validatePersonRecordList,
-      headers: { "x-echo-person-record-version": "2" },
+      validate_response: validatePersonRecordListV1,
       maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
     });
   }
@@ -1353,8 +1028,8 @@ export class PersonAuthorityClient {
         query,
         ...(limit === undefined ? {} : { limit }),
       },
-      validate_request: validatePersonRecordSearchRequest,
-      validate_response: validatePersonRecordSearch,
+      validate_request: validatePersonRecordSearchRequestV2,
+      validate_response: validatePersonRecordSearchV2,
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
     });
@@ -1388,29 +1063,16 @@ export class PersonAuthorityClient {
     });
   }
 
-  /** A read of a route an older Authority lacks: its 404 is `not_supported`, with this message, never `not_found`. */
-  private async notSupportedOn404<T>(read: Promise<T>, message: string): Promise<T> {
-    try {
-      return await read;
-    } catch (error) {
-      if (error instanceof PersonAuthorityClientError && error.status === 404) throw new PersonAuthorityClientError("not_supported", 404, message);
-      throw error;
-    }
-  }
-
   /**
-   * Ask (`/v7`, the V8 answer, research tool contract v1): global by default, a supplied project ID is a strict
-   * project-only scope, and mine is only what the asker added. The answer may cite live tickets and pages, follow-ups,
-   * and the asker's projects, people, tools and tool containers, and must echo the requested scope. The request may
-   * carry the asker's previous turn (ADR-0047).
+   * Ask (`/v7`, the V8 answer, research tool contract v1): global by default, and a supplied project ID is a strict
+   * project-only scope. The answer may cite live tickets and pages, follow-ups, and the asker's projects, people, tools
+   * and tool containers, and must echo the requested scope. The request may carry the asker's previous turn (ADR-0047).
    */
-  askV7(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
-    return this.askRoute((async () => {
-      const response = await this.json({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
-        validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV8,
-        access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
-      return inAskScope(response, scope, previous);
-    })());
+  async askV7(accessToken: string, question: string, scope?: ProjectIdV1, signal?: AbortSignal, captureId?: PersonDiagnosticCaptureIdV1, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
+    const response = await this.json({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, captureId, previous), headers: askHeaders(),
+      validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV8,
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
+    return inAskScope(response, scope, previous);
   }
 
   /**
@@ -1421,37 +1083,20 @@ export class PersonAuthorityClient {
    * inside the stream is the error its JSON response would have had. The ask
    * timeout and the caller's signal bound the whole stream.
    */
-  askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | { readonly mine: true } | undefined, signal: AbortSignal | undefined,
+  async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
-    return this.askRoute((async () => {
-      const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
-      const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, undefined, previous), validate_request: validatePersonAnswerRequestV3,
-        access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
-      if (!isAskProgressStream(response)) {
-        const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
-        return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validatePersonAnswerResponseV8), scope, previous) });
-      }
-      const terminal = await readAskProgressStream(response, deadline, onProgress);
-      if (terminal.type === 'error') {
-        throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request', { routeMatched: true });
-      }
-      return Object.freeze({ result: inAskScope(terminal.response, scope, previous), receipt: terminal.receipt });
-    })());
-  }
-
-  /**
-   * An Ask on `/v7`, which answers every request it matches with its route header: a `not_found` 404 without it is an
-   * Authority with no `/v7`, `not_supported` here, never `not_found`. Any other failure is the Authority's own.
-   */
-  private async askRoute<T>(read: Promise<T>): Promise<T> {
-    try {
-      return await read;
-    } catch (error) {
-      if (error instanceof PersonAuthorityClientError && error.status === 404 && error.code === "not_found" && !error.routeMatched) {
-        throw new PersonAuthorityClientError("not_supported", 404, "This Authority has no /v7 Ask");
-      }
-      throw error;
+    const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
+    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, undefined, previous), validate_request: validatePersonAnswerRequestV3,
+      access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json`, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 } }, deadline);
+    if (!isAskProgressStream(response)) {
+      const value = await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
+      return Object.freeze({ result: inAskScope(validateSuccess(value, response.status, validatePersonAnswerResponseV8), scope, previous) });
     }
+    const terminal = await readAskProgressStream(response, deadline, onProgress);
+    if (terminal.type === 'error') {
+      throw new PersonAuthorityClientError(terminal.error.code, terminal.status, 'Person Authority rejected the request');
+    }
+    return Object.freeze({ result: inAskScope(terminal.response, scope, previous), receipt: terminal.receipt });
   }
 
   /** Prepares or reads an explicitly requested private capture on the ordinary product route. */
@@ -1487,30 +1132,21 @@ export class PersonAuthorityClient {
 
   /**
    * The Ask source check (Ask timeline v1, C1; ADR-0047): whether each source old answers cited is the same, changed, unreadable
-   * or unknown now, and no content. An Authority without the route answers 404, which is `not_supported` here, never `not_found`.
+   * or unknown now, and no content.
    */
   async askCheck(accessToken: string, value: PersonAskCheckRequestV1, signal?: AbortSignal): Promise<PersonAskCheckV1> {
     const request = validatePersonAskCheckRequestV1(value);
-    return this.notSupportedOn404(this.json({
+    return this.json({
       path: PERSON_ASK_CHECK_PATH_V1, body: request, validate_request: validatePersonAskCheckRequestV1,
       validate_response: response => validatePersonAskCheckV1(response, request), access_token: accessToken,
       maximum_request_bytes: PERSON_ASK_CHECK_LIMITS_V1.body_bytes, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_CHECK_TIMEOUT_MS, signal,
-    }), "This Authority has no Ask source check");
+    });
   }
 
-  evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.evidenceDesk(PERSON_EVIDENCE_SEARCH_PATH_V1, validatePersonEvidenceSearchRequestV1, accessToken, value, signal);
-  }
-
-  evidenceOpen(accessToken: string, value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    return this.evidenceDesk(PERSON_EVIDENCE_OPEN_PATH_V1, validatePersonEvidenceOpenRequestV1, accessToken, value, signal);
-  }
-
-  private async evidenceDesk<T extends { readonly project_id?: string }>(path: string, validate_request: (value: unknown) => T, accessToken: string,
-    value: T, signal: AbortSignal | undefined): Promise<PersonEvidenceDeskV1> {
-    const request = validate_request(value);
-    const response = await this.json({ path, body: request,
-      validate_request, validate_response: validatePersonEvidenceDeskResponseV1,
+  async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
+    const request = validatePersonEvidenceSearchRequestV1(value);
+    const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
+      validate_request: validatePersonEvidenceSearchRequestV1, validate_response: validatePersonEvidenceDeskResponseV1,
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
     const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');
@@ -1523,12 +1159,10 @@ export class PersonAuthorityClient {
     const response = await this.json({ path: PERSON_LIST_PATH_V1, body: request,
       validate_request: validatePersonListRequestV1, validate_response: validatePersonListResponseV1,
       access_token: accessToken, maximum_response_bytes: PERSON_LIST_RESPONSE_MAX_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal });
-    const expectedScope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id }
-      : request.mine === true ? { kind: 'mine' } : request.only_me === true ? { kind: 'only_me' } : { kind: 'global' };
+    const expectedScope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : { kind: 'only_me' };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different list scope');
-    // Global page 1 carries me; project page 1 carries project; mine, only_me and cursor pages carry no header.
-    const hasHeader = response.me !== undefined || response.project !== undefined;
-    if (hasHeader !== (request.cursor === undefined && (expectedScope.kind === 'global' || expectedScope.kind === 'project'))) {
+    // Project page 1 carries project; only_me and cursor pages carry no header.
+    if ((response.project !== undefined) !== (request.cursor === undefined && expectedScope.kind === 'project')) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a list header on the wrong page');
     }
     return response;
@@ -1609,7 +1243,7 @@ export class PersonAuthorityClient {
     return this.getJson({
       path: PERSON_EMPLOYEES_PATH_V1,
       access_token: accessToken,
-      validate_response: validateEmployeeRoster,
+      validate_response: validateEmployeeRosterV1,
       maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
     });
   }
@@ -1621,8 +1255,8 @@ export class PersonAuthorityClient {
     return this.json({
       path: PERSON_EMPLOYEES_PATH_V1,
       body: input,
-      validate_request: (value) => employeeInviteRequest(value, true),
-      validate_response: validateEmployeeInvitation,
+      validate_request: (value) => validateEmployeeRequestV1(value, true),
+      validate_response: validateEmployeeInvitationV1,
       access_token: accessToken,
     });
   }
@@ -1634,8 +1268,8 @@ export class PersonAuthorityClient {
     return this.json({
       path: PERSON_EMPLOYEES_PATH_V1,
       body: input,
-      validate_request: (value) => employeeInviteRequest(value, false),
-      validate_response: validateEmployeeInvitation,
+      validate_request: (value) => validateEmployeeRequestV1(value, false),
+      validate_response: validateEmployeeInvitationV1,
       access_token: accessToken,
       method: "PUT",
     });
@@ -1645,7 +1279,7 @@ export class PersonAuthorityClient {
     return this.noContent({
       path: PERSON_EMPLOYEES_PATH_V1,
       body: input,
-      validate_request: (value) => employeeInviteRequest(value, false),
+      validate_request: (value) => validateEmployeeRequestV1(value, false),
       access_token: accessToken,
       method: "DELETE",
     });

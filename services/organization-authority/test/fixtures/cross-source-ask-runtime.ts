@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { expect, vi } from 'vitest';
 import { canonicalJson, canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import type Database from 'better-sqlite3';
-import { derivedAtomIdentity } from '@echo-brain/organization-record/application/atom-identity';
+import { derivedAtomIdentity } from '../../../../packages/organization-record/src/application/atom-identity.js';
 import { storableImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -49,7 +49,7 @@ export async function crossSourceAuthorityFixture(owned: string[]) {
 }
 
 /** The runtime's Authority database, as the proofs read its audit rows. */
-export interface CrossSourceAuthorityDatabaseV1 {
+interface CrossSourceAuthorityDatabaseV1 {
   prepare(sql: string): { all(...parameters: unknown[]): unknown[]; get(...parameters: unknown[]): unknown };
   close(): void;
 }
@@ -157,15 +157,16 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
       db.transaction(() => {
         const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?").pluck().get(guard) as string;
         db.exec(`DROP TRIGGER ${guard}`);
-        runs.enqueueApprovedRecord(db, { approval_id: 'cross-source-public', proposal_approval_id: 'cross-source-public', record_sha256, reviewer: owner, decided_at: new Date().toISOString() });
+        runs.enqueueApprovedRecord(db, { approval_id: seeded.approved_approval_id, proposal_approval_id: 'cross-source-public', record_sha256, reviewer: owner, decided_at: new Date().toISOString() });
         db.exec(sql);
       })();
     }
     const run = runs.impactRunsFor([record_sha256])[0]!;
     const claim = runs.claim(owner, run.run_id, 60_000);
     if (claim.kind !== 'claimed') throw new Error(`The impact check was not claimed: ${claim.kind}`);
-    const decision = { citation: { kind: 'approved_record' as const, atom_id: derivedAtomIdentity(record_sha256, 'd1') as Sha256Digest, record_sha256, policy_id: 'organization-member-readable-person-v2' as const },
-      kind: 'decision' as const, label: 'Launchscope', visibility: 'team' as const };
+    // The seeded record is the owner's own (Only me).
+    const decision = { citation: { kind: 'approved_record' as const, atom_id: derivedAtomIdentity(record_sha256, 'd1') as Sha256Digest, record_sha256, policy_id: 'restricted-reviewer-person-v2' as const },
+      kind: 'decision' as const, label: 'Launchscope', visibility: 'approver_only' as const };
     const card = storableImpactCardV1({ status: 'assessed', decided: [{ text: 'Launchscope rolls out to the pilot group first.', citation_index: 0 }], affected: [], unconfirmed: [], people: [], citations: [decision] }, []);
     const pointer = { kind: 'meeting_action', record_sha256, signal_id: 'a1' };
     const finished = runs.finish(run.run_id, claim.lease_token, { json: canonicalJson(card), sha256: canonicalSha256(card) }, transaction => items.insertForRun(transaction, run, [{

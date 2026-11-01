@@ -16,7 +16,7 @@ export interface JiraCloudTransportV1 {
   request(input: JiraCloudRequestV1): Promise<unknown>;
 }
 
-export type JiraCloudAuthenticatedFetchV1 = PersonProviderAuthenticatedFetchV1;
+type JiraCloudAuthenticatedFetchV1 = PersonProviderAuthenticatedFetchV1;
 
 export const JIRA_RESPONSE_MAX_BYTES_V1 = PERSON_PROVIDER_RESPONSE_MAX_BYTES_V1;
 /** The longest keyword, in UTF-8 bytes, the project search is sent. */

@@ -13,8 +13,7 @@ import ts from 'typescript';
 //
 // This collector is an architecture guard over reviewed source, not a hostile
 // JavaScript sandbox: generated code and arbitrarily constructed property names
-// are outside its proof boundary. Ceremony callers separately require these
-// sources to equal a named Git commit byte-for-byte and hash the reviewed list.
+// are outside its proof boundary.
 const LOADER_NAMES = new Set([
   'require',
   'module',
@@ -258,7 +257,7 @@ function isLoaderReference(node) {
   return node.text === 'require' ? !isRequireNamePosition(node) : true;
 }
 
-export function collectModuleReferences(sourceFile, { includeTypeQueries = false } = {}) {
+export function collectModuleReferences(sourceFile) {
   const references = [];
 
   // CommonJS supplies `require` and `module.require` as ambient capabilities,
@@ -328,19 +327,17 @@ export function collectModuleReferences(sourceFile, { includeTypeQueries = false
     ts.forEachChild(node, visit);
   }
 
-  if (includeTypeQueries) {
-    const types = node => {
-      if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
-        record(node, node.argument.literal, 'import-type');
-      }
-      if (ts.isImportEqualsDeclaration(node) && node.isTypeOnly &&
-          ts.isExternalModuleReference(node.moduleReference) && node.moduleReference.expression) {
-        record(node, node.moduleReference.expression, 'import-type');
-      }
-      ts.forEachChild(node, types);
-    };
-    types(sourceFile);
-  }
+  const types = node => {
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      record(node, node.argument.literal, 'import-type');
+    }
+    if (ts.isImportEqualsDeclaration(node) && node.isTypeOnly &&
+        ts.isExternalModuleReference(node.moduleReference) && node.moduleReference.expression) {
+      record(node, node.moduleReference.expression, 'import-type');
+    }
+    ts.forEachChild(node, types);
+  };
+  types(sourceFile);
   visit(sourceFile);
   return references;
 }

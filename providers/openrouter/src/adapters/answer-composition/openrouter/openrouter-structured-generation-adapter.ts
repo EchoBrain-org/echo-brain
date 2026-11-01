@@ -10,23 +10,23 @@ import {
   type StructuredGenerationUsageV1,
 } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 
-export const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
+const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
 
-export type OpenRouterFailureClass = StructuredGenerationFailureClassV1;
+type OpenRouterFailureClass = StructuredGenerationFailureClassV1;
 
-export type OpenRouterFinishReason =
+type OpenRouterFinishReason =
   "stop" | "length" | "content_filter" | "error" | "other";
 
 /**
  * Closed, safe-to-record failure metadata. It excludes request and response
  * content, provider error text, credentials, prompts, and reasoning.
  */
-export interface OpenRouterFailureDiagnostic extends StructuredGenerationFailureDiagnosticV1 {
+interface OpenRouterFailureDiagnostic extends StructuredGenerationFailureDiagnosticV1 {
   readonly adapter_id: "openrouter";
   readonly adapter_request_id: string | null;
 }
 
-export interface OpenRouterFailureGenerationObservation {
+interface OpenRouterFailureGenerationObservation {
   readonly usage: StructuredGenerationUsageV1;
   readonly provider_latency_ms: number | null;
   /** The upstream host that served the call, from a closed vocabulary ("other" when unlisted). */
@@ -36,41 +36,19 @@ export interface OpenRouterFailureGenerationObservation {
 }
 
 /** A successful call's observation, with the same routing identity as a failure's. */
-export interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 {
+interface OpenRouterObservedResult extends StructuredGenerationObservedResultV1 {
   readonly upstream_provider: string | null;
   readonly generation_id: string | null;
 }
 
 /**
- * ADR-0037: upstream hosts that garbled this model's output in the 2026-09-30
- * per-host replay, even at temperature 0. Slugs, as provider.ignore takes them;
- * the evidence is per model, so the list is too.
+ * Claude Sonnet 5.5 requires reasoning and does not advertise temperature
+ * support (ADR-0037). Medium effort shares the completion budget with the
+ * visible JSON. Reserve 4,096 extra tokens even for small background calls, at
+ * most 8,192 combined. This is headroom, not a separate provider-enforced
+ * reasoning-token budget.
  */
-const OPENROUTER_IGNORED_PROVIDERS_BY_MODEL: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  "deepseek/deepseek-v3.2": Object.freeze(["friendli", "atlas-cloud"]),
-});
-
-const CLAUDE_SONNET_5_5_MODEL = "anthropic/claude-sonnet-5.5";
-
-/**
- * Sonnet 5.5 requires reasoning and does not advertise temperature support.
- * Medium effort shares the completion budget with the visible JSON. Reserve
- * 4,096 extra tokens even for small background calls, at most 8,192 combined.
- * This is headroom, not a separate provider-enforced reasoning-token budget.
- * Other models retain the byte-for-byte legacy sampling and output settings.
- */
-function modelRequestCompatibility(input: StructuredGenerationInput): Readonly<Record<string, unknown>> {
-  return input.model === CLAUDE_SONNET_5_5_MODEL
-    ? Object.freeze({
-        max_tokens: input.max_output_tokens + 4_096,
-        reasoning: Object.freeze({ effort: "medium" }),
-      })
-    : Object.freeze({
-        max_tokens: input.max_output_tokens,
-        // ADR-0037: structured protocol output; sampling only adds variance.
-        temperature: 0,
-      });
-}
+const REASONING_HEADROOM_TOKENS = 4_096;
 
 /**
  * Upstream host display names recorded as themselves: the hosts OpenRouter
@@ -102,38 +80,17 @@ export class OpenRouterStructuredGenerationError extends Error implements Struct
   }
 }
 
-export interface OpenRouterStructuredGenerationOptions {
+interface OpenRouterStructuredGenerationOptions {
   readonly credential_ref: string;
   readonly credential_resolver: (reference: string) => string | undefined;
   readonly fetch_impl?: typeof fetch;
-  readonly endpoint?: string;
   readonly now_ms?: () => number;
 }
 
+const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
+
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function endpoint(value: string | undefined): string {
-  const selected = value ?? "https://openrouter.ai/api/v1/chat/completions";
-  let parsed: URL;
-  try {
-    parsed = new URL(selected);
-  } catch {
-    throw new OpenRouterStructuredGenerationError(
-      "OpenRouter endpoint is invalid",
-    );
-  }
-  if (
-    parsed.protocol !== "https:" ||
-    parsed.username !== "" ||
-    parsed.password !== ""
-  ) {
-    throw new OpenRouterStructuredGenerationError(
-      "OpenRouter endpoint is invalid",
-    );
-  }
-  return parsed.toString();
 }
 
 function model(value: string): void {
@@ -344,7 +301,6 @@ export function createOpenRouterStructuredGenerationAdapter(
       "OpenRouter credential reference is invalid",
     );
   }
-  const url = endpoint(options.endpoint);
   const fetchImpl = options.fetch_impl ?? fetch;
   const nowMs = options.now_ms ?? (() => performance.now());
   async function generateWithObservation(input: StructuredGenerationInput): Promise<OpenRouterObservedResult> {
@@ -382,7 +338,6 @@ export function createOpenRouterStructuredGenerationAdapter(
     const timeoutSignal = AbortSignal.timeout(input.timeout_ms);
     const signals: AbortSignal[] = [timeoutSignal];
     if (input.signal !== undefined) signals.push(input.signal);
-    const ignored = OPENROUTER_IGNORED_PROVIDERS_BY_MODEL[input.model];
     const request: RequestInit = {
       method: "POST",
       headers: {
@@ -399,13 +354,14 @@ export function createOpenRouterStructuredGenerationAdapter(
           { role: "user", content: input.user_prompt },
         ],
         stream: false,
-        ...modelRequestCompatibility(input),
+        max_tokens: input.max_output_tokens + REASONING_HEADROOM_TOKENS,
+        reasoning: { effort: "medium" },
         response_format: {
           type: "json_schema",
           json_schema: {
             name: "echo_layer4",
             strict: true,
-            schema: input.model === CLAUDE_SONNET_5_5_MODEL ? claudeStructuredSchema(input.schema) : input.schema,
+            schema: claudeStructuredSchema(input.schema),
           },
         },
         provider: {
@@ -415,7 +371,6 @@ export function createOpenRouterStructuredGenerationAdapter(
           // deadline, and OpenRouter's default price-weighted routing picked
           // slow providers; route to the fastest provider that qualifies.
           sort: "throughput",
-          ...(ignored === undefined ? {} : { ignore: ignored }),
         },
       }),
     };
@@ -423,7 +378,7 @@ export function createOpenRouterStructuredGenerationAdapter(
     const providerStartedAt = safeNow(nowMs);
     let response: Response;
     try {
-      response = await fetchImpl(url, request);
+      response = await fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, request);
     } catch (error) {
       fail("OpenRouter request failed", {
         // The call's own timeout can surface as an AbortError through

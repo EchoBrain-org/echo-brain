@@ -4,6 +4,7 @@ import {
 import type { PersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
+import type { AgenticAskAuditRequestContextV1 } from '../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js';
 import type { PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { samePersonV1 } from '../application/person-release-authorization-v1.js';
 import type { PersonAnswerHttpInputV1, PersonAnswerV7HttpApplication } from '../presentation/person-live-answer-http-application.js';
@@ -17,23 +18,13 @@ import { createPersonWorkspaceEvidenceSourcesV1, type PersonWorkspaceSourcesV1 }
 
 export interface CreatePersonLiveAnswerRouteOptionsV1 extends CreatePersonAnswerV3RouteOptions {
   readonly live_sources?: readonly PersonLiveConnectorSourceV1[];
-  /** ECHO's shared follow-ups (ADR-0040). A desk binds them only for an answer that can cite them, outside Mine. */
+  /** ECHO's shared follow-ups (ADR-0040). A desk binds them only for an answer that can cite them. */
   readonly follow_ups?: PersonFollowUpsSourcesV1;
   /**
    * The asker's projects, people and tools (research tool contract v1). A desk binds them only for an answer that can
-   * cite them, outside Mine.
+   * cite them.
    */
   readonly workspace?: PersonWorkspaceSourcesV1;
-}
-
-export interface PersonLiveRequestContextV1 {
-  readonly authority_id: string;
-  readonly organization_id: string;
-  readonly state_lineage_id: string;
-  readonly principal_id: string;
-  readonly membership_id: string;
-  readonly session_family_id: string;
-  readonly request_id: string;
 }
 
 /**
@@ -57,7 +48,7 @@ export async function bindPersonLiveEvidenceDeskV1(
      */
     readonly exclude?: PersonEvidenceDeskExclusionsV1;
   },
-  context: PersonLiveRequestContextV1,
+  context: AgenticAskAuditRequestContextV1,
 ) {
   const { scope } = input;
   // One release witness for the request's live sources: two sources on one connection (a tool's items and its containers)
@@ -68,7 +59,7 @@ export async function bindPersonLiveEvidenceDeskV1(
   // the request's failure, exactly as when they bound one after another.
   const settled = await Promise.allSettled(compatible.map(selected =>
     observePersonLiveEvidenceV1('evidence_connection', selected.descriptor.kind, async (): Promise<RegisteredPersonLiveEvidenceSourceV2 | undefined> => {
-      if (scope.kind === 'mine' || !selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return undefined; }
+      if (!selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return undefined; }
       const source = await selected.application.source({
         ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}),
         access_token: input.access_token, audit: liveAudit,
@@ -91,14 +82,13 @@ export async function bindPersonLiveEvidenceDeskV1(
 
 /**
  * The follow-ups this request's desk binds (ADR-0040): for an answer that can
- * cite them, in a global or project scope, as the authenticated asker. Mine
- * reads only what the asker added, so it never binds them.
+ * cite them, in its global or project scope, as the authenticated asker.
  */
-function followUpsFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Parameters<typeof bindPersonLiveEvidenceDeskV1>[2], context: PersonLiveRequestContextV1) {
+function followUpsFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Parameters<typeof bindPersonLiveEvidenceDeskV1>[2], context: AgenticAskAuditRequestContextV1) {
   const sources = options.follow_ups;
   const { scope } = input;
   // A desk with exclusions binds none: a follow-up could name an excluded record.
-  if (sources === undefined || input.ask !== true || scope.kind === 'mine' || input.exclude !== undefined) return undefined;
+  if (sources === undefined || input.ask !== true || input.exclude !== undefined) return undefined;
   const authenticate = () => options.sessions.authenticateAccess({ access_token: input.access_token });
   const asker = authenticate();
   if (!samePersonV1(asker, context)) throw new AuthorityOperationError('stale_access_state', 'Follow-ups belong to another person');
@@ -108,13 +98,13 @@ function followUpsFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Para
 }
 
 /**
- * The workspace this request's desk binds (research tool contract v1): for an answer that can cite it, in a global or
- * project scope, as the authenticated asker. Mine reads only what the asker added, so it never binds it.
+ * The workspace this request's desk binds (research tool contract v1): for an answer that can cite it, in its global or
+ * project scope, as the authenticated asker.
  */
-function workspaceFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Parameters<typeof bindPersonLiveEvidenceDeskV1>[2], context: PersonLiveRequestContextV1) {
+function workspaceFor(options: CreatePersonLiveAnswerRouteOptionsV1, input: Parameters<typeof bindPersonLiveEvidenceDeskV1>[2], context: AgenticAskAuditRequestContextV1) {
   const sources = options.workspace;
   const { scope } = input;
-  if (sources === undefined || input.ask !== true || scope.kind === 'mine' || input.exclude !== undefined) return undefined;
+  if (sources === undefined || input.ask !== true || input.exclude !== undefined) return undefined;
   const authenticate = () => options.sessions.authenticateAccess({ access_token: input.access_token });
   const asker = authenticate();
   if (!samePersonV1(asker, context)) throw new AuthorityOperationError('stale_access_state', 'The workspace belongs to another person');

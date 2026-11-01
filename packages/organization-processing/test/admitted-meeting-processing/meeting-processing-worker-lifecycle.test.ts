@@ -1,16 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  MEETING_PROCESSING_WORKER_PHASES_V1,
   MeetingProcessingWorkerLifecycleV1,
   type MeetingProcessingWorkerTelemetryEventV1,
 } from "../../src/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
 import { AdapterError } from "../../src/core/contracts/adapter.js";
 
 describe("admitted processing worker lifecycle", () => {
-  it("freezes the exported worker-phase allowlist at runtime", () => {
-    expect(Object.isFrozen(MEETING_PROCESSING_WORKER_PHASES_V1)).toBe(true);
-  });
-
   it("emits only closed lifecycle fields and keeps failure contents out", async () => {
     const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
     let now = 1_000;

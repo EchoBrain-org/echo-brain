@@ -51,6 +51,7 @@ import { createPersonRecordSearchRouteV1, personMeetingReleaseOptionsV1 } from "
 import { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
 import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
+import { AUTHORITY_RECORD_INPUT_CODECS_V1 } from "./authority-record-protocols-v1.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
@@ -71,22 +72,6 @@ import type {
   PersonExternalIdentityRuntimeBundleV1,
   OpenedPersonExternalIdentityRuntimeV1,
 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
-
-/**
- * The runs API on an Authority with no answer model: every operation,
- * open items included, authenticates the caller and then answers unavailable.
- */
-export function unavailablePersonTriggerRunsV1(sessions: { authenticateAccess(input: { readonly access_token: string }): unknown }): PersonTriggerRunsHttpApplicationV1 {
-  const unavailable = async (input: { readonly access_token: string }): Promise<never> => {
-    sessions.authenticateAccess({ access_token: input.access_token });
-    throw new AuthorityOperationError('unavailable', 'an answer model is not configured');
-  };
-  return Object.freeze({
-    list: unavailable, start: unavailable, retry: unavailable, view: unavailable,
-    home: unavailable, items: unavailable, item: unavailable, send: unavailable, set_state: unavailable, assign: unavailable, sweep: unavailable,
-    close() {},
-  });
-}
 
 export interface OrganizationAuthorityApiRuntimeConfig {
   readonly state_directory: string;
@@ -110,7 +95,7 @@ export interface PersonHttpRuntimeResourcesV1 {
   readonly record: import('better-sqlite3').Database;
   readonly coordinates: { readonly authority_id: string; readonly organization_id: string; readonly state_lineage_id: string };
 }
-export interface PersonHttpRuntimeV1 {
+interface PersonHttpRuntimeV1 {
   readonly applications: readonly ProviderHttpApplicationV1[];
   readonly processing?: import('./organization-authority-service-lifecycle.js').OrganizationAuthorityProcessingCycleV1;
   tools?(token: string): Promise<readonly import('@echo-brain/organization-api').OrganizationPersonToolV4[]>;
@@ -135,15 +120,15 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly record_approver?: RecordApproverProjectorV1;
   /**
    * The record codecs the Authority appends with. Ask's evidence desk reads
-   * approved records through them; without them only human-act records parse.
+   * approved records through them; without them the Authority's own list is used.
    */
   readonly record_input_codecs?: import("@echo-brain/organization-protocol").RecordInputCodecRegistryV4;
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
   readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
-  /** Always bound by `openOrganizationAuthorityRuntime`; only tests that serve no Ask omit it. */
-  readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
+  /** Always bound by `openOrganizationAuthorityRuntime`. */
+  readonly answer_composition_generation: AnswerCompositionGenerationBindingV1;
   /** Background-priority model port for trigger and sweep research; they use the Ask port when absent. */
   readonly answer_composition_background?: AnswerCompositionGenerationBindingV1["structured_output"];
 }
@@ -180,7 +165,7 @@ export interface RunningOrganizationAuthorityApiRuntime {
  */
 export async function startOrganizationAuthorityApiRuntime(
   config: OrganizationAuthorityApiRuntimeConfig,
-  dependencies: OrganizationAuthorityApiRuntimeDependencies = {},
+  dependencies: OrganizationAuthorityApiRuntimeDependencies,
 ): Promise<RunningOrganizationAuthorityApiRuntime> {
   if (
     !Number.isSafeInteger(config.port) ||
@@ -316,7 +301,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const captureProjects = createRecordProjectAuthorizationV1(projectRepository);
     const originals = new SqlitePersonOriginalContextRetrievalV1(database, sessions, metadata.organization_id);
     const recordSearch = createPersonRecordSearchRouteV1({
-      ...(dependencies.record_input_codecs === undefined ? {} : { record_input_codecs: dependencies.record_input_codecs }),
+      record_input_codecs: dependencies.record_input_codecs ?? AUTHORITY_RECORD_INPUT_CODECS_V1,
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
       organization_id: metadata.organization_id,
@@ -327,7 +312,7 @@ export async function startOrganizationAuthorityApiRuntime(
       record: recordDatabase,
       audit: readAudit,
       capture_projects: captureProjects,
-      // Mine needs the approver; the person list names it.
+      // The person list and open name a meeting's approver.
       ...personMeetingReleaseOptionsV1({
         record_approver: dependencies.record_approver,
         memberships,
@@ -343,9 +328,9 @@ export async function startOrganizationAuthorityApiRuntime(
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
       on_failure: event => console.error(JSON.stringify(event)),
     });
-    diagnostics = dependencies.answer_composition_generation === undefined && personHttp?.attachDiagnostics === undefined ? undefined : createPersonDiagnosticsV1({ sessions });
-    if (diagnostics !== undefined) personHttp?.attachDiagnostics?.(diagnostics);
-    const answerOptions = dependencies.answer_composition_generation === undefined ? undefined : {
+    diagnostics = createPersonDiagnosticsV1({ sessions });
+    personHttp?.attachDiagnostics?.(diagnostics);
+    const answerOptions = {
       authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id,
       sessions, originals, records: recordSearch,
       memberships,
@@ -354,7 +339,7 @@ export async function startOrganizationAuthorityApiRuntime(
       ...(dependencies.answer_composition_generation.personal_research === undefined ? {} : { personal_research: dependencies.answer_composition_generation.personal_research }),
       ...(dependencies.answer_composition_generation.research_driver === undefined ? {} : { research_driver: dependencies.answer_composition_generation.research_driver }),
       audit: new SqlitePersonAgenticAskAuditV1(database),
-      ...(diagnostics === undefined ? {} : { diagnostics }),
+      diagnostics,
     };
     const items = new SqliteImpactItemsV1(database);
     const people = new SqliteOpenItemPeopleV1(database);
@@ -379,28 +364,26 @@ export async function startOrganizationAuthorityApiRuntime(
       authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
       repository: projectRepository,
     });
-    const runs = answerOptions === undefined ? undefined : new SqliteTriggerRunsV1(database);
+    const runs = new SqliteTriggerRunsV1(database);
     // Ask's V8 answer reads ECHO's shared follow-ups as Home shows them (ADR-0040), and the asker's projects, people and
     // tools as the project pages and the tools page show them (research tool contract v1), each release audited without
     // content.
-    const followUps = runs === undefined ? undefined : { runs, items, people, records: recordSearch };
+    const followUps = { runs, items, people, records: recordSearch };
     const workspace = { projects: projectContext, grants: personWorkspaceGrantsV1(projectRepository), people, tools: personTools };
     // The staging research evaluation asks a question as `/v7` does, on the same sources.
-    const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 && answerOptions !== undefined
-      ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources, ...(followUps === undefined ? {} : { follow_ups: followUps }), workspace })
+    const researchEval = dependencies.research_eval_v1 === true && config.authority_url === STAGING_AUTHORITY_ORIGIN_V1
+      ? createPersonResearchEvalV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace })
       : undefined;
-    const triggerRuns: PersonTriggerRunsHttpApplicationV1 = answerOptions === undefined || runs === undefined ? unavailablePersonTriggerRunsV1(sessions) : (() => {
-      // Ticket assignees match impact owners only when a live connector that reads them is configured.
-      const owners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
-      return Object.freeze({
-        ...createPersonTriggerRunsV1({
-          runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources,
-          research: ({ desk, context }) => createAgenticResearchV1({ ...(dependencies.research_background_driver === undefined ? {} : { research_driver: dependencies.research_background_driver }), desk, model: dependencies.answer_composition_background ?? answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context) }),
-          items, people, ...(owners === undefined ? {} : { owners }),
-        }),
-        ...createPersonOpenItemsV1({ sessions, runs, items, people, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources }),
-      });
-    })();
+    // Ticket assignees match impact owners only when a live connector that reads them is configured.
+    const owners = liveConnectors.find(({ runtime }) => runtime.owners !== undefined)?.runtime.owners;
+    const triggerRuns: PersonTriggerRunsHttpApplicationV1 = Object.freeze({
+      ...createPersonTriggerRunsV1({
+        runs, sessions, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources,
+        research: ({ desk, context }) => createAgenticResearchV1({ ...(dependencies.research_background_driver === undefined ? {} : { research_driver: dependencies.research_background_driver }), desk, model: dependencies.answer_composition_background ?? answerOptions.model, generation: answerOptions.generation, audit: answerOptions.audit.forRequest(context) }),
+        items, people, ...(owners === undefined ? {} : { owners }),
+      }),
+      ...createPersonOpenItemsV1({ sessions, runs, items, people, records: recordSearch, bindDesk: bindPersonLiveEvidenceDeskV1, bind_options: answerOptions, live_sources: liveSources }),
+    });
     let closing = false;
     const server = createOrganizationAuthorityHttpServer({
       is_closing: () => closing,
@@ -430,22 +413,16 @@ export async function startOrganizationAuthorityApiRuntime(
       person_list: createPersonListRouteV1({
         organization_id: metadata.organization_id,
         sessions,
-        tools: personTools,
         directory: new SqlitePersonListDirectoryV1(database),
         originals: originalItems,
         meetings: recordSearch,
       }),
-      // Agentic Ask is the only Ask (ADR-0022), on `/v7`; it and the evidence desk need the bound answer model.
-      ...(answerOptions === undefined ? {} : {
-        person_answer_v3: createPersonAnswerV3Route(answerOptions),
-        // Without the follow-up sources the V8 desk would bind none, so the Ask needs them. The request catalog contains
-        // local context even when no external source is configured.
-        ...(followUps === undefined ? {} : {
-          person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }),
-        }),
-      }),
+      // Agentic Ask is the only Ask (ADR-0022), on `/v7`, beside the evidence desk. The request catalog contains local
+      // context even when no external source is configured.
+      person_answer_v3: createPersonAnswerV3Route(answerOptions),
+      person_answer_v7: createPersonLiveAnswerRouteV1({ ...answerOptions, live_sources: liveSources, follow_ups: followUps, workspace }),
       ...(researchEval === undefined ? {} : { person_research_eval: researchEval }),
-      ...(diagnostics === undefined ? {} : { person_diagnostics: diagnostics }),
+      person_diagnostics: diagnostics,
       person_trigger_runs: triggerRuns,
       person_ask_check: askCheck,
       person_changes: personChanges,
@@ -490,7 +467,7 @@ export async function startOrganizationAuthorityApiRuntime(
       close: async () => {
         stopAcceptingRequests();
         researchEval?.close();
-        triggerRuns?.close();
+        triggerRuns.close();
         diagnostics?.close();
         await Promise.all([serverClosed, documentWorker?.close()]);
         for (const { runtime } of [...liveConnectors].reverse()) runtime.close();

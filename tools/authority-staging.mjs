@@ -11,7 +11,6 @@
  */
 
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, statSync } from "node:fs";
 import process from "node:process";
 import { dirname, resolve } from "node:path";
@@ -22,7 +21,7 @@ import {
   installStagingEdgeToken,
   stagingEdgeStatus,
 } from "./authority-staging-edge.mjs";
-import { awsCliArguments, sanitizedAwsEnvironment } from "./lib/operator-io.mjs";
+import { awsCliArguments, sanitizedAwsEnvironment, sha256 as sha256Hex } from "./lib/operator-io.mjs";
 
 const STACK_NAME = /^[A-Za-z][A-Za-z0-9-]{0,127}$/;
 const OPERATION_ID = /^staging-[a-z0-9][a-z0-9-]{7,63}$/;
@@ -280,7 +279,7 @@ function checkedTemplate(templatePath = DEFAULT_TEMPLATE_PATH) {
   }
   return Object.freeze({
     path: templatePath,
-    sha256: createHash("sha256").update(body, "utf8").digest("hex"),
+    sha256: sha256Hex(body),
   });
 }
 
@@ -1888,9 +1887,7 @@ function changeSetDescription(
   const edgeBindingSuffix =
     edgePlanBinding === undefined
       ? ""
-      : `-edge-${createHash("sha256")
-          .update(JSON.stringify(edgePlanBinding), "utf8")
-          .digest("hex")}`;
+      : `-edge-${sha256Hex(JSON.stringify(edgePlanBinding))}`;
   return `echo-authority-staging-template-${templateSha256}-${changeSetType}${edgeBindingSuffix}`;
 }
 
@@ -2468,9 +2465,7 @@ export function createAwsCliAdapters() {
           if (error instanceof AwsCliError) throw error;
           throw new AwsCliError("bundle_source_unreadable");
         }
-        const calculated = createHash("sha256")
-          .update(readFileSync(sourcePath))
-          .digest("hex");
+        const calculated = sha256Hex(readFileSync(sourcePath));
         if (sha256 !== undefined && sha256 !== calculated)
           throw new AwsCliError("bundle_source_checksum_mismatch");
         const result = await awsJson([

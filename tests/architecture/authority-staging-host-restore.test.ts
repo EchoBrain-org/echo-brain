@@ -1,4 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
@@ -24,15 +25,6 @@ function restoreScript(): string {
 }
 
 describe("Authority retained-host restore", () => {
-  it("keeps blank materialization a safe no-op but refuses a resume without an accepted tuple", () => {
-    const script = restoreScript();
-
-    expect(() => execFileSync("bash", ["-n", RESTORER])).not.toThrow();
-    expect(script).toContain(
-      "but resume is refused. A partial, candidate, symlinked, permission-unsafe, or",
-    );
-  });
-
   it("executes blank materialization successfully but exits through the classified resume refusal", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-retained-host-restore-"));
     const deploy = join(root, "deploy");
@@ -124,7 +116,6 @@ describe("Authority retained-host restore", () => {
     expect(script).toContain("active retained runtime profile differs from the accepted release tuple");
     expect(script).toContain("deployment runtime file drifts from the accepted retained tuple");
     expect(script).toContain('"$ONBOARD_TOOL" resume');
-    expect(script).toContain('"$ONBOARD_TOOL" status');
     expect(script).toContain("terminal_green=true");
   });
 
@@ -155,6 +146,44 @@ fi
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("terminal_green=true");
       expect(() => readFileSync(join(root, ".staging-release-guard", "owner-pid"))).toThrow();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("restores a selected staging connector profile from its digest alone, without the retired rehearsal sidecar", () => {
+    const recovery = /^require_staging_connector_rehearsal_recovery_state\(\) \{\n.*?<<'PY'\n(.*?\n)PY\n/ms.exec(restoreScript());
+    expect(recovery).not.toBeNull();
+    const root = mkdtempSync(join(tmpdir(), "echo-restore-connector-profile-"));
+    try {
+      const sorted = (value: unknown): unknown => value === null || typeof value !== "object" ? value
+        : Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : 1).map(([key, child]) => [key, sorted(child)]));
+      const canonical = JSON.stringify(sorted({
+        schema_version: 3, kind: "echo-staging-connector-rehearsal-profile-v3", read_policy: "initial-owner-jira-pointer-v3",
+        jira: { cloud_id: "11111111-1111-4111-8111-111111111111", integration_key: "jira", project: "ECHO" },
+      }));
+      const digest = `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+      const environment = join(root, "runtime.env");
+      const setup = join(root, "onboard-clean-v1.conf");
+      const profile = join(root, "staging-connector-rehearsal.json");
+      const sidecar = join(root, "staging-connector-rehearsal-v1");
+      const run = () => spawnSync("python3", ["-", environment, setup, profile, sidecar], { input: recovery![1], encoding: "utf8" });
+      writeFileSync(environment, "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/echo-clean/private/staging-connector-rehearsal.json\n");
+      writeFileSync(setup, `staging_connector_rehearsal_profile_sha256=${digest}\n`);
+      writeFileSync(profile, `${canonical}\n`, { mode: 0o600 });
+      expect(run()).toMatchObject({ status: 0, stdout: "enabled\n" });
+      // Jira connections now stay in the retained state directory; an old sidecar is no longer read.
+      mkdirSync(sidecar, { mode: 0o700 });
+      expect(run()).toMatchObject({ status: 0, stdout: "enabled\n" });
+      writeFileSync(setup, `staging_connector_rehearsal_profile_sha256=sha256:${"0".repeat(64)}\n`);
+      expect(run().status).toBe(1);
+      // A retired selection still refuses any leftover of the rehearsal.
+      writeFileSync(environment, "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=\n");
+      writeFileSync(setup, "");
+      rmSync(profile);
+      expect(run().status).toBe(1);
+      rmSync(sidecar, { recursive: true });
+      expect(run()).toMatchObject({ status: 0, stdout: "disabled\n" });
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

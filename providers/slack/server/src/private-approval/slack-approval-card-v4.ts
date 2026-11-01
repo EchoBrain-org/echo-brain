@@ -18,7 +18,7 @@ export interface SlackApprovalCardV4 {
     readonly unfurl_media: false;
   };
 }
-export interface SlackApprovalCardInputV4 {
+interface SlackApprovalCardInputV4 {
   readonly approval_id: string;
   readonly snapshot_sha256: string;
   readonly review: PrivateSlackApprovalBlockKitCardInputV1;

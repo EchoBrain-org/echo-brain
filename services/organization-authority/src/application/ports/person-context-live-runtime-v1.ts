@@ -19,13 +19,13 @@ export interface PersonContextLiveApplicationV1<C extends PersonLiveEvidenceCita
   source(input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<C>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<C> | undefined>;
 }
 /** The selecting root owns provider construction; the API root supplies current grants. */
-export interface OpenedPersonContextLiveRuntimeV1<C extends PersonLiveEvidenceCitationV1> {
+interface OpenedPersonContextLiveRuntimeV1<C extends PersonLiveEvidenceCitationV1> {
   readonly application: PersonContextLiveApplicationV1<C>;
   readonly connection_http: ProviderHttpApplicationV1;
   tools?(access_token: string): Promise<readonly OrganizationPersonToolV4[]>;
   close(): void;
 }
-export type PersonContextLiveRuntimeFactoryV1<C extends PersonLiveEvidenceCitationV1> = (authentication: {
+type PersonContextLiveRuntimeFactoryV1<C extends PersonLiveEvidenceCitationV1> = (authentication: {
   authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization;
 }, authorize_project: PersonContextProjectAuthorizationV1) => OpenedPersonContextLiveRuntimeV1<C>;
 

@@ -7,6 +7,7 @@ import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/orga
 import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-brain/organization-api';
+import { personCitedRecordV1, type PersonCitedRecordV1 } from '@echo-brain/organization-api';
 import { validatePersonAskCheckRequestV1, type PersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
 import { validatePersonAnswerRequestV3, type PersonAnswerPreviousV1 } from '@echo-brain/organization-api';
@@ -17,7 +18,7 @@ import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { EmployeeMutationError, PersonClient } from "./client.js";
 import { PersonAuthorityClientError, PersonContextMutationError } from "./authority-client.js";
-import { PersonClientSessionUnavailableError } from "./session-store.js";
+import { PersonClientSessionUnavailableError, type PersonSessionEndedCode } from "./session-store.js";
 import { startPersonLoopbackHandoff } from "./browser-login-handoff.js";
 import {
   readPersonOnboardingInvitation,
@@ -84,10 +85,7 @@ const OPTIONS = {
   limit: { type: "string" },
   "open-browser": { type: "boolean" },
   "record-sha256": { type: "string" },
-  kind: { type: "string" },
-  item: { type: "string" },
-  neighbours: { type: "string" },
-  mine: { type: "boolean" },
+  brief: { type: "boolean" },
   "only-me": { type: "boolean" },
   ref: { type: "string" },
 } as const;
@@ -138,22 +136,20 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "mine", "progress", "expected-membership-id", "expected-authority", "previous"],
+    accepts: ["question", "project", "progress", "expected-membership-id", "expected-authority", "previous"],
     requires: ["question"],
   },
-  list: { accepts: ["project", "mine", "only-me", "cursor"] },
+  list: { accepts: ["project", "only-me", "cursor"] },
   open: { accepts: ["ref", "cursor"], requires: ["ref"] },
   runs: { accepts: ["request"], requires: ["request"] },
   changes: {},
   "project-activity": {},
-  "evidence-search": { accepts: ["query", "project", "kind", "limit"], requires: [] },
-  "evidence-open": { accepts: ["item", "project", "neighbours"], requires: ["item"] },
   "ask-source": {
     accepts: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256", "document-id", "project"],
     requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
   },
   "ask-check": { accepts: ["request"], requires: ["request"] },
-  records: { accepts: ["limit", "query", "record-sha256"] },
+  records: { accepts: ["limit", "query", "record-sha256", "brief"] },
   "tools": {},
   "employee-invite": {
     accepts: ["name", "email", "out"],
@@ -179,21 +175,22 @@ const HELP: Readonly<Record<string, string>> = {
 
 Start here:
   status                                      Who you are on this machine (no network).
-  list                                        The newest notes, documents, imported meetings and approved meetings you can read, 25 at a time.
-  list --project <project-id> | --mine | --only-me   Only one of your projects, what you added, or what only you can read.
+  list --project <project-id> | --only-me     The newest items in one of your projects, or of what only you can read, 25 at a time.
   open --ref <ref>                            Read one item from list or from an ask citation.
-  ask --question <text> [--project <project-id> | --mine]   Answer with citations.
+  ask --question <text> [--project <project-id>]   Answer with citations.
 list shows only what you can read now; next_cursor means more.
 
 Commands:
   login       Sign in with an invitation or existing Authority identity.
   status      Show client build identity and sign-in state.
+  session-refresh  Renew the local session with the Authority.
   logout      Remove the local session.
-  list        List the newest notes, documents, imported meetings and approved meetings you can read.
+  list        List the newest notes, documents, imported meetings and approved meetings in one project, or only yours.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
   ask-check   Check whether what earlier answers cited changed, with no content.
-  evidence    Search or open released Ask evidence.
+  ask-source  Read one source-evidence packet an Ask citation names.
+  runs        Read and act on impact runs, their open items, and sweeps.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
   projects    Create projects, manage members, and browse permitted context.
@@ -205,6 +202,8 @@ Commands:
   project-activity  When each of your projects last had something new from someone else, with no content.
 
 Run \`echo-brain person <command> --help\` for command options.
+
+Every command but login, status, session-refresh and logout takes paired --expected-membership-id <id> --expected-authority <origin>, the account it is for. Signed out or signed in as anyone else, it sends nothing; if the account changes while it runs, its output is not for that account. Either way it fails with code account_changed, signed_out, reauthentication_required or sign_in_required, and "sent" says whether its request went out.
 `,
   login: `usage: echo-brain person login (--invitation <path> | --authority-url <url>) [--open-browser]
 
@@ -214,6 +213,10 @@ Provide exactly one identity option. --open-browser opens the handoff automatica
 
 Shows installed_version, client_build source_sha/source_kind, sign-in state, membership type, and Authority origin.
 Client provenance does not identify the Authority build serving requests. Status is local and makes no network request.
+`,
+  "session-refresh": `usage: echo-brain person session-refresh
+
+Renews the local session's access with the Authority and prints the account with its new access_expires_at and hard_reauthentication_at. The desktop runs it; other commands refresh on their own when access expires. A refresh past hard_reauthentication_at, or one that fails after leaving this machine, ends the session: sign in again with person login.
 `,
   tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel|project|meetings|submit> --tool <tool> [options]]
 
@@ -226,21 +229,20 @@ Run \`echo-brain person tools <verb> --help\` for each tool's options.
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]
 
-Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
+Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
-Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings. Mine excludes live tools, follow-ups and the workspace. An Authority without /v7 fails with code not_supported.
+Ask asks POST /v7/person/ask, with every configured request-local live source, including Jira tickets and Confluence pages, ECHO's shared follow-ups as Home shows them, and your workspace: your projects, the people in your organization, your tools, and the Jira projects and Confluence spaces of the tools you connected. Global scope reads what your connected accounts can access; each project uses its saved provider mappings.
 
 --progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. The last line is the usual {"ok":true,"result":...} with the answer's receipt. An Authority that does not stream prints only the usual last line. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 
 --previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with at most 8 sentences of at most 400 characters each and at most 12 of that answer's citations, as it carried them. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request.
 `,
-  list: `usage: echo-brain person list [--project <project-id> | --mine | --only-me] [--cursor <next_cursor>]
+  list: `usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]
 
 Lists the newest things you can read now, 25 per page: notes, documents, imported meetings and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
-Without a scope flag the list covers the notes, documents, imported meetings and approved meetings ask can read; the first page also shows who you are, your connected tools and your projects.
---project lists one project you belong to. --mine lists only what you added: notes you saved, documents you uploaded and meetings you imported or approved (approved means you were the approver, not an attendee or action owner). --only-me lists everything only you can read, filed in a project or not: your only-me notes and documents, meetings you imported, and approved meetings kept for you alone; a filed row names its projects.
+Give exactly one scope. --project lists one project you belong to, as ask can read it there; its first page also shows the project. --only-me lists everything only you can read, filed in a project or not: your only-me notes and documents, meetings you imported, and approved meetings kept for you alone; a filed row names its projects.
 Pass next_cursor as --cursor with the same scope for the next page; null means the end.
 notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A first page with no items and that notice is not the end: follow its next_cursor later. A later page that could only wait for meetings fails with unavailable (503): retry the same --cursor later.
 `,
@@ -269,33 +271,22 @@ Reads when something new last arrived in each of your active projects from someo
 
 Checks what moved in your own view since you last looked, with no content: one fingerprint per area (projects, the follow-ups you sent, own or last handed on, and the meetings waiting for your review), and how many seconds to wait before checking again. Compare each fingerprint with the last one you saw and read that area again only when it differs. Prints echo-person-changes-v1 as its last line.
 `,
-  evidence: `usage: echo-brain person evidence <search|open> [options]
-
-Search or open released evidence under a fresh signed-in request. Use the citation JSON returned by search with open.
-`,
-  "evidence-search": `usage: echo-brain person evidence search [--query <text>] [--project <project-id>] [--kind <imported_meeting|decision|action|rationale|note|document_passage>] [--limit <1-50>]
-
-Without --query, lists readable evidence titles and kinds without body text.
-`,
-  "evidence-open": `usage: echo-brain person evidence open --item <citation-json> [--project <project-id>] [--neighbours <0-2>]
-
-Opens one cited evidence item under a fresh signed-in request. --item is the citation object from evidence search JSON.
-`,
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
 Reads one bounded immutable source-evidence packet cited by Ask. Use the exact citation fields. The server rechecks your current access and project association before returning it; this never downloads an original file.
 `,
   "ask-check": `usage: echo-brain person ask-check --request <json>
 
-Checks whether the sources earlier answers cited changed, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket may add the "marker" an earlier check returned. Each item is answered in order: same, changed, unreadable (never why) or unknown (its tool is not connected, failed or ran out of time), and a readable ticket with its current marker. Prints echo-person-ask-check-v1 as its last line. An Authority without the check fails with code not_supported.
+Checks whether the sources earlier answers cited changed, with no content. The request is {"schema_version":1,"kind":"echo-person-ask-check-request-v1","items":[...]}: 1 to 100 items, each {"asked_at":<UTC millisecond time the turn was asked>,"citation":<the citation exactly as the answer carried it>}, for an approved record, a source revision, a follow-up, a ticket or a page; a ticket may add the "marker" an earlier check returned. Each item is answered in order: same, changed, unreadable (never why) or unknown (its tool is not connected, failed or ran out of time), and a readable ticket with its current marker. Prints echo-person-ask-check-v1 as its last line.
 `,
   directory: `usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 
 Lists active people in your organization by name, or narrows the list with a name search. Any signed-in member may use it; no project is needed. Shows names and membership IDs only. Pass next_cursor as --cursor with the same --query and --limit for the next page.
 `,
-  records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex>]
+  records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex> [--brief]]
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
+--brief prints that one record as Ask cites it (echo-person-cited-record-v1) in place of its signed envelope: the meeting, its approver, participants and policy, and up to 32 decisions, actions and rationales, each with the atom id Ask citations carry and up to 3 quotes. A record you cannot read fails with not_found.
 `,
   documents: `usage: echo-brain person documents <upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate> [options]
 
@@ -494,7 +485,7 @@ function registerToolProviders(list: readonly PersonToolProviderV1[]) {
 
 /** Returns supported human CLI help without constructing a client or session. */
 function personClientCliHelp(argv: readonly string[], providers: readonly PersonToolProviderV1[]): string | undefined {
-  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents' || argv[0] === 'evidence') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
+  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
   if (argv.length === 3 && argv[0] === 'tools' && argv[2] === '--help') return toolVerbHelp(argv[1], providers);
   if (argv.length === 1 && argv[0] === "--help") return HELP.person;
   if (argv.length === 2 && argv[1] === "--help") return HELP[argv[0] ?? ""];
@@ -572,6 +563,58 @@ function expectedAccount(values: Record<Option, string | boolean | undefined>) {
   };
 }
 
+/** These act on the session itself; every other command acts for one account, and takes a pin. */
+const SESSION_ACTIONS: ReadonlySet<string> = new Set(["login", "status", "session-refresh", "logout"]);
+const PIN_OPTIONS: readonly Option[] = ["expected-membership-id", "expected-authority"];
+
+/** The account a pinned run is for: paired --expected-membership-id and --expected-authority. */
+interface AccountPin { readonly membership_id: string; readonly authority: string }
+
+function accountPin(values: Record<Option, string | boolean | undefined>): AccountPin | undefined {
+  const membership = values["expected-membership-id"];
+  const authority = values["expected-authority"];
+  if (membership === undefined && authority === undefined) return undefined;
+  if (typeof membership !== "string" || typeof authority !== "string") throw new Error("--expected-membership-id and --expected-authority must be given together");
+  return { membership_id: membership, authority };
+}
+
+/** Why a pinned run cannot run, or stand, as its account: no one is signed in (and why, when a refresh ended the session), or someone else is. */
+type PinRefusal = "account_changed" | "signed_out" | PersonSessionEndedCode;
+
+function pinRefusal(client: PersonClient, pin: AccountPin): PinRefusal | null {
+  let signedIn: { readonly authority_origin: string; readonly membership_id: string };
+  try {
+    signedIn = client.sessionSummary();
+  } catch (error) {
+    // A session that cannot be read at all cannot be shown to be the pinned one.
+    return error instanceof PersonClientSessionUnavailableError ? client.sessionEnded()?.reason ?? "signed_out" : "account_changed";
+  }
+  return signedIn.authority_origin === pin.authority && signedIn.membership_id === pin.membership_id ? null : "account_changed";
+}
+
+/** A pinned run that ended under another account, or none: what it printed is not for its account. */
+class AccountPinError extends Error {
+  constructor(readonly code: PinRefusal) {
+    super("The signed-in account changed during the request");
+    this.name = "AccountPinError";
+  }
+}
+
+/** Throws when the pin no longer holds. */
+function assertPinned(client: PersonClient, pin: AccountPin | undefined): void {
+  const refused = pin === undefined ? null : pinRefusal(client, pin);
+  if (refused !== null) throw new AccountPinError(refused);
+}
+
+/** A refused pinned run: nothing went out (`sent` false), or the account changed while it ran. */
+function pinRefused(action: string, code: PinRefusal, sent: boolean) {
+  return {
+    ok: false, action, code, sent,
+    error: sent ? "The signed-in account changed during the request; its output is not for the expected account."
+      : "Not signed in as the expected account; nothing was sent.",
+  };
+}
+
 function optionalProject(values: Record<Option, string | boolean | undefined>) {
   return values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
 }
@@ -634,7 +677,7 @@ function askPreviousOf(values: Record<Option, string | boolean | undefined>): Pe
   try {
     return validatePersonAnswerRequestV3({
       schema_version: 3, question: values.question,
-      ...(typeof values.project === "string" ? { project_id: values.project } : values.mine === true ? { mine: true } : {}), previous,
+      ...(typeof values.project === "string" ? { project_id: values.project } : {}), previous,
     }).previous!;
   } catch (error) {
     throw new AskPreviousError(`Ask previous is invalid: ${(error as Error).message}`);
@@ -672,7 +715,19 @@ function optionalRecordLimit(
   return Number(value);
 }
 
-export interface BrowserOpenerOptions {
+/** --brief: the one record asked for, as Ask cites it. None readable is not_found; anything else is not a record Ask cites. */
+function citedRecord(listed: Awaited<ReturnType<PersonClient["records"]>>, recordSha256: string): PersonCitedRecordV1 {
+  const records = listed.kind === "echo-clean-person-record-list-v1" ? listed.records : [];
+  if (records.length === 0) throw new PersonAuthorityClientError("not_found", null, "No record you can read has that digest");
+  try {
+    if (records.length !== 1 || records[0]!.record_sha256 !== recordSha256) throw new Error("Another record came back");
+    return personCitedRecordV1(records[0]!);
+  } catch {
+    throw new PersonAuthorityClientError("invalid_response", null, "Person Authority returned a record Ask cannot cite");
+  }
+}
+
+interface BrowserOpenerOptions {
   readonly platform?: NodeJS.Platform;
   readonly spawn_sync?: typeof spawnSync;
 }
@@ -868,13 +923,12 @@ export async function runPersonClientCli(
   const employeeAction =
     argv[0] === "employee" ? EMPLOYEE_ACTIONS[argv[1] as keyof typeof EMPLOYEE_ACTIONS] : undefined;
   const documentAction = argv[0] === 'documents' ? `documents-${argv[1] ?? ''}` : undefined;
-  const evidenceAction = argv[0] === 'evidence' ? `evidence-${argv[1] ?? ''}` : undefined;
   const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
   // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of TOOL_VERBS.
   const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;
   const verbName = toolAction === undefined ? undefined : toolVerb(argv[1]);
-  const subcommandAction = documentAction ?? evidenceAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction;
+  const subcommandAction = documentAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction;
   const action = subcommandAction ?? (argv[0] ?? "");
   const rule = RULES[action] ?? (verbName === undefined ? undefined : { accepts: ['tool', ...Object.keys(toolOptions)], requires: ['tool'] });
   if (rule === undefined) {
@@ -889,6 +943,7 @@ export async function runPersonClientCli(
     let askCheckRequest: PersonAskCheckRequestV1 | undefined;
     let askPrevious: PersonAnswerPreviousV1 | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
+  let pin: AccountPin | undefined;
   try {
     const args = argv.slice(subcommandAction === undefined ? 1 : 2);
     // Accept a negative integer as a limit value so the existing bounds explain
@@ -919,7 +974,7 @@ export async function runPersonClientCli(
         seen.add(token.name);
       }
     }
-    const accepted = new Set(rule.accepts ?? []);
+    const accepted = new Set([...(rule.accepts ?? []), ...(SESSION_ACTIONS.has(action) ? [] : PIN_OPTIONS)]);
     for (const [name, value] of Object.entries(values)) {
       if (value !== undefined && value !== false && !accepted.has(name as Option)) {
         throw new Error(
@@ -941,7 +996,7 @@ export async function runPersonClientCli(
       if (toolVerbDefinition === undefined) throw new Error(usage());
       const command = `echo-brain person tools ${verbName} --tool ${tool}`;
       for (const [name, value] of Object.entries(values)) {
-        if (value !== undefined && value !== false && name !== 'tool' && !Object.hasOwn(toolVerbDefinition.options, name)) {
+        if (value !== undefined && value !== false && name !== 'tool' && !PIN_OPTIONS.includes(name) && !Object.hasOwn(toolVerbDefinition.options, name)) {
           throw new Error(`--${name} is not valid with \`${command}\``);
         }
       }
@@ -970,16 +1025,19 @@ export async function runPersonClientCli(
       ) {
         throw new Error("--record-sha256 must be sha256 followed by 64 lowercase hex characters");
       }
+      if (values.brief === true && values["record-sha256"] === undefined) throw new Error("--brief requires --record-sha256");
     }
-    // At most one scope. Only list accepts --only-me; ask has already refused it as not valid.
-    const scopeFlags = ["project", "mine", "only-me"].filter((name) => values[name] !== undefined && values[name] !== false).map((name) => `--${name}`);
-    if ((action === "ask" || action === "list") && scopeFlags.length > 1) {
-      throw new Error(`${scopeFlags.slice(0, -1).join(", ")} and ${scopeFlags.at(-1)} cannot be combined with \`echo-brain person ${action}\``);
+    // A list takes exactly one scope: a project or --only-me.
+    const scopeFlags = ["project", "only-me"].filter((name) => values[name] !== undefined && values[name] !== false).map((name) => `--${name}`);
+    if (action === "list" && scopeFlags.length !== 1) {
+      throw new Error(scopeFlags.length === 0 ? "`echo-brain person list` needs --project or --only-me" : "--project and --only-me cannot be combined with `echo-brain person list`");
     }
-    // Only the streamed Ask checks a pinned account: on any other, a pin would be silently ignored.
+    // Ask's usage keeps the pin under --progress, so a plain Ask with one is a usage error; every other account-scoped
+    // command takes a pin on its own (accountPin).
     if (action === "ask" && (values["expected-membership-id"] !== undefined || values["expected-authority"] !== undefined) && values.progress !== true) {
       throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
     }
+    pin = accountPin(values);
     // The previous turn (ADR-0047) is validated with the whole request, its 16 KiB bound included, before any network or
     // session use.
     if (action === "ask" && values.previous !== undefined) askPrevious = askPreviousOf(values);
@@ -988,7 +1046,6 @@ export async function runPersonClientCli(
       listRequest = validatePersonListRequestV1({
         schema_version: 1,
         ...(values.project === undefined ? {} : { project_id: values.project }),
-        ...(values.mine === true ? { mine: true } : {}),
         ...(values["only-me"] === true ? { only_me: true } : {}),
         ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
       });
@@ -1040,6 +1097,12 @@ export async function runPersonClientCli(
       : { random_uuid: dependencies.random_uuid }),
   });
   const readInteractiveLine = dependencies.read_input ?? readBoundedStdinLine;
+  // A pinned run is for its account alone: signed out, or as anyone else, it sends nothing.
+  const refusedBefore = pin === undefined ? null : pinRefusal(client, pin);
+  if (refusedBefore !== null) {
+    print(stderr, pinRefused(action, refusedBefore, false));
+    return 1;
+  }
 
   try {
     if (toolVerbDefinition !== undefined) {
@@ -1054,6 +1117,7 @@ export async function runPersonClientCli(
           await (dependencies.sleep ?? ((delay: number) => new Promise<void>(resolve => setTimeout(resolve, delay))))(ms);
           dependencies.abort_signal?.throwIfAborted();
         } });
+      assertPinned(client, pin);
       return 0;
     }
     switch (action) {
@@ -1241,9 +1305,7 @@ export async function runPersonClientCli(
       case "ask": {
         validatePersonQueryText(values.question);
         const question = requiredText(values, "question");
-        const scope = values.project !== undefined
-          ? validateProjectIdV1(requiredText(values, "project"))
-          : values.mine === true ? { mine: true } as const : undefined;
+        const scope = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project"));
         if (values.progress === true) {
           // One line per step event as it arrives; the last line is the answer's, with the receipt when the Authority streamed.
           // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.
@@ -1276,32 +1338,6 @@ export async function runPersonClientCli(
         // The bare project activity is the last line, as the desktop reads it.
         print(stdout, await client.projectActivity(dependencies.abort_signal));
         break;
-      case 'evidence-search': {
-        const project_id = optionalProject(values);
-        const kind = values.kind;
-        if (kind !== undefined && !['imported_meeting', 'decision', 'action', 'rationale', 'note', 'document_passage'].includes(String(kind))) throw new Error('Invalid evidence kind');
-        const limit = values.limit === undefined ? undefined : Number(values.limit);
-        if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)) throw new Error('Invalid evidence limit');
-        print(stdout, { ok: true, result: await client.evidenceSearch({ schema_version: 1,
-          ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }),
-          ...(kind === undefined ? {} : { kinds: [kind as 'imported_meeting' | 'decision' | 'action' | 'rationale' | 'note' | 'document_passage'] as const }),
-          ...(limit === undefined ? {} : { limit }),
-          ...(project_id === undefined ? {} : { project_id }),
-        }, dependencies.abort_signal) });
-        break;
-      }
-      case 'evidence-open': {
-        let citation: unknown;
-        try { citation = JSON.parse(requiredText(values, 'item')); } catch { throw new Error('Evidence citation JSON is invalid'); }
-        const neighbours = values.neighbours === undefined ? undefined : Number(values.neighbours);
-        if (neighbours !== undefined && (!Number.isSafeInteger(neighbours) || neighbours < 0 || neighbours > 2)) throw new Error('Invalid evidence neighbours');
-        const project_id = optionalProject(values);
-        print(stdout, { ok: true, result: await client.evidenceOpen({ schema_version: 1, citation: citation as never,
-          ...(neighbours === undefined ? {} : { neighbours: neighbours as 0 | 1 | 2 }),
-          ...(project_id === undefined ? {} : { project_id }),
-        }, dependencies.abort_signal) });
-        break;
-      }
       case "ask-source": {
         const project_id = optionalProject(values);
         print(stdout, {
@@ -1326,14 +1362,12 @@ export async function runPersonClientCli(
         const query = values.query;
         const recordSha256 = values["record-sha256"];
         if (query !== undefined) validatePersonQueryText(query);
-        print(stdout, {
-          ok: true,
-          result: await client.records(
-            optionalRecordLimit(values, query === undefined ? 100 : 10),
-            typeof query === "string" ? query : undefined,
-            typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
-          ),
-        });
+        const records = await client.records(
+          optionalRecordLimit(values, query === undefined ? 100 : 10),
+          typeof query === "string" ? query : undefined,
+          typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
+        );
+        print(stdout, { ok: true, result: values.brief === true ? citedRecord(records, String(recordSha256)) : records });
         break;
       }
       case "tools":
@@ -1366,8 +1400,16 @@ export async function runPersonClientCli(
         print(stdout, { ok: true, revoked: true });
         break;
     }
+    // A pinned run ends as it began, for its account; otherwise what it printed is not for it.
+    assertPinned(client, pin);
     return 0;
   } catch (error) {
+    // Under another account by now, or none, that is the failure, whatever else went wrong: the request may have gone out.
+    const refused = pin === undefined ? null : error instanceof AccountPinError ? error.code : pinRefusal(client, pin);
+    if (refused !== null) {
+      print(stderr, pinRefused(action, refused, true));
+      return 1;
+    }
     if (isContextAction(action)) {
       print(stderr, contextCliFailure(action, error, values));
       return 1;

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  PERSON_ANSWER_PATH_V7, PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
+  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
   createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
   type OrganizationPersonToolV4,
 } from '@echo-brain/organization-api';
@@ -11,7 +11,7 @@ import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../src/composition/person-live-answer-route-v1.js';
 import { personWorkspaceGrantsV1 } from '../src/composition/person-workspace-evidence-v1.js';
-import { askClient, auditBodies as audits, closeAskServers, decodeAll, expectAskRouteUnavailable, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
+import { askClient, auditBodies as audits, closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures/ask-over-http.js';
 import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
@@ -69,14 +69,14 @@ const tools = async (access_token: string): Promise<readonly OrganizationPersonT
 }];
 
 /** The `/v7` route as the runtime composes it, the asker's workspace beside the follow-up sources. */
-function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort, mount: { readonly v7?: boolean } = {}) {
+function origin(f: OpenItemsFixtureV1, model: StructuredGenerationPort) {
   const sessions = f.openItemsOptions.sessions;
   const projects = new SqliteProjectContextRepositoryV1(f.db);
   const options: CreatePersonLiveAnswerRouteOptionsV1 = { ...liveAskOptions(f, model), workspace: {
     projects: createProjectContextApplicationV1({ authenticate: access_token => sessions.authenticateAccess({ access_token }), repository: projects }),
     grants: personWorkspaceGrantsV1(projects), people: f.directory, tools,
   } };
-  return serveAsk(mount.v7 === false ? {} : { person_answer_v7: createPersonLiveAnswerRouteV1(options) });
+  return serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(options) });
 }
 const ask = askClient({ path: PERSON_ANSWER_PATH_V7, progress: PERSON_ASK_PROGRESS_HEADER_VALUE_V3, question: QUESTION });
 const decode = (text: string) => decodeAll(createPersonAskProgressDecoderV3(), text);
@@ -88,7 +88,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     const base = await origin(f, planner.model);
     const plain = await ask(base, { progress: null });
     expect(plain.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    expect(plain.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
     const json = validatePersonAnswerResponseV8(await plain.json());
     planner.reset();
     const project = { citation: { kind: 'project', project_id: f.projectA }, kind: 'project', label: 'Project A', visibility: 'project', ref: `project:${f.projectA}` };
@@ -101,7 +100,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     const streamed = await ask(base);
     expect(streamed.status).toBe(200);
     expect(streamed.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
-    expect(streamed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
     const raw = await streamed.text();
     const events = decode(raw);
     const searched = events.filter(event => event.type === 'searched');
@@ -118,18 +116,6 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(JSON.stringify(released)).not.toContain('Project A');
     // The streamed request's Ask record names the project by its citation commitment.
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').at(-1)).toMatchObject({ outcome: 'answered', named_citation_digests: expect.arrayContaining([canonicalSha256(project.citation)]) });
-  });
-
-  it('never binds the workspace in Mine, which reads only what the asker added: no projects, people or tools are offered, read or audited', async () => {
-    const f = await sentFixture();
-    const planner = leadsAndTasks();
-    const base = await origin(f, planner.model);
-    const response = await ask(base, { progress: null, mine: true });
-    expect(response.status).toBe(200);
-    const answer = validatePersonAnswerResponseV8(await response.json());
-    for (const source of ['projects', 'people', 'tools', 'follow_ups']) expect(planner.catalogs.flat()).not.toContain(source);
-    expect(answer.citations.map(citation => citation.kind)).not.toContain('project');
-    expect(audits(f, 'echo-person-workspace-release-audit-v1')).toEqual([]);
   });
 
   it('asks the V8 Ask for its layout exactly when the client sends the layout header, streamed or not, and refuses any other value before the Ask runs', async () => {
@@ -153,7 +139,7 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {
       for (const value of ['2', 'true', '1, 1']) {
         const refused = await ask(base, { progress, headers: { 'x-echo-answer-layout': value } });
-        expect([refused.status, refused.headers.get('content-type'), refused.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)]).toEqual([400, 'application/json; charset=utf-8', '7']);
+        expect([refused.status, refused.headers.get('content-type')]).toEqual([400, 'application/json; charset=utf-8']);
         await expect(refused.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
       }
     }
@@ -161,9 +147,5 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(created).toHaveBeenCalledTimes(4);
     expect(planner.catalogs.length).toBe(planned);
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').length).toBe(asked);
-  });
-
-  it('answers /v7 as unavailable, still route-matched, on an Authority composed without the V8 Ask', async () => {
-    await expectAskRouteUnavailable(ask, await origin(await sentFixture(), leadsAndTasks().model, { v7: false }), '7');
   });
 });

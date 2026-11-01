@@ -3,7 +3,7 @@
 // out is never reported as another account.
 import { describe, expect, it } from 'vitest';
 import type { CliRun } from '../../src/host/cli.js';
-import { lost, refreshStops, sessionEnded } from '../../src/host/session.js';
+import { lost, pinRefusal, refreshStops, sessionEnded } from '../../src/host/session.js';
 import type { AppStatus } from '../../src/shared/protocol.js';
 
 /** A failed `session-refresh`, its last stderr line as the person client prints it. */
@@ -57,5 +57,28 @@ describe('a call that cannot run as the account the page shows', () => {
     expect(lost({ signed_in: true, account, client_version: '1' })).toBe('account_changed');
     // No status could be read: nothing says no one is signed in.
     expect(lost(null)).toBe('account_changed');
+  });
+});
+
+describe('a call the client refused for the account it was pinned to', () => {
+  /** A pinned run's refusal, as the person client prints it last on stderr. */
+  const refusal = (code: string, sent: boolean): CliRun => ({ exit: 1, stdout: '', overflow: false,
+    stderr: `${JSON.stringify({ ok: false, action: 'list', code, sent, error: 'Not signed in as the expected account; nothing was sent.' })}\n` });
+
+  it('says why, and whether its request had gone out', () => {
+    expect(pinRefusal(refusal('account_changed', false))).toEqual({ code: 'account_changed', sent: false });
+    expect(pinRefusal(refusal('signed_out', false))).toEqual({ code: 'signed_out', sent: false });
+    // A session that ended is told apart from an account that changed.
+    expect(pinRefusal(refusal('reauthentication_required', false))).toEqual({ code: 'reauthentication_required', sent: false });
+    expect(pinRefusal(refusal('sign_in_required', true))).toEqual({ code: 'sign_in_required', sent: true });
+    expect(pinRefusal(refusal('account_changed', true))).toEqual({ code: 'account_changed', sent: true });
+  });
+
+  it('is nothing else the client prints: its own failures, a run that succeeded, or a code it never refuses with', () => {
+    expect(pinRefusal(REFUSED)).toBeNull();
+    expect(pinRefusal(failed({ error: 'Signed out', code: 'sign_in_required' }))).toBeNull();
+    expect(pinRefusal(refusal('unavailable', false))).toBeNull();
+    expect(pinRefusal({ ...refusal('account_changed', false), exit: 0 })).toBeNull();
+    expect(pinRefusal({ exit: 1, stdout: '', stderr: 'not json\n', overflow: false })).toBeNull();
   });
 });

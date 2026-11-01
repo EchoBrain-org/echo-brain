@@ -1,4 +1,4 @@
-import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { NangoSlackConnectionV1 } from "../adapters/nango/nango-connection-client-v1.js";
 import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../application/slack-app-credentials-v1.js";
@@ -21,7 +21,7 @@ export class SlackConnectionConflictError extends Error {
   }
 }
 
-export type SlackConnectionRefusalReasonV1 =
+type SlackConnectionRefusalReasonV1 =
   | "attempt_mismatch"
   | "app_mismatch"
   | "identity_mismatch"
@@ -49,7 +49,7 @@ export class SlackConnectionRefusedErrorV1 extends Error {
   }
 }
 
-export interface ActivateNangoSlackConnectionInputV1 {
+interface ActivateNangoSlackConnectionInputV1 {
   readonly database: Database.Database;
   readonly secrets: OrganizationSecretStore;
   readonly verifier: SlackConnectionVerifierV1;
@@ -65,7 +65,7 @@ export interface ActivateNangoSlackConnectionInputV1 {
   readonly new_connection_id: () => string;
 }
 
-export type ActivatedNangoSlackConnectionV1 = {
+type ActivatedNangoSlackConnectionV1 = {
   readonly kind: "created" | "reconnected";
   readonly connection: OrganizationToolConnectionContractV2;
   readonly state: OrganizationToolConnectionStateV2;
@@ -242,7 +242,7 @@ export async function activateNangoSlackConnectionV1(
   return Object.freeze({ kind: "created", connection, state });
 }
 
-export interface RebindNangoSlackConnectionInputV1 extends ActivateNangoSlackConnectionInputV1 {
+interface RebindNangoSlackConnectionInputV1 extends ActivateNangoSlackConnectionInputV1 {
   /** The active state, and the Nango connection its bundle named, when Nango no longer had that connection. */
   readonly rebind: { readonly state_sha256: `sha256:${string}`; readonly nango_connection_id: string };
   /**

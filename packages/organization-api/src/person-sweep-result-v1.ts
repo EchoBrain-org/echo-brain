@@ -1,6 +1,6 @@
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerCitationV6 } from './person-answer-v4.js';
-import type { PersonAnswerCitationV6 } from './person-answer-v6.js';
+import type { PersonAnswerCitationV6 } from './person-answer-v8.js';
 import { PERSON_IMPACT_CARD_LIMITS_V1 } from './person-impact-card-v1.js';
 import { asEnumerableRecord as object, assertExactKeys, assertUnique as unique, boundedLine as line, boundedList as list, fail } from './validation.js';
 

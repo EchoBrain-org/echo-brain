@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyOrganizationRecordLogBaselineV6, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { applyOrganizationRecordLogBaselineV6 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { authorityRecordPolicyProjectorsV1 } from '../src/composition/authority-record-protocols-v1.js';
 import { openPersonMeetingRuntimeV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { createApprovalCoreV1, type AfterApprovedRecordHookV1 } from '../src/composition/approval-core-v1.js';
 
@@ -26,7 +27,7 @@ async function open(approval_core?: { readonly after_record: readonly AfterAppro
   const runtime = openPersonMeetingRuntimeV1({
     state_directory, sessions: { authenticateAccess: () => { throw new Error('unused'); } },
     resources: { coordinates: COORDINATES, database: authority, record },
-    processor: { processor_adapter_id: 'fixture-llm' } as never, projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2()]),
+    processor: { processor_adapter_id: 'fixture-llm' } as never, projectors: authorityRecordPolicyProjectorsV1(),
     providers: [{ id: 'fixture', cursor: { policy: { source_adapter_id: 'fixture-source' } } } as never],
     ...(approval_core === undefined ? {} : { approval_core }),
   });

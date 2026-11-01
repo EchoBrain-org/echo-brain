@@ -4,7 +4,7 @@ import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol'
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { personProviderStorageNamespaceV1, type PersonProviderV1 } from './person-provider-v1.js';
 
-export type PersonConnectionAttemptStatusV1 = 'pending' | 'complete' | 'cancelled' | 'expired' | 'failed';
+type PersonConnectionAttemptStatusV1 = 'pending' | 'complete' | 'cancelled' | 'expired' | 'failed';
 export type PersonConnectionAttemptFailureV1 = 'provider_rejected' | 'provider_unavailable' | 'account_mismatch';
 export type ConnectedPersonV1 = Pick<PersonConnectorReadBindingV1, 'organization_id' | 'principal_id' | 'membership_id'>;
 export interface StoredPersonConnectionV1 { readonly binding: PersonConnectorReadBindingV1; readonly reference: string; readonly site: string; readonly version: string; readonly active: boolean; readonly attempt: string }

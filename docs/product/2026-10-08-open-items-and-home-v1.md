@@ -1,6 +1,6 @@
 # Open items and Home v1
 
-Superseded in part by [follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md)
+Superseded in part by [follow-ups thread v1](../archive/2026-10-14-follow-ups-thread-v1.md)
 (sending selects, owners before sending, every row opens the item page,
 meeting actions are follow-ups); its Rulings and API changes sections name what
 changed (`items` takes `states` in place of `open_only`).
@@ -20,7 +20,7 @@ Decision record: [ADR-0033](../decisions/ADR-0033-shared-open-items.md).
 Builds on
 [runs store and impact card v1](2026-10-07-runs-store-and-impact-card-v1.md),
 [unified meeting approval v1](2026-10-07-unified-meeting-approval-v1.md) and
-the [research trigger contract v1](2026-10-06-research-trigger-contract-v1.md).
+the [research trigger contract v1](../archive/2026-10-06-research-trigger-contract-v1.md).
 Design canvas, row 9:
 https://claude.ai/code/artifact/ffa8478f-578d-40d0-bc7a-578a66f4adb0.
 
@@ -432,7 +432,7 @@ with the sweep result in
 and the
 [Authority runbook](../../services/organization-authority/README.md#person-reads-and-permissions)
 describes each operation. Two later designs changed it:
-[follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md) ("API changes":
+[follow-ups thread v1](../archive/2026-10-14-follow-ups-thread-v1.md) ("API changes":
 `items` takes `states` in place of `open_only`, and one `read` replaces
 `summary_only`), and
 [desktop refresh and notifications v1](2026-10-15-desktop-refresh-and-notifications-v1.md)
@@ -444,7 +444,7 @@ describes each operation. Two later designs changed it:
 The design was the canvas's row 9 (artboards 9.1 to 9.7), with the founder's
 rulings of 2026-10-09 (R63–R76, under Rulings) in place of its Check row,
 Check card, footer and Did it land? copy. Two later designs replaced most of
-it: [follow-ups thread v1](2026-10-14-follow-ups-thread-v1.md) (every row
+it: [follow-ups thread v1](../archive/2026-10-14-follow-ups-thread-v1.md) (every row
 opens the item page, follow-ups lists for a meeting and a project, one status
 vocabulary) and
 [desktop refresh and notifications v1](2026-10-15-desktop-refresh-and-notifications-v1.md)

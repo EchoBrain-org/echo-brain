@@ -7,7 +7,7 @@ import {
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 const decision = (atom: string, label = 'Tuesday sync'): AnswerSource =>
-  ({ kind: 'record', label, record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' }, atom_id: sha(atom) });
+  ({ kind: 'record', label, record: { record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' }, atom_id: sha(atom) });
 const ticket = (key: string): AnswerSource => ({ kind: 'ticket', tool_id: 'jira', label: key, permalink: `https://example.atlassian.net/browse/${key}` });
 const passage = (anchor: string, label = 'Launch plan.md'): AnswerSource => ({ kind: 'original', label, ref: {
   source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'), representation_sha256: sha('5'), anchor_sha256: sha(anchor) } });
@@ -142,7 +142,7 @@ describe('the line and its rows', () => {
 });
 
 describe('the receipt', () => {
-  const receipt: AskReceipt = { looked_through: 14, elapsed_ms: 48_400, rows: [
+  const receipt: AskReceipt = { looked_through: 14, rows: [
     { type: 'searched', sources: [{ kind: 'meetings' }], found: 9 }, { type: 'read', items: [decision('1'), ticket('THERM-48')] },
   ] };
   it('says how many items it looked through and how long the person waited', () => {

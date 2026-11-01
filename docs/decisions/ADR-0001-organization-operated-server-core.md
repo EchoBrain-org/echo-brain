@@ -219,6 +219,10 @@ cutover — and the branch is explicitly non-shippable until then.
 rollback was exercised before any code moved. `main` was never modified and
 nothing was pushed. Reverting the whole line of work is deleting one branch.
 
+Update (2026-10-31): the repository's git tags were deleted. The rollback
+points they named are commits on `main`: `4665c3a` (`pre-migration/4665c3a`),
+`56aea1f` (`checkpoint/relocated`) and `ce10e38` (`checkpoint/retired`).
+
 **Reversibility boundary.** Everything through phase 2 is reversible. Phase 3
 step 2 is the one-way door: raw transcripts flow to the server for real, and
 machine keys retire. This ADR is the only custody gate in the plan;

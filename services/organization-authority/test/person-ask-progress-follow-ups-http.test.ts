@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import {
-  PERSON_ANSWER_PATH_V7, PERSON_ANSWER_ROUTE_HEADER_V5, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
+  PERSON_ANSWER_PATH_V7, PERSON_ASK_PROGRESS_HEADER_VALUE_V3, createPersonAskProgressDecoderV3, validatePersonAnswerResponseV8,
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-answer-route-v1.js';
@@ -35,7 +35,6 @@ describe('follow-ups in an Ask streamed on /v7 (ADR-0039, ADR-0040)', () => {
     const base = await origin(f, planner.model);
     const plain = await ask(base, { progress: null });
     expect(plain.headers.get('content-type')).toBe('application/json; charset=utf-8');
-    expect(plain.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
     const json = validatePersonAnswerResponseV8(await plain.json());
     planner.reset();
     const followUp = { citation: { kind: 'follow_up', item_id: f.ticket.item_id }, kind: 'follow_up', label: `ECHO-12 ${f.outsideText}`, visibility: 'only_me', ref: `follow_up:${f.ticket.item_id}` };
@@ -45,7 +44,6 @@ describe('follow-ups in an Ask streamed on /v7 (ADR-0039, ADR-0040)', () => {
     expect(streamed.status).toBe(200);
     expect(streamed.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
     expect(streamed.headers.get('cache-control')).toBe('no-store');
-    expect(streamed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
     const raw = await streamed.text();
     const events = decode(raw);
     expect(planner.catalogs[0]).toContain('follow_ups');

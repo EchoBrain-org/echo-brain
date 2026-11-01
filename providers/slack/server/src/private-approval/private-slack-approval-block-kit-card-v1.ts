@@ -1,20 +1,20 @@
 import { createHash } from "node:crypto";
 
-export interface PrivateSlackApprovalReviewItemV1 {
+interface PrivateSlackApprovalReviewItemV1 {
   readonly text: string;
   readonly evidence_reference: string;
 }
 
-export interface PrivateSlackApprovalDecisionItemV1
+interface PrivateSlackApprovalDecisionItemV1
   extends PrivateSlackApprovalReviewItemV1 {
   readonly status: "proposed" | "decided" | "unresolved";
 }
 
 /** V1 actions deliberately have no assignee, relation, or deadline presentation. */
-export type PrivateSlackApprovalActionItemV1 =
+type PrivateSlackApprovalActionItemV1 =
   PrivateSlackApprovalReviewItemV1;
 
-export interface PrivateSlackApprovalDecisionGroupV1 {
+interface PrivateSlackApprovalDecisionGroupV1 {
   readonly id: string;
   readonly decision: PrivateSlackApprovalDecisionItemV1;
   readonly rationales: readonly PrivateSlackApprovalReviewItemV1[];
@@ -41,7 +41,7 @@ interface MrkdwnTextV1 {
   readonly verbatim: true;
 }
 
-export interface PrivateSlackApprovalReviewV1 {
+interface PrivateSlackApprovalReviewV1 {
   /**
    * Plain-text review for the card's notification and assistive-tool
    * alternative; the card appends its own control instructions.

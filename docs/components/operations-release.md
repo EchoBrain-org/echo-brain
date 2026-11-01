@@ -106,6 +106,8 @@ identity no longer matches.
 - [Canonical source and immutable release runbook](../operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md)
 - [Staging clean-data volume backup runbook](../operations/RB-OPERATIONS-004-authority-staging-data-volume-backup.md)
 - [Qualification and evidence](../qualification/README.md)
+- [Client updates](../features/client-updates-v1.md) and the
+  [client update feed procedure](../../deploy/client-updates/README.md)
 - [`deploy/organization-authority/`](../../deploy/organization-authority)
 - [`tools/`](../../tools)
 - [GitHub workflows](../../.github/workflows)

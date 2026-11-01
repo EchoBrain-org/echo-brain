@@ -14,9 +14,7 @@ const packageJson = JSON.parse(
 
 describe("organization protocol package contract", () => {
   it("publishes only the code entry points", () => {
-    expect(Object.keys(packageJson.exports).sort()).toEqual(
-      [".", "./record-codec-support-v4"].sort(),
-    );
+    expect(Object.keys(packageJson.exports)).toEqual(["."]);
     expect(packageJson.files).toEqual([
       "dist/**/*.js",
       "dist/**/*.js.map",

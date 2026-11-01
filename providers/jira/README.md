@@ -253,7 +253,7 @@ organization, grant or site selector in model arguments or connection commands.
    desktop's Ask asks the same route in every scope
    ([ADR-0042](../../docs/decisions/ADR-0042-research-tool-contract.md)), as the
    [Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)
-   describes; Mine reads no Jira. The desktop validates V8 answers, with a
+   describes. The desktop validates V8 answers, with a
    safe direct-link opener. The `/v4` ticket route, `--tickets` and `--live`
    are retired ([ADR-0047](../../docs/decisions/ADR-0047-ask-timeline.md)).
 5. `echo-brain person tools disconnect --tool jira` calls
@@ -300,10 +300,10 @@ requires a saved mapping set by a current ECHO project lead. The desktop project
 Jira project ID and key. Members can read the setting; leads can change or remove
 it. Each asker uses their own OAuth connection and Jira permissions. Global Ask
 has no additional project allowlist; project Ask applies the saved mapping before
-discovery and checks it again on open and revalidation. Mine and unmapped projects exclude Jira and
+discovery and checks it again on open and revalidation. Unmapped projects exclude Jira and
 never fall back to global Jira; explicit ticket inventory in an unsupported scope
-is refused. There is no persistent ticket-open API, sync or index. Jira capture
-is disabled, including in the staging rehearsal. See
+is refused. There is no persistent ticket-open API, sync or index, and no Jira
+capture. See
 [project settings](../../docs/features/project-settings-v1.md#jira-project-mapping)
 for the setting's CLI and revision checks.
 
@@ -341,15 +341,16 @@ Confluence's: the Authority creates it 0600 and will not start while other
 users can read it. A file created before this check, with the process umask
 (often 0644), stops the first start after the upgrade: the service writes only
 the bare `echo-clean-live-startup-failed-v1` marker, which does not name the
-file, until an operator runs `chmod 600` on it. The staging rehearsal below
-keeps its own private sidecar.
+file, until an operator runs `chmod 600` on it. The fixed staging connector
+profile below uses the same file.
 
 For the fixed staging connector profile, `ECHO_STAGING_JIRA_ASK_V1=true` selects
-its cloud ID and integration. The EC2 Compose overlay supplies this flag only when
-the connector profile is selected. Live Ask allows each Person's own connection;
-the rehearsal's owner and fixed-project restrictions apply only to its diagnostic
-reads. Existing connections in the sidecar survive restart; do not reconnect or
-reset working state.
+its cloud ID and integration, exactly as the two flags would. The EC2 Compose
+overlay supplies this flag only when the connector profile is selected. Live Ask
+allows each Person's own connection. Connections made in the retired staging
+rehearsal sidecar are not read: staging members who used Jira connect it again
+once after that release (see the
+[service guide](../../services/organization-authority/README.md#staging-connector-rehearsal)).
 
 Live qualification must exercise actual consent, tag discovery, refreshed token
 reads, fresh-consent reconnect, disconnect/reconnect, denied/changed issue visibility,

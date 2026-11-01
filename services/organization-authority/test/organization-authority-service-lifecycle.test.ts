@@ -72,12 +72,13 @@ function apiRuntime(events: string[]): RunningOrganizationAuthorityApiRuntime {
 
 function startLifecycle(
   worker_interval_ms: number,
-  dependencies: OrganizationAuthorityServiceLifecycleDependencies,
+  dependencies: Omit<OrganizationAuthorityServiceLifecycleDependencies, "api">,
   events: string[] = [],
 ) {
   return startOrganizationAuthorityServiceLifecycle(
     { api: apiConfig, worker_interval_ms },
-    { start_api_runtime: async () => apiRuntime(events), ...dependencies },
+    // The stand-in API runtime takes no dependencies.
+    { start_api_runtime: async () => apiRuntime(events), api: {} as never, ...dependencies },
   );
 }
 
@@ -533,6 +534,28 @@ describe("Organization Authority service lifecycle", () => {
         retryable: false,
       },
     ]);
+  });
+
+  it("starts the API when the startup rebuild is past the search ceiling, and reports the overflow every cycle", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const failures: string[] = [];
+    const runtime = await startLifecycle(1_000, {
+      processing: processing(events, undefined, async () => {
+        throw new Error("readable-search generation exceeds maximum_segments");
+      }),
+      start_api_runtime: async () => {
+        events.push("api-start");
+        return apiRuntime(events);
+      },
+      on_worker_error: (error) => failures.push(error.message),
+      clear_readable_search_handle: () => events.push("handle-clear"),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toEqual(["recover", "handle-clear", "reconcile", "api-start", "recover", "stage", "append", "reconcile"]);
+    expect(failures).toEqual(Array.from({ length: 2 }, () => "readable-search generation exceeds maximum_segments"));
+    await runtime.close();
   });
 
   it("rejects startup before prewarm or API start when append recovery fails", async () => {

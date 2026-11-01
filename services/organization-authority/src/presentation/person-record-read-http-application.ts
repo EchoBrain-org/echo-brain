@@ -1,32 +1,10 @@
-export const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
-
-/** Presentation-local structural views keep this HTTP seam implementation-free. */
-export type PersonRecordDigestV1 = `sha256:${string}`;
-export type PersonRecordEnvelopeV1 = Readonly<Record<string, unknown>>;
-
-/** Optional presentation metadata, resolved now; not part of the signed record. */
-export interface PersonRecordSourceMetadataV1 {
-  readonly record_approved_by?: { readonly display_name: string };
-}
-
-export interface PersonRecordReadResponseV1 {
-  readonly schema_version: 1;
-  readonly kind: "echo-clean-person-record-list-v1";
-  readonly records: readonly {
-    readonly position: number;
-    readonly approval_id: string;
-    readonly record_sha256: PersonRecordDigestV1;
-    readonly envelope: PersonRecordEnvelopeV1;
-    readonly source_metadata?: PersonRecordSourceMetadataV1;
-  }[];
-}
+import type { PersonRecordListV1 } from "@echo-brain/organization-api";
 
 /** A bearer-only route. Caller identity is never accepted from HTTP input. */
 export interface PersonRecordReadHttpApplicationV1 {
   list(input: {
     readonly access_token: string;
     readonly limit?: number;
-    readonly record_sha256?: PersonRecordDigestV1;
-    readonly include_source_metadata?: boolean;
-  }): PersonRecordReadResponseV1;
+    readonly record_sha256?: `sha256:${string}`;
+  }): PersonRecordListV1;
 }

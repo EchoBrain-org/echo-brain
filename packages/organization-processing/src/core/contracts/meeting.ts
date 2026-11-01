@@ -3,7 +3,7 @@ import type { JsonObject } from "./json.js";
 
 export type AdapterCursor = string;
 
-export const MEETING_CONTEXT_SCHEMA_VERSION = 1 as const;
+const MEETING_CONTEXT_SCHEMA_VERSION = 1 as const;
 
 export type MeetingLifecycle =
   | 'scheduled'

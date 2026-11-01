@@ -1,425 +1,77 @@
-import { describe, expect, it } from "vitest";
-import { meetingSourceEnvelopeV1 } from "@echo-brain/organization-processing/core";
-import { normalizeGranolaMeetingV1, type GranolaMeetingContentInputV1 } from "../src/granola-meeting-normalizer-v1.js";
+import { describe, expect, it } from 'vitest';
+import { meetingSourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
+import { granolaMcpMeetingContentV1, type GranolaMeetingV1 } from '../src/granola-mcp-v1.js';
+import { normalizeGranolaMeetingV1 } from '../src/granola-meeting-normalizer-v1.js';
 
-const identity = { kind: "meeting-source" as const, adapter_id: "granola", instance_id: "primary", version: "2.2.0" };
-function normalize(note: GranolaMeetingContentInputV1, observedAt = "2026-07-16T00:00:00.000Z") {
-  return normalizeGranolaMeetingV1(note, identity, observedAt);
+// Golden values from the 2.4.0 mapping: a changed revision would import every watched meeting again.
+const id = '00000000-0000-4000-8000-000000000001';
+const url = `https://notes.granola.ai/d/${id}`;
+const source = { kind: 'meeting-source' as const, adapter_id: 'granola-person-mcp', instance_id: 'granola-fixture', version: '1.0.0' };
+const known = 'Zhen Ye (note creator) from Acme <zhen@acme.com>, Pat Lee <pat@y.com>, pat lee, Dana';
+const meeting: GranolaMeetingV1 = { id, title: 'Beta launch', date: 'Oct 2, 2026 8:08 PM PDT', url, known_participants: known,
+  private_notes: '- Ship beta Friday', summary: '### Decisions\n- Ship the beta on Friday' };
+const transcript = { text: 'Microphone: We ship Friday.\n\nSystem audio: Agreed.', created_at: '2026-10-03T03:40:00.000Z' };
+type Transcript = Parameters<typeof granolaMcpMeetingContentV1>[1];
+const normalize = (value: GranolaMeetingV1 = meeting, text: Transcript = transcript, observedAt = '2026-10-06T00:00:00.000Z') =>
+  normalizeGranolaMeetingV1(granolaMcpMeetingContentV1(value, text), source, observedAt);
+/** The revision, and the digest of the whole document but its observation time. */
+function digests(value: GranolaMeetingV1, text: Transcript, observedAt?: string): string[] {
+  const document = normalize(value, text, observedAt);
+  return [document.provenance.canonical_revision, meetingSourceEnvelopeV1(document).revision.content_sha256];
 }
 
-const detail: GranolaMeetingContentInputV1 = {
-  id: "note-1",
-  object: "note",
-  title: "Product review",
-  created_at: "2026-07-15T16:00:00.000Z",
-  updated_at: "2026-07-15T17:00:00.000Z",
-  summary_markdown: "## Decision\nShip the canonical bridge.",
-  attendees: [
-    { id: "person-1", name: "Alice", email: "ALICE@example.com" },
-    "bob@example.com",
-  ],
-  owner: { name: "Owner", email: "owner@example.com" },
-  calendar_event: {
-    start: { dateTime: "2026-07-15T15:30:00-07:00" },
-  },
-  folder_membership: [
-    {
-      object: "folder",
-      id: "fol_4y6LduVdwSKC27",
-      name: "echo-restricted",
-      parent_folder_id: null,
-      space_id: "spa_4y6LduVdwSKC27",
-    },
-  ],
-  web_url: "https://app.granola.ai/notes/note-1",
-  transcript: [
-    {
-      text: "We should ship it.",
-      start_time: 1.25,
-      end_time: 3.5,
-      speaker: { name: "Alice", email: "alice@example.com" },
-    },
-    { text: "Agreed.", start: "4.0", speaker: "Owner" },
-    { text: "   ", speaker: "Ignored" },
-  ],
-};
-
-const liveCalendarShapeDetail: GranolaMeetingContentInputV1 = {
-  id: "note-live-calendar-shape",
-  object: "note",
-  title: "Live calendar shape",
-  created_at: "2026-07-15T16:00:00.000Z",
-  updated_at: "2026-07-15T17:00:00.000Z",
-  summary_text: "Preserve the live calendar fields.",
-  calendar_event: {
-    calendar_event_id: "calendar-event-123",
-    event_title: "Live calendar shape",
-    scheduled_start_time: "2026-07-15T09:30:00-07:00",
-    scheduled_end_time: "2026-07-15T10:15:00-07:00",
-    organiser: "FOUNDER@example.com",
-    invitees: [
-      { email: "founder@example.com" },
-      { email: "teammate@example.com" },
-    ],
-  },
-  transcript: [
-    {
-      text: "We should preserve the live calendar fields.",
-      start_time: 0,
-      speaker: { name: "Founder", email: "founder@example.com" },
-    },
-    {
-      text: "And link invitees to transcript speakers.",
-      start_time: 2.5,
-      speaker: { name: "Teammate", email: "teammate@example.com" },
-    },
-  ],
-};
-
-const documentedSpeakerShapeDetail = {
-  id: "note-documented-speaker-shape",
-  object: "note",
-  title: "Documented speaker shape",
-  created_at: "2026-07-15T18:00:00.000Z",
-  updated_at: "2026-07-15T19:00:00.000Z",
-  summary_text: "Documented speaker-shape summary.",
-  owner: { name: "Note Owner", email: "owner@example.com" },
-  transcript: ([
-    ["Local audio, first turn.", { source: "microphone" }],
-    ["Remote audio.", { source: "speaker" }],
-    ["Local audio, second turn.", { source: "microphone" }],
-    ["Diarized speaker A, first turn.", { source: "microphone", diarization_label: "Speaker A" }],
-    ["Diarized speaker B.", { source: "microphone", diarization_label: "Speaker B" }],
-    ["Diarized speaker A, second turn.", { source: "microphone", diarization_label: "Speaker A" }],
-  ] as const).map(([text, speaker], index) => ({ text, start_time: `2026-07-15T18:00:0${index}.000Z`, speaker })),
-} as unknown as GranolaMeetingContentInputV1;
-
-describe("Retained Granola content normalization", () => {
-  it("maps notes, participants, transcript turns, revision, and provenance", () => {
-    const meeting = normalize(detail);
-    expect(meeting).toMatchObject({
-      schema_version: 1,
-      id: "granola:primary:note-1",
-      title: "Product review",
-      time: { scheduled_start_at: "2026-07-15T22:30:00.000Z" },
+describe('Granola meeting normalization of MCP content', () => {
+  it('maps an MCP meeting to its exact document and revision', () => {
+    const state = (kind: string, value: string) => ({ kind, state: value });
+    expect(normalize()).toEqual({
+      schema_version: 1, id: `granola:granola-fixture:${id}`, title: 'Beta launch',
+      time: { actual_start_at: '2026-10-03T03:08:00.000Z', timezone: 'America/Los_Angeles' },
+      // Reported people get no role, and a repeated name joins its first entry.
+      participants: [
+        { id: 'email:zhen@acme.com', display_name: 'Zhen Ye', identities: [{ kind: 'email', value: 'zhen@acme.com' }] },
+        { id: 'email:pat@y.com', display_name: 'Pat Lee', identities: [{ kind: 'email', value: 'pat@y.com' }] },
+        { id: 'name:sha256:2c9e0a2585dc7406589a3724f0027811506e0f133726303a15d6779d532a2573', display_name: 'Dana' },
+      ],
+      content: [
+        { id: `${id}:notes`, kind: 'note', text: '- Ship beta Friday', origin: 'human', metadata: { format: 'markdown' } },
+        { id: `${id}:summary`, kind: 'summary', text: '### Decisions\n- Ship the beta on Friday', origin: 'source_ai', metadata: { format: 'markdown' } },
+        { id: `${id}:transcript:0`, kind: 'transcript', text: transcript.text, sequence: 0, origin: 'imported',
+          metadata: { source_index: 0, granola: { speaker_resolution: 'unresolved' } } },
+      ],
       artifacts: [],
+      capture: {
+        state: 'complete',
+        components: [
+          state('metadata', 'available'), state('participants', 'available'), state('summary', 'available'),
+          state('transcript', 'available'), state('agenda', 'not_provided'), state('notes', 'available'),
+          state('chat', 'not_provided'), state('recording', 'not_provided'), state('attachments', 'not_provided'),
+          state('artifacts', 'empty'),
+        ],
+        warnings: ['Some Granola transcript turns did not include usable speaker metadata.'],
+      },
       provenance: {
-        source: {
-          kind: "meeting-source",
-          adapter_id: "granola",
-          instance_id: "primary",
-          version: "2.2.0",
-        },
-        external_id: "note-1",
-        observed_at: "2026-07-16T00:00:00.000Z",
-        normalizer_version: "2.4.0",
-        source_created_at: "2026-07-15T16:00:00.000Z",
-        source_updated_at: "2026-07-15T17:00:00.000Z",
-        source_url: "https://app.granola.ai/notes/note-1",
+        source, external_id: id, canonical_revision: 'sha256:b8bd78084927ceb61fa53f6f079388e2e28c6289c88df2559a6f6398150d97d9',
+        observed_at: '2026-10-06T00:00:00.000Z', normalizer_version: '2.4.0', source_created_at: '2026-10-03T03:40:00.000Z', source_url: url,
       },
+      extensions: { granola: { provider_fields: { mcp_date_label: meeting.date, mcp_known_participants: known } } },
     });
-    expect(meeting.participants).toEqual([
-      {
-        id: "source:person-1",
-        display_name: "Alice",
-        identities: [
-          { kind: "source", value: "person-1" },
-          { kind: "email", value: "alice@example.com" },
-        ],
-        roles: ["attendee", "speaker"],
-      },
-      {
-        id: "email:bob@example.com",
-        display_name: "bob@example.com",
-        identities: [{ kind: "email", value: "bob@example.com" }],
-        roles: ["attendee"],
-      },
-      {
-        id: "name:sha256:4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581",
-        display_name: "Owner",
-        roles: ["speaker"],
-      },
-    ]);
-    expect(meeting.content).toEqual([
-      {
-        id: "note-1:summary",
-        kind: "summary",
-        text: "## Decision\nShip the canonical bridge.",
-        origin: "source_ai",
-        metadata: { format: "markdown" },
-      },
-      {
-        id: "note-1:transcript:0",
-        kind: "transcript",
-        text: "We should ship it.",
-        speaker_participant_id: "source:person-1",
-        sequence: 0,
-        start_offset_ms: 1_250,
-        end_offset_ms: 3_500,
-        origin: "imported",
-        metadata: {
-          source_index: 0,
-          granola: {
-            speaker: { name: "Alice", email: "alice@example.com" },
-            speaker_resolution: "named_identity",
-          },
-        },
-      },
-      {
-        id: "note-1:transcript:1",
-        kind: "transcript",
-        text: "Agreed.",
-        speaker_participant_id:
-          "name:sha256:4c1029697ee358715d3a14a2add817c4b01651440de808371f78165ac90dc581",
-        sequence: 1,
-        start_offset_ms: 4_000,
-        origin: "imported",
-        metadata: {
-          source_index: 1,
-          granola: {
-            speaker: "Owner",
-            speaker_resolution: "named_identity",
-          },
-        },
-      },
-    ]);
-    expect(meeting.capture).toMatchObject({
-      state: "complete",
-      components: expect.arrayContaining([
-        { kind: "summary", state: "available" },
-        { kind: "transcript", state: "available" },
-        { kind: "recording", state: "not_provided" },
-      ]),
-    });
-    expect(meeting.extensions).toMatchObject({
-      granola: {
-        folder_membership: [
-          {
-            object: "folder",
-            id: "fol_4y6LduVdwSKC27",
-            name: "echo-restricted",
-            parent_folder_id: null,
-            space_id: "spa_4y6LduVdwSKC27",
-          },
-        ],
-      },
-    });
-    expect(meeting.provenance.canonical_revision).toMatch(
-      /^sha256:[a-f0-9]{64}$/,
-    );
-
-    // Moving a note between folders is no edit.
-    const withoutFolder = normalize({ ...detail, folder_membership: [] });
-    expect(withoutFolder.provenance.canonical_revision).toBe(
-      meeting.provenance.canonical_revision,
-    );
   });
   it.each([
-    {
-      name: "Markdown wins and the plain-text copy is not duplicated",
-      summary: { summary_markdown: "## Decision\nShip the canonical bridge.", summary_text: "Decision\nShip the canonical bridge." },
-      text: "## Decision\nShip the canonical bridge.",
-      format: "markdown",
-    },
-    {
-      name: "falls back to the plain-text summary when Granola sends no Markdown",
-      summary: { summary_text: "Decision: ship the canonical bridge." },
-      text: "Decision: ship the canonical bridge.",
-      format: "text",
-    },
-  ])("stores one summary form: $name", ({ summary, text, format }) => {
-    const meeting = normalize({
-      id: "note-summary-form",
-      object: "note",
-      title: "Summary form",
-      created_at: "2026-07-15T16:00:00.000Z",
-      updated_at: "2026-07-15T17:00:00.000Z",
-      ...summary,
-      transcript: [{ text: "Transcript available." }],
-    });
-
-    expect(meeting.content[0]).toEqual({
-      id: "note-summary-form:summary",
-      kind: "summary",
-      text,
-      origin: "source_ai",
-      metadata: { format },
-    });
+    ['an untitled meeting without a transcript', { ...meeting, title: null }, null,
+      'sha256:c94c1903e0a28bdf358da6473a9332736f1735e6fd5c7603e256b9025ec829a4', '881d5c118db4be6e746e315e7fe7c5bdf5e4e86f0db3ca423f79e94c99267eff'],
+    ['empty notes, summary and transcript', { ...meeting, private_notes: '', summary: '' }, { ...transcript, text: ' ' },
+      'sha256:cbdaa01f603dbe03a931b873b1cfa6a945f6ea0b45b850ab6c3a59d9af667903', 'c6f09d4a8f0fd799a476033224474273cd11ee54bad6e70ff5f66de7af359cd6'],
+    ['a list row with an unreadable date label', { id, title: 'Standup', date: 'Oct 6, 2026', url, known_participants: '' }, null,
+      'sha256:62b643bb7656db1f37f47ce018e2a95fc211387df8199e3247ac1328d38dbec5', 'da2c5c5245f2790be5681be33047fc8e2bc2cebb7521768dac86e5edf2537676'],
+  ] as const)('keeps the revision and document digest of %s', (_name, value, text, revision, content) => {
+    expect(digests(value, text)).toEqual([revision, content]);
   });
-  it("normalizes the incremental Granola calendar shape and links its people to transcript turns", () => {
-    const meeting = normalize(liveCalendarShapeDetail);
-    expect(meeting.time).toEqual({
-      scheduled_start_at: "2026-07-15T16:30:00.000Z",
-      scheduled_end_at: "2026-07-15T17:15:00.000Z",
-    });
-    expect(normalize({ ...liveCalendarShapeDetail, started_at: "2026-07-15T09:31:00-07:00", timezone: "America/Denver" }).time).toEqual(meeting.time);
-    // A calendar with no start keeps its other fields and still takes the note's own start.
-    expect(normalize({ ...liveCalendarShapeDetail, calendar_event: { end: "2026-07-15T17:15:00Z", timezone: "America/Chicago" },
-      started_at: "2026-07-15T09:31:00-07:00", timezone: "America/Denver" }).time).toEqual({
-      scheduled_end_at: "2026-07-15T17:15:00.000Z", timezone: "America/Chicago", actual_start_at: "2026-07-15T16:31:00.000Z",
-    });
-    expect(meeting.context).toEqual({
-      owner_participant_id: "email:founder@example.com",
-      calendar: {
-        event_id: "calendar-event-123",
-        organizer_participant_id: "email:founder@example.com",
-      },
-    });
-    expect(meeting.participants).toHaveLength(2);
-    expect(meeting.participants).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "email:founder@example.com",
-          identities: [{ kind: "email", value: "founder@example.com" }],
-          roles: expect.arrayContaining(["invitee", "organizer", "speaker"]),
-        }),
-        expect.objectContaining({
-          id: "email:teammate@example.com",
-          identities: [{ kind: "email", value: "teammate@example.com" }],
-          roles: expect.arrayContaining(["invitee", "speaker"]),
-        }),
-      ]),
-    );
-    expect(
-      meeting.content.filter((block) => block.kind === "transcript"),
-    ).toEqual([
-      expect.objectContaining({
-        id: "note-live-calendar-shape:transcript:0",
-        speaker_participant_id: "email:founder@example.com",
-      }),
-      expect.objectContaining({
-        id: "note-live-calendar-shape:transcript:1",
-        speaker_participant_id: "email:teammate@example.com",
-      }),
-    ]);
-  });
-  it("normalizes an ad-hoc note owner only when its calendar event is absent", () => {
-    const adHocDetail: GranolaMeetingContentInputV1 = {
-      ...detail,
-      id: "note-ad-hoc-owner",
-      calendar_event: null,
-      owner: { email: "OWNER@example.com", name: "Owner" },
-    };
-    const malformedCalendarDetail: GranolaMeetingContentInputV1 = {
-      ...adHocDetail,
-      id: "note-malformed-calendar-owner",
-      calendar_event: { organizer: { name: "Owner" } },
-    };
-    const adHoc = normalize(adHocDetail);
-    const malformed = normalize(malformedCalendarDetail);
-    expect(adHoc.context?.owner_participant_id).toBe("email:owner@example.com");
-    expect(adHoc.participants).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "email:owner@example.com",
-          identities: [{ kind: "email", value: "owner@example.com" }],
-        }),
-      ]),
-    );
-    expect(malformed.context?.owner_participant_id).toBeUndefined();
-    expect(malformed.participants).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "email:owner@example.com" })]),
-    );
-  });
-  it("leaves audio channels unlinked and creates stable meeting-local diarization speakers", () => {
-    const meeting = normalize(documentedSpeakerShapeDetail);
-    const second = normalize(documentedSpeakerShapeDetail, "2026-07-16T01:00:00.000Z");
-    const transcript = meeting.content.filter(
-      (block) => block.kind === "transcript",
-    );
-    const speakerReferences = transcript.map(
-      (block) => block.speaker_participant_id,
-    );
-    expect(speakerReferences).toEqual([
-      undefined,
-      undefined,
-      undefined,
-      expect.any(String),
-      expect.any(String),
-      speakerReferences[3],
-    ]);
-    expect(speakerReferences[3]).not.toBe(speakerReferences[4]);
-    expect(
-      second.content
-        .filter((block) => block.kind === "transcript")
-        .map((block) => block.speaker_participant_id),
-    ).toEqual(speakerReferences);
-
-    expect(meeting.participants).toHaveLength(3);
-    expect(
-      meeting.participants.some(
-        (participant) => participant.id === "email:owner@example.com",
-      ),
-    ).toBe(true);
-    expect(meeting.context?.owner_participant_id).toBe(
-      "email:owner@example.com",
-    );
-    expect(meeting.extensions).toMatchObject({
-      granola: {
-        owner: { name: "Note Owner", email: "owner@example.com" },
-      },
-    });
-    for (const reference of speakerReferences.slice(3)) {
-      const participant = meeting.participants.find(
-        (candidate) => candidate.id === reference,
-      );
-      expect(participant?.roles).toContain("speaker");
-      expect(
-        participant?.identities?.some((identity) => identity.kind === "email"),
-      ).not.toBe(true);
-    }
-
-    expect(transcript[0]?.metadata).toMatchObject({
-      source_index: 0,
-      granola: {
-        speaker: { source: "microphone" },
-        speaker_resolution: "audio_channel",
-      },
-    });
-    expect(transcript[1]?.metadata).toMatchObject({
-      source_index: 1,
-      granola: {
-        speaker: { source: "speaker" },
-        speaker_resolution: "audio_channel",
-      },
-    });
-    expect(transcript[3]?.metadata).toMatchObject({
-      source_index: 3,
-      granola: {
-        speaker: { source: "microphone", diarization_label: "Speaker A" },
-        speaker_resolution: "diarization_bucket",
-      },
-    });
-  });
-  it("keeps revision identity and bridge digests stable across observation and JSON key order", () => {
-    const reordered: GranolaMeetingContentInputV1 = {
-      ...detail,
-      owner: { email: "owner@example.com", name: "Owner" },
-      provider_fields: { b: { y: 2, x: 1 }, a: true },
-    };
-    const original = { ...detail, provider_fields: { a: true, b: { x: 1, y: 2 } } };
-    const first = normalize(original, "2026-07-16T00:00:00.000Z");
-    const later = normalize(reordered, "2026-07-17T00:00:00.000Z");
-    expect(later.id).toBe(first.id);
-    expect(later.provenance.canonical_revision).toBe(first.provenance.canonical_revision);
-    const firstEnvelope = meetingSourceEnvelopeV1(first);
-    const laterEnvelope = meetingSourceEnvelopeV1(later);
-    expect(laterEnvelope.revision.content_sha256).toBe(firstEnvelope.revision.content_sha256);
-    expect(laterEnvelope.revision.captured_at).not.toBe(firstEnvelope.revision.captured_at);
-
-    for (const changed of [
-      { ...original, summary_markdown: "An edited summary." },
-      { ...original, transcript: [{ text: "An edited transcript.", speaker: { source: "microphone" } }] },
-      { ...original, provider_fields: { a: true, b: { x: 1, y: 3 } } },
-      { ...original, private_notes_markdown: "Edited private notes." },
-      { ...original, started_at: "2026-07-15T15:31:00-07:00" },
-      { ...original, timezone: "America/Denver" },
-      { ...original, attendees: [{ name: "Alice", email: "alice@example.com" }] },
-    ]) {
-      const revision = normalize(changed, "2026-07-17T00:00:00.000Z");
-      expect(revision.id).toBe(first.id);
-      expect(revision.provenance.canonical_revision).not.toBe(first.provenance.canonical_revision);
-      expect(meetingSourceEnvelopeV1(revision).revision.content_sha256).not.toBe(firstEnvelope.revision.content_sha256);
-    }
+  it('keeps both digests across observations, and changes the revision with each mapped field', () => {
+    const [revision] = digests(meeting, transcript);
+    expect(digests(meeting, transcript, '2026-10-07T00:00:00.000Z')).toEqual(digests(meeting, transcript));
+    for (const [value, text] of [
+      [{ ...meeting, title: 'Beta' }, transcript], [{ ...meeting, date: 'Oct 2, 2026 8:09 PM PDT' }, transcript],
+      [{ ...meeting, known_participants: 'Dana' }, transcript], [meeting, { ...transcript, text: 'Microphone: We ship Monday.' }], [meeting, null],
+    ] as const) expect(normalize(value, text).provenance.canonical_revision).not.toBe(revision);
   });
 });

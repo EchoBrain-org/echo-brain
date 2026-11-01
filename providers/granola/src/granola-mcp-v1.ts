@@ -94,14 +94,14 @@ function transcriptText(value: unknown): string {
   const head = boundUtf8V1(whole, MAX_TEXT), turn = head.lastIndexOf('\n\n'), line = head.lastIndexOf('\n');
   return text((turn > 0 ? head.slice(0, turn) : line > 0 ? head.slice(0, line) : head).trimEnd());
 }
-/**
- * A read of one meeting that fails the same way every time: Granola's answer for it is unusable, or a detail read
- * answered without it. A watch passes such a meeting over; an outage, a rate limit or changed access is not one.
- */
 /** A transcript Granola is still processing or syncing: a watch tries that meeting again on a later pull. */
 export function granolaTranscriptPendingV1(error: unknown): boolean {
   return error instanceof AuthorityOperationError && error.code === 'unavailable' && error.message === TRANSCRIPT_PENDING;
 }
+/**
+ * A read of one meeting that fails the same way every time: Granola's answer for it is unusable, or a detail read
+ * answered without it. A watch passes such a meeting over; an outage, a rate limit or changed access is not one.
+ */
 export function granolaMeetingUnreadableV1(error: unknown): boolean {
   return error instanceof AuthorityOperationError && (error.code === 'invalid_output' || (error.code === 'not_found' && error.message === MEETING_MISSING));
 }

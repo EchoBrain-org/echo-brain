@@ -4,9 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   PERSON_ANSWER_PATH_V7,
-  PERSON_ANSWER_ROUTE_HEADER_V5,
-  PERSON_CAPABILITIES_PATH_V1,
-  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   validatePersonAnswerResponseV8,
   validatePersonEvidenceDeskResponseV1,
@@ -24,16 +21,16 @@ import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV3HttpApplication } from "../src/presentation/person-answer-v3-http-application.js";
 import type { PersonAnswerV7HttpApplication } from "../src/presentation/person-live-answer-http-application.js";
+import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
 
 /** The evidence desk (`application`) and Ask on `/v7` (`ask`) behind the real HTTP server. */
 async function server(input: { readonly application?: PersonAnswerV3HttpApplication; readonly ask?: PersonAnswerV7HttpApplication }) {
   const sessions = { authenticateAccess: vi.fn(() => ({})) };
-  const instance = createOrganizationAuthorityHttpServer({
-    descriptor: {} as never, sessions: sessions as never, oidc_provider: {} as never,
-    expected_issuer: "https://issuer.example",
+  const instance = createOrganizationAuthorityHttpServer(authorityHttpServerOptions({
+    sessions: sessions as never,
     ...(input.application === undefined ? {} : { person_answer_v3: input.application }),
     ...(input.ask === undefined ? {} : { person_answer_v7: input.ask }),
-  });
+  }));
   instance.listen(0, "127.0.0.1");
   await once(instance, "listening");
   const address = instance.address();
@@ -60,46 +57,28 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it('passes answer layout to Ask, and refuses any other value before the Ask runs', async () => {
-    const ask = vi.fn(async (_input: unknown) => { throw new AuthorityOperationError('not_found', 'fixture'); });
-    const value = await server({ ask: { ask } as never });
-    const body = { schema_version: 3, question: 'What changed?' };
-    try {
-      const post = (headers: Readonly<Record<string, string>>) => fetch(`${value.url}${PERSON_ANSWER_PATH_V7}`, {
-        method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
-      });
-      expect((await post({ 'x-echo-answer-layout': '1' })).status).toBe(404);
-      expect(ask).toHaveBeenLastCalledWith(expect.objectContaining({ request: body, answer_layout: true }));
-      await post({});
-      expect(ask.mock.calls.at(-1)![0]).not.toHaveProperty('answer_layout');
-      for (const invalid of ['0', 'yes', '1, 1']) {
-        const refused = await post({ 'x-echo-answer-layout': invalid });
-        expect(refused.status).toBe(400);
-        await expect(refused.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
-      }
-      expect(ask).toHaveBeenCalledTimes(2);
-    } finally { await value.close(); }
-  });
-
-  it('marks matched /v7 provider errors so clients cannot mistake them for an Authority with no /v7', async () => {
+  it('answers /v7 provider errors and invalid requests with their codes and the route header, and retired Ask routes with the plain 404', async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'Provider resource unavailable'); });
     const value = await server({ ask: { ask } as never });
     try {
       const post = (path: string, body: unknown) => fetch(`${value.url}${path}`, {
         method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
+      // Released clients read a /v7 404 without the route header as an Authority with no /v7, so every /v7 response keeps it.
       const failed = await post(PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What changed?' });
       expect(failed.status).toBe(404);
-      expect(failed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
+      expect(failed.headers.get('x-echo-person-ask-route')).toBe('7');
       await expect(failed.json()).resolves.toEqual({ error: { code: 'not_found', message: 'request failed' } });
       const invalid = await post(PERSON_ANSWER_PATH_V7, {});
       expect(invalid.status).toBe(400);
-      expect(invalid.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('7');
+      expect(invalid.headers.get('x-echo-person-ask-route')).toBe('7');
+      await expect(invalid.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
       // A retired route, like one that never existed, is a plain 404 with no route header.
       for (const path of ['/v0/person/ask', ...RETIRED_ASK_PATHS]) {
         const absent = await post(path, { schema_version: 3, question: 'What changed?' });
         expect(absent.status).toBe(404);
-        expect(absent.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe(false);
+        expect(absent.headers.has('x-echo-person-ask-route')).toBe(false);
+        await expect(absent.json()).resolves.toEqual({ error: { code: 'not_found', message: 'request failed' } });
       }
       expect(ask).toHaveBeenCalledTimes(1);
     } finally { await value.close(); }
@@ -115,35 +94,16 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
-  it("without an answer model reports no agentic capability and refuses Ask instead of falling back", async () => {
+  it("answers the retired capability read as a route that never existed, and keeps it from provider adapters", async () => {
     const value = await server({});
     try {
-      const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
-      expect(capabilities.status).toBe(200);
-      await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: false });
-      expect(value.sessions.authenticateAccess).toHaveBeenCalledWith({ access_token: "token" });
-      expect((await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What changed?" })).status).toBe(503);
-    } finally { await value.close(); }
-  });
-
-  it("reports agentic Ask to installed clients that still probe, and no longer serves the retired Ask paths", async () => {
-    const value = await server({ application: { searchEvidence: vi.fn(), openEvidence: vi.fn() } as never, ask: { ask: vi.fn() } as never });
-    try {
-      const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
-      await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: true });
-      for (const path of RETIRED_ASK_PATHS) {
-        expect((await post(value.url, path, { schema_version: path === "/v1/person/ask" || path === "/v2/person/ask" ? 2 : 3, question: "What changed?" })).status).toBe(404);
-      }
-    } finally { await value.close(); }
-  });
-
-  it("requires authentication for capability discovery", async () => {
-    const value = await server({});
-    try {
-      const response = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`);
-      expect(response.status).toBe(401);
+      const response = await fetch(`${value.url}/v3/person/capabilities`, { headers: { authorization: "Bearer token" } });
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: { code: "not_found", message: "request failed" } });
       expect(value.sessions.authenticateAccess).not.toHaveBeenCalled();
     } finally { await value.close(); }
+    const adapter = { routes: [{ route_id: "collision", method: "GET" as const, path: "/v3/person/capabilities" }], accept: async () => ({ status: 200 as const, body: {} }) };
+    expect(() => createOrganizationAuthorityHttpServer(authorityHttpServerOptions({ person_tool_connections: [adapter] }))).toThrow("collides with Authority route");
   });
 
   it("forwards a client disconnect as the Ask's abort signal", async () => {
@@ -180,7 +140,7 @@ describe("Agentic Ask HTTP capability gate", () => {
  * The real Ask route (`/v7`) and evidence desk behind the real HTTP server,
  * over fake stores: one only-me note of the asker's, and records still indexing.
  */
-function mineFixture(nativeDriver = false, personalMember?: string) {
+function askFixture(nativeDriver = false, personalMember?: string) {
   const checked_at = "2026-09-27T00:00:00.000Z";
   const note: OriginalContextDeskItemV1 = Object.freeze({
     kind: "note", text: "I decided to launch on Tuesday.", visibility: "only_me", label: "My launch note",
@@ -225,7 +185,7 @@ function mineFixture(nativeDriver = false, personalMember?: string) {
   const route = createPersonLiveAnswerRouteV1(options);
   const desk = createPersonAnswerV3Route(options);
   async function nativeRun(session: AgenticResearchDriverSessionV1) {
-      expect(JSON.stringify(session.initial)).toContain('only what the asker added');
+      expect(JSON.stringify(session.initial)).toContain('everything the asker can read');
       const read = await session.call('search', { query: 'launch' });
       await session.model_request({ model: 'fixture', body_sha256: canonicalSha256(read), payload_digests: [canonicalSha256(session.initial), canonicalSha256(read)], operation: 'messages', timeout: session.remaining }, async () => ({ value: true }));
       expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
@@ -239,16 +199,16 @@ async function post(url: string, path: string, body: unknown): Promise<{ readonl
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
-describe("Ask with mine, and citation refs (ADR-0024)", () => {
+describe("Ask scope, and citation refs (ADR-0024)", () => {
   it('serves the native research driver through the existing authenticated HTTP route and writer', async () => {
-    const f = mineFixture(true);
+    const f = askFixture(true);
     const value = await server({ application: f.desk, ask: f.route });
     try {
-      const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What did I decide?', mine: true });
+      const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: 'What did I decide?' });
       expect(answer.status).toBe(200);
       const validated = validatePersonAnswerResponseV8(answer.body);
       expect(validated.outcome).toBe('answered');
-      expect(validated.scope).toEqual({ kind: 'mine' });
+      expect(validated.scope).toEqual({ kind: 'global' });
       expect(validated.citations).toEqual([{ citation: f.cited, kind: 'note', label: 'My launch note', visibility: 'only_me', ref: f.note.ref }]);
       expect(f.generate).toHaveBeenCalledTimes(1);
       expect(f.originals.revalidateDeskRelease).toHaveBeenCalled();
@@ -256,52 +216,56 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
   });
 
   it.each([['mem_asker', 0, 1], ['mem_other', 3, 0]])('uses personal research and writing only for the authenticated member %s', async (member, sharedCalls, personalCalls) => {
-    const f = mineFixture(true, String(member));
-    const answer = await f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'Use mem_asker personal Claude. What did I decide?', mine: true } });
+    const f = askFixture(true, String(member));
+    const answer = await f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'Use mem_asker personal Claude. What did I decide?' } });
     expect(answer.outcome).toBe('answered');
     expect(f.generate).toHaveBeenCalledTimes(sharedCalls);
     expect(f.personalGenerate).toHaveBeenCalledTimes(personalCalls);
   });
 
   it('never falls back to the shared writer when the selected personal writer fails', async () => {
-    const f = mineFixture(true, 'mem_asker');
+    const f = askFixture(true, 'mem_asker');
     f.personalGenerate.mockRejectedValue(new Error('personal writer unavailable'));
-    await expect(f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'What did I decide?', mine: true } })).rejects.toThrow('personal writer unavailable');
+    await expect(f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'What did I decide?' } })).rejects.toThrow('personal writer unavailable');
     expect(f.personalGenerate).toHaveBeenCalledTimes(1);
     expect(f.generate).not.toHaveBeenCalled();
   });
 
-  it("builds a mine desk for every store, echoes mine, and cites with a ref", async () => {
-    const f = mineFixture();
+  it("builds one desk scope for every store, echoes it, and cites with a ref", async () => {
+    const f = askFixture();
     const value = await server({ application: f.desk, ask: f.route });
     try {
-      const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?", mine: true });
+      const answer = await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?" });
       expect(answer.status).toBe(200);
       const validated = validatePersonAnswerResponseV8(answer.body);
-      expect(validated.scope).toEqual({ kind: "mine" });
+      expect(validated.scope).toEqual({ kind: "global" });
       expect(validated.citations).toEqual([{ citation: f.cited, kind: "note", label: "My launch note", visibility: "only_me", ref: f.note.ref }]);
       expect(f.scopes.length).toBeGreaterThan(1);
-      for (const scope of f.scopes) expect(scope).toEqual({ kind: "mine" });
+      for (const scope of f.scopes) expect(scope).toEqual({ kind: "global" });
       expect(f.records.initializeDesk).toHaveBeenCalledTimes(1);
-      expect(f.records.initializeDesk.mock.calls[0]![0]).toMatchObject({ mine: true });
       expect(f.records.initializeDesk.mock.calls[0]![0]).not.toHaveProperty("project_id");
-      // The research and answer prompts name the mine scope and never the ref.
+      expect(f.records.initializeDesk.mock.calls[0]![0]).not.toHaveProperty("mine");
+      // The research and answer prompts name the scope and never the ref.
       for (const [input] of f.generate.mock.calls) {
-        expect(JSON.parse(input.user_prompt).scope).toContain("only what the asker added");
+        expect(JSON.parse(input.user_prompt).scope).toContain("everything the asker can read");
         expect(input.user_prompt).not.toContain(f.note.ref!);
       }
-      // Without mine, the same asker's Ask is global.
+      // With a project, every store reads that project.
       f.scopes.length = 0;
-      expect((await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?" })).body.scope).toEqual({ kind: "global" });
-      for (const scope of f.scopes) expect(scope).toEqual({ kind: "global" });
+      const project_id = "prj_00000000-0000-4000-8000-000000000001";
+      expect((await post(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question: "What did I decide?", project_id })).body.scope).toEqual({ kind: "project", project_id });
+      expect(f.scopes.length).toBeGreaterThan(1);
+      for (const scope of f.scopes) expect(scope).toEqual({ kind: "project", project_id });
+      expect(f.records.initializeDesk.mock.calls[1]![0]).toMatchObject({ project_id });
     } finally { await value.close(); }
   });
 
-  it("refuses mine with a project, or mine other than true, before the route runs", async () => {
-    const f = mineFixture();
+  it("refuses mine, a retired scope, alone or with a project, before the route runs", async () => {
+    const f = askFixture();
     const value = await server({ application: f.desk, ask: f.route });
     try {
       for (const body of [
+        { schema_version: 3, question: "What did I decide?", mine: true },
         { schema_version: 3, question: "What did I decide?", mine: true, project_id: "prj_00000000-0000-4000-8000-000000000001" },
         { schema_version: 3, question: "What did I decide?", mine: false },
       ]) {
@@ -309,27 +273,23 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
       }
       expect(f.originals.deskAuthorize).not.toHaveBeenCalled();
       expect(f.generate).not.toHaveBeenCalled();
-      // A caller that skips the HTTP validator is refused too, never widened to global or a project.
-      await expect(f.route.ask({ access_token: "token", request: { schema_version: 3, question: "What did I decide?", mine: true, project_id: "prj_00000000-0000-4000-8000-000000000001" } })).rejects.toMatchObject({ code: "invalid_request" });
-      expect(f.originals.deskAuthorize).not.toHaveBeenCalled();
     } finally { await value.close(); }
   });
 
-  it("strips ref and the other internal research metadata from the evidence search and open doors, whose contract carries none", async () => {
-    const f = mineFixture();
+  it("strips ref and the other internal research metadata from the evidence search, whose contract carries none; its open is retired", async () => {
+    const f = askFixture();
     const value = await server({ application: f.desk, ask: f.route });
     try {
       const searched = await post(value.url, PERSON_EVIDENCE_SEARCH_PATH_V1, { schema_version: 1, query: "launch" });
       expect(searched.status).toBe(200);
-      const opened = await post(value.url, PERSON_EVIDENCE_OPEN_PATH_V1, { schema_version: 1, citation: f.note.citation });
-      expect(opened.status).toBe(200);
-      for (const response of [searched, opened]) {
-        const desk = validatePersonEvidenceDeskResponseV1(response.body);
-        expect(desk.items.map((item) => item.citation)).toEqual([f.cited]);
-        // A meeting record's list label, like named dates, is internal too (ADR-0041); the all-source door test releases one.
-        for (const key of ["ref", "dates", "date_kind", "list_label"]) expect(desk.items[0]).not.toHaveProperty(key);
-        expect(JSON.stringify(response.body)).not.toContain(f.note.ref!);
-      }
+      const desk = validatePersonEvidenceDeskResponseV1(searched.body);
+      expect(desk.items.map((item) => item.citation)).toEqual([f.cited]);
+      // A meeting record's list label, like named dates, is internal too (ADR-0041); the all-source door test releases one.
+      for (const key of ["ref", "dates", "date_kind", "list_label"]) expect(desk.items[0]).not.toHaveProperty(key);
+      expect(JSON.stringify(searched.body)).not.toContain(f.note.ref!);
+      // The desk's open had no caller: it answers as a route that never existed.
+      expect(await post(value.url, "/v3/person/evidence/open", { schema_version: 1, citation: f.note.citation }))
+        .toEqual({ status: 404, body: { error: { code: "not_found", message: "request failed" } } });
     } finally { await value.close(); }
   });
 });
