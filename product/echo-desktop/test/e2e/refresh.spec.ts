@@ -51,6 +51,10 @@ test('a hidden window is notified, and reads what shows once it is shown again',
   const { page, app } = run;
   await expect(page.getByTestId('need-row').filter({ hasText: 'ECHO-12' })).toBeVisible();
   await expect.poll(checks).toBe(1);
+  // The first change request starts learning; Home can finish before its follow-up reads. The closed-items read starts
+  // only after every open-item page was read, so Mina's send below is new to that baseline rather than part of it.
+  await expect.poll(() => run.calls().some(call => call.path === '/v1/person/runs' && call.body?.operation === 'items'
+    && call.body.scope === 'involved' && call.body.read === 'rows' && call.body.changed_since !== undefined)).toBe(true);
   const homeReads = () => run.calls().filter(call => call.path === '/v1/person/runs' && call.body?.operation === 'home' && call.body.read === 'rows').length;
   await expect(page.getByTestId('needs')).toHaveAttribute('aria-busy', 'false');
   await emit(app, 'echo-test:hidden');

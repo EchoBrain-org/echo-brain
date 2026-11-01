@@ -1,4 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
@@ -17,32 +18,78 @@ export interface Launched {
   close(): Promise<void>;
 }
 
+/** Chromium's words when Electron cannot open the X display, before any of ECHO's code runs. */
+const NO_X_SERVER = 'Missing X server or $DISPLAY';
+
+/**
+ * Electron on fresh private folders. On the Linux runner a launch has, rarely, failed to open the X display while every
+ * launch around it connected, and the cause is not known. That failure alone is tried once more on new folders, with
+ * the X server's state attached to the test and annotated, so a repeat can name its cause. Any other launch failure,
+ * or a second one, fails the test.
+ */
+async function start(mode: string, files: Readonly<Record<string, string>>, env: Readonly<Record<string, string>>):
+  Promise<{ app: ElectronApplication; home: string; userData: string }> {
+  for (let attempt = 1; ; attempt += 1) {
+    // The session store requires a canonical private folder (macOS /var is a link).
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-desktop-home-')));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(home, name), text);
+    const userData = mkdtempSync(join(tmpdir(), 'echo-desktop-data-'));
+    try {
+      const app = await electron.launch({
+        args: [
+          // Hidden Linux windows otherwise delay Playwright's frame-based stability checks.
+          ...(process.platform === 'linux' ? ['--disable-frame-rate-limit'] : []),
+          join(root, 'build', 'main.cjs'),
+        ],
+        env: {
+          ...process.env,
+          ...env,
+          ECHO_HOME: home,
+          ECHO_DESKTOP_USER_DATA: userData,
+          ECHO_DESKTOP_TEST_FIXTURES: join(root, 'test', 'fixtures'),
+          ECHO_DESKTOP_TEST_MODE: mode,
+          ECHO_DESKTOP_HIDDEN: '1',
+        },
+      });
+      return { app, home, userData };
+    } catch (error) {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(userData, { recursive: true, force: true });
+      if (attempt > 1 || process.platform !== 'linux' || !String(error).includes(NO_X_SERVER)) throw error;
+      const state = xServerState();
+      await test.info().attach('x-server-state', { body: state, contentType: 'text/plain' });
+      test.info().annotations.push({ type: 'x-server-launch-retried', description: state });
+      console.warn(`electron.launch could not open the X display; trying once more.\n${state}`);
+    }
+  }
+}
+
+/** What the X server and the runner looked like when a launch could not open the display: each line stands alone. */
+function xServerState(): string {
+  const shell = (command: string) => {
+    const result = spawnSync('bash', ['-c', command], { encoding: 'utf8', timeout: 5_000 });
+    return `${result.stdout ?? ''}${result.stderr ?? ''}`.trim() || `(exit ${result.status ?? result.signal})`;
+  };
+  const auth = process.env.XAUTHORITY;
+  return [
+    `DISPLAY=${process.env.DISPLAY ?? '(unset)'} XAUTHORITY=${auth ?? '(unset)'} auth file: ${auth ? (existsSync(auth) ? 'present' : 'missing') : '-'}`,
+    `Xvfb: ${shell('pgrep -a Xvfb || echo "not running"')}`,
+    `X clients connected: ${shell(`ss -xp state connected 2>/dev/null | grep -c '"Xvfb"'`)}`,
+    `Xvfb open files: ${shell('ls /proc/$(pgrep -n Xvfb)/fd 2>/dev/null | wc -l')}`,
+    `display answers: ${shell('command -v xdpyinfo >/dev/null && { xdpyinfo >/dev/null 2>&1 && echo yes || echo "no (exit $?)"; } || echo "xdpyinfo not installed"')}`,
+    // The brackets keep pgrep's own shell, whose command line holds the pattern, out of the count.
+    `electron processes: ${shell('pgrep -fc "[e]lectron/dist/electron" || true')}`,
+    `load: ${shell('cat /proc/loadavg')}; memory available: ${shell(`awk '/MemAvailable/{print $2" kB"}' /proc/meminfo`)}`,
+  ].join('\n');
+}
+
 /**
  * The real app with a private temporary home: never the founder's session. `files` are written into that home before the
  * app starts, such as the fixture Authority's switches (`hold-live` holds every live read until the test removes it).
  * `env` adds to the app's environment, such as `TZ` for the time zone it and its person client run in.
  */
 export async function launch(mode = '', files: Readonly<Record<string, string>> = {}, env: Readonly<Record<string, string>> = {}): Promise<Launched> {
-  // The session store requires a canonical private folder (macOS /var is a link).
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'echo-desktop-home-')));
-  for (const [name, text] of Object.entries(files)) writeFileSync(join(home, name), text);
-  const userData = mkdtempSync(join(tmpdir(), 'echo-desktop-data-'));
-  const app = await electron.launch({
-    args: [
-      // Hidden Linux windows otherwise delay Playwright's frame-based stability checks.
-      ...(process.platform === 'linux' ? ['--disable-frame-rate-limit'] : []),
-      join(root, 'build', 'main.cjs'),
-    ],
-    env: {
-      ...process.env,
-      ...env,
-      ECHO_HOME: home,
-      ECHO_DESKTOP_USER_DATA: userData,
-      ECHO_DESKTOP_TEST_FIXTURES: join(root, 'test', 'fixtures'),
-      ECHO_DESKTOP_TEST_MODE: mode,
-      ECHO_DESKTOP_HIDDEN: '1',
-    },
-  });
+  const { app, home, userData } = await start(mode, files, env);
   const context = app.context();
   let contextClosed = false;
   context.once('close', () => { contextClosed = true; });
