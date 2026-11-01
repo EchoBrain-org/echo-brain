@@ -1,5 +1,5 @@
 import { Fragment } from 'preact';
-import { useEffect, useMemo, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'preact/hooks';
 import type { Member, OpenItemView, ProjectSummary } from '../../shared/protocol.js';
 import { externalSourceProvider } from '../answer.js';
 import { message } from '../messages.js';
@@ -94,7 +94,7 @@ function Owner({ state, busy, picking, item, name, flat = false }: { state: Stat
 /** The people picker under an owner chip: you first ("You", as a chip says), then the organization's people by name. Picking one changes the owner at once. */
 function OwnerPicker({ state, picker, item }: { state: State; picker: Picker; item: OpenItemView }) {
   const field = useRef<HTMLInputElement>(null);
-  useEffect(() => { field.current?.focus(); }, []);
+  useLayoutEffect(() => { field.current?.focus(); }, []);
   const choices = ownerChoices(picker, item, meOf(state));
   return (
     <div class="picker" data-testid="owner-picker">
