@@ -60,8 +60,9 @@ test('the timeline stays through navigation, on this computer only, each place s
   expect(asks().map(body => body.project_id)).toEqual([undefined, 'prj_11111111-1111-4111-8111-111111111111', undefined]);
   // Kept in one owner-only file for the account, beside the session.
   const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
-  const files = readdirSync(folder);
-  expect(files).toHaveLength(1);
+  // The answer renders before its atomic save finishes. Wait for the committed file, without a temporary write beside it.
+  let files: string[] = [];
+  await expect.poll(() => { files = readdirSync(folder); return files; }).toEqual([expect.stringMatching(/^[0-9a-f]{64}\.json$/u)]);
   expect(statSync(folder).mode & 0o777).toBe(0o700);
   expect(statSync(join(folder, files[0]!)).mode & 0o777).toBe(0o600);
 
