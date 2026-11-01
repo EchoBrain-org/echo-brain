@@ -285,6 +285,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       const calls: AfterApprovedRecordEventV1[] = [];
       const create = () => f.create([provider], { approval_core: { after_record: [(_db, event) => { calls.push(event); }] } });
       let runtime = create();
+      expect(await runtime.tools('owner')).toEqual([]);
       const meeting = { id: 'synthetic-custom-cohort-review', title: 'Cohort rehearsal', notes: 'Ship the cohort onboarding.', transcript: 'Synthetic speaker: ship the cohort onboarding.' };
       const submit = { operation: 'submit', meeting, project_id: project, retain: true } as const;
       await expect(f.call(runtime, submit, 'owner', 'synthetic')).resolves.toEqual({ status: 'queued', meeting_id: meeting.id });
@@ -295,21 +296,23 @@ describe('personal meeting intake uses the shared processing path', () => {
       // Restart the shared runtime before processing the durable queue.
       runtime = create();
       for (let i = 0; i < 3; i++) await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-      const [pending] = (await f.call(runtime, { operation: 'reviews' }, 'owner', 'synthetic')).reviews;
+      const [pending] = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
       expect(pending).toMatchObject({ title: 'SYNTHETIC STAGING - Cohort rehearsal', status: 'pending', project_ids: [project] });
       expect(f.extracted()).toBe(1); expect(calls).toEqual([]);
-      expect((await f.call(runtime, { operation: 'reviews' }, 'other', 'synthetic')).reviews).toEqual([]);
-      const opened = await f.call(runtime, { operation: 'review_open', approval_id: pending!.approval_id }, 'owner', 'synthetic');
+      expect((await f.reviewCall(runtime, { operation: 'reviews' }, 'other')).reviews).toEqual([]);
+      const opened = await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id });
       const approve = { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256,
         command_id: 'synthetic-review-1', action: 'approve', routes: f.routes(opened, [project]), owners: [] } as const;
-      await f.call(runtime, approve, 'owner', 'synthetic');
+      await f.reviewCall(runtime, approve);
+      // Publishing after a fresh runtime still uses the synthetic source's cursor policy.
+      runtime = create();
       await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
       expect(calls).toHaveLength(1);
       await f.call(runtime, submit, 'owner', 'synthetic');
       await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
       await runtime.processing.appendFinalizedApprovalsToV4(new AbortController().signal);
       expect(f.extracted()).toBe(1); expect(calls).toHaveLength(1);
-      expect((await f.call(runtime, { operation: 'reviews' }, 'owner', 'synthetic')).reviews).toHaveLength(1);
+      expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
       expect(f.db.prepare("SELECT source_custodian_assurance FROM authority_live_source_admission_v2 WHERE source_adapter_id='staging-synthetic-meeting'").pluck().get()).toBe('staging_synthetic');
     } finally { storage.close(); }
   });

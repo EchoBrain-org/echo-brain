@@ -121,11 +121,10 @@ Central state is authoritative for organization membership and access,
 provider integration policy, the append-only organization record, and
 centrally served retrieval generations. It may also hold governed pre-record
 meeting data from an exactly bound member identity and that member's own
-meeting source (a personal Nango grant under
-[ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md), the
-retained or already queued `hand-in` meetings from the now-retired input under
-[ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md), or the
-internal staging synthetic source). Until approved, it is readable by its importer only.
+meeting source (personal Granola through a Nango grant under
+[ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md), or the
+internal staging synthetic source). Until approved, it is readable by its importer only
+([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)).
 That data remains in
 the pending approval boundary: it is not an organization record, retrieval
 input, or delivery payload until an audited resolution admits it. Central state
@@ -186,7 +185,7 @@ protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits and indefinite retention.
 The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persistence.md)
-describes the original V7 project storage. The current Authority is V15, which
+describes the original V7 project storage. The current Authority is V16, which
 accepts only fresh state, and its project routes and client operations are live.
 
 Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as

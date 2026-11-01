@@ -32,7 +32,7 @@ import type { PersonReadableDecisionProjectsV1 } from './person-record-search-ro
  * - `approved_record`: the Layer 1 exact read with the caller's current grants (`readableDecisionProjects`), with no search
  *   generation. Records are immutable, so a readable one is always the same.
  * - `source_revision`: the originals ACL under global access (`checkSourceRevisions`); changed when a newer readable revision
- *   of the same source exists, as for an imported or pasted meeting edited since. Notes and documents never change.
+ *   of the same source exists, as for an imported meeting edited since. Notes and documents never change.
  * - `follow_up`: the open item through the open-items policy (`see_row`), as `runs` `item` reads it; changed when its owner,
  *   state or send moved after the turn was asked.
  * - `ticket`: read in bulk through the caller's own connection to its tool; changed when its marker differs from the

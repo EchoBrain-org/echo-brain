@@ -433,7 +433,7 @@ interface JsonRequest {
   readonly access_token?: string;
   readonly method?: "POST" | "PUT";
   readonly headers?: Readonly<Record<string, string>>;
-  /** Only a tool's bounded request (a handed-in meeting) passes the ordinary body bound. */
+  /** Only a tool's bounded request (a custom staging meeting) passes the ordinary body bound. */
   readonly maximum_request_bytes?: number;
 }
 

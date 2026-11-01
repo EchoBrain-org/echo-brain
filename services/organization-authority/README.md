@@ -12,6 +12,11 @@ state; it requires the [current baselines](#state-and-baselines), and existing
 disposable rehearsal state uses the
 [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state).
 
+Meeting intake comes from personal Granola and, on staging only, an internal
+synthetic source for release qualification. The synthetic source is hidden
+from Connected tools. Person clients list, open and decide reviews through
+`POST /v1/person/reviews` independently of connector availability.
+
 For any deployed staging initial-owner setup, do not run the lower-level setup
 commands in this service reference. Start with the
 [operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
@@ -471,12 +476,15 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses six byte-pinned baselines, one per role: Authority V15,
+Current state uses six byte-pinned baselines, one per role: Authority V16,
 control-plane V4, record-log V6, retrieval facts V3, retrieval lexical V2 and
 retrieval content V2. The V2 root binds exactly these six roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
 database. Old roots, retired databases, and mismatched schemas refuse before
-writable opening.
+writable opening. Authority V16 removes the unused manual meeting-intake
+table and its triggers. V15 state cannot be upgraded in place; use the
+[authorized fresh-state setup](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state)
+under the operator playbook.
 
 A proposal is frozen once, when it is staged, and one row in
 `authority_approval_decisions_v1` records the first decision. A card that cannot

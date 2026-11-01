@@ -14,8 +14,10 @@ This document preserves their implementation evidence as historical context.
 Custody, approval and personal connector code remain; the dormant tool capture
 libraries and shared capture contracts were removed on 2026-10-19.
 
-**Current surface update, 2026-11-01:** Paste a meeting is retired, not moved
-into Capture. Meeting reviews are independent of a connected meeting tool.
+**Implementation update, 2026-11-01:** Paste a meeting and its entire
+`hand-in` implementation are removed, with no compatibility processing and no
+Capture integration. This requires fresh Authority V16 state; V15 is not
+migrated. Meeting reviews are independent of a connected meeting tool.
 The synthetic staging provider remains available to release qualification but
 is hidden from the public tools catalog. Slack is labeled for approval
 notifications and supplies no knowledge-source reads. Its bounded own-DM

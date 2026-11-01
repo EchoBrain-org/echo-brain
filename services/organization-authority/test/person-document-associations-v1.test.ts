@@ -47,12 +47,12 @@ function search(project_id: typeof PROJECT_ALPHA | typeof PROJECT_BETA) {
 }
 
 describe('document project associations', () => {
-  it('refuses a pre-V15 schema header at both current runtime adapters before attempting V15 queries', () => {
+  it('refuses a pre-V16 schema header at both current runtime adapters before attempting V16 queries', () => {
     const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys=ON');
-    db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v15.sql', import.meta.url), 'utf8'));
+    db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v16.sql', import.meta.url), 'utf8'));
     db.pragma('user_version = 9');
-    expect(() => new SqlitePersonDocumentRepositoryV1(db)).toThrow('Documents require Authority V15');
-    expect(() => new SqliteProjectContextRepositoryV1(db)).toThrow('Project context requires Authority V15');
+    expect(() => new SqlitePersonDocumentRepositoryV1(db)).toThrow('Documents require Authority V16');
+    expect(() => new SqliteProjectContextRepositoryV1(db)).toThrow('Project context requires Authority V16');
   });
 
   it('keeps independent modern project links, immutable audience and exact replay while removing only the requested link', () => {

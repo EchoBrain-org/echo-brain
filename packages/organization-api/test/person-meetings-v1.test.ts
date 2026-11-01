@@ -24,6 +24,15 @@ describe('person meetings v2', () => {
       meeting: { id: 'synthetic-custom-dvt-review', title: 'DVT exception review', notes: '', transcript: 'Decision: begin PVT with DVT still on hold.' } };
     expect(validatePersonMeetingRequestV2(input)).toEqual(input);
   });
+  it('refuses manual meeting submission and its receipt while preserving synthetic staging submission', () => {
+    const meeting = { title: 'Planning', notes: 'Decide the release date.', transcript: '' };
+    expect(() => validatePersonMeetingRequestV2({ schema_version: 2, tool_id: 'hand-in', operation: 'submit', retain: true, project_id: null, meeting })).toThrow();
+    expect(() => validatePersonMeetingRequestV2({ schema_version: 2, tool_id: 'hand-in', operation: 'submit', retain: true, project_id: null,
+      meeting: { id: 'synthetic-custom-planning', ...meeting } })).toThrow();
+    expect(() => validatePersonMeetingResultV2('submit', { status: 'queued', meeting_id: `hand-in-${'a'.repeat(64)}` })).toThrow();
+    expect(validatePersonMeetingResultV2('submit', { status: 'queued', meeting_id: 'synthetic-custom-planning' }))
+      .toEqual({ status: 'queued', meeting_id: 'synthetic-custom-planning' });
+  });
   it.each([
     { tool_id: 'granola' }, { retain: false }, { retain: undefined }, { project_id: 'invalid' },
     { meeting: { id: 'synthetic-release-canary', title: 'Test', notes: 'Test', transcript: '' } },

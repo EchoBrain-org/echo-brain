@@ -568,8 +568,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const candidates = [
       ...this.textRows(actor, scope, [], { inventory: true, limit: sourceLimit, ...(exclude === undefined ? {} : { exclude }) }),
       // Transcript-only imports from a meeting tool remain visible in the
-      // original-item list, but have no passage to cite (a pasted transcript
-      // is text). Exclude them before applying the limit so they neither
+      // original-item list, but have no passage to cite. Exclude them before
+      // applying the limit so they neither
       // break packet construction nor hide readable notes.
       ...this.imported.rows(actor, scope).filter(row => row.text.length > 0 && !excludedRow(row, true, exclude)).slice(0, sourceLimit),
       ...this.documentRows(actor, scope, [], { inventory: true, limit: sourceLimit, first_document_passage: true, ...(exclude === undefined ? {} : { exclude }) }),
@@ -800,7 +800,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   /**
    * The Ask source check (Ask timeline v1, C1; ADR-0047): for each cited source revision, whether the caller can read it now,
    * through the same ACL and global scope filter as every original read, and when they can, whether a newer readable revision
-   * of the same source exists: `changed` for an imported or pasted meeting edited since. Notes and documents never change.
+   * of the same source exists: `changed` for an imported meeting edited since. Notes and documents never change.
    * Read only: it releases nothing and writes no audit row, and a citation the caller cannot read is `unreadable`, never a
    * refusal, so a hidden, deleted and never-existing source read the same.
    *

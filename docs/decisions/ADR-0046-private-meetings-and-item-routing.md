@@ -28,11 +28,15 @@ The founder accepted this record on 2026-10-31, as built in #360 (`915761c`)
 and #362 (`8cc3fff`). Acceptance does not mean the change is deployed or
 qualified.
 
-Implementation update, 2026-11-01: the Paste a meeting surface and new `hand-in`
-submissions described here are retired. Existing retained and queued hand-ins
-keep their custody, source identity and review access. Private intake and
-per-item audience rules remain unchanged; native review now has a
-provider-independent route. The decision below records the accepted design.
+Implementation update, 2026-11-01: Paste a meeting and the entire `hand-in`
+implementation are removed, including its UI, CLI, API payloads, provider,
+storage and compatibility processing. The founder confirmed the feature was
+never used and all existing data is disposable. Removal requires fresh
+Authority V16 state; V15 is not migrated. Nothing moves into Capture.
+Granola and the internal staging synthetic source remain. Private intake and
+per-item audience rules remain unchanged; native review has a
+provider-independent route. The decision below records the accepted design;
+its pasted-meeting requirements are historical.
 
 ## Context and options
 

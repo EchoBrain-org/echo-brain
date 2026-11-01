@@ -451,7 +451,7 @@ const EMPLOYEE_ACTIONS = {
   list: "employee-list",
 } as const;
 
-const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project', 'meetings', 'submit'];
+const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel', 'project', 'meetings'];
 
 function toolVerb(value: string | undefined): PersonToolVerbNameV1 | undefined {
   return TOOL_VERBS.find((verb) => verb === value);

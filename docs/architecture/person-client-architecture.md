@@ -285,8 +285,7 @@ Granola's Manage sheet adds its meeting watch: Off, My meetings (the meetings
 the person recorded in the last 7 days) or One folder (a filter), with an
 optional suggested project that only pre-ticks a review's destinations
 ([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)).
-Paste a meeting is retired. The staging synthetic provider stays internal and
-is not listed. Slack's provider-owned label identifies approval notifications;
+The staging synthetic provider stays internal and is not listed. Slack's provider-owned label identifies approval notifications;
 it is not an Ask data source. Home and the decision page read reviews through
 `person reviews --request <JSON>`, without requiring a connected meeting tool.
 Connect, Reconnect and Disconnect run the same Person CLI tools verbs as the

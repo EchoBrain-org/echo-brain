@@ -410,8 +410,8 @@ payload capture has one API and collector, on ordinary product requests.
 
 #### Follow a meeting from intake to approval delivery
 
-Personal Granola, pasted (`hand-in`) and synthetic intake use the same
-core-runtime channel. Join
+Personal Granola and staging synthetic intake use the same core-runtime
+channel. Join
 `source_poll` and extraction within the worker operation; follow the hashed
 `meeting_id` through `extraction`, `candidate_persist` and `approval_staging`.
 The staging event links that meeting to a hashed `approval_id`, which later

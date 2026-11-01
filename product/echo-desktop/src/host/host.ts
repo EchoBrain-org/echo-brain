@@ -78,13 +78,12 @@ async function load(): Promise<ClientModules> {
     dependencies, now,
   };
 }
-// Private input text left behind by a host stopped mid-send. Retired meeting
-// input folders are included so upgrades clean up any old leftovers. Only an
-// hour old, well past a send's time limit: another host (the installed app, a
-// dev or test run) may be sending from its folder now.
+// Private note text left behind by a host stopped mid-send. Only an hour old,
+// well past a send's time limit: another host (the installed app, a dev or test
+// run) may be sending from its folder now.
 try {
   for (const name of readdirSync(tmpdir())) {
-    if (!name.startsWith('echo-note-') && !name.startsWith('echo-meeting-')) continue;
+    if (!name.startsWith('echo-note-')) continue;
     const folder = join(tmpdir(), name);
     try {
       if (Date.now() - statSync(folder).mtimeMs > 60 * 60_000) rmSync(folder, { recursive: true, force: true });

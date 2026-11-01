@@ -34,19 +34,12 @@ import type { PersonHttpRuntimeResourcesV1 } from './organization-authority-api-
 
 export interface PersonMeetingProviderV1 {
   readonly id: string; readonly normalizer_version: string;
-  /** Internal or retired sources keep their processing/review support without appearing as user connectors. */
+  /** Internal sources keep their processing/review support without appearing as user connectors. */
   readonly listed?: boolean;
   /** The admission label for this provider's custodian; defaults to a person's own OAuth account. */
   readonly custodian_assurance?: string;
-  /** A provider may allow every active member to submit; otherwise submissions are owner-only. */
-  readonly submitters?: 'members';
   readonly connection_http: ProviderHttpApplicationV1;
   readonly cursor: PersonalMeetingCheckpointCodecV1 & { readonly policy: AdmittedMeetingSourceCursorPolicyV1 };
-  /**
-   * Optional: forgets what a cancelled import kept (a handed-in payload no admitted source revision holds). It runs
-   * inside the Authority transaction that drops the import from its source's queue, and needs no provider session.
-   */
-  forget?(setting: MeetingIntakeSettingV1, meetingId: string): void;
   tool(token: string): OrganizationPersonToolV4;
   open(person: MeetingIntakePersonV1, current: () => void, signal?: AbortSignal): Promise<{
     readonly identity: MeetingSourceAdapter['identity']; readonly custodian: unknown; readonly email: string | null; readonly workspace: string | null;
@@ -60,11 +53,8 @@ export interface PersonMeetingProviderV1 {
      */
     watchable?(watch: PersonalMeetingWatchV1): Promise<void>;
     preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
-    /**
-     * Optional: keeps a submitted meeting for the person's source and returns the id its import is queued under. It runs
-     * inside the Authority transaction that queues that import, so a payload kept in the Authority commits with it.
-     */
-    submit?(meeting: PersonSubmittedMeetingV2, setting: MeetingIntakeSettingV1): string;
+    /** Optional: creates a meeting in the source and returns its immutable id for queuing. */
+    submit?(meeting: PersonSubmittedMeetingV2): string;
   }>;
   source(setting: MeetingIntakeSettingV1, current: () => void): MeetingSourceAdapter & { requireCurrent(): void };
 }
@@ -454,8 +444,7 @@ export function createPersonMeetingRuntimeV1(options: {
           const setting = intake.list(person).find(s => s.source_key === input.source_key);
           if (!setting) throw new AuthorityOperationError('not_found', 'Meeting import unavailable');
           const owner = ownerOf(setting.source_adapter_id);
-          // What the import kept goes with it, in the same transaction: a handed-in payload no admitted revision holds.
-          db.transaction(() => { owner.intake.cancelImport(setting, input.meeting_id, current); owner.provider.forget?.(setting, input.meeting_id); }).immediate();
+          owner.intake.cancelImport(setting, input.meeting_id, current);
           observed.delete(setting.source_key); return { status: 'cancelled' };
         }
         // Stopping needs no provider session and no project access, and leaves no status from the stopped watch behind.
@@ -492,8 +481,8 @@ export function createPersonMeetingRuntimeV1(options: {
         const currentProject = () => {
           session.current(); current();
           if (intake.currentPerson(person, project).grant_sha256 !== grant) throw new AuthorityOperationError('stale_access_state', 'Meeting project access changed');
-          // Submission authority is declared by the provider; the default is owner-only.
-          if (input.operation === 'submit' && provider.submitters !== 'members' && options.sessions.authenticateAccess({ access_token: token }).membership_type !== 'owner') {
+          // Creating a meeting through a source is owner-only.
+          if (input.operation === 'submit' && options.sessions.authenticateAccess({ access_token: token }).membership_type !== 'owner') {
             throw new AuthorityOperationError('unauthorized', 'Only an owner can submit meetings to this tool');
           }
         };
@@ -513,8 +502,8 @@ export function createPersonMeetingRuntimeV1(options: {
           if (input.operation === 'watch' && settings(person) !== input.settings_sha256) throw new AuthorityOperationError('stale_access_state', 'Meeting settings changed. Reload them.');
           const providerIntake = ownerOf(provider.cursor.policy.source_adapter_id).intake;
           const setting = ensurePersonMeetingSourceV1(providerIntake, { provider, person, session, commitments: id => processor.current_commitments(id), current: currentProject });
-          // A submitted meeting is kept here, so its payload and its queued import commit together or not at all.
-          const submitted = input.operation === 'submit' ? session.submit!(input.meeting, setting) : null;
+          // The source owns submission persistence; its immutable id makes a queue retry safe.
+          const submitted = input.operation === 'submit' ? session.submit!(input.meeting) : null;
           // A watch's or an import's project is only a suggestion; neither changes the source.
           if (input.operation === 'watch') providerIntake.watch(setting, { watch: input.watch, folder_id: input.folder_id }, project, currentProject);
           else providerIntake.enqueue(setting, input.operation === 'submit' ? submitted! : input.meeting_id, project, currentProject);

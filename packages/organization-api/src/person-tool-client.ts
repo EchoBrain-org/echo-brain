@@ -4,7 +4,7 @@ export const PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1 = 8 * 1024;
 export const PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1 = 32 * 1024;
 /** Finite JSON envelope for bounded tool metadata collections; also the transport ceiling. */
 export const PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 = 128 * 1024;
-/** The largest request a tool may send: the Authority's provider-route body (a handed-in meeting). */
+/** The largest request a tool may send: the Authority's provider-route body, including a custom staging meeting. */
 export const PERSON_TOOL_REQUEST_MAX_BYTES_V1 = 64 * 1024;
 
 /** Authenticated, bounded Authority transport supplied to a Person tool fragment. */
@@ -38,7 +38,7 @@ export interface PersonToolHostV1 {
   withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>): Promise<T>;
 }
 /** The verbs of `echo-brain person tools <verb> --tool <tool_id>`, the same for every tool. */
-export type PersonToolVerbNameV1 = 'setup' | 'connect' | 'disconnect' | 'status' | 'cancel' | 'project' | 'meetings' | 'submit';
+export type PersonToolVerbNameV1 = 'setup' | 'connect' | 'disconnect' | 'status' | 'cancel' | 'project' | 'meetings';
 
 export interface PersonToolVerbContextV1 {
   readonly host: PersonToolHostV1;

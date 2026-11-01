@@ -70,8 +70,8 @@ Tokens are never printed by successful commands.
 
 - external OIDC Person identity and rotating sessions;
 - organization authorization and audit;
-- each person's own meeting sources (Granola, pasted meetings, and a
-  staging-only synthetic source), decision processing, and Slack presentation
+- each person's own meeting sources (Granola and an internal staging-only
+  synthetic source), decision processing, and Slack presentation
   and identity adapters, plus the per-person live Jira and Confluence readers;
 - one approval core for every meeting proposal, decided from a Person client
   or on the optional Slack DM copy;

@@ -78,9 +78,9 @@ or source admission. Shared meeting admission and approval remain available.
 Meetings enter through each person's own source: a person connects Granola with
 `echo-brain person tools connect --tool granola` (or the desktop Tools page)
 and may turn on automatic import of the meetings they captured or of one
-folder. Imported meetings stay private until their items are approved. Paste
-a meeting is retired; previously handed-in meetings retain their custody and
-audience. Native reviews do not require a connected meeting tool
+folder. Imported meetings stay private until their items are approved. Staging
+also has an internal synthetic source for release qualification. Native reviews
+do not require a connected meeting tool
 ([ADR-0030](../decisions/ADR-0030-personal-meeting-custody-and-review.md),
 [ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md); the
 [Personal Granola sprint](../product/2026-10-05-personal-granola-sprint-v1.md)

@@ -356,8 +356,8 @@ be implemented safely with the current model.
 No Teams, Granola, project-management, or other non-Slack organization-tool
 onboarding is implemented. The Person CLI dispatches Granola, Slack, Jira and
 Confluence ([connector contracts](connector-contracts.md)); Granola, Jira and
-Confluence are personal connections, not organization tools. Paste a meeting
-is retired. The staging synthetic meeting provider stays internal to release
+Confluence are personal connections, not organization tools. The staging
+synthetic meeting provider stays internal to release
 qualification and is omitted from the public Connected tools list.
 
 ## Schema growth rule

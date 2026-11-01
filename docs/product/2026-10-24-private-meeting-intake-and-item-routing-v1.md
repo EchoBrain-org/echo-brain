@@ -10,12 +10,15 @@ Shipped is not deployed or qualified.
 later added items kept private inside a project, and replaced section 2.5's
 destination chip with a place button and an Only me lock.
 
-Surface retirement, 2026-11-01: the Paste a meeting UI and new `hand-in`
-submissions described below are retired, without moving them into Capture.
-Previously retained and queued hand-ins keep their source identity and custody.
-Native reviews now use provider-independent `person reviews` requests, so they
-remain available without a connected meeting tool. The remainder records the
-original intake and routing design.
+Implementation update, 2026-11-01: Paste a meeting and its `hand-in`
+implementation are removed completely, including the desktop and CLI entry
+points, API payloads, provider, storage and compatibility processing. The
+founder confirmed the feature was never used and all existing data is
+disposable. Removal requires fresh Authority V16 state; V15 is not migrated.
+Nothing moves into Capture. Granola and the internal staging
+synthetic source remain. Native reviews use provider-independent `person reviews`
+requests and remain available without a connected meeting tool. The remainder
+records the original intake and routing design; its hand-in sections are historical.
 
 ## Goal
 

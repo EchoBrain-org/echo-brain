@@ -21,8 +21,8 @@ The Person CLI dispatches `person tools <verb> --tool <id>` through
 client fragment, with only the authenticated `PersonToolHostV1` transport supplied
 by the product. Slack, Jira and Confluence use this seam through client-only
 workspaces that keep their server dependencies out of the installed Person
-client; the Person client composes the Granola meeting tool itself. Paste a
-meeting is retired. The staging synthetic meeting provider remains internal to
+client; the Person client composes the Granola meeting tool itself. The
+staging synthetic meeting provider remains internal to
 release qualification and does not appear in the public tools catalog.
 
 Provider-owned HTTP applications mount through the Authority's generic
@@ -214,9 +214,9 @@ Granola supplies verified account/workspace, folder enumeration, a paged
 `list_meetings` window and meeting normalization. A watch is off, the person's
 own meetings or one folder, over the last 7 days; a project named with it is
 only a suggestion. Imported notes are labeled unapproved and readable by their
-importer alone; nothing shares a transcript. The former `hand-in` input is
-retired, including its Paste a meeting UI. Existing retained meetings keep
-their custody and audience. `POST /v1/person/reviews` takes `schema_version: 1`
+importer alone; no transcript is exposed through Person reads. Granola and the
+internal staging synthetic source are the implemented meeting intake providers.
+`POST /v1/person/reviews` takes `schema_version: 1`
 and `reviews`, `review_open` or `review` operations without a `tool_id`; the
 Person CLI exposes it as `person reviews --request <JSON>`. Reading and deciding
 an existing review requires no connected meeting tool. The older meeting route
