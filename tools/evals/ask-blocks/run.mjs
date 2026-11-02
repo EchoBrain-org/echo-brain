@@ -9,7 +9,8 @@
  * the same route ranks each case's trial-1 answers twice. The report keeps full traces: all data is synthetic.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
@@ -50,6 +51,9 @@ export function help() {
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
     "  --timeout-ms N      Per-call timeout, 15000 through 180000 (default: 120000).",
     "  --resume PATH       Carry every call of an earlier report that got a reply; make only the calls it lacks.",
+    "  --writer ROUTE      openrouter (default) or claude-account: the product's personal Claude account writer, the",
+    "                      same model through the Claude Agent SDK and your own signed-in claude binary.",
+    "  --claude-executable PATH  With --writer claude-account: the signed-in claude binary.",
     "  --help              Show this text without reading a credential or making a request.",
     "",
     "Only the whole pre-registered set (every case and catalog, three trials, the judge on) decides anything; a smaller",
@@ -59,7 +63,7 @@ export function help() {
 }
 
 export function parseArgs(argv) {
-  const options = { run: false, credentialFile: null, out: null, caseIds: null, catalogIds: null, trials: TRIALS, judge: true, concurrency: 4, timeoutMs: 120_000, resume: null };
+  const options = { run: false, credentialFile: null, out: null, caseIds: null, catalogIds: null, trials: TRIALS, judge: true, concurrency: 4, timeoutMs: 120_000, resume: null, writer: "openrouter", claudeExecutable: null };
   const list = (value) => value.split(",").map((part) => part.trim()).filter(Boolean);
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
@@ -71,8 +75,11 @@ export function parseArgs(argv) {
     "--concurrency": (value) => { options.concurrency = Number(value); },
     "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
     "--resume": (value) => { options.resume = value; },
+    "--writer": (value) => { if (value !== "openrouter" && value !== "claude-account") throw new Error("--writer must be openrouter or claude-account"); options.writer = value; },
+    "--claude-executable": (value) => { options.claudeExecutable = value; },
   })) return { help: true };
   if (options.resume !== null && (!isAbsolute(options.resume) || !existsSync(options.resume))) throw new Error("--resume must be the absolute path of an earlier report");
+  if (options.writer === "claude-account" && (options.claudeExecutable === null || !isAbsolute(options.claudeExecutable) || !existsSync(options.claudeExecutable))) throw new Error("--writer claude-account needs --claude-executable, the absolute path of the signed-in claude binary");
   assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, TRIALS);
   options.concurrency = boundedInteger(options.concurrency, "--concurrency", 1, 6);
@@ -180,13 +187,31 @@ export async function captureWriterPrompts(caseDefinition, document, generation)
   return captured;
 }
 
+/**
+ * One call through a port that admits each outbound request (the personal Claude account writer): every request is
+ * admitted at once, and the usage of all of them is added up.
+ */
+async function admitted(structuredOutput, input) {
+  const usages = [];
+  let finishReason = null;
+  const value = await structuredOutput.generate_with_admission(input, async (request, forward) => {
+    const result = await forward(request.signal ?? AbortSignal.timeout(input.timeout_ms));
+    usages.push(result.usage ?? null);
+    finishReason = result.finish_reason ?? finishReason;
+    return result.value;
+  });
+  const sum = (name) => usages.reduce((total, entry) => total + (Number.isSafeInteger(entry?.[name]) ? entry[name] : 0), 0);
+  return { value, finish_reason: finishReason, usage: usages.every((entry) => entry === null) ? null : { input_tokens: sum("input_tokens"), output_tokens: sum("output_tokens"), total_tokens: sum("input_tokens") + sum("output_tokens") }, provider_latency_ms: null };
+}
+
 /** One model call, kept whole: the reply and the provider's metadata, or the safe error. */
 async function call(structuredOutput, input) {
   const started = performance.now();
   try {
     const observed = typeof structuredOutput.generate_with_observation === "function"
       ? await structuredOutput.generate_with_observation(input)
-      : { value: await structuredOutput.generate(input), finish_reason: null, usage: null, provider_latency_ms: null };
+      : typeof structuredOutput.generate_with_admission === "function" ? await admitted(structuredOutput, input)
+        : { value: await structuredOutput.generate(input), finish_reason: null, usage: null, provider_latency_ms: null };
     return { value: observed.value, finish_reason: observed.finish_reason ?? null, usage: usage(observed.usage),
       provider_latency_ms: Number.isSafeInteger(observed.provider_latency_ms) ? observed.provider_latency_ms : null, elapsed_ms: Math.round(performance.now() - started) };
   } catch (error) {
@@ -295,7 +320,13 @@ export async function run(options, dependencies = {}) {
   const cases = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
   const catalogs = options.catalogIds === null ? CATALOGS : CATALOGS.filter((catalog) => options.catalogIds.includes(catalog.id));
   const identityBefore = codeIdentity(ROOT, CODE_FILES);
-  const loaded = dependencies.loaded ?? createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: options.credentialFile }).load();
+  const route = options.writer ?? "openrouter";
+  // The personal Claude account writer: the product's own path (providers/openrouter/src/claude-research), with this
+  // machine's home directory and signed-in claude binary. Native Claude Code owns the sign-in; nothing here reads it.
+  const bundled = dependencies.loaded ?? createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: options.credentialFile,
+    ...(route === "claude-account" ? { personal_claude_research: { membership_id: "mem_ask-blocks-eval", home_directory: homedir(), executable_path: realpathSync(options.claudeExecutable) } } : {}) }).load();
+  const loaded = route === "claude-account" ? bundled.personal_research : bundled;
+  if (loaded === undefined) throw new Error("the claude-account writer is not available from this bundle");
   const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
   const captured = new Map();
   for (const caseDefinition of cases) captured.set(caseDefinition.id, await captureWriterPrompts(caseDefinition, document, loaded.generation));
@@ -362,7 +393,7 @@ export async function run(options, dependencies = {}) {
     complete,
     cases_sha256: sha256(readFileSync(CASES_FILE)),
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
-    model: Object.freeze({ adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
+    model: Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
     ...(previous === null ? {} : { resumed_from: Object.freeze({ observed_at: previous.observed_at, report_sha256: sha256(readFileSync(options.resume)), code: previous.code,
       carried_calls: trials.reduce((sum, trial) => sum + trial.attempts.filter((attempt) => attempt.carried).length, 0),
       carried_judge_orders: Object.values(judged).flat().filter((entry) => entry.carried).length }) }),

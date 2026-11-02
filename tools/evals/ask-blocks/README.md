@@ -200,8 +200,19 @@ carried and counts the calls that still failed.
 
 The first full run (2026-11-02, at `2834997`) lost calls when OpenRouter
 refused them with HTTP 402, for lack of credit: trial 1 was complete, trial 2
-lost 15 calls, trial 3 113, and the judge 57 of 59. It decides nothing until
-it is resumed.
+lost 15 calls, trial 3 113, and the judge 57 of 59. It is kept as a partial
+report and decides nothing.
+
+## Writer route
+
+The founder had ranked nothing yet, so the run of record re-ran every trial
+and the judge through the product's personal Claude account writer instead
+(`--writer claude-account --claude-executable <signed-in claude binary>`,
+`providers/openrouter/src/claude-research`): the same model,
+`claude-sonnet-5-5`, through the Claude Agent SDK and the founder's own
+`claude` sign-in, with the SDK's JSON-schema output in place of OpenRouter's.
+Every answer of the run of record comes from that one route; the report names
+it under `model.route`.
 
 ## Limits
 

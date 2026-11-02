@@ -73,6 +73,28 @@ test("runs every catalog with one repair or retry, judges both orders, and keeps
   assert.equal(JSON.parse(readFileSync(reportPath, "utf8")).kind, "echo-ask-blocks-evaluation-v1");
 });
 
+test("writes through the personal Claude account port, admitting each request and adding up its usage", async () => {
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-account-"));
+  const admittedRequests = [];
+  const port = {
+    async generate() { throw new Error("Native structured generation requires per-request admission"); },
+    async generate_with_admission(input, admit) {
+      // A native session may make more than one model request for one answer.
+      for (const operation of ["count_tokens", "messages"]) {
+        await admit({ model: input.model, operation, signal: AbortSignal.timeout(5_000) }, async () => { admittedRequests.push(operation); return { value: null, usage: { input_tokens: 10, output_tokens: operation === "messages" ? 7 : 0 } }; });
+      }
+      return { lists: [], tables: [], sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"], form: "lead" }], not_found: [] };
+    },
+  };
+  const accountGeneration = { ...generation, generation_adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" };
+  const options = { run: true, credentialFile: null, out, caseIds: ["soak-owner"], catalogIds: ["today"], trials: 1, judge: false, concurrency: 1, timeoutMs: 20_000, writer: "claude-account" };
+  const { report } = await run(options, { loaded: { personal_research: { structured_output: port, generation: accountGeneration } }, progress: () => undefined });
+  assert.deepEqual(report.model, { route: "claude-account", adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" });
+  assert.deepEqual(admittedRequests, ["count_tokens", "messages"]);
+  assert.deepEqual(report.trials[0].attempts[0].usage, { input_tokens: 20, output_tokens: 7, total_tokens: 27 });
+  assert.equal(report.trials[0].grade.valid, true);
+});
+
 test("resumes an earlier report: carries every call that got a reply and makes only the calls it lacks", async () => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-resume-"));
   const answer = { blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] };
