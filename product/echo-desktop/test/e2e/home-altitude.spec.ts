@@ -70,6 +70,12 @@ test('Home opens at its top: the stops in the title row, what needs you with no 
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('alt-projects')).toBeVisible();
   await expect(apollo).toBeFocused();
+  // Back into Apollo, the focus starts on its first row, not on Mina from the zoom before.
+  await page.keyboard.press('Enter');
+  await expect(level).toBeVisible();
+  await expect(level.getByTestId('alt-decision').first()).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(apollo).toBeFocused();
   await page.keyboard.press('ArrowDown');
   await expect(page.getByTestId('alt-project').nth(1)).toBeFocused();
   await page.keyboard.press('ArrowUp');

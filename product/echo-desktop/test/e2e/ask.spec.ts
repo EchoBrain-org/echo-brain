@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 import { captureOpenExternal } from './native.js';
@@ -222,4 +222,20 @@ test('a long Ask shows one quiet line that opens onto what it looks through, nam
   await pane.getByTestId('source-open').click();
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
   await expect(page.getByTestId('reader-text')).toHaveText('Apollo moves to usage-based pricing tiers from October.');
+});
+
+test('Cancel stops a long Ask in the client, so the Authority stops researching and no answer comes', async () => {
+  run = await launch('ask-progress');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  await expect(page.getByTestId('ask-stage')).toHaveText('Reading Tuesday sync and 2 more', { timeout: 10_000 });
+  await page.getByTestId('ask-cancel').click();
+  // Asked from Home with nothing before it, Ask closes.
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+  // The host stopped the client's request: the Authority saw it end before answering, and the run ended without an answer.
+  await expect.poll(() => existsSync(join(run.home, 'ask-stopped'))).toBe(true);
+  expect(readFileSync(join(run.home, 'ask-stopped'), 'utf8')).toBe('What did we agree?');
+  const runs = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/ask\.run \S+/g) ?? [];
+  await expect.poll(runs).toHaveLength(1);
+  expect(runs()).not.toEqual(['ask.run ok']);
 });
