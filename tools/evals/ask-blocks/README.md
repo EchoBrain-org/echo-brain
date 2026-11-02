@@ -187,6 +187,22 @@ rule, threshold or catalog entry changed.
   `dvt-date-moves` each move's reason sat beside its new date, where a writer
   may name either first; the case now checks the three dates, in order.
 
+## Resuming
+
+A run that loses calls to a provider failure is resumed with
+`--resume <earlier report>`. It carries every call that got a reply, reads
+and checks each again with the current code, and makes only the calls a
+trial still needs: the repair after a carried refused reply, or the whole
+trial when its first call failed. A judged order is carried when it judged the
+same trial-1 answers. The earlier report must be this evaluation's, over the
+same cases, with the same writer prompts; the new report names what it
+carried and counts the calls that still failed.
+
+The first full run (2026-11-02, at `2834997`) lost calls when OpenRouter
+refused them with HTTP 402, for lack of credit: trial 1 was complete, trial 2
+lost 15 calls, trial 3 113, and the judge 57 of 59. It decides nothing until
+it is resumed.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model

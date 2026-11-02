@@ -9,8 +9,8 @@
  * the same route ranks each case's trial-1 answers twice. The report keeps full traces: all data is synthetic.
  */
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { validatePersonFollowUpEvidenceV1 } from "@echo-brain/organization-api";
@@ -49,6 +49,7 @@ export function help() {
     "  --judge on|off      Run the model judge (default: on).",
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
     "  --timeout-ms N      Per-call timeout, 15000 through 180000 (default: 120000).",
+    "  --resume PATH       Carry every call of an earlier report that got a reply; make only the calls it lacks.",
     "  --help              Show this text without reading a credential or making a request.",
     "",
     "Only the whole pre-registered set (every case and catalog, three trials, the judge on) decides anything; a smaller",
@@ -58,7 +59,7 @@ export function help() {
 }
 
 export function parseArgs(argv) {
-  const options = { run: false, credentialFile: null, out: null, caseIds: null, catalogIds: null, trials: TRIALS, judge: true, concurrency: 4, timeoutMs: 120_000 };
+  const options = { run: false, credentialFile: null, out: null, caseIds: null, catalogIds: null, trials: TRIALS, judge: true, concurrency: 4, timeoutMs: 120_000, resume: null };
   const list = (value) => value.split(",").map((part) => part.trim()).filter(Boolean);
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
@@ -69,7 +70,9 @@ export function parseArgs(argv) {
     "--judge": (value) => { if (value !== "on" && value !== "off") throw new Error("--judge must be on or off"); options.judge = value === "on"; },
     "--concurrency": (value) => { options.concurrency = Number(value); },
     "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
+    "--resume": (value) => { options.resume = value; },
   })) return { help: true };
+  if (options.resume !== null && (!isAbsolute(options.resume) || !existsSync(options.resume))) throw new Error("--resume must be the absolute path of an earlier report");
   assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, TRIALS);
   options.concurrency = boundedInteger(options.concurrency, "--concurrency", 1, 6);
@@ -198,31 +201,61 @@ function repairPrompt(userPrompt, rejected, reason) {
 
 /**
  * One trial: the catalog's writer on one case, its reply read and checked, one repair for a refused reply or one retry
- * for a failed call, then graded. Every prompt and reply is kept (synthetic).
+ * for a failed call, then graded. Every prompt and reply is kept (synthetic). `carried` is an earlier run's calls for
+ * this trial that got a reply, in order (README.md, "Resuming"): each is read and checked again, and only the calls it
+ * still needs are made.
  */
-export async function runTrial(caseDefinition, catalog, trial, prompts, evidence, structuredOutput, generation, options) {
+export async function runTrial(caseDefinition, catalog, trial, prompts, evidence, structuredOutput, generation, options, carried = []) {
   const attempts = [];
   let read = null;
   let userPrompt = prompts.user_prompt;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  const record = (entry) => {
+    if (entry.error === undefined) {
+      read = readReply(catalog, entry.value);
+      Object.assign(entry, { valid: read.valid, problems: read.problems });
+      if (!read.valid) userPrompt = repairPrompt(prompts.user_prompt, entry.value, read.problems[0] ?? "the reply could not be read");
+    } else {
+      Object.assign(entry, { valid: false });
+      userPrompt = prompts.user_prompt;
+    }
+    attempts.push(entry);
+  };
+  for (const previous of carried) {
+    record({ ...previous, carried: true });
+    if (attempts.at(-1).valid) break;
+  }
+  while (attempts.length < 2 && attempts.at(-1)?.valid !== true) {
+    const attempt = attempts.length + 1;
     const kind = attempt === 1 ? "first" : attempts[0].error === undefined ? "repair" : "retry";
     const result = await call(structuredOutput, { model: generation.answer_model, system_prompt: prompts.system_prompt, user_prompt: userPrompt, schema: catalog.schema,
       max_output_tokens: WRITER_OUTPUT_TOKENS, timeout_ms: options.timeoutMs });
-    const record = { attempt, kind, ...(kind === "first" ? {} : { user_prompt: userPrompt }), ...result };
-    if (result.error === undefined) {
-      read = readReply(catalog, result.value);
-      record.valid = read.valid;
-      record.problems = read.problems;
-    } else {
-      record.valid = false;
-    }
-    attempts.push(record);
-    if (record.valid) break;
-    if (attempt === 1) userPrompt = result.error === undefined ? repairPrompt(prompts.user_prompt, result.value, read.problems[0] ?? "the reply could not be read") : prompts.user_prompt;
+    record({ attempt, kind, ...(kind === "first" ? {} : { user_prompt: userPrompt }), ...result });
   }
   const final = attempts.at(-1).error === undefined ? read : null;
   const grade = gradeTrial(caseDefinition, catalog, final ?? { valid: false }, evidence);
   return Object.freeze({ case_id: caseDefinition.id, catalog: catalog.id, trial, attempts, read: final, grade });
+}
+
+/** An earlier run's calls that got a reply, in order, up to the first that failed. */
+const repliedPrefix = (attempts) => {
+  const failed = attempts.findIndex((attempt) => attempt.error !== undefined);
+  return (failed < 0 ? attempts : attempts.slice(0, failed)).map(({ valid: _valid, problems: _problems, carried: _carried, ...attempt }) => attempt);
+};
+
+/**
+ * The earlier report a run resumes (README.md, "Resuming"): it must be this evaluation's, over the same cases, with
+ * the same writer prompts for every case and catalog it carries; otherwise nothing is carried.
+ */
+function resumable(previous, cases, catalogs, prompts) {
+  if (previous.kind !== "echo-ask-blocks-evaluation-v1" || previous.cases_sha256 !== sha256(readFileSync(CASES_FILE))) throw new Error("--resume must name a report of this evaluation over the same cases");
+  for (const caseDefinition of cases) {
+    for (const catalog of catalogs) {
+      const before = previous.prompts?.[caseDefinition.id]?.[catalog.id];
+      const now = prompts.get(caseDefinition.id).get(catalog.id);
+      if (before === undefined) continue;
+      if (before.user_prompt !== now.user_prompt || before.system_prompt_sha256 !== sha256(now.system_prompt)) throw new Error(`--resume: the writer prompts for ${caseDefinition.id} (${catalog.id}) changed since that run`);
+    }
+  }
 }
 
 /** The model judge on one case, in one order: each catalog's rank, after at most one repair, or its failure. */
@@ -268,6 +301,9 @@ export async function run(options, dependencies = {}) {
   for (const caseDefinition of cases) captured.set(caseDefinition.id, await captureWriterPrompts(caseDefinition, document, loaded.generation));
   const prompts = new Map(cases.map((caseDefinition) => [caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, writerPrompts(catalog, captured.get(caseDefinition.id))]))]));
   const evidence = new Map(cases.map((caseDefinition) => [caseDefinition.id, evidenceOf(captured.get(caseDefinition.id).user_prompt)]));
+  const previous = options.resume === null || options.resume === undefined ? null : JSON.parse(readFileSync(options.resume, "utf8"));
+  if (previous !== null) resumable(previous, cases, catalogs, prompts);
+  const carriedOf = (caseId, catalogId, trial) => repliedPrefix(previous?.trials?.find((entry) => entry.case_id === caseId && entry.catalog === catalogId && entry.trial === trial)?.attempts ?? []);
 
   // Trials interleave catalogs and cases, so a slow route slows every catalog alike.
   const tasks = [];
@@ -275,7 +311,8 @@ export async function run(options, dependencies = {}) {
     for (const caseDefinition of cases) {
       for (const catalog of catalogs) {
         tasks.push(async () => {
-          const result = await runTrial(caseDefinition, catalog, trial, prompts.get(caseDefinition.id).get(catalog.id), evidence.get(caseDefinition.id), loaded.structured_output, loaded.generation, options);
+          const result = await runTrial(caseDefinition, catalog, trial, prompts.get(caseDefinition.id).get(catalog.id), evidence.get(caseDefinition.id), loaded.structured_output, loaded.generation, options,
+            carriedOf(caseDefinition.id, catalog.id, trial));
           progress(`${JSON.stringify({ kind: "echo-ask-blocks-evaluation-progress-v1", case_id: result.case_id, catalog: result.catalog, trial, valid: result.grade.valid,
             grounded: result.grade.grounded, nothing_lost: result.grade.nothing_lost, fit: result.grade.fit, attempts: result.attempts.length })}\n`);
           return result;
@@ -292,7 +329,13 @@ export async function run(options, dependencies = {}) {
       const order = caseOrder(caseDefinition.id).filter((catalog) => catalogs.some((entry) => entry.id === catalog));
       const reads = Object.fromEntries(order.map((catalog) => [catalog, trials.find((entry) => entry.case_id === caseDefinition.id && entry.catalog === catalog && entry.trial === 1)?.read ?? null]));
       const casePrompts = prompts.get(caseDefinition.id).get(catalogs[0].id);
-      return [order, [...order].reverse()].map((shown) => async () => ({ case_id: caseDefinition.id, ...(await judgeCase(caseDefinition, casePrompts, reads, shown, loaded.structured_output, loaded.generation, options)) }));
+      return [order, [...order].reverse()].map((shown) => async () => {
+        // A judged order is carried when its trial-1 answers are the ones it judged: the same input, ranked.
+        const before = previous?.judge?.[caseDefinition.id]?.find((entry) => entry.ranks !== null && entry.order.join() === shown.join()
+          && entry.user_prompt === judgeInput(caseDefinition.question, JSON.parse(casePrompts.user_prompt).evidence, shown, reads));
+        if (before !== undefined) return { case_id: caseDefinition.id, ...before, carried: true };
+        return { case_id: caseDefinition.id, ...(await judgeCase(caseDefinition, casePrompts, reads, shown, loaded.structured_output, loaded.generation, options)) };
+      });
     });
     for (const result of await pooled(judgeTasks, options.concurrency)) (judged[result.case_id] ??= []).push(result);
   }
@@ -320,6 +363,11 @@ export async function run(options, dependencies = {}) {
     cases_sha256: sha256(readFileSync(CASES_FILE)),
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
     model: Object.freeze({ adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
+    ...(previous === null ? {} : { resumed_from: Object.freeze({ observed_at: previous.observed_at, report_sha256: sha256(readFileSync(options.resume)), code: previous.code,
+      carried_calls: trials.reduce((sum, trial) => sum + trial.attempts.filter((attempt) => attempt.carried).length, 0),
+      carried_judge_orders: Object.values(judged).flat().filter((entry) => entry.carried).length }) }),
+    errors: Object.freeze({ writer_calls: trials.reduce((sum, trial) => sum + trial.attempts.filter((attempt) => attempt.error !== undefined).length, 0),
+      trials_without_reply: trials.filter((trial) => trial.read === null).length, judge_orders_without_ranks: Object.values(judged).flat().filter((entry) => entry.ranks === null).length }),
     limits: Object.freeze({ cases: cases.length, catalogs: catalogs.map((catalog) => catalog.id), trials: options.trials, judge: options.judge, writer_output_tokens: WRITER_OUTPUT_TOKENS,
       timeout_ms: options.timeoutMs, concurrency: options.concurrency, max_total_model_calls: MAX_TOTAL_MODEL_CALLS }),
     catalogs: Object.freeze(Object.fromEntries(catalogs.map((catalog) => [catalog.id, { modeled_on: catalog.modeled_on, catalog_key: catalog.catalog_key, catalog: catalog.catalog, can_show: catalog.can_show, schema: catalog.schema }]))),

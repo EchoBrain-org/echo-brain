@@ -72,3 +72,35 @@ test("runs every catalog with one repair or retry, judges both orders, and keeps
   assert.ok(!report.system_prompts[prompts.balanced.system_prompt_sha256].includes(ANSWER_LAYOUT_PROMPT));
   assert.equal(JSON.parse(readFileSync(reportPath, "utf8")).kind, "echo-ask-blocks-evaluation-v1");
 });
+
+test("resumes an earlier report: carries every call that got a reply and makes only the calls it lacks", async () => {
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-resume-"));
+  const answer = { blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] };
+  const replies = (input, outage) => {
+    const fields = Object.keys(input.schema.properties ?? {});
+    if (fields.includes("ranks")) { if (outage) throw new Error("402"); return { ranks: ["A", "B", "C", "D"].map((label, at) => ({ answer: label, rank: at + 1, reason: "fixture" })) }; }
+    if (fields.includes("sentences")) return { lists: [], tables: [], sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"], form: "lead" }], not_found: [] };
+    if (fields.includes("template")) return { template: { name: "fact", answer: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }, not_found: [] };
+    if (fields.includes("blocks")) {
+      if (outage && JSON.parse(input.user_prompt).validation_error !== undefined) throw new Error("402");
+      return outage ? { blocks: [{ block: "text", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] } : answer;
+    }
+    if (outage) throw new Error("402");
+    return { root: "main", components: [{ id: "main", component: "Column", children: ["a"] }, { id: "a", component: "Text", variant: "body", text: "Priya Raman owns it.", evidence: ["E1"] }], not_found: [] };
+  };
+  const fake = (outage, inputs) => ({ async generate_with_observation(input) { inputs.push(input); return { value: replies(input, outage), finish_reason: "stop", usage: null, provider_latency_ms: 1 }; } });
+  const options = { run: true, credentialFile: null, out, caseIds: ["soak-owner"], catalogIds: null, trials: 1, judge: true, concurrency: 1, timeoutMs: 20_000 };
+  const first = await run(options, { loaded: { structured_output: fake(true, []), generation }, progress: () => undefined });
+  // Balanced's repair and both primitives calls failed, so neither trial ends with a reply.
+  assert.deepEqual(first.report.errors, { writer_calls: 3, trials_without_reply: 2, judge_orders_without_ranks: 2 });
+
+  const inputs = [];
+  const { report } = await run({ ...options, resume: first.reportPath }, { loaded: { structured_output: fake(false, inputs), generation }, progress: () => undefined });
+  // Only the balanced repair, the primitives call and the two judge orders were made again.
+  assert.equal(inputs.length, 4);
+  assert.deepEqual(Object.fromEntries(report.trials.map((trial) => [trial.catalog, trial.attempts.map((attempt) => `${attempt.kind}${attempt.carried ? " (carried)" : ""}`)])),
+    { today: ["first (carried)"], templates: ["first (carried)"], balanced: ["first (carried)", "repair"], primitives: ["first"] });
+  assert.ok(report.trials.every((trial) => trial.grade.valid));
+  assert.deepEqual([report.resumed_from.carried_calls, report.resumed_from.carried_judge_orders], [3, 0]);
+  assert.deepEqual(report.errors, { writer_calls: 0, trials_without_reply: 0, judge_orders_without_ranks: 0 });
+});
