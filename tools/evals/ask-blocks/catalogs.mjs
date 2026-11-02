@@ -3,8 +3,10 @@
  * writer's instructions, its reply schema, and how a reply is checked and read into common blocks and a view the page
  * draws. `today` is production's own prompt, schema and reading (ADR-0045). Every other catalog's entries follow the
  * research tool contract (ADR-0042): a name, a description that says only what the entry shows, and params with their
- * meanings; its schema and checks are built from the same entries.
+ * meanings; its schema and checks are built from the same entries. Beside them, the arm `built` grades the shipped
+ * writer (README.md, "Gate on the built writer"): the answer the kernel releases, read into the same common blocks.
  */
+import { validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import {
   ANSWER_LAYOUT_PROMPT, answerLayoutSchema, cleanModelLine, parseAnswer, stripEvidenceIds,
 } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
@@ -498,6 +500,48 @@ export const CATALOGS = Object.freeze([
     can_show: Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]) }),
 ]);
 export const CATALOG_IDS = Object.freeze(CATALOGS.map((entry) => entry.id));
+
+/**
+ * The arm that grades the shipped writer (README.md, "Gate on the built writer"): Ask through the kernel with answer
+ * layout v2 (ADR-0051), which is `balanced` built into the product. Its prompt, block catalog and schema are the
+ * kernel's, recorded from its writer's calls, and what is graded is the answer the kernel releases (`readReleased`).
+ */
+export const BUILT = Object.freeze({ id: "built", modeled_on: "the built writer: answer layout v2 in the kernel (ADR-0051)", catalog_key: "block_catalog", answer_layout: 2,
+  can_show: Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]) });
+/** Every arm a run may select: the four catalogs, then `built`. */
+export const ARMS = Object.freeze([...CATALOGS, BUILT]);
+export const ARM_IDS = Object.freeze(ARMS.map((entry) => entry.id));
+
+/**
+ * An answer the kernel released, read as common blocks (README.md, "Gate on the built writer"): its first part's
+ * `blocks`, each claim citing the evidence ids of its statement's citations, or of a table row's own (`ids` has one per
+ * citation of the answer). Valid only when the answer passes the V8 contract and was released with blocks.
+ */
+export function readReleased(response, ids) {
+  let answer;
+  try { answer = validatePersonAnswerResponseV8(response); } catch (error) {
+    return Object.freeze({ valid: false, problems: [error instanceof Error ? error.message : "the answer could not be read"], blocks: [], view: [] });
+  }
+  const part = answer.parts[0];
+  if (part.blocks === undefined) return Object.freeze({ valid: false, problems: ["the answer was released without blocks"], blocks: [], view: [] });
+  const cites = (indexes) => [...new Set(indexes.map((index) => ids[index]))];
+  const claim = (at) => ({ text: part.statements[at].text, evidence: cites(part.statements[at].citation_indexes) });
+  const titled = (block) => (block.title === undefined ? {} : { title: block.title });
+  const blocks = part.blocks.map((block) => {
+    switch (block.kind) {
+      case "answer": return { kind: "answer", claims: block.statements.map(claim) };
+      case "text": return { kind: "prose", ...titled(block), claims: block.statements.map(claim) };
+      case "points": return { kind: "list", ordered: block.ordered, ...titled(block), claims: block.statements.map(claim) };
+      case "table": return { kind: "table", ...titled(block), columns: [...block.columns], rows: block.rows.map((row) => ({ cells: [...row.cells], evidence: cites(row.citation_indexes) })) };
+      // An event, a fact and a quote are each one statement, and cite what it cites.
+      case "timeline": return { kind: "timeline", ...titled(block), events: block.events.map((event, at) => ({ date: event.date, text: event.text, ...(event.who === undefined ? {} : { who: event.who }), evidence: claim(block.statements[at]).evidence })) };
+      case "card": return { kind: "card", title: block.title, card_kind: block.entity, facts: block.facts.map((fact, at) => ({ label: fact.label, value: fact.value, evidence: claim(block.statements[at]).evidence })) };
+      // The contract has no other block: what is left is a quote.
+      default: return { kind: "quote", text: block.text, from: block.from ?? "", evidence: claim(block.statements[0]).evidence };
+    }
+  });
+  return Object.freeze({ valid: true, problems: [], blocks, view: viewOfBlocks(blocks) });
+}
 
 /** One catalog's writer prompts, from production's captured ones: the system prompt's layout part swapped, the catalog added as data. */
 export function writerPrompts(catalog, captured) {

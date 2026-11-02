@@ -390,3 +390,13 @@ export function decide(catalogs, ranks) {
     .sort((left, right) => (Math.abs(left.rank - right.rank) > RANK_TIE ? left.rank - right.rank : left.repairs - right.repairs || left.tokens - right.tokens));
   return Object.freeze({ complete, direction_sound: complete ? sound : null, right_size: complete ? (eligible[0]?.catalog ?? null) : null, eligible: Object.freeze(eligible) });
 }
+
+/**
+ * The gate on the built writer (README.md, "Gate on the built writer"): it passes when `built` meets rules 1 to 5 at the
+ * pre-registered thresholds in a complete gate run (`summary` is its summarizeCatalogs entry). Undecided otherwise; the
+ * founder's check on the desktop stands in for rule 6.
+ */
+export function decideGate(summary, complete) {
+  const rules = summary?.rules ?? null;
+  return Object.freeze({ complete, arm: "built", passes: complete && rules !== null ? Object.values(rules).every(Boolean) : null, rules });
+}

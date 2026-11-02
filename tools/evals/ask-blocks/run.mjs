@@ -6,7 +6,10 @@
  * over a scripted desk, with a writer that answers nothing: that records production's exact writer prompts with no
  * network call. Then each catalog in catalogs.mjs writes every case three times through the shipped OpenRouter bundle and
  * its answer model, with one repair for a reply its catalog refuses, and grade.mjs grades every trial. A model judge on
- * the same route ranks each case's trial-1 answers twice. The report keeps full traces: all data is synthetic.
+ * the same route ranks each case's trial-1 answers twice. The arm `built` grades the shipped writer instead (README.md,
+ * "Gate on the built writer"): each of its trials runs Ask through the kernel end to end with answer layout v2
+ * (ADR-0051), only the writer's call going to the model, and grade.mjs grades the answer the kernel releases. The report
+ * keeps full traces: all data is synthetic.
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -14,19 +17,19 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { validatePersonFollowUpEvidenceV1 } from "@echo-brain/organization-api";
+import { personAnswerCitationKeyV8, validatePersonFollowUpEvidenceV1 } from "@echo-brain/organization-api";
 import { createAgenticAskV5 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from "@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { repairInstruction } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
-import { assertExplicitRun, boundedInteger, codeIdentity, json, outputDirectory, readFlags, safeError, sha256, usage } from "../shared/runner.mjs";
-import { CATALOGS, CATALOG_IDS, readReply, writerPrompts } from "./catalogs.mjs";
-import { CASES_FILE, CASE_COUNT, TRIALS, caseOrder, decide, evidenceOf, gradeTrial, loadCases, summarizeCatalogs, summarizeRanks } from "./grade.mjs";
+import { assertExplicitRun, boundedInteger, codeIdentity, compiledModules, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, usage } from "../shared/runner.mjs";
+import { ARMS, ARM_IDS, BUILT, CATALOGS, CATALOG_IDS, readReleased, readReply, writerPrompts } from "./catalogs.mjs";
+import { CASES_FILE, CASE_COUNT, TRIALS, caseOrder, decide, decideGate, evidenceOf, gradeTrial, loadCases, summarizeCatalogs, summarizeRanks } from "./grade.mjs";
 import { JUDGE_SYSTEM_PROMPT, judgeInput, judgeSchema, readJudge } from "./judge.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(TOOL_DIRECTORY, "../../..");
-/** Every catalog's writer gets this many output tokens (README.md, "Catalogs"). */
+/** Every catalog's writer gets this many output tokens (README.md, "Catalogs"); the built writer gets the kernel's. */
 const WRITER_OUTPUT_TOKENS = 3_000;
 const JUDGE_OUTPUT_TOKENS = 1_500;
 /** A trial makes at most two writer calls (its reply and one repair or retry); a case's judge at most two per order. */
@@ -45,20 +48,22 @@ export function help() {
     "",
     "Options:",
     `  --cases id,id       Select cases (default: all ${CASE_COUNT}).`,
-    `  --catalogs id,id    Select catalogs (default: ${CATALOG_IDS.join(",")}).`,
+    `  --catalogs id,id    Select catalogs (default: ${CATALOG_IDS.join(",")}), or ${BUILT.id}: the shipped writer,`,
+    "                      Ask through the kernel with answer layout v2, graded on the answer it releases.",
     `  --trials N          Trials per case and catalog, 1 through ${TRIALS} (default: ${TRIALS}).`,
-    "  --judge on|off      Run the model judge (default: on).",
+    `  --judge on|off      Run the model judge on the four catalogs (default: on; --catalogs ${BUILT.id} alone needs off).`,
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
-    "  --timeout-ms N      Per-call timeout, 15000 through 180000 (default: 120000).",
+    "  --timeout-ms N      Per-call timeout, 15000 through 180000 (default: 120000); a built trial's whole Ask.",
     "  --resume PATH       Carry every call of an earlier report that got a reply; make only the calls it lacks.",
     "  --writer ROUTE      openrouter (default) or claude-account: the product's personal Claude account writer, the",
     "                      same model through the Claude Agent SDK and your own signed-in claude binary.",
     "  --claude-executable PATH  With --writer claude-account: the signed-in claude binary.",
     "  --help              Show this text without reading a credential or making a request.",
     "",
-    "Only the whole pre-registered set (every case and catalog, three trials, the judge on) decides anything; a smaller",
-    "run is a diagnostic. --out must be outside the repository and private; the report and the page's data are written",
-    "there with mode 0600, with full traces of every synthetic prompt and reply, never a credential.",
+    "Only a whole pre-registered set decides anything: every case and catalog, three trials, the judge on; or the gate on",
+    `the built writer, --catalogs ${BUILT.id} --judge off with every case and three trials. A smaller run is a diagnostic.`,
+    "--out must be outside the repository and private; the report and the page's data are written there with mode 0600,",
+    "with full traces of every synthetic prompt and reply, never a credential.",
   ].join("\n");
 }
 
@@ -87,21 +92,28 @@ export function parseArgs(argv) {
   const known = new Set(loadCases().cases.map((entry) => entry.id));
   const once = (values) => new Set(values).size === values.length;
   if (options.caseIds !== null && (options.caseIds.length === 0 || !once(options.caseIds) || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases, each once");
-  if (options.catalogIds !== null && (options.catalogIds.length === 0 || !once(options.catalogIds) || options.catalogIds.some((id) => !CATALOG_IDS.includes(id)))) throw new Error("--catalogs must select known catalogs, each once");
+  if (options.catalogIds !== null && (options.catalogIds.length === 0 || !once(options.catalogIds) || options.catalogIds.some((id) => !ARM_IDS.includes(id)))) throw new Error("--catalogs must select known catalogs, each once");
+  // The judge ranks the four catalogs' answers, never the built writer's.
+  if (options.judge && options.catalogIds?.every((id) => id === BUILT.id)) throw new Error(`--catalogs ${BUILT.id} has nothing for the judge to rank: add --judge off`);
   const calls = (options.caseIds?.length ?? known.size) * ((options.catalogIds?.length ?? CATALOG_IDS.length) * options.trials * 2 + (options.judge ? 4 : 0));
   if (calls > MAX_TOTAL_MODEL_CALLS) throw new Error(`requested model-call budget exceeds ${MAX_TOTAL_MODEL_CALLS}`);
   options.out = outputDirectory(ROOT, options.out);
   return Object.freeze(options);
 }
 
-const COMPOSITION = "packages/organization-authority-kernel/dist/answer-composition";
-/** The files a report fingerprints, beside the commit and its uncommitted changes. */
-const CODE_FILES = Object.freeze([
+/**
+ * The files a report fingerprints, beside the commit and its uncommitted changes: the evaluation's own, every compiled
+ * module of the kernel's answer composition (the writer, its layouts and its checks, whatever their files are named),
+ * the answer contract the built arm reads, and the writer routes.
+ */
+const codeFiles = () => Object.freeze([
   "tools/evals/ask-blocks/run.mjs", "tools/evals/ask-blocks/catalogs.mjs", "tools/evals/ask-blocks/grade.mjs", "tools/evals/ask-blocks/judge.mjs",
   "tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", "tools/evals/shared/runner.mjs",
-  `${COMPOSITION}/agentic-ask-v1-model-protocol.js`, `${COMPOSITION}/agentic-ask-v1.js`, `${COMPOSITION}/renderers/ask-renderer-v1.js`, `${COMPOSITION}/renderers/ask-layout-v1.js`,
+  ...compiledModules(ROOT, "packages/organization-authority-kernel/dist/answer-composition"),
+  "packages/organization-api/dist/person-answer-v4.js", "packages/organization-api/dist/person-answer-layout-v2.js",
   "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
   "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
+  ...compiledModules(ROOT, "providers/openrouter/dist/claude-research"),
 ]);
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
@@ -137,9 +149,12 @@ export function deskItem(caseId, index, item) {
   });
 }
 
+/** One case's items as the desk releases them, in the case's order: the order search finds them and research opens them. */
+const caseItems = (caseDefinition) => caseDefinition.items.map((item, index) => deskItem(caseDefinition.id, index, item));
+
 /** A desk over one case's items, in a global Ask with Jira and follow-ups bound: any search finds them all, in order. */
 function caseDesk(caseDefinition, document) {
-  const items = caseDefinition.items.map((item, index) => deskItem(caseDefinition.id, index, item));
+  const items = caseItems(caseDefinition);
   const result = (values) => Object.freeze({ items: Object.freeze(values), truncated: false, receipt_digests: Object.freeze(values.map((value) => value.receipt_sha256)) });
   return Object.freeze({
     scope: Object.freeze({ kind: "global" }),
@@ -149,6 +164,16 @@ function caseDesk(caseDefinition, document) {
     async list() { return result([]); },
     async revalidate() { return Object.freeze({ checked_at: document.asked_at }); },
   });
+}
+
+/**
+ * The evidence id of each of an answer's citations, as the writer saw it: the case item the citation cites, found by its
+ * citation key, is `E1` to `En` in the order research opened the items (researchStep). A citation of no case item is
+ * named as one, so grading finds it among nothing the writer was given.
+ */
+export function evidenceIdsOf(citations, items) {
+  const byKey = new Map(items.map((item, at) => [personAnswerCitationKeyV8(item.citation), `E${at + 1}`]));
+  return Object.freeze(citations.map((entry, at) => byKey.get(personAnswerCitationKeyV8(entry.citation)) ?? `citation ${at + 1}`));
 }
 
 /** The scripted research step for `round` (from 1): search, then open every item found, then finish citing them all. */
@@ -161,8 +186,20 @@ export function researchStep(caseDefinition, round) {
   return { parts: part("found", `${ids.join(", ")} read in full.`), actions: [{ tool: "finish", args: {} }] };
 }
 
-/** Production's writer prompts for one case, recorded through the kernel with a writer that answers nothing. */
-export async function captureWriterPrompts(caseDefinition, document, generation) {
+/** Ask over one case's scripted desk, as the kernel runs it for a client that asks for `answerLayout`, with `model`. */
+function caseAsk(caseDefinition, document, model, generation, answerLayout) {
+  return createAgenticAskV5({
+    desk: caseDesk(caseDefinition, document), model, generation, audit: { append: () => undefined }, answer_layout: answerLayout,
+    asker: { display_name: document.asker }, time_context: { now: document.asked_at, time_zone: document.time_zone },
+    today: () => document.today, wall_ms: () => Date.parse(document.asked_at),
+  });
+}
+
+/**
+ * Production's writer prompts and reply schema for one case, recorded through the kernel with a writer that answers
+ * nothing: for answer layout 1 (ADR-0045), which the four catalogs start from, or 2 (ADR-0051), the built writer's.
+ */
+export async function captureWriterPrompts(caseDefinition, document, generation, answerLayout) {
   let round = 0;
   let captured = null;
   const model = Object.freeze({
@@ -173,45 +210,21 @@ export async function captureWriterPrompts(caseDefinition, document, generation)
         return { value: researchStep(caseDefinition, round), finish_reason: "stop", usage: null, provider_latency_ms: null };
       }
       if (!input.system_prompt.startsWith(WRITER_PROMPT)) throw new Error("the capture runs only research and the Ask writer");
-      captured ??= Object.freeze({ system_prompt: input.system_prompt, user_prompt: input.user_prompt });
-      return { value: { lists: [], tables: [], sentences: [], not_found: [caseDefinition.research.need] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
+      captured ??= Object.freeze({ system_prompt: input.system_prompt, user_prompt: input.user_prompt, schema: input.schema });
+      // A reply that says nothing, in either layout's shape.
+      return { value: { lists: [], tables: [], sentences: [], blocks: [], not_found: [caseDefinition.research.need] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
     },
   });
-  const ask = createAgenticAskV5({
-    desk: caseDesk(caseDefinition, document), model, generation, audit: { append: () => undefined }, answer_layout: true,
-    asker: { display_name: document.asker }, time_context: { now: document.asked_at, time_zone: document.time_zone },
-    today: () => document.today, wall_ms: () => Date.parse(document.asked_at),
-  });
-  await ask.answer({ question: caseDefinition.question, signal: AbortSignal.timeout(30_000) });
+  await caseAsk(caseDefinition, document, model, generation, answerLayout).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(30_000) });
   if (captured === null) throw new Error(`case ${caseDefinition.id}: research never reached the writer`);
   return captured;
-}
-
-/**
- * One call through a port that admits each outbound request (the personal Claude account writer): every request is
- * admitted at once, and the usage of all of them is added up.
- */
-async function admitted(structuredOutput, input) {
-  const usages = [];
-  let finishReason = null;
-  const value = await structuredOutput.generate_with_admission(input, async (request, forward) => {
-    const result = await forward(request.signal ?? AbortSignal.timeout(input.timeout_ms));
-    usages.push(result.usage ?? null);
-    finishReason = result.finish_reason ?? finishReason;
-    return result.value;
-  });
-  const sum = (name) => usages.reduce((total, entry) => total + (Number.isSafeInteger(entry?.[name]) ? entry[name] : 0), 0);
-  return { value, finish_reason: finishReason, usage: usages.every((entry) => entry === null) ? null : { input_tokens: sum("input_tokens"), output_tokens: sum("output_tokens"), total_tokens: sum("input_tokens") + sum("output_tokens") }, provider_latency_ms: null };
 }
 
 /** One model call, kept whole: the reply and the provider's metadata, or the safe error. */
 async function call(structuredOutput, input) {
   const started = performance.now();
   try {
-    const observed = typeof structuredOutput.generate_with_observation === "function"
-      ? await structuredOutput.generate_with_observation(input)
-      : typeof structuredOutput.generate_with_admission === "function" ? await admitted(structuredOutput, input)
-        : { value: await structuredOutput.generate(input), finish_reason: null, usage: null, provider_latency_ms: null };
+    const observed = await observedGeneration(structuredOutput, input);
     return { value: observed.value, finish_reason: observed.finish_reason ?? null, usage: usage(observed.usage),
       provider_latency_ms: Number.isSafeInteger(observed.provider_latency_ms) ? observed.provider_latency_ms : null, elapsed_ms: Math.round(performance.now() - started) };
   } catch (error) {
@@ -259,6 +272,71 @@ export async function runTrial(caseDefinition, catalog, trial, prompts, evidence
   const final = attempts.at(-1).error === undefined ? read : null;
   const grade = gradeTrial(caseDefinition, catalog, final ?? { valid: false }, evidence);
   return Object.freeze({ case_id: caseDefinition.id, catalog: catalog.id, trial, attempts, read: final, grade });
+}
+
+/**
+ * One trial of the built writer (README.md, "Gate on the built writer"): Ask on one case through the kernel end to end
+ * with answer layout v2, research scripted and each writer call sent to the route. The kernel reads, checks, repairs and
+ * releases; the harness adds no repair, keeps each call (its raw reply, usage and prompts: those `prompts` recorded, or
+ * its own when the kernel asked with others, as for a repair) and the released answer, and grades that answer's blocks
+ * against `evidence`, what the writer was given. `carried` is an earlier run's calls for this trial that got a reply, in
+ * order (README.md, "Resuming"): one is handed to the kernel again only when the kernel asks for it with the same prompts,
+ * and every other call is made.
+ */
+export async function runBuiltTrial(caseDefinition, trial, prompts, evidence, document, structuredOutput, generation, options, carried = []) {
+  const attempts = [];
+  const recorded = sha256(prompts.system_prompt);
+  let round = 0;
+  const model = Object.freeze({
+    async generate(input) { return (await this.generate_with_observation(input)).value; },
+    async generate_with_observation(input) {
+      if (input.system_prompt.startsWith(RESEARCH_PROMPT)) {
+        round += 1;
+        return { value: researchStep(caseDefinition, round), finish_reason: "stop", usage: null, provider_latency_ms: null };
+      }
+      if (!input.system_prompt.startsWith(WRITER_PROMPT)) throw new Error("the built arm runs only research and the Ask writer");
+      const attempt = attempts.length + 1;
+      // A repair names what the kernel found wrong with the reply before it; a retry repeats a call that failed.
+      const problem = JSON.parse(input.user_prompt).validation_error;
+      if (typeof problem === "string" && attempts.length > 0) attempts.at(-1).problems = [problem];
+      const systemPromptSha256 = sha256(input.system_prompt);
+      const asked = { attempt, kind: attempt === 1 ? "first" : typeof problem === "string" ? "repair" : "retry", system_prompt_sha256: systemPromptSha256,
+        ...(systemPromptSha256 === recorded ? {} : { system_prompt: input.system_prompt }), ...(input.user_prompt === prompts.user_prompt ? {} : { user_prompt: input.user_prompt }),
+        max_output_tokens: input.max_output_tokens };
+      const before = carried[attempt - 1];
+      if (before !== undefined && before.system_prompt_sha256 === systemPromptSha256 && (before.user_prompt ?? prompts.user_prompt) === input.user_prompt) {
+        attempts.push({ ...before, ...asked, carried: true });
+        return { value: before.value, finish_reason: before.finish_reason, usage: before.usage, provider_latency_ms: before.provider_latency_ms };
+      }
+      const started = performance.now();
+      try {
+        const observed = await observedGeneration(structuredOutput, input);
+        attempts.push({ ...asked, value: observed.value, finish_reason: observed.finish_reason ?? null, usage: usage(observed.usage),
+          provider_latency_ms: Number.isSafeInteger(observed.provider_latency_ms) ? observed.provider_latency_ms : null, elapsed_ms: Math.round(performance.now() - started) });
+        return observed;
+      } catch (error) {
+        // The kernel meets the route's failure as it would in production: it retries, falls back or stops.
+        attempts.push({ ...asked, error: safeError(error, { withUsage: true }), elapsed_ms: Math.round(performance.now() - started) });
+        throw error;
+      }
+    },
+  });
+  let response = null;
+  let error;
+  try {
+    response = await caseAsk(caseDefinition, document, model, generation, BUILT.answer_layout).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
+  } catch (caught) {
+    error = safeError(caught);
+  }
+  // Only a release that follows a writer's reply is read: one with no reply is code's fallback, not the writer's answer.
+  const read = response === null || !attempts.some((entry) => entry.error === undefined) ? null : readReleased(response, evidenceIdsOf(response.citations, caseItems(caseDefinition)));
+  for (const [at, entry] of attempts.entries()) {
+    const last = at === attempts.length - 1;
+    entry.valid = last && read?.valid === true;
+    if (last && entry.error === undefined && read !== null && !read.valid) entry.problems = read.problems;
+  }
+  const grade = gradeTrial(caseDefinition, BUILT, read ?? { valid: false }, evidence);
+  return Object.freeze({ case_id: caseDefinition.id, catalog: BUILT.id, trial, attempts, read, response, ...(error === undefined ? {} : { error }), grade });
 }
 
 /** An earlier run's calls that got a reply, in order, up to the first that failed. */
@@ -318,8 +396,11 @@ async function pooled(tasks, limit) {
 export async function run(options, dependencies = {}) {
   const document = loadCases();
   const cases = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
-  const catalogs = options.catalogIds === null ? CATALOGS : CATALOGS.filter((catalog) => options.catalogIds.includes(catalog.id));
-  const identityBefore = codeIdentity(ROOT, CODE_FILES);
+  const catalogs = options.catalogIds === null ? CATALOGS : ARMS.filter((catalog) => options.catalogIds.includes(catalog.id));
+  // The four catalogs the judge and the founder rank; the built writer is graded alone.
+  const ranked = catalogs.filter((catalog) => catalog !== BUILT);
+  const built = catalogs.includes(BUILT);
+  const identityBefore = codeIdentity(ROOT, codeFiles());
   const route = options.writer ?? "openrouter";
   // The personal Claude account writer: the product's own path (providers/openrouter/src/claude-research), with this
   // machine's home directory and signed-in claude binary. Native Claude Code owns the sign-in; nothing here reads it.
@@ -328,10 +409,15 @@ export async function run(options, dependencies = {}) {
   const loaded = route === "claude-account" ? bundled.personal_research : bundled;
   if (loaded === undefined) throw new Error("the claude-account writer is not available from this bundle");
   const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
-  const captured = new Map();
-  for (const caseDefinition of cases) captured.set(caseDefinition.id, await captureWriterPrompts(caseDefinition, document, loaded.generation));
-  const prompts = new Map(cases.map((caseDefinition) => [caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, writerPrompts(catalog, captured.get(caseDefinition.id))]))]));
-  const evidence = new Map(cases.map((caseDefinition) => [caseDefinition.id, evidenceOf(captured.get(caseDefinition.id).user_prompt)]));
+  // Each arm's writer prompts: the four catalogs' from layout v1's, the built writer's as the kernel asks with layout v2.
+  const prompts = new Map();
+  for (const caseDefinition of cases) {
+    const v1 = ranked.length === 0 ? null : await captureWriterPrompts(caseDefinition, document, loaded.generation, 1);
+    const v2 = built ? await captureWriterPrompts(caseDefinition, document, loaded.generation, BUILT.answer_layout) : null;
+    prompts.set(caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, catalog === BUILT ? v2 : writerPrompts(catalog, v1)])));
+  }
+  // Every arm is graded against the evidence its writer was given.
+  const evidence = new Map(cases.map((caseDefinition) => [caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, evidenceOf(prompts.get(caseDefinition.id).get(catalog.id).user_prompt)]))]));
   const previous = options.resume === null || options.resume === undefined ? null : JSON.parse(readFileSync(options.resume, "utf8"));
   if (previous !== null) resumable(previous, cases, catalogs, prompts);
   const carriedOf = (caseId, catalogId, trial) => repliedPrefix(previous?.trials?.find((entry) => entry.case_id === caseId && entry.catalog === catalogId && entry.trial === trial)?.attempts ?? []);
@@ -342,8 +428,12 @@ export async function run(options, dependencies = {}) {
     for (const caseDefinition of cases) {
       for (const catalog of catalogs) {
         tasks.push(async () => {
-          const result = await runTrial(caseDefinition, catalog, trial, prompts.get(caseDefinition.id).get(catalog.id), evidence.get(caseDefinition.id), loaded.structured_output, loaded.generation, options,
-            carriedOf(caseDefinition.id, catalog.id, trial));
+          const given = evidence.get(caseDefinition.id).get(catalog.id);
+          const carried = carriedOf(caseDefinition.id, catalog.id, trial);
+          const own = prompts.get(caseDefinition.id).get(catalog.id);
+          const result = catalog === BUILT
+            ? await runBuiltTrial(caseDefinition, trial, own, given, document, loaded.structured_output, loaded.generation, options, carried)
+            : await runTrial(caseDefinition, catalog, trial, own, given, loaded.structured_output, loaded.generation, options, carried);
           progress(`${JSON.stringify({ kind: "echo-ask-blocks-evaluation-progress-v1", case_id: result.case_id, catalog: result.catalog, trial, valid: result.grade.valid,
             grounded: result.grade.grounded, nothing_lost: result.grade.nothing_lost, fit: result.grade.fit, attempts: result.attempts.length })}\n`);
           return result;
@@ -353,13 +443,13 @@ export async function run(options, dependencies = {}) {
   }
   const trials = await pooled(tasks, options.concurrency);
 
-  // The judge ranks each case's trial-1 answers in the page's order, then reversed.
+  // The judge ranks each case's trial-1 answers of the four catalogs in the page's order, then reversed.
   const judged = {};
-  if (options.judge) {
+  if (options.judge && ranked.length > 0) {
     const judgeTasks = cases.flatMap((caseDefinition) => {
-      const order = caseOrder(caseDefinition.id).filter((catalog) => catalogs.some((entry) => entry.id === catalog));
+      const order = caseOrder(caseDefinition.id).filter((catalog) => ranked.some((entry) => entry.id === catalog));
       const reads = Object.fromEntries(order.map((catalog) => [catalog, trials.find((entry) => entry.case_id === caseDefinition.id && entry.catalog === catalog && entry.trial === 1)?.read ?? null]));
-      const casePrompts = prompts.get(caseDefinition.id).get(catalogs[0].id);
+      const casePrompts = prompts.get(caseDefinition.id).get(ranked[0].id);
       return [order, [...order].reverse()].map((shown) => async () => {
         // A judged order is carried when its trial-1 answers are the ones it judged: the same input, ranked.
         const before = previous?.judge?.[caseDefinition.id]?.find((entry) => entry.ranks !== null && entry.order.join() === shown.join()
@@ -372,11 +462,14 @@ export async function run(options, dependencies = {}) {
   }
   const judgeRanks = Object.fromEntries(Object.entries(judged).flatMap(([caseId, orders]) => {
     if (orders.some((entry) => entry.ranks === null)) return [];
-    return [[caseId, Object.fromEntries(catalogs.map((catalog) => [catalog.id, orders.reduce((sum, entry) => sum + entry.ranks[catalog.id], 0) / orders.length]))]];
+    return [[caseId, Object.fromEntries(ranked.map((catalog) => [catalog.id, orders.reduce((sum, entry) => sum + entry.ranks[catalog.id], 0) / orders.length]))]];
   }));
 
-  const identityAfter = codeIdentity(ROOT, CODE_FILES);
-  const complete = cases.length === CASE_COUNT && catalogs.length === CATALOG_IDS.length && options.trials === TRIALS && options.judge;
+  const identityAfter = codeIdentity(ROOT, codeFiles());
+  // A complete run is the four-catalog comparison, as pre-registered, or the gate: the built writer alone, judge off.
+  const everyTrial = cases.length === CASE_COUNT && options.trials === TRIALS;
+  const gate = built && ranked.length === 0;
+  const complete = everyTrial && (gate ? !options.judge : !built && ranked.length === CATALOG_IDS.length && options.judge);
   const summary = summarizeCatalogs(trials, catalogs.map((catalog) => catalog.id));
   const observedAt = new Date().toISOString();
   const systemPrompts = {};
@@ -386,6 +479,8 @@ export async function run(options, dependencies = {}) {
     systemPrompts[hash] = entry.system_prompt;
     return [catalog.id, { system_prompt_sha256: hash, user_prompt: entry.user_prompt }];
   }))]));
+  // The built writer's entries and schema are the kernel's, as its writer was given them.
+  const builtPrompts = built ? prompts.get(cases[0].id).get(BUILT.id) : null;
   const report = Object.freeze({
     kind: "echo-ask-blocks-evaluation-v1",
     observed_at: observedAt,
@@ -401,12 +496,14 @@ export async function run(options, dependencies = {}) {
       trials_without_reply: trials.filter((trial) => trial.read === null).length, judge_orders_without_ranks: Object.values(judged).flat().filter((entry) => entry.ranks === null).length }),
     limits: Object.freeze({ cases: cases.length, catalogs: catalogs.map((catalog) => catalog.id), trials: options.trials, judge: options.judge, writer_output_tokens: WRITER_OUTPUT_TOKENS,
       timeout_ms: options.timeoutMs, concurrency: options.concurrency, max_total_model_calls: MAX_TOTAL_MODEL_CALLS }),
-    catalogs: Object.freeze(Object.fromEntries(catalogs.map((catalog) => [catalog.id, { modeled_on: catalog.modeled_on, catalog_key: catalog.catalog_key, catalog: catalog.catalog, can_show: catalog.can_show, schema: catalog.schema }]))),
+    catalogs: Object.freeze(Object.fromEntries(catalogs.map((catalog) => [catalog.id, catalog === BUILT
+      ? { modeled_on: catalog.modeled_on, answer_layout: catalog.answer_layout, catalog_key: catalog.catalog_key, catalog: JSON.parse(builtPrompts.user_prompt)[catalog.catalog_key] ?? null, can_show: catalog.can_show, schema: builtPrompts.schema }
+      : { modeled_on: catalog.modeled_on, catalog_key: catalog.catalog_key, catalog: catalog.catalog, can_show: catalog.can_show, schema: catalog.schema }]))),
     summary,
-    // The founder's ranks come from the page; until then the decision waits for them.
+    // The founder's ranks come from the page; until then the comparison's decision waits for them. The gate decides alone.
     judge_ranks: judgeRanks,
-    ranks_without_founder: summarizeRanks({}, judgeRanks, catalogs.map((catalog) => catalog.id)),
-    decision: decide(summary, null),
+    ranks_without_founder: summarizeRanks({}, judgeRanks, ranked.map((catalog) => catalog.id)),
+    decision: gate ? decideGate(summary[BUILT.id], complete) : decide(summary, null),
     case_orders: Object.freeze(Object.fromEntries(cases.map((caseDefinition) => [caseDefinition.id, caseOrder(caseDefinition.id)]))),
     system_prompts: systemPrompts,
     prompts: casePrompts,
@@ -431,7 +528,7 @@ if (invokedDirectly) {
         valid: `${entry.valid}/${entry.trials}`, grounded: `${entry.grounded}/${entry.trials}`, nothing_lost: `${entry.nothing_lost}/${entry.trials}`, fit: `${entry.fit}/${entry.trials}`,
         stable: `${entry.stable}/${entry.cases}`, valid_at_once: entry.valid_at_once, repairs: entry.repairs, output_tokens: entry.output_tokens,
       }]));
-      process.stdout.write(`${JSON.stringify({ report_path: reportPath, complete: report.complete, summary: brief, judge_mean_rank: report.ranks_without_founder.judge_mean_rank })}\n`);
+      process.stdout.write(`${JSON.stringify({ report_path: reportPath, route: report.model.route, complete: report.complete, summary: brief, judge_mean_rank: report.ranks_without_founder.judge_mean_rank, decision: report.decision })}\n`);
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : "block evaluation failed"}\n${help()}\n`);
