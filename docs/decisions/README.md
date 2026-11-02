@@ -73,6 +73,7 @@ separately.
 | [ADR-0048](ADR-0048-retire-older-person-routes.md) | Retire the older Person routes and fallbacks kept only for compatibility | accepted |
 | [ADR-0049](ADR-0049-only-me-is-a-lock.md) | Only me is a lock on an item, Ask shows one thread per place, and Mine goes | accepted |
 | [ADR-0050](ADR-0050-update-floor-only-rises.md) | The update floor only rises, and the desktop says when updates are off | accepted |
+| [ADR-0051](ADR-0051-ask-answer-layout-v2.md) | The Ask writer arranges an answer from a catalog of seven blocks | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary
