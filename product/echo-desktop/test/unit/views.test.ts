@@ -4,11 +4,11 @@ import {
   noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
-import { personCitedRecordV1, personRecordAtomIdV1, validatePersonRecordListV1 } from '@echo-brain/organization-api';
+import { personCitedRecordV1, personRecordAtomIdV1, validatePersonAnswerResponseV8, validatePersonRecordListV1 } from '@echo-brain/organization-api';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { checkOf } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
-import { layoutAnswer } from '../fixtures/authority.js';
+import { blocksAnswer, layoutAnswer } from '../fixtures/authority.js';
 
 // The store reads the preload's bridge when it loads; its record join needs none.
 (globalThis as { window?: unknown }).window = { echo: {} };
@@ -805,6 +805,34 @@ describe('a laid-out answer (answer layout v1, ADR-0045)', () => {
     const table = part!.layout[4] as { rows: { cells: string[]; citation_indexes: number[] }[] };
     const wrong = { ...answer, parts: [{ ...part, layout: [...part!.layout.slice(0, 4), { ...table, rows: [{ ...table.rows[0], citation_indexes: [0] }, ...table.rows.slice(1)] }] }] };
     expect(() => answerView({ ok: true, result: wrong }, scope)).toThrow(ViewError);
+  });
+});
+
+describe('an answer arranged in blocks (answer layout v2, ADR-0051)', () => {
+  const scope = { kind: 'global' } as const;
+  const question = 'Can THERM start PVT?';
+
+  it('carries the fixture\'s blocks as the client validated them, every block; an answer to an Ask that did not ask for them has none, and reads the same', () => {
+    expect(() => validatePersonAnswerResponseV8(blocksAnswer(question, scope, true))).not.toThrow();
+    const arranged = answerView({ ok: true, result: blocksAnswer(question, scope, true) }, scope);
+    const blocks = arranged.parts[0]!.blocks!;
+    expect(blocks.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
+    expect(blocks[2]).toMatchObject({ kind: 'timeline', title: 'Soak test', statements: [2, 3], events: [{ date: '2026-10-20', who: 'Noor Haddad' }, { date: '2026-10-23' }] });
+    expect(blocks[3]).toMatchObject({ kind: 'card', title: 'THERM-48', entity: 'ticket', facts: [{ label: 'Status', value: 'In review' }, { label: 'Owner', value: 'Tomas Okafor' }] });
+    expect(arranged.parts[0]).not.toHaveProperty('layout');
+    const plain = answerView({ ok: true, result: blocksAnswer(question, scope, false) }, scope);
+    expect(plain.parts[0]).not.toHaveProperty('blocks');
+    expect(plain.parts[0]!.statements).toEqual(arranged.parts[0]!.statements);
+    expect(arranged.text).toBe(plain.text);
+  });
+
+  it('refuses blocks beside a layout, or blocks that leave a statement out', () => {
+    const answer = blocksAnswer(question, scope, true) as { parts: { blocks: Record<string, unknown>[] }[] };
+    const [part] = answer.parts;
+    const both = { ...answer, parts: [{ ...part, layout: [{ kind: 'paragraph', statements: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }] }] };
+    expect(() => answerView({ ok: true, result: both }, scope)).toThrow(ViewError);
+    const dropped = { ...answer, parts: [{ ...part, blocks: part!.blocks.slice(0, 6) }] };
+    expect(() => answerView({ ok: true, result: dropped }, scope)).toThrow(ViewError);
   });
 });
 

@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import type { Answer, AnswerSource } from '../../src/shared/protocol.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Answer, AnswerSource, ArrangedBlock } from '../../src/shared/protocol.js';
 import {
-  answerMarkdown, answerSentences, documentName, externalSourceProvider, lateForYou, MAX_SOURCES, passageBlocks, sourceGroups, statementGroups, tableDay,
+  answerMarkdown, answerSentences, answerText, documentName, externalSourceProvider, lateForYou, MAX_SOURCES, passageBlocks, sourceGroups, statementGroups, tableDay,
 } from '../../src/renderer/answer.js';
-import { layoutAnswer } from '../fixtures/authority.js';
+import { blocksAnswer, layoutAnswer } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
 
 const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -276,5 +276,116 @@ describe('Copy answer\'s Markdown keeps the text as it was written', () => {
       '| Name | Note\\_1 |', '| --- | --- |', '| Doc \\*one\\* \\<b\\> [2] | 1\\. step |', '',
       'Sources', '', '1. One', '2. Two', '3. Three',
     ].join('\n'));
+  });
+});
+
+// Answer layout v2 (ADR-0051): the fixture's THERM answer in its blocks, as the host hands it to the page.
+const BLOCKS_QUESTION = 'Can THERM start PVT?';
+const arranged = (blocks = true): Answer => answerView({ ok: true, result: blocksAnswer(BLOCKS_QUESTION, GLOBAL, blocks) }, GLOBAL);
+/** The fixture's arranged answer with its blocks changed by `change`. */
+const rearranged = (change: (blocks: ArrangedBlock[]) => ArrangedBlock[]): Answer => {
+  const base = arranged();
+  return { ...base, parts: [{ ...base.parts[0]!, blocks: change([...base.parts[0]!.blocks!]) }] };
+};
+const BLOCK_NAMES = ['Soak test plan', 'Soak test report', 'PVT readiness review', 'THERM-48 · Soak sign-off', 'THERM-52 · Thermal pad supplier', 'THERM-55 · Line fixture'];
+const BLOCK_SOURCES = ['Sources', '', ...BLOCK_NAMES.map((name, at) => `${at + 1}. ${name}`)];
+
+describe('an arranged answer (answer layout v2, ADR-0051)', () => {
+  // The timeline's days are this year's.
+  beforeEach(() => { vi.useFakeTimers({ now: NOW }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('names its table\'s rows as a laid-out table\'s, by the table\'s place among its blocks, after the part\'s statements', () => {
+    const sentences = answerSentences(arranged());
+    expect(sentences.map(([id]) => id)).toEqual(['0.0', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '0.t1.0', '0.t1.1']);
+    expect(Object.fromEntries(sentences.filter(([id]) => id.includes('t')))).toEqual({
+      '0.t1.0': { text: 'THERM-52 · Thermal pad supplier · In Progress · Tomas Okafor · 2026-11-04', citation_indexes: [4], private: true },
+      '0.t1.1': { text: 'THERM-55 · Line fixture · To Do · You · 2026-10-30', citation_indexes: [5], private: true },
+    });
+    // An event, a fact and a quote are the part's own sentences, as the Authority wrote them from their blocks.
+    expect(sentences.filter(([id]) => ['0.2', '0.4', '0.9'].includes(id)).map(([, statement]) => statement.text)).toEqual([
+      '2026-10-20, Noor Haddad: Approved the soak plan.', 'Ticket: THERM-48; Status: In review.', 'Noor Haddad, Oct 23 review: “Start PVT once the soak passes.”']);
+    // Without its blocks there are no rows, and its plain reading is the same either way.
+    expect(answerSentences(arranged(false)).map(([id]) => id)).toHaveLength(10);
+    expect(answerText(arranged(), () => true)).toBe(answerText(arranged(false), () => true));
+  });
+
+  it('writes its blocks as Markdown in the page\'s order, each item followed by its sentence\'s numbers', () => {
+    expect(markdown(arranged(), BLOCK_NAMES)).toBe([
+      'Yes, PVT can start: the 72-hour soak passed on Oct 23. [2]',
+      '',
+      '2 Jira tickets are open',
+      '',
+      '| Item | Status | Owner | Due |',
+      '| --- | --- | --- | --- |',
+      '| THERM-52 · Thermal pad supplier [5] | In Progress | Tomas Okafor | 2026-11-04 |',
+      '| THERM-55 · Line fixture [6] | To Do | You | 2026-10-30 |',
+      '',
+      '### Soak test',
+      '',
+      '- Oct 20, Noor Haddad: Approved the soak plan. [1]',
+      '- Oct 23, Noor Haddad: The 72-hour soak passed. [2]',
+      '',
+      '**Ticket: THERM-48**',
+      '',
+      '- Status: In review [4]',
+      '- Owner: Tomas Okafor [4]',
+      '',
+      '### Before PVT',
+      '',
+      '1. Freeze the firmware at 1.4.2. [3]',
+      '2. Ship the build to the line. [3]',
+      '',
+      '### Open risk',
+      '',
+      'Sensor self-heating is still unexplained, so the soak report keeps it on the PVT watch list. [2]',
+      '',
+      '> Start PVT once the soak passes. [3]',
+      '>',
+      '> Noor Haddad, Oct 23 review',
+      '',
+      ...BLOCK_SOURCES,
+    ].join('\n'));
+  });
+
+  it('writes points that are not steps as bullets, a table\'s title as its heading, an event no one is named for from its day alone, and a quote with no source as its words', () => {
+    const answer = rearranged(blocks => blocks.map(block => {
+      if (block.kind === 'points') return { ...block, ordered: false };
+      if (block.kind === 'table') return { ...block, title: 'Open tickets' };
+      if (block.kind === 'timeline') return { ...block, events: [{ date: '2025-12-30', text: 'Wrote the soak plan.' }, block.events[1]!] };
+      return block.kind === 'quote' ? { kind: 'quote', statements: block.statements, text: block.text } : block;
+    }));
+    const written = markdown(answer, BLOCK_NAMES);
+    expect(written).toContain('\n\n### Open tickets\n\n2 Jira tickets are open\n\n| Item |');
+    expect(written).toContain('\n\n- Dec 30, 2025: Wrote the soak plan. [1]\n- Oct 23, Noor Haddad: The 72-hour soak passed. [2]\n\n');
+    expect(written).toContain('\n\n### Before PVT\n\n- Freeze the firmware at 1.4.2. [3]\n- Ship the build to the line. [3]\n\n');
+    expect(written).toContain('\n\n> Start PVT once the soak passes. [3]\n\nSources\n');
+  });
+
+  it('leaves out what the page does not show: an item a check left out, and a block left with nothing to show, with its title', () => {
+    // The soak plan, the readiness review and THERM-48 are not shown: one event goes, and the card, the steps and the quote with all they say.
+    const hidden = new Set([0, 2, 3]);
+    const answer = arranged();
+    const written = answerMarkdown(answer, BLOCK_NAMES, sourceGroups(answer.sources), citations => !citations.some(at => hidden.has(at)));
+    expect(written).toBe([
+      'Yes, PVT can start: the 72-hour soak passed on Oct 23. [2]', '',
+      '2 Jira tickets are open', '', '| Item | Status | Owner | Due |', '| --- | --- | --- | --- |',
+      '| THERM-52 · Thermal pad supplier [5] | In Progress | Tomas Okafor | 2026-11-04 |', '| THERM-55 · Line fixture [6] | To Do | You | 2026-10-30 |', '',
+      '### Soak test', '', '- Oct 23, Noor Haddad: The 72-hour soak passed. [2]', '',
+      '### Open risk', '', 'Sensor self-heating is still unexplained, so the soak report keeps it on the PVT watch list. [2]', '',
+      ...BLOCK_SOURCES,
+    ].join('\n'));
+  });
+
+  it('keeps a title, a card, a fact and a quote as text: their punctuation escaped, a start that would make a list a sentence again', () => {
+    const answer = rearranged(blocks => blocks.map(block => {
+      if (block.kind === 'timeline') return { ...block, title: '# Soak *draft*', events: block.events.map(event => ({ ...event, who: 'Noor | QA' })) };
+      if (block.kind === 'card') return { ...block, title: 'THERM-48 <b>', facts: [{ label: '1. Owner_1', value: '- Tomas' }, block.facts[1]!] };
+      return block.kind === 'quote' ? { ...block, text: 'Start `now`, not [later].', from: 'Noor_H' } : block;
+    }));
+    const written = markdown(answer, BLOCK_NAMES);
+    expect(written).toContain('\n\n### \\# Soak \\*draft\\*\n\n- Oct 20, Noor \\| QA: Approved the soak plan. [1]\n');
+    expect(written).toContain('\n\n**Ticket: THERM-48 \\<b\\>**\n\n- 1\\. Owner\\_1: \\- Tomas [4]\n- Owner: Tomas Okafor [4]\n\n');
+    expect(written).toContain('\n\n> Start \\`now\\`, not \\[later\\]. [3]\n>\n> Noor\\_H\n\n');
   });
 });

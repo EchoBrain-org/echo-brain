@@ -8,7 +8,7 @@
 // reading one account's timeline deletes any other account's, so an account
 // change leaves nothing of the last one here. Kept apart from host.ts so all
 // of it is tested on a real folder.
-import { validateProjectIdV1 } from '@echo-brain/organization-api';
+import { PERSON_ANSWER_CARD_ENTITIES_V2, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
@@ -158,6 +158,9 @@ const time = (value: unknown): value is string => string(value, 64) && !Number.i
 const STATUSES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found', 'records_only']);
 const OUTCOMES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found']);
 const BLOCKS: ReadonlySet<unknown> = new Set(['lead', 'heading', 'paragraph', 'bullets', 'table']);
+/** The blocks a writer arranges a part in (answer layout v2, ADR-0051), and what a card may show. */
+const ARRANGED: ReadonlySet<unknown> = new Set(['answer', 'text', 'points', 'table', 'timeline', 'card', 'quote']);
+const ENTITIES: ReadonlySet<unknown> = new Set(PERSON_ANSWER_CARD_ENTITIES_V2);
 
 function scope(value: unknown): value is AskScope {
   if (!record(value)) return false;
@@ -195,23 +198,48 @@ function source(value: unknown): value is AnswerSource {
   }
 }
 
+/** A table of either layout, as the page draws it: its columns, its caption, and each row's cells and citations. */
+function table(block: Json): boolean {
+  return Array.isArray(block.columns) && block.columns.every(column => string(column)) && (block.caption === undefined || string(block.caption))
+    && Array.isArray(block.rows) && block.rows.every(row => record(row) && Array.isArray(row.cells) && row.cells.every(cell => string(cell)) && indexes(row.citation_indexes));
+}
+
 /** A part's layout, each block's sentences among the part's own: the page reads them by their place. */
 function layout(value: unknown, count: number): boolean {
   const within = (places: unknown) => indexes(places) && (places as number[]).every(place => place < count);
   return Array.isArray(value) && value.length <= 64 && value.every(block => record(block) && BLOCKS.has(block.kind) && (block.kind === 'heading' ? string(block.text)
-    : block.kind !== 'table' ? within(block.statements)
-      : within(block.statements) && Array.isArray(block.columns) && block.columns.every(column => string(column)) && (block.caption === undefined || string(block.caption))
-        && Array.isArray(block.rows) && block.rows.every(row => record(row) && Array.isArray(row.cells) && row.cells.every(cell => string(cell)) && indexes(row.citation_indexes))));
+    : block.kind !== 'table' ? within(block.statements) : within(block.statements) && table(block)));
 }
 
-/** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). */
+/**
+ * A part's blocks (answer layout v2, ADR-0051), each block's sentences among
+ * the part's own, its title a text: the page reads an item by its sentence's
+ * place, so a timeline has an event and a card a fact for each of its
+ * sentences, and a quote has one sentence.
+ */
+function arranged(value: unknown, count: number): boolean {
+  const within = (places: unknown) => indexes(places) && (places as number[]).every(place => place < count);
+  /** One item a sentence, each what the page reads of it. */
+  const each = (block: Json, items: unknown, item: (entry: Json) => boolean) => Array.isArray(items) && items.length === (block.statements as unknown[]).length
+    && items.every(entry => record(entry) && item(entry));
+  return Array.isArray(value) && value.length <= 64 && value.every(block => record(block) && ARRANGED.has(block.kind) && within(block.statements)
+    && (block.title === undefined || string(block.title)) && (block.kind === 'points' ? typeof block.ordered === 'boolean'
+      : block.kind === 'table' ? table(block)
+        : block.kind === 'timeline' ? each(block, block.events, event => string(event.date, 64) && string(event.text) && (event.who === undefined || string(event.who)))
+          : block.kind === 'card' ? string(block.title) && ENTITIES.has(block.entity) && each(block, block.facts, fact => string(fact.label) && string(fact.value))
+            : block.kind === 'quote' ? (block.statements as unknown[]).length === 1 && string(block.text) && (block.from === undefined || string(block.from))
+              : true));
+}
+
+/** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). A part reads one way: a layout or blocks. */
 function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !string(value.text, 200_000) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
   if (!Array.isArray(value.sources) || value.sources.length > 256 || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
   return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.records === undefined || statements(part.records))
-    && (part.layout === undefined || layout(part.layout, (part.statements as unknown[]).length)));
+    && (part.layout === undefined || layout(part.layout, (part.statements as unknown[]).length))
+    && (part.blocks === undefined || (part.layout === undefined && arranged(part.blocks, (part.statements as unknown[]).length))));
 }
 
 /** A turn as a put writes it, or null for anything else. */

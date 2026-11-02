@@ -313,10 +313,11 @@ button.account-row:hover { background: var(--raise); }
 /* An old answer opened: as it was, dimmed, under its question; what changed since is lit in the signal. */
 .opened { display: flex; flex-direction: column; gap: 10px; padding: 6px 0 4px 36px; }
 .agentic-answer.dimmed { color: var(--muted); }
-.agentic-answer .changed > span:first-child, .claim.changed > span:first-child, .answer-bullets li.changed > span > span:first-child {
+.agentic-answer .changed > span:first-child, .claim.changed > span:first-child, .answer-bullets li.changed > span > span:first-child,
+.answer-timeline li.changed .event-text > span:first-child, .answer-quote.changed blockquote > span:first-child {
   border-radius: 4px; color: var(--text); background: var(--signal-soft); -webkit-box-decoration-break: clone; box-decoration-break: clone;
 }
-.answer-table tr.changed td { color: var(--text); background: var(--signal-soft); }
+.answer-table tr.changed td, .answer-fact.changed { color: var(--text); background: var(--signal-soft); }
 .passage.changed { color: var(--text); border-color: var(--signal-soft); background: var(--signal-soft); }
 /* "Changed since Oct 14": over Ask again's list of what is different now, each cited, and over an old answer that changed. No box. */
 .since { display: flex; flex-direction: column; gap: 6px; }
@@ -342,16 +343,20 @@ button.marker:hover { color: var(--text); background: var(--line-strong); }
 .marker.on, .source-row.on .marker { color: var(--on-primary); background: var(--primary); }
 /* In an answer a source's number is a faint footnote digit, with no box (ADR-0049): it brightens with its sentence under the
    pointer, and the one the pane shows is lit as everywhere. */
-:is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage) .marker:not(.on) {
+:is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage, .answer-timeline li, .answer-fact, .answer-quote) .marker:not(.on) {
   min-width: 0; height: auto; padding: 0 1px; margin-left: 2px; border-radius: 3px; font-size: 10px; line-height: 1; color: var(--faint);
   background: transparent; vertical-align: super;
 }
-:is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage) .marker + .marker { margin-left: 1px; }
-:is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage):hover .marker:not(.on),
+:is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage, .answer-timeline li, .answer-fact, .answer-quote) .marker + .marker {
+  margin-left: 1px;
+}
+:is(.answer-statement, .claim, .answer-bullets li, .since-items li, .answer-table tr, .passage, .answer-timeline li, .answer-fact, .answer-quote):hover .marker:not(.on),
 button.marker:not(.on):hover { color: var(--text); background: transparent; }
 /* The sentence under the pointer is lit quietly, as its numbers show. */
 .claim:not(.on, .changed):hover > span:first-child, .answer-statement:not(.on, .changed):hover > span:first-child,
-.answer-bullets li:not(.on, .changed):hover > span > span:first-child, .since-items li:not(.on):hover > span > span:first-child {
+.answer-bullets li:not(.on, .changed):hover > span > span:first-child, .since-items li:not(.on):hover > span > span:first-child,
+.answer-timeline li:not(.on, .changed):hover .event-text > span:first-child, .answer-fact:not(.on, .changed):hover dd > span:first-child,
+.answer-quote:not(.on, .changed):hover blockquote > span:first-child {
   border-radius: 4px; background: var(--hover); -webkit-box-decoration-break: clone; box-decoration-break: clone;
 }
 /* The one line under an answer (ADR-0049): how many sources and how long, then Ask again and Copy on the right. */
@@ -460,6 +465,41 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .answer-table td.late time::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 3px; background: var(--signal); vertical-align: 1px; }
 .answer-table tr.on td { background: var(--selected); }
 .answer-table .marker { vertical-align: 1px; }
+/* An answer the writer arranged (ADR-0051), in the same type: the answer as the lead, a title as a section heading, points as
+   bullets or numbered steps, tables as above. A timeline keeps each event's day down the side, beside a dot on one rail; a card is a
+   box headed by its kind's icon, its kind and its title, then its facts as label and value rows; a quote is set apart by a rule,
+   its source under it. Each item is lit on its own, and lit in the signal when a source it cites changed. */
+.answer-bullets.answer-steps { counter-reset: answer-step; }
+.answer-bullets.answer-steps li { counter-increment: answer-step; }
+.answer-bullets.answer-steps li::before {
+  content: counter(answer-step) "."; min-width: 14px; width: auto; height: auto; margin-top: 0; border-radius: 0; font-weight: 500;
+  font-variant-numeric: tabular-nums; text-align: right; color: var(--muted); background: none;
+}
+.answer-timeline { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px 14px; margin: 0; padding: 0; list-style: none; font-size: 15px; line-height: 1.6; }
+.answer-timeline li { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline; }
+.answer-timeline li.on { border-radius: 6px; background: var(--selected); box-shadow: 0 0 0 4px var(--selected); }
+.answer-timeline .event-day { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; color: var(--muted); }
+.answer-timeline .event-body { position: relative; display: flex; flex-direction: column; min-width: 0; padding-left: 20px; }
+.answer-timeline .event-body::before { content: ""; position: absolute; top: 8.5px; left: 0; width: 7px; height: 7px; border-radius: 4px; background: var(--faint); }
+.answer-timeline .event-body::after { content: ""; position: absolute; top: 20px; bottom: -16px; left: 3px; width: 1px; background: var(--line-strong); }
+.answer-timeline li:last-child .event-body::after { display: none; }
+.answer-timeline .event-who { font-size: 13px; line-height: 1.45; color: var(--muted); }
+.answer-card { display: flex; flex-direction: column; min-width: 0; margin: 2px 0; border: 1px solid var(--line); border-radius: 10px; }
+.answer-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); border-radius: 9px 9px 0 0; background: var(--hover); }
+.answer-card-icon { display: inline-flex; flex-shrink: 0; justify-content: center; width: 16px; color: var(--muted); }
+.answer-card-kind { flex-shrink: 0; font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.answer-card-title { min-width: 0; font-size: 14px; font-weight: 600; }
+.answer-facts { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); column-gap: 16px; margin: 0; }
+.answer-fact { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline; padding: 9px 14px; border-top: 1px solid var(--line); }
+.answer-fact:first-child { border-top: 0; }
+.answer-fact:last-child { border-radius: 0 0 9px 9px; }
+.answer-fact dt { font-size: 13px; color: var(--muted); }
+.answer-fact dd { margin: 0; font-size: 14.5px; line-height: 1.5; }
+.answer-fact.on { background: var(--selected); }
+.answer-quote { display: flex; flex-direction: column; gap: 4px; margin: 2px 0; padding: 2px 0 2px 16px; border-left: 2px solid var(--control); }
+.answer-quote blockquote { margin: 0; font-size: 15px; line-height: 1.65; }
+.answer-quote figcaption { font-size: 13px; line-height: 1.45; color: var(--muted); }
+.answer-quote.on { border-radius: 0 8px 8px 0; background: var(--selected); }
 .asking .link-button { margin-left: 8px; }
 .asking i { width: 6px; height: 6px; border-radius: 3px; background: var(--muted); animation: pulse 1.2s infinite ease-in-out; }
 .asking i:nth-child(2) { animation-delay: 0.15s; } .asking i:nth-child(3) { animation-delay: 0.3s; }
