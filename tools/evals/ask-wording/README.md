@@ -143,8 +143,9 @@ the desktop.
   answer is still read by its lead block. The answer's text is still every
   part's statements and gap, as the audit reads them, so it includes the
   statements code writes for a table row, a timeline event, a card fact and a
-  quote: a long identifier that titles a card is written once in each of its
-  facts.
+  quote. Amended before any run: the kernel now names a card in its first
+  fact's statement only, so a long identifier that titles a card is written
+  once there.
 - **The writer route:** the personal Claude account writer (`--writer
   claude-account`): `claude-sonnet-5-5` through the Claude Agent SDK and the
   signed-in `claude` binary, the route of the block evaluation's run of record

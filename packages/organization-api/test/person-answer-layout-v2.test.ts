@@ -19,7 +19,7 @@ const statements = [
   statement('2026-10-20, Noor Haddad: Started the 72-hour soak.', [1]),
   statement('2026-10-23, Noor Haddad: The soak passed.', [1, 2]),
   statement('Ticket: THERM-48; Status: In review.', [1]),
-  statement('Ticket: THERM-48; Owner: Tomas Okafor.', [1]),
+  statement('Owner: Tomas Okafor.', [1]),
   statement('Freeze the firmware.', [2]),
   statement('Ship the build to the line.', [2]),
   statement('2 actions are open: TRACE-01; DVT-R2.', [1, 2]),

@@ -716,7 +716,7 @@ function listUsesOf(body: Record<string, unknown>): readonly AgenticAnswerListUs
 }
 
 const BLOCK_NAMES = ["answer", "text", "points", "table", "timeline", "card", "quote"] as const;
-/** How a card's kind reads in its facts' statements ("Ticket: THERM-48; Status: In review."). */
+/** How a card's kind reads in its first fact's statement ("Ticket: THERM-48; Status: In review."). */
 const ENTITY_WORDS: Readonly<Record<PersonAnswerCardEntityV2, string>> = Object.freeze({ person: "Person", project: "Project", ticket: "Ticket", decision: "Decision" });
 /** Quotation marks a writer put around a quote's words, which the block sets itself. */
 const QUOTE_MARKS = /^["“”'‘’]+|["“”'‘’]+$/gu;
@@ -806,12 +806,15 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
       const kind = typeof entry.kind === "string" ? entry.kind.trim().toLowerCase() : "";
       const entity = (PERSON_ANSWER_CARD_ENTITIES_V2 as readonly string[]).includes(kind) ? respelled(entry.kind, kind as PersonAnswerCardEntityV2) : undefined;
       if (named.length === 0 || entity === undefined) observeCoreModelCorrectionV1("model_enum_respelled");
+      // The card's first fact names it, and the others follow it: a name, often a long identifier, is written once.
+      let first = true;
       for (const fact of entries(entry.facts)) {
         const label = blockText(fact.label, LABEL_CHARS, PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2);
         const said = blockText(fact.value, VALUE_CHARS, PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2);
         if (label.length === 0 || said.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
         if (named.length === 0 || entity === undefined) add(sentenceOf(`${label}: ${said}`), fact.evidence, { block, kind: "text", ...(named.length === 0 ? {} : { title: named }) });
-        else add(sentenceOf(`${ENTITY_WORDS[entity]}: ${named}; ${label}: ${said}`), fact.evidence, { block, kind: "fact", title: named, entity, label, value: said });
+        else add(sentenceOf(`${first ? `${ENTITY_WORDS[entity]}: ${named}; ` : ""}${label}: ${said}`), fact.evidence, { block, kind: "fact", title: named, entity, label, value: said });
+        first = false;
       }
     } else {
       const text = blockText(entry.text, SENTENCE_CHARS, PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2).replace(QUOTE_MARKS, "").trim();

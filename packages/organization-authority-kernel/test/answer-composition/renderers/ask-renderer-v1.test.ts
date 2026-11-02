@@ -767,7 +767,7 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     expect(part(rendered).statements.map(value => [value.text, value.citation_indexes])).toEqual([
       ["PVT can start: the soak passed on Oct 23.", [0, 1]],
       ["2026-10-20, Noor Haddad: Started the 72-hour soak.", [1]], ["2026-10-23: The soak passed.", [1]],
-      ["Ticket: THERM-48; Status: In review.", [2]], ["Ticket: THERM-48; Owner: Tomas Okafor.", [2]],
+      ["Ticket: THERM-48; Status: In review.", [2]], ["Owner: Tomas Okafor.", [2]],
       ["Freeze the firmware.", [3]], ["Ship the build to the line.", [3]],
       ["PVT review, Oct 23: “start PVT once the 72-hour soak passes”", [0]],
     ]);
@@ -797,7 +797,7 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     const steps = { ...STEPS, items: [STEPS.items[0], { text: "Book the line.", evidence: ["E9"] }] };
     const unread = { block: "answer", sentences: [{ text: "PVT can start.", evidence: ["E9"] }] };
     const rendered = await alone({ bundle: therm(), replies: [reply(unread, steps, CARD)], layout: 2 }).render("Can PVT start?");
-    expect(part(rendered).statements.map(value => value.text)).toEqual(["Freeze the firmware.", "Ticket: THERM-48; Status: In review.", "Ticket: THERM-48; Owner: Tomas Okafor."]);
+    expect(part(rendered).statements.map(value => value.text)).toEqual(["Freeze the firmware.", "Ticket: THERM-48; Status: In review.", "Owner: Tomas Okafor."]);
     expect(blocksOf(rendered)).toEqual([{ kind: "text", title: "Before PVT", statements: [0] }, { kind: "card", title: "THERM-48", entity: "ticket", statements: [1, 2], facts: [{ label: "Status", value: "In review" }, { label: "Owner", value: "Tomas Okafor" }] }]);
     // A writer that gave no answer block has its first item read as the answer, when it is untitled text.
     const untitled = await alone({ bundle: therm(), replies: [reply({ block: "text", sentences: ANSWER.sentences }, STEPS)], layout: 2 }).render("Can PVT start?");

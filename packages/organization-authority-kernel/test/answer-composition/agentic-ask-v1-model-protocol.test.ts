@@ -651,7 +651,8 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       ["PVT can start Nov 3.", ["E1"]],
       ["Action: Fix BUG-412; Owner: Tomas Okafor.", ["E2"]], ["Action: Run DVT-R2; Owner: QA; Due: 2026-10-30.", ["E3"]],
       ["2026-10-20, Noor Haddad: Started the soak.", ["E2"]], ["2026-10-23: The soak passed.", ["E2"]],
-      ["Ticket: THERM-48; Status: In review.", ["E3"]], ["Ticket: THERM-48; Owner: Tomas Okafor.", ["E3"]],
+      // Only a card's first fact names it, so a card's name is written once.
+      ["Ticket: THERM-48; Status: In review.", ["E3"]], ["Owner: Tomas Okafor.", ["E3"]],
       ["Freeze the firmware.", ["E1"]], ["Ship the build.", ["E1"]],
       ["Noor Haddad, Oct 23 review: “Start PVT once the soak passes.”", ["E1"]],
     ]);
