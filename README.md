@@ -148,6 +148,7 @@ Choose the smallest check that covers the change while iterating:
 | Editing the synthetic Ask evaluator | `npm run test:agentic-ask-eval` | `node --test` suites in `tools/evals/agentic-ask` |
 | Editing the follow-up resolution evaluator | `npm run test:ask-follow-up-eval` | `node --test` suites in `tools/evals/ask-follow-up` |
 | Editing the Ask wording evaluator | `npm run test:ask-wording-eval` | `node --test` suites in `tools/evals/ask-wording` |
+| Editing the Ask block evaluator | `npm run test:ask-blocks-eval` | `node --test` suites in `tools/evals/ask-blocks` |
 | Editing the desktop app | `cd product/echo-desktop && npm run typecheck && npm test` | Desktop typecheck, unit and Electron end-to-end tests (see `product/echo-desktop/README.md`) |
 | Measuring one runtime round | `npm run capacity:checkpoint` | Deterministic, provider-independent functional checkpoint; about one minute, not an org-capacity result |
 

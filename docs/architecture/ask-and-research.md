@@ -127,9 +127,9 @@ their own Claude account; that code lives in
 ## Evaluation
 
 `tools/evals/research-loop` (`npm run eval:research-loop`) runs scripted
-questions against a staging Authority; `agentic-ask`, `ask-follow-up` and
-`ask-wording` under `tools/evals/` check the engine offline. Their unit tests
-run in CI's tail leg.
+questions against a staging Authority; `agentic-ask`, `ask-follow-up`,
+`ask-wording` and `ask-blocks` under `tools/evals/` check the engine offline.
+Their unit tests run in CI's tail leg.
 
 See also: [impact checks and open items](impact-checks-and-open-items.md),
 [global and project Ask](../features/global-project-ask-v1.md),
