@@ -1,11 +1,12 @@
 /**
- * What the opt-in real-model evaluation runners share (agentic-ask, ask-follow-up and ask-wording): the report's hash,
- * JSON, usage, safe-error and code-identity helpers, integer bounds, the argv loop, the private report directory, and the
- * explicit --run and private credential-file checks made before any request.
+ * What the opt-in real-model evaluation runners share (agentic-ask, ask-follow-up, ask-wording and ask-blocks): the
+ * report's hash, JSON, usage, safe-error and code-identity helpers, one generation through any model port, integer
+ * bounds, the argv loop, the private report directory, and the explicit --run and private credential-file checks made
+ * before any request.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, sep } from "node:path";
 
 export const sha256 = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -16,6 +17,26 @@ export function usage(value) {
   if (value === null || typeof value !== "object") return null;
   const integer = (entry) => typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0 ? entry : null;
   return Object.freeze({ input_tokens: integer(value.input_tokens), output_tokens: integer(value.output_tokens), total_tokens: integer(value.total_tokens) });
+}
+
+/**
+ * One structured generation as an observation (its value, finish reason, usage and provider latency), through whichever
+ * method the port offers: its own observation; for a port that admits each outbound request (the personal Claude account
+ * writer), every request admitted at once and the usage of all of them added up; or the bare value.
+ */
+export async function observedGeneration(structuredOutput, input) {
+  if (typeof structuredOutput.generate_with_observation === "function") return structuredOutput.generate_with_observation(input);
+  if (typeof structuredOutput.generate_with_admission !== "function") return { value: await structuredOutput.generate(input), finish_reason: null, usage: null, provider_latency_ms: null };
+  const usages = [];
+  let finishReason = null;
+  const value = await structuredOutput.generate_with_admission(input, async (request, forward) => {
+    const result = await forward(request.signal ?? AbortSignal.timeout(input.timeout_ms));
+    usages.push(result.usage ?? null);
+    finishReason = result.finish_reason ?? finishReason;
+    return result.value;
+  });
+  const sum = (name) => usages.reduce((total, entry) => total + (Number.isSafeInteger(entry?.[name]) ? entry[name] : 0), 0);
+  return { value, finish_reason: finishReason, usage: usages.every((entry) => entry === null) ? null : { input_tokens: sum("input_tokens"), output_tokens: sum("output_tokens"), total_tokens: sum("input_tokens") + sum("output_tokens") }, provider_latency_ms: null };
 }
 
 /**
@@ -73,6 +94,11 @@ export function outputDirectory(root, value) {
   if (directory === repository || directory.startsWith(`${repository}${sep}`)) throw new Error("--out must be outside the repository");
   if ((statSync(directory).mode & 0o077) !== 0) throw new Error("--out must not be readable by group or other users");
   return directory;
+}
+
+/** Every compiled module under `directory` (relative to `root`), in a stable order: a report fingerprints a build whatever its files are named. */
+export function compiledModules(root, directory) {
+  return Object.freeze(readdirSync(join(root, directory), { recursive: true }).filter((file) => file.endsWith(".js")).map((file) => `${directory}/${file.split(sep).join("/")}`).sort());
 }
 
 /** The evaluated code at `root`: its commit, the digest of its uncommitted tracked changes, and each named file's digest. */

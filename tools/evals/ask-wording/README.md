@@ -9,29 +9,36 @@ evaluation measures how often Ask's writer does that, before and after a change
 to its wording rules.
 
 It measures only the writer of a laid-out answer, the answer every desktop and
-`person ask` gets (they send `x-echo-answer-layout: 1`,
-[ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md)). Each case is
+`person ask` gets: answer layout v2, since they send `x-echo-answer-layout: 2`
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md)); the
+2026-10-26 result measured layout v1
+([ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md)). Each case is
 a question and the synthetic items that answer it. Ask runs as the kernel runs
-it, with answer layout, over a synthetic desk with Jira and follow-ups bound.
-Research is scripted, so every trial hands the writer the same evidence: one
-search returns the case's items, research opens them all and finishes with one
-need found on them. The writer is the product's: its prompt and schema, through
-the shipped OpenRouter bundle and its answer model
-([ADR-0037](../../../docs/decisions/ADR-0037-openrouter-routing-for-research-calls.md)).
-Nothing is read from any tool.
+it, with answer layout v2, over a synthetic desk with Jira and follow-ups
+bound. Research is scripted, so every trial hands the writer the same evidence:
+one search returns the case's items, research opens them all and finishes with
+one need found on them. The writer is the product's: its prompt, block catalog
+and schema, through the shipped bundle's OpenRouter answer model
+([ADR-0037](../../../docs/decisions/ADR-0037-openrouter-routing-for-research-calls.md)),
+or, with `--writer claude-account --claude-executable <signed-in claude binary>`,
+the personal Claude account writer (`providers/openrouter/src/claude-research`):
+the same model through the Claude Agent SDK and your own `claude` sign-in. The
+report names the route under `model.route`. Nothing is read from any tool.
 
 ```sh
 npm run build:workspaces
-npm run eval:ask-wording -- --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
+npm run eval:ask-wording -- --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory \
+  --writer claude-account --claude-executable /absolute/path/to/claude
 ```
 
 The bundle reads the credential file; the runner only checks that it is a
 private file, and makes no request without `--run`. `--out` must be a private
 directory outside the repository; the report is written there with mode 0600.
 It keeps case ids, each trial's statements, lead and grade (synthetic text),
-the writer prompt's SHA-256 and model metadata; never prompts, raw replies,
-credentials or provider payloads. `--cases` and `--trials` make a smaller
-diagnostic run, which never decides anything.
+the writer prompt's SHA-256, the layout the writer was given and model
+metadata; never prompts, raw replies, credentials or provider payloads.
+`--cases` and `--trials` make a smaller diagnostic run, which never decides
+anything.
 
 ## Cases (pre-registered)
 

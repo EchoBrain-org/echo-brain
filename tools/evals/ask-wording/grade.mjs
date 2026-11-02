@@ -97,11 +97,14 @@ export function loadCases(path = CASES_FILE) {
   return document;
 }
 
-/** The lead of a laid-out answer: its first part's lead block, or, without one, that part's first statement. */
+/**
+ * The lead of a laid-out answer: the statements of its first part's answer block (layout v2, ADR-0051), or of a layout v1
+ * part's lead block (ADR-0045, the earlier reports), or, without one, that part's first statement.
+ */
 export function leadOf(response) {
   const part = response?.parts?.[0];
   const statements = part?.statements ?? [];
-  const block = part?.layout?.find((entry) => entry.kind === "lead");
+  const block = part?.blocks?.find((entry) => entry.kind === "answer") ?? part?.layout?.find((entry) => entry.kind === "lead");
   const chosen = block === undefined ? statements.slice(0, 1) : block.statements.map((index) => statements[index]).filter(Boolean);
   return chosen.map((statement) => statement.text).join(" ");
 }
