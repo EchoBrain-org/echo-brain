@@ -100,8 +100,8 @@ export interface CreateAgenticAskOptions {
   readonly today?: () => string;
   /** Captured once by the calling client, used only to interpret temporal questions. */
   readonly time_context?: PersonAskTimeContextV1;
-  /** The client asked for answer layout v1 (ADR-0045): the answer's part carries its layout. */
-  readonly answer_layout?: boolean;
+  /** The client asked for answer layout v1 (ADR-0045) or v2 (ADR-0051): the answer's part carries its layout or its blocks. */
+  readonly answer_layout?: 1 | 2;
   /**
    * Who is asking, as the organization's directory names them, so "I", "me"
    * and "my" resolve to a person. Only the models see it; audits never do.
@@ -469,7 +469,7 @@ function createAgenticAskCore(options: CreateAgenticAskOptions) {
         const writer = createAskRendererV1({
           answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
-          layout: options.answer_layout === true,
+          ...(options.answer_layout === undefined ? {} : { layout: options.answer_layout }),
           // An answer to an Ask that carried its previous turn names the question it answers, and an Ask again's writer also
           // says what is different since the earlier answer (ADR-0047). With none of its sentences left to compare with, an
           // Ask again is answered as asked: it cannot say what changed.

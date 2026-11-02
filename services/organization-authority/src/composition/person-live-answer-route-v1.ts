@@ -133,7 +133,7 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
       const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
       capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
-      // An Ask that asked for answer layout v1 has its part laid out (ADR-0045).
+      // An Ask that asked for answer layout v1 has its part laid out (ADR-0045), and one that asked for v2 its blocks (ADR-0051).
       const askOptions = { ...personResearchDriverV1(options, context.membership_id), ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, audit: options.audit.forRequest(context),
         ...(input.answer_layout === undefined ? {} : { answer_layout: input.answer_layout }), ...(asker === undefined ? {} : { asker }),
       };

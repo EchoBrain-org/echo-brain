@@ -77,7 +77,7 @@ function desk(overrides: Partial<EvidenceDeskPortV2> = {}) {
     ...overrides,
   } satisfies EvidenceDeskPortV2;
 }
-function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>, options: { readonly answer_layout?: boolean } = {}) {
+function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>, options: { readonly answer_layout?: 1 | 2 } = {}) {
   const audits: AgenticAskAuditEntryV1[] = [];
   const ask = createAgenticAskV5({
     desk: port, model: run.model, generation, audit: { append: entry => { audits.push(entry); } }, today: () => "2026-10-25",
@@ -238,7 +238,7 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
 });
 
 describe("Ask again on the V8 Ask (ADR-0047)", () => {
-  const again = (writer: unknown, options: { readonly answer_layout?: boolean; readonly steps?: readonly unknown[] } = {}) => {
+  const again = (writer: unknown, options: { readonly answer_layout?: 1 | 2; readonly steps?: readonly unknown[] } = {}) => {
     const run = scripted({ steps: options.steps ?? [searchFor(ASK_AGAIN.question, "THERM-482 owner"), finishOn(ASK_AGAIN.question, ["E1"])], writer: [writer] });
     return { run, ...askV8(desk(), run, options.answer_layout === undefined ? {} : { answer_layout: options.answer_layout }) };
   };
@@ -293,7 +293,7 @@ describe("Ask again on the V8 Ask (ADR-0047)", () => {
   });
 
   it("lays out the answer and keeps since beside it when the client asked for layout", async () => {
-    const { run, ask } = again({ lists: [], sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"], form: "lead" }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] }, { answer_layout: true });
+    const { run, ask } = again({ lists: [], sentences: [{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"], form: "lead" }], since: [{ text: "The owner changed to Dev Patel.", evidence: ["E1"] }], not_found: [] }, { answer_layout: 1 });
     const response = await ask.answer({ question: ASK_AGAIN.question, previous: ASK_AGAIN });
     expect(run.of("writer")[0]!.schema).toBe(answerLayoutSinceSchema);
     expect(run.of("writer")[0]!.max_output_tokens).toBe(2_500);

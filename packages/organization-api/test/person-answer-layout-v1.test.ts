@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_V1,
   validatePersonAnswerLayoutV1,
   validatePersonAnswerResponseV8,
-  validatePersonAskAnswerLayoutHeaderV1,
 } from '../src/index.js';
 
 const projectId = 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10' as const;
@@ -36,13 +34,6 @@ const response = (parts: Record<string, unknown> = {}) => ({
 const check = (blocks: unknown, of = statements) => validatePersonAnswerLayoutV1(blocks, of, citations.length);
 
 describe('Answer layout v1 (ADR-0045)', () => {
-  it('reads the header: absent is no, its value is yes, anything else is refused', () => {
-    expect(PERSON_ASK_ANSWER_LAYOUT_HEADER_V1).toBe('x-echo-answer-layout');
-    expect(validatePersonAskAnswerLayoutHeaderV1(undefined)).toBe(false);
-    expect(validatePersonAskAnswerLayoutHeaderV1('1')).toBe(true);
-    for (const value of ['0', 'true', '', ['1']]) expect(() => validatePersonAskAnswerLayoutHeaderV1(value)).toThrow();
-  });
-
   it('accepts a V8 part whose layout shows every statement once, in order, and freezes it', () => {
     const accepted = validatePersonAnswerResponseV8(response());
     expect(accepted.parts[0]!.layout).toEqual(layout);

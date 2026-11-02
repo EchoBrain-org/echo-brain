@@ -1,4 +1,16 @@
-import { PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1, validatePersonQueryText } from "@echo-brain/organization-api";
+import {
+  PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2,
+  PERSON_ANSWER_CARD_ENTITIES_V2,
+  PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2,
+  PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2,
+  PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2,
+  PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2,
+  PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2,
+  PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
+  PERSON_ANSWER_WHO_MAX_BYTES_V2,
+  validatePersonQueryText,
+  type PersonAnswerCardEntityV2,
+} from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { calendarDateV1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
 import { AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1, type AgenticListSelectionV1 } from "./agentic-list-evidence-v1.js";
@@ -46,6 +58,17 @@ const COLUMN_BYTES = 100;
 const CELL_BYTES = 300;
 export const AGENTIC_ASK_MAX_TABLES_V1 = 3;
 export const AGENTIC_ASK_MAX_COLUMNS_V1 = 6;
+/**
+ * Answer layout v2 (ADR-0051): the most blocks a writer arranges, as the block evaluation allowed (the part's ten
+ * statements bound what is kept), and what a block shows, in characters, each within the contract's bytes.
+ */
+export const AGENTIC_ASK_MAX_BLOCKS_V1 = 12;
+const TITLE_CHARS = SECTION_CHARS;
+const CARD_TITLE_CHARS = 120;
+const WHO_CHARS = 80;
+const LABEL_CHARS = COLUMN_CHARS;
+const VALUE_CHARS = 200;
+const FROM_CHARS = 120;
 
 /** A model response failed its closed, request-local protocol. */
 export class AgenticAskOutputErrorV1 extends Error {
@@ -70,7 +93,22 @@ export type Step = { readonly parts: readonly StepPart[]; readonly actions: read
 export type AnswerSentence = {
   readonly text: string; readonly evidence: readonly string[];
   readonly form?: "lead" | "bullet" | "row"; readonly section?: string; readonly cells?: readonly string[];
+  /** Only in a laid-out v2 reply (ADR-0051): the item the sentence is in its writer's blocks. */
+  readonly item?: AnswerItem;
 };
+/**
+ * One item of a laid-out v2 reply (answer layout v2, ADR-0051): the place of the writer's block it is in, and what that
+ * block shows of it. Its sentence is its statement: code writes a row's, an event's, a fact's and a quote's from these
+ * fields, so the claim is what the block shows.
+ */
+export type AnswerItem =
+  | { readonly block: number; readonly kind: "answer" }
+  | { readonly block: number; readonly kind: "text"; readonly title?: string }
+  | { readonly block: number; readonly kind: "point"; readonly title?: string; readonly ordered: boolean }
+  | { readonly block: number; readonly kind: "row"; readonly title?: string; readonly columns: readonly string[]; readonly cells: readonly string[] }
+  | { readonly block: number; readonly kind: "event"; readonly title?: string; readonly date: string; readonly text: string; readonly who?: string }
+  | { readonly block: number; readonly kind: "fact"; readonly title: string; readonly entity: PersonAnswerCardEntityV2; readonly label: string; readonly value: string }
+  | { readonly block: number; readonly kind: "quote"; readonly text: string; readonly from?: string };
 /** A table the writer declares for a section's rows (ADR-0045). */
 export type AnswerTable = { readonly section: string; readonly columns: readonly string[] };
 /**
@@ -244,6 +282,55 @@ function withSince(schema: StructuredGenerationJsonSchema): StructuredGeneration
 export const answerSinceSchema: StructuredGenerationJsonSchema = withSince(answerSchema);
 /** A laid-out answer asked again: answerLayoutSchema, with `since`. */
 export const answerLayoutSinceSchema: StructuredGenerationJsonSchema = withSince(answerLayoutSchema);
+
+// ---- answer layout v2 (ADR-0051): the writer arranges its answer from the block catalog ----
+const blockClaim = {
+  type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string", maxLength: SENTENCE_CHARS }, evidence: ids },
+} as const;
+const blockTitle = { type: "string", maxLength: TITLE_CHARS } as const;
+const eventDate = { type: "string", format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } as const;
+/** One block's shape: its name, the fields it requires, and every field it takes. */
+function blockShape(name: string, required: readonly string[], properties: Readonly<Record<string, unknown>>): StructuredGenerationJsonSchema {
+  return { type: "object", additionalProperties: false, required: ["block", ...required], properties: { block: closedString([name]), ...properties } };
+}
+
+/**
+ * Ask's answer when the client asked for answer layout v2 (ADR-0051): the lists code names first (ADR-0041), the
+ * writer's blocks, each one of ANSWER_BLOCK_CATALOG's with the fields it takes, and what it could not find. Only a v2
+ * Ask's writer sees it.
+ */
+export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze({
+  type: "object", additionalProperties: false, required: ["lists", "blocks", "not_found"], properties: {
+    lists: { type: "array", maxItems: AGENTIC_LIST_WRITER_LISTS_MAX_V1, items: listUse },
+    blocks: { type: "array", minItems: 1, maxItems: AGENTIC_ASK_MAX_BLOCKS_V1, items: { anyOf: [
+      blockShape("answer", ["sentences"], { sentences: { type: "array", minItems: 1, maxItems: 2, items: blockClaim } }),
+      blockShape("text", ["sentences"], { title: blockTitle, sentences: { type: "array", minItems: 1, maxItems: 4, items: blockClaim } }),
+      blockShape("points", ["ordered", "items"], { title: blockTitle, ordered: { type: "boolean" }, items: { type: "array", minItems: 2, maxItems: 10, items: blockClaim } }),
+      blockShape("table", ["columns", "rows"], {
+        title: blockTitle, columns: { type: "array", minItems: 2, maxItems: AGENTIC_ASK_MAX_COLUMNS_V1, items: { type: "string", maxLength: COLUMN_CHARS } },
+        rows: { type: "array", minItems: 2, maxItems: 12, items: {
+          type: "object", additionalProperties: false, required: ["cells", "evidence"],
+          properties: { cells: { type: "array", minItems: 2, maxItems: AGENTIC_ASK_MAX_COLUMNS_V1, items: { type: "string", maxLength: CELL_CHARS } }, evidence: ids },
+        } },
+      }),
+      blockShape("timeline", ["events"], { title: blockTitle, events: { type: "array", minItems: 2, maxItems: 12, items: {
+        type: "object", additionalProperties: false, required: ["date", "text", "evidence"],
+        properties: { date: eventDate, text: { type: "string", maxLength: SENTENCE_CHARS }, who: { type: "string", maxLength: WHO_CHARS }, evidence: ids },
+      } } }),
+      blockShape("card", ["title", "kind", "facts"], {
+        title: { type: "string", maxLength: CARD_TITLE_CHARS }, kind: closedString(PERSON_ANSWER_CARD_ENTITIES_V2),
+        facts: { type: "array", minItems: 2, maxItems: 8, items: {
+          type: "object", additionalProperties: false, required: ["label", "value", "evidence"],
+          properties: { label: { type: "string", maxLength: LABEL_CHARS }, value: { type: "string", maxLength: VALUE_CHARS }, evidence: ids },
+        } },
+      }),
+      blockShape("quote", ["text", "from", "evidence"], { text: { type: "string", maxLength: SENTENCE_CHARS }, from: { type: "string", maxLength: FROM_CHARS }, evidence: ids }),
+    ] } },
+    not_found: { type: "array", maxItems: AGENTIC_ASK_MAX_PARTS_V1, items: { type: "string", maxLength: NOT_FOUND_CHARS } },
+  },
+});
+/** A v2 answer asked again (ADR-0047): answerBlocksSchema, with `since`. */
+export const answerBlocksSinceSchema: StructuredGenerationJsonSchema = withSince(answerBlocksSchema);
 
 function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -584,6 +671,17 @@ export function parseAnswer(value: unknown, options: { readonly layout?: boolean
       break;
     }
   }
+  const notFound = notFoundOf(body);
+  const uses = listUsesOf(body);
+  const since = options.since === true && Array.isArray(body.since) ? sinceOf(body.since) : undefined;
+  return Object.freeze({
+    sentences: Object.freeze(sentences), not_found: notFound, lists: uses,
+    ...(tables === undefined ? {} : { tables }), ...(since === undefined ? {} : { since }),
+  });
+}
+
+/** A reply's "not_found": its phrases, each once, the first 5. */
+function notFoundOf(body: Record<string, unknown>): readonly string[] {
   const notFound: string[] = [];
   const missing: readonly unknown[] = Array.isArray(body.not_found) ? body.not_found : [];
   for (const [index, raw] of missing.entries()) {
@@ -596,6 +694,11 @@ export function parseAnswer(value: unknown, options: { readonly layout?: boolean
       break;
     }
   }
+  return Object.freeze(notFound);
+}
+
+/** A reply's "lists" (ADR-0041): each list's use in full or by a selection once, and by members' ids once, at most 5 lists. */
+function listUsesOf(body: Record<string, unknown>): readonly AgenticAnswerListUseV1[] {
   const uses: AgenticAnswerListUseV1[] = [];
   const asked: readonly unknown[] = Array.isArray(body.lists) ? body.lists : [];
   for (const [index, raw] of asked.entries()) {
@@ -609,11 +712,116 @@ export function parseAnswer(value: unknown, options: { readonly layout?: boolean
       break;
     }
   }
-  const since = options.since === true && Array.isArray(body.since) ? sinceOf(body.since) : undefined;
-  return Object.freeze({
-    sentences: Object.freeze(sentences), not_found: Object.freeze(notFound), lists: Object.freeze(uses),
-    ...(tables === undefined ? {} : { tables }), ...(since === undefined ? {} : { since }),
+  return Object.freeze(uses);
+}
+
+const BLOCK_NAMES = ["answer", "text", "points", "table", "timeline", "card", "quote"] as const;
+/** How a card's kind reads in its facts' statements ("Ticket: THERM-48; Status: In review."). */
+const ENTITY_WORDS: Readonly<Record<PersonAnswerCardEntityV2, string>> = Object.freeze({ person: "Person", project: "Project", ticket: "Ticket", decision: "Decision" });
+/** Quotation marks a writer put around a quote's words, which the block sets itself. */
+const QUOTE_MARKS = /^["“”'‘’]+|["“”'‘’]+$/gu;
+
+/** A writer's text in a block: one line within its caps, evidence ids dropped. */
+function blockText(value: unknown, maximumChars: number, maximumBytes: number): string {
+  return stripEvidenceIds(boundedModelLine(value, maximumChars, maximumBytes), true);
+}
+
+/**
+ * A laid-out v2 reply (answer layout v2, ADR-0051): its blocks read in order into the writer's sentences, each with the
+ * item it is, then its lists, what it did not find and, asked again, `since`, as parseAnswer reads them. Code writes a
+ * row's, an event's, a fact's and a quote's sentence from what the block shows. Only an answer block that comes first
+ * is the answer, with its first two sentences; any other answer sentence is text. An item the block cannot show reads as
+ * text in its block: a row whose cells do not match its columns, an event with no real day, a fact of a card with no
+ * name or kind. A block code cannot read, and an item that says nothing, is dropped. What needs the evidence, a quote
+ * word for word and an event's day, the renderer checks.
+ */
+export function parseBlocksAnswer(value: unknown, options: { readonly since?: boolean } = {}): Answer {
+  const body = object(value);
+  if (body === null) throw new AgenticAskOutputErrorV1("the reply was not a JSON object");
+  if (!Array.isArray(body.blocks)) throw new AgenticAskOutputErrorV1(`"blocks" must be an array (got ${keysOf(body)})`);
+  const sentences: AnswerSentence[] = [];
+  let capped = 0;
+  const add = (text: string, evidence: unknown, item: AnswerItem) => {
+    if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
+    else if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) capped += 1;
+    else sentences.push(Object.freeze({ text, evidence: cleanIds(evidence, true, false), item: Object.freeze(item) }));
+  };
+  /** A block's entries: its array, or none. */
+  const entries = (field: unknown): readonly Record<string, unknown>[] => (Array.isArray(field) ? field : []).flatMap(entry => {
+    const read = object(entry);
+    if (read === null) observeCoreModelCorrectionV1("model_entry_dropped");
+    return read === null ? [] : [read];
   });
+  if (body.blocks.length > AGENTIC_ASK_MAX_BLOCKS_V1) observeCoreModelCorrectionV1("model_items_capped", body.blocks.length - AGENTIC_ASK_MAX_BLOCKS_V1);
+  for (const [block, raw] of body.blocks.slice(0, AGENTIC_ASK_MAX_BLOCKS_V1).entries()) {
+    const entry = object(raw);
+    const normalized = typeof entry?.block === "string" ? entry.block.trim().toLowerCase() : "";
+    const name = (BLOCK_NAMES as readonly string[]).includes(normalized) ? respelled(entry!.block, normalized as (typeof BLOCK_NAMES)[number]) : undefined;
+    if (entry === null || name === undefined) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
+    const title = boundedModelLine(entry.title, TITLE_CHARS, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2);
+    const titled = title.length === 0 ? {} : { title };
+    const claim = (item: AnswerItem) => (sentence: Record<string, unknown>) => add(stripEvidenceIds(cleanModelLine(sentence.text, SENTENCE_CHARS), true), sentence.evidence, item);
+    if (name === "answer") {
+      const opens = sentences.length === 0;
+      if (!opens) observeCoreModelCorrectionV1("model_enum_respelled");
+      entries(entry.sentences).forEach((sentence, at) => claim(opens && at < 2 ? { block, kind: "answer" } : { block, kind: "text" })(sentence));
+    } else if (name === "text") {
+      entries(entry.sentences).forEach(claim({ block, kind: "text", ...titled }));
+    } else if (name === "points") {
+      if (typeof entry.ordered !== "boolean") observeCoreModelCorrectionV1("model_enum_respelled");
+      entries(entry.items).forEach(claim({ block, kind: "point", ...titled, ordered: entry.ordered === true }));
+    } else if (name === "table") {
+      const columns: string[] = [];
+      for (const column of Array.isArray(entry.columns) ? entry.columns : []) {
+        const text = boundedModelLine(column, COLUMN_CHARS, COLUMN_BYTES);
+        if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
+        else if (columns.some(existing => existing.toLowerCase() === text.toLowerCase())) observeCoreModelCorrectionV1("model_repeat_dropped");
+        else if (columns.length < AGENTIC_ASK_MAX_COLUMNS_V1) columns.push(text);
+        else observeCoreModelCorrectionV1("model_items_capped");
+      }
+      for (const row of entries(entry.rows)) {
+        const cells = (Array.isArray(row.cells) ? row.cells : []).map(cell => typeof cell === "string" ? blockText(cell, CELL_CHARS, CELL_BYTES) : "");
+        // A row says its cells under their columns, as layout v1's does; one whose cells do not match them is text.
+        if (columns.length >= 2 && cells.length === columns.length && cells.some(cell => cell.length > 0)) {
+          add(sentenceOf(columns.flatMap((column, at) => cells[at]!.length === 0 ? [] : [`${column}: ${cells[at]!}`]).join("; ")), row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) });
+        } else {
+          observeCoreModelCorrectionV1("model_enum_respelled");
+          add(sentenceOf(cells.filter(cell => cell.length > 0).join("; ")), row.evidence, { block, kind: "text", ...titled });
+        }
+      }
+    } else if (name === "timeline") {
+      for (const event of entries(entry.events)) {
+        const text = blockText(event.text, SENTENCE_CHARS, PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2);
+        const who = boundedModelLine(event.who, WHO_CHARS, PERSON_ANSWER_WHO_MAX_BYTES_V2);
+        const date = typeof event.date === "string" ? calendarDay(event.date.trim()) : undefined;
+        if (text.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
+        const said = who.length === 0 ? {} : { who };
+        if (date === undefined) {
+          observeCoreModelCorrectionV1("model_enum_respelled");
+          add(sentenceOf(who.length === 0 ? text : `${who}: ${text}`), event.evidence, { block, kind: "text", ...titled });
+        } else add(sentenceOf(`${date}${who.length === 0 ? "" : `, ${who}`}: ${text}`), event.evidence, { block, kind: "event", ...titled, date, text, ...said });
+      }
+    } else if (name === "card") {
+      const named = boundedModelLine(entry.title, CARD_TITLE_CHARS, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2);
+      const kind = typeof entry.kind === "string" ? entry.kind.trim().toLowerCase() : "";
+      const entity = (PERSON_ANSWER_CARD_ENTITIES_V2 as readonly string[]).includes(kind) ? respelled(entry.kind, kind as PersonAnswerCardEntityV2) : undefined;
+      if (named.length === 0 || entity === undefined) observeCoreModelCorrectionV1("model_enum_respelled");
+      for (const fact of entries(entry.facts)) {
+        const label = blockText(fact.label, LABEL_CHARS, PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2);
+        const said = blockText(fact.value, VALUE_CHARS, PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2);
+        if (label.length === 0 || said.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
+        if (named.length === 0 || entity === undefined) add(sentenceOf(`${label}: ${said}`), fact.evidence, { block, kind: "text", ...(named.length === 0 ? {} : { title: named }) });
+        else add(sentenceOf(`${ENTITY_WORDS[entity]}: ${named}; ${label}: ${said}`), fact.evidence, { block, kind: "fact", title: named, entity, label, value: said });
+      }
+    } else {
+      const text = blockText(entry.text, SENTENCE_CHARS, PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2).replace(QUOTE_MARKS, "").trim();
+      const from = boundedModelLine(entry.from, FROM_CHARS, PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2);
+      add(text.length === 0 ? "" : `${from.length === 0 ? "" : `${from}: `}“${text}”`, entry.evidence, { block, kind: "quote", text, ...(from.length === 0 ? {} : { from }) });
+    }
+  }
+  if (capped > 0) observeCoreModelCorrectionV1("model_items_capped", capped);
+  const since = options.since === true && Array.isArray(body.since) ? sinceOf(body.since) : undefined;
+  return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body), ...(since === undefined ? {} : { since }) });
 }
 
 /**
@@ -710,7 +918,7 @@ function laidSentence(entry: Record<string, unknown>, said: string, tables: read
  * in bytes (at most six of each), so the whole claim fits a statement, and two rows that differ only at their end stay
  * two statements.
  */
-function sentenceOf(text: string): string {
+export function sentenceOf(text: string): string {
   return text.length === 0 ? "" : /[.!?]$/u.test(text) ? text : `${text}.`;
 }
 
@@ -941,11 +1149,15 @@ export const ANSWER_PROMPT = [
  * long identifier at most once), and the reply shape answerLayoutSchema holds. An Ask without layout never sees it. Its
  * examples name nothing the wording evaluation asks about (tools/evals/ask-wording).
  */
+/** The two wording rules of a laid-out answer, which layouts v1 and v2 say word for word (tools/evals/ask-wording). */
+const NO_RESTATING_RULE = "- The app shows the answer right under the question, so never restate the question: the lead answers it at once. Call what the question already names \"it\" or a word or two (\"the follow-up\", \"the release\"), not its full title or identifier; name a follow-up by its title only when the question does not name it. Asked when \"Renew the vendor contract\" is due, the lead is \"It is due Nov 3.\", not \"The follow-up 'Renew the vendor contract' is due Nov 3.\"";
+const LONG_IDS_ONCE_RULE = "- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.";
+
 export const ANSWER_LAYOUT_PROMPT = [
   "Layout: the person's app sets the answer as a short document. Give it its shape with each sentence's \"form\" and \"section\":",
   "- The lead is the conclusion, in one or two sentences, first: \"form\": \"lead\". Leave \"form\" out for other prose.",
-  "- The app shows the answer right under the question, so never restate the question: the lead answers it at once. Call what the question already names \"it\" or a word or two (\"the follow-up\", \"the release\"), not its full title or identifier; name a follow-up by its title only when the question does not name it. Asked when \"Renew the vendor contract\" is due, the lead is \"It is due Nov 3.\", not \"The follow-up 'Renew the vendor contract' is due Nov 3.\"",
-  "- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.",
+  NO_RESTATING_RULE,
+  LONG_IDS_ONCE_RULE,
   "- \"section\" is a short heading, such as \"Decisions\" or \"Next steps\". Give sentences a section only when the answer covers two or more distinct topics; never the lead.",
   "- \"form\": \"bullet\" for parallel items, such as blockers, conditions or decisions.",
   "- For three or more items that share owner, date or status fields, declare one table for their section in \"tables\", with its columns, such as [\"Action\", \"Owner\", \"Due\", \"Status\"]. Give each item \"form\": \"row\", that section, and \"cells\": exactly one per column, in the columns' order, empty where the evidence does not give it; write a date as YYYY-MM-DD. A row's facts go in its cells: code writes its text from them, so its \"text\" may be empty.",
@@ -953,6 +1165,46 @@ export const ANSWER_LAYOUT_PROMPT = [
   "",
   "With layout, reply with ONLY a JSON object in exactly this shape instead:",
   "{\"lists\":[],\"tables\":[{\"section\":\"<table section>\",\"columns\":[\"<column>\",\"<column>\"]}],\"sentences\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"],\"form\":\"lead\"},{\"text\":\"<sentence>\",\"evidence\":[\"E2\"],\"form\":\"bullet\",\"section\":\"<section>\"},{\"text\":\"\",\"evidence\":[\"E3\"],\"form\":\"row\",\"section\":\"<table section>\",\"cells\":[\"<cell>\",\"<cell>\"]}],\"not_found\":[]}",
+].join("\n");
+
+const BLOCK_TITLE = "optional: a heading of a few words";
+/**
+ * The blocks a v2 Ask's writer arranges its answer from (answer layout v2, ADR-0051), in the shape of the research tool
+ * contract's source entries (ADR-0042): the name it passes, a description that says only what the block shows, and
+ * each field it takes with its meaning and limits. It reaches the writer as data beside source_catalog, and
+ * answerBlocksSchema is built from the same entries. The entries are the block evaluation's, word for word
+ * (tools/evals/ask-blocks).
+ */
+export const ANSWER_BLOCK_CATALOG = Object.freeze([
+  { block: "answer", description: "The direct answer to the question, in one or two sentences.", params: { sentences: "1 to 2 sentences, each with its text and evidence" } },
+  { block: "text", description: "A short paragraph that explains, qualifies or connects facts.", params: { title: BLOCK_TITLE, sentences: "1 to 4 sentences, each with its text and evidence" } },
+  { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 to 10 items, each with its text and evidence" } },
+  { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 to 6 column names", rows: "2 to 12 rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence" } },
+  { block: "timeline", description: "Events in date order, oldest first: each event's date and what happened, and who was involved when the evidence says.", params: { title: BLOCK_TITLE, events: "2 to 12 events, each with date (YYYY-MM-DD, as the evidence dates the event), text (what happened, in one sentence), who (optional: a person's name as the evidence records it) and evidence" } },
+  { block: "card", description: "One person, project, ticket or decision, with its key facts as label and value.", params: { title: "its name", kind: "person, project, ticket or decision", facts: "2 to 8 facts, each with label, value and evidence" } },
+  { block: "quote", description: "The exact words of one source, such as an approved decision's text or what someone said, with where they come from.", params: { text: "words copied exactly from the cited evidence", from: "who said or recorded it, and when", evidence: "the one id it is copied from" } },
+].map(entry => Object.freeze({ ...entry, params: Object.freeze(entry.params) })));
+
+/**
+ * What a v2 Ask's writer is told after ANSWER_PROMPT and its guidance (answer layout v2, ADR-0051): how to arrange the
+ * answer from block_catalog, layout v1's two wording rules word for word, and the reply shape answerBlocksSchema holds.
+ * It is the block evaluation's layout part with two lines production needs: the reply names the lists it uses, and the
+ * writer never writes items for a list's members, which code states. An Ask without v2 never sees it.
+ */
+export const ANSWER_BLOCKS_PROMPT = [
+  "Layout: the person's app shows the answer as a short document made of blocks. \"block_catalog\" lists the blocks it can show:",
+  "- Each block_catalog entry has \"block\", the name you pass; \"description\", what the block shows; and \"params\", each field it takes with what it means and its limits.",
+  "- Choose the blocks that show this answer best, in the order the person should read them, and only the blocks the answer needs: an answer that is one fact is one \"answer\" block.",
+  "- The first block is \"answer\": the conclusion, in one or two sentences.",
+  NO_RESTATING_RULE,
+  LONG_IDS_ONCE_RULE,
+  "- Every sentence, item, row, event, fact and quote cites the evidence that supports it in \"evidence\", and only that evidence. Never write ids such as E4 in the text.",
+  "- Never write items, rows, events or facts for a list's members: code states them, right after the answer.",
+  "- Write a date in a date field or a table cell as YYYY-MM-DD.",
+  "- Put in a block only what the evidence says.",
+  "",
+  "With layout, reply with ONLY a JSON object in exactly this shape instead:",
+  "{\"lists\":[],\"blocks\":[{\"block\":\"answer\",\"sentences\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}]},{\"block\":\"<a block from block_catalog>\",\"<its params>\":\"...\"}],\"not_found\":[]}",
 ].join("\n");
 
 /**
