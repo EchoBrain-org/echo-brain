@@ -43,7 +43,8 @@ separately, as CI does:
 - `npm run test:research-loop-eval` runs `tools/evals/research-loop/test/`.
 - `npm run test:agentic-ask-eval` runs `tools/evals/agentic-ask/test/` with a
   stubbed transport. It makes no model requests and needs no real credentials.
-- `npm run test:ask-follow-up-eval` runs `tools/evals/ask-follow-up/test/` and
-  `npm run test:ask-wording-eval` runs `tools/evals/ask-wording/test/`, each
+- `npm run test:ask-follow-up-eval` runs `tools/evals/ask-follow-up/test/`,
+  `npm run test:ask-wording-eval` runs `tools/evals/ask-wording/test/` and
+  `npm run test:ask-blocks-eval` runs `tools/evals/ask-blocks/test/`, each
   with a stubbed model and no real credentials.
   These deterministic evaluator suites all run in CI's `check (tail)` leg.
