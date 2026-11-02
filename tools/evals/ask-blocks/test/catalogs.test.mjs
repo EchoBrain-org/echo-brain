@@ -62,6 +62,10 @@ test("reads one filled template, and refuses a template the catalog does not hav
   assert.deepEqual(report.blocks.map((block) => block.kind), ["answer", "table", "prose"]);
   const unknown = readReply(catalog("templates"), { not_found: [], template: { name: "dashboard", answer: [{ text: "Two are open.", evidence: ["E1"] }] } });
   assert.deepEqual(unknown.problems, ["template.name must be one of fact, list, report, story, profile"]);
+  // One template object: a field the named template does not take is refused, as a choice of shapes would.
+  const mixed = readReply(catalog("templates"), { not_found: [], template: { name: "fact", answer: [{ text: "Two are open.", evidence: ["E1"] }], events: [] } });
+  assert.deepEqual(mixed.problems, ["template.events is not a field of the fact template"]);
+  assert.deepEqual(catalog("templates").schema.properties.template.properties.name.enum, ["fact", "list", "report", "story", "profile"]);
 });
 
 const text = (id, words, evidence, variant = "body") => ({ id, component: "Text", variant, text: words, ...(evidence === undefined ? {} : { evidence }) });

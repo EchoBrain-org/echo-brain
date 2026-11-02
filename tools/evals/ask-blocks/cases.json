@@ -177,7 +177,7 @@
       ],
       "expect": {
         "shapes": ["sequence"], "fallback": ["parallel", "grid"], "order": true,
-        "facts": [["30 DVT units", "30 units"], ["gate"], ["lab"], ["certificate"]],
+        "facts": [["30 DVT units", "30 units"], ["gate"], ["lab"], ["Nov 3", "November 3", "2026-11-03"]],
         "people": ["Dev Mehta"]
       }
     },
@@ -193,7 +193,7 @@
       ],
       "expect": {
         "shapes": ["sequence"], "fallback": ["grid", "parallel"], "order": true,
-        "facts": [["Oct 5", "October 5", "2026-10-05"], ["Oct 12", "October 12", "2026-10-12"], ["tooling"], ["Oct 26", "October 26", "2026-10-26"], ["THERM-482"]],
+        "facts": [["Oct 5", "October 5", "2026-10-05"], ["Oct 12", "October 12", "2026-10-12"], ["Oct 26", "October 26", "2026-10-26"]],
         "people": []
       }
     },

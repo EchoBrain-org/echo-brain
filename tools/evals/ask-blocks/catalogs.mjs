@@ -161,20 +161,27 @@ export const TEMPLATE_CATALOG = Object.freeze([
   { template: "profile", description: "A direct answer, then one person, project, ticket or decision with its key facts as label and value.", params: { answer: ANSWER_PARAM, title: "its name", kind: "person, project, ticket or decision", facts: FACTS_PARAM } },
 ].map((entry) => Object.freeze(entry)));
 
-const TEMPLATE_SCHEMAS = Object.freeze([
-  object(["name", "answer"], { name: one("fact"), answer: array(CLAIM, 1, 2), support: array(CLAIM, 0, 3) }),
-  object(["name", "answer", "items"], { name: one("list"), answer: array(CLAIM, 1, 2), title: STRING, items: array(CLAIM, 2, 10) }),
-  object(["name", "answer", "columns", "rows"], { name: one("report"), answer: array(CLAIM, 1, 2), title: STRING, columns: array(STRING, 2, 6), rows: array(ROW, 2, 12), notes: array(CLAIM, 0, 3) }),
-  object(["name", "answer", "events"], { name: one("story"), answer: array(CLAIM, 1, 2), title: STRING, events: array(EVENT, 2, 12) }),
-  object(["name", "answer", "title", "kind", "facts"], { name: one("profile"), answer: array(CLAIM, 1, 2), title: STRING, kind: { type: "string", enum: [...CARD_KINDS] }, facts: array(FACT, 2, 8) }),
-]);
-const templateSchema = object(["template", "not_found"], { template: { anyOf: [...TEMPLATE_SCHEMAS] }, not_found: NOT_FOUND });
+// One template object whose name picks the template; code refuses a field the named template does not take. (The
+// provider refused a template given as a choice of five object shapes; README.md, "Changes after the diagnostic run".)
+const templateSchema = object(["template", "not_found"], {
+  template: object(["name", "answer"], {
+    name: { type: "string", enum: TEMPLATE_CATALOG.map((entry) => entry.template) },
+    answer: array(CLAIM, 1, 2), support: array(CLAIM, 0, 3), title: STRING, items: array(CLAIM, 2, 10),
+    columns: array(STRING, 2, 6), rows: array(ROW, 2, 12), notes: array(CLAIM, 0, 3), events: array(EVENT, 2, 12),
+    kind: { type: "string", enum: [...CARD_KINDS] }, facts: array(FACT, 2, 8),
+  }),
+  not_found: NOT_FOUND,
+});
 
 function readTemplates(value) {
   const check = problems();
   if (!isObject(value) || !isObject(value.template)) return { valid: false, problems: ["the reply must be an object with a template"], blocks: [], not_found: [] };
   const template = value.template;
   const name = template.name;
+  const entry = TEMPLATE_CATALOG.find((candidate) => candidate.template === name);
+  if (entry !== undefined) {
+    for (const field of Object.keys(template)) if (field !== "name" && !Object.hasOwn(entry.params, field)) check.add(`template.${field}`, `is not a field of the ${name} template`);
+  }
   const title = said(template.title, LABEL_CHARS);
   const titled = title.length === 0 ? {} : { title };
   const blocks = [{ kind: "answer", claims: claimsOf(check, "template.answer", template.answer, 1, 2) }];

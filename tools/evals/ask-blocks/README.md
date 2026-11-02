@@ -171,6 +171,22 @@ then to fewer output tokens. The judge's mean ranks, and how often its top
 pick and its order of each pair of catalogs match the founder's, are reported
 beside it.
 
+## Changes after the diagnostic run
+
+A diagnostic run on 2026-11-02 (three cases, one trial, at `9d626c2`) decided
+nothing and found two faults in the harness, fixed before the full run. No
+rule, threshold or catalog entry changed.
+
+- The provider refused the `templates` reply schema, a template given as a
+  choice of five object shapes, on every call (HTTP 400). The schema is now one
+  template object whose `name` is one of the five, and code refuses a field the
+  named template does not take, as the five shapes did.
+- Two order facts could not tell order. In `week-events` the fourth event's
+  fact was "certificate", which the second event's text also says; it is now
+  the certificate's date, Nov 3, which only the fourth event says. In
+  `dvt-date-moves` each move's reason sat beside its new date, where a writer
+  may name either first; the case now checks the three dates, in order.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
