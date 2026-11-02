@@ -214,6 +214,34 @@ and the judge through the product's personal Claude account writer instead
 Every answer of the run of record comes from that one route; the report names
 it under `model.route`.
 
+## Result, 2026-11-02 (rules 1 to 5)
+
+The run of record, at `0e625a8` with no uncommitted change, on
+`claude-sonnet-5-5` through the founder's Claude account: 180 trials and 30
+judge rankings, no failed call, one repair in all.
+
+| Catalog | 1. Valid (43) | 2. Grounded (43) | 3. Nothing lost (41) | 4. Fit (36) | 5. Stable (12) | Output tokens | Judge's mean rank |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `today` | 45 | 45 | 45 | 37 | 15 | 18,449 | 2.30 |
+| `templates` | 45 | 45 | 42 | 45 | 15 | 16,943 | 2.37 |
+| `balanced` | 45 | 45 | 45 | 39 | 15 | 18,839 | 2.47 |
+| `primitives` | 45 | 45 | 45 | **20** | 15 | 20,011 | 2.87 |
+
+- `balanced` passes rules 1 to 5; rule 6, the founder's ranking, decides the
+  direction and the block size.
+- `primitives` fails fit: given only small components it built no table, card
+  or timeline, writing lists and prose instead, so the reader gets less
+  structure for the same facts.
+- `templates` fits every case but loses facts in `trap-undated` in all three
+  trials: its story template takes dated events only, so the undated ticket
+  updates fall out.
+- `balanced` misses fit in two cases only, in every trial: points instead of
+  a card for `person-profile`, and one table instead of sections for
+  `review-multi`. It is the only catalog that wrote steps in order, a timeline
+  for both dated cases, a card for the ticket and the decision's exact words.
+- The judge, which reads answers as text, ranks the three structured catalogs
+  within 0.17 of each other and `primitives` last.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
