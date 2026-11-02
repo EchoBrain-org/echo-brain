@@ -114,6 +114,43 @@ Both trials that failed rule 1 after the change are `blocker-plain`, whose leads
 said THERM-482 "is blocking the DVT gate", 5 words of the question; one of its
 three trials did so before too.
 
+## Layout v2, 2026-11-02 (pre-registered)
+
+Written before any run. Every desktop and `person ask` will send
+`x-echo-answer-layout: 2`
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md)): the
+writer arranges the answer from seven blocks. Its prompt is the answer prompt
+followed by a blocks layout part whose two wording rules are layout v1's word
+for word, its input carries `block_catalog` beside `source_catalog`, and it
+replies with blocks. That change ships only when this evaluation still passes
+its three rules on it
+([Ask answer layout v2](../../../docs/product/2026-11-02-ask-answer-layout-v2.md),
+"Gates"), so the evaluation now measures the v2 writer: Ask runs with answer
+layout v2, and the kernel reads, checks and releases the answer as it does for
+the desktop.
+
+- **The same cases:** `cases.json` is unchanged (`sha256:6ad26dc1…6a2bfa`).
+- **The same three rules and thresholds,** each at least 27 of 30 trials,
+  graded as above. The lead is the statements of the first part's `answer`
+  block, layout v2's lead, or, without one, its first statement; a layout v1
+  answer is still read by its lead block. The answer's text is still every
+  part's statements and gap, as the audit reads them, so it includes the
+  statements code writes for a table row, a timeline event, a card fact and a
+  quote: a long identifier that titles a card is written once in each of its
+  facts.
+- **The writer route:** the personal Claude account writer (`--writer
+  claude-account`): `claude-sonnet-5-5` through the Claude Agent SDK and the
+  signed-in `claude` binary, the route of the block evaluation's run of record
+  and of its gate. The report names it under `model.route`.
+- **Decided by a complete run:** all 10 cases, 3 trials each, and every
+  trial's writer given the block catalog (each trial's `writer_layout` is 2).
+  The v2 writer passes when all three rules pass (the report's
+  `wording_ships`). A smaller run, or one whose writer was not given the block
+  catalog, decides nothing.
+
+The 2026-10-26 results above measured layout v1 through OpenRouter and stay as
+they are.
+
 ## Limits
 
 - One model route and synthetic items only: a staging release and the
