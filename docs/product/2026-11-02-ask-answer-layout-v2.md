@@ -1,6 +1,6 @@
 # Ask answer layout v2: model-arranged blocks
 
-Status: proposed design, 2026-11-02. Decision record:
+Status: accepted by the founder on 2026-11-02. Decision record:
 [ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md).
 
 ## What changes for the person

@@ -9,7 +9,7 @@ component_ids:
 created_at: 2026-11-02
 reviewed_at: 2026-11-02
 reviewed_ref: 9e6bc8a356c826d77e2094a268340ba3fa848549
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -28,9 +28,9 @@ block catalogs on 15 synthetic THERM questions, three trials each, on
 meaning-sized blocks ("balanced") passed all six rules: valid, grounded and
 nothing lost in 45 of 45, fit in 39 of 45, a mean founder rank of 1.40 against
 production's 2.33, best in 10 of 15. The plain-English design is
-[Ask answer layout v2](../product/2026-11-02-ask-answer-layout-v2.md). This
-record is proposed; acceptance does not mean the change is deployed or
-qualified.
+[Ask answer layout v2](../product/2026-11-02-ask-answer-layout-v2.md). The
+founder accepted this record on 2026-11-02, before it was built. Acceptance
+does not mean the change is deployed or qualified.
 
 ## Context and options
 
