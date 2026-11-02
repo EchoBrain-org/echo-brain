@@ -703,11 +703,10 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
   });
 
   it("reads a reply's lists, what it did not find and, asked again, since, as a laid-out v1 reply's", () => {
-    const given = reply([{ block: "answer", sentences: [{ text: "Two are open.", evidence: ["E1", "L1"] }] }], {
-      lists: [{ id: "L1", where: { field: "owner", value: "Dana Lee" } }], not_found: ["the due date"], since: [{ text: "The owner changed.", evidence: ["E1"] }],
-    });
+    const fields = { lists: [{ id: "L1", where: { field: "owner", value: "Dana Lee" } }], not_found: ["the due date"], since: [{ text: "The owner changed.", evidence: ["E1"] }] };
+    const given = reply([{ block: "answer", sentences: [{ text: "Two are open.", evidence: ["E1", "L1"] }] }], fields);
     const parsed = parseBlocksAnswer(given, { since: true });
-    const v1 = parseAnswer({ lists: given.lists, not_found: given.not_found, since: given.since, sentences: [{ text: "Two are open.", evidence: ["E1", "L1"], form: "lead" }] }, { layout: true, since: true });
+    const v1 = parseAnswer({ ...fields, sentences: [{ text: "Two are open.", evidence: ["E1", "L1"], form: "lead" }] }, { layout: true, since: true });
     expect([parsed.lists, parsed.not_found, parsed.since, parsed.sentences[0]!.evidence]).toEqual([v1.lists, v1.not_found, v1.since, v1.sentences[0]!.evidence]);
     expect(parseBlocksAnswer(given)).not.toHaveProperty("since");
   });
