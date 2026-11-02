@@ -26,10 +26,9 @@ It can:
   Slack identity, read tool link status, and let an owner set up the
   organization's Slack app;
 - bring meetings in from the person's own Granola (one at a time, or by
-  watching their meetings or one folder) or by pasting one from any tool, then
-  review each meeting privately: route every decision and action to Only me,
-  to one to twenty of their projects (optionally kept for them alone), or
-  nowhere, and confirm action owners
+  watching their meetings or one folder), then review each meeting privately:
+  route every decision and action to Only me, to one to twenty of their projects
+  (optionally kept for them alone), or nowhere, and confirm action owners
   ([ADR-0046](docs/decisions/ADR-0046-private-meetings-and-item-routing.md));
 - ask cited questions across approved records, authorized notes and
   documents, follow-ups, their projects, people and tools, and their live Jira
