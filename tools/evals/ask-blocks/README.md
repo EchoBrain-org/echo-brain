@@ -242,6 +242,33 @@ judge rankings, no failed call, one repair in all.
 - The judge, which reads answers as text, ranks the three structured catalogs
   within 0.17 of each other and `primitives` last.
 
+## Result, 2026-11-02 (rule 6 and the decision)
+
+The founder ranked all 15 cases blind on the page the same day, with nothing
+revealed before every case was ranked. The labels the page saved match each
+case's fixed order.
+
+| Catalog | Founder's mean rank | Ranked best in | Judge's mean rank |
+| --- | --- | --- | --- |
+| `today` | 2.33 | 4 cases | 2.30 |
+| `templates` | 2.13 | 3 cases | 2.37 |
+| `balanced` | **1.40** | **10 cases** | 2.47 |
+| `primitives` | 3.80 | 0 cases | 2.87 |
+
+- **Rule 6 passes:** `balanced` is ranked at least as high as `today` in 12 of
+  15 cases (9 needed): better in 11, tied in 1, worse in 3. Against
+  `templates` it is also better in 11, tied in 1, worse in 3, and it is better
+  than `primitives` in all 15.
+- **Decision:** the model-arranged direction is sound (`balanced` passes all
+  six rules), and the right block size is `balanced`, the lowest mean founder
+  rank among the catalogs that pass rules 1 to 3.
+- **Where `balanced` lost:** `today`'s bullets or table ranked first in
+  `gate-blockers`, `review-multi` and `workstreams-status`, and `templates`'
+  card and timeline in `person-profile` and `trap-undated`.
+- **The judge does not stand in for a reader:** its top pick matched the
+  founder's in 7 of 15 cases and its order of a pair of catalogs in 39 of 90.
+  It reads answers as text and cannot see their structure.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
