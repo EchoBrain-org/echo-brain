@@ -820,6 +820,8 @@ Ask's follow-up resolver (`agentic-follow-up-resolver-v1.ts`) and the renderers 
 | `writer_unknown_id_dropped` | Dropped an id the writer was not shown from a sentence, a list use or a list's members |
 | `writer_uncited_sentence_dropped` | Left out a writer sentence that cites no evidence text it read |
 | `writer_fallback` | Stated lists or records in place of a writer that gave no usable reply |
+| `writer_quote_unquoted` | Read a quote block whose words are not word for word in what it cites as plain text (ADR-0051) |
+| `writer_event_undated` | Read a timeline event whose day no item it cites records or writes as plain text, without that day (ADR-0051) |
 | `card_line_screened` | Sent back an impact-card line that suggests an edit or claims ownership |
 | `card_unknown_id_dropped` | Dropped a decided or affected entry naming an item the model was not shown, or the wrong kind of item |
 | `card_date_dropped` | Dropped a date at risk that the item does not state, that is not a date, or that has no milestone |

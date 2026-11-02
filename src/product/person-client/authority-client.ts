@@ -12,7 +12,7 @@ import {
   createPersonAskProgressDecoderV3, type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV3, type PersonAskReceiptV3,
 } from '@echo-brain/organization-api';
 import {
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
+  PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
   PERSON_ANSWER_PATH_V7,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1,
@@ -383,10 +383,10 @@ function askRequest(question: string, scope: AskScope, captureId: PersonDiagnost
     ...(previous === undefined ? {} : { previous }) });
 }
 
-/** Every Ask sends the client's clock and time zone and asks for answer layout v1 (ADR-0045). */
+/** Every Ask sends the client's clock and time zone and asks for answer layout v2, the writer's blocks (ADR-0051). */
 function askHeaders(): Readonly<Record<string, string>> {
   return { [PERSON_ASK_CLIENT_NOW_HEADER_V1]: new Date().toISOString(), [PERSON_ASK_TIME_ZONE_HEADER_V1]: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1 };
+    [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2 };
 }
 
 /**
