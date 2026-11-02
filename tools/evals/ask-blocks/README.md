@@ -269,6 +269,54 @@ case's fixed order.
   founder's in 7 of 15 cases and its order of a pair of catalogs in 39 of 90.
   It reads answers as text and cannot see their structure.
 
+## Gate on the built writer, 2026-11-02
+
+Written before any run.
+[ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md) builds
+`balanced` into the kernel as answer layout v2, and its design makes a re-run
+of this evaluation on the built writer one of its gates
+([Ask answer layout v2](../../../docs/product/2026-11-02-ask-answer-layout-v2.md),
+"Gates"). The gate adds one arm, `built`, beside the four catalogs, whose
+cases, measures, rules and results above are unchanged.
+
+```sh
+npm run build:workspaces
+node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory \
+  --catalogs built --judge off --writer claude-account --claude-executable /absolute/path/to/claude
+```
+
+- **The arm:** each trial runs Ask through the kernel end to end with answer
+  layout v2, over the scripted desk and research of step 1 of the procedure.
+  Only the writer's call goes to the model. The kernel's own prompt, block
+  catalog, reply schema and output room (2,000 tokens, where the four catalogs
+  get 3,000), its reading and checks, its one repair and its downgrades decide
+  what is released; the harness adds no repair. The report keeps each writer
+  call's prompts, raw reply and usage, and the released answer.
+- **What is graded is the released answer:** its part's `blocks`, read into
+  the common blocks of step 3: the answer block's statements as the answer's
+  claims, a text block as prose, points as a list, ordered or not, and a
+  table, a timeline, a card and a quote as themselves, each with its title.
+  Each claim's evidence is the evidence ids of its statement's citations, or
+  of a table row's own: each of the answer's citations is mapped back, by its
+  citation, to the case item it cites, whose id is `E1` to `En` in the order
+  research opened the items, as the writer saw them.
+- **Valid** means the answer was released with `blocks`; an answer released
+  without them is not valid and passes nothing. Grounded, nothing lost, fit
+  (`built` can show all nine shapes, as `balanced` can) and stable are
+  measured as above.
+- **The run:** the arm `built` alone, all 15 cases, 3 trials each, the judge
+  off, the writer through the founder's Claude account (`--writer
+  claude-account`, `claude-sonnet-5-5`), as in the run of record. That is a
+  complete gate run, and the report says so under `complete`; any other run
+  with `built` is a diagnostic and decides nothing. A run of the four
+  catalogs means what it meant before. `--resume` carries a `built` writer
+  reply only when the kernel asks for it with the same prompts again.
+- **The gate passes** when `built` meets rules 1 to 5 at their pre-registered
+  thresholds: valid in at least 43 of 45 trials, grounded in 43, nothing lost
+  in 41, fit in 36, and stable in at least 12 of 15 cases (the report's
+  `decision.passes`). Rule 6, the founder's blind ranking, is replaced by the
+  founder's check on the desktop.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
