@@ -49,13 +49,6 @@ export type PersonAnswerBlockV1 =
     readonly rows: readonly PersonAnswerTableRowV1[]; readonly caption?: string;
   };
 
-/** Whether an Ask asked for answer layout v1: absent is no, the header's value is yes, anything else is refused. */
-export function validatePersonAskAnswerLayoutHeaderV1(value: unknown): boolean {
-  if (value === undefined) return false;
-  if (value === PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1) return true;
-  return fail('Ask answer layout header is invalid');
-}
-
 /**
  * A part's layout, against the part's statements (each statement's
  * `citation_indexes`) and the answer's citation count. Every statement is in

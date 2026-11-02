@@ -118,33 +118,33 @@ describe('the V8 Ask streamed on /v7 (research tool contract v1)', () => {
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').at(-1)).toMatchObject({ outcome: 'answered', named_citation_digests: expect.arrayContaining([canonicalSha256(project.citation)]) });
   });
 
-  it('asks the V8 Ask for its layout exactly when the client sends the layout header, streamed or not, and refuses any other value before the Ask runs', async () => {
+  it('asks the V8 Ask for the layout the client sends in the layout header, streamed or not, and refuses any other value before the Ask runs', async () => {
     const f = await sentFixture();
     const planner = leadsAndTasks();
     const base = await origin(f, planner.model);
     const created = vi.mocked(createAgenticAskV5);
     created.mockClear();
     for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {
-      for (const headers of [{ 'x-echo-answer-layout': '1' }, {}] as readonly Readonly<Record<string, string>>[]) {
+      for (const headers of [{ 'x-echo-answer-layout': '1' }, { 'x-echo-answer-layout': '2' }, {}] as readonly Readonly<Record<string, string>>[]) {
         planner.reset();
         const response = await ask(base, { progress, headers });
         expect(response.status).toBe(200);
         await response.text();
       }
     }
-    // ADR-0045: the header's value is yes, its absence no, for the JSON answer and the stream alike.
-    expect(created.mock.calls.map(([options]) => options.answer_layout)).toEqual([true, undefined, true, undefined]);
+    // ADR-0045 and ADR-0051: the header's value is the layout asked for, its absence none, for the JSON answer and the stream alike.
+    expect(created.mock.calls.map(([options]) => options.answer_layout)).toEqual([1, 2, undefined, 1, 2, undefined]);
     const asked = audits(f, 'echo-person-agentic-ask-audit-v1').length;
     const planned = planner.catalogs.length;
     for (const progress of [null, PERSON_ASK_PROGRESS_HEADER_VALUE_V3]) {
-      for (const value of ['2', 'true', '1, 1']) {
+      for (const value of ['3', 'true', '1, 2']) {
         const refused = await ask(base, { progress, headers: { 'x-echo-answer-layout': value } });
         expect([refused.status, refused.headers.get('content-type')]).toEqual([400, 'application/json; charset=utf-8']);
         await expect(refused.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request failed' } });
       }
     }
     // Refused before the Ask runs: no Ask created, nothing planned, nothing audited.
-    expect(created).toHaveBeenCalledTimes(4);
+    expect(created).toHaveBeenCalledTimes(6);
     expect(planner.catalogs.length).toBe(planned);
     expect(audits(f, 'echo-person-agentic-ask-audit-v1').length).toBe(asked);
   });

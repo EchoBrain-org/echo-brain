@@ -49,7 +49,7 @@ const changed = (place: number, fields: Record<string, unknown>) => blocks.map((
 const two = [statement('One.', [0]), statement('Two.', [1])];
 
 describe('Answer layout v2 (ADR-0051)', () => {
-  it('reads the header: absent is none, 1 is layout v1, 2 is layout v2, anything else is refused', () => {
+  it('reads the header (ADR-0045, ADR-0051): absent is none, 1 is layout v1, 2 is layout v2, anything else is refused', () => {
     expect(PERSON_ASK_ANSWER_LAYOUT_HEADER_V1).toBe('x-echo-answer-layout');
     expect(PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2).toBe('2');
     expect(validatePersonAskAnswerLayoutHeaderV2(undefined)).toBeUndefined();
