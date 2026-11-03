@@ -160,27 +160,30 @@ they are.
 
 ## Result, layout v2, 2026-11-02
 
-At `4769016` with no uncommitted change, through the founder's Claude account
+At `294bf37` with no uncommitted change, through the founder's Claude account
 (`claude-sonnet-5-5`): 30 trials, every writer given the block catalog, no
 errors and no repairs. All three rules pass, so the v2 writer's wording ships.
 The layout v1 column is the 2026-10-26 run after its change, through
-OpenRouter: another route to the same model.
+OpenRouter: another route to the same model. An earlier complete run at
+`4769016`, before five review fixes to how code reads a v2 reply, passed too
+(30, 30 and 30, leads of 17.7 words).
 
 | | Layout v1, 2026-10-26 | Layout v2 |
 | --- | --- | --- |
-| 1. Answer, don't restate (27 of 30 to pass) | 28 | 30 |
+| 1. Answer, don't restate (27 of 30 to pass) | 28 | 29 |
 | 2. Long identifiers once (27 of 30 to pass) | 30 | 30 |
 | 3. Nothing lost (27 of 30 to pass) | 30 | 30 |
-| Words shared with the question, mean and longest run | 2.0, 5 | 2.4, 4 |
-| Lead length, mean words | 10.2 | 17.7 |
+| Words shared with the question, mean and longest run | 2.0, 5 | 2.4, 5 |
+| Lead length, mean words | 10.2 | 14.9 |
 | Long identifiers written | 6 | 6 |
 | Leads writing an identifier the question named | 0 | 0 |
 
+The one trial that failed rule 1 is `blocker-plain`'s, whose lead said THERM-482
+"is blocking the DVT gate", 5 words of the question, as v1's failing trials did.
 The v2 lead, the answer block, is longer: it often adds a second sentence or a
-qualifier ("You own it: Noor Haddad is the owner, and its status is open. The
-approved Staging release review record says ..."). No rule measures its
-length; it belongs with tuning the block descriptions, which the design leaves
-for later.
+qualifier ("The soak cannot finish until the fixture holds 45 °C. The ticket is
+In Progress and owned by Dev Okafor."). No rule measures its length; it belongs
+with tuning the block descriptions, which the design leaves for later.
 
 ## Limits
 

@@ -319,9 +319,13 @@ node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/cr
 
 ## Result of the gate, 2026-11-02
 
-At `4769016` with no uncommitted change, through the founder's Claude account
+At `294bf37` with no uncommitted change, through the founder's Claude account
 (`claude-sonnet-5-5`): 45 trials, no failed call and no repair. The gate
-passes: `built` meets rules 1 to 5.
+passes: `built` meets rules 1 to 5. The run resumed a complete run made at
+`4769016`, before five review fixes that change only how code reads a reply,
+never what the writer is sent, so the kernel asked with the same prompts and
+all 45 writer replies were carried and read again by the final code; that
+earlier run's grades were the same.
 
 | Arm | 1. Valid (43) | 2. Grounded (43) | 3. Nothing lost (41) | 4. Fit (36) | 5. Stable (12) | Output tokens |
 | --- | --- | --- | --- | --- | --- | --- |
