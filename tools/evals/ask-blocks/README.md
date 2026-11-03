@@ -317,6 +317,28 @@ node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/cr
   `decision.passes`). Rule 6, the founder's blind ranking, is replaced by the
   founder's check on the desktop.
 
+## Result of the gate, 2026-11-02
+
+At `4769016` with no uncommitted change, through the founder's Claude account
+(`claude-sonnet-5-5`): 45 trials, no failed call and no repair. The gate
+passes: `built` meets rules 1 to 5.
+
+| Arm | 1. Valid (43) | 2. Grounded (43) | 3. Nothing lost (41) | 4. Fit (36) | 5. Stable (12) | Output tokens |
+| --- | --- | --- | --- | --- | --- | --- |
+| `built` | 45 | 45 | 45 | 38 | 15 | 18,935 |
+| `balanced`, run of record | 45 | 45 | 45 | 39 | 15 | 18,839 |
+
+- `built` misses fit where `balanced` did, in every trial: points instead of a
+  card for `person-profile`, and one table instead of sections for
+  `review-multi`. It also misses it in one `ticket-profile` trial, whose writer
+  wrote text instead of a card.
+- Every block the writer gave was released as it gave it: no quote fell short
+  of being word for word, no timeline event's day was one its items lacked,
+  and no block was left with too few items.
+- The writer used 12 tables, 10 points (3 of them numbered steps, one in each
+  `ship-steps` trial), 8 timelines, 3 quotes and 2 cards, 2.3 blocks and 4.4
+  claims an answer.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
