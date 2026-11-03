@@ -485,6 +485,9 @@ const COMPONENT_PROMPT = [
   "{\"root\":\"main\",\"components\":[{\"id\":\"main\",\"component\":\"Column\",\"children\":[\"answer\"]},{\"id\":\"answer\",\"component\":\"Text\",\"variant\":\"body\",\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}],\"not_found\":[]}",
 ].join("\n");
 
+/** Every shape an answer can show (grade.mjs, SHAPES), which balanced, primitives and the built writer can each show. */
+const EVERY_SHAPE = Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]);
+
 /**
  * The catalogs, in the page's and the report's order. `catalog_key` names the entries' place in the writer's input
  * (beside `source_catalog`); `today` adds none and keeps production's prompt and schema byte for byte.
@@ -495,9 +498,9 @@ export const CATALOGS = Object.freeze([
   Object.freeze({ id: "templates", modeled_on: "OpenAI ChatKit widget templates, Microsoft Adaptive Card templates", catalog_key: "template_catalog", catalog: TEMPLATE_CATALOG, layout_prompt: TEMPLATE_PROMPT, schema: templateSchema, read: readTemplates,
     can_show: Object.freeze(["single", "prose", "parallel", "grid", "sequence", "profile", "verbatim"]) }),
   Object.freeze({ id: "balanced", modeled_on: "Vercel json-render style meaning-sized components", catalog_key: "block_catalog", catalog: BLOCK_CATALOG, layout_prompt: BLOCK_PROMPT, schema: blockSchema, read: readBalanced,
-    can_show: Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]) }),
+    can_show: EVERY_SHAPE }),
   Object.freeze({ id: "primitives", modeled_on: "Google A2UI basic catalog, without media and input components", catalog_key: "component_catalog", catalog: COMPONENT_CATALOG, layout_prompt: COMPONENT_PROMPT, schema: componentSchema, read: readPrimitives,
-    can_show: Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]) }),
+    can_show: EVERY_SHAPE }),
 ]);
 export const CATALOG_IDS = Object.freeze(CATALOGS.map((entry) => entry.id));
 
@@ -506,8 +509,7 @@ export const CATALOG_IDS = Object.freeze(CATALOGS.map((entry) => entry.id));
  * layout v2 (ADR-0051), which is `balanced` built into the product. Its prompt, block catalog and schema are the
  * kernel's, recorded from its writer's calls, and what is graded is the answer the kernel releases (`readReleased`).
  */
-export const BUILT = Object.freeze({ id: "built", modeled_on: "the built writer: answer layout v2 in the kernel (ADR-0051)", catalog_key: "block_catalog", answer_layout: 2,
-  can_show: Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]) });
+export const BUILT = Object.freeze({ id: "built", modeled_on: "the built writer: answer layout v2 in the kernel (ADR-0051)", catalog_key: "block_catalog", answer_layout: 2, can_show: EVERY_SHAPE });
 /** Every arm a run may select: the four catalogs, then `built`. */
 export const ARMS = Object.freeze([...CATALOGS, BUILT]);
 export const ARM_IDS = Object.freeze(ARMS.map((entry) => entry.id));

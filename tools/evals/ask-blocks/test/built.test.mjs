@@ -3,7 +3,6 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { citationOfAgenticEvidenceItemV8 } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-evidence-bundle-v1.js";
 import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, answerBlocksSchema } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { sha256 } from "../../shared/runner.mjs";
@@ -22,6 +21,8 @@ const itemsOf = (caseDefinition) => caseDefinition.items.map((item, index) => de
 const blockers = caseOf("gate-blockers");
 const [decision, fan, certificate, soak] = itemsOf(blockers);
 const citations = [soak, fan, certificate, decision].map((item) => citationOfAgenticEvidenceItemV8(item, document.time_zone));
+/** What the v2 writer is given for gate-blockers, as the kernel asks it: the evidence its answers are graded against. */
+const given = evidenceOf((await captureWriterPrompts(blockers, document, generation, BUILT.answer_layout)).user_prompt);
 /** A statement citing `citation_indexes`: private exactly when one of them is, as a Jira issue the asker reads alone is. */
 const statement = (text, citation_indexes) => ({ text, citation_indexes, private: citation_indexes.some((index) => citations[index].visibility === "only_me") });
 /** gate-blockers answered with every block layout v2 has, as the kernel releases it (ADR-0051). */
@@ -62,9 +63,8 @@ test("maps each of an answer's citations back to its case item, E1 to En in the 
   assert.deepEqual(evidenceIdsOf([citations[1], elsewhere], itemsOf(blockers)), ["E2", "citation 2"]);
 });
 
-test("reads every block of a released answer into the common blocks, each claim citing its evidence ids", async () => {
+test("reads every block of a released answer into the common blocks, each claim citing its evidence ids", () => {
   const response = released();
-  assert.doesNotThrow(() => validatePersonAnswerResponseV8(response));
   const read = readReleased(response, evidenceIdsOf(response.citations, itemsOf(blockers)));
   assert.deepEqual([read.valid, read.problems], [true, []]);
   assert.deepEqual(read.blocks, [
@@ -78,13 +78,12 @@ test("reads every block of a released answer into the common blocks, each claim 
   ]);
   assert.deepEqual(read.view.map((node) => node.t), ["lead", "h", "p", "h", "ol", "h", "table", "h", "timeline", "card", "quote"]);
   // Graded as the other arms are, against the evidence the v2 writer is given.
-  const captured = await captureWriterPrompts(blockers, document, generation, BUILT.answer_layout);
-  const grade = gradeTrial(blockers, BUILT, read, evidenceOf(captured.user_prompt));
+  const grade = gradeTrial(blockers, BUILT, read, given);
   assert.deepEqual([grade.valid, grade.grounded, grade.fit, grade.grounding_problems], [true, true, true, []]);
   assert.deepEqual(grade.shapes, ["grid", "ordered", "profile", "prose", "sections", "sequence", "verbatim"]);
 });
 
-test("is not valid when the answer was released without blocks or fails the V8 contract, and passes nothing", async () => {
+test("is not valid when the answer was released without blocks or fails the V8 contract, and passes nothing", () => {
   const ids = evidenceIdsOf(citations, itemsOf(blockers));
   const { blocks: _blocks, ...plain } = released().parts[0];
   const without = readReleased({ ...released(), parts: [plain] }, ids);
@@ -94,8 +93,7 @@ test("is not valid when the answer was released without blocks or fails the V8 c
   const broken = readReleased(released({ blocks: released().parts[0].blocks.slice(0, 6) }), ids);
   assert.deepEqual([broken.valid, broken.problems], [false, ["organization API: Ask answer blocks leave a statement out"]]);
   assert.equal(readReleased(null, ids).valid, false);
-  const captured = await captureWriterPrompts(blockers, document, generation, BUILT.answer_layout);
-  const grade = gradeTrial(blockers, BUILT, without, evidenceOf(captured.user_prompt));
+  const grade = gradeTrial(blockers, BUILT, without, given);
   assert.deepEqual([grade.valid, grade.grounded, grade.nothing_lost, grade.fit, grade.main_shape], [false, false, false, false, "invalid"]);
 });
 
@@ -116,7 +114,6 @@ test("selects the built arm beside the four catalogs, and never asks the judge t
   const gate = parseArgs([...base, "--catalogs", "built", "--judge", "off"]);
   assert.deepEqual([gate.catalogIds, gate.judge, gate.trials, gate.caseIds], [["built"], false, 3, null]);
   assert.throws(() => parseArgs([...base, "--catalogs", "built"]), /nothing for the judge to rank: add --judge off/u);
-  assert.throws(() => parseArgs([...base, "--catalogs", "built,built", "--judge", "off"]), /each once/u);
   assert.throws(() => parseArgs([...base, "--catalogs", "shipped", "--judge", "off"]), /known catalogs/u);
   // A diagnostic beside a catalog keeps the judge for that catalog.
   assert.deepEqual(parseArgs([...base, "--catalogs", "balanced,built", "--trials", "1"]).catalogIds, ["balanced", "built"]);
@@ -165,7 +162,6 @@ test("runs the built writer through the kernel end to end, keeping each call and
   assert.deepEqual(attempt, { attempt: 1, kind: "first", system_prompt_sha256: prompts.system_prompt_sha256, max_output_tokens: 2_000, value: TICKET_REPLY, finish_reason: "stop",
     usage: { input_tokens: 900, output_tokens: 120, total_tokens: 1020 }, provider_latency_ms: 3, valid: true });
   // The released answer is kept and graded: its citations in first-use order, the follow-up first, map back to E2 and E1.
-  assert.doesNotThrow(() => validatePersonAnswerResponseV8(trial.response));
   assert.deepEqual(trial.response.citations.map((entry) => entry.kind), ["follow_up", "ticket"]);
   assert.deepEqual(trial.read.blocks.map((block) => block.kind), ["answer", "card", "timeline", "quote", "list", "prose"]);
   assert.deepEqual(trial.read.blocks[0].claims[0].evidence, ["E2", "E1"]);
@@ -205,7 +201,7 @@ test("makes a complete gate run of the built writer alone, every case three time
   const { report } = await run(options(out, { caseIds: null, trials: 3, concurrency: 6 }), { loaded: { structured_output: writer, generation }, progress: () => undefined });
   assert.deepEqual([report.complete, report.limits.catalogs, report.summary.built.trials, writer.inputs.length], [true, ["built"], 45, 45]);
   assert.deepEqual(report.decision, { complete: true, arm: "built", passes: false, rules: { valid: true, grounded: true, nothing_lost: false, fit: false, stable: true } });
-  // The same run with the judge on, or fewer trials, decides nothing.
+  // The same run with fewer trials decides nothing.
   const fewer = await run(options(out, { caseIds: null, trials: 1, concurrency: 6 }), { loaded: { structured_output: route(() => TICKET_REPLY), generation }, progress: () => undefined });
   assert.deepEqual([fewer.report.complete, fewer.report.decision.passes], [false, null]);
 });

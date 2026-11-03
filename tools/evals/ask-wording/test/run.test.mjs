@@ -6,7 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, answerBlocksSchema } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { loadCases } from "../grade.mjs";
-import { ANSWER_LAYOUT, decides, help, parseArgs, run, runTrial, writerLayout } from "../run.mjs";
+import { decides, help, parseArgs, run, runTrial, writerLayout } from "../run.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const document = loadCases();
@@ -98,7 +98,6 @@ test("runs Ask with answer layout v2 over scripted research, sending only the wr
 
 test("tells the layout a writer was given from its input: the block catalog, layout v1's tables, or none", () => {
   const input = (user, properties) => ({ user_prompt: JSON.stringify(user), schema: { type: "object", properties } });
-  assert.equal(ANSWER_LAYOUT, 2);
   assert.equal(writerLayout(input({ source_catalog: [], block_catalog: [], evidence: [] }, { lists: {}, blocks: {}, not_found: {} })), 2);
   assert.equal(writerLayout(input({ source_catalog: [], evidence: [] }, { lists: {}, tables: {}, sentences: {}, not_found: {} })), 1);
   assert.equal(writerLayout(input({ source_catalog: [], evidence: [] }, { lists: {}, sentences: {}, not_found: {} })), null);

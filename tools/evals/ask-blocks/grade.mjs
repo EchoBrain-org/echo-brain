@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { validatePersonQueryText } from "@echo-brain/organization-api";
+import { ITEM_KINDS, nonEmptyStrings, says, wordIndex, words } from "../shared/ask-cases.mjs";
 import { CATALOG_IDS } from "./catalogs.mjs";
 
 export const CASES_FILE = new URL("./cases.json", import.meta.url);
@@ -16,21 +17,11 @@ export const SHAPES = Object.freeze(["single", "prose", "parallel", "ordered", "
 export const RULES = Object.freeze({ valid: 43, grounded: 43, nothing_lost: 41, fit: 36, stable: 12, ranked: 9 });
 /** Mean founder ranks within this much of each other are a tie for block size. */
 const RANK_TIE = 0.1;
-const ITEM_KINDS = new Set(["follow_up", "decision", "ticket"]);
 const QUOTE_WORDS = 6;
 
 // ---- words and dates ---------------------------------------------------------------------------------------------
-/** A text's words, lower case, as the wording evaluation reads them: an identifier or a date is one word. */
-export function words(text) {
-  return String(text).normalize("NFC").toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+(?:['’._-][\p{L}\p{N}]+)*/gu) ?? [];
-}
-/** Where `phrase` first appears in `text`, as a run of whole words, or -1. */
-export function wordIndex(text, phrase) {
-  const [haystack, needle] = [words(text), words(phrase)];
-  if (needle.length === 0) return -1;
-  return haystack.findIndex((_, at) => needle.every((word, offset) => haystack[at + offset] === word));
-}
-export const says = (text, phrase) => wordIndex(text, phrase) >= 0;
+// A text's words are read as the wording evaluation reads them (shared/ask-cases.mjs): an identifier or a date is one word.
+export { says, wordIndex, words };
 
 const MONTHS = Object.freeze({ jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 });
 const ISO_DAY = /\b(\d{4})-(\d{2})-(\d{2})\b/gu;
@@ -58,7 +49,6 @@ function openingDate(text) {
 }
 
 // ---- cases -------------------------------------------------------------------------------------------------------
-const nonEmptyStrings = (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry.trim() !== "");
 const itemText = (item) => [item.title, item.label, item.text, item.owner, item.status, item.due_at, item.key, item.priority, item.decision?.title, item.decision?.first_line]
   .filter((value) => typeof value === "string").join("\n");
 
@@ -309,6 +299,9 @@ export function stableOf(trials) {
   return [...counts.entries()].some(([shape, count]) => shape !== "invalid" && count >= 2);
 }
 
+/** `value` to two decimal places, as the summaries report a mean. */
+const hundredths = (value) => Math.round(value * 100) / 100;
+
 /** Each catalog's rule counts over its trials, beside the measures reported with them. */
 export function summarizeCatalogs(trials, catalogIds = CATALOG_IDS) {
   return Object.freeze(Object.fromEntries(catalogIds.map((catalog) => {
@@ -324,8 +317,8 @@ export function summarizeCatalogs(trials, catalogIds = CATALOG_IDS) {
       valid: count("valid"), grounded: count("grounded"), nothing_lost: count("nothing_lost"), fit: count("fit"), stable,
       valid_at_once: own.filter((trial) => trial.attempts?.[0]?.valid === true).length,
       repairs: own.filter((trial) => (trial.attempts?.length ?? 0) > 1).length,
-      mean_blocks: own.length === 0 ? null : Math.round((total((trial) => trial.grade.blocks) / own.length) * 100) / 100,
-      mean_claims: own.length === 0 ? null : Math.round((total((trial) => trial.grade.claims) / own.length) * 100) / 100,
+      mean_blocks: own.length === 0 ? null : hundredths(total((trial) => trial.grade.blocks) / own.length),
+      mean_claims: own.length === 0 ? null : hundredths(total((trial) => trial.grade.claims) / own.length),
       output_tokens: total((trial) => trial.attempts?.reduce((sum, attempt) => sum + (attempt.usage?.output_tokens ?? 0), 0)),
       block_kinds: Object.freeze(kinds),
       rules: Object.freeze({
@@ -344,7 +337,7 @@ export function summarizeCatalogs(trials, catalogIds = CATALOG_IDS) {
 export function summarizeRanks(founder, judge, catalogIds = CATALOG_IDS) {
   const mean = (ranks, catalog) => {
     const values = Object.values(ranks).map((byCatalog) => byCatalog[catalog]).filter((value) => typeof value === "number");
-    return values.length === 0 ? null : Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 100) / 100;
+    return values.length === 0 ? null : hundredths(values.reduce((sum, value) => sum + value, 0) / values.length);
   };
   const cases = Object.keys(founder);
   const ranked = cases.filter((caseId) => founder[caseId].balanced <= founder[caseId].today).length;

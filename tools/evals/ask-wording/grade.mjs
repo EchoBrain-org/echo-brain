@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { validatePersonQueryText } from "@echo-brain/organization-api";
+import { ITEM_KINDS, nonEmptyStrings, says, words } from "../shared/ask-cases.mjs";
 
 export const CASES_FILE = new URL("./cases.json", import.meta.url);
 /** Each group's number of cases, as pre-registered. */
@@ -12,15 +13,9 @@ export const GROUPS = Object.freeze({ names_long_id: 6, plain: 4 });
 const MAX_SHARED_WORDS = 4;
 /** Each rule passes when at least this share of trials passes it. */
 const THRESHOLD = 0.9;
-const ITEM_KINDS = new Set(["follow_up", "decision", "ticket"]);
 
-/**
- * A text's words, lower case: runs of letters and digits, joined across an inner hyphen, dot, underscore or apostrophe,
- * so "clean-v1-20261026-ask-timeline-aa79d90" and "it's" are one word each, and quotes and punctuation are not words.
- */
-export function words(text) {
-  return text.normalize("NFC").toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+(?:['’._-][\p{L}\p{N}]+)*/gu) ?? [];
-}
+// A text's words, and whether a phrase is a run of them (shared/ask-cases.mjs): an identifier is one word, quotes and punctuation are none.
+export { says, words };
 
 /** The longest run of consecutive words two texts share. */
 export function sharedRun(left, right) {
@@ -36,19 +31,12 @@ export function sharedRun(left, right) {
   return longest;
 }
 
-/** Whether `phrase` is a run of whole words in `text`. */
-export function says(text, phrase) {
-  const [haystack, needle] = [words(text), words(phrase)];
-  return needle.length > 0 && haystack.some((_, at) => needle.every((word, offset) => haystack[at + offset] === word));
-}
-
 /** How many times `id` is written in `text`, as a whole word. */
 export function mentions(text, id) {
   const wanted = id.toLocaleLowerCase("en-US");
   return words(text).filter((word) => word === wanted).length;
 }
 
-const nonEmptyStrings = (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry.trim() !== "");
 const itemText = (item) => [item.title, item.label, item.text, item.owner, item.status, item.due_at, item.key, item.decision?.title, item.decision?.first_line].filter((value) => typeof value === "string").join("\n");
 
 /** Every problem with the cases document; an empty list when it is the pre-registered set. */

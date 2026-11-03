@@ -9,6 +9,21 @@ import { loadCases } from "../grade.mjs";
 
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
 const document = loadCases();
+const OWNS = "Priya Raman owns it.";
+/** The reply to each call, by the field its schema asks for (schemaOf): the judge's ranks, or the catalog's answer that Priya Raman owns it. */
+const REPLY = Object.freeze({
+  ranks: { ranks: ["A", "B", "C", "D"].map((answer, at) => ({ answer, rank: at + 1, reason: "fixture" })) },
+  sentences: { lists: [], tables: [], sentences: [{ text: OWNS, evidence: ["E1"], form: "lead" }], not_found: [] },
+  template: { template: { name: "fact", answer: [{ text: OWNS, evidence: ["E1"] }] }, not_found: [] },
+  blocks: { blocks: [{ block: "answer", sentences: [{ text: OWNS, evidence: ["E1"] }] }], not_found: [] },
+  root: { root: "main", components: [{ id: "main", component: "Column", children: ["a"] }, { id: "a", component: "Text", variant: "body", text: OWNS, evidence: ["E1"] }], not_found: [] },
+});
+/** A balanced reply that opens with prose, which the catalog refuses. */
+const PROSE_FIRST = Object.freeze({ blocks: [{ block: "text", sentences: [{ text: OWNS, evidence: ["E1"] }] }], not_found: [] });
+/** The field a call's schema asks for: the judge's ranks, today's sentences, a template, balanced's blocks, or else the primitives' root. */
+const schemaOf = (input) => ["ranks", "sentences", "template", "blocks"].find((field) => Object.hasOwn(input.schema.properties ?? {}, field)) ?? "root";
+/** A run over soak-owner, one trial of every catalog with the judge on, with `fields` changed. */
+const options = (out, fields = {}) => ({ run: true, credentialFile: null, out, caseIds: ["soak-owner"], catalogIds: null, trials: 1, judge: true, concurrency: 1, timeoutMs: 20_000, ...fields });
 
 test("makes no request without an explicit run and a private credential file, and keeps its budget", () => {
   assert.throws(() => parseArgs(["--out", "/tmp/x"]), /no network request unless --run/u);
@@ -19,8 +34,8 @@ test("makes no request without an explicit run and a private credential file, an
   assert.throws(() => parseArgs([...base, "--catalogs", "today,today"]), /--catalogs must select known catalogs, each once/u);
   assert.throws(() => parseArgs([...base, "--cases", "no-such-case"]), /--cases must select known cases/u);
   assert.throws(() => parseArgs([...base, "--judge", "maybe"]), /--judge must be on or off/u);
-  const options = parseArgs([...base, "--cases", "soak-owner", "--trials", "1"]);
-  assert.deepEqual([options.trials, options.judge, options.concurrency], [1, true, 4]);
+  const parsed = parseArgs([...base, "--cases", "soak-owner", "--trials", "1"]);
+  assert.deepEqual([parsed.trials, parsed.judge, parsed.concurrency], [1, true, 4]);
 });
 
 test("scripts research as one search, every item opened, then finish", () => {
@@ -32,26 +47,16 @@ test("scripts research as one search, every item opened, then finish", () => {
 
 test("runs every catalog with one repair or retry, judges both orders, and keeps full traces", async () => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-run-"));
-  const seen = { balanced: 0, primitives: 0 };
-  const replies = (input) => {
-    const fields = Object.keys(input.schema.properties ?? {});
-    if (fields.includes("ranks")) return { ranks: ["A", "B", "C", "D"].map((answer, at) => ({ answer, rank: at + 1, reason: "fixture" })) };
-    if (fields.includes("sentences")) return { lists: [], tables: [], sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"], form: "lead" }], not_found: [] };
-    if (fields.includes("template")) return { template: { name: "fact", answer: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }, not_found: [] };
-    if (fields.includes("blocks")) {
-      seen.balanced += 1;
-      // The first reply opens with prose, which the catalog refuses; the repair answers.
-      return seen.balanced === 1 ? { blocks: [{ block: "text", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] }
-        : { blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] };
-    }
-    seen.primitives += 1;
-    if (seen.primitives === 1) throw new Error("fixture outage");
-    return { root: "main", components: [{ id: "main", component: "Column", children: ["a"] }, { id: "a", component: "Text", variant: "body", text: "Priya Raman owns it.", evidence: ["E1"] }], not_found: [] };
-  };
   const inputs = [];
-  const structured = { async generate_with_observation(input) { inputs.push(input); return { value: replies(input), finish_reason: "stop", usage: { input_tokens: 9, output_tokens: 4, total_tokens: 13 }, provider_latency_ms: 2 }; } };
-  const options = { run: true, credentialFile: null, out, caseIds: ["soak-owner"], catalogIds: null, trials: 1, judge: true, concurrency: 1, timeoutMs: 20_000 };
-  const { reportPath, report } = await run(options, { loaded: { structured_output: structured, generation }, progress: () => undefined });
+  const structured = { async generate_with_observation(input) {
+    inputs.push(input);
+    const schema = schemaOf(input);
+    const seen = inputs.filter((entry) => schemaOf(entry) === schema).length;
+    // Balanced's first reply opens with prose, so the repair answers; primitives' first call fails, so the retry does.
+    if (schema === "root" && seen === 1) throw new Error("fixture outage");
+    return { value: schema === "blocks" && seen === 1 ? PROSE_FIRST : REPLY[schema], finish_reason: "stop", usage: { input_tokens: 9, output_tokens: 4, total_tokens: 13 }, provider_latency_ms: 2 };
+  } };
+  const { reportPath, report } = await run(options(out), { loaded: { structured_output: structured, generation }, progress: () => undefined });
 
   assert.equal(statSync(reportPath).mode & 0o777, 0o600);
   assert.equal(report.complete, false);
@@ -83,12 +88,11 @@ test("writes through the personal Claude account port, admitting each request an
       for (const operation of ["count_tokens", "messages"]) {
         await admit({ model: input.model, operation, signal: AbortSignal.timeout(5_000) }, async () => { admittedRequests.push(operation); return { value: null, usage: { input_tokens: 10, output_tokens: operation === "messages" ? 7 : 0 } }; });
       }
-      return { lists: [], tables: [], sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"], form: "lead" }], not_found: [] };
+      return REPLY.sentences;
     },
   };
   const accountGeneration = { ...generation, generation_adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" };
-  const options = { run: true, credentialFile: null, out, caseIds: ["soak-owner"], catalogIds: ["today"], trials: 1, judge: false, concurrency: 1, timeoutMs: 20_000, writer: "claude-account" };
-  const { report } = await run(options, { loaded: { personal_research: { structured_output: port, generation: accountGeneration } }, progress: () => undefined });
+  const { report } = await run(options(out, { catalogIds: ["today"], judge: false, writer: "claude-account" }), { loaded: { personal_research: { structured_output: port, generation: accountGeneration } }, progress: () => undefined });
   assert.deepEqual(report.model, { route: "claude-account", adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" });
   assert.deepEqual(admittedRequests, ["count_tokens", "messages"]);
   assert.deepEqual(report.trials[0].attempts[0].usage, { input_tokens: 20, output_tokens: 7, total_tokens: 27 });
@@ -97,27 +101,19 @@ test("writes through the personal Claude account port, admitting each request an
 
 test("resumes an earlier report: carries every call that got a reply and makes only the calls it lacks", async () => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-resume-"));
-  const answer = { blocks: [{ block: "answer", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] };
-  const replies = (input, outage) => {
-    const fields = Object.keys(input.schema.properties ?? {});
-    if (fields.includes("ranks")) { if (outage) throw new Error("402"); return { ranks: ["A", "B", "C", "D"].map((label, at) => ({ answer: label, rank: at + 1, reason: "fixture" })) }; }
-    if (fields.includes("sentences")) return { lists: [], tables: [], sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"], form: "lead" }], not_found: [] };
-    if (fields.includes("template")) return { template: { name: "fact", answer: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }, not_found: [] };
-    if (fields.includes("blocks")) {
-      if (outage && JSON.parse(input.user_prompt).validation_error !== undefined) throw new Error("402");
-      return outage ? { blocks: [{ block: "text", sentences: [{ text: "Priya Raman owns it.", evidence: ["E1"] }] }], not_found: [] } : answer;
-    }
-    if (outage) throw new Error("402");
-    return { root: "main", components: [{ id: "main", component: "Column", children: ["a"] }, { id: "a", component: "Text", variant: "body", text: "Priya Raman owns it.", evidence: ["E1"] }], not_found: [] };
-  };
-  const fake = (outage, inputs) => ({ async generate_with_observation(input) { inputs.push(input); return { value: replies(input, outage), finish_reason: "stop", usage: null, provider_latency_ms: 1 }; } });
-  const options = { run: true, credentialFile: null, out, caseIds: ["soak-owner"], catalogIds: null, trials: 1, judge: true, concurrency: 1, timeoutMs: 20_000 };
-  const first = await run(options, { loaded: { structured_output: fake(true, []), generation }, progress: () => undefined });
+  // In the outage the judge, balanced's repair and every primitives call fail, and balanced's first reply opens with prose.
+  const fake = (outage, inputs) => ({ async generate_with_observation(input) {
+    inputs.push(input);
+    const schema = schemaOf(input);
+    if (outage && (schema === "ranks" || schema === "root" || (schema === "blocks" && JSON.parse(input.user_prompt).validation_error !== undefined))) throw new Error("402");
+    return { value: outage && schema === "blocks" ? PROSE_FIRST : REPLY[schema], finish_reason: "stop", usage: null, provider_latency_ms: 1 };
+  } });
+  const first = await run(options(out), { loaded: { structured_output: fake(true, []), generation }, progress: () => undefined });
   // Balanced's repair and both primitives calls failed, so neither trial ends with a reply.
   assert.deepEqual(first.report.errors, { writer_calls: 3, trials_without_reply: 2, judge_orders_without_ranks: 2 });
 
   const inputs = [];
-  const { report } = await run({ ...options, resume: first.reportPath }, { loaded: { structured_output: fake(false, inputs), generation }, progress: () => undefined });
+  const { report } = await run(options(out, { resume: first.reportPath }), { loaded: { structured_output: fake(false, inputs), generation }, progress: () => undefined });
   // Only the balanced repair, the primitives call and the two judge orders were made again.
   assert.equal(inputs.length, 4);
   assert.deepEqual(Object.fromEntries(report.trials.map((trial) => [trial.catalog, trial.attempts.map((attempt) => `${attempt.kind}${attempt.carried ? " (carried)" : ""}`)])),
