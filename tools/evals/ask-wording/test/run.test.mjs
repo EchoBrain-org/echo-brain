@@ -177,3 +177,30 @@ test("writes through the personal Claude account port, admitting each request an
   assert.deepEqual(report.results[0].model_calls, [{ attempt: 1, result: "succeeded", finish_reason: "stop", usage: { input_tokens: 20, output_tokens: 7, total_tokens: 27 }, provider_latency_ms: null }]);
   assert.deepEqual([report.results[0].grade.lead, report.results[0].grade.rules], ["You own it.", { no_restating: true, long_ids_once: true, nothing_lost: true }]);
 });
+
+test("runs trials a few at a time and keeps the report's results in case order", async (t) => {
+  const { root, credential } = privateRoot(t);
+  const base = ["--run", "--credential-file", credential, "--out", join(root, "out")];
+  assert.equal(parseArgs(base).concurrency, 4);
+  for (const value of ["0", "7", "two"]) assert.throws(() => parseArgs([...base, "--concurrency", value]), /--concurrency must be an integer from 1 to 6/u);
+  const caseIds = ["owner-plain", "rollback-named-id", "blocker-plain"];
+  const options = parseArgs([...base, "--cases", caseIds.join(","), "--concurrency", "3"]);
+  // A writer whose later cases answer sooner, so trials end out of order; it counts the calls it is in at once.
+  const answers = writer();
+  let running = 0;
+  const overlapping = { peak: 0, async generate_with_observation(input) {
+    running += 1;
+    overlapping.peak = Math.max(overlapping.peak, running);
+    const at = caseIds.findIndex((id) => document.cases.find((entry) => entry.id === id).question === JSON.parse(input.user_prompt).question);
+    await new Promise((resolve) => setTimeout(resolve, (caseIds.length - at) * 15));
+    try { return await answers.generate_with_observation(input); } finally { running -= 1; }
+  } };
+  const together = await run(options, { loaded: { structured_output: overlapping, generation }, progress: () => undefined });
+  const alone = await run({ ...options, concurrency: 1 }, { loaded: { structured_output: writer(), generation }, progress: () => undefined });
+  assert.equal(overlapping.peak, 3);
+  assert.deepEqual(together.report.results.map((result) => [result.case_id, result.trial]), caseIds.flatMap((id) => [1, 2, 3].map((trial) => [id, trial])));
+  // Apart from their timings, the results are the ones a run one trial at a time reports, and the report says how many ran at once.
+  const timeless = (results) => JSON.parse(JSON.stringify(results, (key, value) => (key === "elapsed_ms" ? undefined : value)));
+  assert.deepEqual(timeless(together.report.results), timeless(alone.report.results));
+  assert.deepEqual([together.report.limits.concurrency, alone.report.limits.concurrency], [3, 1]);
+});
