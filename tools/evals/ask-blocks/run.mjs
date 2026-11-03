@@ -16,7 +16,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { personAnswerCitationKeyV8 } from "@echo-brain/organization-api";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { repairInstruction } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
+import { repairInput } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { caseAsk, caseItems, deskItem as releasedItem, scriptedModel } from "../shared/ask-cases.mjs";
 import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { ARMS, ARM_IDS, BUILT, CATALOGS, CATALOG_IDS, readReleased, readReply, writerPrompts } from "./catalogs.mjs";
@@ -142,10 +142,8 @@ async function call(structuredOutput, input) {
   }
 }
 
-/** The repair input production sends (agentic-model-gate-v1): the rejected reply and the reason, beside the original input. */
-function repairPrompt(userPrompt, rejected, reason) {
-  return JSON.stringify({ ...JSON.parse(userPrompt), rejected_response: JSON.stringify(rejected).slice(0, 4_000), validation_error: repairInstruction(reason) });
-}
+/** The repair prompt production's gate sends (repairInput): the original input, then the rejected reply and the reason. */
+const repairPrompt = (userPrompt, rejected, reason) => JSON.stringify(repairInput(JSON.parse(userPrompt), rejected, reason));
 
 /**
  * One trial: the catalog's writer on one case, its reply read and checked, one repair for a refused reply or one retry

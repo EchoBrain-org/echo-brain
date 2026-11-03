@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ANSWER_LAYOUT_PROMPT } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_LAYOUT_PROMPT, cleanLine, repairInput } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { parseArgs, researchStep, run } from "../run.mjs";
 import { loadCases } from "../grade.mjs";
 
@@ -155,4 +155,24 @@ test("fingerprints its cases, its pre-registration and every module the run load
   for (const file of ["packages/organization-api/dist/person-answer-layout-checks.js", "packages/organization-api/dist/person-answer-layout-v1.js",
     "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js", "packages/organization-authority-kernel/dist/shared/evidence-desk-v2.js"]) assert.ok(fingerprinted.includes(file), file);
   assert.equal(report.code.unchanged, true);
+});
+
+test("repairs a refused reply with the prompt production's gate sends: the reply cut to one line of 4,000 characters", async () => {
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-repair-"));
+  // A reply balanced refuses (it opens with prose), longer than 4,000 characters, with a line separator and a double space.
+  const refused = { blocks: [{ block: "text", sentences: [{ text: `${OWNS} Then  ${"more ".repeat(1_000)}`, evidence: ["E1"] }] }], not_found: [] };
+  const inputs = [];
+  const structured = { async generate_with_observation(input) {
+    inputs.push(input);
+    return { value: inputs.length === 1 ? refused : REPLY.blocks, finish_reason: "stop", usage: null, provider_latency_ms: 1 };
+  } };
+  const { report } = await run(options(out, { catalogIds: ["balanced"], judge: false }), { loaded: { structured_output: structured, generation }, progress: () => undefined });
+  const [first, repair] = report.trials[0].attempts;
+  assert.deepEqual([first.valid, repair.kind, repair.valid], [false, "repair", true]);
+  assert.equal(repair.user_prompt, JSON.stringify(repairInput(JSON.parse(report.prompts["soak-owner"].balanced.user_prompt), refused, first.problems[0])));
+  // Where a plain cut would keep the separator and both spaces and end mid-word, production's is one clean line.
+  const sent = JSON.parse(repair.user_prompt).rejected_response;
+  assert.equal(sent, cleanLine(JSON.stringify(refused), 4_000));
+  assert.notEqual(sent, JSON.stringify(refused).slice(0, 4_000));
+  assert.deepEqual([[...sent].length <= 4_000, sent.endsWith("…"), sent.includes(" "), sent.includes("  ")], [true, true, false, false]);
 });
