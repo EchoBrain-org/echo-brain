@@ -1182,11 +1182,12 @@ const BLOCK_TITLE = "optional: a heading of a few words";
  * The blocks a v2 Ask's writer arranges its answer from (answer layout v2, ADR-0051), in the shape of the research tool
  * contract's source entries (ADR-0042): the name it passes, a description that says only what the block shows, and
  * each field it takes with its meaning and limits. It reaches the writer as data beside source_catalog, and
- * answerBlocksSchema is built from the same entries. The entries are the block evaluation's, word for word
- * (tools/evals/ask-blocks).
+ * answerBlocksSchema is built from the same entries. The entries are the block evaluation's, but that the answer's
+ * description says it writes out no three or more items, which a block after it shows (tools/evals/ask-blocks, "Quick
+ * lead on the first try").
  */
 export const ANSWER_BLOCK_CATALOG = Object.freeze([
-  { block: "answer", description: "The direct answer to the question, in one or two sentences.", params: { sentences: "1 to 2 sentences, each with its text and evidence" } },
+  { block: "answer", description: "The short answer to the question, in one or two sentences: the conclusion, or what the items come to, such as how many there are. It never writes out three or more items; a block after it shows them, as points, numbered points when their order matters, or a timeline when each has a date.", params: { sentences: "1 to 2 sentences, each with its text and evidence" } },
   { block: "text", description: "A short paragraph that explains, qualifies or connects facts.", params: { title: BLOCK_TITLE, sentences: "1 to 4 sentences, each with its text and evidence" } },
   { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 to 10 items, each with its text and evidence" } },
   { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 to 6 column names", rows: "2 to 12 rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence" } },
@@ -1199,13 +1200,16 @@ export const ANSWER_BLOCK_CATALOG = Object.freeze([
  * What a v2 Ask's writer is told after ANSWER_PROMPT and its guidance (answer layout v2, ADR-0051): how to arrange the
  * answer from block_catalog, layout v1's two wording rules word for word, and the reply shape answerBlocksSchema holds.
  * It is the block evaluation's layout part with two lines production needs: the reply names the lists it uses, and the
- * writer never writes items for a list's members, which code states. An Ask without v2 never sees it.
+ * writer never writes items for a list's members, which code states. Its lead line, and one example after it, keep three
+ * or more items out of the answer block and in a block after it (tools/evals/ask-blocks, "Quick lead on the first try").
+ * An Ask without v2 never sees it.
  */
 export const ANSWER_BLOCKS_PROMPT = [
   "Layout: the person's app shows the answer as a short document made of blocks. \"block_catalog\" lists the blocks it can show:",
   "- Each block_catalog entry has \"block\", the name you pass; \"description\", what the block shows; and \"params\", each field it takes with what it means and its limits.",
   "- Choose the blocks that show this answer best, in the order the person should read them, and only the blocks the answer needs: an answer that is one fact is one \"answer\" block.",
-  "- The first block is \"answer\": the conclusion, in one or two sentences.",
+  "- The first block is \"answer\": the conclusion, in one or two sentences. Never write out three or more items in it: say what they come to, such as how many there are, and give them in a block after it: points, numbered points when their order matters, or a timeline when each has a date.",
+  "- For example, asked what a warehouse audit found, the answer block says \"The audit found three problems, all in receiving.\" and a points block after it gives them: \"Pallets are stacked above the rack limit.\", \"Two scanners cannot read damaged labels.\" and \"Returns wait four days for inspection.\"",
   NO_RESTATING_RULE,
   LONG_IDS_ONCE_RULE,
   "- Every sentence, item, row, event, fact and quote cites the evidence that supports it in \"evidence\", and only that evidence. Never write ids such as E4 in the text.",

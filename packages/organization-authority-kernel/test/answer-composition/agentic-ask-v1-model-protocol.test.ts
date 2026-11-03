@@ -626,6 +626,9 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       expect(lines.find(line => line.startsWith(start))).toBe(ANSWER_LAYOUT_PROMPT.split("\n").find(line => line.startsWith(start)));
     }
     expect(lines).toContain("- Never write items, rows, events or facts for a list's members: code states them, right after the answer.");
+    // Three or more items go in a block after the answer, never in it: the answer's description and the lead line both say so.
+    expect(ANSWER_BLOCK_CATALOG[0].description).toContain("It never writes out three or more items");
+    expect(lines.find(line => line.startsWith("- The first block is \"answer\""))).toContain("Never write out three or more items in it");
     expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
     expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
   });
