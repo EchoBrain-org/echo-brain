@@ -18,7 +18,7 @@ import { personAnswerCitationKeyV8 } from "@echo-brain/organization-api";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { repairInstruction } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { caseAsk, caseItems, deskItem as releasedItem, scriptedModel } from "../shared/ask-cases.mjs";
-import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, compiledModules, generationMetadata, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
+import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { ARMS, ARM_IDS, BUILT, CATALOGS, CATALOG_IDS, readReleased, readReply, writerPrompts } from "./catalogs.mjs";
 import { CASES_FILE, CASE_COUNT, TRIALS, caseOrder, decide, decideGate, evidenceOf, gradeTrial, loadCases, summarizeCatalogs, summarizeRanks } from "./grade.mjs";
 import { JUDGE_SYSTEM_PROMPT, judgeInput, judgeSchema, readJudge } from "./judge.mjs";
@@ -94,19 +94,11 @@ export function parseArgs(argv) {
 }
 
 /**
- * The files a report fingerprints, beside the commit and its uncommitted changes: the evaluation's own, every compiled
- * module of the kernel's answer composition (the writer, its layouts and its checks, whatever their files are named),
- * the answer contract the built arm reads, and the writer routes.
+ * The files a report fingerprints, beside the commit and its uncommitted changes: the cases, the pre-registration and
+ * every module the evaluation loads (its own, the kernel's writer, checks and shared modules, the answer contract and the
+ * writer routes), found by following its imports.
  */
-const codeFiles = () => Object.freeze([
-  "tools/evals/ask-blocks/run.mjs", "tools/evals/ask-blocks/catalogs.mjs", "tools/evals/ask-blocks/grade.mjs", "tools/evals/ask-blocks/judge.mjs",
-  "tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", "tools/evals/shared/runner.mjs", "tools/evals/shared/ask-cases.mjs", "tools/evals/shared/grading.mjs",
-  ...compiledModules(ROOT, "packages/organization-authority-kernel/dist/answer-composition"),
-  "packages/organization-api/dist/person-answer-v4.js", "packages/organization-api/dist/person-answer-layout-v2.js",
-  "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
-  "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
-  ...compiledModules(ROOT, "providers/openrouter/dist/claude-research"),
-]);
+const codeFiles = () => Object.freeze(["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", ...importedModules(ROOT, ["tools/evals/ask-blocks/run.mjs"])]);
 
 /** One case item as the desk releases it, with this evaluation's ids and fixtures (shared/ask-cases.mjs). */
 export const deskItem = (caseId, index, item) => releasedItem("blocks", caseId, index, item);

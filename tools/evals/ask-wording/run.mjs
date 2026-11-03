@@ -16,7 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { caseAsk, caseItems, scriptedModel } from "../shared/ask-cases.mjs";
-import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, compiledModules, generationMetadata, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
+import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { CASES_FILE, GROUPS, gradeTrial, loadCases, summarizeRules } from "./grade.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -80,24 +80,11 @@ export function parseArgs(argv) {
 }
 
 /**
- * The files a report fingerprints, beside the commit and its uncommitted changes: the eval's own, every compiled module of
- * the kernel's answer composition (the writer, its layouts and its checks, whatever their files are named), the answer
- * contract, and the writer routes.
+ * The files a report fingerprints, beside the commit and its uncommitted changes: the cases and every module the eval
+ * loads (its own, the kernel's writer, checks and shared modules, the answer contract and the writer routes), found by
+ * following its imports.
  */
-const codeFiles = () => Object.freeze([
-  "tools/evals/ask-wording/run.mjs",
-  "tools/evals/ask-wording/grade.mjs",
-  "tools/evals/ask-wording/cases.json",
-  "tools/evals/shared/runner.mjs",
-  "tools/evals/shared/ask-cases.mjs",
-  "tools/evals/shared/grading.mjs",
-  ...compiledModules(ROOT, "packages/organization-authority-kernel/dist/answer-composition"),
-  "packages/organization-api/dist/person-answer-v4.js",
-  "packages/organization-api/dist/person-answer-layout-v2.js",
-  "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
-  "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
-  ...compiledModules(ROOT, "providers/openrouter/dist/claude-research"),
-]);
+const codeFiles = () => Object.freeze(["tools/evals/ask-wording/cases.json", ...importedModules(ROOT, ["tools/evals/ask-wording/run.mjs"])]);
 
 /**
  * The answer layout the writer was given, from its input: 2 when it carries the block catalog (ADR-0051), 1 when its

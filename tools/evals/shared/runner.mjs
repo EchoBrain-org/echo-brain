@@ -7,9 +7,10 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const sha256 = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 export const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -128,9 +129,30 @@ export function outputDirectory(root, value) {
   return directory;
 }
 
-/** Every compiled module under `directory` (relative to `root`), in a stable order: a report fingerprints a build whatever its files are named. */
-export function compiledModules(root, directory) {
-  return Object.freeze(readdirSync(join(root, directory), { recursive: true }).filter((file) => file.endsWith(".js")).map((file) => `${directory}/${file.split(sep).join("/")}`).sort());
+/** A static import or re-export, or a dynamic import of a literal specifier. */
+const IMPORTS = /(?:^|[\s;])(?:import|export)(?:\s+|(?=[{*"']))(?:[\w$*{},\s]+?from\s*)?["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gu;
+
+/**
+ * Every repository module the modules `entries` (relative to `root`) load, themselves included, relative to `root` and in
+ * a stable order, found by following their imports: relative ones and the workspaces' (`@echo-brain/`), never Node's own
+ * or an installed package's. A report fingerprints the code that produced it, wherever it lives and whatever its files
+ * are named.
+ */
+export function importedModules(root, entries) {
+  const repository = realpathSync(root);
+  const files = new Set();
+  const visit = (url) => {
+    const file = realpathSync(fileURLToPath(url));
+    if (files.has(file)) return;
+    files.add(file);
+    for (const match of readFileSync(file, "utf8").matchAll(IMPORTS)) {
+      const specifier = match[1] ?? match[2];
+      if (specifier.startsWith(".")) visit(new URL(specifier, pathToFileURL(file)));
+      else if (specifier.startsWith("@echo-brain/")) visit(import.meta.resolve(specifier));
+    }
+  };
+  for (const entry of entries) visit(pathToFileURL(join(repository, entry)));
+  return Object.freeze([...files].map((file) => relative(repository, file).split(sep).join("/")).sort());
 }
 
 /** The evaluated code at `root`: its commit, the digest of its uncommitted tracked changes, and each named file's digest. */

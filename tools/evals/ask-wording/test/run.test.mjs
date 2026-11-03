@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, answerBlocksSchema } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { loadCases } from "../grade.mjs";
 import { decides, help, parseArgs, run, runTrial, writerLayout } from "../run.mjs";
@@ -40,6 +41,21 @@ function writer(lead = (entry) => `It is ${entry.expect.facts.map((alternatives)
         finish_reason: "stop", usage: { input_tokens: 4000, output_tokens: 60, total_tokens: 4060 }, provider_latency_ms: 900 };
     },
   };
+}
+
+/** Every repository module Node loads for the module `entry`, as a hook on its loader sees them, relative to the repository. */
+function loadedModules(entry) {
+  const script = [
+    'import { registerHooks } from "node:module";',
+    "const loaded = [];",
+    "registerHooks({ load(url, context, next) { loaded.push(url); return next(url, context); } });",
+    `await import(${JSON.stringify(pathToFileURL(join(ROOT, entry)).href)});`,
+    "process.stdout.write(JSON.stringify(loaded));",
+  ].join("\n");
+  const root = realpathSync(ROOT);
+  const files = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", script], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }))
+    .filter((url) => url.startsWith("file:")).map((url) => realpathSync(fileURLToPath(url)));
+  return [...new Set(files)].filter((file) => file.startsWith(`${root}${sep}`) && !file.includes(`${sep}node_modules${sep}`)).map((file) => relative(root, file).split(sep).join("/")).sort();
 }
 
 test("makes no request, and reads no credential, unless asked to run with a private credential file and a private report directory", (t) => {
@@ -121,8 +137,12 @@ test("writes a private report outside the repository that applies the three pre-
   assert.deepEqual([report.kind, report.complete, report.wording_ships, report.results.length], ["echo-ask-wording-evaluation-v1", true, true, 30]);
   assert.deepEqual([report.answer_layout, report.model, new Set(report.results.map((entry) => entry.writer_layout))], [2, { route: "openrouter", adapter_id: "fixture", answer_model: "fixture-model" }, new Set([2])]);
   assert.deepEqual(report.groups.names_long_id, { trials: 18, no_restating: 18, long_ids_once: 18, nothing_lost: 18, errors: 0 });
-  // The report fingerprints the kernel's compiled layout v2 module, whatever else the build holds.
-  assert.ok(Object.hasOwn(report.code.before.files_sha256, "packages/organization-authority-kernel/dist/answer-composition/renderers/ask-layout-v2.js"));
+  // The report fingerprints its cases and every module the run loads: among them layout v2's writer, checks and title
+  // bound, and the kernel's shared modules on the writer's path.
+  const fingerprinted = Object.keys(report.code.before.files_sha256);
+  assert.deepEqual(fingerprinted, ["tools/evals/ask-wording/cases.json", ...loadedModules("tools/evals/ask-wording/run.mjs")]);
+  for (const file of ["packages/organization-authority-kernel/dist/answer-composition/renderers/ask-layout-v2.js", "packages/organization-api/dist/person-answer-layout-checks.js",
+    "packages/organization-api/dist/person-answer-layout-v1.js", "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js"]) assert.ok(fingerprinted.includes(file), file);
   // Restating the question, as the founder's staging answer did, keeps the wording from shipping.
   const restating = await run({ ...options, caseIds: [founder.id, "owner-plain"], trials: 1 },
     { loaded: { structured_output: writer((entry) => `${entry.expect.facts[0].at(-1)} answers: ${entry.question}`), generation }, progress: () => undefined });

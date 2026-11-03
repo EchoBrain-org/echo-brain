@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { ANSWER_LAYOUT_PROMPT } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { parseArgs, researchStep, run } from "../run.mjs";
 import { loadCases } from "../grade.mjs";
 
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const generation = { generation_adapter_id: "fixture", planner_model: "fixture-model", answer_model: "fixture-model", timeout_ms: 30_000, context_tokens: 131_072 };
 const document = loadCases();
 const OWNS = "Priya Raman owns it.";
@@ -24,6 +27,26 @@ const PROSE_FIRST = Object.freeze({ blocks: [{ block: "text", sentences: [{ text
 const schemaOf = (input) => ["ranks", "sentences", "template", "blocks"].find((field) => Object.hasOwn(input.schema.properties ?? {}, field)) ?? "root";
 /** A run over soak-owner, one trial of every catalog with the judge on, with `fields` changed. */
 const options = (out, fields = {}) => ({ run: true, credentialFile: null, out, caseIds: ["soak-owner"], catalogIds: null, trials: 1, judge: true, concurrency: 1, timeoutMs: 20_000, ...fields });
+/** A route that answers each call with its schema's reply (REPLY), keeping every input. */
+const answering = (inputs = []) => ({ inputs, async generate_with_observation(input) {
+  inputs.push(input);
+  return { value: REPLY[schemaOf(input)], finish_reason: "stop", usage: null, provider_latency_ms: 1 };
+} });
+
+/** Every repository module Node loads for the module `entry`, as a hook on its loader sees them, relative to the repository. */
+function loadedModules(entry) {
+  const script = [
+    'import { registerHooks } from "node:module";',
+    "const loaded = [];",
+    "registerHooks({ load(url, context, next) { loaded.push(url); return next(url, context); } });",
+    `await import(${JSON.stringify(pathToFileURL(join(ROOT, entry)).href)});`,
+    "process.stdout.write(JSON.stringify(loaded));",
+  ].join("\n");
+  const root = realpathSync(ROOT);
+  const files = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", script], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }))
+    .filter((url) => url.startsWith("file:")).map((url) => realpathSync(fileURLToPath(url)));
+  return [...new Set(files)].filter((file) => file.startsWith(`${root}${sep}`) && !file.includes(`${sep}node_modules${sep}`)).map((file) => relative(root, file).split(sep).join("/")).sort();
+}
 
 test("makes no request without an explicit run and a private credential file, and keeps its budget", () => {
   assert.throws(() => parseArgs(["--out", "/tmp/x"]), /no network request unless --run/u);
@@ -121,4 +144,15 @@ test("resumes an earlier report: carries every call that got a reply and makes o
   assert.ok(report.trials.every((trial) => trial.grade.valid));
   assert.deepEqual([report.resumed_from.carried_calls, report.resumed_from.carried_judge_orders], [3, 0]);
   assert.deepEqual(report.errors, { writer_calls: 0, trials_without_reply: 0, judge_orders_without_ranks: 0 });
+});
+
+test("fingerprints its cases, its pre-registration and every module the run loads", async () => {
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-code-"));
+  const { report } = await run(options(out, { catalogIds: ["today"], judge: false }), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
+  const fingerprinted = Object.keys(report.code.before.files_sha256);
+  assert.deepEqual(fingerprinted, ["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", ...loadedModules("tools/evals/ask-blocks/run.mjs")]);
+  // Among them layout v2's checks and title bound, and the kernel's shared modules on the writer's path.
+  for (const file of ["packages/organization-api/dist/person-answer-layout-checks.js", "packages/organization-api/dist/person-answer-layout-v1.js",
+    "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js", "packages/organization-authority-kernel/dist/shared/evidence-desk-v2.js"]) assert.ok(fingerprinted.includes(file), file);
+  assert.equal(report.code.unchanged, true);
 });
