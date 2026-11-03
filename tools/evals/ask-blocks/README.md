@@ -722,6 +722,53 @@ short answer with its list below is the shape a later attempt should reach,
 without a second writer call, and the held-out questions can test it beyond
 the 15 cases.
 
+## Quick lead on the first try, 2026-11-02 (pre-registered)
+
+Written before any run. Asked whether to try for the check's shape in the
+writer's first reply, with no check, no repair and no second call, the founder
+said "Yes, try it". The repair's instruction is what produced the shape they
+picked 7 to 0, so its rule moves into what the writer reads first: the answer
+block's description and the prompt's line about it, with one example on a
+topic that is neither THERM nor HELIX. Round 1 shortened the answer block's
+description but said nothing of lists, and neither round put the list rule or
+an example in front of the writer.
+
+The change, to `ANSWER_BLOCK_CATALOG` and `ANSWER_BLOCKS_PROMPT` only:
+
+| Where | Before | After |
+| --- | --- | --- |
+| `answer` description | The direct answer to the question, in one or two sentences. | The short answer to the question, in one or two sentences: the conclusion, or what the items come to, such as how many there are. It never writes out three or more items; a block after it shows them, as points, numbered points when their order matters, or a timeline when each has a date. |
+| The prompt's answer line | - The first block is "answer": the conclusion, in one or two sentences. | - The first block is "answer": the conclusion, in one or two sentences. Never write out three or more items in it: say what they come to, such as how many there are, and give them in a block after it: points, numbered points when their order matters, or a timeline when each has a date. |
+| New prompt line, after it | | - For example, asked what a warehouse audit found, the answer block says "The audit found three problems, all in receiving." and a points block after it gives them: "Pallets are stacked above the rack limit.", "Two scanners cannot read damaged labels." and "Returns wait four days for inspection." |
+
+Every other description, every `params` text, both wording rules and every
+other prompt line stay as PR #394 has them.
+
+- **The base:** PR #394's writer once the founder's removal of its count
+  caps is in it. The change is rebased onto that before any run, and kept
+  word for word through the rebase.
+- **The comparison:** before is that base, after is the change on it. Each
+  gets one complete gate run of `built` (15 cases, 3 trials), one complete
+  wording run (10 cases, 3 trials) and one held-out run (5 cases, 3 trials),
+  through the founder's Claude account (`claude-sonnet-5-5`).
+- **Rules.** The change is proposed for PR #394 only when all three hold:
+  1. After, `built` passes rules 1 to 5 at their thresholds.
+  2. After, the wording evaluation passes its three rules.
+  3. The founder ranks, blind, each question whose trial-1 answer changed,
+     before against after, as A and B, and prefers after in more questions
+     than before; a question ranked the same counts for neither. Among the 15
+     cases and the 5 held-out ones, an answer changed when the kinds of its
+     blocks, in order, differ between before and after, or the quick lead
+     check's colon rule reads one lead as writing out items and the other
+     not. The changed questions sorted by the SHA-256 of
+     `<case id>:ask-lead-first-try`, after is A in the 1st, 3rd, 5th and
+     every other odd place, B in the rest.
+- **Reported, never rules:** released leads that write out three or more
+  items by the colon rule, of the 60 gate and held-out trials (24 of 60 at
+  `c5bd827`; the rejected check left none); output tokens and each trial's
+  writer time, which should not rise much with no second call; fit in each
+  case, the held-out ones included; the blocks used.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
