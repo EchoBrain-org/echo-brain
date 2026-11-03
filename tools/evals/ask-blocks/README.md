@@ -748,8 +748,10 @@ Every other description, every `params` text, both wording rules and every
 other prompt line stay as PR #394 has them.
 
 - **The base:** PR #394's writer once the founder's removal of its count
-  caps is in it. The change is rebased onto that before any run, and kept
-  word for word through the rebase.
+  caps is in it, and its lifting of the 10-statement and 40-citation limits
+  for an answer in blocks, which changes a line the writer reads. #394's
+  head with both is merged in before any run, and the change is kept word
+  for word.
 - **The comparison:** before is that base, after is the change on it. Each
   gets one complete gate run of `built` (15 cases, 3 trials), one complete
   wording run (10 cases, 3 trials) and one held-out run (5 cases, 3 trials),
