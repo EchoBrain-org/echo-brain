@@ -95,7 +95,7 @@ const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text
 const FIT_GAP = "Some evidence could not fit in this response.";
 /** A list that is not complete: its statement says "at least" (ADR-0041). */
 function listEndGap(noun: string): string { return `The list of ${noun} could not be read to its end, so more may exist.`; }
-/** The response's bounds, unchanged by lists: 40 citations and ten statements in a part. */
+/** The response's bounds, unchanged by lists: 40 citations and ten statements in a part, but in one arranged in blocks (ADR-0051). */
 const MAX_CITATIONS = 40;
 const MAX_STATEMENTS = AGENTIC_ASK_MAX_SENTENCES_V1;
 /** The writer runs in Ask's answer span; the audit records it as an `answer` call. */
@@ -522,6 +522,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
         // What fits is decided in that order whatever the layout, so a long lead never crowds out a stated list (W3). A laid-out
         // answer (ADR-0045) then reads what was kept lead first, then the lists, then the other sentences by section.
+        // An answer arranged in blocks (ADR-0051) has no count of statements or citations of its own: only its byte bound,
+        // whose fallback, an answer without blocks, keeps ADR-0041's.
+        const bounded = !(arranged && laid);
         const statementKeys = new Set<string>();
         const keptReads: Entry[] = [];
         const fitted: Laid[] = [];
@@ -537,7 +540,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             continue;
           }
           const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !fittedKeys.has(key)));
-          if (fitted.length >= MAX_STATEMENTS || fittedKeys.size + fresh.size > MAX_CITATIONS) { dropped = true; break; }
+          if (bounded && (fitted.length >= MAX_STATEMENTS || fittedKeys.size + fresh.size > MAX_CITATIONS)) { dropped = true; break; }
           statementKeys.add(statementKey);
           for (const key of fresh) fittedKeys.add(key);
           fitted.push(sentence);
@@ -626,7 +629,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           });
           if (given.length > 0 && drafts.length === 0) return undefined;
           const fresh = new Set(drafts.flatMap(value => value.shorts.map(keyOf)).filter(key => !usedKeys.has(key)));
-          if (usedKeys.size + fresh.size > MAX_CITATIONS) return undefined;
+          if (bounded && usedKeys.size + fresh.size > MAX_CITATIONS) return undefined;
           return drafts.map(value => statementOf(value.text, value.shorts));
         };
         const since = !withSince || reply?.since === undefined || !anyEvidence ? undefined : sinceOf(reply.since);

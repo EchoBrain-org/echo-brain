@@ -164,7 +164,8 @@ export class SqlitePersonAgenticAskAuditV1 {
     // Research-only triggers and background-budget Ask runs (research loop evaluation v1).
     const background = entry.trigger !== undefined || entry.budget !== undefined;
     const budget = AGENTIC_RESEARCH_BUDGETS_V1[background ? "background" : "live"];
-    const limits = { rounds: budget.max_rounds, model_calls: budget.max_model_calls, receipts: budget.max_receipts, citations: background ? 360 : 40 };
+    // A question's answer arranged in blocks (ADR-0051) has no count of citations of its own: its 64 KiB holds far fewer than 1,000.
+    const limits = { rounds: budget.max_rounds, model_calls: budget.max_model_calls, receipts: budget.max_receipts, citations: background ? 360 : 1_000 };
     // A native harness has no ECHO planner-step counter; it reports its outbound
     // research calls, already bounded by the shared request's call budget.
     const external = Array.isArray(entry.generations) && entry.generations.some(value => value.engine === 'external_research');

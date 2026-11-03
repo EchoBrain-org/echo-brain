@@ -150,7 +150,9 @@ type Json = Record<string, unknown>;
 const record = (value: unknown): value is Json => value !== null && typeof value === 'object' && !Array.isArray(value);
 const string = (value: unknown, maximum = 20_000): value is string => typeof value === 'string' && value.length <= maximum;
 const index = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
-const indexes = (value: unknown, maximum = 64): value is number[] => Array.isArray(value) && value.length <= maximum && value.every(index);
+/** How many statements, places or sources a stored answer may hold: far more than an answer's 64 KiB carries, as one in blocks has no count of its own (ADR-0051). */
+const MOST = 1_000;
+const indexes = (value: unknown, maximum = MOST): value is number[] => Array.isArray(value) && value.length <= maximum && value.every(index);
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const projectId = (value: unknown): boolean => { try { validateProjectIdV1(value); return true; } catch { return false; } };
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
@@ -172,7 +174,7 @@ function scope(value: unknown): value is AskScope {
 function statement(value: unknown): value is AnswerStatement {
   return record(value) && string(value.text) && indexes(value.citation_indexes) && typeof value.private === 'boolean';
 }
-const statements = (value: unknown, maximum = 64): value is AnswerStatement[] => Array.isArray(value) && value.length <= maximum && value.every(statement);
+const statements = (value: unknown, maximum = MOST): value is AnswerStatement[] => Array.isArray(value) && value.length <= maximum && value.every(statement);
 
 /**
  * A source, by what the page reads of its kind to show and open it: anything
@@ -222,7 +224,7 @@ function arranged(value: unknown, count: number): boolean {
   /** One item a sentence, each what the page reads of it. */
   const each = (block: Json, items: unknown, item: (entry: Json) => boolean) => Array.isArray(items) && items.length === (block.statements as unknown[]).length
     && items.every(entry => record(entry) && item(entry));
-  return Array.isArray(value) && value.length <= 64 && value.every(block => record(block) && ARRANGED.has(block.kind) && within(block.statements)
+  return Array.isArray(value) && value.length <= MOST && value.every(block => record(block) && ARRANGED.has(block.kind) && within(block.statements)
     && (block.title === undefined || string(block.title)) && (block.kind === 'points' ? typeof block.ordered === 'boolean'
       : block.kind === 'table' ? table(block)
         : block.kind === 'timeline' ? each(block, block.events, event => string(event.date, 64) && string(event.text) && (event.who === undefined || string(event.who)))
@@ -234,7 +236,7 @@ function arranged(value: unknown, count: number): boolean {
 /** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). A part reads one way: a layout or blocks. */
 function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !string(value.text, 200_000) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
-  if (!Array.isArray(value.sources) || value.sources.length > 256 || !value.sources.every(source)) return false;
+  if (!Array.isArray(value.sources) || value.sources.length > MOST || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
   return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.records === undefined || statements(part.records))

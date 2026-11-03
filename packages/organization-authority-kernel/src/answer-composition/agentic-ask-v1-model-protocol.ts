@@ -1216,6 +1216,7 @@ export const ANSWER_BLOCKS_PROMPT = [
   "- Never write items, rows, events or facts for a list's members: code states them, right after the answer.",
   "- Write a date in a date field or a table cell as YYYY-MM-DD.",
   "- Put in a block only what the evidence says.",
+  "- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.",
   "",
   "With layout, reply with ONLY a JSON object in exactly this shape instead:",
   "{\"lists\":[],\"blocks\":[{\"block\":\"answer\",\"sentences\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}]},{\"block\":\"<a block from block_catalog>\",\"<its params>\":\"...\"}],\"not_found\":[]}",

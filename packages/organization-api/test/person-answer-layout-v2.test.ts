@@ -66,6 +66,19 @@ describe('Answer layout v2 (ADR-0051)', () => {
     expect(Object.isFrozen((accepted.parts[0]!.blocks![1] as { events: readonly object[] }).events[0])).toBe(true);
   });
 
+  it('lets an answer in blocks hold more than ten statements and forty citations, as no other answer may (ADR-0051)', () => {
+    const many = Array.from({ length: 45 }, (_, at) => ({ citation: { kind: 'tool' as const, tool_id: `tool-${at}` }, kind: 'tool' as const, label: `Tool ${at}`, visibility: 'team' as const, ref: `tool:tool-${at}` as const }));
+    const said = Array.from({ length: 15 }, (_, at) => statement(`Tool ${at * 3} is set up.`, [at * 3, at * 3 + 1, at * 3 + 2]));
+    const answer = (fields: Record<string, unknown>) => ({ schema_version: 8 as const, kind: 'echo-clean-person-answer-v8' as const, scope: { kind: 'global' as const }, outcome: 'answered' as const,
+      citations: many, parts: [{ question: 'Which tools are set up?', status: 'answered' as const, statements: said, ...fields }] });
+    const arranged = validatePersonAnswerResponseV8(answer({ blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: false, statements: said.slice(1).map((_, at) => at + 1) }] }));
+    expect([arranged.citations.length, arranged.parts[0]!.statements.length]).toEqual([45, 15]);
+    // Laid out by layout v1, or with no layout, the same answer keeps ADR-0041's bounds, as every installed client checks.
+    expect(() => validatePersonAnswerResponseV8(answer({ layout: [{ kind: 'paragraph', statements: said.map((_, at) => at) }] }))).toThrow('Ask response is invalid');
+    expect(() => validatePersonAnswerResponseV8(answer({}))).toThrow('Ask response is invalid');
+    expect(() => validatePersonAnswerResponseV8({ ...answer({}), citations: many.slice(0, 40), parts: [{ question: 'q', status: 'answered', statements: said.slice(0, 11).map(value => ({ ...value, citation_indexes: [0] })) }] })).toThrow('Ask response part is invalid');
+  });
+
   it('refuses blocks beside a v1 layout, or on a part with no statements', () => {
     expect(() => validatePersonAnswerResponseV8(response({ layout: [{ kind: 'paragraph', statements: statements.map((_, at) => at) }] }))).toThrow('blocks are invalid');
     expect(() => validatePersonAnswerResponseV8({ ...response({ status: 'not_found', statements: [], gap: 'None.' }), outcome: 'not_found', citations: [] })).toThrow();
