@@ -835,6 +835,20 @@ describe("Person client", () => {
       });
     });
   });
+  it("asks for the writer's blocks (ADR-0051) and returns them as the Authority arranged them, checked", async () => {
+    await withHome(async home => {
+      const answer = v8PageAnswer();
+      const arranged = { ...answer, parts: [{ ...answer.parts[0]!, blocks: [{ kind: 'answer', statements: [0] }] }] };
+      const client = await signedInClient(home, async (_input, init) => {
+        expect(new Headers(init?.headers).get('x-echo-answer-layout')).toBe('2');
+        return json(arranged);
+      });
+      await expect(client.askWithLiveSources('Is EVT ready?')).resolves.toMatchObject({ parts: [{ blocks: [{ kind: 'answer', statements: [0] }] }] });
+      // Blocks the contract refuses, here a quote with no words, are refused, never shown.
+      const broken = await signedInClient(home, async () => json({ ...arranged, parts: [{ ...arranged.parts[0]!, blocks: [{ kind: 'quote', statements: [0], text: '' }] }] }));
+      await expect(broken.askWithLiveSources('Is EVT ready?')).rejects.toMatchObject({ code: 'invalid_response' });
+    });
+  });
   it("asks agentic Ask and validates its V8 response before returning it", async () => {
     await withHome(async home => {
       const digest = `sha256:${'a'.repeat(64)}`;
@@ -845,7 +859,7 @@ describe("Person client", () => {
         const headers = new Headers(init?.headers);
         expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
         expect(Math.abs(Date.now() - Date.parse(headers.get('x-echo-client-now')!))).toBeLessThan(5_000);
-        expect(headers.get('x-echo-answer-layout')).toBe('1');
+        expect(headers.get('x-echo-answer-layout')).toBe('2');
         return json({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',
           citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'project-members-readable-person-v1' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
           direct: { text: 'The launch date moved.', citation_indexes: [0], private: false },
@@ -862,7 +876,7 @@ describe("Person client", () => {
       const client = await signedInClient(home, async (input, init) => {
         expect(new URL(String(input)).pathname).toBe('/v7/person/ask');
         expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'Are we ready for EVT?', project_id: projectId });
-        expect(new Headers(init?.headers).get('x-echo-answer-layout')).toBe('1');
+        expect(new Headers(init?.headers).get('x-echo-answer-layout')).toBe('2');
         return json(v8WorkspaceAnswer({ scope: { kind: 'project', project_id: projectId } }));
       });
       await expect(client.askWithLiveSources('Are we ready for EVT?', projectId)).resolves.toMatchObject({

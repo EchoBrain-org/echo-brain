@@ -72,6 +72,7 @@ export const CORE_RUNTIME_MODEL_CORRECTIONS_V1 = Object.freeze([
   "resolver_fallback",
   // Renderers: Ask's writer, the impact card and the sweep.
   "writer_repeat_dropped", "writer_unknown_id_dropped", "writer_uncited_sentence_dropped", "writer_fallback",
+  "writer_quote_unquoted", "writer_event_undated",
   "card_line_screened", "card_unknown_id_dropped", "card_date_dropped", "card_fallback",
   "sweep_line_withheld", "sweep_fallback",
 ] as const);

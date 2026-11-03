@@ -1,5 +1,6 @@
 import type {
-  PersonAnswerBlockV1, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEvidenceCitationV8, PersonAnswerPreviousV1, PersonAnswerTableRowV1,
+  PersonAnswerBlockV1, PersonAnswerBlockV2, PersonAnswerCardEntityV2, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEventV2, PersonAnswerEvidenceCitationV8,
+  PersonAnswerFactV2, PersonAnswerPreviousV1, PersonAnswerTableRowV1,
   PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
@@ -348,6 +349,22 @@ export type AnswerBlock = PersonAnswerBlockV1;
 /** One table row of a laid-out part: its cells, in its table's column order, and the citations of what it shows. */
 export type AnswerTableRow = PersonAnswerTableRowV1;
 
+/**
+ * How a part reads when the writer arranged it (answer layout v2, ADR-0051):
+ * blocks that group its statements, in their order, into the answer, text,
+ * points, a table, a timeline, a card or a quote. Every item a block shows is
+ * one of its statements and cites what that statement cites (a point, an
+ * event, a fact, a quote); a table is layout v1's. It adds no claim and no
+ * citation. The contract's own type, as the host validated it.
+ */
+export type ArrangedBlock = PersonAnswerBlockV2;
+/** One event of a timeline block: the day it happened (YYYY-MM-DD), what happened, and who, when the evidence says. */
+export type AnswerEvent = PersonAnswerEventV2;
+/** One fact of a card block: a label and its value. */
+export type AnswerFact = PersonAnswerFactV2;
+/** What a card block shows: one person, project, ticket or decision. */
+export type CardEntity = PersonAnswerCardEntityV2;
+
 export interface AnswerPart {
   readonly question: string;
   readonly status: 'answered' | 'partial' | 'not_found' | 'records_only';
@@ -356,6 +373,8 @@ export interface AnswerPart {
   readonly records?: readonly AnswerStatement[];
   /** Only on a V8 answer to an Ask that asked for it: how its statements read. Without it, each is a paragraph. */
   readonly layout?: readonly AnswerBlock[];
+  /** Only on a V8 answer to an Ask that asked for answer layout v2, never beside `layout`: the blocks its statements read as. */
+  readonly blocks?: readonly ArrangedBlock[];
 }
 
 /** One thing a follow-up could be about, as Ask offers it to choose (ADR-0047): a short label, and the full question it asks. */

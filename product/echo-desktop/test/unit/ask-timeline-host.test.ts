@@ -24,6 +24,8 @@ vi.mock('node:fs', async original => {
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
 import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
+import { answerView } from '../../src/host/views.js';
+import { blocksAnswer, layoutAnswer } from '../fixtures/authority.js';
 
 const ARI: Expect = { authority: 'https://authority.example', membership_id: 'mem_11111111-1111-4111-8111-111111111111' };
 const MINA: Expect = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
@@ -201,6 +203,48 @@ describe('the timeline file (C5)', () => {
       { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: undefined } }] } },
       { ...good, answer: { ...good.answer, sources: [{ ...good.answer.sources[0], cited: { ...cited, citation: { ...ticketCitation, kind: 7 } } }] } },
       { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0], layout: [{ kind: 'lead', statements: [3] }] }] } },
+    ]) expect(timelineTurn(bad)).toBeNull();
+  });
+
+  it('keeps an answer arranged in blocks (ADR-0051) and one laid out (ADR-0045) as the page wrote them, and refuses blocks the page could not draw', () => {
+    const scope = { kind: 'global' } as const;
+    /** An answer as the page keeps it: what the host handed it, less what only its Ask reads. */
+    const kept = (result: Record<string, unknown>): TimelineTurn['answer'] => {
+      const { receipt: _receipt, question: _question, since: _since, choices: _choices, ...answer } = answerView({ ok: true, result }, scope);
+      return answer;
+    };
+    const arranged = turn(1, { answer: kept(blocksAnswer('Can THERM start PVT?', scope, true)) });
+    const laidOut = turn(0, { answer: kept(layoutAnswer('Can DVT-R2 run on the reduced test scope?', scope, true)) });
+    putTimeline(person, ARI, arranged, NOW);
+    putTimeline(person, ARI, laidOut, NOW);
+    const [readArranged, readLaidOut] = readTimeline(person, ARI);
+    expect(readArranged).toEqual(arranged);
+    expect(readArranged!.answer.parts[0]!.blocks!.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
+    expect(readLaidOut).toEqual(laidOut);
+    expect(readLaidOut!.answer.parts[0]!.layout).toHaveLength(5);
+    // An answer in blocks has no count of statements of its own (ADR-0051): 70 read back as written.
+    const wide = arranged.answer.parts[0]!;
+    const seventy = Array.from({ length: 70 }, (_, at) => ({ text: `Step ${at + 1}.`, citation_indexes: [0], private: wide.statements[0]!.private }));
+    const long = turn(2, { answer: { ...arranged.answer, parts: [{ ...wide, statements: seventy, blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: true, statements: seventy.slice(1).map((_, at) => at + 1) }] }] } });
+    putTimeline(person, ARI, long, NOW);
+    expect(readTimeline(person, ARI).find(entry => entry.id === long.id)?.answer.parts[0]!.statements).toHaveLength(70);
+    const part = arranged.answer.parts[0]!;
+    const blocks = part.blocks! as unknown as Record<string, unknown>[];
+    const timeline = blocks[2] as { events: Record<string, unknown>[] };
+    const card = blocks[3] as { facts: Record<string, unknown>[] };
+    /** The arranged turn with `fields` in its blocks' place `at`. */
+    const changed = (at: number, fields: Record<string, unknown>) => ({ ...arranged, answer: { ...arranged.answer, parts: [{ ...part,
+      blocks: blocks.map((block, place) => place === at ? { ...block, ...fields } : block) }] } });
+    expect(timelineTurn(changed(4, { ordered: false }))).not.toBeNull();
+    for (const bad of [
+      // A part reads one way.
+      { ...arranged, answer: { ...arranged.answer, parts: [{ ...part, layout: [{ kind: 'paragraph', statements: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }] }] } },
+      changed(0, { kind: 'lead' }), changed(0, { statements: [10] }), changed(5, { title: 7 }), changed(4, { ordered: 'yes' }),
+      changed(1, { rows: [{ cells: 'THERM-52', citation_indexes: [4] }] }),
+      // An event, a fact and a quote are each one sentence: the page reads them by its place.
+      changed(2, { events: [timeline.events[0]] }), changed(2, { events: [timeline.events[0], { text: 'No day.' }] }),
+      changed(3, { entity: 'meeting' }), changed(3, { title: undefined }), changed(3, { facts: [card.facts[0], { label: 'Owner' }] }),
+      changed(6, { statements: [8, 9] }), changed(6, { text: null }),
     ]) expect(timelineTurn(bad)).toBeNull();
   });
 });

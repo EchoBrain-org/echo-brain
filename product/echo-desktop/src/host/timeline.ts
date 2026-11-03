@@ -8,13 +8,13 @@
 // reading one account's timeline deletes any other account's, so an account
 // change leaves nothing of the last one here. Kept apart from host.ts so all
 // of it is tested on a real folder.
-import { validateProjectIdV1 } from '@echo-brain/organization-api';
+import { PERSON_ANSWER_CARD_ENTITIES_V2, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type AskScope, type Expect, type TimelineAnswer,
-  type TimelineTurn,
+  MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
+  type TimelineAnswer, type TimelineTurn,
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
@@ -150,7 +150,9 @@ type Json = Record<string, unknown>;
 const record = (value: unknown): value is Json => value !== null && typeof value === 'object' && !Array.isArray(value);
 const string = (value: unknown, maximum = 20_000): value is string => typeof value === 'string' && value.length <= maximum;
 const index = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
-const indexes = (value: unknown, maximum = 64): value is number[] => Array.isArray(value) && value.length <= maximum && value.every(index);
+/** How many statements, places or sources a stored answer may hold: far more than an answer's 64 KiB carries, as one in blocks has no count of its own (ADR-0051). */
+const MOST = 1_000;
+const indexes = (value: unknown, maximum = MOST): value is number[] => Array.isArray(value) && value.length <= maximum && value.every(index);
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const projectId = (value: unknown): boolean => { try { validateProjectIdV1(value); return true; } catch { return false; } };
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
@@ -158,6 +160,8 @@ const time = (value: unknown): value is string => string(value, 64) && !Number.i
 const STATUSES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found', 'records_only']);
 const OUTCOMES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found']);
 const BLOCKS: ReadonlySet<unknown> = new Set(['lead', 'heading', 'paragraph', 'bullets', 'table']);
+/** What a card may show (answer layout v2, ADR-0051). */
+const ENTITIES: ReadonlySet<unknown> = new Set(PERSON_ANSWER_CARD_ENTITIES_V2);
 
 function scope(value: unknown): value is AskScope {
   if (!record(value)) return false;
@@ -169,7 +173,7 @@ function scope(value: unknown): value is AskScope {
 function statement(value: unknown): value is AnswerStatement {
   return record(value) && string(value.text) && indexes(value.citation_indexes) && typeof value.private === 'boolean';
 }
-const statements = (value: unknown, maximum = 64): value is AnswerStatement[] => Array.isArray(value) && value.length <= maximum && value.every(statement);
+const statements = (value: unknown, maximum = MOST): value is AnswerStatement[] => Array.isArray(value) && value.length <= maximum && value.every(statement);
 
 /**
  * A source, by what the page reads of its kind to show and open it: anything
@@ -195,23 +199,57 @@ function source(value: unknown): value is AnswerSource {
   }
 }
 
-/** A part's layout, each block's sentences among the part's own: the page reads them by their place. */
-function layout(value: unknown, count: number): boolean {
-  const within = (places: unknown) => indexes(places) && (places as number[]).every(place => place < count);
-  return Array.isArray(value) && value.length <= 64 && value.every(block => record(block) && BLOCKS.has(block.kind) && (block.kind === 'heading' ? string(block.text)
-    : block.kind !== 'table' ? within(block.statements)
-      : within(block.statements) && Array.isArray(block.columns) && block.columns.every(column => string(column)) && (block.caption === undefined || string(block.caption))
-        && Array.isArray(block.rows) && block.rows.every(row => record(row) && Array.isArray(row.cells) && row.cells.every(cell => string(cell)) && indexes(row.citation_indexes))));
+/** A table of either layout, as the page draws it: its columns, its caption, and each row's cells and citations. */
+function table(block: Json): boolean {
+  return Array.isArray(block.columns) && block.columns.every(column => string(column)) && (block.caption === undefined || string(block.caption))
+    && Array.isArray(block.rows) && block.rows.every(row => record(row) && Array.isArray(row.cells) && row.cells.every(cell => string(cell)) && indexes(row.citation_indexes));
 }
 
-/** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). */
+/** Whether `places` are sentences of a part that has `count`, by their place. */
+const within = (places: unknown, count: number) => indexes(places) && places.every(place => place < count);
+
+/** A part's layout, each block's sentences among the part's own: the page reads them by their place. */
+function layout(value: unknown, count: number): boolean {
+  return Array.isArray(value) && value.length <= 64 && value.every(block => record(block) && BLOCKS.has(block.kind) && (block.kind === 'heading' ? string(block.text)
+    : within(block.statements, count) && (block.kind !== 'table' || table(block))));
+}
+
+/** One item a sentence: as many `items` as the block has sentences (checked first), each what the page reads of it. */
+const each = (block: Json, items: unknown, item: (entry: Json) => boolean) => Array.isArray(items) && items.length === (block.statements as unknown[]).length
+  && items.every(entry => record(entry) && item(entry));
+
+/**
+ * What the page reads of each kind of block a writer arranges a part in
+ * (answer layout v2, ADR-0051), once its sentences and title are checked: a
+ * timeline has an event and a card a fact for each of its sentences, and a
+ * quote has one sentence.
+ */
+const ARRANGED: Readonly<Record<ArrangedBlock['kind'], (block: Json) => boolean>> = {
+  answer: () => true, text: () => true, points: block => typeof block.ordered === 'boolean', table,
+  timeline: block => each(block, block.events, event => string(event.date, 64) && string(event.text) && (event.who === undefined || string(event.who))),
+  card: block => string(block.title) && ENTITIES.has(block.entity) && each(block, block.facts, fact => string(fact.label) && string(fact.value)),
+  quote: block => (block.statements as unknown[]).length === 1 && string(block.text) && (block.from === undefined || string(block.from)),
+};
+
+/**
+ * A part's blocks (answer layout v2, ADR-0051), each of a kind the page
+ * draws, its sentences among the part's own and its title a text: the page
+ * reads an item by its sentence's place.
+ */
+function arranged(value: unknown, count: number): boolean {
+  return Array.isArray(value) && value.length <= MOST && value.every(block => record(block) && typeof block.kind === 'string' && Object.hasOwn(ARRANGED, block.kind)
+    && within(block.statements, count) && (block.title === undefined || string(block.title)) && ARRANGED[block.kind as ArrangedBlock['kind']](block));
+}
+
+/** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). A part reads one way: a layout or blocks. */
 function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !string(value.text, 200_000) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
-  if (!Array.isArray(value.sources) || value.sources.length > 256 || !value.sources.every(source)) return false;
+  if (!Array.isArray(value.sources) || value.sources.length > MOST || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
   return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.records === undefined || statements(part.records))
-    && (part.layout === undefined || layout(part.layout, (part.statements as unknown[]).length)));
+    && (part.layout === undefined || layout(part.layout, (part.statements as unknown[]).length))
+    && (part.blocks === undefined || (part.layout === undefined && arranged(part.blocks, (part.statements as unknown[]).length))));
 }
 
 /** A turn as a put writes it, or null for anything else. */

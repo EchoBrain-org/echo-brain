@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { answerLayoutSchema, answerLayoutSinceSchema, answerSchema, answerSinceSchema, createStepSchema, parseStep } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-ask-v1-model-protocol.js';
+import { answerBlocksSchema, answerBlocksSinceSchema, answerLayoutSchema, answerLayoutSinceSchema, answerSchema, answerSinceSchema, createStepSchema, parseStep } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-ask-v1-model-protocol.js';
 import { followUpResolutionSchema } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-follow-up-resolver-v1.js';
 import { createOpenRouterStructuredGenerationAdapter } from '../../providers/openrouter/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js';
 
@@ -36,6 +36,9 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
     // Ask again's writer and the follow-up resolver (ADR-0047).
     ['answer asked again', answerSinceSchema],
     ['laid-out answer asked again', answerLayoutSinceSchema],
+    // The writer's blocks (answer layout v2, ADR-0051).
+    ['answer in blocks', answerBlocksSchema],
+    ['answer in blocks asked again', answerBlocksSinceSchema],
     ['follow-up resolution', followUpResolutionSchema],
   ])('%s keeps the closed protocol without unsupported wire bounds', async (_role, schema) => {
     const before = JSON.stringify(schema);

@@ -5,18 +5,18 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskChoice, AskedScope, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskedScope, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { answerMarkdown, answerSentences, answerText, documentName, MAX_SOURCES, type SourceGroup } from './answer.js';
+import { answerMarkdown, answerSentences, answerText, documentName, numberedSources, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, knownStates, previousOf, sameScope,
-  shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type Suggestion, type TurnCheck, type TurnChecks,
+  answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
+  previousOf, sameScope, shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type CheckPlan, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
@@ -3805,8 +3805,11 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * of each turn it speaks for is good for five minutes from when it went, and
  * stands over what an earlier check said of that turn, never over what a
  * later one did; a turn citing nothing a check asks about is spoken for
- * without asking. It fails quietly, with no tags: what an earlier check said
- * that is no longer good goes with it. A ticket it reads for the first time
+ * without asking. It fails quietly, with no tags, when any of its requests
+ * does: it speaks for no turn, and what an earlier check said that is no
+ * longer good goes with it; only what a request that came back found you can
+ * no longer read stays, hidden as the turn's unreadable sources and over what
+ * a check still good said of them. A ticket it reads for the first time
  * keeps the marker it read as its baseline. `newest`: the place (`threadKey`)
  * whose newest turns Ask opening checked, made again there five minutes after
  * it went.
@@ -3818,17 +3821,20 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
   const mine = checkSeq;
   const at = Date.now();
   const check = async () => {
-    const result = plan.items.length === 0 ? null : await rpc('ask.check', { expect: account, items: [...plan.items] });
-    if (mine !== checkSeq || !sameAccount(account)) return;
-    if (result && !result.ok) {
-      if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
-      keepChecks(state.timeline.checks);
-      return;
-    }
-    const found = checkedOf(plan, result?.value.items ?? []);
-    if (newest !== null) newestCheckedAt.set(newest, at);
+    const asked = await askChecks(account, plan, () => mine === checkSeq && sameAccount(account));
+    if (asked === null) return;
+    const found = checkedOf(plan, asked.results);
     const before = state.timeline.checks;
     const latest = Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
+    if (asked.failure !== undefined) {
+      const gone = ACCOUNT_GONE.includes(asked.failure.code);
+      if (gone) accountLost(asked.failure);
+      const hidden = gone ? {} : Object.fromEntries(latest.map(([id, states]) => [id, foundUnreadable(states)]));
+      keepChecks(checksHiding(state.timeline.checks, hidden));
+      keepUnreadable(Object.entries(hidden));
+      return;
+    }
+    if (newest !== null) newestCheckedAt.set(newest, at);
     keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
     keepBaselines(found.markers);
     keepUnreadable(latest);
@@ -3877,15 +3883,31 @@ function keepBaselines(markers: Readonly<Record<string, Readonly<Record<string, 
   }
 }
 
+/**
+ * A check's requests, one after another: the results of each that came
+ * back, and the failure that ended it, if one did; null once a reply no
+ * longer counts (`wanted`).
+ */
+async function askChecks(account: Expect, plan: CheckPlan, wanted: () => boolean): Promise<{ readonly results: readonly (readonly AskCheckResult[])[]; readonly failure?: Failure } | null> {
+  const results: (readonly AskCheckResult[])[] = [];
+  for (const request of plan.requests) {
+    const result = await rpc('ask.check', { expect: account, items: [...request.items] });
+    if (!wanted()) return null;
+    if (!result.ok) return { results, failure: result.failure };
+    results.push(result.value.items);
+  }
+  return { results };
+}
+
 /** A new answer's tickets: one check, for their markers now, the baseline a later check compares with (C5). Quiet. */
 async function baseline(turn: TimelineTurn): Promise<void> {
   const account = expect();
   if (!account) return;
   const plan = checkPlan([turn], source => source.kind === 'ticket');
-  if (plan.items.length === 0) return;
-  const result = await rpc('ask.check', { expect: account, items: [...plan.items] });
-  if (!sameAccount(account) || !result.ok) return;
-  keepBaselines(checkedOf(plan, result.value.items).markers);
+  if (plan.requests.length === 0) return;
+  const asked = await askChecks(account, plan, () => sameAccount(account));
+  if (asked === null || asked.failure !== undefined) return;
+  keepBaselines(checkedOf(plan, asked.results).markers);
 }
 
 /** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet, the older earlier questions folded. */
@@ -4173,7 +4195,7 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   if (turn === undefined) return false;
   const { answer } = turn;
   const checks = shownChecks(turn);
-  const groups = turnGroups(answer.sources, checks);
+  const groups = turnGroups(answer, checks);
   const shows = showsOf(checks);
   // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
   const earlier = turn.again_of === undefined ? undefined : turnOf(turn.again_of)?.asked_at;
@@ -4196,9 +4218,10 @@ export function activeTurn(current: State = state): TimelineTurn | undefined {
   return turnOf(current.sources?.turn, current);
 }
 
-/** The citations of that turn's answer: the first 32. */
+/** The citations of that turn's answer the page numbers (numberedSources). */
 function answerSources(current: State = state): readonly AnswerSource[] {
-  return activeTurn(current)?.answer.sources.slice(0, MAX_SOURCES) ?? [];
+  const turn = activeTurn(current);
+  return turn === undefined ? [] : numberedSources(turn.answer);
 }
 
 /**
@@ -4207,7 +4230,7 @@ function answerSources(current: State = state): readonly AnswerSource[] {
  */
 export function answerGroups(current: State = state): SourceGroup[] {
   const turn = activeTurn(current);
-  return turn ? turnGroups(turn.answer.sources, shownChecks(turn, current)) : [];
+  return turn ? turnGroups(turn.answer, shownChecks(turn, current)) : [];
 }
 
 /** The turns Ask shows (ADR-0049): its place's thread, each question once. */
@@ -4394,7 +4417,7 @@ function sourcesAt(gen: number): SourcesState | null {
 
 /** The approved records and follow-ups' rows (each source row's "owner · status") of what Ask shows, read one after another. */
 async function readRecords(gen: number): Promise<void> {
-  for (const source of shownTurns().flatMap(turn => turn.answer.sources.slice(0, MAX_SOURCES))) {
+  for (const source of shownTurns().flatMap(turn => numberedSources(turn.answer))) {
     const sources = sourcesAt(gen);
     if (!sources) return;
     if (source.kind === 'record' && !sources.records[source.record.record_sha256]) await readRecord(gen, source.record, true);
@@ -4458,7 +4481,7 @@ function readPane(gen: number, source: AnswerSource): void {
 export function chooseSource(group: number, focus: string | null, turn: string | null): void {
   const sources = state.sources;
   const shown = turnOf(turn);
-  const chosen = shown ? turnGroups(shown.answer.sources, shownChecks(shown))[group] : undefined;
+  const chosen = shown ? turnGroups(shown.answer, shownChecks(shown))[group] : undefined;
   const source = chosen ? shown!.answer.sources[chosen.indexes[0]!] : undefined;
   if (!sources || !shown || !source) return;
   set({ sources: { ...sources, turn: shown.id, open: group, focus, named: null, evidence: null } });

@@ -68,9 +68,10 @@ interface Contract {
    */
   PERSON_ASK_PROGRESS_HEADER_VALUE_V3: string;
   formatPersonAskProgressEventV3(event: unknown): string;
-  /** Answer layout v1 (ADR-0045): the header an Ask asks for it with, and its value. */
+  /** Answer layout v1 (ADR-0045): the header an Ask asks for it with, and its value; and layout v2's value (ADR-0051). */
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1: string;
   PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1: string;
+  PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2: string;
 }
 const api = organizationApi as unknown as Contract;
 
@@ -270,6 +271,64 @@ export function layoutAnswer(question: string, scope: Record<string, unknown>, l
           row(['Fix BUG-412 on the board (HW-11)', 'Tomas Okafor', '2026-10-28', 'In Progress'], 4),
           row(['Run DVT-R2 and publish the report', 'QA', '2026-10-30', 'To Do'], 5),
         ] },
+      ] } : {}),
+    }],
+  };
+}
+
+/** What `ask-blocks`'s THERM answer cites: the soak's plan and report and the PVT readiness review, then three tickets. */
+const THERM_BLOCK_CITATIONS = [
+  thermPage('31020', 'Soak test plan'), thermPage('31021', 'Soak test report'), thermPage('31022', 'PVT readiness review'),
+  thermTicket('THERM-48', 'Soak sign-off', '20048'), thermTicket('THERM-52', 'Thermal pad supplier', '20052'), thermTicket('THERM-55', 'Line fixture', '20055'),
+];
+
+/**
+ * `ask-blocks`'s V8 answer (answer layout v2, ADR-0051), THERM's, in every
+ * block: the answer; the open tickets, a list statement that reads as a
+ * table right after it, with a row of yours that is late; the soak as a
+ * timeline; THERM-48 as a card; the steps before PVT; the open risk as
+ * titled text; and Noor's words as a quote. Each statement reads as the
+ * Authority writes it from its block: an event from its day, who and what
+ * happened, a fact from its card's kind and title and its label and value, a
+ * quote from its source and words. Its blocks come only to an Ask that asked
+ * for them (`blocks`); without them the statements are the same, in the same
+ * order.
+ */
+export function blocksAnswer(question: string, scope: Record<string, unknown>, blocks: boolean): Record<string, unknown> {
+  const said = (text: string, cited: number[]) => ({ text, citation_indexes: cited, private: cited.some(at => THERM_BLOCK_CITATIONS[at]!.visibility === 'only_me') });
+  const row = (cells: string[], cited: number) => ({ cells, citation_indexes: [cited] });
+  const events = [{ date: '2026-10-20', text: 'Approved the soak plan.', who: 'Noor Haddad' }, { date: '2026-10-23', text: 'The 72-hour soak passed.', who: 'Noor Haddad' }];
+  const facts = [{ label: 'Status', value: 'In review' }, { label: 'Owner', value: 'Tomas Okafor' }];
+  const quote = { text: 'Start PVT once the soak passes.', from: 'Noor Haddad, Oct 23 review' };
+  const event = (at: number) => `${events[at]!.date}, ${events[at]!.who}: ${events[at]!.text}`;
+  const fact = (at: number) => `Ticket: THERM-48; ${facts[at]!.label}: ${facts[at]!.value}.`;
+  return {
+    schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered', citations: THERM_BLOCK_CITATIONS,
+    parts: [{
+      question, status: 'answered',
+      statements: [
+        said('Yes, PVT can start: the 72-hour soak passed on Oct 23.', [1]),
+        said('2 Jira tickets are open: THERM-52 · Thermal pad supplier; THERM-55 · Line fixture.', [4, 5]),
+        said(event(0), [0]),
+        said(event(1), [1]),
+        said(fact(0), [3]),
+        said(fact(1), [3]),
+        said('Freeze the firmware at 1.4.2.', [2]),
+        said('Ship the build to the line.', [2]),
+        said('Sensor self-heating is still unexplained, so the soak report keeps it on the PVT watch list.', [1]),
+        said(`${quote.from}: “${quote.text}”`, [2]),
+      ],
+      ...(blocks ? { blocks: [
+        { kind: 'answer', statements: [0] },
+        { kind: 'table', statements: [1], columns: ['Item', 'Status', 'Owner', 'Due'], caption: '2 Jira tickets are open', rows: [
+          row(['THERM-52 · Thermal pad supplier', 'In Progress', 'Tomas Okafor', '2026-11-04'], 4),
+          row(['THERM-55 · Line fixture', 'To Do', 'You', '2026-10-30'], 5),
+        ] },
+        { kind: 'timeline', title: 'Soak test', statements: [2, 3], events },
+        { kind: 'card', title: 'THERM-48', entity: 'ticket', statements: [4, 5], facts },
+        { kind: 'points', title: 'Before PVT', ordered: true, statements: [6, 7] },
+        { kind: 'text', title: 'Open risk', statements: [8] },
+        { kind: 'quote', statements: [9], ...quote },
       ] } : {}),
     }],
   };
@@ -1811,6 +1870,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             ? [{ text: 'The Confluence EVT readiness page is current.', citation_indexes: [0], private: true }]
             : [], ...(included ? {} : { gap: 'No accessible Confluence page was found.' }) }],
         });
+      }
+      // `ask-blocks` answers in the layout the Ask asked for: THERM's blocks for layout v2 (ADR-0051), layout v1's THERM answer for 1,
+      // and the blocks' plain statements for none.
+      if (mode === 'ask-blocks') {
+        const layout = new Headers(init?.headers).get(api.PERSON_ASK_ANSWER_LAYOUT_HEADER_V1);
+        return json(layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2 ? blocksAnswer(question, scope, true)
+          : layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1 ? layoutAnswer(question, scope, true) : blocksAnswer(question, scope, false));
       }
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const [part] = desktop.answer.parts as Record<string, unknown>[];

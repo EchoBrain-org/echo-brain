@@ -1,6 +1,6 @@
 import {
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
-  validatePersonAskAnswerLayoutHeaderV1, validatePersonAskTimeContextV1, type PersonAskTimeContextV1,
+  validatePersonAskAnswerLayoutHeaderV2, validatePersonAskTimeContextV1, type PersonAskAnswerLayoutV2, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
 import {
   PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
@@ -490,16 +490,17 @@ function askTimeContext(request: IncomingMessage): PersonAskTimeContextV1 | unde
   catch { throw new AuthorityOperationError('invalid_request', 'Ask time context is invalid'); }
 }
 
-/** Whether the client asked for answer layout v1 (ADR-0045); only a V8 answer reads it. */
-function askAnswerLayout(request: IncomingMessage): boolean {
-  try { return validatePersonAskAnswerLayoutHeaderV1(request.headers[PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]); }
+/** Which answer layout the client asked for, v1 (ADR-0045) or v2 (ADR-0051), if any; only a V8 answer reads it. */
+function askAnswerLayout(request: IncomingMessage): PersonAskAnswerLayoutV2 | undefined {
+  try { return validatePersonAskAnswerLayoutHeaderV2(request.headers[PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]); }
   catch { throw new AuthorityOperationError('invalid_request', 'Ask answer layout is invalid'); }
 }
 
 /** An Ask's optional headers as its options: the client's time context, and answer layout when asked for. An invalid one is `invalid_request`. */
-function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: true } {
+function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2 } {
   const time_context = askTimeContext(request);
-  return { ...(time_context === undefined ? {} : { time_context }), ...(askAnswerLayout(request) ? { answer_layout: true as const } : {}) };
+  const answer_layout = askAnswerLayout(request);
+  return { ...(time_context === undefined ? {} : { time_context }), ...(answer_layout === undefined ? {} : { answer_layout }) };
 }
 
 /** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
@@ -507,7 +508,7 @@ function personCancellablePost<Application, Request>(
   application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: {
-    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: boolean; readonly signal: AbortSignal;
+    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2; readonly signal: AbortSignal;
   }) => Promise<unknown>,
   ask = false,
 ): PersonPostHandler {

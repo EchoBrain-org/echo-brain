@@ -161,7 +161,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       expect(headers.get('accept')).toBe('text/event-stream, application/json');
       expect(headers.get('authorization')).toBe('Bearer bearer');
       expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
-      expect(headers.get('x-echo-answer-layout')).toBe('1');
+      expect(headers.get('x-echo-answer-layout')).toBe('2');
     }
   });
 
@@ -264,8 +264,8 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch: refused }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
         .rejects.toMatchObject({ code, status });
       expect(refused.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
-      // Every Ask asks for answer layout v1 (ADR-0045), streamed or not.
-      expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-answer-layout')).toBe('1');
+      // Every Ask asks for answer layout v2 (ADR-0051), streamed or not.
+      expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-answer-layout')).toBe('2');
       expect(progress).toEqual([]);
     }
   });
@@ -455,7 +455,7 @@ describe('person ask --progress', () => {
       await expect(run(argv)).resolves.toBe(0);
       expect(pathOf(fetch.mock.calls[0]![0])).toBe('/v7/person/ask');
       expect(headersOf(fetch.mock.calls[0]![1]).has(PERSON_ASK_PROGRESS_HEADER_V1)).toBe(false);
-      expect(headersOf(fetch.mock.calls[0]![1]).get('x-echo-answer-layout')).toBe('1');
+      expect(headersOf(fetch.mock.calls[0]![1]).get('x-echo-answer-layout')).toBe('2');
       expect(output.stdout).toBe(`${JSON.stringify({ ok: true, result: body })}\n`);
     }
   });

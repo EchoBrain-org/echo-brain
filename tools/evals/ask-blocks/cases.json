@@ -1,0 +1,373 @@
+{
+  "schema_version": 1,
+  "kind": "echo-ask-blocks-eval-cases-v1",
+  "description": "Pre-registered Ask block catalog cases (README.md). Synthetic hardware-program content for one project, THERM. Research is scripted: one search returns the case's items and research opens them all; only the writer is the product's model.",
+  "today": "2026-10-30",
+  "asked_at": "2026-10-30T17:00:00.000Z",
+  "time_zone": "America/Los_Angeles",
+  "asker": "Noor Haddad",
+  "cases": [
+    {
+      "id": "soak-owner",
+      "question": "Who owns the 72-hour soak test?",
+      "research": { "query": "72-hour soak test owner", "need": "owner of the soak test" },
+      "items": [
+        {
+          "kind": "follow_up", "on": "action", "title": "Run the 72-hour soak test on the DVT units", "owner": "Priya Raman", "status": "open",
+          "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-06",
+          "decision": { "title": "DVT readiness review", "first_line": "Run a 72-hour soak before the DVT gate." }
+        },
+        {
+          "kind": "ticket", "key": "THERM-490", "title": "Calibrate the soak chamber", "text": "Calibrate the soak chamber sensors before the 72-hour soak test.",
+          "status": "Done", "owner": "Ana Silva", "created": "2026-10-20"
+        }
+      ],
+      "expect": { "shapes": ["single"], "fallback": [], "facts": [["Priya Raman", "Priya"]], "people": ["Priya Raman", "Ana Silva"] }
+    },
+    {
+      "id": "notes-due",
+      "question": "When are the DVT release notes due?",
+      "research": { "query": "DVT release notes", "need": "due date of the release notes" },
+      "items": [
+        {
+          "kind": "follow_up", "on": "page", "title": "Publish the DVT release notes to the team space", "owner": "Tomas Okafor", "status": "open",
+          "created_at": "2026-10-28T17:00:00.000Z", "sent_at": "2026-10-28T17:02:00.000Z", "due_at": "2026-11-04",
+          "check": { "verdict": "still_open", "checked_at": "2026-10-29T16:00:00.000Z" },
+          "decision": { "title": "DVT review", "first_line": "Publish the DVT release notes before the lab handoff." }
+        }
+      ],
+      "expect": { "shapes": ["single"], "fallback": [], "facts": [["Nov 4", "November 4", "2026-11-04"]], "people": ["Tomas Okafor"] }
+    },
+    {
+      "id": "gate-blockers",
+      "question": "What is blocking the DVT gate?",
+      "research": { "query": "DVT gate blockers", "need": "what blocks the DVT gate" },
+      "items": [
+        {
+          "kind": "decision", "label": "DVT readiness review", "occurred_at": "2026-10-27",
+          "text": "The DVT gate opens only when THERM-482 is fixed, the thermal pad supplier sends its RoHS certificate, and a 72-hour soak passes."
+        },
+        {
+          "kind": "ticket", "key": "THERM-482", "title": "Fan stalls below 40% duty cycle at cold start",
+          "text": "The fan stalls below 40% duty cycle when started under 5°C. A fix is planned in firmware 2.3.", "status": "In Progress", "owner": "Tomas Okafor", "created": "2026-10-08"
+        },
+        {
+          "kind": "ticket", "key": "THERM-488", "title": "Thermal pad RoHS certificate missing",
+          "text": "The thermal pad supplier has not sent its RoHS certificate.", "status": "Blocked", "owner": "Dev Mehta", "created": "2026-10-14"
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Run the 72-hour soak test on the DVT units", "owner": "Priya Raman", "status": "open",
+          "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-06",
+          "decision": { "title": "DVT readiness review", "first_line": "Run a 72-hour soak before the DVT gate." }
+        }
+      ],
+      "expect": { "shapes": ["parallel", "grid"], "fallback": [], "facts": [["THERM-482"], ["certificate"], ["soak"]], "people": ["Tomas Okafor", "Dev Mehta", "Priya Raman"] }
+    },
+    {
+      "id": "ship-steps",
+      "question": "What has to happen, in order, before the DVT build ships to the lab?",
+      "research": { "query": "DVT ship plan steps", "need": "steps before the DVT build ships, in order" },
+      "items": [
+        {
+          "kind": "decision", "label": "DVT ship plan", "occurred_at": "2026-10-28",
+          "text": "Before the DVT build ships to the lab: first flash firmware 2.3 on every unit, then run the 72-hour soak, then Ana Silva signs off the test report, and only then Dev Mehta books the courier."
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Flash firmware 2.3 on every DVT unit", "owner": "Tomas Okafor", "status": "open",
+          "created_at": "2026-10-28T19:00:00.000Z", "sent_at": "2026-10-28T19:05:00.000Z", "due_at": "2026-11-02",
+          "decision": { "title": "DVT ship plan", "first_line": "Flash firmware 2.3 first." }
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Run the 72-hour soak test on the DVT units", "owner": "Priya Raman", "status": "open",
+          "created_at": "2026-10-28T19:00:00.000Z", "sent_at": "2026-10-28T19:05:00.000Z", "due_at": "2026-11-06",
+          "decision": { "title": "DVT ship plan", "first_line": "Run the soak after the firmware is flashed." }
+        },
+        {
+          "kind": "follow_up", "on": "document", "title": "Sign off the DVT test report", "owner": "Ana Silva", "status": "open",
+          "created_at": "2026-10-28T19:00:00.000Z", "sent_at": "2026-10-28T19:05:00.000Z", "due_at": "2026-11-09",
+          "decision": { "title": "DVT ship plan", "first_line": "Sign off the test report after the soak." }
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Book the courier to the lab", "owner": "Dev Mehta", "status": "open",
+          "created_at": "2026-10-28T19:00:00.000Z", "sent_at": "2026-10-28T19:05:00.000Z", "due_at": "2026-11-10",
+          "decision": { "title": "DVT ship plan", "first_line": "Book the courier last." }
+        }
+      ],
+      "expect": {
+        "shapes": ["ordered", "grid", "sequence"], "fallback": ["parallel"], "order": true,
+        "facts": [["firmware 2.3"], ["soak"], ["test report", "sign off", "signs off"], ["courier"]],
+        "people": ["Tomas Okafor", "Priya Raman", "Ana Silva", "Dev Mehta"]
+      }
+    },
+    {
+      "id": "pvt-owners",
+      "question": "Who owns each open PVT follow-up, and when is each due?",
+      "research": { "query": "PVT follow-ups owners due dates", "need": "owner and due date of each open PVT follow-up" },
+      "items": [
+        {
+          "kind": "follow_up", "on": "action", "title": "Approve the PVT budget", "owner": "Noor Haddad", "status": "open",
+          "created_at": "2026-10-29T17:00:00.000Z", "sent_at": "2026-10-29T17:05:00.000Z", "due_at": "2026-11-03",
+          "decision": { "title": "PVT kickoff", "first_line": "Start PVT preparation now." }
+        },
+        {
+          "kind": "follow_up", "on": "document", "title": "Update the PVT test plan", "owner": "Priya Raman", "status": "open",
+          "created_at": "2026-10-29T17:00:00.000Z", "sent_at": "2026-10-29T17:05:00.000Z", "due_at": "2026-11-05",
+          "decision": { "title": "PVT kickoff", "first_line": "Start PVT preparation now." }
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Book the EMC lab slot", "owner": "Ana Silva", "status": "open",
+          "created_at": "2026-10-29T17:00:00.000Z", "sent_at": "2026-10-29T17:05:00.000Z", "due_at": "2026-11-08",
+          "decision": { "title": "PVT kickoff", "first_line": "Start PVT preparation now." }
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Order 40 PVT enclosures", "owner": "Dev Mehta", "status": "open",
+          "created_at": "2026-10-29T17:00:00.000Z", "sent_at": "2026-10-29T17:05:00.000Z", "due_at": "2026-11-12",
+          "decision": { "title": "PVT kickoff", "first_line": "Start PVT preparation now." }
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Freeze the PVT firmware", "owner": "Tomas Okafor", "status": "open",
+          "created_at": "2026-10-29T17:00:00.000Z", "sent_at": "2026-10-29T17:05:00.000Z", "due_at": "2026-11-14",
+          "decision": { "title": "PVT kickoff", "first_line": "Start PVT preparation now." }
+        }
+      ],
+      "expect": {
+        "shapes": ["grid"], "fallback": ["parallel"],
+        "facts": [
+          ["you", "Noor Haddad", "Noor"], ["Nov 3", "November 3", "2026-11-03"],
+          ["Priya Raman", "Priya"], ["Nov 5", "November 5", "2026-11-05"],
+          ["Ana Silva", "Ana"], ["Nov 8", "November 8", "2026-11-08"],
+          ["Dev Mehta", "Dev"], ["Nov 12", "November 12", "2026-11-12"],
+          ["Tomas Okafor", "Tomas"], ["Nov 14", "November 14", "2026-11-14"]
+        ],
+        "people": ["Noor Haddad", "Priya Raman", "Ana Silva", "Dev Mehta", "Tomas Okafor"]
+      }
+    },
+    {
+      "id": "fan-curve-options",
+      "question": "How do the two fan curve options compare?",
+      "research": { "query": "fan curve options", "need": "how the two fan curves compare" },
+      "items": [
+        {
+          "kind": "decision", "label": "Fan curve review", "occurred_at": "2026-10-22",
+          "text": "Two fan curves were compared under the soak load. Curve v1, the current curve, keeps noise at 32 dBA but peaks at 78°C. Curve v2 peaks at 71°C, raises noise to 36 dBA and needs firmware 2.3. The review approved curve v2 for DVT."
+        },
+        {
+          "kind": "ticket", "key": "THERM-485", "title": "Curve v2 noise above target", "text": "Curve v2 measures 36 dBA against a 35 dBA target.",
+          "status": "Open", "owner": "Tomas Okafor", "created": "2026-10-23"
+        }
+      ],
+      "expect": {
+        "shapes": ["grid", "sections"], "fallback": ["parallel"],
+        "facts": [["32 dBA"], ["78"], ["71"], ["36 dBA"], ["firmware 2.3"], ["approved", "chose", "picked"]],
+        "people": ["Tomas Okafor"]
+      }
+    },
+    {
+      "id": "week-events",
+      "question": "What happened on THERM this week?",
+      "research": { "query": "THERM this week", "need": "what happened on THERM this week" },
+      "items": [
+        { "kind": "decision", "label": "DVT build review", "occurred_at": "2026-10-26", "text": "Approved: assemble 30 DVT units this week." },
+        {
+          "kind": "decision", "label": "DVT readiness review", "occurred_at": "2026-10-27",
+          "text": "The DVT gate opens only when THERM-482 is fixed, the supplier certificate arrives and a 72-hour soak passes."
+        },
+        { "kind": "decision", "label": "DVT ship plan", "occurred_at": "2026-10-28", "text": "The DVT build ships to the lab after the soak passes and the test report is signed off." },
+        { "kind": "decision", "label": "Supplier call", "occurred_at": "2026-10-29", "text": "Dev Mehta reported that the thermal pad supplier will send the RoHS certificate by Nov 3." }
+      ],
+      "expect": {
+        "shapes": ["sequence"], "fallback": ["parallel", "grid"], "order": true,
+        "facts": [["30 DVT units", "30 units"], ["gate"], ["lab"], ["Nov 3", "November 3", "2026-11-03"]],
+        "people": ["Dev Mehta"]
+      }
+    },
+    {
+      "id": "dvt-date-moves",
+      "question": "How did the DVT build date move?",
+      "research": { "query": "DVT build date changes", "need": "how the DVT build date changed over time" },
+      "items": [
+        { "kind": "decision", "label": "Program plan", "occurred_at": "2026-09-10", "text": "The DVT build is set for Oct 5." },
+        { "kind": "decision", "label": "Schedule review", "occurred_at": "2026-09-24", "text": "The DVT build moves to Oct 12 because the enclosure tooling slipped." },
+        { "kind": "decision", "label": "Schedule review", "occurred_at": "2026-10-08", "text": "The DVT build moves to Oct 26 after THERM-482 was found on DVT unit 7." },
+        { "kind": "decision", "label": "Schedule review", "occurred_at": "2026-10-21", "text": "The DVT build stays on Oct 26." }
+      ],
+      "expect": {
+        "shapes": ["sequence"], "fallback": ["grid", "parallel"], "order": true,
+        "facts": [["Oct 5", "October 5", "2026-10-05"], ["Oct 12", "October 12", "2026-10-12"], ["Oct 26", "October 26", "2026-10-26"]],
+        "people": []
+      }
+    },
+    {
+      "id": "ticket-profile",
+      "question": "What is THERM-482?",
+      "research": { "query": "THERM-482", "need": "what THERM-482 is" },
+      "items": [
+        {
+          "kind": "ticket", "key": "THERM-482", "title": "Fan stalls below 40% duty cycle at cold start",
+          "text": "The fan stalls below 40% duty cycle when started under 5°C. Found on DVT unit 7. A fix is planned in firmware 2.3. It blocks the DVT gate.",
+          "status": "In Progress", "owner": "Tomas Okafor", "priority": "High", "created": "2026-10-08"
+        },
+        {
+          "kind": "follow_up", "on": "ticket", "title": "Verify the THERM-482 fix on the DVT units", "owner": "Priya Raman", "status": "open",
+          "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-05",
+          "decision": { "title": "DVT readiness review", "first_line": "Verify the fan fix before the DVT gate." }
+        }
+      ],
+      "expect": {
+        "shapes": ["profile"], "fallback": ["grid", "parallel", "prose", "single"],
+        "facts": [["stalls", "stall"], ["In Progress"], ["Tomas Okafor", "Tomas"], ["firmware 2.3"]],
+        "people": ["Tomas Okafor", "Priya Raman"]
+      }
+    },
+    {
+      "id": "person-profile",
+      "question": "Who is Lena Brandt on THERM?",
+      "research": { "query": "Lena Brandt", "need": "Lena Brandt's role and what she owns" },
+      "items": [
+        { "kind": "decision", "label": "THERM staffing", "occurred_at": "2026-09-01", "text": "Lena Brandt is the hardware lead for THERM and approves every gate review." },
+        {
+          "kind": "follow_up", "on": "action", "title": "Approve the DVT gate", "owner": "Lena Brandt", "status": "open",
+          "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-07",
+          "decision": { "title": "DVT readiness review", "first_line": "Lena Brandt approves the DVT gate once its conditions are met." }
+        },
+        {
+          "kind": "follow_up", "on": "page", "title": "Review the revision C enclosure drawings", "owner": "Lena Brandt", "status": "open",
+          "created_at": "2026-10-28T19:00:00.000Z", "sent_at": "2026-10-28T19:05:00.000Z", "due_at": "2026-11-03",
+          "decision": { "title": "DVT review", "first_line": "Freeze the enclosure at revision C." }
+        }
+      ],
+      "expect": {
+        "shapes": ["profile"], "fallback": ["parallel", "grid", "prose"],
+        "facts": [["hardware lead"], ["gate review", "gate reviews", "approves"], ["DVT gate"], ["enclosure drawings", "revision C"]],
+        "people": ["Lena Brandt"]
+      }
+    },
+    {
+      "id": "pvt-wording",
+      "question": "What exactly did the PVT go/no-go review decide? I need the approved wording.",
+      "research": { "query": "PVT go/no-go review decision", "need": "the approved wording of the PVT go/no-go decision" },
+      "items": [
+        {
+          "kind": "decision", "label": "PVT go/no-go review", "occurred_at": "2026-10-29",
+          "text": "PVT starts on Nov 16 only if the DVT gate has passed and the EMC pre-scan shows no failures; otherwise PVT moves to the next build window."
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Run the EMC pre-scan", "owner": "Ana Silva", "status": "open",
+          "created_at": "2026-10-29T18:00:00.000Z", "sent_at": "2026-10-29T18:05:00.000Z", "due_at": "2026-11-10",
+          "decision": { "title": "PVT go/no-go review", "first_line": "Run the EMC pre-scan before PVT." }
+        }
+      ],
+      "expect": {
+        "shapes": ["verbatim"], "fallback": ["single", "prose"],
+        "facts": [["Nov 16", "November 16", "2026-11-16"], ["pre-scan"], ["next build window"]],
+        "people": ["Ana Silva"]
+      }
+    },
+    {
+      "id": "review-multi",
+      "question": "What did the Oct 28 DVT review decide, and what are the next steps?",
+      "research": { "query": "Oct 28 DVT review", "need": "the review's decisions and next steps" },
+      "items": [
+        {
+          "kind": "decision", "label": "DVT review", "occurred_at": "2026-10-28",
+          "text": "Decided: the DVT units ship to the lab after the soak passes. Decided: the enclosure is frozen at revision C. Decided: the blue color option is dropped for DVT."
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Run the 72-hour soak test on the DVT units", "owner": "Priya Raman", "status": "open",
+          "created_at": "2026-10-28T19:00:00.000Z", "sent_at": "2026-10-28T19:05:00.000Z", "due_at": "2026-11-06",
+          "decision": { "title": "DVT review", "first_line": "The DVT units ship to the lab after the soak passes." }
+        },
+        {
+          "kind": "follow_up", "on": "page", "title": "Send the revision C drawings to the enclosure vendor", "owner": "Lena Brandt", "status": "open",
+          "created_at": "2026-10-28T19:00:00.000Z", "sent_at": "2026-10-28T19:05:00.000Z", "due_at": "2026-11-03",
+          "decision": { "title": "DVT review", "first_line": "The enclosure is frozen at revision C." }
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Tell marketing the blue option is dropped", "owner": "Noor Haddad", "status": "open",
+          "created_at": "2026-10-28T19:00:00.000Z", "sent_at": "2026-10-28T19:05:00.000Z", "due_at": "2026-11-02",
+          "decision": { "title": "DVT review", "first_line": "The blue color option is dropped for DVT." }
+        }
+      ],
+      "expect": {
+        "shapes": ["sections"], "fallback": ["parallel", "grid"],
+        "facts": [["soak"], ["revision C"], ["blue"], ["Priya Raman", "Priya"], ["Lena Brandt", "Lena"], ["you", "Noor Haddad", "Noor"]],
+        "people": ["Priya Raman", "Lena Brandt", "Noor Haddad"]
+      }
+    },
+    {
+      "id": "workstreams-status",
+      "question": "Where does each DVT workstream stand?",
+      "research": { "query": "DVT workstreams status", "need": "status of each DVT workstream" },
+      "items": [
+        {
+          "kind": "follow_up", "on": "ticket", "title": "Ship firmware 2.3 with the THERM-482 fix", "owner": "Tomas Okafor", "status": "open",
+          "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-02",
+          "check": { "verdict": "still_open", "checked_at": "2026-10-29T16:00:00.000Z" },
+          "decision": { "title": "DVT readiness review", "first_line": "Firmware 2.3 must fix THERM-482." }
+        },
+        {
+          "kind": "follow_up", "on": "page", "title": "Freeze the enclosure at revision C", "owner": "Lena Brandt", "status": "done",
+          "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z",
+          "check": { "verdict": "landed", "checked_at": "2026-10-29T16:00:00.000Z" },
+          "decision": { "title": "DVT review", "first_line": "Freeze the enclosure at revision C." }
+        },
+        {
+          "kind": "follow_up", "on": "ticket", "title": "Get the thermal pad RoHS certificate", "owner": "Dev Mehta", "status": "open",
+          "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-03",
+          "check": { "verdict": "still_open", "checked_at": "2026-10-29T16:00:00.000Z" },
+          "decision": { "title": "DVT readiness review", "first_line": "The supplier must send its RoHS certificate." }
+        },
+        {
+          "kind": "follow_up", "on": "action", "title": "Run the 72-hour soak test on the DVT units", "owner": "Priya Raman", "status": "open",
+          "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-06",
+          "decision": { "title": "DVT readiness review", "first_line": "Run a 72-hour soak before the DVT gate." }
+        }
+      ],
+      "expect": {
+        "shapes": ["grid"], "fallback": ["parallel", "sections"],
+        "facts": [["firmware"], ["revision C", "enclosure"], ["done", "landed", "frozen"], ["certificate"], ["soak"]],
+        "people": ["Tomas Okafor", "Lena Brandt", "Dev Mehta", "Priya Raman"]
+      }
+    },
+    {
+      "id": "trap-undated",
+      "question": "What happened with the thermal pad supplier this week?",
+      "research": { "query": "thermal pad supplier", "need": "what happened with the thermal pad supplier this week" },
+      "items": [
+        { "kind": "decision", "label": "Supplier review", "occurred_at": "2026-10-27", "text": "Dev Mehta will chase the thermal pad supplier for the RoHS certificate." },
+        { "kind": "decision", "label": "Supplier call", "occurred_at": "2026-10-29", "text": "The thermal pad supplier will send the RoHS certificate by Nov 3." },
+        {
+          "kind": "ticket", "key": "THERM-488", "title": "Thermal pad RoHS certificate missing", "text": "Update from the supplier: the certificate is in final review.",
+          "status": "Blocked", "owner": "Dev Mehta", "created": "2026-09-15"
+        },
+        {
+          "kind": "ticket", "key": "THERM-491", "title": "Second thermal pad supplier quote", "text": "Marcus Lee asked a second supplier for a backup quote.",
+          "status": "Open", "owner": "Marcus Lee", "created": "2026-09-15"
+        }
+      ],
+      "expect": {
+        "shapes": ["sequence", "parallel", "grid"], "fallback": [],
+        "facts": [["chase"], ["Nov 3", "November 3", "2026-11-03"], ["final review"], ["quote"]],
+        "forbidden_event_dates": ["2026-09-15"],
+        "people": ["Dev Mehta", "Marcus Lee"]
+      }
+    },
+    {
+      "id": "trap-disagree",
+      "question": "When is the PVT build?",
+      "research": { "query": "PVT build date", "need": "date of the PVT build" },
+      "items": [
+        { "kind": "decision", "label": "Schedule review", "occurred_at": "2026-10-21", "text": "Approved: the PVT build is on Nov 16." },
+        {
+          "kind": "ticket", "key": "THERM-493", "title": "Test fixtures arriving late",
+          "text": "The fixture vendor now says the test fixtures arrive Nov 20, so the PVT build may slip to Nov 20.", "status": "Open", "owner": "Dev Mehta", "created": "2026-10-28"
+        }
+      ],
+      "expect": {
+        "shapes": ["any"], "fallback": [],
+        "facts": [["Nov 16", "November 16", "2026-11-16"], ["Nov 20", "November 20", "2026-11-20"], ["approved"]],
+        "people": ["Dev Mehta"]
+      }
+    }
+  ]
+}

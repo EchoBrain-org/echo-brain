@@ -1,13 +1,13 @@
 import { Fragment, type ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type {
-  Answer, AnswerBlock, AnswerPart, AnswerSource, AskReceipt, AskSearched, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, OpenItemView, RecordItem,
-  TimelineTurn, ToolContainerKind,
+  Answer, AnswerBlock, AnswerEvent, AnswerFact, AnswerPart, AnswerSource, ArrangedBlock, AskReceipt, AskSearched, CardEntity, ExternalAnswerSource, AnswerStatement,
+  ApprovedRecord, Match, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import {
-  answerSentences, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownBlocks, statementGroups, tableDay,
-  yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
+  answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
+  shownBlocks, shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
@@ -28,7 +28,7 @@ import { MAX_QUESTION, questionCount } from '../bar.js';
 import {
   allOmitted, askedAgain, behindEarlierLine, markOf, shownInFull, showsOf, turnChanged, turnGroups, turnNote, type Mark, type Suggestion, type TurnChecks,
 } from '../timeline.js';
-import { Check, Chevron, Close, Copy, Doc, Folder, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticks, Up } from './icons.js';
+import { Check, Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -186,7 +186,7 @@ interface TurnView {
 }
 
 function turnView(turn: TimelineTurn, checks: TurnChecks | undefined): TurnView {
-  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer.sources, checks), checks, shows: showsOf(checks) };
+  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer, checks), checks, shows: showsOf(checks) };
 }
 
 /** A source's first citation stands for it: its kind, its label, its record or its link. */
@@ -233,14 +233,27 @@ function markClass(base: string, on: boolean, mark: Mark): string {
   return [base, on ? 'on' : '', mark === 'changed' ? 'changed' : ''].filter(Boolean).join(' ');
 }
 
+/**
+ * What a sentence's element carries, whichever item it reads as: its classes
+ * after `base`, if any (lit by its number, changed since it was said), its
+ * test id, and what a check says of it.
+ */
+function statementProps(state: State, view: TurnView, statement: AnswerStatement, id: string, base = '') {
+  const mark = markIn(view, statement.citation_indexes);
+  return { class: markClass(base, lit(state, view, id), mark) || undefined, 'data-testid': 'statement', 'data-mark': mark ?? undefined };
+}
+
+/** A sentence's words as its item reads them (`text`), then the numbers of its sources. */
+function Said({ state, view, statement, id, text }: { state: State; view: TurnView; statement: AnswerStatement; id: string; text: string }) {
+  return <><span data-testid="statement-text">{text}</span><Markers state={state} view={view} statement={statement} id={id} /></>;
+}
+
 /** A sentence and the numbers of its sources. The one whose number opened the pane is lit. One a check left out is not shown. */
 function Statement({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
-  const mark = markIn(view, statement.citation_indexes);
-  if (mark === 'omitted') return null;
+  if (markIn(view, statement.citation_indexes) === 'omitted') return null;
   return (
-    <p class={markClass('answer-statement selectable', lit(state, view, id), mark)} data-testid="statement" data-mark={mark ?? undefined}>
-      <span data-testid="statement-text">{statement.text}</span>
-      <Markers state={state} view={view} statement={statement} id={id} />
+    <p {...statementProps(state, view, statement, id, 'answer-statement selectable')}>
+      <Said state={state} view={view} statement={statement} id={id} text={statement.text} />
     </p>
   );
 }
@@ -259,13 +272,8 @@ function Found({ state, view, statement, id }: { state: State; view: TurnView; s
 }
 
 /** A sentence of the lead or a paragraph, inline with the others: its text and its numbers, lit on its own. */
-function Claim({ state, view, statement, id, mark }: { state: State; view: TurnView; statement: AnswerStatement; id: string; mark: Mark }) {
-  return (
-    <span class={markClass('claim', lit(state, view, id), mark)} data-testid="statement" data-mark={mark ?? undefined}>
-      <span data-testid="statement-text">{statement.text}</span>
-      <Markers state={state} view={view} statement={statement} id={id} />
-    </span>
-  );
+function Claim({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
+  return <span {...statementProps(state, view, statement, id, 'claim')}><Said state={state} view={view} statement={statement} id={id} text={statement.text} /></span>;
 }
 
 /** The places of a block's sentences a check leaves to show. */
@@ -273,13 +281,38 @@ function shownPlaces(view: TurnView, part: AnswerPart, places: readonly number[]
   return places.filter(place => view.shows(part.statements[place]!.citation_indexes));
 }
 
+/** A bullet, or a numbered step: its sentence and its numbers, lit on its own. */
+function Point({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
+  return <li {...statementProps(state, view, statement, id)}><span><Said state={state} view={view} statement={statement} id={id} text={statement.text} /></span></li>;
+}
+
 /** The sentences of a lead or a paragraph, one after another, each with its own numbers. */
 function Claims({ state, view, part, index, statements }: { state: State; view: TurnView; part: AnswerPart; index: number; statements: readonly number[] }) {
-  return <>{statements.map((place, at) => {
-    const statement = part.statements[place]!;
-    return <Fragment key={place}>{at > 0 && ' '}
-      <Claim state={state} view={view} statement={statement} id={`${index}.${place}`} mark={markIn(view, statement.citation_indexes)} /></Fragment>;
-  })}</>;
+  return <>{statements.map((place, at) => <Fragment key={place}>{at > 0 && ' '}
+    <Claim state={state} view={view} statement={part.statements[place]!} id={`${index}.${place}`} /></Fragment>)}</>;
+}
+
+/** A lead (`lead`) or a paragraph: the sentences of `statements` a check leaves to show, one after another. */
+function Prose({ state, view, part, index, statements, lead }: {
+  state: State; view: TurnView; part: AnswerPart; index: number; statements: readonly number[]; lead: boolean;
+}) {
+  return (
+    <p class={lead ? 'answer-lead selectable' : 'answer-paragraph selectable'}>
+      <Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, statements)} />
+    </p>
+  );
+}
+
+/** Bullets, or numbered steps when their order matters (`ordered`): a point for each sentence of `statements` a check leaves to show. */
+function Points({ state, view, part, index, statements, ordered }: {
+  state: State; view: TurnView; part: AnswerPart; index: number; statements: readonly number[]; ordered: boolean;
+}) {
+  const List = ordered ? 'ol' : 'ul';
+  return (
+    <List class={`answer-bullets${ordered ? ' answer-steps' : ''} selectable`}>
+      {shownPlaces(view, part, statements).map(at => <Point key={at} state={state} view={view} statement={part.statements[at]!} id={`${index}.${at}`} />)}
+    </List>
+  );
 }
 
 /** One cell of a table that is not its first: an ISO date as "Oct 14" in mono, late when the row is yours and late; you, as the owner, heavier. */
@@ -309,7 +342,8 @@ function Table({ state, view, index, block, place, opens, label }: {
   return <>
     {block.caption && opens && <p class="answer-lead selectable">{block.caption}</p>}
     <div class="answer-table selectable" role="region" tabIndex={0} aria-label={block.caption ?? label}>
-      <table class={`cols-${block.columns.length}`}>
+      {/* A writer's table has as many columns as it needs (ADR-0051): past six, each one widens its own scroll box. */}
+      <table class={`cols-${block.columns.length}`} style={block.columns.length > 6 ? { minWidth: `${block.columns.length * 100}px` } : undefined}>
         <thead><tr>{block.columns.map(column => <th key={column} scope="col">{column}</th>)}</tr></thead>
         <tbody>
           {rows.map(({ row, at, mark }) => {
@@ -347,54 +381,166 @@ function LaidOut({ state, view, part, index, layout, opening }: {
       {layout.map((block, place) => {
         if (!showing[place]) return null;
         if (block.kind === 'heading') { heading = block.text; return <h3 key={place} class="answer-heading">{block.text}</h3>; }
-        if (block.kind === 'lead') {
-          return <p key={place} class="answer-lead selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
+        if (block.kind === 'lead' || block.kind === 'paragraph') {
+          return <Prose key={place} state={state} view={view} part={part} index={index} statements={block.statements} lead={block.kind === 'lead'} />;
         }
-        if (block.kind === 'paragraph') {
-          return <p key={place} class="answer-paragraph selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
-        }
-        if (block.kind === 'bullets') {
-          return (
-            <ul key={place} class="answer-bullets selectable">
-              {shownPlaces(view, part, block.statements).map(at => {
-                const id = `${index}.${at}`;
-                const statement = part.statements[at]!;
-                const mark = markIn(view, statement.citation_indexes);
-                return <li key={at} class={markClass('', lit(state, view, id), mark) || undefined} data-testid="statement" data-mark={mark ?? undefined}>
-                  <span><span data-testid="statement-text">{statement.text}</span><Markers state={state} view={view} statement={statement} id={id} /></span>
-                </li>;
-              })}
-            </ul>
-          );
-        }
+        if (block.kind === 'bullets') return <Points key={place} state={state} view={view} part={part} index={index} statements={block.statements} ordered={false} />;
         return <Table key={place} state={state} view={view} index={index} block={block} place={place} opens={opening && place === 0} label={heading} />;
       })}
     </div>
   );
 }
 
+/** A card's kind, as its icon: a person, a project's folder, a ticket's stub, or a decision's diamond, as Home marks one. */
+function EntityIcon({ entity }: { entity: CardEntity }) {
+  if (entity === 'person') return <OnePerson />;
+  if (entity === 'project') return <Folder />;
+  return entity === 'ticket' ? <Ticket /> : <KindMark kind="approve" />;
+}
+
 /**
- * The answer: each part, laid out when it carries a layout and a paragraph
- * per sentence when not. A part with nothing to show is left out, and so is a
- * sentence citing a source you can no longer read; one whose source changed is
- * lit in the signal (ADR-0047). What research did not cover is not shown; an
- * answer with nothing to say says nothing matched, unless the project's own
- * line says so.
+ * One event of a timeline block, a dot on its rail: its day as a person reads
+ * it ("Oct 27", with its year when it is not this year's), what happened with
+ * its sentence's numbers, and who, when the evidence says. Lit on its own.
+ */
+function EventItem({ state, view, statement, event, id }: { state: State; view: TurnView; statement: AnswerStatement; event: AnswerEvent; id: string }) {
+  return (
+    <li {...statementProps(state, view, statement, id)}>
+      <time class="event-day" dateTime={event.date}>{tableDay(event.date) ?? event.date}</time>
+      <span class="event-body">
+        <span class="event-text"><Said state={state} view={view} statement={statement} id={id} text={event.text} /></span>
+        {event.who !== undefined && <span class="event-who">{event.who}</span>}
+      </span>
+    </li>
+  );
+}
+
+/** One fact of a card: its label, then its value with its sentence's numbers. Lit on its own. */
+function FactRow({ state, view, statement, fact, id }: { state: State; view: TurnView; statement: AnswerStatement; fact: AnswerFact; id: string }) {
+  return (
+    <div {...statementProps(state, view, statement, id, 'answer-fact')}>
+      <dt>{fact.label}</dt>
+      <dd><Said state={state} view={view} statement={statement} id={id} text={fact.value} /></dd>
+    </div>
+  );
+}
+
+/** A quote, set apart by a rule: the words with their sentence's numbers, then where they come from. Lit on its own. */
+function Quote({ state, view, statement, text, from, id }: { state: State; view: TurnView; statement: AnswerStatement; text: string; from?: string; id: string }) {
+  return (
+    <figure {...statementProps(state, view, statement, id, 'answer-quote selectable')}>
+      <blockquote><Said state={state} view={view} statement={statement} id={id} text={text} /></blockquote>
+      {from !== undefined && <figcaption>{from}</figcaption>}
+    </figure>
+  );
+}
+
+/**
+ * One block of an arranged part, as its kind reads: the answer in the lead's
+ * type; text as a paragraph; points as bullets, or numbered steps when their
+ * order matters; a table as a laid-out part's (`opens`: it opens the answer,
+ * so its caption shows above it); a timeline, its days down the side; a card,
+ * headed by its kind's icon, its kind and its title, its facts as label and
+ * value rows; and a quote. Each item is a sentence, by its place in the part
+ * (`${index}.${place}`), or a table's row.
+ */
+function ArrangedItems({ state, view, part, index, block, place, opens }: {
+  state: State; view: TurnView; part: AnswerPart; index: number; block: ArrangedBlock; place: number; opens: boolean;
+}) {
+  const statement = (at: number) => part.statements[at]!;
+  switch (block.kind) {
+    case 'answer': case 'text':
+      return <Prose state={state} view={view} part={part} index={index} statements={block.statements} lead={block.kind === 'answer'} />;
+    case 'points':
+      return <Points state={state} view={view} part={part} index={index} statements={block.statements} ordered={block.ordered} />;
+    case 'table':
+      return <Table state={state} view={view} index={index} block={block} place={place} opens={opens} label={block.title ?? 'Table'} />;
+    case 'timeline':
+      return (
+        <ol class="answer-timeline selectable">
+          {shownItems(part, block.statements, view.shows).map(({ place: sentence, at }) => (
+            <EventItem key={sentence} state={state} view={view} statement={statement(sentence)} event={block.events[at]!} id={`${index}.${sentence}`} />
+          ))}
+        </ol>
+      );
+    case 'card': {
+      const kind = CARD_WORDS[block.entity];
+      return (
+        <div class="answer-card selectable" role="group" aria-label={`${kind} ${block.title}`}>
+          <div class="answer-card-head">
+            <span class="answer-card-icon"><EntityIcon entity={block.entity} /></span>
+            <span class="answer-card-kind">{kind}</span>
+            <span class="answer-card-title">{block.title}</span>
+          </div>
+          <dl class="answer-facts">
+            {shownItems(part, block.statements, view.shows).map(({ place: sentence, at }) => (
+              <FactRow key={sentence} state={state} view={view} statement={statement(sentence)} fact={block.facts[at]!} id={`${index}.${sentence}`} />
+            ))}
+          </dl>
+        </div>
+      );
+    }
+    case 'quote': {
+      const sentence = block.statements[0]!;
+      return <Quote state={state} view={view} statement={statement(sentence)} text={block.text} from={block.from} id={`${index}.${sentence}`} />;
+    }
+  }
+}
+
+/**
+ * A part the writer arranged in blocks (answer layout v2, ADR-0051), in the
+ * desktop's own type, each block under its title as a section heading (a
+ * card's names the card). Every item keeps its own numbers and is lit on its
+ * own, as a laid-out part's sentences are. `opening`: the part opens the
+ * answer, so a table first has no answer above it. A block a check leaves
+ * with nothing to show goes, and its title with it.
+ */
+function Arranged({ state, view, part, index, blocks, opening }: {
+  state: State; view: TurnView; part: AnswerPart; index: number; blocks: readonly ArrangedBlock[]; opening: boolean;
+}) {
+  const showing = shownArranged(part, blocks, view.shows);
+  return (
+    <div class="answer-layout">
+      {blocks.map((block, place) => {
+        if (!showing[place]) return null;
+        const title = blockTitle(block);
+        return (
+          <Fragment key={place}>
+            {title !== undefined && <h3 class="answer-heading">{title}</h3>}
+            <ArrangedItems state={state} view={view} part={part} index={index} block={block} place={place} opens={opening && place === 0} />
+          </Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The answer: each part, laid out when it carries a layout, in its blocks
+ * when the writer arranged it (ADR-0051), and a paragraph per sentence when
+ * neither. A part with nothing to show is left out, and so is a sentence
+ * citing a source you can no longer read; one whose source changed is lit in
+ * the signal (ADR-0047). What research did not cover is not shown; an answer
+ * with nothing to say says nothing matched, unless the project's own line
+ * says so.
  */
 function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
   const answer = view.answer;
-  const parts = answer.parts.map((part, index) => ({ part, index })).filter(({ part }) => partShows(part, view.shows));
+  // A part opens the answer when it is the first and no direct answer is above it.
+  const parts = answer.parts.map((part, index) => ({ part, index, opening: index === 0 && !answer.direct })).filter(({ part }) => partShows(part, view.shows));
   const said = parts.length > 0 || (answer.direct !== undefined && view.shows(answer.direct.citation_indexes));
   return (
     <div class={`agentic-answer${dimmed ? ' dimmed' : ''}`} data-testid="answer">
       {answer.direct && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
-      {parts.map(({ part, index }) => (
+      {parts.map(({ part, index, opening }) => (
         <section class="answer-part" key={index}>
           {/* One part answers the question itself: its label would repeat it. */}
           {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
           {part.layout
-            ? <LaidOut state={state} view={view} part={part} index={index} layout={part.layout} opening={index === 0 && !answer.direct} />
-            : part.statements.map((statement, place) => <Statement key={place} state={state} view={view} statement={statement} id={`${index}.${place}`} />)}
+            ? <LaidOut state={state} view={view} part={part} index={index} layout={part.layout} opening={opening} />
+            : part.blocks
+              ? <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />
+              : part.statements.map((statement, place) => <Statement key={place} state={state} view={view} statement={statement} id={`${index}.${place}`} />)}
           {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} view={view} statement={statement} id={`${index}.r${place}`} />)}
         </section>
       ))}

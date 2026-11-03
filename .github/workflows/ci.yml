@@ -121,6 +121,9 @@ jobs:
       - name: Verify the Ask wording evaluator
         if: matrix.leg == 'tail'
         run: npm run test:ask-wording-eval
+      - name: Verify the Ask block evaluator
+        if: matrix.leg == 'tail'
+        run: npm run test:ask-blocks-eval
       - name: Verify the Authority core evaluation components
         if: matrix.leg == 'tail'
         run: npm run test:capacity

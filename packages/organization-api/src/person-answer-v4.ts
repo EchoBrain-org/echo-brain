@@ -13,6 +13,7 @@ import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
 import { validatePersonItemRefV1, type PersonItemRefV1 } from './person-list-v1.js';
 import { validatePersonAnswerLayoutV1, type PersonAnswerBlockV1 } from './person-answer-layout-v1.js';
+import { validatePersonAnswerBlocksV2, type PersonAnswerBlockV2 } from './person-answer-layout-v2.js';
 import {
   PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
   PERSON_ANSWER_CHOICES_MAX_V1,
@@ -43,6 +44,10 @@ import {
 
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
 const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
+/** A statement's text: one claim, within 4 KiB. */
+export const PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 = 4 * 1024;
+/** The citations one statement may carry, in an answer of any length (ADR-0051 lifts only an answer's own count). */
+export const PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 = 40;
 /**
  * The evidence desk search (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the Ask routes before
  * it, `/v3` to `/v6` with the V4 to V7 answers, were retired, and so were the capability read and the desk's open.
@@ -105,6 +110,8 @@ export interface PersonAnswerPartV4 {
   readonly records?: readonly PersonAnswerEvidenceFallbackV4[];
   /** Only for an Ask that asked for it (answer layout v1, ADR-0045): how its statements read. */
   readonly layout?: readonly PersonAnswerBlockV1[];
+  /** Only for an Ask that asked for answer layout v2 (ADR-0051), never beside `layout`: the blocks its statements read as. */
+  readonly blocks?: readonly PersonAnswerBlockV2[];
 }
 
 /** An answer citation's projection: what later citations (V6 to V8) extend. */
@@ -252,9 +259,9 @@ function statement(value: unknown, citations: readonly PersonAnswerCitationV8[],
   const input = object(value, label);
   assertExactKeys(input, ['text', 'citation_indexes', 'private'], label);
   if (fallback) evidenceText(input.text, `${label} text`, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
-  else text(input.text, `${label} text`, 4 * 1024, true);
-  if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || input.citation_indexes.length > 40 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
-  const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length, 40);
+  else text(input.text, `${label} text`, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, true);
+  if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || input.citation_indexes.length > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
+  const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length, PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4);
   const expectedPrivate = indexes.some((index) => ['only_me', 'approver_only'].includes(citations[index]!.visibility));
   if (input.private !== expectedPrivate) fail(`${label} private is inconsistent with cited visibility`);
   return Object.freeze({ text: input.text as string, citation_indexes: indexes, private: input.private });
@@ -312,14 +319,16 @@ function answerCitation(value: unknown, version: 6 | 8): PersonAnswerCitationV8 
 
 function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerPartV4 {
   const input = object(value, 'Ask response part');
-  assertExactKeys(input, ['question', 'status', 'statements', ...(Object.hasOwn(input, 'gap') ? ['gap'] : []), ...(Object.hasOwn(input, 'records') ? ['records'] : []), ...(Object.hasOwn(input, 'layout') ? ['layout'] : [])], 'Ask response part');
+  assertExactKeys(input, ['question', 'status', 'statements', ...['gap', 'records', 'layout', 'blocks'].filter(key => Object.hasOwn(input, key))], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
-  if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4) fail('Ask response part is invalid');
+  // A part arranged in blocks (answer layout v2, ADR-0051) has no count of statements of its own; any other keeps ten.
+  if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || (!Object.hasOwn(input, 'blocks') && input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4)) fail('Ask response part is invalid');
   if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
   const statements = Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement')));
-  // A layout arranges written statements; a part with none has nothing to arrange.
+  // A layout arranges written statements; a part with none has nothing to arrange, and a part reads one way.
   if (Object.hasOwn(input, 'layout') && statements.length === 0) fail('Ask response part layout is invalid');
+  if (Object.hasOwn(input, 'blocks') && (statements.length === 0 || Object.hasOwn(input, 'layout'))) fail('Ask response part blocks are invalid');
   return Object.freeze({
     question: input.question as string,
     status: input.status as PersonAnswerPartV4['status'],
@@ -327,6 +336,7 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
     ...(Object.hasOwn(input, 'gap') ? { gap: input.gap as string } : {}),
     ...(Object.hasOwn(input, 'records') ? { records: Object.freeze((input.records as unknown[]).map((item) => statement(item, citations, 'Ask response fallback record', true))) } : {}),
     ...(Object.hasOwn(input, 'layout') ? { layout: validatePersonAnswerLayoutV1(input.layout, statements, citations.length) } : {}),
+    ...(Object.hasOwn(input, 'blocks') ? { blocks: validatePersonAnswerBlocksV2(input.blocks, statements, citations.length) } : {}),
   });
 }
 
@@ -450,7 +460,10 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous], 'Ask response');
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = input.outcome === 'clarify';
-  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
+  // An answer arranged in blocks (answer layout v2, ADR-0051) has no count of citations of its own, as ADR-0041 gives any
+  // other answer: its bytes bound it.
+  const arranged = Array.isArray(input.parts) && input.parts.some(item => item !== null && typeof item === 'object' && Object.hasOwn(item, 'blocks'));
+  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || (!arranged && input.citations.length > 40) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
   const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();

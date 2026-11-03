@@ -1,28 +1,43 @@
 import {
+  PERSON_ANSWER_STATEMENT_MAX_BYTES_V4,
+  PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
   personAnswerCitationKeyV8,
+  validatePersonAnswerBlocksV2,
   validatePersonAnswerLayoutV1,
-  type PersonAnswerBlockV1,
   type PersonAnswerResponseV8,
   type PersonAnswerPartV4,
+  type PersonAskAnswerLayoutV2,
 } from "@echo-brain/organization-api";
 import {
   AGENTIC_ASK_MAX_SENTENCES_V1,
   AgenticAskOutputErrorV1,
+  ANSWER_BLOCK_CATALOG,
+  ANSWER_BLOCKS_PROMPT,
   ANSWER_LAYOUT_PROMPT,
   ANSWER_SINCE_PROMPT,
+  answerBlocksSchema,
+  answerBlocksSinceSchema,
   answerLayoutSchema,
   answerLayoutSinceSchema,
   answerSchema,
   answerSinceSchema,
+  attributed,
+  boundedBytes,
   cleanId,
   cleanLine,
   parseAnswer,
+  parseBlocksAnswer,
   partQuestion,
+  textItem,
   type Answer,
+  type AnswerItem,
   type AnswerSentence,
 } from "../agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, agenticAskResponseFitsV1, compactAndValidateAgenticAskResponseV1 } from "../agentic-ask-v1-response.js";
-import { citationOfAgenticEvidenceItemV8, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "../agentic-evidence-bundle-v1.js";
+import {
+  agenticEvidenceAttributesV1, agenticEvidenceDatesV1, agenticEvidenceLabelV1, citationOfAgenticEvidenceItemV8, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1,
+  type AgenticEvidenceBundleV1,
+} from "../agentic-evidence-bundle-v1.js";
 import {
   AGENTIC_LIST_WRITER_LISTS_MAX_V1,
   agenticListCheckedNoteV1,
@@ -50,6 +65,7 @@ import { AGENTIC_ASK_MIN_ANSWER_MS_V1, type AgenticModelCallV1 } from "../agenti
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import { observeCoreModelCorrectionV1, type CoreRuntimeModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
 import { buildAskLayoutV1, orderAskLayoutV1, type AskLayoutShapeV1 } from "./ask-layout-v1.js";
+import { buildAskBlocksV2, daysWrittenV2, orderAskBlocksV2, quoteIsWordForWordV2, type AskBlockShapeV2 } from "./ask-layout-v2.js";
 
 /**
  * Ask's renderer: one writer call reads the question against released
@@ -63,7 +79,10 @@ import { buildAskLayoutV1, orderAskLayoutV1, type AskLayoutShapeV1 } from "./ask
  * Ask that asked for its layout (ADR-0045) gives its writer the layout prompt
  * and schema; its answer reads lead first and its part carries the blocks its
  * kept statements read as, or, when that cannot be released, it is exactly the
- * answer the same reply gives without layout.
+ * answer the same reply gives without layout. An Ask that asked for layout v2
+ * (ADR-0051) gives its writer the block catalog beside the source catalog; code
+ * reads each item of its blocks as one statement, checked against what it
+ * cites, and its part carries `blocks` instead.
  */
 
 const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
@@ -82,16 +101,25 @@ const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text
 const FIT_GAP = "Some evidence could not fit in this response.";
 /** A list that is not complete: its statement says "at least" (ADR-0041). */
 function listEndGap(noun: string): string { return `The list of ${noun} could not be read to its end, so more may exist.`; }
-/** The response's bounds, unchanged by lists: 40 citations and ten statements in a part. */
+/** The response's bounds, unchanged by lists: 40 citations and ten statements in a part, but in one arranged in blocks (ADR-0051). */
 const MAX_CITATIONS = 40;
 const MAX_STATEMENTS = AGENTIC_ASK_MAX_SENTENCES_V1;
 /** The writer runs in Ask's answer span; the audit records it as an `answer` call. */
 const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
-/** A laid-out Ask's writer (ADR-0045) marks each sentence's form and section, and a row's cells: a longer reply. */
+/** A laid-out Ask's writer (ADR-0045, and the blocks of ADR-0051) marks each sentence's form and section, and a row's cells: a longer reply. */
 const LAYOUT_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_000 });
 /** An Ask again's writer (ADR-0047) also says what is different since: room for its sentences beside the answer. */
 const SINCE_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_000 });
 const LAYOUT_SINCE_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_500 });
+/**
+ * A writer by the answer layout its Ask asked for: none, v1 (ADR-0045) or v2 (ADR-0051). Each has the part of the prompt
+ * after Ask's own, what it adds to the writer's input, and its reply's schema and call, asked once or again (ADR-0047).
+ */
+const WRITERS = Object.freeze({
+  none: { prompt: [], context: {}, schema: answerSchema, since_schema: answerSinceSchema, call: WRITER_CALL, since_call: SINCE_WRITER_CALL },
+  1: { prompt: [ANSWER_LAYOUT_PROMPT], context: {}, schema: answerLayoutSchema, since_schema: answerLayoutSinceSchema, call: LAYOUT_WRITER_CALL, since_call: LAYOUT_SINCE_WRITER_CALL },
+  2: { prompt: [ANSWER_BLOCKS_PROMPT], context: { block_catalog: ANSWER_BLOCK_CATALOG }, schema: answerBlocksSchema, since_schema: answerBlocksSinceSchema, call: LAYOUT_WRITER_CALL, since_call: LAYOUT_SINCE_WRITER_CALL },
+});
 
 type Entry = AgenticEvidenceBundleItemV1;
 /** A statement's shape before its citations are known: a list's rows name the items they cite. */
@@ -131,8 +159,8 @@ export interface CreateAskRendererV1Options {
   readonly context: { readonly asked_by?: string; readonly today: string; readonly time_zone?: string };
   /** The response's scope: the desk's. */
   readonly desk_scope: AgenticEvidenceBundleV1["gathered_for"]["scope"];
-  /** The part carries its layout (answer layout v1, ADR-0045), because the client asked for it. */
-  readonly layout?: boolean;
+  /** The part carries its layout (answer layout v1, ADR-0045) or its blocks (v2, ADR-0051), because the client asked for it. */
+  readonly layout?: PersonAskAnswerLayoutV2;
   /**
    * For an Ask that carried its previous turn (ADR-0047): the full question the answer answers, which the response names.
    * Without it the response names none.
@@ -192,17 +220,22 @@ function coverageIsLimitedFor(bundle: AgenticEvidenceBundleV1, used: readonly En
   return [...limited].some(id => !resolved.has(id));
 }
 
+type Cited = readonly { readonly citation_indexes: readonly number[] }[];
 /**
- * A layout that passes the contract against the part's statements, or none: layout adds no claim, so an answer whose
- * layout code could not build reads as it would without one rather than failing.
+ * Blocks of a layout that pass the contract (`validate`) against the part's statements, or none: layout adds no claim, so
+ * an answer whose layout code could not build reads as it would without one rather than failing.
  */
-function laidOutBlocks(blocks: readonly PersonAnswerBlockV1[], statements: readonly { readonly citation_indexes: readonly number[] }[], citations: number): readonly PersonAnswerBlockV1[] | undefined {
-  try { return validatePersonAnswerLayoutV1(blocks, statements, citations); } catch { return undefined; }
+function contracted<B>(validate: (blocks: readonly B[], statements: Cited, citations: number) => readonly B[], blocks: readonly B[], statements: Cited, citations: number): readonly B[] | undefined {
+  try { return validate(blocks, statements, citations); } catch { return undefined; }
 }
 
 export function createAskRendererV1(options: CreateAskRendererV1Options): AgenticRendererV1<AskRendererInputV1, AskRenderedV1> {
-  const laidOut = options.layout === true;
+  const laidOut = options.layout !== undefined;
+  /** Layout v2 (ADR-0051): the writer arranges its answer from the block catalog. */
+  const arranged = options.layout === 2;
+  const writer = WRITERS[options.layout ?? "none"];
   const earlier = options.earlier;
+  const timeZone = options.context.time_zone ?? 'UTC';
   return Object.freeze({
     async render(input: AgenticRenderInputV1<AskRendererInputV1>) {
       const { bundle } = input;
@@ -213,7 +246,20 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const id = cleanId(short);
         return id === null ? undefined : byShort.get(id);
       };
-      const describe = (entry: Entry) => describeAgenticEvidenceItemV1(entry, options.context.time_zone ?? 'UTC');
+      const describe = (entry: Entry) => describeAgenticEvidenceItemV1(entry, timeZone);
+      /**
+       * The days an item records or writes, for a v2 timeline's check (ADR-0051): its dates as `describe` shows them to the
+       * writer, in the request's time zone, and every day its title, text or attributes write, a month and day with no year
+       * read as the nearest such day to one the item records, or to today when it records none.
+       */
+      const daysOf = (entry: Entry): ReadonlySet<string> => {
+        const { dates, date } = agenticEvidenceDatesV1(entry.item, timeZone);
+        const recorded = [...new Set([...Object.values(dates ?? {}), date].flatMap(value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}/u.test(value) ? [value.slice(0, 10)] : []))];
+        const anchors = recorded.length === 0 ? [options.context.today] : recorded;
+        const written = [agenticEvidenceLabelV1(entry.item, timeZone), entry.item.text, ...Object.values(agenticEvidenceAttributesV1(entry.item, timeZone) ?? {})]
+          .flatMap(value => typeof value === "string" ? [...daysWrittenV2(value, anchors)] : []);
+        return new Set([...recorded, ...written]);
+      };
 
       // ---- lists (ADR-0041): what the plan's declared kinds ask of them, and how the writer sees them ----
       const lists = bundle.lists ?? [];
@@ -257,6 +303,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const answerContext = {
         // An Ask again's writer reads the earlier answer beside the question (ADR-0047); no other writer's input changes.
         question: askedQuestion, ...(earlier === undefined ? {} : { earlier }), ...options.context, scope: options.scope, source_catalog: options.source_catalog,
+        // A v2 Ask's writer picks its blocks from a catalog beside the sources' (ADR-0051).
+        ...writer.context,
         // Planner need text is intentionally excluded. Lists carry their filters (ADR-0041); this describes what
         // research read, not whether an arbitrary fact exists.
         research: {
@@ -264,11 +312,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           notices: [...bundle.coverage.notices], omitted_evidence_items: bundle.items.filter(entry => entry.item.text !== undefined).length,
         },
       };
-      // A laid-out Ask's writer is also told how to mark forms (ADR-0045), and an Ask again's what to say is different since
-      // (ADR-0047); each has a longer reply's room. No other writer's prompt changes.
-      const writerPrompt = [options.answer_prompt, ...(laidOut ? [ANSWER_LAYOUT_PROMPT] : []), ...(earlier === undefined ? [] : [ANSWER_SINCE_PROMPT])].join("\n\n");
-      const writerCall = earlier === undefined ? (laidOut ? LAYOUT_WRITER_CALL : WRITER_CALL) : laidOut ? LAYOUT_SINCE_WRITER_CALL : SINCE_WRITER_CALL;
-      const writerSchema = earlier === undefined ? (laidOut ? answerLayoutSchema : answerSchema) : laidOut ? answerLayoutSinceSchema : answerSinceSchema;
+      // A laid-out Ask's writer is also told how to mark forms (ADR-0045) or arrange blocks (ADR-0051), and an Ask again's
+      // what to say is different since (ADR-0047); each has a longer reply's room. No other writer's prompt changes.
+      const writerPrompt = [options.answer_prompt, ...writer.prompt, ...(earlier === undefined ? [] : [ANSWER_SINCE_PROMPT])].join("\n\n");
+      const writerCall = earlier === undefined ? writer.call : writer.since_call;
+      const writerSchema = earlier === undefined ? writer.schema : writer.since_schema;
       const promptBudget = writerCall.output_tokens === undefined ? input.prompt_budget(writerPrompt) : input.prompt_budget(writerPrompt, writerCall.output_tokens);
       const contextBudget = Math.max(0, promptBudget - bytes(JSON.stringify({ ...answerContext, lists: [], evidence: [] })));
       // Lists' rows take at most half the room; a smaller window shows fewer members of each, never fewer lists.
@@ -320,7 +368,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return stats.calls === callsBefore + 1 && stats.calls < bundle.budget.max_model_calls && input.remaining() >= AGENTIC_ASK_MIN_ANSWER_MS_V1;
       };
       const parse = (value: unknown): Answer => {
-        const parsed = withMembers(parseAnswer(value, { layout: laidOut, ...(earlier === undefined ? {} : { since: true }) }));
+        const since = earlier === undefined ? {} : { since: true };
+        const parsed = withMembers(arranged ? parseBlocksAnswer(value, since) : parseAnswer(value, { layout: laidOut, ...since }));
         last.answer = parsed;
         if (parsed.sentences.some(restsOnRows) && repairable()) throw new AgenticAskOutputErrorV1(ROWS_REASON);
         return parsed;
@@ -344,6 +393,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // One citation per key, the key the Ask response checks for duplicates: a listed ticket's row and its opened body
       // are two items with one key, so they share one citation.
       const keyOf = (short: string) => personAnswerCitationKeyV8(byShort.get(short)!.item.citation);
+      /** Whether a statement citing `shorts` would cite more items than one statement may, in blocks too (ADR-0051). */
+      const overCited = (shorts: readonly string[]) => new Set(shorts.map(keyOf)).size > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4;
       const question = partQuestion(askedQuestion);
       /**
        * The response `reply` (the writer's answer, or null) gives, laid out (ADR-0045) or not, with an Ask again's `since`
@@ -446,6 +497,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           if (sentence.form === "row" && !noted) return { kind: "row", ...section, columns: reply!.tables!.find(table => table.section === sentence.section)!.columns, cells: sentence.cells! };
           return { kind: sentence.form === undefined ? "text" : sentence.form === "row" ? "bullet" : sentence.form, ...section };
         };
+        /** The sentence with code's note (W5) within a statement's 4 KiB: one too long to take the note whole, a wide row, is cut, never the note. */
+        const fittedNote = (text: string, note: string) => {
+          const whole = withNote(text, note);
+          if (bytes(whole) <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4) return whole;
+          correct("model_text_truncated");
+          return `${boundedBytes(text, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 - bytes(` ${note}`))} ${note}`;
+        };
         /** A writer's or `since` sentence as code keeps it: on the text the writer read (W1), then the rows it may carry, noted (W5); or none. */
         const drafted = (sentence: Pick<AnswerSentence, "text" | "evidence">) => {
           const read = sentence.evidence.filter(short => textGiven.has(short));
@@ -454,16 +512,45 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
           if (unknown > 0) correct("writer_unknown_id_dropped", unknown);
           const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
-          return { text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, noted: notes.length > 0 };
+          return { text: notes.length === 0 ? sentence.text : fittedNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, noted: notes.length > 0 };
         };
-        const writerSentences = sentences.flatMap(sentence => {
+        /**
+         * A v2 item as code checks it against the evidence text it stands on (ADR-0051): a quote that is not word for word in
+         * the title or text of one it cites reads as text, its source and words without quotation marks; an event whose day
+         * is not one they record or write reads as text without that day. An item that stands on no text is left out (W1).
+         */
+        const verified = (sentence: AnswerSentence): AnswerSentence => {
+          const item = sentence.item;
+          const read = sentence.evidence.flatMap(short => textGiven.has(short) ? [byShort.get(short)!] : []);
+          if (item === undefined || read.length === 0) return sentence;
+          if (item.kind === "quote" && !quoteIsWordForWordV2(item.text, read.flatMap(entry => [agenticEvidenceLabelV1(entry.item, timeZone), entry.item.text ?? ""]))) {
+            correct("writer_quote_unquoted");
+            return { ...sentence, text: attributed(item.from, item.text), item: textItem(item) };
+          }
+          if (item.kind === "event" && !read.some(entry => daysOf(entry).has(item.date))) {
+            correct("writer_event_undated");
+            return { ...sentence, text: attributed(item.who, item.text), item: textItem(item) };
+          }
+          return sentence;
+        };
+        /** How a v2 item reads: one whose sentence carries code's note reads as text when its block shows other fields than its sentence, so the note shows. */
+        const itemShape = (item: AnswerItem, noted: boolean): AnswerItem => !noted || item.kind === "answer" || item.kind === "text" || item.kind === "point" ? item : textItem(item);
+        type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape; item?: AnswerItem };
+        const writerSentences: Laid[] = sentences.flatMap(given => {
+          // Only a v2 reply's sentences are items.
+          const sentence = verified(given);
           const kept = drafted(sentence);
-          return kept === undefined ? [] : [{ text: kept.text, shorts: kept.shorts, read: kept.read, shape: shapeOf(sentence, kept.noted) }];
+          return kept === undefined ? [] : [{ text: kept.text, shorts: kept.shorts, read: kept.read, shape: shapeOf(sentence, kept.noted),
+            ...(sentence.item === undefined ? {} : { item: itemShape(sentence.item, kept.noted) }) }];
         });
         // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
         // What fits is decided in that order whatever the layout, so a long lead never crowds out a stated list (W3). A laid-out
         // answer (ADR-0045) then reads what was kept lead first, then the lists, then the other sentences by section.
-        type Laid = { text: string; shorts: readonly string[]; read?: readonly string[]; shape: DraftShape };
+        // An answer arranged in blocks (ADR-0051) has no count of statements or citations of its own: only its byte bound,
+        // whose fallback, an answer without blocks, keeps ADR-0041's, and the 40 citations one statement may carry. A statement
+        // that would cite more, through the private rows its list id brings, is left out whole, never cut short of them, and
+        // the statements after it are kept. ADR-0041's 40 for an answer leaves such a statement out first, with every one after it.
+        const bounded = !(arranged && laid);
         const statementKeys = new Set<string>();
         const keptReads: Entry[] = [];
         const fitted: Laid[] = [];
@@ -479,18 +566,21 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             continue;
           }
           const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !fittedKeys.has(key)));
-          if (fitted.length >= MAX_STATEMENTS || fittedKeys.size + fresh.size > MAX_CITATIONS) { dropped = true; break; }
+          if (bounded && (fitted.length >= MAX_STATEMENTS || fittedKeys.size + fresh.size > MAX_CITATIONS)) { dropped = true; break; }
+          if (overCited(sentence.shorts)) { dropped = true; continue; }
           statementKeys.add(statementKey);
           for (const key of fresh) fittedKeys.add(key);
           fitted.push(sentence);
           keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
         }
         const kept = new Set(fitted);
-        // Only a writer that marked no lead at all has its first sentence read as one (orderAskLayoutV1).
-        const order: readonly Laid[] = laid ? orderAskLayoutV1(listStatements.filter(entry => kept.has(entry)), writerSentences.filter(entry => kept.has(entry)), sentences.some(sentence => sentence.form === "lead")) : fitted;
+        // Only a writer that marked no lead at all has its first sentence read as one (orderAskLayoutV1), and only one that gave
+        // no answer block its first item (orderAskBlocksV2).
+        const keptLists = listStatements.filter(entry => kept.has(entry));
+        const order: readonly Laid[] = !laid ? fitted
+          : arranged ? orderAskBlocksV2(keptLists, writerSentences.filter((entry): entry is Laid & { item: AnswerItem } => kept.has(entry) && entry.item !== undefined), sentences.some(sentence => sentence.item?.kind === "answer"))
+          : orderAskLayoutV1(keptLists, writerSentences.filter(entry => kept.has(entry)), sentences.some(sentence => sentence.form === "lead"));
         const statements: Statement[] = order.map(sentence => statementOf(sentence.text, sentence.shorts));
-        /** The shape of each statement kept, in order. */
-        const shapes: readonly DraftShape[] = order.map(sentence => sentence.shape);
         const notFound = [...(reply?.not_found ?? []), ...selectionNotFound];
         // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
         const coverageLimited = coverageIsLimitedFor(bundle, keptReads);
@@ -534,15 +624,22 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const outcome = !anyEvidence ? (incomplete || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         // The blocks of the statements kept (ADR-0045), only for a part with statements; a list's rows cite their items' citations.
         const indexesOf = (shorts: readonly string[]) => [...new Set(shorts.map(short => usedKeys.get(keyOf(short))!))];
-        const layout = !laid || draft.statements.length === 0 ? undefined : laidOutBlocks(buildAskLayoutV1(draft.statements.map((value, index) => {
-          const shape = shapes[index]!;
-          return { citation_indexes: value.citation_indexes, shape: shape.kind !== "list" ? shape : { ...shape, rows: shape.rows.map(row => ({ cells: row.cells, citation_indexes: indexesOf(row.shorts) })) } };
-        })), draft.statements, used.length);
+        /** A list statement's table, its rows citing their items' citations. */
+        const tableOf = (shape: Extract<DraftShape, { kind: "list" }>) => ({ ...shape, rows: shape.rows.map(row => ({ cells: row.cells, citation_indexes: indexesOf(row.shorts) })) });
+        /** Each statement kept, in order, with its citations and the shape `read` gives its sentence. */
+        const shaped = <S>(read: (sentence: Laid) => S) => order.map((sentence, at) => ({ citation_indexes: statements[at]!.citation_indexes, shape: read(sentence) }));
+        // A part with no statements has nothing to lay out.
+        const mode = laid && draft.statements.length > 0 ? options.layout : undefined;
+        const layout = mode !== 1 ? undefined
+          : contracted(validatePersonAnswerLayoutV1, buildAskLayoutV1(shaped(({ shape }) => shape.kind !== "list" ? shape : tableOf(shape))), draft.statements, used.length);
+        // A v2 answer's blocks (ADR-0051): each writer item as its block shows it, and each list statement as its table or text.
+        const blocks = mode !== 2 ? undefined
+          : contracted(validatePersonAnswerBlocksV2, buildAskBlocksV2(shaped(({ shape, item }): AskBlockShapeV2 => item ?? (shape.kind === "list" ? tableOf(shape) : { kind: "text" }))), draft.statements, used.length);
         // ---- an Ask again's since (ADR-0047): what is different now, after everything the answer cites ----
         // Only beside an answer with evidence: one with none cannot say what changed. Each sentence stands on text the writer
         // read (W1), as the writer's own sentences do, and repeats are dropped. A list the writer gave whose every sentence
-        // was left out says nothing, never that nothing changed; one that cannot fit the citation bound whole is left out
-        // whole, since cut short it would say less changed than did.
+        // was left out says nothing, never that nothing changed; one that cannot fit the citation bound whole, or has a sentence
+        // citing more than one statement may, is left out whole, since cut short it would say less changed than did.
         const sinceOf = (given: NonNullable<Answer["since"]>): Statement[] | undefined => {
           const keys = new Set<string>();
           const drafts = given.flatMap(sentence => {
@@ -555,7 +652,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           });
           if (given.length > 0 && drafts.length === 0) return undefined;
           const fresh = new Set(drafts.flatMap(value => value.shorts.map(keyOf)).filter(key => !usedKeys.has(key)));
-          if (usedKeys.size + fresh.size > MAX_CITATIONS) return undefined;
+          if ((bounded && usedKeys.size + fresh.size > MAX_CITATIONS) || drafts.some(value => overCited(value.shorts))) return undefined;
           return drafts.map(value => statementOf(value.text, value.shorts));
         };
         const since = !withSince || reply?.since === undefined || !anyEvidence ? undefined : sinceOf(reply.since);
@@ -567,14 +664,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             ...(draft.gap === undefined ? {} : { gap: draft.gap }),
             ...(draft.records === undefined ? {} : { records: released(draft.records) }),
             ...(layout === undefined ? {} : { layout }),
+            ...(blocks === undefined ? {} : { blocks }),
           })]),
-          citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV8(entry.item, options.context.time_zone ?? 'UTC')) : []),
+          citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV8(entry.item, timeZone)) : []),
           ...(responseNotices.length === 0 ? {} : { notice: responseNotices.join(" ") }),
           // Only an answer to a request that carried its previous turn names its question and says what is different since (ADR-0047).
           ...(options.answers === undefined ? {} : { question: options.answers }),
           ...(since === undefined ? {} : { since: Object.freeze({ statements: released(since) }) }),
         });
-        return { result, used, laid_out: layout !== undefined };
+        return { result, used, laid_out: layout !== undefined || blocks !== undefined };
       };
       /** A laid-out response as it may be released: with its layout, within its byte bound. Each is measured once, and only then. */
       const releasable = (responded: ReturnType<typeof respond>) => responded.laid_out && agenticAskResponseFitsV1(responded.result) ? responded : undefined;

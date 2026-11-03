@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { validatePersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { gradeTrial, leadOf, loadCases, mentions, sharedRun, summarizeRules, words } from "../grade.mjs";
 
 const document = loadCases();
@@ -14,6 +15,16 @@ function answer(statements, { lead = [0], outcome = "answered", kinds = ["follow
     parts: [{ status: "answered", statements: statements.map((text) => ({ text, citation_indexes: [0], private: false })),
       layout: lead.length === 0 ? [{ kind: "paragraph", statements: statements.map((_, index) => index) }] : [{ kind: "lead", statements: lead }] }],
   };
+}
+
+const FOLLOW_UP = "itm_0123456789abcdef01234567";
+/** The founder's question answered with layout v2 (ADR-0051): `blocks` over `statements`, each citing the follow-up, as the kernel releases it. */
+function blocksAnswer(blocks, statements) {
+  return validatePersonAnswerResponseV8({
+    schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "answered",
+    citations: [{ citation: { kind: "follow_up", item_id: FOLLOW_UP }, kind: "follow_up", label: `Approve release ${ID} and choose who can read it.`, visibility: "team", ref: `follow_up:${FOLLOW_UP}` }],
+    parts: [{ question: founder.question, status: "answered", statements: statements.map((text) => ({ text, citation_indexes: [0], private: false })), blocks }],
+  });
 }
 
 test("reads words as a reader does: an identifier is one word, quotes and punctuation are none", () => {
@@ -52,6 +63,21 @@ test("takes the lead from the lead block, or else from the first statement", () 
   assert.equal(leadOf(answer(["First.", "Second."], { lead: [0, 1] })), "First. Second.");
   assert.equal(leadOf(answer(["First.", "Second."], { lead: [] })), "First.");
   assert.equal(leadOf({ parts: [] }), "");
+});
+
+test("takes layout v2's lead from its answer block, or else from the first statement", () => {
+  const facts = [{ label: "Status", value: "Open" }, { label: "Owner", value: "You" }];
+  const card = (title) => ({ kind: "card", title, entity: "decision", statements: [2, 3], facts });
+  const answered = blocksAnswer([{ kind: "answer", statements: [0, 1] }, card("The follow-up")],
+    ["You own it.", "It is still open.", "Decision: The follow-up; Status: Open.", "Decision: The follow-up; Owner: You."]);
+  assert.equal(leadOf(answered), "You own it. It is still open.");
+  assert.deepEqual(gradeTrial(founder, answered).rules, { no_restating: true, long_ids_once: true, nothing_lost: true });
+  // With no answer block, the first statement leads, as it does in an answer without layout.
+  assert.equal(leadOf(blocksAnswer([{ kind: "points", ordered: false, statements: [0, 1] }], ["You own it.", "It is still open."])), "You own it.");
+  // The answer's text is its statements, as the audit reads them: a long identifier that titles a card is written in each of its facts.
+  const titled = gradeTrial(founder, blocksAnswer([{ kind: "answer", statements: [0, 1] }, card(ID)],
+    ["You own it.", "It is still open.", `Decision: ${ID}; Status: Open.`, `Decision: ${ID}; Owner: You.`]));
+  assert.deepEqual([titled.id_mentions[ID], titled.rules.long_ids_once], [2, false]);
 });
 
 test("passes each rule at 90% of all trials, and ships the wording only when all three pass", () => {

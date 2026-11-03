@@ -33,7 +33,9 @@ flowchart LR
 - **Request headers:** `x-echo-ask-progress: 3` streams progress as server-sent
   events ([ADR-0039](../decisions/ADR-0039-ask-progress-names-after-the-access-check.md));
   `x-echo-answer-layout: 1` asks for a laid-out answer
-  ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md));
+  ([ADR-0045](../decisions/ADR-0045-ask-answer-layout.md)), and `2` for one
+  the writer arranges from a catalog of seven blocks, which the person client
+  sends ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md));
   `x-echo-client-now` and `x-echo-time-zone` anchor dates. A follow-up carries
   the previous turn ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
 - **Scopes:** the whole organization, or one project. The `mine` scope is
@@ -73,7 +75,7 @@ The engine lives in `packages/organization-authority-kernel/src/answer-compositi
 | `agentic-ask-v1-model-protocol.ts` | Prompts and JSON schemas for the model |
 | `agentic-model-gate-v1.ts` | The access check before every model call |
 | `agentic-list-evidence-v1.ts` | Complete lists as evidence |
-| `renderers/ask-renderer-v1.ts`, `ask-layout-v1.ts` | The written answer and its layout |
+| `renderers/ask-renderer-v1.ts`, `ask-layout-v1.ts`, `ask-layout-v2.ts` | The written answer, its layout and its blocks |
 | `agentic-ask-progress-recorder-v1.ts` | Progress steps and the receipt of what was looked through ([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)) |
 | `agentic-release-v1.ts` | The release step: final access check, audit, second check |
 
@@ -125,9 +127,9 @@ their own Claude account; that code lives in
 ## Evaluation
 
 `tools/evals/research-loop` (`npm run eval:research-loop`) runs scripted
-questions against a staging Authority; `agentic-ask`, `ask-follow-up` and
-`ask-wording` under `tools/evals/` check the engine offline. Their unit tests
-run in CI's tail leg.
+questions against a staging Authority; `agentic-ask`, `ask-follow-up`,
+`ask-wording` and `ask-blocks` under `tools/evals/` check the engine offline.
+Their unit tests run in CI's tail leg.
 
 See also: [impact checks and open items](impact-checks-and-open-items.md),
 [global and project Ask](../features/global-project-ask-v1.md),

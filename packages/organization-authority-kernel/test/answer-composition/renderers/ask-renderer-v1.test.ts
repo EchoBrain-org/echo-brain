@@ -1,8 +1,10 @@
 import { canonicalJsonBytes, canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, validatePersonAnswerLayoutV1, type PersonAnswerResponseV8 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, validatePersonAnswerBlocksV2, validatePersonAnswerLayoutV1, type PersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { describe, expect, it } from "vitest";
 import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_LAYOUT_PROMPT, ANSWER_PROMPT, answerLayoutSchema, answerSchema } from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import {
+  ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, ANSWER_LAYOUT_PROMPT, ANSWER_PROMPT, ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema, answerLayoutSchema, answerSchema,
+} from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
 import { createAgenticListEvidenceV1, type AgenticListEvidenceV1 } from "../../../src/answer-composition/agentic-list-evidence-v1.js";
 import { AGENTIC_MODEL_OUTPUT_TOKENS_V1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
@@ -13,12 +15,17 @@ import { ids } from "../fixtures/agentic-lists.js";
 import { EMPTY_BUNDLE, LIST_READ_AT, listed, record, scriptedGate } from "../fixtures/agentic-scenarios.js";
 
 /** Ask's renderer on its own: a hand-built bundle, a gate over scripted writer replies, and no desk. */
-function alone(input: { readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly remaining?: number; readonly layout?: boolean }) {
+function alone(input: {
+  readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly remaining?: number; readonly layout?: 1 | 2;
+  /** An Ask again (ADR-0047): the earlier answer, and the question the answer names, as Ask passes them together. */
+  readonly earlier?: Parameters<typeof createAskRendererV1>[0]["earlier"]; readonly answers?: string;
+}) {
   const trace: string[] = [];
   const { gate, inputs } = scriptedGate(input.replies, input.bundle.budget, trace);
   const renderer = createAskRendererV1({
     answer_prompt: ANSWER_PROMPT, source_catalog: [], scope: "everything the asker can read",
     context: { today: "2026-10-06" }, desk_scope: input.bundle.gathered_for.scope, ...(input.layout === undefined ? {} : { layout: input.layout }),
+    ...(input.earlier === undefined ? {} : { earlier: input.earlier }), ...(input.answers === undefined ? {} : { answers: input.answers }),
   });
   const render = (question: string) => renderer.render({
     bundle: input.bundle, trigger_input: { question }, gate, remaining: () => input.remaining ?? 30_000, signal: new AbortController().signal,
@@ -36,6 +43,14 @@ async function observed(render: () => Promise<Rendering>): Promise<{ readonly re
   return { rendered, corrections: events.find(event => event.phase === "research_output" && event.event !== "started")!.model_corrections ?? {} };
 }
 
+/** A released v2 part's blocks, checked against the contract; a v2 part never carries layout v1's. */
+function blocksOf(rendered: Rendering) {
+  const part = rendered.result.response.parts[0]!;
+  expect(validatePersonAnswerBlocksV2(part.blocks, part.statements, rendered.result.response.citations.length)).toEqual(part.blocks);
+  expect(part).not.toHaveProperty("layout");
+  return part.blocks!;
+}
+
 /** Items in short-id order, the plan citing `cited`. */
 function bundle(entries: readonly { readonly item: EvidenceDeskItemV2; readonly full: boolean; readonly touched: number }[], cited: readonly string[], completed = true): AgenticEvidenceBundleV1 {
   return Object.freeze({
@@ -47,6 +62,8 @@ function bundle(entries: readonly { readonly item: EvidenceDeskItemV2; readonly 
     stop: { reason: completed ? "finished" as const : "budget" as const, completed },
   });
 }
+/** Approved records E1..En, each read in full and cited by the plan. */
+const records = (count: number, options: Parameters<typeof record>[2] = {}) => bundle(Array.from({ length: count }, (_, index) => ({ item: record(`r${index + 1}`, `Approved record ${index + 1}.`, options), full: true, touched: index + 1 })), Array.from({ length: count }, (_, index) => `E${index + 1}`));
 
 describe("Ask renderer", () => {
   it.each([false, true])("keeps both project leads when both needs are which_items (extra person citation: %s)", async extraPerson => {
@@ -495,7 +512,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
 
   describe("as tables (answer layout v1, ADR-0045)", () => {
     const laid = async (research: AgenticEvidenceBundleV1, reply: unknown) => {
-      const rendered = await alone({ bundle: research, replies: [reply], layout: true }).render("Which tickets were created on October 4?");
+      const rendered = await alone({ bundle: research, replies: [reply], layout: 1 }).render("Which tickets were created on October 4?");
       const part = rendered.result.response.parts[0]!;
       expect(validatePersonAnswerLayoutV1(part.layout, part.statements, rendered.result.response.citations.length)).toEqual(part.layout);
       return part;
@@ -551,12 +568,86 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(part.layout).toEqual([{ kind: "heading", text: "Blocked" }, { kind: "paragraph", statements: [0] }]);
     });
   });
+
+  describe("as tables among blocks (answer layout v2, ADR-0051)", () => {
+    const arranged = async (research: AgenticEvidenceBundleV1, reply: unknown) => {
+      const rendered = await alone({ bundle: research, replies: [reply], layout: 2 }).render("Which tickets were created on October 4?");
+      blocksOf(rendered);
+      return rendered.result.response.parts[0]!;
+    };
+    it("states a list's members as code's table right after the answer, then the writer's other blocks", async () => {
+      const part = await arranged(listBundle(3, 1, [list("L1", ids(1, 3))], [WI(["L1"])]), { lists: [{ id: "L1" }], not_found: [], blocks: [
+        { block: "answer", sentences: [{ ...REVIEW, evidence: ["E4"] }] }, { block: "text", title: "Why", sentences: [{ text: "The fixture work passed its review.", evidence: ["E4"] }] },
+      ] });
+      expect(part.statements.map(value => value.text)).toEqual([REVIEW.text, `3 tickets created on October 4, 2026: ${names(1, 3)}.`, "The fixture work passed its review."]);
+      expect(part.blocks).toEqual([
+        { kind: "answer", statements: [0] },
+        { kind: "table", statements: [1], columns: ["Item", "Status", "Owner"], caption: "3 tickets created on October 4, 2026", rows: [1, 2, 3].map(n => ({ cells: [`THERM-${n}: Fixture work ${n}`, "In Progress", "Dana Lee"], citation_indexes: [n] })) },
+        { kind: "text", title: "Why", statements: [2] },
+      ]);
+    });
+    it("reads events whose sentences carry code's checked note as text, so the note shows (W5)", async () => {
+      const research: AgenticEvidenceBundleV1 = Object.freeze({
+        ...EMPTY_BUNDLE, lists: [list("L1", ["E1", "E2"])], plan: planOf([WS(["L1", "E1"])]),
+        items: [
+          { short: "E1", source: "tickets", item: ticketRow(1, "THERM-1: BUG-412 blocks DVT."), full: true, opened: true, preloaded: false, touched: 1, cited_by_plan: true },
+          { short: "E2", source: "tickets", item: ticketRow(2), full: false, opened: false, preloaded: false, touched: 2, cited_by_plan: false },
+        ],
+      });
+      const part = await arranged(research, { lists: [], not_found: [], blocks: [{ block: "timeline", title: "Blocked", events: [
+        { date: "2026-10-04", text: "THERM-1 was created.", evidence: ["E1"] }, { date: "2026-10-04", text: "BUG-412 blocked it.", evidence: ["E1"] },
+      ] }] });
+      expect(part.statements.map(value => value.text)).toEqual(["2026-10-04: THERM-1 was created (1 of 2 checked so far).", "2026-10-04: BUG-412 blocked it (1 of 2 checked so far)."]);
+      expect(part.blocks).toEqual([{ kind: "text", title: "Blocked", statements: [0, 1] }]);
+    });
+    it("keeps a wide row's statement within 4 KiB with code's checked note, the row cut and never the note (W5)", async () => {
+      const research: AgenticEvidenceBundleV1 = Object.freeze({
+        ...EMPTY_BUNDLE, lists: [list("L1", ["E1", "E2"])], plan: planOf([WS(["L1", "E1"])]),
+        items: [
+          { short: "E1", source: "tickets", item: ticketRow(1, "THERM-1: BUG-412 blocks DVT."), full: true, opened: true, preloaded: false, touched: 1, cited_by_plan: true },
+          { short: "E2", source: "tickets", item: ticketRow(2), full: false, opened: false, preloaded: false, touched: 2, cited_by_plan: false },
+        ],
+      });
+      const columns = (count: number) => Array.from({ length: count }, (_, at) => `C${String(at + 1).padStart(2, "0")}`);
+      // Forty cells of 100 characters are too wide for a statement, so the row reads as text cut to 4 KiB; 37 of them and one
+      // of 120 are a row of 4,085 bytes, which its note would take past 4 KiB.
+      const wide = { block: "table", title: "Fixture", columns: columns(40), rows: [{ cells: columns(40).map(() => "x".repeat(100)), evidence: ["E1"] }] };
+      const near = { block: "table", title: "Fixture", columns: columns(38), rows: [{ cells: columns(38).map((_, at) => "y".repeat(at === 37 ? 120 : 100)), evidence: ["E1"] }] };
+      for (const table of [wide, near]) {
+        const { rendered, corrections } = await observed(() => alone({ bundle: research, replies: [{ lists: [], not_found: [], blocks: [table] }], layout: 2 }).render("Which tickets were created on October 4?"));
+        const part = rendered.result.response.parts[0]!;
+        expect(Buffer.byteLength(part.statements[0]!.text, "utf8")).toBeLessThanOrEqual(PERSON_ANSWER_STATEMENT_MAX_BYTES_V4);
+        expect(part.statements[0]!.text).toMatch(/^C01: [xy]+.*… \(1 of 2 checked so far\)$/u);
+        expect(blocksOf(rendered)).toEqual([{ kind: "text", title: "Fixture", statements: [0] }]);
+        // The reader counts its cut of the row too wide for a statement; the renderer counts its own, for the note.
+        expect(corrections.model_text_truncated).toBe(table === wide ? 2 : 1);
+      }
+    });
+    // 45 only_me rows: an item citing L1 beside text would cite 46 items, past the 40 one statement may cite in blocks too.
+    const pastOne = () => listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])]);
+    const WAITS_ON = { text: "The fixture work waits on the review.", evidence: ["L1", "E47"] };
+    it("leaves out whole an item whose list id would cite more than a statement's 40 items, and keeps the items after it (W6)", async () => {
+      const part = await arranged(pastOne(), { lists: [], not_found: [], blocks: [
+        { block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] },
+        { block: "points", ordered: false, items: [WAITS_ON, { text: "The review closed.", evidence: ["E46"] }] },
+      ] });
+      expect(part.statements.map(value => value.text)).toEqual([REVIEW.text, "The review closed."]);
+      expect(part).toMatchObject({ status: "partial", gap: FIT });
+      expect(part.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "text", statements: [1] }]);
+    });
+    it("leaves out whole an Ask again's since whose list id would cite more than a statement's 40 items", async () => {
+      const rendered = await alone({
+        bundle: pastOne(), layout: 2, replies: [{ lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] }], since: [WAITS_ON] }],
+        earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "What did the review approve?",
+      }).render("What did the review approve?");
+      expect(rendered.result.response).not.toHaveProperty("since");
+      expect(rendered.result.response.parts[0]!.statements.map(value => value.text)).toEqual([REVIEW.text]);
+    });
+  });
 });
 
 describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
   const NEXT = "What has to happen first";
-  /** Approved records E1..En, each read in full and cited by the plan. */
-  const records = (count: number, options: Parameters<typeof record>[2] = {}) => bundle(Array.from({ length: count }, (_, index) => ({ item: record(`r${index + 1}`, `Approved record ${index + 1}.`, options), full: true, touched: index + 1 })), Array.from({ length: count }, (_, index) => `E${index + 1}`));
   /** The THERM answer as the writer marks it: a bullet before its lead, two decisions, and two actions as rows of a declared table. */
   const THERM = {
     lists: [], not_found: [], tables: [{ section: NEXT, columns: ["Action", "Owner", "Due"] }],
@@ -579,7 +670,7 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
   };
 
   it("lays the THERM answer out lead first: the conclusion, its decisions as bullets, and what has to happen first as a table", async () => {
-    const rendered = await alone({ bundle: records(4), replies: [THERM], layout: true }).render("Can DVT-R2 run on the reduced test scope?");
+    const rendered = await alone({ bundle: records(4), replies: [THERM], layout: 1 }).render("Can DVT-R2 run on the reduced test scope?");
     // A row's statement is code's, from its cells, so what audits and the judge read is what the table shows.
     expect(part(rendered).statements.map(value => [value.text, value.citation_indexes])).toEqual([
       ["The reduced test scope was rejected.", [0]], ["DVT-R2 retests TC-D-03 and TC-D-01.", [1]], ["Hardware owns the BUG-412 fix.", [2]],
@@ -594,22 +685,22 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
     expect(rendered.outcome).toBe("answered");
   });
 
-  it("keeps today's response without layout: no layout, and the statements of the same reply without forms", async () => {
+  it("keeps today's response without layout: no layout or blocks, and the statements of the same reply without forms", async () => {
     const today = await alone({ bundle: records(4), replies: [plain(THERM)] }).render("Can DVT-R2 run on the reduced test scope?");
-    for (const layout of [false, undefined]) {
-      const rendered = await alone({ bundle: records(4), replies: [THERM], ...(layout === undefined ? {} : { layout }) }).render("Can DVT-R2 run on the reduced test scope?");
-      expect(part(rendered)).not.toHaveProperty("layout");
-      expect(part(rendered).statements).toEqual(part(today).statements);
-    }
+    const rendered = await alone({ bundle: records(4), replies: [THERM] }).render("Can DVT-R2 run on the reduced test scope?");
+    expect(part(rendered)).not.toHaveProperty("layout");
+    expect(part(rendered)).not.toHaveProperty("blocks");
+    expect(part(rendered).statements).toEqual(part(today).statements);
   });
 
-  it("gives only a laid-out Ask's writer the layout prompt, the layout schema and a longer reply's allowance", async () => {
-    for (const layout of [false, true]) {
-      const run = alone({ bundle: records(4), replies: [THERM], layout });
+  it("gives only a laid-out Ask's writer the layout prompt, the layout schema and a longer reply's allowance, and never the block catalog", async () => {
+    for (const layout of [undefined, 1] as const) {
+      const run = alone({ bundle: records(4), replies: [THERM], ...(layout === undefined ? {} : { layout }) });
       await run.render("Can DVT-R2 run on the reduced test scope?");
       expect(run.input(0)).toMatchObject(layout
         ? { system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_LAYOUT_PROMPT}`, schema: answerLayoutSchema, max_output_tokens: 2_000 }
         : { system_prompt: ANSWER_PROMPT, schema: answerSchema, max_output_tokens: AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer });
+      expect(run.prompt(0)).not.toHaveProperty("block_catalog");
     }
   });
 
@@ -621,18 +712,18 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
       { text: "Approved: two.", evidence: ["E2"], form: "bullet", section: "Decisions" },
       { text: "Record three applies.", evidence: ["E3"] },
     ];
-    const rendered = await alone({ bundle: records(3), layout: true, replies: [{ lists: [], not_found: [], sentences }] }).render("What was decided?");
+    const rendered = await alone({ bundle: records(3), layout: 1, replies: [{ lists: [], not_found: [], sentences }] }).render("What was decided?");
     expect(part(rendered).statements.map(value => value.text)).toEqual(["Record three applies.", "Approved: one.", "Approved: two."]);
     expect(layoutOf(rendered)).toEqual([{ kind: "paragraph", statements: [0] }, { kind: "heading", text: "Decisions" }, { kind: "bullets", statements: [1, 2] }]);
     // A writer that marked no lead has its first sentence read as one, when that is prose with no section.
-    const unmarked = await alone({ bundle: records(3), layout: true, replies: [{ lists: [], not_found: [], sentences: [sentences[4]!, ...sentences.slice(1, 4)] }] }).render("What was decided?");
+    const unmarked = await alone({ bundle: records(3), layout: 1, replies: [{ lists: [], not_found: [], sentences: [sentences[4]!, ...sentences.slice(1, 4)] }] }).render("What was decided?");
     expect(layoutOf(unmarked)).toEqual([{ kind: "lead", statements: [0] }, { kind: "heading", text: "Decisions" }, { kind: "bullets", statements: [1, 2] }]);
   });
 
   it("lays out only the statements that fit the 40-citation bound", async () => {
     // Twelve citations each: the fourth sentence would cite a 41st item, so it is dropped with every one after it.
     const twelve = (from: number) => Array.from({ length: 12 }, (_, index) => `E${((from + index - 1) % 41) + 1}`);
-    const rendered = await alone({ bundle: records(41), layout: true, replies: [{ lists: [], not_found: [], sentences: [
+    const rendered = await alone({ bundle: records(41), layout: 1, replies: [{ lists: [], not_found: [], sentences: [
       { text: "The records apply.", evidence: twelve(1), form: "lead" },
       ...[13, 25, 37].map((from, index) => ({ text: `Records ${index + 1} apply.`, evidence: twelve(from), form: "bullet", section: "Records" })),
       { text: "Record 1 applies.", evidence: ["E1"], form: "bullet", section: "Records" },
@@ -651,7 +742,7 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
       text: index === 0 ? `${"𝔹".repeat(690)} ${index}.` : "", evidence: [1, 2, 3, 4].map(n => `E${4 * index + n}`),
       ...(index === 0 ? { form: "lead" } : { form: "row", section: "Rows", cells: columns.map(column => `${column} ${"𝔸".repeat(70)} ${index}`) }),
     })) };
-    const on = await alone({ bundle: research, replies: [reply], layout: true }).render("What applies?");
+    const on = await alone({ bundle: research, replies: [reply], layout: 1 }).render("What applies?");
     const released = part(on);
     expect(released).not.toHaveProperty("layout");
     expect(released.statements.length).toBeGreaterThan(1);
@@ -666,7 +757,7 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
   it("keeps two rows that cite the same item and differ only at the end of their last cell", async () => {
     const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
     const row = (last: string) => ({ text: "", evidence: ["E1"], form: "row", section: "Rules", cells: [...columns.slice(0, 5).map(() => "x".repeat(120)), last] });
-    const rendered = await alone({ bundle: records(1), layout: true, replies: [{ lists: [], not_found: [], tables: [{ section: "Rules", columns }], sentences: [
+    const rendered = await alone({ bundle: records(1), layout: 1, replies: [{ lists: [], not_found: [], tables: [{ section: "Rules", columns }], sentences: [
       { text: "Two rules apply.", evidence: ["E1"], form: "lead" }, row(`${"y".repeat(114)} ALLOW`), row(`${"y".repeat(115)} DENY`),
     ] }] }).render("Which rules apply?");
     expect(part(rendered)).toMatchObject({ status: "answered" });
@@ -674,5 +765,149 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
     expect([texts.length, texts[1]!.endsWith(" ALLOW."), texts[2]!.endsWith(" DENY.")]).toEqual([3, true, true]);
     const table = layoutOf(rendered).find(block => block.kind === "table");
     expect(table?.kind === "table" && table.rows.map(value => value.cells[5]!.slice(-5))).toEqual(["ALLOW", " DENY"]);
+  });
+});
+
+describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
+  /** THERM's evidence: the PVT review's decision, the soak's days, THERM-48 and the steps before PVT, each read in full and cited. */
+  const THERM_ITEMS = [
+    record("pvt", "The Oct 23 PVT review decided: start PVT once the 72-hour soak passes.", { label: "PVT review", occurred_at: "2026-10-23" }),
+    record("soak", "Noor Haddad started the 72-hour soak on 2026-10-20, and it passed on Oct 23.", { label: "Soak log", occurred_at: "2026-10-24" }),
+    record("therm-48", "THERM-48 is in review, and Tomas Okafor owns it.", { label: "THERM-48 status" }),
+    record("steps", "Before PVT: freeze the firmware, then ship the build to the line.", { label: "PVT plan" }),
+  ];
+  const therm = () => bundle(THERM_ITEMS.map((item, index) => ({ item, full: true, touched: index + 1 })), ["E1", "E2", "E3", "E4"]);
+  const ANSWER = { block: "answer", sentences: [{ text: "PVT can start: the soak passed on Oct 23.", evidence: ["E1", "E2"] }] };
+  const TIMELINE = { block: "timeline", title: "The soak", events: [
+    { date: "2026-10-23", text: "The soak passed.", evidence: ["E2"] }, { date: "2026-10-20", text: "Started the 72-hour soak.", who: "Noor Haddad", evidence: ["E2"] },
+  ] };
+  const CARD = { block: "card", title: "THERM-48", kind: "ticket", facts: [{ label: "Status", value: "In review", evidence: ["E3"] }, { label: "Owner", value: "Tomas Okafor", evidence: ["E3"] }] };
+  const STEPS = { block: "points", title: "Before PVT", ordered: true, items: [{ text: "Freeze the firmware.", evidence: ["E4"] }, { text: "Ship the build to the line.", evidence: ["E4"] }] };
+  const QUOTE = { block: "quote", text: "start PVT once the 72-hour soak passes", from: "PVT review, Oct 23", evidence: ["E1"] };
+  const reply = (...blocks: readonly unknown[]) => ({ lists: [], not_found: [], blocks });
+  const part = (rendered: Rendering) => rendered.result.response.parts[0]!;
+
+  it("gives only a v2 Ask's writer the block catalog beside the source catalog, its layout part and its schema, with a laid-out reply's allowance", async () => {
+    const run = alone({ bundle: therm(), replies: [reply(ANSWER)], layout: 2 });
+    await run.render("Can PVT start?");
+    expect(run.input(0)).toMatchObject({ system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_BLOCKS_PROMPT}`, schema: answerBlocksSchema, max_output_tokens: 2_000 });
+    const keys = Object.keys(run.prompt(0));
+    expect(keys.slice(keys.indexOf("source_catalog"), keys.indexOf("source_catalog") + 2)).toEqual(["source_catalog", "block_catalog"]);
+    expect(run.prompt(0).block_catalog).toEqual(ANSWER_BLOCK_CATALOG);
+    const again = alone({ bundle: therm(), replies: [{ ...reply(ANSWER), since: [] }], layout: 2, earlier: { asked_on: "2026-10-05", statements: [{ text: "PVT waits on the soak.", sources: ["Soak log"] }] }, answers: "Can PVT start?" });
+    await again.render("Can PVT start?");
+    expect(again.input(0)).toMatchObject({ system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_BLOCKS_PROMPT}\n\n${ANSWER_SINCE_PROMPT}`, schema: answerBlocksSinceSchema, max_output_tokens: 2_500 });
+  });
+
+  it("arranges THERM's answer: the answer, a timeline oldest first, a card, numbered steps and a quote, each item a statement code wrote", async () => {
+    const rendered = await alone({ bundle: therm(), replies: [reply(ANSWER, TIMELINE, CARD, STEPS, QUOTE)], layout: 2 }).render("Can PVT start?");
+    expect(part(rendered).statements.map(value => [value.text, value.citation_indexes])).toEqual([
+      ["PVT can start: the soak passed on Oct 23.", [0, 1]],
+      ["2026-10-20, Noor Haddad: Started the 72-hour soak.", [1]], ["2026-10-23: The soak passed.", [1]],
+      ["Ticket: THERM-48; Status: In review.", [2]], ["Ticket: THERM-48; Owner: Tomas Okafor.", [2]],
+      ["Freeze the firmware.", [3]], ["Ship the build to the line.", [3]],
+      ["PVT review, Oct 23: “start PVT once the 72-hour soak passes”", [0]],
+    ]);
+    expect(blocksOf(rendered)).toEqual([
+      { kind: "answer", statements: [0] },
+      { kind: "timeline", title: "The soak", statements: [1, 2], events: [{ date: "2026-10-20", text: "Started the 72-hour soak.", who: "Noor Haddad" }, { date: "2026-10-23", text: "The soak passed." }] },
+      { kind: "card", title: "THERM-48", entity: "ticket", statements: [3, 4], facts: [{ label: "Status", value: "In review" }, { label: "Owner", value: "Tomas Okafor" }] },
+      { kind: "points", title: "Before PVT", ordered: true, statements: [5, 6] },
+      { kind: "quote", statements: [7], text: "start PVT once the 72-hour soak passes", from: "PVT review, Oct 23" },
+    ]);
+    expect(rendered.outcome).toBe("answered");
+  });
+
+  it("reads a quote that is not word for word in what it cites as text, and an event on a day no cited item has as text after its timeline", async () => {
+    const paraphrase = { ...QUOTE, text: "PVT starts when the soak is done" };
+    const undated = { ...TIMELINE, events: [...TIMELINE.events, { date: "2026-10-22", text: "The soak hit 60 hours.", evidence: ["E2"] }] };
+    const { rendered, corrections } = await observed(() => alone({ bundle: therm(), replies: [reply(ANSWER, undated, paraphrase)], layout: 2 }).render("Can PVT start?"));
+    expect(part(rendered).statements.map(value => value.text)).toEqual([
+      "PVT can start: the soak passed on Oct 23.", "2026-10-20, Noor Haddad: Started the 72-hour soak.", "2026-10-23: The soak passed.", "The soak hit 60 hours.",
+      "PVT review, Oct 23: PVT starts when the soak is done.",
+    ]);
+    expect(blocksOf(rendered).map(block => [block.kind, block.statements])).toEqual([["answer", [0]], ["timeline", [1, 2]], ["text", [3, 4]]]);
+    expect(corrections).toMatchObject({ writer_quote_unquoted: 1, writer_event_undated: 1 });
+  });
+
+  it("leaves out an item that cites no text it read (W1), reading a block left with one item as text and no answer it was not given", async () => {
+    const steps = { ...STEPS, items: [STEPS.items[0], { text: "Book the line.", evidence: ["E9"] }] };
+    const unread = { block: "answer", sentences: [{ text: "PVT can start.", evidence: ["E9"] }] };
+    const rendered = await alone({ bundle: therm(), replies: [reply(unread, steps, CARD)], layout: 2 }).render("Can PVT start?");
+    expect(part(rendered).statements.map(value => value.text)).toEqual(["Freeze the firmware.", "Ticket: THERM-48; Status: In review.", "Ticket: THERM-48; Owner: Tomas Okafor."]);
+    expect(blocksOf(rendered)).toEqual([{ kind: "text", title: "Before PVT", statements: [0] }, { kind: "card", title: "THERM-48", entity: "ticket", statements: [1, 2], facts: [{ label: "Status", value: "In review" }, { label: "Owner", value: "Tomas Okafor" }] }]);
+    // A writer that gave no answer block has its first item read as the answer, when it is untitled text.
+    const untitled = await alone({ bundle: therm(), replies: [reply({ block: "text", sentences: ANSWER.sentences }, STEPS)], layout: 2 }).render("Can PVT start?");
+    expect(blocksOf(untitled).map(block => block.kind)).toEqual(["answer", "points"]);
+  });
+
+  it("keeps every card fact a whole claim: a fact left out takes no other's name, and two cards' like facts are not one", async () => {
+    const card = (title: string, facts: readonly (readonly [string, string, string])[]) => ({ block: "card", title, kind: "ticket", facts: facts.map(([label, value, cited]) => ({ label, value, evidence: [cited] })) });
+    const rendered = await alone({ bundle: therm(), replies: [reply(ANSWER,
+      card("THERM-48", [["Status", "In review", "E9"], ["Owner", "Tomas Okafor", "E3"], ["Due", "2026-11-03", "E3"]]),
+      card("THERM-49", [["Owner", "Tomas Okafor", "E3"], ["Due", "2026-11-03", "E3"]]),
+    )], layout: 2 }).render("What are THERM-48 and THERM-49?");
+    expect(part(rendered).statements.slice(1).map(value => value.text)).toEqual([
+      "Ticket: THERM-48; Owner: Tomas Okafor.", "Ticket: THERM-48; Due: 2026-11-03.", "Ticket: THERM-49; Owner: Tomas Okafor.", "Ticket: THERM-49; Due: 2026-11-03.",
+    ]);
+    expect(blocksOf(rendered).map(block => [block.kind, block.statements])).toEqual([["answer", [0]], ["card", [1, 2]], ["card", [3, 4]]]);
+  });
+
+  it("checks a timeline day a cited item writes without a year against the days it records, not today's year", async () => {
+    // Asked on 2026-10-06 about a note of 2025-10-27 that says "ship by Nov 3": that is 2025-11-03, never 2026-11-03.
+    const note = record("note", "Approved: ship by Nov 3, after the review on Oct 30.", { label: "Release note", occurred_at: "2025-10-27" });
+    const research = bundle([{ item: note, full: true, touched: 1 }], ["E1"]);
+    const events = (year: string) => ({ block: "timeline", events: [{ date: `${year}-10-30`, text: "The review met.", evidence: ["E1"] }, { date: `${year}-11-03`, text: "It ships.", evidence: ["E1"] }] });
+    const right = await alone({ bundle: research, replies: [reply({ block: "answer", sentences: [{ text: "It ships Nov 3.", evidence: ["E1"] }] }, events("2025"))], layout: 2 }).render("When does it ship?");
+    expect(blocksOf(right).map(block => block.kind)).toEqual(["answer", "timeline"]);
+    const wrong = await alone({ bundle: research, replies: [reply({ block: "answer", sentences: [{ text: "It ships Nov 3.", evidence: ["E1"] }] }, events("2026"))], layout: 2 }).render("When does it ship?");
+    expect(blocksOf(wrong).map(block => block.kind)).toEqual(["answer", "text"]);
+  });
+
+  it("reads an answer block the writer put after another block as the answer, the context before it as text", async () => {
+    const rendered = await alone({ bundle: therm(), replies: [reply({ block: "text", sentences: [{ text: "The soak started on 2026-10-20.", evidence: ["E2"] }] }, ANSWER)], layout: 2 }).render("Can PVT start?");
+    expect(part(rendered).statements.map(value => value.text)).toEqual(["PVT can start: the soak passed on Oct 23.", "The soak started on 2026-10-20."]);
+    expect(blocksOf(rendered).map(block => block.kind)).toEqual(["answer", "text"]);
+  });
+
+  it("keeps every item of an answer in blocks: no count of statements or citations cuts it (ADR-0051, past ADR-0041's W6)", async () => {
+    const steps = { block: "points", title: "Before PVT", ordered: true, items: Array.from({ length: 12 }, (_, at) => ({ text: `Step ${at + 1} of the plan.`, evidence: ["E4"] })) };
+    const rendered = await alone({ bundle: therm(), replies: [reply(ANSWER, steps)], layout: 2 }).render("What happens before PVT?");
+    expect(part(rendered).statements.map(value => value.text)).toEqual(["PVT can start: the soak passed on Oct 23.", ...Array.from({ length: 12 }, (_, at) => `Step ${at + 1} of the plan.`)]);
+    expect(part(rendered)).toMatchObject({ status: "answered" });
+    expect(part(rendered)).not.toHaveProperty("gap");
+    expect(blocksOf(rendered).map(block => [block.kind, block.statements.length])).toEqual([["answer", 1], ["points", 12]]);
+    // 45 records, each an item of its own: every one is cited, past ADR-0041's 40.
+    const research = bundle(Array.from({ length: 45 }, (_, at) => ({ item: record(`many-${at + 1}`, `Record ${at + 1} applies.`), full: true, touched: at + 1 })), Array.from({ length: 45 }, (_, at) => `E${at + 1}`));
+    const wide = await alone({ bundle: research, replies: [reply({ block: "answer", sentences: [{ text: "All 45 apply.", evidence: ["E1"] }] },
+      { block: "points", ordered: false, items: Array.from({ length: 45 }, (_, at) => ({ text: `Record ${at + 1} applies.`, evidence: [`E${at + 1}`] })) })], layout: 2 }).render("Which records apply?");
+    expect([wide.result.response.citations.length, part(wide).statements.length, part(wide).status]).toEqual([45, 46, "answered"]);
+    // Layout v1's writer keeps its ten sentences, as its reader and the part's bound always have.
+    const v1 = await alone({ bundle: research, replies: [{ lists: [], not_found: [], sentences: Array.from({ length: 12 }, (_, at) => ({ text: `Record ${at + 1} applies.`, evidence: [`E${at + 1}`], form: "bullet" })) }], layout: 1 }).render("Which records apply?");
+    expect(part(v1).statements).toHaveLength(10);
+  });
+
+  it("gives a layout v1 Ask no blocks, and states its lead as v2 states the answer block", async () => {
+    const laid = await alone({ bundle: therm(), replies: [reply(ANSWER, TIMELINE, CARD, STEPS, QUOTE)], layout: 2 }).render("Can PVT start?");
+    const v1 = await alone({ bundle: therm(), replies: [{ lists: [], not_found: [], sentences: [{ text: "PVT can start: the soak passed on Oct 23.", evidence: ["E1", "E2"], form: "lead" }] }], layout: 1 }).render("Can PVT start?");
+    expect(part(v1)).not.toHaveProperty("blocks");
+    expect(part(laid).statements[0]).toEqual(part(v1).statements[0]);
+  });
+
+  it("releases a v2 answer too large for its byte bound without blocks: the same claims, a row still its cells' claim", async () => {
+    // As layout v1's test: forty records with long labels, and nine rows of six long cells each citing four records.
+    const research = records(40, { label: "𝔸".repeat(250) });
+    const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
+    const big = reply(
+      { block: "answer", sentences: [{ text: `${"𝔹".repeat(690)} 0.`, evidence: ["E1", "E2", "E3", "E4"] }] },
+      { block: "table", columns, rows: Array.from({ length: 9 }, (_, index) => ({ cells: columns.map(column => `${column} ${"𝔸".repeat(70)} ${index + 1}`), evidence: [1, 2, 3, 4].map(n => `E${4 * (index + 1) + n}`) })) },
+    );
+    const on = await alone({ bundle: research, replies: [big], layout: 2 }).render("What applies?");
+    const released = part(on);
+    expect(released).not.toHaveProperty("blocks");
+    expect(released).not.toHaveProperty("layout");
+    expect(released.statements.slice(1).map(value => value.text.startsWith(`One: One ${"𝔸".repeat(70)} `))).toEqual(released.statements.slice(1).map(() => true));
+    expect(released.statements.length === 10 || released.gap === "Some evidence could not fit in this response.").toBe(true);
+    expect(canonicalJsonBytes(on.result.response).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
   });
 });

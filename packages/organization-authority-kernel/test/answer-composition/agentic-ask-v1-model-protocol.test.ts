@@ -2,9 +2,14 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   AgenticAskOutputErrorV1,
+  ANSWER_BLOCK_CATALOG,
+  ANSWER_BLOCKS_PROMPT,
   ANSWER_LAYOUT_PROMPT,
   ANSWER_PROMPT,
+  ANSWER_SINCE_PROMPT,
   ASK_STEP_PROMPT,
+  answerBlocksSchema,
+  answerBlocksSinceSchema,
   answerLayoutSchema,
   answerLayoutSinceSchema,
   answerSchema,
@@ -14,6 +19,7 @@ import {
   FOLLOW_UPS_ANSWER_GUIDANCE,
   normalizeQuery,
   parseAnswer,
+  parseBlocksAnswer,
   parseStep,
   SEARCH_ONLY_STEP_PROMPT,
   STEP_PROMPT,
@@ -40,6 +46,7 @@ function generator(seed: number) {
       return text;
     }
     if (schema.type === "integer") return Math.floor((schema.minimum ?? 0) + next() * ((schema.maximum ?? 9) - (schema.minimum ?? 0) + 1));
+    if (schema.type === "boolean") return next() < 0.5;
     if (schema.type === "array") {
       const minimum = schema.minItems ?? 0; const maximum = Math.min(schema.maxItems ?? 4, 6);
       return Array.from({ length: minimum + Math.floor(next() * (maximum - minimum + 1)) }, () => value(schema.items));
@@ -52,6 +59,13 @@ function generator(seed: number) {
     throw new Error("unsupported schema");
   };
   return value;
+}
+
+/** What code corrected while `read` read a reply: an empty object when the reply needed nothing. */
+function corrected(read: () => unknown): CoreRuntimeModelCorrectionsV1 {
+  const events: CoreRuntimeObservationV1[] = [];
+  observeCoreRuntimeSyncV1("research_loop", read, { observer: event => { events.push(event); } });
+  return events.at(-1)!.model_corrections ?? {};
 }
 
 describe("agentic Ask model protocol parity", () => {
@@ -321,6 +335,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(() => parseStep({ parts: [] })).toThrow('"actions" must be an array');
     expect(() => parseStep({ parts: [], actions: [{ tool: "delete", args: {} }] })).toThrow('unknown tool "delete"');
     expect(() => parseAnswer({ direct: { text: "x" }, parts: [] })).toThrow('"sentences" must be an array (got keys "direct", "parts")');
+    expect(() => parseBlocksAnswer({ lists: [], sentences: [], not_found: [] })).toThrow('"blocks" must be an array (got keys "lists", "sentences", "not_found")');
   });
 
   it("normalizes untidy but permitted forms", () => {
@@ -476,12 +491,6 @@ describe("agentic Ask model protocol parity", () => {
   });
 
   describe("counts each correction it makes, by name (model scaffolding audit 2026-10-20)", () => {
-    /** What code corrected while `read` read a reply: an empty object when the reply needed nothing. */
-    const corrected = (read: () => unknown): CoreRuntimeModelCorrectionsV1 => {
-      const events: CoreRuntimeObservationV1[] = [];
-      observeCoreRuntimeSyncV1("research_loop", read, { observer: event => { events.push(event); } });
-      return events.at(-1)!.model_corrections ?? {};
-    };
     const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
     const need = { id: "N1", need: "owner of OPS-17", kind: "content", status: "open", evidence: ["E1"] };
     const step = (overrides: Record<string, unknown> = {}) => ({ parts: [{ question: "Who owns OPS-17?", needs: [need], notes: "E1 is OPS-17." }], actions: [{ tool: "open", args: { id: "E1" } }], ...overrides });
@@ -579,5 +588,149 @@ describe("agentic Ask model protocol parity", () => {
       expect(normalizeQuery(query), query).toBe(query);
     }
     expect(normalizeQuery(Array.from({ length: 20 }, (_, i) => `HW${i}-${i}`).join(' '))).toBeNull();
+  });
+});
+
+describe("answer layout v2: the writer arranges its answer from the block catalog (ADR-0051)", () => {
+  const reply = (blocks: readonly unknown[], fields: Record<string, unknown> = {}) => ({ lists: [], blocks, not_found: [], ...fields });
+  const read = (blocks: readonly unknown[]) => parseBlocksAnswer(reply(blocks)).sentences.map(sentence => [sentence.text, sentence.item?.kind]);
+
+  it("keeps layout v1's prompt and schemas, and Ask again's, byte for byte", () => {
+    expect([ANSWER_LAYOUT_PROMPT, answerLayoutSchema, answerLayoutSinceSchema, ANSWER_SINCE_PROMPT, answerSinceSchema].map(value => canonicalSha256(value))).toEqual([
+      "sha256:dafa440a7ab2a603c6d15b8a8af7845a33bdc6856a6e7801e91cdfaa21f04ba3", "sha256:be447025c7326cbfe845f396b5b4a03483338f48b2792e419ef0156a7f5f5511",
+      "sha256:2a5130b14413383c71bab93d46bd923366813d22394dcf078b3716356f5a2549", "sha256:2384ac104f117a119bb97beaf99415a0c1b6b411d33b013204ec09ac985be48e",
+      "sha256:e568a3836f6cb05aee257db720ef85f15b51bafc38266341f818aec11a58146a",
+    ]);
+  });
+
+  it("describes each block as research sources are described, and builds the reply schema from the same entries", () => {
+    expect(ANSWER_BLOCK_CATALOG.map(entry => entry.block)).toEqual(["answer", "text", "points", "table", "timeline", "card", "quote"]);
+    for (const entry of ANSWER_BLOCK_CATALOG) {
+      expect(Object.keys(entry)).toEqual(["block", "description", "params"]);
+      // A description says what the block shows, never when to use it (ADR-0042).
+      expect(entry.description).not.toMatch(/\b(use|when to|choose)\b/iu);
+    }
+    const variants = (((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[];
+    expect(variants.map(variant => [(variant.properties as Schema).block.enum[0], Object.keys(variant.properties as Schema)]))
+      .toEqual(ANSWER_BLOCK_CATALOG.map(entry => [entry.block, ["block", ...Object.keys(entry.params)]]));
+    expect([Object.keys(answerBlocksSchema.properties as Schema), Object.keys(answerBlocksSinceSchema.properties as Schema)]).toEqual([["lists", "blocks", "not_found"], ["lists", "blocks", "not_found", "since"]]);
+  });
+
+  it("tells the writer layout v1's wording rules word for word, never to write a list's members, and its reply shape", () => {
+    const lines = ANSWER_BLOCKS_PROMPT.split("\n");
+    for (const start of ["- The app shows the answer right under the question", "- Write a long identifier"]) {
+      expect(lines.find(line => line.startsWith(start))).toBe(ANSWER_LAYOUT_PROMPT.split("\n").find(line => line.startsWith(start)));
+    }
+    expect(lines).toContain("- Never write items, rows, events or facts for a list's members: code states them, right after the answer.");
+    expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
+    expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
+    // An answer in blocks has no count limit, whatever the answer prompt's usual length says (ADR-0051).
+    expect(lines).toContain("- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.");
+    expect(ANSWER_PROMPT).toContain("use up to 10 when the question asks several things");
+  });
+
+  it("never rejects a reply the blocks schema permits, asked again or not", () => {
+    for (let seed = 1; seed <= 400; seed += 1) {
+      expect(() => parseBlocksAnswer(generator(seed)(answerBlocksSchema))).not.toThrow();
+      expect(() => parseBlocksAnswer(generator(seed)(answerBlocksSinceSchema), { since: true })).not.toThrow();
+    }
+  });
+
+  it("reads each item as its statement: a row from its cells, an event from its day, who and text, a fact from its card, a quote from its source and words", () => {
+    const parsed = parseBlocksAnswer(reply([
+      { block: "answer", sentences: [{ text: "PVT can start Nov 3 (E1).", evidence: ["E1"] }] },
+      { block: "table", title: "Open actions", columns: ["Action", "Owner", "Due"], rows: [{ cells: ["Fix BUG-412", "Tomas Okafor", ""], evidence: ["e2"] }, { cells: ["Run DVT-R2", "QA", "2026-10-30"], evidence: ["E3"] }] },
+      { block: "timeline", title: "This week", events: [{ date: "2026-10-20", text: "Started the soak", who: "Noor Haddad", evidence: ["E2"] }, { date: "2026-10-23", text: "The soak passed.", evidence: ["E2"] }] },
+      { block: "card", title: "THERM-48", kind: "ticket", facts: [{ label: "Status", value: "In review", evidence: ["E3"] }, { label: "Owner", value: "Tomas Okafor", evidence: ["E3"] }] },
+      { block: "points", title: "Before PVT", ordered: true, items: [{ text: "Freeze the firmware.", evidence: ["E1"] }, { text: "Ship the build.", evidence: ["E1"] }] },
+      { block: "quote", text: "“Start PVT once the soak passes.”", from: "Noor Haddad, Oct 23 review", evidence: ["E1"] },
+    ]));
+    expect(parsed.sentences.map(sentence => [sentence.text, sentence.evidence])).toEqual([
+      ["PVT can start Nov 3.", ["E1"]],
+      ["Action: Fix BUG-412; Owner: Tomas Okafor.", ["E2"]], ["Action: Run DVT-R2; Owner: QA; Due: 2026-10-30.", ["E3"]],
+      ["2026-10-20, Noor Haddad: Started the soak.", ["E2"]], ["2026-10-23: The soak passed.", ["E2"]],
+      ["Ticket: THERM-48; Status: In review.", ["E3"]], ["Ticket: THERM-48; Owner: Tomas Okafor.", ["E3"]],
+      ["Freeze the firmware.", ["E1"]], ["Ship the build.", ["E1"]],
+      ["Noor Haddad, Oct 23 review: “Start PVT once the soak passes.”", ["E1"]],
+    ]);
+    expect(parsed.sentences.map(sentence => sentence.item)).toEqual([
+      { block: 0, kind: "answer" },
+      { block: 1, kind: "row", title: "Open actions", columns: ["Action", "Owner", "Due"], cells: ["Fix BUG-412", "Tomas Okafor", ""] },
+      { block: 1, kind: "row", title: "Open actions", columns: ["Action", "Owner", "Due"], cells: ["Run DVT-R2", "QA", "2026-10-30"] },
+      { block: 2, kind: "event", title: "This week", date: "2026-10-20", text: "Started the soak", who: "Noor Haddad" },
+      { block: 2, kind: "event", title: "This week", date: "2026-10-23", text: "The soak passed." },
+      { block: 3, kind: "fact", title: "THERM-48", entity: "ticket", label: "Status", value: "In review" },
+      { block: 3, kind: "fact", title: "THERM-48", entity: "ticket", label: "Owner", value: "Tomas Okafor" },
+      { block: 4, kind: "point", title: "Before PVT", ordered: true }, { block: 4, kind: "point", title: "Before PVT", ordered: true },
+      { block: 5, kind: "quote", text: "Start PVT once the soak passes.", from: "Noor Haddad, Oct 23 review" },
+    ]);
+    expect([parsed.lists, parsed.not_found, parsed.tables, parsed.since]).toEqual([[], [], undefined, undefined]);
+  });
+
+  it("reads the first answer block as the answer wherever the writer put it, and at most two of its sentences", () => {
+    const sentences = (...texts: readonly string[]) => texts.map(text => ({ text, evidence: ["E1"] }));
+    expect(read([{ block: "answer", sentences: sentences("One.", "Two.", "Three.") }, { block: "answer", sentences: sentences("Four.") }]))
+      .toEqual([["One.", "answer"], ["Two.", "answer"], ["Three.", "text"], ["Four.", "text"]]);
+    // An answer block after another block is still the writer's conclusion, so the context before it stays text.
+    expect(read([{ block: "text", sentences: sentences("Why.") }, { block: "answer", sentences: sentences("Late.") }])).toEqual([["Why.", "text"], ["Late.", "answer"]]);
+    expect(read([{ block: "chart" }, { block: " Answer ", sentences: sentences("First.") }])).toEqual([["First.", "answer"]]);
+  });
+
+  it("caps no table's columns or cells, but reads a row too wide for one statement as text, cut to a statement's bytes", () => {
+    const wide = Array.from({ length: 35 }, (_, at) => `${"x".repeat(115)} ${at}`);
+    const columns = Array.from({ length: 35 }, (_, at) => `Column ${at + 1}`);
+    const eight = columns.slice(0, 8);
+    const parsed = parseBlocksAnswer(reply([{ block: "table", columns, rows: [
+      { cells: wide, evidence: ["E1"] }, { cells: ["a", 7], evidence: ["E1"] }, { cells: eight.map((_, at) => `${at}`), evidence: ["E1"] },
+    ] }, { block: "table", columns: eight, rows: [{ cells: eight.map((_, at) => `${at}`), evidence: ["E1"] }, { cells: eight.map((_, at) => `${at + 1}`), evidence: ["E1"] }] }]));
+    // 35 columns of long cells pass a statement's 4 KiB: text, cut; a row whose cells do not match its columns: text.
+    expect(parsed.sentences.map(sentence => sentence.item?.kind)).toEqual(["text", "text", "text", "row", "row"]);
+    expect(Buffer.byteLength(parsed.sentences[0]!.text)).toBeLessThanOrEqual(4 * 1024);
+    expect(parsed.sentences[0]!.text.endsWith("…")).toBe(true);
+    expect(parsed.sentences[1]!.text).toBe("a.");
+    expect(parsed.sentences[3]!.item).toMatchObject({ kind: "row", columns: eight });
+    expect(corrected(() => parseBlocksAnswer(reply([{ block: "table", columns, rows: [{ cells: wide, evidence: ["E1"] }, { cells: wide, evidence: ["E1"] }] }])))).toEqual({ model_enum_respelled: 2, model_text_truncated: 2 });
+  });
+
+  it("reads a card's title once, as its name, counting a cut only past a name's own cap", () => {
+    const card = (title: string) => reply([{ block: "card", title, kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }, { label: "Owner", value: "Ana", evidence: ["E1"] }] }]);
+    expect(corrected(() => parseBlocksAnswer(card("t".repeat(79))))).toEqual({});
+    expect(corrected(() => parseBlocksAnswer(card("t".repeat(121))))).toEqual({ model_text_truncated: 1 });
+  });
+
+  it("reads an item its block cannot show as text in its block, and counts each reading", () => {
+    const blocks = [
+      { block: "table", columns: ["Action", "Owner"], rows: [{ cells: ["Fix BUG-412"], evidence: ["E1"] }, { cells: ["", " "], evidence: ["E1"] }, { cells: ["Run DVT-R2", "QA"], evidence: ["E1"] }] },
+      { block: "table", columns: ["Only"], rows: [{ cells: ["One"], evidence: ["E1"] }, { cells: ["Two"], evidence: ["E1"] }] },
+      { block: "timeline", events: [{ date: "2026-02-30", text: "Not a day.", who: "Ana", evidence: ["E1"] }, { date: "Oct 20", text: "Written.", evidence: ["E1"] }, { date: "2026-10-21", text: " ", evidence: ["E1"] }] },
+      { block: "card", title: "", kind: "ticket", facts: [{ label: "Status", value: "Done", evidence: ["E1"] }, { label: "Owner", value: "", evidence: ["E1"] }] },
+      { block: "card", title: "Ana", kind: "team", facts: [{ label: "Role", value: "Lead", evidence: ["E1"] }] },
+    ];
+    expect(read(blocks)).toEqual([
+      ["Fix BUG-412.", "text"], ["Action: Run DVT-R2; Owner: QA.", "row"], ["One.", "text"], ["Two.", "text"],
+      ["Ana: Not a day.", "text"], ["Written.", "text"], ["Status: Done.", "text"], ["Role: Lead.", "text"],
+    ]);
+    // Two rows and both of a one-column table, two events, and two cards are read again; an empty row, event and value are dropped.
+    expect(corrected(() => parseBlocksAnswer(reply(blocks)))).toEqual({ model_enum_respelled: 8, model_entry_dropped: 3 });
+  });
+
+  it("drops a block it cannot read, and caps no count of blocks or items: the part's bounds decide what is kept", () => {
+    const points = (count: number) => ({ block: "points", ordered: false, items: Array.from({ length: count }, (_, at) => ({ text: `Item ${at + 1}.`, evidence: ["E1"] })) });
+    expect(corrected(() => expect(parseBlocksAnswer(reply([null, { block: "chart" }, points(6), points(6)])).sentences).toHaveLength(12))).toEqual({ model_entry_dropped: 2 });
+    const many = Array.from({ length: 14 }, () => ({ block: "text", sentences: [{ text: "x", evidence: ["E1"] }] }));
+    expect(corrected(() => expect(parseBlocksAnswer(reply(many)).sentences).toHaveLength(14))).toEqual({});
+    // The schema bounds only the answer's sentences, and every text's length.
+    const variants = (((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[];
+    const most = (value: Schema): readonly string[] => Object.entries(value).flatMap(([key, child]) => key === "maxItems" ? [String(child)] : child !== null && typeof child === "object" ? most(child as Schema) : []);
+    expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,12", "12", "12", "12", "12", "12", "12"]);
+  });
+
+  it("reads a reply's lists, what it did not find and, asked again, since, as a laid-out v1 reply's", () => {
+    const fields = { lists: [{ id: "L1", where: { field: "owner", value: "Dana Lee" } }], not_found: ["the due date"], since: [{ text: "The owner changed.", evidence: ["E1"] }] };
+    const given = reply([{ block: "answer", sentences: [{ text: "Two are open.", evidence: ["E1", "L1"] }] }], fields);
+    const parsed = parseBlocksAnswer(given, { since: true });
+    const v1 = parseAnswer({ ...fields, sentences: [{ text: "Two are open.", evidence: ["E1", "L1"], form: "lead" }] }, { layout: true, since: true });
+    expect([parsed.lists, parsed.not_found, parsed.since, parsed.sentences[0]!.evidence]).toEqual([v1.lists, v1.not_found, v1.since, v1.sentences[0]!.evidence]);
+    expect(parseBlocksAnswer(given)).not.toHaveProperty("since");
   });
 });

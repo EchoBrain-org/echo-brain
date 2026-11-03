@@ -17,8 +17,8 @@ import {
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
 import {
-  ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, wake,
-  type Node,
+  ACCOUNT, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text,
+  timelineFiles, wake,
 } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -110,8 +110,6 @@ beforeEach(() => {
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params as Record<string, unknown>);
 const seed = (...turns: TimelineTurn[]) => { timelineFiles.set(fileOf(ACCOUNT), turns); };
 const kept = () => timelineFiles.get(fileOf(ACCOUNT)) ?? [];
-const classes = (node: Node | undefined) => String(node?.props.class ?? '').split(' ').filter(Boolean);
-const click = (node: Node | undefined) => (node!.props.onClick as () => void)();
 async function view() {
   const screens = await import('../../src/renderer/screens/ask.js');
   return (store: { getState(): unknown }) => render(screens.AskView({ state: store.getState() as never }));
@@ -164,28 +162,33 @@ describe('the timeline\'s rules', () => {
 });
 
 describe('what a check asks, and what it says of a turn', () => {
-  it('asks once per citation of a turn, newest turn first, with a ticket\'s baseline, at most 100 items', () => {
+  it('asks once per citation of a turn, newest turn first, with a ticket\'s baseline, at most 100 items a request', () => {
     const repeated = answerOf('Q?', [ticket('THERM-482', '20482'), ticket('THERM-482', '20482'), mara, page('31010')], [['A.', [0, 1]], ['B.', [2, 3]]]);
     const [older, newer] = [turn('Older?', 2 * DAY, status(), { markers: { 0: sha('m1') } }), turn('Newer?', DAY, repeated)];
     const plan = checkPlan([newer!, older!]);
     // The same ticket twice in a turn is asked about once; a person never.
-    expect(plan.items.map(item => [item.citation.kind, item.asked_at, item.marker ?? null])).toEqual([
+    expect(plan.requests).toHaveLength(1);
+    expect(plan.requests[0]!.items.map(item => [item.citation.kind, item.asked_at, item.marker ?? null])).toEqual([
       ['ticket', newer!.asked_at, null], ['page', newer!.asked_at, null],
       ['ticket', older!.asked_at, sha('m1')], ['page', older!.asked_at, null], ['follow_up', older!.asked_at, null],
     ]);
-    expect(plan.places).toEqual([{ turn: newer!.id, sources: [0, 1] }, { turn: newer!.id, sources: [3] }, { turn: older!.id, sources: [0] }, { turn: older!.id, sources: [1] },
-      { turn: older!.id, sources: [2] }]);
+    expect(plan.requests[0]!.places).toEqual([{ turn: newer!.id, sources: [0, 1] }, { turn: newer!.id, sources: [3] }, { turn: older!.id, sources: [0] },
+      { turn: older!.id, sources: [1] }, { turn: older!.id, sources: [2] }]);
     // A new answer's tickets alone, for their baseline.
-    expect(checkPlan([newer!], source => source.kind === 'ticket').items).toHaveLength(1);
-    // At most 100 items in all.
+    expect(checkPlan([newer!], source => source.kind === 'ticket').requests.map(request => request.items.length)).toEqual([1]);
+    // At most 100 items a request, every source asked about: a turn the first request cuts short goes on in the next.
     const wide = answerOf('Wide?', Array.from({ length: 30 }, (_, at) => ticket(`T-${at}`, String(1000 + at))), [['All of them.', [0]]]);
-    expect(checkPlan(Array.from({ length: 5 }, (_, at) => turn(`W${at}?`, at * HOUR, wide))).items).toHaveLength(MAX_CHECK_ITEMS);
+    const turns = Array.from({ length: 5 }, (_, at) => turn(`W${at}?`, at * HOUR, wide));
+    const split = checkPlan(turns);
+    expect(split.requests.map(request => request.items.length)).toEqual([MAX_CHECK_ITEMS, 50]);
+    expect(split.requests[1]!.places[0]).toEqual({ turn: turns[3]!.id, sources: [10] });
+    expect(split.turns).toEqual(turns.map(value => value.id));
   });
 
   it('turns the results into each turn\'s sources\' states and its tickets\' markers', () => {
     const one = turn('One?', DAY, status());
     const plan = checkPlan([one]);
-    const found = checkedOf(plan, [{ state: 'same', marker: sha('m2') }, { state: 'changed' }, { state: 'unreadable' }]);
+    const found = checkedOf(plan, [[{ state: 'same', marker: sha('m2') }, { state: 'changed' }, { state: 'unreadable' }]]);
     expect(found).toEqual({ turns: { [one.id]: { 0: 'same', 1: 'changed', 2: 'unreadable' } }, markers: { [one.id]: { 0: sha('m2') } } });
   });
 
@@ -377,10 +380,10 @@ describe('Ask on the timeline', () => {
   it('leaves a source you can no longer read out of its turn\'s sources, the numbers of the page, its list and the pane agreeing', async () => {
     const one = turn('One?', 2 * DAY, status());
     // Out only when every citation of a place is unreadable; the rest keep their places among the answer's sources.
-    expect(turnGroups(one.answer.sources, { 0: 'same', 1: 'changed', 2: 'unreadable' }).map(group => group.indexes)).toEqual([[0], [1]]);
-    expect(turnGroups(one.answer.sources, undefined)).toHaveLength(3);
+    expect(turnGroups(one.answer, { 0: 'same', 1: 'changed', 2: 'unreadable' }).map(group => group.indexes)).toEqual([[0], [1]]);
+    expect(turnGroups(one.answer, undefined)).toHaveLength(3);
     const twice = [ticket('THERM-482', '20482'), page('31010'), page('31010')];
-    expect(turnGroups(twice, { 1: 'unreadable', 2: 'same' }).map(group => group.indexes)).toEqual([[0], [1, 2]]);
+    expect(turnGroups({ sources: twice, parts: one.answer.parts }, { 1: 'unreadable', 2: 'same' }).map(group => group.indexes)).toEqual([[0], [1, 2]]);
     seed(one, turn('Two?', DAY, status()));
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
     const store = await startStore();

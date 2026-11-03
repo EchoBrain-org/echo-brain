@@ -9,29 +9,37 @@ evaluation measures how often Ask's writer does that, before and after a change
 to its wording rules.
 
 It measures only the writer of a laid-out answer, the answer every desktop and
-`person ask` gets (they send `x-echo-answer-layout: 1`,
-[ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md)). Each case is
+`person ask` gets: answer layout v2, since they send `x-echo-answer-layout: 2`
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md)); the
+2026-10-26 result measured layout v1
+([ADR-0045](../../../docs/decisions/ADR-0045-ask-answer-layout.md)). Each case is
 a question and the synthetic items that answer it. Ask runs as the kernel runs
-it, with answer layout, over a synthetic desk with Jira and follow-ups bound.
-Research is scripted, so every trial hands the writer the same evidence: one
-search returns the case's items, research opens them all and finishes with one
-need found on them. The writer is the product's: its prompt and schema, through
-the shipped OpenRouter bundle and its answer model
-([ADR-0037](../../../docs/decisions/ADR-0037-openrouter-routing-for-research-calls.md)).
-Nothing is read from any tool.
+it, with answer layout v2, over a synthetic desk with Jira and follow-ups
+bound. Research is scripted, so every trial hands the writer the same evidence:
+one search returns the case's items, research opens them all and finishes with
+one need found on them. The writer is the product's: its prompt, block catalog
+and schema, through the shipped bundle's OpenRouter answer model
+([ADR-0037](../../../docs/decisions/ADR-0037-openrouter-routing-for-research-calls.md)),
+or, with `--writer claude-account --claude-executable <signed-in claude binary>`,
+the personal Claude account writer (`providers/openrouter/src/claude-research`):
+the same model through the Claude Agent SDK and your own `claude` sign-in. The
+report names the route under `model.route`. Nothing is read from any tool.
 
 ```sh
 npm run build:workspaces
-npm run eval:ask-wording -- --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory
+npm run eval:ask-wording -- --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory \
+  --writer claude-account --claude-executable /absolute/path/to/claude
 ```
 
 The bundle reads the credential file; the runner only checks that it is a
 private file, and makes no request without `--run`. `--out` must be a private
 directory outside the repository; the report is written there with mode 0600.
 It keeps case ids, each trial's statements, lead and grade (synthetic text),
-the writer prompt's SHA-256 and model metadata; never prompts, raw replies,
-credentials or provider payloads. `--cases` and `--trials` make a smaller
-diagnostic run, which never decides anything.
+the writer prompt's SHA-256, the layout the writer was given and model
+metadata; never prompts, raw replies, credentials or provider payloads.
+`--cases` and `--trials` make a smaller diagnostic run, which never decides
+anything. Trials run four at a time by default (`--concurrency`, 1 to 6); the
+report keeps them in case order.
 
 ## Cases (pre-registered)
 
@@ -113,6 +121,118 @@ The same trials, before and after:
 Both trials that failed rule 1 after the change are `blocker-plain`, whose leads
 said THERM-482 "is blocking the DVT gate", 5 words of the question; one of its
 three trials did so before too.
+
+## Layout v2, 2026-11-02 (pre-registered)
+
+Written before any run. Every desktop and `person ask` will send
+`x-echo-answer-layout: 2`
+([ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md)): the
+writer arranges the answer from seven blocks. Its prompt is the answer prompt
+followed by a blocks layout part whose two wording rules are layout v1's word
+for word, its input carries `block_catalog` beside `source_catalog`, and it
+replies with blocks. That change ships only when this evaluation still passes
+its three rules on it
+([Ask answer layout v2](../../../docs/product/2026-11-02-ask-answer-layout-v2.md),
+"Gates"), so the evaluation now measures the v2 writer: Ask runs with answer
+layout v2, and the kernel reads, checks and releases the answer as it does for
+the desktop.
+
+- **The same cases:** `cases.json` is unchanged (`sha256:6ad26dc1…6a2bfa`).
+- **The same three rules and thresholds,** each at least 27 of 30 trials,
+  graded as above. The lead is the statements of the first part's `answer`
+  block, layout v2's lead, or, without one, its first statement; a layout v1
+  answer is still read by its lead block. The answer's text is still every
+  part's statements and gap, as the audit reads them, so it includes the
+  statements code writes for a table row, a timeline event, a card fact and a
+  quote: a long identifier that titles a card is written once in each of its
+  facts.
+- **The writer route:** the personal Claude account writer (`--writer
+  claude-account`): `claude-sonnet-5-5` through the Claude Agent SDK and the
+  signed-in `claude` binary, the route of the block evaluation's run of record
+  and of its gate. The report names it under `model.route`.
+- **Decided by a complete run:** all 10 cases, 3 trials each, and every
+  trial's writer given the block catalog (each trial's `writer_layout` is 2).
+  The v2 writer passes when all three rules pass (the report's
+  `wording_ships`). A smaller run, or one whose writer was not given the block
+  catalog, decides nothing.
+
+The 2026-10-26 results above measured layout v1 through OpenRouter and stay as
+they are.
+
+## Result, layout v2, 2026-11-02
+
+At `e9ccc09` with no uncommitted change, through the founder's Claude account
+(`claude-sonnet-5-5`): 30 trials, every writer given the block catalog, no
+errors and no repairs. All three rules pass, so the v2 writer's wording ships.
+This is the writer with no count of statements or citations (ADR-0051's second
+amendment), whose prompt adds that the answer prompt's "up to 10" does not
+apply; its answers held 2.0 statements on average. The run at `b48c2d7` is the
+writer with no count caps (its first amendment; 1.73 statements). The layout
+v1 column is the 2026-10-26 run after its change, through OpenRouter: another
+route to the same model. Two earlier complete v2 runs passed too: at
+`4769016` (30, 30, 30; leads of 17.7 words) and at `294bf37`, with the caps
+and the review's fixes (29, 30, 30; 14.9 words; its one miss was
+`blocker-plain` saying "is blocking the DVT gate", as v1's misses did).
+
+| | Layout v1, 2026-10-26 | Layout v2, no count caps (`b48c2d7`) | Layout v2, no count of statements or citations (`e9ccc09`) |
+| --- | --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 28 | 30 | 30 |
+| 2. Long identifiers once (27 of 30 to pass) | 30 | 30 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 | 30 |
+| Words shared with the question, mean and longest run | 2.0, 5 | 2.4, 4 | 2.4, 4 |
+| Lead length, mean words | 10.2 | 17.2 | 15.2 |
+| Long identifiers written | 6 | 6 | 6 |
+| Leads writing an identifier the question named | 0 | 0 | 0 |
+
+The v2 lead, the answer block, is longer: it often adds a second sentence or a
+qualifier ("The soak cannot finish until the fixture holds 45 °C. The ticket is
+In Progress and owned by Dev Okafor."). No rule measures its length; it belongs
+with tuning the block descriptions, which the design leaves for later.
+
+## Block description tuning, 2026-11-02 (pre-registered)
+
+Written before any run. Tuning layout v2's block descriptions and layout
+prompt is pre-registered in the
+[block evaluation](../ask-blocks/README.md) ("Tuning the block descriptions"),
+and needs this evaluation's three rules to pass on the tuned writer. The same
+cases (`sha256:6ad26dc1…6a2bfa`), rules and thresholds; one complete run on
+the writer before the change and one after, each 10 cases and 3 trials through
+the founder's Claude account (`--writer claude-account`). The lead's length,
+its mean and per case, is reported beside them; no rule measures it.
+
+## Result, block description tuning, 2026-11-02
+
+Through the founder's Claude account (`claude-sonnet-5-5`), 30 trials each, no
+errors and no repairs; the block evaluation's README gives the two rounds.
+All three rules pass on both tuned writers.
+
+| | Before (`67c6351`) | Round 1 (`ef42144`) | Round 2 (`7c7345b`) |
+| --- | --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 30 | 30 | 30 |
+| 2. Long identifiers once (27 of 30 to pass) | 30 | 30 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 | 30 |
+| Words shared with the question, mean and longest run | 2.3, 4 | 2.3, 4 | 2.1, 4 |
+| Lead length, mean words | 14.7 | 13.0 | 12.5 |
+
+The before prompt's earlier runs led with 14.9 and 17.7 words. Round 2's
+one-fact leads say only what was asked ("Dev Okafor owns it.", "Lena Brandt
+approved it."); the longest stay where the lead opens with the record that
+decided ("The release review decided the build may go to staging ...", 23 to
+25 words), as before. The founder's blind ranking preferred neither tuned
+writer to the one before, so the tuning is not proposed and PR #394 keeps its
+prompt (block evaluation README, "Result of rule 3 and the decision").
+
+The quick lead check that followed (block evaluation README, "Quick lead
+check") keeps all three rules: 30, 30 and 30 at `ca9b9a5`, leads of 15.3
+words. It sent no wording trial back: these one-fact questions write out no
+list. The founder rejected that check for its second writer call, and it is
+reverted; PR #394's prompt and writer stand.
+
+The quick lead on the first try (block evaluation README, "Quick lead on the
+first try") keeps all three rules too: 30, 30 and 30, as PR #394's writer at
+`e9ccc09` does, with leads of 16.3 words against 13.8. The founder's blind
+ranking preferred PR #394's writer in 4 of the 5 questions it changed, so it
+is reverted as well.
 
 ## Limits
 
