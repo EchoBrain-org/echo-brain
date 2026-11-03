@@ -55,8 +55,8 @@ export function help() {
     "",
     "Only a whole pre-registered set decides anything: every case and catalog, three trials, the judge on; or the gate on",
     `the built writer, --catalogs ${BUILT.id} --judge off with every case and three trials. A smaller run is a diagnostic.`,
-    "--out must be outside the repository and private; the report and the page's data are written there with mode 0600,",
-    "with full traces of every synthetic prompt and reply, never a credential.",
+    "--out must be outside the repository and private; the report is written there with mode 0600, with full traces of",
+    "every synthetic prompt and reply, never a credential.",
   ].join("\n");
 }
 

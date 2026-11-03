@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ANSWER_LAYOUT_PROMPT, cleanLine, repairInput } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { pooled } from "../../shared/runner.mjs";
-import { parseArgs, researchStep, run } from "../run.mjs";
+import { help, parseArgs, researchStep, run } from "../run.mjs";
 import { loadCases } from "../grade.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -212,4 +212,12 @@ test("makes no more calls once a trial fails, and writes no report", async () =>
   await new Promise((resolve) => setTimeout(resolve, 20));
   // Only the two trials running when it failed made their call.
   assert.deepEqual([route.inputs.length, readdirSync(out)], [2, []]);
+});
+
+test("writes only its report to --out, as --help says", async () => {
+  assert.match(help(), /the report is written there with mode 0600/u);
+  assert.doesNotMatch(help(), /page's data/u);
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-out-"));
+  const { reportPath } = await run(options(out, { catalogIds: ["today"], judge: false }), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
+  assert.deepEqual(readdirSync(out), [basename(reportPath)]);
 });
