@@ -826,6 +826,51 @@ change, through the founder's Claude account (`claude-sonnet-5-5`): 45 gate,
 - **One call, as before:** output tokens fell 12% on the 15 cases and 7% on
   the held-out questions, and the writer's time stayed level.
 
+### Result of rule 3, 2026-11-03
+
+The founder picked between before and after in all 5 changed questions,
+blind, with nothing revealed before the last pick: every pick was saved
+before the reveal, and the labels the page saved match the fixed order.
+
+| Question | Picked | After was |
+| --- | --- | --- |
+| `trap-disagree` | Before | A |
+| `gate-blockers` | After | B |
+| `workstreams-status` | Before | A |
+| `ho-launch-blockers` | Before | B |
+| `review-multi` | Before | A |
+
+- **Rule 3 fails:** after is preferred in 1 question, before in 4, none the
+  same. By the pre-registration the change is not proposed for PR #394.
+- **Where after won:** `gate-blockers`, the one question whose first trial
+  gave a short lead with its list below ("the gate opens only when all three
+  conditions are met, and the retrieved records show none of them as done
+  yet"), the shape the check's answers had in all 7 of theirs.
+- **Where before won:** in `review-multi`, `workstreams-status` and
+  `ho-launch-blockers`, before's first trial ended with a note after's did
+  not have: that the asker's own follow-up was past due, that the firmware
+  follow-up was past due, and the review's rule that the pilot launches only
+  when all three conditions are met. In `trap-disagree` before gave the
+  possible slip a paragraph titled "Possible slip"; after put it in the lead
+  and then restated both sources as points.
+- **Those notes came by chance more than from the change:** of the 60 gate
+  and held-out trials, an answer ended with such a note in 19 before and 16
+  after, so which first trials had one decided three of the four.
+- **Two of those notes are wrong:** the writer is told the question is asked
+  on Oct 30, so a Nov 2 due date has not passed; on Nov 3, when the founder
+  ranked, it had. Both writers call a Nov 2 due date passed in some trials
+  (5 of 60 before, 2 of 60 after; after's first `workstreams-status` trial
+  says "none is overdue as of Oct 30"), and no measure here checks it.
+  Without those two questions before still wins, 2 to 1.
+
+### The decision, 2026-11-03
+
+The change is not proposed. It is reverted (`8f06dbe`), so the writer's
+prompt and catalog are PR #394's again, as after the tuning rounds and the
+check. Wording in the catalog and the prompt, an example included, moved the
+writer's first reply little: leads that write out a list went from 18 of 60
+to 15, where the rejected check, with its second call, left none.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model

@@ -227,6 +227,12 @@ words. It sent no wording trial back: these one-fact questions write out no
 list. The founder rejected that check for its second writer call, and it is
 reverted; PR #394's prompt and writer stand.
 
+The quick lead on the first try (block evaluation README, "Quick lead on the
+first try") keeps all three rules too: 30, 30 and 30, as PR #394's writer at
+`e9ccc09` does, with leads of 16.3 words against 13.8. The founder's blind
+ranking preferred PR #394's writer in 4 of the 5 questions it changed, so it
+is reverted as well.
+
 ## Limits
 
 - One model route and synthetic items only: a staging release and the
