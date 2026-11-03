@@ -827,6 +827,23 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     expect(blocksOf(rendered).map(block => block.kind)).toEqual(["answer", "text"]);
   });
 
+  it("keeps every item of an answer in blocks: no count of statements or citations cuts it (ADR-0051, past ADR-0041's W6)", async () => {
+    const steps = { block: "points", title: "Before PVT", ordered: true, items: Array.from({ length: 12 }, (_, at) => ({ text: `Step ${at + 1} of the plan.`, evidence: ["E4"] })) };
+    const rendered = await alone({ bundle: therm(), replies: [reply(ANSWER, steps)], layout: 2 }).render("What happens before PVT?");
+    expect(part(rendered).statements.map(value => value.text)).toEqual(["PVT can start: the soak passed on Oct 23.", ...Array.from({ length: 12 }, (_, at) => `Step ${at + 1} of the plan.`)]);
+    expect(part(rendered)).toMatchObject({ status: "answered" });
+    expect(part(rendered)).not.toHaveProperty("gap");
+    expect(blocksOf(rendered).map(block => [block.kind, block.statements.length])).toEqual([["answer", 1], ["points", 12]]);
+    // 45 records, each an item of its own: every one is cited, past ADR-0041's 40.
+    const research = bundle(Array.from({ length: 45 }, (_, at) => ({ item: record(`many-${at + 1}`, `Record ${at + 1} applies.`), full: true, touched: at + 1 })), Array.from({ length: 45 }, (_, at) => `E${at + 1}`));
+    const wide = await alone({ bundle: research, replies: [reply({ block: "answer", sentences: [{ text: "All 45 apply.", evidence: ["E1"] }] },
+      { block: "points", ordered: false, items: Array.from({ length: 45 }, (_, at) => ({ text: `Record ${at + 1} applies.`, evidence: [`E${at + 1}`] })) })], layout: 2 }).render("Which records apply?");
+    expect([wide.result.response.citations.length, part(wide).statements.length, part(wide).status]).toEqual([45, 46, "answered"]);
+    // Layout v1's writer keeps its ten sentences, as its reader and the part's bound always have.
+    const v1 = await alone({ bundle: research, replies: [{ lists: [], not_found: [], sentences: Array.from({ length: 12 }, (_, at) => ({ text: `Record ${at + 1} applies.`, evidence: [`E${at + 1}`], form: "bullet" })) }], layout: 1 }).render("Which records apply?");
+    expect(part(v1).statements).toHaveLength(10);
+  });
+
   it("gives a layout v1 Ask no blocks, and states its lead as v2 states the answer block", async () => {
     const laid = await alone({ bundle: therm(), replies: [reply(ANSWER, TIMELINE, CARD, STEPS, QUOTE)], layout: 2 }).render("Can PVT start?");
     const v1 = await alone({ bundle: therm(), replies: [{ lists: [], not_found: [], sentences: [{ text: "PVT can start: the soak passed on Oct 23.", evidence: ["E1", "E2"], form: "lead" }] }], layout: 1 }).render("Can PVT start?");

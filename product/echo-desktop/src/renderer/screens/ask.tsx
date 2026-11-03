@@ -186,7 +186,7 @@ interface TurnView {
 }
 
 function turnView(turn: TimelineTurn, checks: TurnChecks | undefined): TurnView {
-  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer.sources, checks), checks, shows: showsOf(checks) };
+  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer, checks), checks, shows: showsOf(checks) };
 }
 
 /** A source's first citation stands for it: its kind, its label, its record or its link. */
@@ -342,7 +342,8 @@ function Table({ state, view, index, block, place, opens, label }: {
   return <>
     {block.caption && opens && <p class="answer-lead selectable">{block.caption}</p>}
     <div class="answer-table selectable" role="region" tabIndex={0} aria-label={block.caption ?? label}>
-      <table class={`cols-${block.columns.length}`}>
+      {/* A writer's table has as many columns as it needs (ADR-0051): past six, each one widens its own scroll box. */}
+      <table class={`cols-${block.columns.length}`} style={block.columns.length > 6 ? { minWidth: `${block.columns.length * 100}px` } : undefined}>
         <thead><tr>{block.columns.map(column => <th key={column} scope="col">{column}</th>)}</tr></thead>
         <tbody>
           {rows.map(({ row, at, mark }) => {

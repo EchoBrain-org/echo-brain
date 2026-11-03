@@ -13,6 +13,7 @@ status: accepted
 supersedes: []
 superseded_by: []
 updates:
+  - ADR-0041
   - ADR-0042
   - ADR-0045
 ---
@@ -172,3 +173,45 @@ blocks as Markdown. An answer saved with layout v1 still draws with it.
 - Retiring layout v1, once every installed desktop sends `2`, is a later
   decision. So is tuning the block descriptions where the evaluation found
   them weak, measured by the block evaluation.
+
+## Amended 2026-11-02: no count caps
+
+The founder decided the same day, before any release, that the writer
+arranges an answer without count limits ("remove the cap"): the block
+catalog, the reply schema, code's reading of a reply and the contract cap no
+number of blocks, of a text's sentences, of points, of a table's rows or
+columns, of a timeline's events or of a card's facts. The answer block keeps
+its one or two sentences, every text its length, and every block its
+minimum. A table row too wide for one statement (4 KiB) reads as text, cut to
+fit, so no reply can fail the Ask. This replaces the table above's 2 to 6
+columns for layout v2; layout v1 keeps its own.
+
+These still bound a bigger answer, unchanged until the founder decides:
+
+- **10 statements and 40 citations to a part**
+  ([ADR-0041](ADR-0041-complete-lists-as-ask-evidence.md), W6): items past
+  them are dropped from the end, and the part says some evidence could not
+  fit. Every client's answer validator holds a part to 10 statements.
+- **The answer's 64 KiB:** a v2 answer past it is released without its
+  blocks, then cut from the end with a gap, as layout v1's.
+- **The writer's output room:** 2,000 tokens, 2,500 for an Ask again; the
+  evaluations' longest balanced reply was 589.
+- **A list table's 25 named members** (ADR-0041).
+
+## Amended 2026-11-02: no count of statements or citations
+
+The founder then lifted ADR-0041's bounds for an answer in blocks ("Yes,
+lift it"): a part arranged in blocks has no count of statements of its own,
+and its answer no count of citations. The writer is told that the answer
+prompt's "up to 10" does not apply to an answer in blocks; W6 drops nothing
+of such an answer for those counts; the V8 answer's validator takes a part
+with blocks past ten statements and its answer past 40 citations; the Ask
+audit records a question's citations up to 1,000, past what an answer's
+64 KiB can hold; and the desktop numbers, shows and checks every source of an
+answer in blocks, and keeps stored answers of up to 1,000 statements.
+
+Layout v1 and an answer without layout keep ADR-0041's 10 statements and 40
+citations, as every installed client checks, and so does a v2 answer released
+without its blocks because it passed its 64 KiB. These stay, as guards
+against a runaway reply: the answer's 64 KiB, the writer's output room (2,000
+tokens, 2,500 for an Ask again), and the 25 members a list's statement names.

@@ -13,6 +13,7 @@ import {
   PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2,
   PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2,
   PERSON_ANSWER_SINCE_MAX_STATEMENTS_V1,
+  PERSON_ANSWER_STATEMENT_MAX_BYTES_V4,
   PERSON_ANSWER_WHO_MAX_BYTES_V2,
   validatePersonQueryText,
   type PersonAnswerCardEntityV2,
@@ -61,10 +62,9 @@ const CELL_CHARS = 120;
 export const AGENTIC_ASK_MAX_TABLES_V1 = 3;
 export const AGENTIC_ASK_MAX_COLUMNS_V1 = 6;
 /**
- * Answer layout v2 (ADR-0051): the most blocks a writer arranges, as the block evaluation allowed (the part's ten
- * statements bound what is kept), and what a block shows, in characters, each within the contract's bytes.
+ * Answer layout v2 (ADR-0051): what a block shows, in characters, each within the contract's bytes. How many blocks,
+ * and how many items a block holds, has no cap of its own (the founder, 2026-11-02): only the part's bounds limit them.
  */
-const AGENTIC_ASK_MAX_BLOCKS_V1 = 12;
 const TITLE_CHARS = SECTION_CHARS;
 const CARD_TITLE_CHARS = 120;
 const WHO_CHARS = 80;
@@ -296,24 +296,24 @@ function blockShape(name: string, required: readonly string[], properties: Reado
 export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze({
   type: "object", additionalProperties: false, required: ["lists", "blocks", "not_found"], properties: {
     lists: { type: "array", maxItems: AGENTIC_LIST_WRITER_LISTS_MAX_V1, items: listUse },
-    blocks: { type: "array", minItems: 1, maxItems: AGENTIC_ASK_MAX_BLOCKS_V1, items: { anyOf: [
+    blocks: { type: "array", minItems: 1, items: { anyOf: [
       blockShape("answer", ["sentences"], { sentences: { type: "array", minItems: 1, maxItems: PERSON_ANSWER_BLOCKS_ANSWER_MAX_STATEMENTS_V2, items: citedSentence } }),
-      blockShape("text", ["sentences"], { title: blockTitle, sentences: { type: "array", minItems: 1, maxItems: 4, items: citedSentence } }),
-      blockShape("points", ["ordered", "items"], { title: blockTitle, ordered: { type: "boolean" }, items: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, maxItems: 10, items: citedSentence } }),
+      blockShape("text", ["sentences"], { title: blockTitle, sentences: { type: "array", minItems: 1, items: citedSentence } }),
+      blockShape("points", ["ordered", "items"], { title: blockTitle, ordered: { type: "boolean" }, items: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: citedSentence } }),
       blockShape("table", ["columns", "rows"], {
-        title: blockTitle, columns: { type: "array", minItems: 2, maxItems: AGENTIC_ASK_MAX_COLUMNS_V1, items: { type: "string", maxLength: COLUMN_CHARS } },
-        rows: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, maxItems: 12, items: {
+        title: blockTitle, columns: { type: "array", minItems: 2, items: { type: "string", maxLength: COLUMN_CHARS } },
+        rows: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: {
           type: "object", additionalProperties: false, required: ["cells", "evidence"],
-          properties: { cells: { type: "array", minItems: 2, maxItems: AGENTIC_ASK_MAX_COLUMNS_V1, items: { type: "string", maxLength: CELL_CHARS } }, evidence: ids },
+          properties: { cells: { type: "array", minItems: 2, items: { type: "string", maxLength: CELL_CHARS } }, evidence: ids },
         } },
       }),
-      blockShape("timeline", ["events"], { title: blockTitle, events: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, maxItems: 12, items: {
+      blockShape("timeline", ["events"], { title: blockTitle, events: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: {
         type: "object", additionalProperties: false, required: ["date", "text", "evidence"],
         properties: { date: eventDate, text: { type: "string", maxLength: SENTENCE_CHARS }, who: { type: "string", maxLength: WHO_CHARS }, evidence: ids },
       } } }),
       blockShape("card", ["title", "kind", "facts"], {
         title: { type: "string", maxLength: CARD_TITLE_CHARS }, kind: closedString(PERSON_ANSWER_CARD_ENTITIES_V2),
-        facts: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, maxItems: 8, items: {
+        facts: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: {
           type: "object", additionalProperties: false, required: ["label", "value", "evidence"],
           properties: { label: { type: "string", maxLength: LABEL_CHARS }, value: { type: "string", maxLength: VALUE_CHARS }, evidence: ids },
         } },
@@ -742,10 +742,9 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
   if (body === null) throw new AgenticAskOutputErrorV1("the reply was not a JSON object");
   if (!Array.isArray(body.blocks)) throw new AgenticAskOutputErrorV1(`"blocks" must be an array (got ${keysOf(body)})`);
   const sentences: AnswerSentence[] = [];
-  let capped = 0;
+  // No count is capped here: the part's bounds decide what is kept (W6), and say so when something does not fit.
   const add = (text: string, evidence: unknown, item: AnswerItem) => {
     if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
-    else if (sentences.length === AGENTIC_ASK_MAX_SENTENCES_V1) capped += 1;
     else sentences.push(Object.freeze({ text, evidence: cleanIds(evidence, true, false), item: Object.freeze(item) }));
   };
   /** A block's entries: its array, or none. */
@@ -754,9 +753,8 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
     if (read === null) observeCoreModelCorrectionV1("model_entry_dropped");
     return read === null ? [] : [read];
   });
-  if (body.blocks.length > AGENTIC_ASK_MAX_BLOCKS_V1) observeCoreModelCorrectionV1("model_items_capped", body.blocks.length - AGENTIC_ASK_MAX_BLOCKS_V1);
   let answered = false;
-  for (const [block, raw] of body.blocks.slice(0, AGENTIC_ASK_MAX_BLOCKS_V1).entries()) {
+  for (const [block, raw] of body.blocks.entries()) {
     const entry = object(raw);
     // The writer names each block by its kind in the contract.
     const name = closedValue(entry?.block, PERSON_ANSWER_BLOCK_KINDS_V2);
@@ -783,18 +781,22 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
         const text = boundedModelLine(column, COLUMN_CHARS, PERSON_ANSWER_COLUMN_MAX_BYTES_V1);
         if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
         else if (columns.some(existing => existing.toLowerCase() === text.toLowerCase())) observeCoreModelCorrectionV1("model_repeat_dropped");
-        else if (columns.length < AGENTIC_ASK_MAX_COLUMNS_V1) columns.push(text);
-        else observeCoreModelCorrectionV1("model_items_capped");
+        else columns.push(text);
       }
       for (const row of entries(entry.rows)) {
-        // A row reads as layout v1's does, its cells under their columns; one whose cells do not match them is text.
+        // A row says its cells under their columns, as layout v1's does, when its claim fits one statement. One whose cells
+        // do not match its columns, or too wide for a statement, is text, cut to a statement's bytes.
         const given: readonly unknown[] = Array.isArray(row.cells) ? row.cells : [];
         const cells = rowCells(given);
-        if (columns.length >= 2 && given.length === columns.length && cells.some(cell => cell.length > 0)) {
-          add(rowClaim(cells, columns), row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) });
+        const matches = columns.length >= 2 && given.length === columns.length && cells.some(cell => cell.length > 0);
+        const claim = matches ? rowClaim(cells, columns) : rowClaim(cells);
+        if (matches && Buffer.byteLength(claim, "utf8") <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4) {
+          add(claim, row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) });
         } else {
           observeCoreModelCorrectionV1("model_enum_respelled");
-          add(rowClaim(cells), row.evidence, prose);
+          const cut = boundedBytes(claim, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4);
+          if (cut !== claim) observeCoreModelCorrectionV1("model_text_truncated");
+          add(cut, row.evidence, prose);
         }
       }
     } else if (name === "timeline") {
@@ -827,7 +829,6 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
       add(text.length === 0 ? "" : `${from.length === 0 ? "" : `${from}: `}“${text}”`, entry.evidence, { block, kind: "quote", text, ...(from.length === 0 ? {} : { from }) });
     }
   }
-  if (capped > 0) observeCoreModelCorrectionV1("model_items_capped", capped);
   const since = options.since === true && Array.isArray(body.since) ? sinceOf(body.since) : undefined;
   return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body), ...(since === undefined ? {} : { since }) });
 }
@@ -908,7 +909,7 @@ function laidSentence(entry: Record<string, unknown>, said: string, tables: read
     if (given.length > 0) observeCoreModelCorrectionV1("model_entry_dropped");
     return { text: said, ...(read === "text" ? {} : { form: read }), ...section };
   }
-  const cells = rowCells(given);
+  const cells = rowCells(given, AGENTIC_ASK_MAX_COLUMNS_V1);
   const columns = tables.find(table => table.section === named)?.columns;
   if (columns === undefined || given.length !== columns.length || cells.every(cell => cell.length === 0)) {
     observeCoreModelCorrectionV1("model_enum_respelled");
@@ -917,10 +918,10 @@ function laidSentence(entry: Record<string, unknown>, said: string, tables: read
   return { text: rowClaim(cells, columns), form: "row", ...section, cells: Object.freeze(cells) };
 }
 
-/** A row's cells, as layouts v1 and v2 read them: at most six, a cell that is no string empty. */
-function rowCells(given: readonly unknown[]): string[] {
-  if (given.length > AGENTIC_ASK_MAX_COLUMNS_V1) observeCoreModelCorrectionV1("model_items_capped", given.length - AGENTIC_ASK_MAX_COLUMNS_V1);
-  return given.slice(0, AGENTIC_ASK_MAX_COLUMNS_V1).map(cell => {
+/** A row's cells, as layouts v1 and v2 read them: a cell that is no string empty, and at most `maximum` of them (layout v1's six), counted when more. */
+function rowCells(given: readonly unknown[], maximum = Number.POSITIVE_INFINITY): string[] {
+  if (given.length > maximum) observeCoreModelCorrectionV1("model_items_capped", given.length - maximum);
+  return given.slice(0, maximum).map(cell => {
     if (typeof cell !== "string") { observeCoreModelCorrectionV1("model_entry_dropped"); return ""; }
     return writtenLine(cell, CELL_CHARS, PERSON_ANSWER_CELL_MAX_BYTES_V1);
   });
@@ -1200,16 +1201,16 @@ const BLOCK_TITLE = "optional: a heading of a few words";
  * The blocks a v2 Ask's writer arranges its answer from (answer layout v2, ADR-0051), in the shape of the research tool
  * contract's source entries (ADR-0042): the name it passes, a description that says only what the block shows, and
  * each field it takes with its meaning and limits. It reaches the writer as data beside source_catalog, and
- * answerBlocksSchema is built from the same entries. The entries are the block evaluation's, word for word
- * (tools/evals/ask-blocks).
+ * answerBlocksSchema is built from the same entries. The entries are the block evaluation's, but that no block caps
+ * how many items it holds (the founder, 2026-11-02); the answer keeps its one or two sentences (tools/evals/ask-blocks).
  */
 export const ANSWER_BLOCK_CATALOG = Object.freeze([
   { block: "answer", description: "The direct answer to the question, in one or two sentences.", params: { sentences: "1 to 2 sentences, each with its text and evidence" } },
-  { block: "text", description: "A short paragraph that explains, qualifies or connects facts.", params: { title: BLOCK_TITLE, sentences: "1 to 4 sentences, each with its text and evidence" } },
-  { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 to 10 items, each with its text and evidence" } },
-  { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 to 6 column names", rows: "2 to 12 rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence" } },
-  { block: "timeline", description: "Events in date order, oldest first: each event's date and what happened, and who was involved when the evidence says.", params: { title: BLOCK_TITLE, events: "2 to 12 events, each with date (YYYY-MM-DD, as the evidence dates the event), text (what happened, in one sentence), who (optional: a person's name as the evidence records it) and evidence" } },
-  { block: "card", description: "One person, project, ticket or decision, with its key facts as label and value.", params: { title: "its name", kind: "person, project, ticket or decision", facts: "2 to 8 facts, each with label, value and evidence" } },
+  { block: "text", description: "A short paragraph that explains, qualifies or connects facts.", params: { title: BLOCK_TITLE, sentences: "1 or more sentences, each with its text and evidence" } },
+  { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 or more items, each with its text and evidence" } },
+  { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 or more column names", rows: "2 or more rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence" } },
+  { block: "timeline", description: "Events in date order, oldest first: each event's date and what happened, and who was involved when the evidence says.", params: { title: BLOCK_TITLE, events: "2 or more events, each with date (YYYY-MM-DD, as the evidence dates the event), text (what happened, in one sentence), who (optional: a person's name as the evidence records it) and evidence" } },
+  { block: "card", description: "One person, project, ticket or decision, with its key facts as label and value.", params: { title: "its name", kind: "person, project, ticket or decision", facts: "2 or more facts, each with label, value and evidence" } },
   { block: "quote", description: "The exact words of one source, such as an approved decision's text or what someone said, with where they come from.", params: { text: "words copied exactly from the cited evidence", from: "who said or recorded it, and when", evidence: "the one id it is copied from" } },
 ].map(entry => Object.freeze({ ...entry, params: Object.freeze(entry.params) })));
 
@@ -1230,6 +1231,7 @@ export const ANSWER_BLOCKS_PROMPT = [
   "- Never write items, rows, events or facts for a list's members: code states them, right after the answer.",
   "- Write a date in a date field or a table cell as YYYY-MM-DD.",
   "- Put in a block only what the evidence says.",
+  "- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.",
   "",
   "With layout, reply with ONLY a JSON object in exactly this shape instead:",
   "{\"lists\":[],\"blocks\":[{\"block\":\"answer\",\"sentences\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}]},{\"block\":\"<a block from block_catalog>\",\"<its params>\":\"...\"}],\"not_found\":[]}",

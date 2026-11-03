@@ -188,6 +188,16 @@ describe('an arranged part reads as its blocks', () => {
     expect(byType(other, 'figcaption')).toEqual([]);
   });
 
+  it('widens a table of more than six columns in its own scroll box: the writer has no column cap (ADR-0051)', async () => {
+    const columns = ['Item', 'Status', 'Owner', 'Due', 'Priority', 'Area', 'Build', 'Risk'];
+    const wide = changed(blocks => blocks.map(block => block.kind !== 'table' ? block
+      : { ...block, columns, rows: block.rows.map(row => ({ ...row, cells: columns.map((_, at) => row.cells[at] ?? `x${at}`) })) }));
+    const [box] = byClass(byTestId((await answered(wide)).thread(), 'answer').at(-1), 'answer-table');
+    expect(byType(box, 'table')[0]!.props.style).toEqual({ minWidth: '800px' });
+    const [plain] = byClass((await answered(therm())).thread(), 'answer-table');
+    expect(byType(plain, 'table')[0]!.props.style).toBeUndefined();
+  });
+
   it('draws a table as layout v1 does, its title as the heading above it and its region\'s label, its caption only when it opens the answer', async () => {
     const { thread } = await answered(therm());
     const [box] = byClass(thread(), 'answer-table');
