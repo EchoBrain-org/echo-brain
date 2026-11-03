@@ -32,18 +32,6 @@ production's 2.33, best in 10 of 15. The plain-English design is
 founder accepted this record on 2026-11-02, before it was built. Acceptance
 does not mean the change is deployed or qualified.
 
-**Amended 2026-11-02 (quick lead check, proposed).** The founder ranked two
-rounds of tuning the block descriptions below this record's writer, then asked
-for a quick answer block with three or more things set out below it, and
-approved one check in code. A v2 answer block whose sentence writes out three
-or more items after a colon takes the writer's one repair, which asks for the
-short answer in the answer block and the items as points, numbered points or
-a timeline after it; the repair's reply is released whatever its lead. The
-prompt and the catalog do not change. It stands only if the founder's blind
-ranking of the answers it changed prefers them
-([block evaluation](../../tools/evals/ask-blocks/README.md), "Quick lead
-check").
-
 ## Context and options
 
 Layout v1 ([ADR-0045](ADR-0045-ask-answer-layout.md)) lets each writer sentence

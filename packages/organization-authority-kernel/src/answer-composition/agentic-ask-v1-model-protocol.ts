@@ -834,32 +834,6 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
   return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body), ...(since === undefined ? {} : { since }) });
 }
 
-/** The word that joins a list's last item to the others. */
-const LAST_JOIN = /^(?:and then|and finally|and|or|then)\s+/iu;
-const INNER_JOIN = /\s(?:and then|and finally|and|or|then)\s+(.+)$/iu;
-/** Words that open the rest of a sentence about its own subject, so name no other item ("…, and is still open"). */
-const GOES_ON = /^(?:is|are|was|were|has|have|had|will|would|can|could|should|may|might|must)\b/iu;
-
-/**
- * Whether an answer block's sentence writes out three or more items (answer layout v2, ADR-0051; the block evaluation's
- * quick lead check): outside brackets, the text after a colon in one of its sentences is three or more parts separated
- * by commas or semicolons, the last joined by "and", "or" or "then", unless what follows that word goes on about the
- * sentence's own subject ("You own it: the follow-up is assigned to you, Noor Haddad, and is still open.").
- */
-export function leadListsItems(text: string): boolean {
-  return text.replace(/\([^()]*\)|\[[^\]]*\]/gu, " ").split(/(?<=[.!?])\s+/u).some(sentence => {
-    const colon = sentence.indexOf(": ");
-    if (colon < 0) return false;
-    const parts = sentence.slice(colon + 2).replace(/[.!?]+$/u, "").split(/\s*[,;]\s*/u).map(part => part.trim()).filter(part => part.length > 0);
-    const last = parts.at(-1) ?? "";
-    const joined = LAST_JOIN.exec(last);
-    if (joined !== null) return parts.length >= 3 && !GOES_ON.test(last.slice(joined[0].length));
-    // "A, B and C": the last part holds the last two items.
-    const inner = INNER_JOIN.exec(last);
-    return parts.length >= 2 && inner !== null && !GOES_ON.test(inner[1]!);
-  });
-}
-
 /**
  * An Ask again's `since` (ADR-0047): its first 6 sentences, each read as a writer's sentence is, its list ids kept beside
  * its first 12 item ids. A list with an entry that is not a sentence with text is a comparison the reply cannot stand
