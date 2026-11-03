@@ -13,6 +13,7 @@ const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const CALENDAR_DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TOOL_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 const PERMALINK_PATTERN = /^https:\/\/[a-zA-Z0-9.-]+(?::[0-9]{1,5})?\/[^\s\\\p{Cc}]*$/u;
 
@@ -340,6 +341,18 @@ export function assertTimestamp(
   if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
     fail(`${label} is not a real UTC timestamp`);
   }
+}
+
+/**
+ * A real calendar day written YYYY-MM-DD, in any year from 0000 to 9999. The day is parsed as written: Date.UTC would
+ * read the years 0000 to 0099 as 1900 to 1999.
+ */
+export function isCalendarDay(value: unknown): value is string {
+  if (typeof value !== 'string' || !CALENDAR_DAY_PATTERN.test(value)) {
+    return false;
+  }
+  const parsed = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
 }
 
 function validateInnerDocument<T>(label: string, validate: () => T): T {
