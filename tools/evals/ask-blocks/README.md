@@ -708,6 +708,20 @@ the reveal, and the labels the page saved match the fixed order.
   3.7 for a repaired answer, 25% more output tokens on the 15 cases) and the
   ADR's amendment wait for the founder's separate approval.
 
+### The decision, 2026-11-02
+
+The founder rejected the check: the second writer call rewrites the whole
+answer whenever the check refuses the first draft, "no need for extra round
+that is a patch". It is reverted (`630efd8`), so the writer is PR #394's
+again, and ADR-0051 records the rejection beside its other rejected repair.
+
+This record, the held-out questions in
+[`held-out-cases.json`](held-out-cases.json) and `--case-set held-out` stay:
+the founder preferred the check's answers in all 7 questions it changed, so a
+short answer with its list below is the shape a later attempt should reach,
+without a second writer call, and the held-out questions can test it beyond
+the 15 cases.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model

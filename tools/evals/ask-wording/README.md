@@ -221,7 +221,8 @@ prompt (block evaluation README, "Result of rule 3 and the decision").
 The quick lead check that followed (block evaluation README, "Quick lead
 check") keeps all three rules: 30, 30 and 30 at `ca9b9a5`, leads of 15.3
 words. It sent no wording trial back: these one-fact questions write out no
-list.
+list. The founder rejected that check for its second writer call, and it is
+reverted; PR #394's prompt and writer stand.
 
 ## Limits
 

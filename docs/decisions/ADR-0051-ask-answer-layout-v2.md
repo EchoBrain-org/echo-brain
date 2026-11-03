@@ -65,6 +65,16 @@ Within option 3:
   a v1 row's statement from its cells.
 - **A repair when a block falls short.** Rejected: a second writer call costs
   seconds for a fault code can mend by reading the block more plainly.
+- **A repair when the answer block writes out a list** (2026-11-02, after the
+  build). A v2 answer block whose sentence wrote out three or more items
+  after a colon would have taken the writer's one repair, asking for a short
+  answer with the items below it. Rejected by the founder: the extra call
+  rewrites the whole answer whenever the check refuses the first draft, "no
+  need for extra round that is a patch". The answers it produced did win the
+  founder's blind ranking in all 7 questions it changed, so a short answer
+  with its list below is the shape to reach, without a second writer call
+  ([block evaluation](../../tools/evals/ask-blocks/README.md), "Quick lead
+  check").
 
 ## Decision
 
