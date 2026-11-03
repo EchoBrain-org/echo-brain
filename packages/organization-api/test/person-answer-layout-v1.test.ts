@@ -80,6 +80,9 @@ describe('Answer layout v1 (ADR-0045)', () => {
       { cells: ['TRACE-01', '2026-10-14'], citation_indexes: [1] }, { cells: ['DVT-R2', ''], citation_indexes: [2] }], ...fields }]);
     expect(table({})[1]).not.toHaveProperty('caption');
     expect(() => table({ columns: ['Action'] })).toThrow('columns is invalid');
+    // Layout v1's tables keep their six columns.
+    const seven = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+    expect(() => table({ columns: seven, rows: [{ cells: seven, citation_indexes: [1] }, { cells: seven, citation_indexes: [2] }] })).toThrow('columns is invalid');
     expect(() => table({ columns: ['Action', 'Action'] })).toThrow('duplicates');
     expect(() => table({ rows: [{ cells: ['TRACE-01'], citation_indexes: [1] }, { cells: ['DVT-R2', ''], citation_indexes: [2] }] })).toThrow('cells is invalid');
     expect(() => table({ rows: [{ cells: ['', ''], citation_indexes: [1] }, { cells: ['DVT-R2', ''], citation_indexes: [2] }] })).toThrow('row is empty');
