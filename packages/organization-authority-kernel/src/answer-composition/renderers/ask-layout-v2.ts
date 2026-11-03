@@ -1,13 +1,6 @@
-import {
-  PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2,
-  PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2,
-  PERSON_ANSWER_CAPTION_MAX_BYTES_V1,
-  PERSON_ANSWER_CELL_MAX_BYTES_V1,
-  PERSON_ANSWER_COLUMN_MAX_BYTES_V1,
-  type PersonAnswerBlockV2,
-  type PersonAnswerTableRowV1,
-} from "@echo-brain/organization-api";
+import { PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2, PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, type PersonAnswerBlockV2 } from "@echo-brain/organization-api";
 import { boundedBytes, type AnswerItem } from "../agentic-ask-v1-model-protocol.js";
+import { cellsOf, columnsOf, listTableV1, type AskLayoutShapeV1 } from "./ask-layout-v1.js";
 
 /**
  * How Ask lays out a V8 answer part with answer layout v2 (ADR-0051). The
@@ -20,10 +13,7 @@ import { boundedBytes, type AnswerItem } from "../agentic-ask-v1-model-protocol.
  */
 
 /** What one statement reads as: a writer's item, a list statement code writes as its table, or plain text. */
-export type AskBlockShapeV2 =
-  | AnswerItem
-  | { readonly kind: "text" }
-  | { readonly kind: "list"; readonly caption: string; readonly columns: readonly string[]; readonly rows: readonly PersonAnswerTableRowV1[] };
+export type AskBlockShapeV2 = AnswerItem | { readonly kind: "text" } | Extract<AskLayoutShapeV1, { kind: "list" }>;
 /** One statement the response kept, with its citations and its shape. */
 export interface AskBlockStatementV2 {
   readonly citation_indexes: readonly number[];
@@ -55,11 +45,9 @@ export function orderAskBlocksV2<L, S extends { readonly item: AnswerItem }>(lis
   ]);
 }
 
-type Run = { readonly shape: AskBlockShapeV2; readonly block?: number; readonly statements: number[] };
+type Run = { readonly shape: AskBlockShapeV2; readonly statements: number[] };
 const blockOf = (shape: AskBlockShapeV2) => "block" in shape ? shape.block : undefined;
 const titleOf = (shape: AskBlockShapeV2) => "title" in shape && shape.title !== undefined ? { title: boundedBytes(shape.title, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2) } : {};
-/** A table's cells, one per column, each within the contract's bytes. */
-const cellsOf = (cells: readonly string[], columns: readonly string[]) => Object.freeze(columns.map((_, at) => boundedBytes(cells[at] ?? "", PERSON_ANSWER_CELL_MAX_BYTES_V1)));
 
 /**
  * The blocks of the statements a v2 answer kept, in their order: the answer; each list statement as its own table, or
@@ -73,8 +61,8 @@ export function buildAskBlocksV2(statements: readonly AskBlockStatementV2[]): re
   statements.forEach(({ shape }, at) => {
     const last = runs.at(-1);
     const block = blockOf(shape);
-    if (last !== undefined && block !== undefined && last.block === block && last.shape.kind === shape.kind && shape.kind !== "quote") last.statements.push(at);
-    else runs.push({ shape, ...(block === undefined ? {} : { block }), statements: [at] });
+    if (last !== undefined && block !== undefined && blockOf(last.shape) === block && last.shape.kind === shape.kind && shape.kind !== "quote") last.statements.push(at);
+    else runs.push({ shape, statements: [at] });
   });
   const blocks: PersonAnswerBlockV2[] = [];
   const titled = new Set<number>();
@@ -85,39 +73,28 @@ export function buildAskBlocksV2(statements: readonly AskBlockStatementV2[]): re
   };
   for (const run of runs) {
     const { shape } = run;
+    const block = blockOf(shape);
     // A block's title heads its first run only: the items read as text after its own follow it untitled.
-    const opens = run.block !== undefined && !titled.has(run.block);
-    if (run.block !== undefined) titled.add(run.block);
+    const opens = block !== undefined && !titled.has(block);
+    if (block !== undefined) titled.add(block);
     const title = opens ? titleOf(shape) : {};
-    const shapes = run.statements.map(at => statements[at]!.shape);
+    // A run's statements are all of its kind.
+    const items = run.statements.map(at => statements[at]!);
     const enough = run.statements.length >= PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2;
     if (shape.kind === "answer") blocks.push({ kind: "answer", statements: run.statements });
-    else if (shape.kind === "list") {
-      const columns = shape.columns.map(column => boundedBytes(column, PERSON_ANSWER_COLUMN_MAX_BYTES_V1));
-      const caption = boundedBytes(shape.caption, PERSON_ANSWER_CAPTION_MAX_BYTES_V1);
-      blocks.push({
-        kind: "table", statements: run.statements, columns,
-        rows: shape.rows.map(row => Object.freeze({ cells: cellsOf(row.cells, columns), citation_indexes: Object.freeze([...row.citation_indexes]) })),
-        ...(caption.length === 0 ? {} : { caption }),
-      });
-    } else if (shape.kind === "quote") blocks.push({ kind: "quote", statements: run.statements, text: shape.text, ...(shape.from === undefined ? {} : { from: shape.from }) });
+    else if (shape.kind === "list") blocks.push({ kind: "table", statements: run.statements, ...listTableV1(shape) });
+    else if (shape.kind === "quote") blocks.push({ kind: "quote", statements: run.statements, text: shape.text, ...(shape.from === undefined ? {} : { from: shape.from }) });
     else if (shape.kind === "point" && enough) blocks.push({ kind: "points", ...title, ordered: shape.ordered, statements: run.statements });
     else if (shape.kind === "row" && enough) {
-      const columns = shape.columns.map(column => boundedBytes(column, PERSON_ANSWER_COLUMN_MAX_BYTES_V1));
-      blocks.push({
-        kind: "table", ...title, statements: run.statements, columns,
-        rows: run.statements.map((at, row) => Object.freeze({ cells: cellsOf((shapes[row] as Extract<AnswerItem, { kind: "row" }>).cells, columns), citation_indexes: Object.freeze([...statements[at]!.citation_indexes]) })),
-      });
+      const columns = columnsOf(shape.columns);
+      blocks.push({ kind: "table", ...title, statements: run.statements, columns, rows: items.flatMap(({ shape: row, citation_indexes }) => row.kind !== "row" ? []
+        : [Object.freeze({ cells: cellsOf(row.cells, columns), citation_indexes: Object.freeze([...citation_indexes]) })]) });
     } else if (shape.kind === "event" && enough) {
-      blocks.push({ kind: "timeline", ...title, statements: run.statements, events: shapes.map(value => {
-        const event = value as Extract<AnswerItem, { kind: "event" }>;
-        return Object.freeze({ date: event.date, text: event.text, ...(event.who === undefined ? {} : { who: event.who }) });
-      }) });
+      blocks.push({ kind: "timeline", ...title, statements: run.statements, events: items.flatMap(({ shape: event }) => event.kind !== "event" ? []
+        : [Object.freeze({ date: event.date, text: event.text, ...(event.who === undefined ? {} : { who: event.who }) })]) });
     } else if (shape.kind === "fact" && enough) {
-      blocks.push({ kind: "card", title: boundedBytes(shape.title, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2), entity: shape.entity, statements: run.statements, facts: shapes.map(value => {
-        const fact = value as Extract<AnswerItem, { kind: "fact" }>;
-        return Object.freeze({ label: fact.label, value: fact.value });
-      }) });
+      blocks.push({ kind: "card", title: boundedBytes(shape.title, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2), entity: shape.entity, statements: run.statements,
+        facts: items.flatMap(({ shape: fact }) => fact.kind !== "fact" ? [] : [Object.freeze({ label: fact.label, value: fact.value })]) });
     } else text(run, title);
   }
   return Object.freeze(blocks.map(block => Object.freeze({ ...block, statements: Object.freeze([...block.statements]) })));
