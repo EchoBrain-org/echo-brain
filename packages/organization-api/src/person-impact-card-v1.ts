@@ -1,7 +1,7 @@
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerCitationV6 } from './person-answer-v4.js';
 import type { PersonAnswerCitationV6 } from './person-answer-v8.js';
-import { asEnumerableRecord as object, assertExactKeys, assertUnique as unique, boundedLine as line, boundedList as list, fail } from './validation.js';
+import { asEnumerableRecord as object, assertExactKeys, assertUnique as unique, boundedLine as line, boundedList as list, fail, isCalendarDay } from './validation.js';
 
 /**
  * The approved record's impact card (research trigger contract v1, section
@@ -57,13 +57,9 @@ export interface PersonImpactCardV1 {
 export const PERSON_IMPACT_CARD_LIMITS_V1 = Object.freeze({ decided: 12, affected: 20, unconfirmed: 20, line_chars: 300, name_chars: 200, milestone_chars: 120, expected_chars: 120 });
 
 const RELATIONS: readonly string[] = ['confirms', 'conflicts', 'needs_updating'];
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A calendar date written YYYY-MM-DD. */
-export function isPersonImpactCardDateV1(value: unknown): value is string {
-  const time = typeof value === 'string' && DATE.test(value) ? Date.parse(`${value}T00:00:00.000Z`) : Number.NaN;
-  return !Number.isNaN(time) && new Date(time).toISOString().slice(0, 10) === value;
-}
+export const isPersonImpactCardDateV1 = isCalendarDay;
 
 export function validatePersonImpactCardV1(value: unknown): PersonImpactCardV1 {
   const limits = PERSON_IMPACT_CARD_LIMITS_V1;

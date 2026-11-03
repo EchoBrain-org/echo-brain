@@ -1,6 +1,6 @@
 import { LAYOUT_CELL_MAX_BYTES, LAYOUT_COLUMN_MAX_BYTES, layoutIndexes, layoutLine, layoutTable } from './person-answer-layout-checks.js';
 import { PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1, PERSON_ANSWER_HEADING_MAX_BYTES_V1, type PersonAnswerTableRowV1 } from './person-answer-layout-v1.js';
-import { assertExactKeys, asEnumerableRecord as object, fail } from './validation.js';
+import { assertExactKeys, asEnumerableRecord as object, fail, isCalendarDay } from './validation.js';
 
 /**
  * Answer layout v2 (ADR-0051): how a V8 answer part reads when the writer
@@ -77,14 +77,10 @@ export type PersonAnswerBlockV2 =
   }
   | { readonly kind: 'quote'; readonly statements: readonly number[]; readonly text: string; readonly from?: string };
 
-const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-/** A real calendar day, written YYYY-MM-DD. */
+/** A real calendar day, written YYYY-MM-DD: any day the kernel reads, years 0000 to 0099 too. */
 function calendarDay(value: unknown, label: string): string {
-  const found = typeof value === 'string' ? DAY.exec(value) : null;
-  const date = found === null ? null : new Date(Date.UTC(Number(found[1]), Number(found[2]) - 1, Number(found[3])));
-  if (found === null || date === null || date.toISOString().slice(0, 10) !== value) fail(`${label} is invalid`);
-  return value as string;
+  if (!isCalendarDay(value)) fail(`${label} is invalid`);
+  return value;
 }
 
 /**
