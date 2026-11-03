@@ -17,6 +17,7 @@ import {
   cleanId,
   createStepSchema,
   FOLLOW_UPS_ANSWER_GUIDANCE,
+  leadListsItems,
   normalizeQuery,
   parseAnswer,
   parseBlocksAnswer,
@@ -628,6 +629,30 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(lines).toContain("- Never write items, rows, events or facts for a list's members: code states them, right after the answer.");
     expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
     expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
+  });
+
+  it("tells a lead that writes out three or more items after a colon from one that does not (the quick lead check)", () => {
+    const read = (texts: readonly string[]) => texts.map(text => [text, leadListsItems(text)]);
+    const listed = [
+      "The approved Oct 28 DVT review decided three things: DVT units ship to the lab after the soak passes, the enclosure is frozen at revision C, and the blue color option is dropped for DVT.",
+      "Three conditions are still open: the THERM-482 fix, the RoHS certificate and the 72-hour soak.",
+      "Four steps must happen in order: flash firmware, run the soak, sign off the report, then book the courier.",
+      "It is late. Three things hold it up: the fixture; the certificate; and the soak.",
+    ];
+    expect(read(listed)).toEqual(listed.map(text => [text, true]));
+    const plain = [
+      // A comparison, two items, items in brackets, and a sentence that goes on about its own subject are no list.
+      "Curve v2 runs cooler (71°C peak vs 78°C for v1) but is louder (36 dBA vs 32 dBA) and needs firmware 2.3; the review approved v2 for DVT.",
+      "It decided two things: units ship after the soak and blue is dropped.",
+      "The gate waits on its conditions: the fix and the soak (the certificate, the line and the report are in).",
+      "You own it: the follow-up is assigned to you, Noor Haddad, and is still open.",
+      "The DVT gate is blocked by THERM-482: the fixture fails at 45 °C during the soak, and the soak cannot finish until it holds.",
+      // With no colon a list is not read as one: such clauses cannot be told from it.
+      "The DVT build date moved twice, from Oct 5 to Oct 12 and then to Oct 26, and the Oct 21 review kept it on Oct 26.",
+      "Five follow-ups are open, each with a different owner and due date, and none has been checked yet.",
+      "This week's records cover the DVT build, its gate, shipping and the supplier certificate.",
+    ];
+    expect(read(plain)).toEqual(plain.map(text => [text, false]));
   });
 
   it("never rejects a reply the blocks schema permits, asked again or not", () => {

@@ -833,6 +833,30 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     expect(blocksOf(rendered).map(block => block.kind)).toEqual(["answer", "text"]);
   });
 
+  /** The writer's one repair for an answer block that writes out three or more items (the quick lead check). */
+  const LEAD_LIST = "the answer block writes out three or more items in one sentence: keep it to the short answer, such as how many there are or what they come to, and give the items in a block after it: points, numbered points when their order matters, or a timeline when each has a date";
+  const LISTED = { block: "answer", sentences: [{ text: "Three things come before PVT: the soak, the firmware freeze and the build shipping to the line.", evidence: ["E2", "E4"] }] };
+  const calls = (run: ReturnType<typeof alone>) => run.trace.filter(step => step === "generate").length;
+
+  it("sends an answer block that writes out three or more items back once, and releases the repair's reply whatever its lead", async () => {
+    const quick = { block: "answer", sentences: [{ text: "Three things come before PVT.", evidence: ["E2", "E4"] }] };
+    const run = alone({ bundle: therm(), replies: [reply(LISTED, STEPS), reply(quick, STEPS)], layout: 2 });
+    const rendered = await run.render("What comes before PVT?");
+    expect(run.prompt(1).validation_error).toBe(`Your previous reply could not be used: ${LEAD_LIST}. Reply again with only the JSON object, in exactly the shape your instructions show.`);
+    expect([calls(run), part(rendered).statements[0]!.text, blocksOf(rendered).map(block => block.kind)]).toEqual([2, "Three things come before PVT.", ["answer", "points"]]);
+    // There is one repair: a repair's reply that still lists them is released as it is.
+    const again = alone({ bundle: therm(), replies: [reply(LISTED, STEPS), reply(LISTED, STEPS)], layout: 2 });
+    expect([part(await again.render("What comes before PVT?")).statements[0]!.text, calls(again)]).toEqual([LISTED.sentences[0]!.text, 2]);
+  });
+
+  it("checks only a v2 answer block: a v1 lead or a v2 text block that writes out items takes no repair", async () => {
+    const v1 = alone({ bundle: therm(), replies: [{ lists: [], not_found: [], sentences: [{ ...LISTED.sentences[0]!, form: "lead" }] }], layout: 1 });
+    await v1.render("What comes before PVT?");
+    const text = alone({ bundle: therm(), replies: [reply(ANSWER, { block: "text", sentences: LISTED.sentences })], layout: 2 });
+    await text.render("What comes before PVT?");
+    expect([calls(v1), calls(text)]).toEqual([1, 1]);
+  });
+
   it("keeps the same claims without blocks for an Ask that did not ask for v2", async () => {
     const laid = await alone({ bundle: therm(), replies: [reply(ANSWER, TIMELINE, CARD, STEPS, QUOTE)], layout: 2 }).render("Can PVT start?");
     const v1 = await alone({ bundle: therm(), replies: [{ lists: [], not_found: [], sentences: [{ text: "PVT can start: the soak passed on Oct 23.", evidence: ["E1", "E2"], form: "lead" }] }], layout: 1 }).render("Can PVT start?");

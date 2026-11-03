@@ -22,6 +22,7 @@ import {
   answerSinceSchema,
   cleanId,
   cleanLine,
+  leadListsItems,
   parseAnswer,
   parseBlocksAnswer,
   partQuestion,
@@ -92,6 +93,8 @@ const WHICH_GAP = "I could not confirm the full list of items asked for.";
 const UNSUPPORTED_GAP = "Part of the answer was left out because no item's text supports it.";
 /** The writer's one repair for a sentence resting on list rows or list ids alone. */
 const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text: code states which items exist, and members' title, dates, status and owner, through \"lists\" (with \"where\" or \"members\"); what no evidence text says belongs in \"not_found\"";
+/** The writer's one repair for a v2 answer block that writes out three or more items (the block evaluation's quick lead check). */
+const LEAD_LIST_REASON = "the answer block writes out three or more items in one sentence: keep it to the short answer, such as how many there are or what they come to, and give the items in a block after it: points, numbered points when their order matters, or a timeline when each has a date";
 const FIT_GAP = "Some evidence could not fit in this response.";
 /** A list that is not complete: its statement says "at least" (ADR-0041). */
 function listEndGap(noun: string): string { return `The list of ${noun} could not be read to its end, so more may exist.`; }
@@ -344,7 +347,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         return kept === undefined ? [use] : kept.length === 0 ? [] : [Object.freeze({ id: use.id, members: Object.freeze(kept) })];
       })) });
       // A sentence resting on rows or list ids takes the writer's one repair when a repair can still run; the repaired
-      // reply, or a first reply no repair can follow, is kept, and code leaves such a sentence out.
+      // reply, or a first reply no repair can follow, is kept, and code leaves such a sentence out. A v2 answer block that
+      // writes out three or more items takes the same one repair, after that check; whatever lead the repair gives is kept.
       const callsBefore = input.gate.stats().calls;
       /** The last reply parsed: kept when the repair's reply is unusable. */
       const last: { answer: Answer | null } = { answer: null };
@@ -357,6 +361,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const parsed = withMembers(arranged ? parseBlocksAnswer(value, since) : parseAnswer(value, { layout: laidOut, ...since }));
         last.answer = parsed;
         if (parsed.sentences.some(restsOnRows) && repairable()) throw new AgenticAskOutputErrorV1(ROWS_REASON);
+        if (arranged && parsed.sentences.some(sentence => sentence.item?.kind === "answer" && leadListsItems(sentence.text)) && repairable()) throw new AgenticAskOutputErrorV1(LEAD_LIST_REASON);
         return parsed;
       };
 
