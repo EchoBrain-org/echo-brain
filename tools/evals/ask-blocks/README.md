@@ -319,29 +319,32 @@ node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/cr
 
 ## Result of the gate, 2026-11-02
 
-At `294bf37` with no uncommitted change, through the founder's Claude account
+At `b48c2d7` with no uncommitted change, through the founder's Claude account
 (`claude-sonnet-5-5`): 45 trials, no failed call and no repair. The gate
-passes: `built` meets rules 1 to 5. The run resumed a complete run made at
-`4769016`, before five review fixes that change only how code reads a reply,
-never what the writer is sent, so the kernel asked with the same prompts and
-all 45 writer replies were carried and read again by the final code; that
-earlier run's grades were the same.
+passes: `built` meets rules 1 to 5, fit at its threshold. This is the writer
+after the founder removed every count cap from the catalog, the schema and the
+contract (ADR-0051's amendment), so its catalog says "1 or more" and "2 or
+more" where `balanced` said "1 to 4" or "2 to 12".
 
 | Arm | 1. Valid (43) | 2. Grounded (43) | 3. Nothing lost (41) | 4. Fit (36) | 5. Stable (12) | Output tokens |
 | --- | --- | --- | --- | --- | --- | --- |
-| `built` | 45 | 45 | 45 | 38 | 15 | 18,935 |
+| `built`, no count caps (`b48c2d7`) | 45 | 45 | 45 | 36 | 15 | 19,198 |
+| `built`, with the caps (`294bf37`) | 45 | 45 | 45 | 38 | 15 | 18,935 |
 | `balanced`, run of record | 45 | 45 | 45 | 39 | 15 | 18,839 |
 
-- `built` misses fit where `balanced` did, in every trial: points instead of a
-  card for `person-profile`, and one table instead of sections for
-  `review-multi`. It also misses it in one `ticket-profile` trial, whose writer
-  wrote text instead of a card.
-- Every block the writer gave was released as it gave it: no quote fell short
-  of being word for word, no timeline event's day was one its items lacked,
-  and no block was left with too few items.
-- The writer used 12 tables, 10 points (3 of them numbered steps, one in each
-  `ship-steps` trial), 8 timelines, 3 quotes and 2 cards, 2.3 blocks and 4.4
-  claims an answer.
+- Without the caps `built` misses fit where `balanced` did, in every trial
+  (points instead of a card for `person-profile`, one table instead of sections
+  for `review-multi`), and in every `ticket-profile` trial, whose writer wrote
+  text instead of a card; with the caps it had a card in two of three.
+- No answer grew: the largest held 6 statements, none reached the part's 10,
+  and none said evidence could not fit.
+- Every block the writer gave was released as it gave it, with and without the
+  caps: no quote fell short of being word for word, no timeline event's day
+  was one its items lacked, and no block was left with too few items.
+- The run with the caps, at `294bf37`, resumed a complete run at `4769016`,
+  before five review fixes that change only how code reads a reply: the
+  kernel asked with the same prompts, so all 45 replies were carried and read
+  again.
 
 ## Tuning the block descriptions, 2026-11-02 (pre-registered)
 

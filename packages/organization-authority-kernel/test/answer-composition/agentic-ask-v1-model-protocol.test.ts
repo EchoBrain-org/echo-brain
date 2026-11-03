@@ -681,13 +681,20 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(read([{ block: "chart" }, { block: " Answer ", sentences: sentences("First.") }])).toEqual([["First.", "answer"]]);
   });
 
-  it("reads at most six cells of a row, as layout v1 does, so no row's statement passes a statement's bytes", () => {
+  it("caps no table's columns or cells, but reads a row too wide for one statement as text, cut to a statement's bytes", () => {
     const wide = Array.from({ length: 35 }, (_, at) => `${"x".repeat(115)} ${at}`);
-    const parsed = parseBlocksAnswer(reply([{ block: "table", columns: ["A", "B"], rows: [{ cells: wide, evidence: ["E1"] }, { cells: ["a", 7], evidence: ["E1"] }] }]));
-    expect(parsed.sentences.map(sentence => sentence.item?.kind)).toEqual(["text", "row"]);
-    expect(Buffer.byteLength(parsed.sentences[0]!.text)).toBeLessThan(2_000);
-    expect(parsed.sentences[1]!.text).toBe("A: a.");
-    expect(corrected(() => parseBlocksAnswer(reply([{ block: "table", columns: ["A", "B"], rows: [{ cells: wide, evidence: ["E1"] }] }])))).toEqual({ model_items_capped: 29, model_enum_respelled: 1 });
+    const columns = Array.from({ length: 35 }, (_, at) => `Column ${at + 1}`);
+    const eight = columns.slice(0, 8);
+    const parsed = parseBlocksAnswer(reply([{ block: "table", columns, rows: [
+      { cells: wide, evidence: ["E1"] }, { cells: ["a", 7], evidence: ["E1"] }, { cells: eight.map((_, at) => `${at}`), evidence: ["E1"] },
+    ] }, { block: "table", columns: eight, rows: [{ cells: eight.map((_, at) => `${at}`), evidence: ["E1"] }, { cells: eight.map((_, at) => `${at + 1}`), evidence: ["E1"] }] }]));
+    // 35 columns of long cells pass a statement's 4 KiB: text, cut; a row whose cells do not match its columns: text.
+    expect(parsed.sentences.map(sentence => sentence.item?.kind)).toEqual(["text", "text", "text", "row", "row"]);
+    expect(Buffer.byteLength(parsed.sentences[0]!.text)).toBeLessThanOrEqual(4 * 1024);
+    expect(parsed.sentences[0]!.text.endsWith("…")).toBe(true);
+    expect(parsed.sentences[1]!.text).toBe("a.");
+    expect(parsed.sentences[3]!.item).toMatchObject({ kind: "row", columns: eight });
+    expect(corrected(() => parseBlocksAnswer(reply([{ block: "table", columns, rows: [{ cells: wide, evidence: ["E1"] }, { cells: wide, evidence: ["E1"] }] }])))).toEqual({ model_enum_respelled: 2, model_text_truncated: 2 });
   });
 
   it("reads a card's title once, as its name, counting a cut only past a name's own cap", () => {
@@ -712,12 +719,15 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(corrected(() => parseBlocksAnswer(reply(blocks)))).toEqual({ model_enum_respelled: 8, model_entry_dropped: 3 });
   });
 
-  it("drops a block it cannot read, and reads at most ten statements and twelve blocks", () => {
+  it("drops a block it cannot read, and caps no count of blocks or items: the part's bounds decide what is kept", () => {
     const points = (count: number) => ({ block: "points", ordered: false, items: Array.from({ length: count }, (_, at) => ({ text: `Item ${at + 1}.`, evidence: ["E1"] })) });
-    expect(corrected(() => expect(parseBlocksAnswer(reply([null, { block: "chart" }, points(6), points(6)])).sentences).toHaveLength(10))).toEqual({ model_entry_dropped: 2, model_items_capped: 2 });
+    expect(corrected(() => expect(parseBlocksAnswer(reply([null, { block: "chart" }, points(6), points(6)])).sentences).toHaveLength(12))).toEqual({ model_entry_dropped: 2 });
     const many = Array.from({ length: 14 }, () => ({ block: "text", sentences: [{ text: "x", evidence: ["E1"] }] }));
-    // Two blocks past twelve, then two statements past ten.
-    expect(corrected(() => parseBlocksAnswer(reply(many)))).toEqual({ model_items_capped: 4 });
+    expect(corrected(() => expect(parseBlocksAnswer(reply(many)).sentences).toHaveLength(14))).toEqual({});
+    // The schema bounds only the answer's sentences, and every text's length.
+    const variants = (((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[];
+    const most = (value: Schema): readonly string[] => Object.entries(value).flatMap(([key, child]) => key === "maxItems" ? [String(child)] : child !== null && typeof child === "object" ? most(child as Schema) : []);
+    expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,12", "12", "12", "12", "12", "12", "12"]);
   });
 
   it("reads a reply's lists, what it did not find and, asked again, since, as a laid-out v1 reply's", () => {
