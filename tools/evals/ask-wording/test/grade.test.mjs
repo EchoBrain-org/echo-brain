@@ -74,14 +74,10 @@ test("takes layout v2's lead from its answer block, or else from the first state
   assert.deepEqual(gradeTrial(founder, answered).rules, { no_restating: true, long_ids_once: true, nothing_lost: true });
   // With no answer block, the first statement leads, as it does in an answer without layout.
   assert.equal(leadOf(blocksAnswer([{ kind: "points", ordered: false, statements: [0, 1] }], ["You own it.", "It is still open."])), "You own it.");
-  // The answer's text is its statements, as the audit reads them: code names a card in its first fact's statement only, so a long
-  // identifier that titles a card is written once; one the writer also put in a fact is written twice.
+  // The answer's text is its statements, as the audit reads them: a long identifier that titles a card is written in each of its facts.
   const titled = gradeTrial(founder, blocksAnswer([{ kind: "answer", statements: [0, 1] }, card(ID)],
-    ["You own it.", "It is still open.", `Decision: ${ID}; Status: Open.`, "Owner: You."]));
-  assert.deepEqual([titled.id_mentions[ID], titled.rules.long_ids_once], [1, true]);
-  const twice = gradeTrial(founder, blocksAnswer([{ kind: "answer", statements: [0, 1] }, card(ID)],
-    ["You own it.", "It is still open.", `Decision: ${ID}; Status: Open.`, `Release: ${ID}.`]));
-  assert.deepEqual([twice.id_mentions[ID], twice.rules.long_ids_once], [2, false]);
+    ["You own it.", "It is still open.", `Decision: ${ID}; Status: Open.`, `Decision: ${ID}; Owner: You.`]));
+  assert.deepEqual([titled.id_mentions[ID], titled.rules.long_ids_once], [2, false]);
 });
 
 test("passes each rule at 90% of all trials, and ships the wording only when all three pass", () => {

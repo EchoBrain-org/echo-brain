@@ -142,14 +142,27 @@ const MONTHS: Readonly<Record<string, number>> = Object.freeze({ jan: 1, feb: 2,
 const ISO_DAY = /\b(\d{4})-(\d{2})-(\d{2})\b/gu;
 const NAMED_DAY = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(\d{4}))?/gu;
 
-/** Every day a text writes, as YYYY-MM-DD: an ISO day, and a month's name with a day, in `year` unless it names one. */
-export function daysWrittenV2(text: string, year: number): ReadonlySet<string> {
+const dayOf = (year: number, month: number, day: number) => `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+const daysApart = (left: string, right: string) => Math.abs(Date.parse(`${left}T00:00:00Z`) - Date.parse(`${right}T00:00:00Z`));
+
+/**
+ * Every day a text writes, as YYYY-MM-DD: an ISO day, a month's name with a day and a year, and a month's name with a
+ * day alone read as the nearest such day to each of `anchors` (YYYY-MM-DD days, such as the days its item records), so
+ * "Nov 3" in a note of Oct 27, 2025 is 2025-11-03, and "Jan 4" in one of Dec 28 is the next January's.
+ */
+export function daysWrittenV2(text: string, anchors: readonly string[]): ReadonlySet<string> {
   const days = new Set<string>();
   for (const found of text.matchAll(ISO_DAY)) days.add(`${found[1]}-${found[2]}-${found[3]}`);
   for (const found of text.matchAll(NAMED_DAY)) {
     const month = MONTHS[found[1]!.slice(0, 3).toLowerCase()];
     const day = Number(found[2]);
-    if (month !== undefined && day >= 1 && day <= 31) days.add(`${found[3] ?? year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+    if (month === undefined || day < 1 || day > 31) continue;
+    if (found[3] !== undefined) { days.add(dayOf(Number(found[3]), month, day)); continue; }
+    for (const anchor of anchors) {
+      const year = Number(anchor.slice(0, 4));
+      const nearest = [year - 1, year, year + 1].map(candidate => dayOf(candidate, month, day)).sort((left, right) => daysApart(left, anchor) - daysApart(right, anchor))[0]!;
+      days.add(nearest);
+    }
   }
   return days;
 }

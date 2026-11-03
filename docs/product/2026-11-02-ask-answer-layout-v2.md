@@ -51,8 +51,7 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
    with its own citations. Code writes the statement for a row, an event, a
    fact and a quote from what the block shows ("2026-10-27, Noor Haddad:
    Approved the soak plan.", "Ticket: THERM-48; Status: In review."), so the
-   claim that is checked and audited is the one you read. Only a card's first
-   fact names the card, so its name, often a long identifier, is written once.
+   claim that is checked and audited is the one you read.
 4. **Code checks, and downgrades instead of failing.**
    - An item that cites no evidence text it read is left out, as today.
    - A quote whose words are not word for word in an item it cites reads as

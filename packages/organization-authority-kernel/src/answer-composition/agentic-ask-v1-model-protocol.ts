@@ -716,7 +716,7 @@ function listUsesOf(body: Record<string, unknown>): readonly AgenticAnswerListUs
 }
 
 const BLOCK_NAMES = ["answer", "text", "points", "table", "timeline", "card", "quote"] as const;
-/** How a card's kind reads in its first fact's statement ("Ticket: THERM-48; Status: In review."). */
+/** How a card's kind reads in its facts' statements ("Ticket: THERM-48; Status: In review."). */
 const ENTITY_WORDS: Readonly<Record<PersonAnswerCardEntityV2, string>> = Object.freeze({ person: "Person", project: "Project", ticket: "Ticket", decision: "Decision" });
 /** Quotation marks a writer put around a quote's words, which the block sets itself. */
 const QUOTE_MARKS = /^["“”'‘’]+|["“”'‘’]+$/gu;
@@ -729,8 +729,8 @@ function blockText(value: unknown, maximumChars: number, maximumBytes: number): 
 /**
  * A laid-out v2 reply (answer layout v2, ADR-0051): its blocks read in order into the writer's sentences, each with the
  * item it is, then its lists, what it did not find and, asked again, `since`, as parseAnswer reads them. Code writes a
- * row's, an event's, a fact's and a quote's sentence from what the block shows. Only an answer block that comes first
- * is the answer, with its first two sentences; any other answer sentence is text. An item the block cannot show reads as
+ * row's, an event's, a fact's and a quote's sentence from what the block shows. The first answer block, wherever the
+ * writer put it, is the answer, with its first two sentences; any other answer sentence is text. An item the block cannot show reads as
  * text in its block: a row whose cells do not match its columns, an event with no real day, a fact of a card with no
  * name or kind. A block code cannot read, and an item that says nothing, is dropped. What needs the evidence, a quote
  * word for word and an event's day, the renderer checks.
@@ -753,17 +753,20 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
     return read === null ? [] : [read];
   });
   if (body.blocks.length > AGENTIC_ASK_MAX_BLOCKS_V1) observeCoreModelCorrectionV1("model_items_capped", body.blocks.length - AGENTIC_ASK_MAX_BLOCKS_V1);
+  let answered = false;
   for (const [block, raw] of body.blocks.slice(0, AGENTIC_ASK_MAX_BLOCKS_V1).entries()) {
     const entry = object(raw);
     const normalized = typeof entry?.block === "string" ? entry.block.trim().toLowerCase() : "";
     const name = (BLOCK_NAMES as readonly string[]).includes(normalized) ? respelled(entry!.block, normalized as (typeof BLOCK_NAMES)[number]) : undefined;
     if (entry === null || name === undefined) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
-    const title = boundedModelLine(entry.title, TITLE_CHARS, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2);
+    // A card's title is its name, read below within a name's caps; another block's is a heading.
+    const title = name === "card" ? "" : boundedModelLine(entry.title, TITLE_CHARS, PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2);
     const titled = title.length === 0 ? {} : { title };
     const claim = (item: AnswerItem) => (sentence: Record<string, unknown>) => add(stripEvidenceIds(cleanModelLine(sentence.text, SENTENCE_CHARS), true), sentence.evidence, item);
     if (name === "answer") {
-      const opens = sentences.length === 0;
+      const opens = !answered;
       if (!opens) observeCoreModelCorrectionV1("model_enum_respelled");
+      answered = true;
       entries(entry.sentences).forEach((sentence, at) => claim(opens && at < 2 ? { block, kind: "answer" } : { block, kind: "text" })(sentence));
     } else if (name === "text") {
       entries(entry.sentences).forEach(claim({ block, kind: "text", ...titled }));
@@ -780,9 +783,15 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
         else observeCoreModelCorrectionV1("model_items_capped");
       }
       for (const row of entries(entry.rows)) {
-        const cells = (Array.isArray(row.cells) ? row.cells : []).map(cell => typeof cell === "string" ? blockText(cell, CELL_CHARS, CELL_BYTES) : "");
+        // As layout v1 reads a row: at most six cells, a cell that is no string empty.
+        const given: readonly unknown[] = Array.isArray(row.cells) ? row.cells : [];
+        if (given.length > AGENTIC_ASK_MAX_COLUMNS_V1) observeCoreModelCorrectionV1("model_items_capped", given.length - AGENTIC_ASK_MAX_COLUMNS_V1);
+        const cells = given.slice(0, AGENTIC_ASK_MAX_COLUMNS_V1).map(cell => {
+          if (typeof cell !== "string") { observeCoreModelCorrectionV1("model_entry_dropped"); return ""; }
+          return blockText(cell, CELL_CHARS, CELL_BYTES);
+        });
         // A row says its cells under their columns, as layout v1's does; one whose cells do not match them is text.
-        if (columns.length >= 2 && cells.length === columns.length && cells.some(cell => cell.length > 0)) {
+        if (columns.length >= 2 && given.length === columns.length && cells.some(cell => cell.length > 0)) {
           add(sentenceOf(columns.flatMap((column, at) => cells[at]!.length === 0 ? [] : [`${column}: ${cells[at]!}`]).join("; ")), row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) });
         } else {
           observeCoreModelCorrectionV1("model_enum_respelled");
@@ -806,15 +815,13 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
       const kind = typeof entry.kind === "string" ? entry.kind.trim().toLowerCase() : "";
       const entity = (PERSON_ANSWER_CARD_ENTITIES_V2 as readonly string[]).includes(kind) ? respelled(entry.kind, kind as PersonAnswerCardEntityV2) : undefined;
       if (named.length === 0 || entity === undefined) observeCoreModelCorrectionV1("model_enum_respelled");
-      // The card's first fact names it, and the others follow it: a name, often a long identifier, is written once.
-      let first = true;
+      // Every fact names its card, so each is a whole claim, however the others fare (W1, a repeat, a note).
       for (const fact of entries(entry.facts)) {
         const label = blockText(fact.label, LABEL_CHARS, PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2);
         const said = blockText(fact.value, VALUE_CHARS, PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2);
         if (label.length === 0 || said.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
         if (named.length === 0 || entity === undefined) add(sentenceOf(`${label}: ${said}`), fact.evidence, { block, kind: "text", ...(named.length === 0 ? {} : { title: named }) });
-        else add(sentenceOf(`${first ? `${ENTITY_WORDS[entity]}: ${named}; ` : ""}${label}: ${said}`), fact.evidence, { block, kind: "fact", title: named, entity, label, value: said });
-        first = false;
+        else add(sentenceOf(`${ENTITY_WORDS[entity]}: ${named}; ${label}: ${said}`), fact.evidence, { block, kind: "fact", title: named, entity, label, value: said });
       }
     } else {
       const text = blockText(entry.text, SENTENCE_CHARS, PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2).replace(QUOTE_MARKS, "").trim();

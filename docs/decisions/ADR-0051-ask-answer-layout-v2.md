@@ -119,9 +119,7 @@ groups them, in their order, every statement in exactly one block:
 - Code writes the statement for a row from its columns and cells, as v1
   does; for an event from its date, who and text ("2026-10-27, Noor Haddad:
   Approved the soak plan."); for a fact from its card's kind, title, label
-  and value, its card's kind and title before the first only ("Ticket: THERM-48;
-  Status: In review.", then "Owner: Tomas Okafor."), so a card's name, often a
-  long identifier, is written once; and for a quote from its
+  and value ("Ticket: THERM-48; Status: In review."); and for a quote from its
   source and words ("Noor Haddad, Oct 27 review: “Ship when the soak
   passes.”").
 

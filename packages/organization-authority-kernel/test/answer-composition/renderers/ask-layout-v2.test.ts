@@ -99,9 +99,14 @@ describe("Ask answer layout v2 (ADR-0051)", () => {
       expect(quoteIsWordForWordV2("PVT review", ["PVT review (2026-10-23)", ""])).toBe(true);
     });
 
-    it("reads every day a text writes: ISO days, and a month's name with a day in the year given unless it names one", () => {
-      expect([...daysWrittenV2("Moved from 2026-10-12 to Oct 16, then to October 20th, 2025, and Sept. 3.", 2026)]).toEqual(["2026-10-12", "2026-10-16", "2025-10-20", "2026-09-03"]);
-      expect([...daysWrittenV2("Room 12, may be late; DVT-R2 runs 3 times.", 2026)]).toEqual([]);
+    it("reads every day a text writes: ISO days, a month's name with a day and year, and one without a year as its nearest to a day the item records", () => {
+      expect([...daysWrittenV2("Moved from 2026-10-12 to Oct 16, then to October 20th, 2025, and Sept. 3.", ["2026-10-01"])]).toEqual(["2026-10-12", "2026-10-16", "2025-10-20", "2026-09-03"]);
+      expect([...daysWrittenV2("Room 12, may be late; DVT-R2 runs 3 times.", ["2026-10-01"])]).toEqual([]);
+      expect([...daysWrittenV2("Ship by Nov 3.", ["2025-10-27"])]).toEqual(["2025-11-03"]);
+      // Across a year's end, in both directions.
+      expect([...daysWrittenV2("Ship by Jan 4.", ["2026-12-28"])]).toEqual(["2027-01-04"]);
+      expect([...daysWrittenV2("Reviewed on Dec 30.", ["2027-01-02"])]).toEqual(["2026-12-30"]);
+      expect([...daysWrittenV2("Ship by Nov 3.", ["2025-10-27", "2026-10-27"])]).toEqual(["2025-11-03", "2026-11-03"]);
     });
   });
 });

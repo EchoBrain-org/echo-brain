@@ -651,8 +651,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       ["PVT can start Nov 3.", ["E1"]],
       ["Action: Fix BUG-412; Owner: Tomas Okafor.", ["E2"]], ["Action: Run DVT-R2; Owner: QA; Due: 2026-10-30.", ["E3"]],
       ["2026-10-20, Noor Haddad: Started the soak.", ["E2"]], ["2026-10-23: The soak passed.", ["E2"]],
-      // Only a card's first fact names it, so a card's name is written once.
-      ["Ticket: THERM-48; Status: In review.", ["E3"]], ["Owner: Tomas Okafor.", ["E3"]],
+      ["Ticket: THERM-48; Status: In review.", ["E3"]], ["Ticket: THERM-48; Owner: Tomas Okafor.", ["E3"]],
       ["Freeze the firmware.", ["E1"]], ["Ship the build.", ["E1"]],
       ["Noor Haddad, Oct 23 review: “Start PVT once the soak passes.”", ["E1"]],
     ]);
@@ -670,13 +669,28 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect([parsed.lists, parsed.not_found, parsed.tables, parsed.since]).toEqual([[], [], undefined, undefined]);
   });
 
-  it("reads only an answer block that comes first as the answer, and at most two of its sentences", () => {
+  it("reads the first answer block as the answer wherever the writer put it, and at most two of its sentences", () => {
     const sentences = (...texts: readonly string[]) => texts.map(text => ({ text, evidence: ["E1"] }));
     expect(read([{ block: "answer", sentences: sentences("One.", "Two.", "Three.") }, { block: "answer", sentences: sentences("Four.") }]))
       .toEqual([["One.", "answer"], ["Two.", "answer"], ["Three.", "text"], ["Four.", "text"]]);
-    expect(read([{ block: "text", sentences: sentences("Why.") }, { block: "answer", sentences: sentences("Late.") }])).toEqual([["Why.", "text"], ["Late.", "text"]]);
-    // A first block code cannot read is no block, so the answer after it opens the answer.
+    // An answer block after another block is still the writer's conclusion, so the context before it stays text.
+    expect(read([{ block: "text", sentences: sentences("Why.") }, { block: "answer", sentences: sentences("Late.") }])).toEqual([["Why.", "text"], ["Late.", "answer"]]);
     expect(read([{ block: "chart" }, { block: " Answer ", sentences: sentences("First.") }])).toEqual([["First.", "answer"]]);
+  });
+
+  it("reads at most six cells of a row, as layout v1 does, so no row's statement passes a statement's bytes", () => {
+    const wide = Array.from({ length: 35 }, (_, at) => `${"x".repeat(115)} ${at}`);
+    const parsed = parseBlocksAnswer(reply([{ block: "table", columns: ["A", "B"], rows: [{ cells: wide, evidence: ["E1"] }, { cells: ["a", 7], evidence: ["E1"] }] }]));
+    expect(parsed.sentences.map(sentence => sentence.item?.kind)).toEqual(["text", "row"]);
+    expect(Buffer.byteLength(parsed.sentences[0]!.text)).toBeLessThan(2_000);
+    expect(parsed.sentences[1]!.text).toBe("A: a.");
+    expect(corrected(() => parseBlocksAnswer(reply([{ block: "table", columns: ["A", "B"], rows: [{ cells: wide, evidence: ["E1"] }] }])))).toEqual({ model_items_capped: 29, model_enum_respelled: 1 });
+  });
+
+  it("reads a card's title once, as its name, counting a cut only past a name's own cap", () => {
+    const card = (title: string) => reply([{ block: "card", title, kind: "ticket", facts: [{ label: "Status", value: "Open", evidence: ["E1"] }, { label: "Owner", value: "Ana", evidence: ["E1"] }] }]);
+    expect(corrected(() => parseBlocksAnswer(card("t".repeat(79))))).toEqual({});
+    expect(corrected(() => parseBlocksAnswer(card("t".repeat(121))))).toEqual({ model_text_truncated: 1 });
   });
 
   it("reads an item its block cannot show as text in its block, and counts each reading", () => {

@@ -301,7 +301,7 @@ export function blocksAnswer(question: string, scope: Record<string, unknown>, b
   const facts = [{ label: 'Status', value: 'In review' }, { label: 'Owner', value: 'Tomas Okafor' }];
   const quote = { text: 'Start PVT once the soak passes.', from: 'Noor Haddad, Oct 23 review' };
   const event = (at: number) => `${events[at]!.date}, ${events[at]!.who}: ${events[at]!.text}`;
-  const fact = (at: number) => `${at === 0 ? 'Ticket: THERM-48; ' : ''}${facts[at]!.label}: ${facts[at]!.value}.`;
+  const fact = (at: number) => `Ticket: THERM-48; ${facts[at]!.label}: ${facts[at]!.value}.`;
   return {
     schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'answered', citations: THERM_BLOCK_CITATIONS,
     parts: [{

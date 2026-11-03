@@ -234,13 +234,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const describe = (entry: Entry) => describeAgenticEvidenceItemV1(entry, options.context.time_zone ?? 'UTC');
       /**
        * The days an item records or writes, for a v2 timeline's check (ADR-0051): its dates as the writer saw them, in the
-       * request's time zone, and every day its title, text or attributes write, a month and day read in today's year.
+       * request's time zone, and every day its title, text or attributes write, a month and day with no year read as the
+       * nearest such day to one the item records, or to today when it records none.
        */
       const daysOf = (entry: Entry): ReadonlySet<string> => {
         const described = describe(entry) as { readonly title?: unknown; readonly dates?: Readonly<Record<string, unknown>>; readonly date?: unknown; readonly attributes?: Readonly<Record<string, unknown>> };
-        const year = Number(options.context.today.slice(0, 4));
-        const recorded = [...Object.values(described.dates ?? {}), described.date].flatMap(value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}/u.test(value) ? [value.slice(0, 10)] : []);
-        const written = [described.title, entry.item.text, ...Object.values(described.attributes ?? {})].flatMap(value => typeof value === "string" ? [...daysWrittenV2(value, year)] : []);
+        const recorded = [...new Set([...Object.values(described.dates ?? {}), described.date].flatMap(value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}/u.test(value) ? [value.slice(0, 10)] : []))];
+        const anchors = recorded.length === 0 ? [options.context.today] : recorded;
+        const written = [described.title, entry.item.text, ...Object.values(described.attributes ?? {})].flatMap(value => typeof value === "string" ? [...daysWrittenV2(value, anchors)] : []);
         return new Set([...recorded, ...written]);
       };
 
