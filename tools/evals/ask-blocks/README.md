@@ -682,6 +682,32 @@ PR #394's.
   rise 25% on the 15 cases, and a repaired trial's writer time has a median
   of 7.3 seconds against 3.7 for one without a repair.
 
+### Result of rule 3, 2026-11-02
+
+The founder picked between before and after in all 7 changed questions,
+blind, with nothing revealed before the last pick: every pick was saved before
+the reveal, and the labels the page saved match the fixed order.
+
+| Question | Picked | After was |
+| --- | --- | --- |
+| `ship-steps` | After | A |
+| `ho-release-steps` | After | B |
+| `review-multi` | After | A |
+| `gate-blockers` | After | B |
+| `workstreams-status` | After | A |
+| `ho-review-next` | After | B |
+| `ho-launch-blockers` | After | A |
+
+- **Rule 3 holds:** after is preferred in 7 of 7 questions, before in none,
+  none the same, whether after stood as A or as B. All three rules hold, so
+  by the pre-registration the check is proposed for PR #394.
+- **It is not merged yet.** ADR-0051 rejected a repair for a block that falls
+  short, because a second writer call costs seconds for a fault code can mend
+  itself. Code cannot turn a lead that lists items into a short answer and a
+  list, so this check needs the call. That cost (a median 7.3 seconds against
+  3.7 for a repaired answer, 25% more output tokens on the 15 cases) and the
+  ADR's amendment wait for the founder's separate approval.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
