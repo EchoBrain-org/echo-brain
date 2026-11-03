@@ -135,6 +135,8 @@ describe('Answer layout v2 (ADR-0051)', () => {
     expect(check(changed(1, { events: [events[0], { ...events[1], date: '2026-10-20' }] }))[1]).toMatchObject({ kind: 'timeline' });
     expect(() => check(changed(1, { events: [events[0]] }))).toThrow('events is invalid');
     expect(() => check(changed(1, { events: [events[1], events[0]] }))).toThrow('out of date order');
+    // Any real day the kernel reads, years 0000 to 0099 too.
+    for (const date of ['0000-01-01', '0050-01-01', '0099-12-31']) expect(check(changed(1, { events: [{ ...events[0], date }, events[1]] }))[1]).toMatchObject({ events: [{ date }, events[1]] });
     for (const date of ['2026-02-30', '2026-10-2', 'Oct 20', '2026-10-20T00:00:00Z']) expect(() => check(changed(1, { events: [{ ...events[0], date }, events[1]] }))).toThrow('date is invalid');
     expect(() => check(changed(1, { events: [{ ...events[0], who: '' }, events[1]] }))).toThrow('who is invalid');
     expect(() => check(changed(1, { events: [{ ...events[0], link: 'x' }, events[1]] }))).toThrow('unexpected shape');
