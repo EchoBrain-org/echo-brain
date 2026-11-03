@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, ArrangedBlock } from '../../src/shared/protocol.js';
 import {
-  answerMarkdown, answerSentences, answerText, documentName, externalSourceProvider, lateForYou, MAX_SOURCES, passageBlocks, sourceGroups, statementGroups, tableDay,
+  answerMarkdown, answerSentences, answerText, documentName, externalSourceProvider, lateForYou, MAX_SOURCES, numberedSources, passageBlocks, sourceGroups, statementGroups,
+  tableDay,
 } from '../../src/renderer/answer.js';
 import { blocksAnswer, layoutAnswer } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
@@ -42,6 +43,15 @@ describe('an answer cites sources, not passages', () => {
     expect(statementGroups([1], groups)).toEqual([1]);
     // An index the answer does not have is not a source.
     expect(statementGroups([9], groups)).toEqual([]);
+  });
+});
+
+describe('an answer in blocks numbers every source it cites (ADR-0051)', () => {
+  it('numbers all of an arranged answer\'s sources, and the first 32 of any other', () => {
+    const forty = Array.from({ length: 40 }, (_, at) => ({ kind: 'tool', tool_id: `tool-${at}`, label: `Tool ${at}` }) as unknown as AnswerSource);
+    const part = { question: 'q', status: 'answered' as const, statements: [{ text: 'All forty.', citation_indexes: [0], private: false }] };
+    expect(numberedSources({ sources: forty, parts: [{ ...part, blocks: [{ kind: 'answer', statements: [0] } as ArrangedBlock] }] })).toHaveLength(40);
+    expect(numberedSources({ sources: forty, parts: [part] })).toHaveLength(MAX_SOURCES);
   });
 });
 

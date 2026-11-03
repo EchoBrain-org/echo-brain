@@ -12,7 +12,7 @@ import type {
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
-import { answerMarkdown, answerSentences, answerText, documentName, MAX_SOURCES, type SourceGroup } from './answer.js';
+import { answerMarkdown, answerSentences, answerText, documentName, numberedSources, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
   answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, knownStates, previousOf, sameScope,
@@ -4173,7 +4173,7 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   if (turn === undefined) return false;
   const { answer } = turn;
   const checks = shownChecks(turn);
-  const groups = turnGroups(answer.sources, checks);
+  const groups = turnGroups(answer, checks);
   const shows = showsOf(checks);
   // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
   const earlier = turn.again_of === undefined ? undefined : turnOf(turn.again_of)?.asked_at;
@@ -4196,9 +4196,10 @@ export function activeTurn(current: State = state): TimelineTurn | undefined {
   return turnOf(current.sources?.turn, current);
 }
 
-/** The citations of that turn's answer: the first 32. */
+/** The citations of that turn's answer the page numbers (numberedSources). */
 function answerSources(current: State = state): readonly AnswerSource[] {
-  return activeTurn(current)?.answer.sources.slice(0, MAX_SOURCES) ?? [];
+  const turn = activeTurn(current);
+  return turn === undefined ? [] : numberedSources(turn.answer);
 }
 
 /**
@@ -4207,7 +4208,7 @@ function answerSources(current: State = state): readonly AnswerSource[] {
  */
 export function answerGroups(current: State = state): SourceGroup[] {
   const turn = activeTurn(current);
-  return turn ? turnGroups(turn.answer.sources, shownChecks(turn, current)) : [];
+  return turn ? turnGroups(turn.answer, shownChecks(turn, current)) : [];
 }
 
 /** The turns Ask shows (ADR-0049): its place's thread, each question once. */
@@ -4394,7 +4395,7 @@ function sourcesAt(gen: number): SourcesState | null {
 
 /** The approved records and follow-ups' rows (each source row's "owner · status") of what Ask shows, read one after another. */
 async function readRecords(gen: number): Promise<void> {
-  for (const source of shownTurns().flatMap(turn => turn.answer.sources.slice(0, MAX_SOURCES))) {
+  for (const source of shownTurns().flatMap(turn => numberedSources(turn.answer))) {
     const sources = sourcesAt(gen);
     if (!sources) return;
     if (source.kind === 'record' && !sources.records[source.record.record_sha256]) await readRecord(gen, source.record, true);
@@ -4458,7 +4459,7 @@ function readPane(gen: number, source: AnswerSource): void {
 export function chooseSource(group: number, focus: string | null, turn: string | null): void {
   const sources = state.sources;
   const shown = turnOf(turn);
-  const chosen = shown ? turnGroups(shown.answer.sources, shownChecks(shown))[group] : undefined;
+  const chosen = shown ? turnGroups(shown.answer, shownChecks(shown))[group] : undefined;
   const source = chosen ? shown!.answer.sources[chosen.indexes[0]!] : undefined;
   if (!sources || !shown || !source) return;
   set({ sources: { ...sources, turn: shown.id, open: group, focus, named: null, evidence: null } });
