@@ -61,6 +61,13 @@ function generator(seed: number) {
   return value;
 }
 
+/** What code corrected while `read` read a reply: an empty object when the reply needed nothing. */
+function corrected(read: () => unknown): CoreRuntimeModelCorrectionsV1 {
+  const events: CoreRuntimeObservationV1[] = [];
+  observeCoreRuntimeSyncV1("research_loop", read, { observer: event => { events.push(event); } });
+  return events.at(-1)!.model_corrections ?? {};
+}
+
 describe("agentic Ask model protocol parity", () => {
   it("uses portable closed strings for request-scoped action choices", () => {
     const schema = createStepSchema(["meetings", "tickets"], ["E3", "E17"]);
@@ -328,6 +335,7 @@ describe("agentic Ask model protocol parity", () => {
     expect(() => parseStep({ parts: [] })).toThrow('"actions" must be an array');
     expect(() => parseStep({ parts: [], actions: [{ tool: "delete", args: {} }] })).toThrow('unknown tool "delete"');
     expect(() => parseAnswer({ direct: { text: "x" }, parts: [] })).toThrow('"sentences" must be an array (got keys "direct", "parts")');
+    expect(() => parseBlocksAnswer({ lists: [], sentences: [], not_found: [] })).toThrow('"blocks" must be an array (got keys "lists", "sentences", "not_found")');
   });
 
   it("normalizes untidy but permitted forms", () => {
@@ -483,12 +491,6 @@ describe("agentic Ask model protocol parity", () => {
   });
 
   describe("counts each correction it makes, by name (model scaffolding audit 2026-10-20)", () => {
-    /** What code corrected while `read` read a reply: an empty object when the reply needed nothing. */
-    const corrected = (read: () => unknown): CoreRuntimeModelCorrectionsV1 => {
-      const events: CoreRuntimeObservationV1[] = [];
-      observeCoreRuntimeSyncV1("research_loop", read, { observer: event => { events.push(event); } });
-      return events.at(-1)!.model_corrections ?? {};
-    };
     const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
     const need = { id: "N1", need: "owner of OPS-17", kind: "content", status: "open", evidence: ["E1"] };
     const step = (overrides: Record<string, unknown> = {}) => ({ parts: [{ question: "Who owns OPS-17?", needs: [need], notes: "E1 is OPS-17." }], actions: [{ tool: "open", args: { id: "E1" } }], ...overrides });
@@ -590,12 +592,6 @@ describe("agentic Ask model protocol parity", () => {
 });
 
 describe("answer layout v2: the writer arranges its answer from the block catalog (ADR-0051)", () => {
-  /** What code corrected while `read` read a reply: an empty object when the reply needed nothing. */
-  const corrected = (read: () => unknown): CoreRuntimeModelCorrectionsV1 => {
-    const events: CoreRuntimeObservationV1[] = [];
-    observeCoreRuntimeSyncV1("research_output", read, { observer: event => { events.push(event); } });
-    return events.at(-1)!.model_corrections ?? {};
-  };
   const reply = (blocks: readonly unknown[], fields: Record<string, unknown> = {}) => ({ lists: [], blocks, not_found: [], ...fields });
   const read = (blocks: readonly unknown[]) => parseBlocksAnswer(reply(blocks)).sentences.map(sentence => [sentence.text, sentence.item?.kind]);
 
@@ -635,7 +631,6 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       expect(() => parseBlocksAnswer(generator(seed)(answerBlocksSchema))).not.toThrow();
       expect(() => parseBlocksAnswer(generator(seed)(answerBlocksSinceSchema), { since: true })).not.toThrow();
     }
-    expect(() => parseBlocksAnswer({ lists: [], sentences: [], not_found: [] })).toThrow("\"blocks\" must be an array");
   });
 
   it("reads each item as its statement: a row from its cells, an event from its day, who and text, a fact from its card, a quote from its source and words", () => {

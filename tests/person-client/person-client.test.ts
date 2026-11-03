@@ -844,7 +844,7 @@ describe("Person client", () => {
         return json(arranged);
       });
       await expect(client.askWithLiveSources('Is EVT ready?')).resolves.toMatchObject({ parts: [{ blocks: [{ kind: 'answer', statements: [0] }] }] });
-      // Blocks that do not hold every statement are refused, never shown.
+      // Blocks the contract refuses, here a quote with no words, are refused, never shown.
       const broken = await signedInClient(home, async () => json({ ...arranged, parts: [{ ...arranged.parts[0]!, blocks: [{ kind: 'quote', statements: [0], text: '' }] }] }));
       await expect(broken.askWithLiveSources('Is EVT ready?')).rejects.toMatchObject({ code: 'invalid_response' });
     });

@@ -13,9 +13,9 @@ import { closeAskServers, decodeAll, liveAskOptions, serveAsk } from './fixtures
 import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
- * Answer layout v1 over HTTP (ADR-0045): `POST /v7/person/ask` with
- * `x-echo-answer-layout: 1` answers a V8 part that carries its layout, built
- * from the writer's forms, and with `2` one that carries its blocks (ADR-0051),
+ * Answer layouts over HTTP: `POST /v7/person/ask` with `x-echo-answer-layout: 1`
+ * answers a V8 part that carries its layout (ADR-0045), built from the
+ * writer's forms, and with `2` one that carries its blocks (ADR-0051),
  * arranged by the writer from the block catalog; without the header the same
  * Ask has neither. A header with another value is refused before the Ask runs:
  * see the V7 Ask's own HTTP test, which refuses it for the JSON answer and the
@@ -36,21 +36,14 @@ function leadAndSection(): StructuredGenerationPort {
   return { async generate(input: StructuredGenerationInput) {
     const prompt = JSON.parse(input.user_prompt) as StepPrompt & { readonly evidence?: readonly { readonly id: string; readonly kind: string }[] };
     const properties = input.schema.properties as Readonly<Record<string, unknown>>;
-    if (properties.blocks !== undefined) {
+    if (properties.blocks !== undefined || properties.sentences !== undefined) {
       const of = (kind: string) => prompt.evidence!.find(entry => entry.kind === kind)!.id;
       steps = 0; project = undefined; mine = undefined;
-      return { lists: [], blocks: [
-        { block: 'answer', sentences: [{ text: 'Ari leads Project A.', evidence: [of('project')] }] },
-        { block: 'text', title: 'Your tasks', sentences: [{ text: 'Your open follow-up is on the launch ticket.', evidence: [of('follow_up')] }] },
-      ], not_found: [] };
-    }
-    if (properties.sentences !== undefined) {
-      const of = (kind: string) => prompt.evidence!.find(entry => entry.kind === kind)!.id;
-      steps = 0; project = undefined; mine = undefined;
-      return { lists: [], sentences: [
-        { text: 'Ari leads Project A.', evidence: [of('project')], form: 'lead' },
-        { text: 'Your open follow-up is on the launch ticket.', evidence: [of('follow_up')], section: 'Your tasks' },
-      ], not_found: [] };
+      const lead = { text: 'Ari leads Project A.', evidence: [of('project')] };
+      const task = { text: 'Your open follow-up is on the launch ticket.', evidence: [of('follow_up')] };
+      return properties.blocks !== undefined
+        ? { lists: [], blocks: [{ block: 'answer', sentences: [lead] }, { block: 'text', title: 'Your tasks', sentences: [task] }], not_found: [] }
+        : { lists: [], sentences: [{ ...lead, form: 'lead' }, { ...task, section: 'Your tasks' }], not_found: [] };
     }
     project ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.source === 'projects')?.items?.[0];
     mine ??= prompt.last_results?.find(result => result.tool === 'list' && result.args?.owner !== undefined)?.items?.[0];
@@ -87,37 +80,26 @@ function ask(base: string, headers: Readonly<Record<string, string>>) {
   });
 }
 
-describe('answer layout v1 on /v7 (ADR-0045)', () => {
-  it('lays out the V8 answer only when asked, the same in JSON and in the progress stream', async () => {
+describe('answer layouts on /v7 (ADR-0045, ADR-0051)', () => {
+  it('lays out or arranges the V8 answer only when asked, the same in JSON and in the progress stream', async () => {
     const f = await sentFixture();
     const base = await origin(f, leadAndSection());
-    const laid = validatePersonAnswerResponseV8(await (await ask(base, { [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: '1' })).json());
-    const [part] = laid.parts;
-    expect(part!.statements.map(statement => statement.text)).toEqual(['Ari leads Project A.', 'Your open follow-up is on the launch ticket.']);
-    expect(part!.layout).toEqual([{ kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Your tasks' }, { kind: 'paragraph', statements: [1] }]);
-
-    const plain = validatePersonAnswerResponseV8(await (await ask(base, {})).json());
-    expect(plain.parts[0]).not.toHaveProperty('layout');
-    expect(plain.parts[0]!.statements).toEqual(part!.statements);
-
-    const streamed = await ask(base, { [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: '1', [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 });
-    const terminal = decodeAll(createPersonAskProgressDecoderV3(), await streamed.text()).at(-1)!;
-    if (terminal.type !== 'answer') throw new Error('expected the answer event');
-    expect(terminal.response).toEqual(laid);
-  });
-
-  it('arranges the V8 answer in blocks when asked for layout v2, the same in JSON and in the progress stream (ADR-0051)', async () => {
-    const f = await sentFixture();
-    const base = await origin(f, leadAndSection());
-    const arranged = validatePersonAnswerResponseV8(await (await ask(base, { [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: '2' })).json());
-    const [part] = arranged.parts;
-    expect(part!.statements.map(statement => statement.text)).toEqual(['Ari leads Project A.', 'Your open follow-up is on the launch ticket.']);
-    expect(part!.blocks).toEqual([{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Your tasks', statements: [1] }]);
-    expect(part).not.toHaveProperty('layout');
-
-    const streamed = await ask(base, { [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: '2', [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 });
-    const terminal = decodeAll(createPersonAskProgressDecoderV3(), await streamed.text()).at(-1)!;
-    if (terminal.type !== 'answer') throw new Error('expected the answer event');
-    expect(terminal.response).toEqual(arranged);
+    const [plain] = validatePersonAnswerResponseV8(await (await ask(base, {})).json()).parts;
+    expect(plain!.statements.map(statement => statement.text)).toEqual(['Ari leads Project A.', 'Your open follow-up is on the launch ticket.']);
+    expect(plain).not.toHaveProperty('layout');
+    expect(plain).not.toHaveProperty('blocks');
+    for (const [value, field, other, shown] of [
+      ['1', 'layout', 'blocks', [{ kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Your tasks' }, { kind: 'paragraph', statements: [1] }]],
+      ['2', 'blocks', 'layout', [{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Your tasks', statements: [1] }]],
+    ] as const) {
+      const answered = validatePersonAnswerResponseV8(await (await ask(base, { [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: value })).json());
+      const [part] = answered.parts;
+      expect([part![field], part!.statements]).toEqual([shown, plain!.statements]);
+      expect(part).not.toHaveProperty(other);
+      const streamed = await ask(base, { [PERSON_ASK_ANSWER_LAYOUT_HEADER_V1]: value, [PERSON_ASK_PROGRESS_HEADER_V1]: PERSON_ASK_PROGRESS_HEADER_VALUE_V3 });
+      const terminal = decodeAll(createPersonAskProgressDecoderV3(), await streamed.text()).at(-1)!;
+      if (terminal.type !== 'answer') throw new Error('expected the answer event');
+      expect(terminal.response).toEqual(answered);
+    }
   });
 });

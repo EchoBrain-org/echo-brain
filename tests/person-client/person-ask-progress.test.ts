@@ -264,7 +264,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       await expect(new PersonClient({ home_directory: sessionHome(), now: () => NOW, fetch: refused }).askWithLiveProgress('What did we decide?', undefined, undefined, event => progress.push(event)))
         .rejects.toMatchObject({ code, status });
       expect(refused.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
-      // Every Ask asks for answer layout v1 (ADR-0045), streamed or not.
+      // Every Ask asks for answer layout v2 (ADR-0051), streamed or not.
       expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-answer-layout')).toBe('2');
       expect(progress).toEqual([]);
     }
