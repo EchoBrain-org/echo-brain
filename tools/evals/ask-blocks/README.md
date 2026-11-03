@@ -480,6 +480,40 @@ block shows.
   below. Round 1 against before, and round 2 against round 1, are reported
   beside it.
 
+### Result of round 2, 2026-11-02 (rules 1 and 2)
+
+At `7c7345b` with no uncommitted change, through the founder's Claude
+account: 45 gate trials and 30 wording trials, no failed call and no repair.
+
+| | Before | Round 1 | Round 2 |
+| --- | --- | --- | --- |
+| 1. Valid (43) | 45 | 45 | 45 |
+| 2. Grounded (43) | 45 | 45 | 45 |
+| 3. Nothing lost (41) | 45 | 45 | 45 |
+| 4. Fit (36) | 39 | 39 | 39 |
+| 5. Stable (12) | 15 | 15 | 15 |
+| Answer block, mean words | 25.5 | 23.8 | 21.6 |
+| Prose blocks | 27 | 21 | 20 |
+| Output tokens | 19,738 | 18,915 | 18,741 |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 | 30, 30, 30 |
+| Wording lead, mean words | 14.7 | 13.0 | 12.5 |
+
+- Round 2 passes rules 1 and 2, so it is the proposal; rule 3 waits for the
+  founder's ranking.
+- Both aims are missed again. Given the card line word for word, the writer
+  still answers `person-profile` with a lead and points, and `review-multi`
+  with the decisions in the lead and one table: a prompt line does not move
+  either choice on this model.
+- The leads shorten further, in the answer block from 25.5 words to 21.6
+  (the two runs of the before prompt differ by 0.3) and in the wording
+  evaluation from 14.7 to 12.5 (its three runs of the before prompt range from
+  14.7 to 17.7). One-fact leads lose what was not asked: "Dev Okafor owns it.",
+  "Lena Brandt approved it." In `gate-blockers` round 2's lead is 24.0 words,
+  round 1's 34.7.
+- A block that only names a source came back once (`gate-blockers`, trial 2).
+- The ranking page is made from these three runs' trial-1 answers, with the
+  versions named `before`, `round-1` and `round-2` in the label hash.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model

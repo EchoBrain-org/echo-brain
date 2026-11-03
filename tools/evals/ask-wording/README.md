@@ -196,6 +196,26 @@ the writer before the change and one after, each 10 cases and 3 trials through
 the founder's Claude account (`--writer claude-account`). The lead's length,
 its mean and per case, is reported beside them; no rule measures it.
 
+## Result, block description tuning, 2026-11-02
+
+Through the founder's Claude account (`claude-sonnet-5-5`), 30 trials each, no
+errors and no repairs; the block evaluation's README gives the two rounds.
+All three rules pass on both tuned writers.
+
+| | Before (`67c6351`) | Round 1 (`ef42144`) | Round 2 (`7c7345b`) |
+| --- | --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 30 | 30 | 30 |
+| 2. Long identifiers once (27 of 30 to pass) | 30 | 30 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 | 30 |
+| Words shared with the question, mean and longest run | 2.3, 4 | 2.3, 4 | 2.1, 4 |
+| Lead length, mean words | 14.7 | 13.0 | 12.5 |
+
+The before prompt's earlier runs led with 14.9 and 17.7 words. Round 2's
+one-fact leads say only what was asked ("Dev Okafor owns it.", "Lena Brandt
+approved it."); the longest stay where the lead opens with the record that
+decided ("The release review decided the build may go to staging ...", 23 to
+25 words), as before.
+
 ## Limits
 
 - One model route and synthetic items only: a staging release and the
