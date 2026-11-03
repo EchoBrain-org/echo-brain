@@ -269,7 +269,6 @@ class RecordingExtractionAttempts implements ExtractionAttemptStoreV1 {
   readonly keys: ExtractionAttemptKeyV1[] = [];
   readonly completed: Parameters<ExtractionAttemptStoreV1["complete"]>[0][] = [];
   private readonly claims = new Map<string, { attempt: number; claim_id: string; reserved_at: string }>();
-  private readonly completedAt = new Map<string, string>();
 
   reserve(key: ExtractionAttemptKeyV1): ReturnType<ExtractionAttemptStoreV1["reserve"]> {
     this.keys.push(key);
@@ -290,22 +289,9 @@ class RecordingExtractionAttempts implements ExtractionAttemptStoreV1 {
 
   complete(input: Parameters<ExtractionAttemptStoreV1["complete"]>[0]): void {
     this.completed.push(input);
-    this.completedAt.set(input.claim_id, new Date().toISOString());
   }
 
   inspect(): undefined { return undefined; }
-
-  listForAdmission(admission_sha256: string): ReturnType<ExtractionAttemptStoreV1["listForAdmission"]> {
-    return [...this.claims].map(([serialized, claim]) => {
-      const key: ExtractionAttemptKeyV1 = JSON.parse(serialized);
-      const complete = this.completed.find(entry => entry.claim_id === claim.claim_id);
-      return { ...key, attempt: claim.attempt, reserved_at: claim.reserved_at,
-        outcome: complete?.outcome ?? "pending" as const,
-        failure_code: complete?.outcome === "failed" ? complete.failure_code : null,
-        completed_at: this.completedAt.get(claim.claim_id) ?? null, retry_authorized: false };
-    }).filter(row => row.admission_sha256 === admission_sha256)
-      .sort((left, right) => left.review_lineage_id.localeCompare(right.review_lineage_id) || left.review_input_sha256.localeCompare(right.review_input_sha256));
-  }
 }
 
 function source(batch: MeetingBatch): MeetingSourceAdapter {
@@ -386,51 +372,6 @@ const phases = (events: readonly MeetingProcessingWorkerTelemetryEventV1[]) =>
   );
 
 describe("admitted meeting-processing cycle", () => {
-  it("advances a retained historical input without reserving or extracting under the new processor", async () => {
-    const value = meeting(), state = new FakeState(admission()), attempts = new RecordingExtractionAttempts();
-    const extract = vi.fn(decisions), historical = vi.fn(() => true);
-    const next_cursor = fixtureCursor("2026-08-22T02:05:00.000Z");
-    const cycle = liveCycle({ source: source({ meetings: [value], next_cursor }), state,
-      processor: processor(extract), extraction_attempts: attempts, has_processed_historical_input: historical });
-
-    await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "already_processed", cursor_advanced: true });
-    expect(historical).toHaveBeenCalledExactlyOnceWith(value);
-    expect(extract).not.toHaveBeenCalled();
-    expect(attempts.keys).toEqual([]);
-    expect(attempts.completed).toEqual([]);
-    expect(state.candidates).toEqual([]);
-    expect(state.advances).toEqual([{ expected_cursor: admission().source.cursor, next_cursor }]);
-  });
-
-  it("refuses unresolved historical input before reserving, extracting, staging or advancing", async () => {
-    const state = new FakeState(admission()), attempts = new RecordingExtractionAttempts(), extract = vi.fn(decisions);
-    const cycle = liveCycle({ source: source({ meetings: [meeting()], next_cursor: fixtureCursor("2026-08-22T02:05:00.000Z") }), state,
-      processor: processor(extract), extraction_attempts: attempts,
-      has_processed_historical_input: () => { throw new Error("historical input requires recovery"); } });
-
-    await expect(cycle.runOnce()).rejects.toThrow("historical input requires recovery");
-    expect(extract).not.toHaveBeenCalled();
-    expect(attempts.keys).toEqual([]);
-    expect(state.candidates).toEqual([]);
-    expect(state.advances).toEqual([]);
-  });
-
-  it("keeps current-admission frozen recovery ahead of the historical-input guard", async () => {
-    const value = meeting(), current = admission(), state = new FakeState(current), attempts = new RecordingExtractionAttempts();
-    const historical = vi.fn(() => { throw new Error("historical guard must not replace a current frozen snapshot"); });
-    const extract = vi.fn(decisions), approval = stager({ kind: "staged", stage_id: "stage-frozen" });
-    state.seedFrozenCandidate({ ...frozenCandidate(current, value, decisions(value)), candidate_id: "cnd_frozen",
-      disposition: "actionable", approval_id: "apr_frozen", stage_command_id: "pas_frozen", state: "queued" });
-    const cycle = liveCycle({ source: source({ meetings: [value], next_cursor: fixtureCursor("2026-08-22T02:05:00.000Z") }), state,
-      processor: processor(extract), stager: approval, extraction_attempts: attempts, has_processed_historical_input: historical });
-
-    await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "staged", cursor_advanced: true });
-    expect(approval.calls).toBe(1);
-    expect(historical).not.toHaveBeenCalled();
-    expect(extract).not.toHaveBeenCalled();
-    expect(attempts.keys).toEqual([]);
-  });
-
   it.each(["fixed", "resolved"] as const)("rejects %s on-request policy before admission, analysis or cursor advancement", async (kind) => {
     let admitted = false;
     let extracted = false;

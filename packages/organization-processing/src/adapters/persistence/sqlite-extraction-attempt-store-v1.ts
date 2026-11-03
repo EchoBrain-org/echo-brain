@@ -186,22 +186,6 @@ export class SqliteExtractionAttemptStoreV1 implements ExtractionAttemptStoreV1 
     return rows.map(snapshot);
   }
 
-  /** Complete admission history for stopped processor transitions; no status-page limit can hide attempted work. */
-  listForAdmission(admission_sha256: string): readonly ExtractionAttemptLatestV1[] {
-    if (!DIGEST.test(admission_sha256)) invalid();
-    const rows = this.database.prepare(`SELECT a.*, EXISTS (SELECT 1 FROM extraction_retry_permissions_v1 p
-        WHERE p.admission_sha256 = a.admission_sha256 AND p.review_lineage_id = a.review_lineage_id
-          AND p.review_input_sha256 = a.review_input_sha256 AND p.after_attempt = a.attempt) AS retry_authorized
-      FROM extraction_attempts_v1 a
-      WHERE a.admission_sha256 = ? AND a.attempt = (SELECT MAX(b.attempt) FROM extraction_attempts_v1 b
-        WHERE b.admission_sha256 = a.admission_sha256 AND b.review_lineage_id = a.review_lineage_id AND b.review_input_sha256 = a.review_input_sha256)
-      ORDER BY a.review_lineage_id, a.review_input_sha256`).all(admission_sha256) as (ExtractionAttemptKeyV1 & ExtractionAttemptSnapshotV1 & { retry_authorized: number })[];
-    return rows.map(row => {
-      keyValues(row);
-      return { admission_sha256: row.admission_sha256, review_lineage_id: row.review_lineage_id, review_input_sha256: row.review_input_sha256, ...snapshot(row), retry_authorized: row.retry_authorized === 1 };
-    });
-  }
-
   /** Content-free bounded recovery status. Callers may request the full history of one exact key separately. */
   listLatest(limit = 100): readonly ExtractionAttemptLatestV1[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) invalid();

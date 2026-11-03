@@ -28,7 +28,6 @@ import {
   legacyRestrictedReviewerReviewPolicySnapshotV1,
   type ReviewPolicySnapshotV1,
 } from "./review-lineage-semantics.js";
-export { reviewLineageIdV1 } from './review-lineage-semantics.js';
 
 const MAXIMUM_PULL_LIMIT = 1;
 /**
@@ -279,8 +278,6 @@ export interface AdmittedMeetingProcessingCycleV1Options {
   readonly source_cursor_policy: AdmittedMeetingSourceCursorPolicyV1;
   /** Live composition supplies the durable, one-attempt automatic spend guard. */
   readonly extraction_attempts?: ExtractionAttemptStoreV1;
-  /** A successful retained extraction under a historical admission needs no new model call or review. */
-  readonly has_processed_historical_input?: (meeting: MeetingDocument) => boolean;
 }
 
 function automaticMeetingSourceAdmission(
@@ -347,9 +344,13 @@ function inputFingerprint(
   ])}`;
 }
 
-/** Shared by the cycle and stopped processor transitions; cursors never create a new spend allowance. */
-export function extractionAdmissionSha256V1(admission: AdmittedMeetingProcessingAdmissionV1): string {
-  return canonicalSha256({
+/** The attempt-ledger key: one paid attempt per admitted source/processor and bounded review input. */
+function extractionAttemptKeyV1(
+  admission: AdmittedMeetingProcessingAdmissionV1,
+  meeting: MeetingDocument,
+): ExtractionAttemptKeyV1 {
+  return {
+    admission_sha256: canonicalSha256({
       schema_version: 1,
       kind: "echo-meeting-extraction-admission-v1",
       source: {
@@ -359,16 +360,7 @@ export function extractionAdmissionSha256V1(admission: AdmittedMeetingProcessing
         cutoff_at: admission.source.cutoff_at,
       },
       processor: { ...admission.processor },
-    });
-}
-
-/** The attempt-ledger key: one paid attempt per admitted source/processor and bounded review input. */
-export function extractionAttemptKeyV1(
-  admission: AdmittedMeetingProcessingAdmissionV1,
-  meeting: MeetingDocument,
-): ExtractionAttemptKeyV1 {
-  return {
-    admission_sha256: extractionAdmissionSha256V1(admission),
+    }),
     review_lineage_id: reviewLineageIdV1({
       adapter_id: meeting.provenance.source.adapter_id,
       instance_id: meeting.provenance.source.instance_id,
@@ -695,9 +687,6 @@ export class AdmittedMeetingProcessingCycleV1 {
         },
         signal,
       );
-    }
-    if (!fromCustody && this.options.has_processed_historical_input?.(meeting) === true) {
-      return this.finishWithoutStage('already_processed', admission, nextCursor);
     }
     const extraction = await this.phase("extraction", async (): Promise<
       { readonly decisions: DecisionSet } | { readonly done: AdmittedMeetingProcessingCycleResultV1 }

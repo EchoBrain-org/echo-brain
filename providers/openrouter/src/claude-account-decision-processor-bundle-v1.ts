@@ -1,9 +1,15 @@
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
-import type { ClaudeAccountProfileV1 } from './claude-research/account-profile.js';
+import { assertClaudeAccountProfileV1, claudeAccountEnvironmentV1, type ClaudeAccountProfileV1 } from './claude-research/account-profile.js';
 import { createClaudeAccountDecisionProcessorV1 } from './llm/claude-account-decision-processor.js';
 import { assertClaudeAccountDecisionProcessorRuntimeCommitmentsV1, claudeAccountDecisionProcessorConfigurationSha256V1,
   claudeAccountDecisionProcessorCredentialReferenceV1, claudeAccountDecisionProcessorCredentialReferenceSha256V1,
   CLAUDE_ACCOUNT_DECISION_PROCESSOR_RUNTIME_VERSION_V1, fixedClaudeAccountDecisionProcessorConfigV1 } from './claude-account-decision-processor-config-v1.js';
+
+/** Native auth status only: no model call, credential read, or credential transfer. */
+export async function preflightClaudeAccountDecisionProcessorV1(account: ClaudeAccountProfileV1): Promise<void> {
+  assertClaudeAccountProfileV1(account);
+  await claudeAccountEnvironmentV1(account, new AbortController().signal);
+}
 
 /** Native authentication stays inside Claude; source admissions bind only its selected non-secret profile. */
 export function createClaudeAccountDecisionProcessorBundleV1(input: {

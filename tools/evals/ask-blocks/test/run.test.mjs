@@ -121,7 +121,7 @@ test("writes through the personal Claude account port, admitting each request an
     },
   };
   const accountGeneration = { ...generation, generation_adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" };
-  const { report } = await run(options(out, { catalogIds: ["today"], judge: false, writer: "claude-account" }), { loaded: { personal_research: { structured_output: port, generation: accountGeneration } }, progress: () => undefined });
+  const { report } = await run(options(out, { catalogIds: ["today"], judge: false, writer: "claude-account" }), { loaded: { structured_output: port, generation: accountGeneration }, progress: () => undefined });
   assert.deepEqual(report.model, { route: "claude-account", adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" });
   assert.deepEqual(admittedRequests, ["count_tokens", "messages"]);
   assert.deepEqual(report.trials[0].attempts[0].usage, { input_tokens: 20, output_tokens: 7, total_tokens: 27 });
@@ -159,7 +159,7 @@ test("resumes only a report of the same writer: its route, adapter and answer mo
   for (const [writer, other] of [["openrouter", { ...generation, answer_model: "other-model" }], ["openrouter", { ...generation, generation_adapter_id: "other" }], ["claude-account", generation]]) {
     const inputs = [];
     const loaded = { structured_output: answering(inputs), generation: other };
-    await assert.rejects(run(options(out, { ...today, writer, resume: first.reportPath }), { loaded: writer === "openrouter" ? loaded : { personal_research: loaded }, progress: () => undefined }),
+    await assert.rejects(run(options(out, { ...today, writer, resume: first.reportPath }), { loaded, progress: () => undefined }),
       /--resume: that report's writer was openrouter \/ fixture \/ fixture-model, not /u);
     assert.equal(inputs.length, 0);
   }

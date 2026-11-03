@@ -11,6 +11,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "nod
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createClaudeAccountAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/claude-account-answer-composition-generation-bundle-v1";
+import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 
 export const sha256 = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 export const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -129,18 +131,15 @@ export function assertWriterRoute(options) {
 }
 
 /**
- * The route a run writes through and what it loaded (`structured_output` and `generation`): the bundle `createBundle`
- * makes from the credential file, or with --writer claude-account its personal Claude account writer, the product's own
- * path (providers/openrouter/src/claude-research), under `membershipId` with this machine's home directory and signed-in
- * claude binary. Native Claude Code owns the sign-in; nothing here reads it. `loaded`, a test's, replaces the bundle.
+ * The route a run writes through and its default generation binding: OpenRouter from the credential file, or with
+ * --writer claude-account the native bundle with this machine's home directory and signed-in claude binary.
+ * Native Claude Code owns the sign-in; nothing here reads it. `loaded`, a test's, replaces the bundle.
  */
-export function writerRoute(options, membershipId, createBundle, loaded) {
+export function writerRoute(options, loaded) {
   const route = options.writer ?? "openrouter";
-  const bundled = loaded ?? createBundle({ credential_file: options.credentialFile,
-    ...(route === "claude-account" ? { personal_claude_research: { membership_id: membershipId, home_directory: homedir(), executable_path: realpathSync(options.claudeExecutable) } } : {}) }).load();
-  const writer = route === "claude-account" ? bundled.personal_research : bundled;
-  if (writer === undefined) throw new Error("the claude-account writer is not available from this bundle");
-  return Object.freeze({ route, loaded: writer });
+  return Object.freeze({ route, loaded: loaded ?? (route === "claude-account"
+    ? createClaudeAccountAnswerCompositionGenerationBundleV1({ account: { home_directory: homedir(), executable_path: realpathSync(options.claudeExecutable) } })
+    : createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: options.credentialFile })).load() });
 }
 
 /** Where the report goes: an absolute, private directory outside the repository at `root`, created when missing. */

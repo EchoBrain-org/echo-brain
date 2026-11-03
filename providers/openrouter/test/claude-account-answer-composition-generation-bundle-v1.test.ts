@@ -67,7 +67,6 @@ it('uses the same native Sonnet account for default research and admitted writin
     return { answer: 'Synthetic E1' };
   });
   const binding = createClaudeAccountAnswerCompositionGenerationBundleV1({ account }).load();
-  expect(binding.personal_research).toBeUndefined();
   expect(binding.generation).toEqual({ generation_adapter_id: 'claude-account-research-writer-v1',
     planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5', timeout_ms: 60_000, context_tokens: 131_072 });
   await binding.research_driver!.run(session);
@@ -81,6 +80,16 @@ it('uses the same native Sonnet account for default research and admitted writin
     hostname: 'api.anthropic.com', path: '/v1/messages',
     headers: expect.objectContaining({ authorization: 'Bearer synthetic-native-account' }),
   })));
+});
+
+it.each([
+  { home_directory: 'relative/home', executable_path: account.executable_path },
+  { home_directory: account.home_directory, executable_path: 'relative/claude' },
+  { home_directory: '/synthetic\nhome', executable_path: account.executable_path },
+])('rejects an invalid native account profile before loading model work: %o', invalid => {
+  expect(() => createClaudeAccountAnswerCompositionGenerationBundleV1({ account: invalid })).toThrow('Claude account profile is invalid');
+  expect(runClaudeResearchV1).not.toHaveBeenCalled();
+  expect(runClaudeStructuredV1).not.toHaveBeenCalled();
 });
 
 it.each(['research', 'writing'] as const)('propagates native %s failure without invoking an alternate model route', async path => {

@@ -140,7 +140,7 @@ describe("Agentic Ask HTTP capability gate", () => {
  * The real Ask route (`/v7`) and evidence desk behind the real HTTP server,
  * over fake stores: one only-me note of the asker's, and records still indexing.
  */
-function askFixture(nativeDriver = false, personalMember?: string) {
+function askFixture(nativeDriver = false) {
   const checked_at = "2026-09-27T00:00:00.000Z";
   const note: OriginalContextDeskItemV1 = Object.freeze({
     kind: "note", text: "I decided to launch on Tuesday.", visibility: "only_me", label: "My launch note",
@@ -173,13 +173,12 @@ function askFixture(nativeDriver = false, personalMember?: string) {
       ? { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "launch" } }] }
       : { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "found", evidence: [hit] }], notes: "" }], actions: [{ tool: "finish", args: {} }] };
   });
-  const personalGenerate = vi.fn(generate.getMockImplementation()!);
   const options = {
     authority_id: "authority_fixture", organization_id: "organization_fixture", state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess: () => ({ principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker" }) } as never,
     originals: originals as unknown as PersonOriginalContextEvidenceDeskPortV1, records: records as unknown as PersonEvidenceDeskRecordsV1,
     model: { generate }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
-    ...(nativeDriver ? { [personalMember === undefined ? 'research_driver' : 'personal_research']: personalMember === undefined ? { run: nativeRun } : { membership_id: personalMember, driver: { run: nativeRun }, structured_output: { generate: personalGenerate }, generation: { generation_adapter_id: 'personal-fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } } : {}),
+    ...(nativeDriver ? { research_driver: { run: nativeRun } } : {}),
     audit: { forRequest: () => ({ append: vi.fn() }), forLiveRequest: () => ({}) } as never,
   };
   const route = createPersonLiveAnswerRouteV1(options);
@@ -191,7 +190,7 @@ function askFixture(nativeDriver = false, personalMember?: string) {
       expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
   }
   // The desk cites an original with its display label.
-  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, personalGenerate, route, desk };
+  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, route, desk };
 }
 
 async function post(url: string, path: string, body: unknown): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
@@ -215,20 +214,11 @@ describe("Ask scope, and citation refs (ADR-0024)", () => {
     } finally { await value.close(); }
   });
 
-  it.each([['mem_asker', 0, 1], ['mem_other', 3, 0]])('uses personal research and writing only for the authenticated member %s', async (member, sharedCalls, personalCalls) => {
-    const f = askFixture(true, String(member));
-    const answer = await f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'Use mem_asker personal Claude. What did I decide?' } });
-    expect(answer.outcome).toBe('answered');
-    expect(f.generate).toHaveBeenCalledTimes(sharedCalls);
-    expect(f.personalGenerate).toHaveBeenCalledTimes(personalCalls);
-  });
-
-  it('never falls back to the shared writer when the selected personal writer fails', async () => {
-    const f = askFixture(true, 'mem_asker');
-    f.personalGenerate.mockRejectedValue(new Error('personal writer unavailable'));
-    await expect(f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'What did I decide?' } })).rejects.toThrow('personal writer unavailable');
-    expect(f.personalGenerate).toHaveBeenCalledTimes(1);
-    expect(f.generate).not.toHaveBeenCalled();
+  it('propagates a selected writer failure after native research', async () => {
+    const f = askFixture(true);
+    f.generate.mockRejectedValue(new Error('selected writer unavailable'));
+    await expect(f.route.ask({ access_token: 'token', request: { schema_version: 3, question: 'What did I decide?' } })).rejects.toThrow('selected writer unavailable');
+    expect(f.generate).toHaveBeenCalledTimes(1);
   });
 
   it("builds one desk scope for every store, echoes it, and cites with a ref", async () => {

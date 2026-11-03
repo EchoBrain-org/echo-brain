@@ -8,20 +8,20 @@ import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePerson
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, coreRuntimeDiagnosticErrorKindV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeSyncV1, observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, observeCoreRuntimeRootV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import type { DecisionProcessorAdapter, MeetingDocument, MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
+import type { DecisionProcessorAdapter, MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
 import type { AdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
 import type { ApprovalWorkflowContextV1 } from '@echo-brain/organization-processing/ports/approval-workflow-bundle-v1';
 import type { ExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/extraction-attempt-store-v1';
-import { AdmittedMeetingProcessingCycleV1, extractionAdmissionSha256V1, extractionAttemptKeyV1, reviewLineageIdV1, type AdmittedMeetingProcessingAdmissionV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1';
+import { AdmittedMeetingProcessingCycleV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1';
 import { SqliteApprovalWorkflowStateV1, SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { readAdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
 import { bindApprovalWorkflowStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1';
 import { openExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
 import { OrganizationRecordAppenderV4, type RecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
 import { FileOrganizationAuthoritySigner } from '../adapters/security/file-organization-authority-signer.js';
-import { SqlitePersonMeetingIntakeV1, personMeetingSourceAnchorV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingWatchV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
+import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIntakeSettingV1, type PersonalMeetingCheckpointCodecV1, type PersonalMeetingWatchV1 } from '../adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
 import { publishedApprovalOfRecordV1 } from '../adapters/persistence/sqlite/published-approval-records-v1.js';
@@ -64,81 +64,6 @@ export function meetingIntakePersonV1(value: MeetingIntakePersonV1): MeetingInta
   return { organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id };
 }
 type ProcessorCommitmentsV1 = (instance_id: string) => AdmittedMeetingProcessingCommitmentsV1['processor'] | undefined;
-
-function generationAdmissionV1(database: Database.Database, sourceKey: string): AdmittedMeetingProcessingAdmissionV1 {
-  const commitments = readAdmittedMeetingProcessingCommitmentsV1(database, sourceKey);
-  const row = database.prepare(`SELECT a.cutoff_at,p.cursor FROM authority_live_source_admission_v2 a
-    JOIN authority_live_source_progress_v2 p ON p.source_key=a.source_key WHERE a.source_key=?`)
-    .get(sourceKey) as { cutoff_at: string; cursor: string } | undefined;
-  if (!row) throw new Error('Meeting processor generation has no checkpoint');
-  return { source: { adapter_id: commitments.source.adapter_id, instance_id: commitments.source.instance_id,
-    version: commitments.source.version, ...row }, processor: { adapter_id: commitments.processor.adapter_id,
-    instance_id: commitments.processor.instance_id, version: commitments.processor.version, configuration_sha256: commitments.processor.configuration_sha256 } };
-}
-function retainedGenerationInputV1(database: Database.Database, sourceKeys: readonly string[], lineage: string, input: string): boolean {
-  return database.prepare(`SELECT 1 FROM authority_live_source_candidates_v2 c JOIN authority_live_source_admission_v2 a
-    ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key IN (SELECT value FROM json_each(?)) AND c.review_lineage_id=? AND c.review_input_sha256=? LIMIT 1`)
-    .get(JSON.stringify(sourceKeys), lineage, input) !== undefined;
-}
-/** Returning to a former processor intentionally reuses its attempt budget, so its retained candidates share that history. */
-function equivalentGenerationKeysV1(database: Database.Database, generations: readonly MeetingIntakeSettingV1[], hash: string): readonly string[] {
-  return generations.filter(row => extractionAdmissionSha256V1(generationAdmissionV1(database, row.source_key)) === hash).map(row => row.source_key);
-}
-
-/**
- * Stopped startup only, before any HTTP request or worker. Append new processing generations without changing
- * the Authority schema or historical admissions. The ledger is read completely; unresolved spend never grants
- * a new automatic attempt merely because the configured processor changed.
- */
-export function reconcilePersonMeetingProcessorsV1(options: {
-  readonly database: Database.Database; readonly providers: readonly PersonMeetingProviderV1[];
-  readonly processor: DecisionProcessorBundleV1; readonly extraction_attempts: ExtractionAttemptStoreV1;
-}): { readonly transitioned: number } {
-  const { database, processor, extraction_attempts: attempts } = options;
-  return database.transaction(() => {
-    let transitioned = 0;
-    for (const provider of options.providers) {
-      const intake = new SqlitePersonMeetingIntakeV1(database, provider.cursor);
-      for (const setting of intake.listCurrent().filter(row => row.source_adapter_id === provider.cursor.policy.source_adapter_id)) {
-        try { intake.currentPerson(setting); }
-        catch (error) { if (error instanceof AuthorityOperationError && error.code === 'unauthorized') continue; throw error; }
-        const previous = readAdmittedMeetingProcessingCommitmentsV1(database, setting.source_key);
-        const selected = processor.current_commitments(previous.processor.instance_id);
-        if (!selected) throw new Error('Meeting processor transition has no selected commitments');
-        processor.assert_admission_commitments({ ...previous, processor: selected });
-        if (canonicalSha256(previous.processor) === canonicalSha256(selected)) continue;
-        const generations = intake.list().filter(row => personMeetingSourceAnchorV1(row) === personMeetingSourceAnchorV1(setting));
-        if (database.prepare('SELECT 1 FROM authority_live_source_held_extractions_v1 WHERE source_key IN (SELECT value FROM json_each(?)) LIMIT 1').get(JSON.stringify(generations.map(row => row.source_key)))) {
-          throw new Error('Meeting processor transition refused: held extraction requires explicit recovery');
-        }
-        const admissionHash = extractionAdmissionSha256V1(generationAdmissionV1(database, setting.source_key));
-        const equivalent = equivalentGenerationKeysV1(database, generations, admissionHash);
-        const history = attempts.listForAdmission(admissionHash);
-        for (const entry of history) {
-          if (entry.outcome !== 'succeeded' || !retainedGenerationInputV1(database, equivalent, entry.review_lineage_id, entry.review_input_sha256)) {
-            throw new Error('Meeting processor transition refused: unresolved extraction attempt');
-          }
-        }
-        // A lost/incomplete ledger must not turn retained extracted content into an unattempted import.
-        const recorded = new Set(history.map(entry => `${entry.review_lineage_id}:${entry.review_input_sha256}`));
-        const candidates = database.prepare(`SELECT c.review_lineage_id,c.review_input_sha256 FROM authority_live_source_candidates_v2 c
-          JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256 WHERE a.source_key IN (SELECT value FROM json_each(?))`)
-          .all(JSON.stringify(equivalent)) as { review_lineage_id: string; review_input_sha256: string }[];
-        if (candidates.some(row => !recorded.has(`${row.review_lineage_id}:${row.review_input_sha256}`))) {
-          throw new Error('Meeting processor transition refused: retained extraction has no attempt history');
-        }
-        const attempted = new Set(history.map(entry => entry.review_lineage_id));
-        const unattempted = intake.checkpoint(setting.source_key).manual.filter(external_id => !attempted.has(reviewLineageIdV1({
-          adapter_id: setting.source_adapter_id, instance_id: setting.source_adapter_instance_id, external_id,
-        })));
-        intake.transitionProcessor({ setting, processor: selected, unattempted_manual: unattempted,
-          current: () => { intake.currentPerson(setting); } });
-        transitioned++;
-      }
-    }
-    return { transitioned };
-  }).immediate();
-}
 /**
  * The one source rule: a source per person and tool account, with a processor instance per person.
  * Projects never enter the source, so one meeting is extracted and reviewed once whatever projects it suggests.
@@ -193,8 +118,6 @@ export function createPersonMeetingRuntimeV1(options: {
   readonly meeting_lanes?: number;
   /** The lifecycle's observation scope; each lane pass is a root under it, so staging content capture covers lanes. */
   readonly observation?: CoreRuntimeObservationScopeV1;
-  /** Retained operator selection enables generation routing and historical-input spend checks. */
-  readonly processor_generations?: true;
 }) {
   let diagnostics: PersonDiagnosticsV1 | undefined;
   const { database: db, providers, processor } = options, lanes = options.meeting_lanes ?? MEETING_LANES;
@@ -264,8 +187,6 @@ export function createPersonMeetingRuntimeV1(options: {
   const retryReady = (sourceKey: string) => (retryAfter.get(sourceKey) ?? 0) <= Date.now() && held(sourceKey).some(authorized);
   /** The owner's status for a source: its oldest authorized held meeting, else its oldest held one, then any connection or access error. */
   function sourceError(sourceKey: string): string | null {
-    const setting = intake.list().find(row => row.source_key === sourceKey);
-    if (setting && !intake.isCurrentGeneration(setting)) return 'This import belongs to a previous processor. Its existing review remains available; unfinished work needs explicit recovery.';
     const rows = held(sourceKey), granted = rows.find(authorized), first = granted ?? rows[0];
     const parts = [first && `Meeting ${first.external_id} is held after extraction attempt ${first.attempt} failed at ${first.failure_stage}. Later meetings continue. ${
       granted ? 'A retry is authorized and runs on the next check.' : 'An operator can authorize one more attempt.'}`, observed.get(sourceKey)?.error];
@@ -284,13 +205,6 @@ export function createPersonMeetingRuntimeV1(options: {
   }
   /** One pass over one source: an authorized retry from custody, a freeze retry, or its next meeting. */
   async function runSource(setting: MeetingIntakeSettingV1, signal: AbortSignal): Promise<void> {
-    if (!intake.isCurrentGeneration(setting)) {
-      // Historical retry permissions cannot authorize a different processor. Only frozen approval delivery is allowed.
-      intake.currentPerson(setting);
-      const progressed = await (await approvals()).stagerForSource(setting.source_key).reconcilePendingDeliveries({ signal });
-      observed.set(setting.source_key, { checked_at: new Date().toISOString(), error: null, next: Date.now() + (progressed ? 0 : 30_000) });
-      return;
-    }
     // An authorized retry re-runs one parked meeting from custody, before this source's next intake.
     const retry = retryReady(setting.source_key);
     if (retry) retryAfter.set(setting.source_key, Date.now() + 60_000);
@@ -335,29 +249,13 @@ export function createPersonMeetingRuntimeV1(options: {
       };
       const cycle = new AdmittedMeetingProcessingCycleV1({ source, state, processor: observedProcessor, extraction_attempts: options.extraction_attempts,
         source_cursor_policy: provider.cursor.policy, stager,
-        ...(options.processor_generations !== true ? {} : { has_processed_historical_input: (meeting: MeetingDocument) => {
-          current();
-          const generations = intake.list().filter(row => personMeetingSourceAnchorV1(row) === personMeetingSourceAnchorV1(setting));
-          for (const historical of generations.filter(row => row.source_key !== setting.source_key)) {
-            const key = extractionAttemptKeyV1(generationAdmissionV1(db, historical.source_key), meeting);
-            const prior = options.extraction_attempts.inspect(key);
-            const retained = retainedGenerationInputV1(db, equivalentGenerationKeysV1(db, generations, key.admission_sha256), key.review_lineage_id, key.review_input_sha256);
-            // A restored processor shares its original spend key. Without saved output this is the current cycle's
-            // reservation/retry/parking responsibility, not a historical failure that can block its authorized retry.
-            if (key.admission_sha256 === extractionAdmissionSha256V1(admission) && !retained) continue;
-            if (prior === undefined && !retained) continue;
-            if (prior?.outcome !== 'succeeded' || !retained) throw new Error('Historical meeting input requires explicit extraction recovery');
-            return true;
-          }
-          return false;
-        } }),
         source_ingestion: { store: new SqliteSourceAdmissionStoreV1(db, delivered => {
           source.requireCurrent(); state.assertCurrentSourceAdmission(source.identity);
           if (provider.cursor.write(sourceIntake.checkpoint(setting.source_key)) !== admission.source.cursor) throw new AuthorityOperationError('stale_access_state', 'Meeting intake changed during acquisition');
           // Same transaction as the admission: a watch delivery's suggested project becomes the meeting's suggestion.
           sourceIntake.recordAdmission(setting, delivered.item.external_id);
         }),
-          scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${personMeetingSourceAnchorV1(setting)}`, analysis_policy: 'automatic' } },
+          scope: { organization_id: setting.organization_id, custody_ref: `person:${setting.membership_id}`, access_policy_ref: `personal-meeting:${setting.source_key}`, analysis_policy: 'automatic' } },
       });
       const outcome = await (retry ? cycle.retryHeldOnce(signal) : cycle.runOnce(signal));
       if (outcome.kind === 'held' || outcome.kind === 'retry_scheduled') annotateCoreRuntimeV1({ result: outcome.kind === 'held' ? 'held' : 'retry_pending' });
@@ -396,7 +294,7 @@ export function createPersonMeetingRuntimeV1(options: {
     // Cheap checks first: a source's held rows are read, and its grants inspected, only when it is otherwise due.
     const unfrozen = new Set(workflowState.listPendingApprovalSourceKeys());
     const eligible = intake.list().filter(s => !inFlight.has(s.source_key) && owners.has(s.source_adapter_id) && (observed.get(s.source_key)?.next ?? 0) <= Date.now()
-      && (unfrozen.has(s.source_key) || (intake.isCurrentGeneration(s) && (s.watch !== 'off' || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0 || retryReady(s.source_key)))));
+      && (s.watch !== 'off' || ownerOf(s.source_adapter_id).intake.checkpoint(s.source_key).manual.length > 0 || unfrozen.has(s.source_key) || retryReady(s.source_key)));
     return [...eligible.filter(s => s.source_key > after), ...eligible.filter(s => s.source_key <= after)];
   }
   /**
@@ -657,19 +555,15 @@ export function openPersonMeetingRuntimeV1(options: {
   readonly provider_applications?: readonly ProviderHttpApplicationV1[];
   /** The service's observation scope, for the meeting lanes' roots. */
   readonly observation?: CoreRuntimeObservationScopeV1;
-  /** Reconcile after opening the durable ledger and before exposing the runtime. */
-  readonly processor_generations?: true;
 }) {
   const { coordinates, database, record } = options.resources;
   const attempts = openExtractionAttemptStoreV1(join(options.state_directory, 'extraction-attempts.sqlite'), coordinates);
   try {
-    if (options.processor_generations === true) reconcilePersonMeetingProcessorsV1({ database, providers: options.providers, processor: options.processor, extraction_attempts: attempts });
     const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(options.state_directory, 'keys'), ...coordinates });
     const runtime = createPersonMeetingRuntimeV1({ database, sessions: options.sessions, processor: options.processor, extraction_attempts: attempts,
       ...(options.approval_core === undefined ? {} : { approval_core: options.approval_core }),
       ...(options.provider_applications === undefined ? {} : { provider_applications: options.provider_applications }),
       ...(options.observation === undefined ? {} : { observation: options.observation }),
-      ...(options.processor_generations === true ? { processor_generations: true } : {}),
       approval: { coordinates, signer, on_terminal_action_queued: options.resources.on_processing_queued, record_append: new OrganizationRecordAppenderV4(record, coordinates, options.projectors), next_envelope_id: () => `env_${randomUUID()}` },
       providers: options.providers,
     });

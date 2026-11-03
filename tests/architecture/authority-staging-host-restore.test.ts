@@ -25,43 +25,6 @@ function restoreScript(): string {
 }
 
 describe("Authority retained-host restore", () => {
-  it('refuses retained all-models state on incompatible images before materialization or resume', () => {
-    const root = mkdtempSync(join(tmpdir(), 'echo-restore-personal-claude-'));
-    try {
-      const privateDirectory = join(root, 'private');
-      mkdirSync(privateDirectory, { mode: 0o700 });
-      const helper = restoreScript().match(/^require_personal_claude_state_capability\(\) \{\n.*?^\}/ms)?.[0];
-      expect(helper).toBeDefined();
-      const script = join(root, 'probe.sh');
-      writeFileSync(script, `#!/usr/bin/env bash
-set -euo pipefail
-PRIVATE_DIR="$1"
-fail() { printf '%s\\n' "$*" >&2; exit 1; }
-release_field() { printf 'reviewed-image\\n'; }
-docker() {
-  if [[ "$*" == *--format* ]]; then printf '%s\\n' "$ECHO_TEST_STATE_CAPABILITY"; fi
-}
-${helper}
-require_personal_claude_state_capability
-printf 'safe-to-materialize-and-resume\\n'
-`);
-      for (const enabled of [true, false]) {
-        writeFileSync(join(privateDirectory, 'personal-claude-all-models.json'), JSON.stringify({ kind: 'echo-personal-claude-all-models-v1', payer_membership_id: 'mem_owner', enabled }), { mode: 0o600 });
-        for (const capability of ['false', 'true']) {
-          const result = spawnSync('bash', [script, privateDirectory], { encoding: 'utf8', env: { ...process.env, ECHO_TEST_STATE_CAPABILITY: capability } });
-          expect(result.status).toBe(capability === 'true' ? 0 : 1);
-          if (capability === 'false') {
-            expect(result.stderr).toContain('personal Claude all-models state requires a compatible image');
-            expect(result.stdout).toBe('');
-          }
-        }
-      }
-      expect(restoreScript()).toMatch(/validate_retained_tuple\n  require_personal_claude_state_capability\n  require_staging_connector_rehearsal_recovery_state\n  materialize_root_volume_files/);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
   it("executes blank materialization successfully but exits through the classified resume refusal", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-retained-host-restore-"));
     const deploy = join(root, "deploy");

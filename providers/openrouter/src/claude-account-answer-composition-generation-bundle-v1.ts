@@ -1,13 +1,15 @@
 import type { AnswerCompositionGenerationBundleV1 } from '@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1';
-import { CLAUDE_ACCOUNT_MODEL_V1, type ClaudeAccountProfileV1 } from './claude-research/account-profile.js';
+import { assertClaudeAccountProfileV1, CLAUDE_ACCOUNT_MODEL_V1, type ClaudeAccountProfileV1 } from './claude-research/account-profile.js';
 import { createClaudeResearchDriverV1 } from './claude-research/driver.js';
 import { claudeAccountForwarderV1 } from './claude-research/model-transport.js';
 import { createClaudeAccountStructuredGenerationV1 } from './claude-research/structured-generation.js';
+export { assertClaudeAccountProfileV1, type ClaudeAccountProfileV1 } from './claude-research/account-profile.js';
 
 /** Binds the runtime's default research and writing to one native Claude account. */
 export function createClaudeAccountAnswerCompositionGenerationBundleV1(input: {
   readonly account: ClaudeAccountProfileV1;
 }): AnswerCompositionGenerationBundleV1 {
+  assertClaudeAccountProfileV1(input.account);
   return Object.freeze({
     load() {
       return Object.freeze({

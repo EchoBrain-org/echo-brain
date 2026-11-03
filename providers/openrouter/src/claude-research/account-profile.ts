@@ -12,14 +12,9 @@ export interface ClaudeAccountProfileV1 {
   readonly executable_path: string;
 }
 
-export interface PersonalClaudeResearchV1 extends ClaudeAccountProfileV1 {
-  readonly membership_id: string;
-}
-
-export function assertPersonalClaudeResearchV1(value: PersonalClaudeResearchV1): void {
-  if (!/^mem_[a-zA-Z0-9-]{1,100}$/u.test(value.membership_id) ||
-      ![value.home_directory, value.executable_path].every(path => isAbsolute(path) && !/[\x00-\x1f]/u.test(path))) {
-    throw new Error('Personal Claude research selection is invalid');
+export function assertClaudeAccountProfileV1(value: ClaudeAccountProfileV1): void {
+  if (![value.home_directory, value.executable_path].every(path => typeof path === 'string' && isAbsolute(path) && !/[\x00-\x1f]/u.test(path))) {
+    throw new Error('Claude account profile is invalid');
   }
 }
 

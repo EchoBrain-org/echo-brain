@@ -38,6 +38,10 @@ import { initializePersonSessionCredentials } from "../src/composition/person-on
 import {bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
+import { createAuthorityDecisionProcessorV1 } from "../src/composition/authority-decision-processor-v1.js";
+import { readPersonalClaudeSelectionV1 } from "../src/composition/personal-claude-selection-v1.js";
+import { readAdmittedMeetingProcessingCommitmentsV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
+import * as nativeProcessor from "@echo-brain/provider-openrouter/claude-account-decision-processor-bundle-v1";
 import {
   readStagingSyntheticCheckpointV1,
   writeStagingSyntheticCheckpointV1,
@@ -51,6 +55,7 @@ const STAGING_ORIGIN = "https://authority-staging.echobrain.org";
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const path of temporaryDirectories.splice(0)) {
     rmSync(path, { recursive: true, force: true });
   }
@@ -151,6 +156,13 @@ async function cli(
 function writePrivate(path: string, text: string): void {
   writeFileSync(path, text, { mode: 0o600 });
   chmodSync(path, 0o600);
+}
+
+function selectNativeClaude(state: string): string {
+  const selection = join(dirname(state), "personal-claude.json");
+  writePrivate(selection, JSON.stringify({ kind: "echo-staging-claude-account-v1" }));
+  vi.stubEnv("ECHO_STAGING_CLAUDE_ACCOUNT_FILE", selection);
+  return selection;
 }
 
 function readyStatusDependencies(
@@ -965,6 +977,60 @@ describe("Organization Authority setup coordinator", () => {
         1,
       )).stderr,
     ).toContain("usage:");
+  });
+
+  it("admits the runtime's native processor on fresh staging without an OpenRouter credential", async () => {
+    const state = stateDirectory(STAGING_ORIGIN);
+    const { queue_staging_synthetic_meetings: _stub, ...real } = dependencies([]);
+    await cli(bootstrapArgs(state, STAGING_ORIGIN), real);
+    const manifest = readOrganizationAuthoritySetupManifest(state);
+    const selection = selectNativeClaude(state);
+    const preflight = vi.spyOn(nativeProcessor, "preflightClaudeAccountDecisionProcessorV1").mockResolvedValue();
+
+    await cli(["finalize", "--state-dir", state], finalizeDeps(real));
+
+    expect(existsSync(manifest.llm_credential_file)).toBe(false);
+    const account = readPersonalClaudeSelectionV1(selection, STAGING_ORIGIN)!;
+    expect(preflight).toHaveBeenCalledWith(account);
+    const runtime = createAuthorityDecisionProcessorV1({
+      authority_url: STAGING_ORIGIN, openrouter_credential_file: manifest.llm_credential_file, staging_claude_account: account,
+    });
+    const authority = new Database(join(state, "authority.sqlite"), { readonly: true });
+    try {
+      const sourceKey = authority.prepare("SELECT source_key FROM authority_live_source_admission_v2").pluck().get() as string;
+      const admission = readAdmittedMeetingProcessingCommitmentsV1(authority, sourceKey);
+      expect(admission.processor).toEqual(runtime.current_commitments(admission.processor.instance_id));
+      expect(() => runtime.assert_admission_commitments(admission)).not.toThrow();
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("refuses native admission when sign-in is unavailable without falling back to OpenRouter", async () => {
+    const state = stateDirectory(STAGING_ORIGIN);
+    const { queue_staging_synthetic_meetings: _stub, ...real } = dependencies([]);
+    await cli(bootstrapArgs(state, STAGING_ORIGIN), real);
+    selectNativeClaude(state);
+    vi.spyOn(nativeProcessor, "preflightClaudeAccountDecisionProcessorV1").mockRejectedValue(new Error("Personal Claude sign-in is unavailable"));
+    expect((await cli(["finalize", "--state-dir", state], finalizeDeps(real), 1)).stderr).toContain("Personal Claude sign-in is unavailable");
+    const authority = new Database(join(state, "authority.sqlite"), { readonly: true });
+    try {
+      expect(authority.prepare("SELECT count(*) FROM authority_live_source_admission_v2").pluck().get()).toBe(0);
+    } finally {
+      authority.close();
+    }
+  });
+
+  it.each([true, false])("reports native authentication status %s without requiring an OpenRouter credential", async (authenticated) => {
+    const state = stateDirectory(STAGING_ORIGIN);
+    const deps = dependencies([]);
+    await cli(bootstrapArgs(state, STAGING_ORIGIN), deps);
+    selectNativeClaude(state);
+    const preflight = vi.spyOn(nativeProcessor, "preflightClaudeAccountDecisionProcessorV1");
+    if (authenticated) preflight.mockResolvedValue();
+    else preflight.mockRejectedValue(new Error("Personal Claude sign-in is unavailable"));
+    expect((await cli(["status", "--state-dir", state], deps)).json.llm_credential_valid).toBe(authenticated);
+    expect(preflight).toHaveBeenCalledOnce();
   });
 
   it("reports a synthetic admitted source without demanding the release canary record", async () => {

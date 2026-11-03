@@ -9,7 +9,7 @@ export interface ModelCallLimiterV1 {
 }
 
 const MODEL_CALL_LIMITS = Object.freeze({ concurrent: 6, background: 4 });
-/** Each SDK research session runs a Claude Code process (about 210 MB resident). */
+/** Each SDK research or writer session runs a Claude Code process (about 210 MB resident). */
 export const RESEARCH_SESSION_LIMITS_V1 = Object.freeze({ concurrent: 3, background: 2 });
 const COOLDOWN_MIN_MS = 5_000;
 const COOLDOWN_MAX_MS = 60_000;
@@ -25,8 +25,8 @@ function transient(error: unknown): boolean {
 }
 
 /**
- * One process-wide gate for the Authority's model calls, which share one
- * OpenRouter credential. Interactive calls (Ask) are served first and may use
+ * One process-wide gate for the Authority's model calls. Interactive calls
+ * (Ask) are served first and may use
  * every slot; background calls (extraction, notes, trigger research)
  * use at most four. It never retries: a 429, a 5xx, a temporary failure or a
  * timeout only pauses background admission, once per episode, 5 s doubling to

@@ -14,11 +14,11 @@ The archive is development evidence, not a release candidate. Application
 regression tests remain in the kernel, provider and service test suites, and the
 root `npm-shrinkwrap.json` retains the production SDK dependencies.
 
-## Staging service adapter
+## Staging OpenRouter research adapter
 
 `providers/openrouter/src/claude-research` packages Claude Agent SDK `0.3.305`.
-`ECHO_STAGING_CLAUDE_RESEARCH_V1=true` selects it for ordinary Ask, evaluation and
-background research only at the fixed staging Authority origin. The EC2
+When no native Claude account is selected, `ECHO_STAGING_CLAUDE_RESEARCH_V1=true`
+selects it for ordinary Ask, evaluation and background research only at the fixed staging Authority origin. The EC2
 connector-rehearsal profile selects it; other Authorities retain the existing
 engine. Trigger dispatch, planner-disabled sweeps, writers and client contracts
 remain unchanged. No database baseline change is required.
@@ -46,47 +46,28 @@ a separate 100-row cutoff; omitted rows remain explicit.
 
 ## Personal Claude account selection
 
-An optional staging selection binds **interactive Ask research for one authenticated
-ECHO membership** to that person's own native Claude Code sign-in. Since #354
-(`fd46bc7`) the same account also writes the final answer. It does not replace
-OpenRouter: other members, background research, evaluation and extraction keep
-their existing provider. The account is never selected by question text, a
-client header, or a project lead's identity.
+The staging selection binds **all Authority model work** to one native Claude
+account: Ask for every member, background research and writing, and meeting
+extraction use `claude-sonnet-5-5`. The account pays for requests; ECHO still
+authenticates each caller and revalidates that caller's evidence permissions.
+There is no per-member provider override or automatic OpenRouter fallback.
 
-The service accepts these three non-secret settings together, only at the fixed
-staging origin:
+The reviewed [personal Claude setup](../../../deploy/organization-authority/README.md#personal-claude-staging-research)
+uses the installed wrapper's `login`, `enable` and `status` actions on a fresh
+staging rehearsal, before source admission. Compose names one private marker
+through `ECHO_STAGING_CLAUDE_ACCOUNT_FILE`; its content is exactly
+`{"kind":"echo-staging-claude-account-v1"}`. The service fixes the native home and
+executable. An absent marker selects OpenRouter. Changing provider after source
+admission requires a fresh rehearsal; existing processing state is not migrated.
 
-| Setting | Meaning |
-| --- | --- |
-| `ECHO_STAGING_CLAUDE_ACCOUNT_MEMBER` | Exact ECHO membership ID allowed to use the profile |
-| `ECHO_STAGING_CLAUDE_ACCOUNT_HOME` | Absolute home of that person's native Claude installation |
-| `ECHO_STAGING_CLAUDE_ACCOUNT_EXECUTABLE` | Absolute path to the unmodified Claude Code executable |
-
-The person signs into that executable through Anthropic's own `claude auth login`
-flow on the machine running it. A Mac sign-in does not sign the staging host in.
-ECHO does not import credential files or accept an OAuth token in configuration.
-Native `auth status --json` must report `claude.ai` before a run; an absent sign-in
-or a cached API-key route stops the personal request rather than changing its
-billing route. Native Claude Code owns credential refresh. Its home is preserved;
-each request still uses an empty working directory, ECHO-only tools, disabled
-settings/plugins and no persisted SDK conversation. On macOS the OS username
-and default config location preserve the existing Keychain identity.
-
-Native authenticated model requests pass through the same request-local access
-gate, then go only to `api.anthropic.com`. ECHO does not retain authentication
-headers. Requests, including retries, still revalidate the exact evidence packet
-before sending it; choosing a personal account grants no additional source access.
-The SDK uses `claude-sonnet-5-5` and records Anthropic as the research provider.
-
-For hosted staging, the reviewed [personal Claude setup](../../../deploy/organization-authority/README.md#personal-claude-staging-research)
-uses native `login`, then `enable --member` and `status` on the installed
-onboarding wrapper. Compose selects the optional non-secret binding through
-`ECHO_STAGING_CLAUDE_ACCOUNT_FILE`; its native home and executable are fixed.
-The file and the three explicit settings above cannot both select an account.
-An absent file leaves the existing provider route unchanged. Do not copy a
-laptop session into the host or change the host environment outside the
-[operator playbook](../../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
-The normal canary and release checks still follow host sign-in and enablement.
+Native Claude Code owns sign-in and refresh on the machine running it. A laptop
+login does not sign the host in. Native authentication must report `claude.ai`;
+an absent sign-in or cached API-key route stops model work. Requests use empty
+working directories, ECHO-only tools, disabled settings/plugins and no persisted
+SDK conversation. Every native request passes through ECHO's admission gate
+before reaching `api.anthropic.com`; authentication headers are not retained.
+Follow the [operator playbook](../../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
+for host sign-in, canary approval and release checks.
 
 Claude Agent SDK has no separate harness fee; model access uses the selected
 subscription limits or API billing, and infrastructure has its own costs.

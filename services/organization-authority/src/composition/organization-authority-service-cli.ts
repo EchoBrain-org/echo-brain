@@ -1,5 +1,4 @@
 import { OPENROUTER_TELEMETRY_VOCABULARY_V1 } from "@echo-brain/provider-openrouter/openrouter-telemetry-vocabulary-v1";
-import { assertPersonalClaudeResearchV1 } from '@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { readPrivateAuthorityCredential, readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
@@ -14,7 +13,7 @@ import { createLangSmithRuntimeV1 } from './observability/langsmith-runtime-v1.j
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { readStagingConnectorRehearsalSelection } from './staging-connector-rehearsal-selection.js';
 import { CLEAN_V1_RELEASE_ID } from './clean-v1-release-id.js';
-import { readPersonalClaudeAllModelsSelectionV1, readPersonalClaudeSelectionV1 } from './personal-claude-selection-v1.js';
+import { readPersonalClaudeSelectionV1 } from './personal-claude-selection-v1.js';
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
@@ -247,25 +246,7 @@ export async function runOrganizationAuthorityServiceCli(
     const stagingClaudeResearch = process.env.ECHO_STAGING_CLAUDE_RESEARCH_V1;
     if (stagingClaudeResearch !== undefined && !['', 'false', 'true'].includes(stagingClaudeResearch)) throw new Error('Staging Claude research selection is invalid');
     if (stagingClaudeResearch === 'true' && manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) throw new Error('Claude research is available only on the staging Authority');
-    const personalMember = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_MEMBER;
-    const personalHome = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_HOME;
-    const personalExecutable = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_EXECUTABLE;
-    const hostedClaude = readPersonalClaudeSelectionV1(process.env.ECHO_STAGING_CLAUDE_ACCOUNT_FILE, manifest.authority_url);
-    const allModelsClaude = readPersonalClaudeAllModelsSelectionV1(process.env.ECHO_STAGING_CLAUDE_ACCOUNT_FILE, manifest.authority_url);
-    const explicitPersonalClaude = [personalMember, personalHome, personalExecutable].every(value => value === undefined) ? undefined : {
-      membership_id: personalMember ?? '', home_directory: personalHome ?? '', executable_path: personalExecutable ?? '',
-    };
-    if (hostedClaude !== undefined && explicitPersonalClaude !== undefined) throw new Error('Personal Claude research has conflicting selections');
-    const personalClaude = hostedClaude ?? explicitPersonalClaude;
-    if (personalClaude !== undefined) {
-      if (manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) throw new Error('Personal Claude research is available only on the staging Authority');
-      assertPersonalClaudeResearchV1(personalClaude);
-    }
-    if (allModelsClaude !== undefined && personalClaude !== undefined &&
-        (allModelsClaude.payer_membership_id !== personalClaude.membership_id ||
-         allModelsClaude.home_directory !== personalClaude.home_directory || allModelsClaude.executable_path !== personalClaude.executable_path)) {
-      throw new Error('Personal Claude has conflicting payer selections');
-    }
+    const stagingClaudeAccount = readPersonalClaudeSelectionV1(process.env.ECHO_STAGING_CLAUDE_ACCOUNT_FILE, manifest.authority_url);
     const stagingResearchEval = process.env.ECHO_STAGING_RESEARCH_EVAL_V1;
     if (stagingResearchEval !== undefined && !['', 'false', 'true'].includes(stagingResearchEval)) {
       throw new Error('Staging research evaluation selection is invalid');
@@ -313,8 +294,7 @@ export async function runOrganizationAuthorityServiceCli(
       pkce_key_file: manifest.pkce_key_file,
       ...(stagingResearchEval === 'true' ? { staging_research_eval_v1: true as const } : {}),
       ...(stagingClaudeResearch === 'true' ? { staging_claude_research_v1: true as const } : {}),
-      ...(personalClaude === undefined ? {} : { personal_claude_research: personalClaude }),
-      ...(allModelsClaude === undefined ? {} : { personal_claude_all_models: allModelsClaude }),
+      ...(stagingClaudeAccount === undefined ? {} : { staging_claude_account: stagingClaudeAccount }),
       nango,
       ...(jiraCloudId === undefined ? {} : { jira_person_live: {
         enabled: true as const,

@@ -15,7 +15,6 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { personAnswerCitationKeyV8 } from "@echo-brain/organization-api";
-import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { repairInput } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { caseAsk, caseItems, deskItem as releasedItem, scriptedModel } from "../shared/ask-cases.mjs";
 import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, pooled, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
@@ -296,7 +295,7 @@ export async function run(options, dependencies = {}) {
   const ranked = catalogs.filter((catalog) => catalog !== BUILT);
   const built = catalogs.includes(BUILT);
   const identityBefore = codeIdentity(ROOT, codeFiles());
-  const { route, loaded } = writerRoute(options, "mem_ask-blocks-eval", createOpenRouterAnswerCompositionGenerationBundleV1, dependencies.loaded);
+  const { route, loaded } = writerRoute(options, dependencies.loaded);
   const model = Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model });
   const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
   // Each arm's writer prompts: the four catalogs' from layout v1's, the built writer's as the kernel asks with layout v2.

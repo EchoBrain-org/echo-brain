@@ -25,9 +25,9 @@ function world() {
   };
   project(PROJECT_ALPHA, [OWNER]); project(PROJECT_BETA, [OWNER]); project(FOREIGN, [MEMBER]); project(ARCHIVED, [OWNER], 'archived');
   const intake = new SqlitePersonMeetingIntakeV1(db, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1);
-  const ensure = (tool = 'granola', actor = OWNER) => intake.ensure({
+  const ensure = (tool = 'granola', actor = OWNER, processorConfiguration = 'processor') => intake.ensure({
     person: person(actor), identity: identity(tool, actor), normalizer_version: '1.0.0', custodian: { tool, actor: actor.membership_id },
-    processor: { adapter_id: 'llm', instance_id: `personal-${canonicalSha256(person(actor)).slice(7, 39)}`, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('reference') },
+    processor: { adapter_id: 'llm', instance_id: `personal-${canonicalSha256(person(actor)).slice(7, 39)}`, version: '1.0.0', configuration_sha256: canonicalSha256(processorConfiguration), credential_reference_sha256: canonicalSha256('reference') },
     current: () => undefined,
   });
   const count = (table: string) => db.prepare(`SELECT count(*) FROM ${table}`).pluck().get();
@@ -57,6 +57,24 @@ describe('personal meeting intake: one source per person and tool account', () =
     expect(w.ensure('granola', MEMBER).source_key).not.toBe(first.source_key);
     expect(w.count('authority_person_meeting_sources_v2')).toBe(3);
     expect(w.count('authority_live_source_admission_v2')).toBe(3);
+  });
+
+  it('refuses a changed processor without replacing the admission or changing queued intake', () => {
+    const w = world(), source = w.ensure();
+    w.intake.watch(source, MINE, PROJECT_ALPHA, () => undefined);
+    w.intake.enqueue(w.stored(source), NOTE_1, PROJECT_BETA, () => undefined);
+    const state = () => ({
+      admissions: w.db.prepare('SELECT * FROM authority_live_source_admission_v2').all(),
+      sources: w.intake.list(),
+      checkpoint: w.intake.checkpoint(source.source_key),
+      suggestions: w.intake.proposalSuggestions(source.source_key, NOTE_1),
+    });
+    const before = state();
+    expect(() => w.ensure('granola', OWNER, 'changed-processor')).toThrow(expect.objectContaining({
+      code: 'unavailable', message: 'The meeting processor changed. Reset staging before importing with the selected processor.',
+    }));
+    expect(state()).toEqual(before);
+    expect(w.ensure()).toEqual(w.stored(source));
   });
 
   it('holds import projects as pending until the cursor advance drops the queued import, then records them as sorted suggestions', () => {

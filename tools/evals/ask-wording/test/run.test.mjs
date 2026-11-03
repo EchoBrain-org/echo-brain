@@ -171,7 +171,7 @@ test("writes through the personal Claude account port, admitting each request an
   };
   const accountGeneration = { ...generation, generation_adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" };
   const options = { ...parseArgs(["--run", "--credential-file", join(root, "credential"), "--out", join(root, "report"), "--cases", founder.id, "--trials", "1"]), writer: "claude-account" };
-  const { report } = await run(options, { loaded: { personal_research: { structured_output: port, generation: accountGeneration } }, progress: () => undefined });
+  const { report } = await run(options, { loaded: { structured_output: port, generation: accountGeneration }, progress: () => undefined });
   assert.deepEqual(report.model, { route: "claude-account", adapter_id: "claude-account-research-writer-v1", answer_model: "claude-sonnet-5-5" });
   assert.deepEqual(admittedRequests, ["count_tokens", "messages"]);
   assert.deepEqual(report.results[0].model_calls, [{ attempt: 1, result: "succeeded", finish_reason: "stop", usage: { input_tokens: 20, output_tokens: 7, total_tokens: 27 }, provider_latency_ms: null }]);

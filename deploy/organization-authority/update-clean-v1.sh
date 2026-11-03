@@ -77,26 +77,9 @@ acquire_staging_release_guard() {
 [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'Authority deployment environment file is missing or unsafe'
 
 compose_clean() {
-  case "${1:-}" in up|run|restart)
-    require_personal_claude_state_capability "$(sed -n 's/^ECHO_CLEAN_AUTHORITY_IMAGE=//p' "$ENV_FILE")" || return 1
-    ;;
-  esac
   docker compose --env-file "$ENV_FILE" \
     -f "$RUNTIME_CONFIG_DIR/compose.clean-v1.yaml" \
     -f "$RUNTIME_CONFIG_DIR/compose.clean-v1.ec2.yaml" "$@"
-}
-
-require_personal_claude_state_capability() {
-  local image="$1" marker="${RELEASE_STATE_DIR%/*}/private/personal-claude-all-models.json"
-  [[ -e "$marker" || -L "$marker" ]] || return 0
-  [[ -n "$image" ]] || return 1
-  if ! docker image inspect "$image" >/dev/null 2>&1; then
-    docker pull "$image" >/dev/null || return 1
-  fi
-  [[ "$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.state-capability.personal-claude-all-models-v1"}}' "$image" 2>/dev/null)" == true ]] || {
-    printf '%s\n' 'personal Claude all-models state requires a compatible image, even after disable; accepted rollback may be unavailable; preserve the candidate and generation history' >&2
-    return 1
-  }
 }
 
 field() { python3 "$RELEASE_TOOL" field "$1" "$2"; }
@@ -292,7 +275,6 @@ PY
 
 activate_release_tuple() {
   local record="$1" profile env_snapshot stage_parent stage_dir
-  require_personal_claude_state_capability "$(field "$record" authority-image)" || return 1
   profile="$(runtime_profile_path "$record")"
   env_snapshot="$(environment_snapshot_path "$record")"
   [[ -f "$profile" && ! -L "$profile" ]] || fail 'stored runtime profile is missing or unsafe'
@@ -944,7 +926,6 @@ start_and_check() {
   { read -r expected; read -r expected_source; } <<<"$values"
   compose_clean pull authority || return 1
   image_source_matches "$expected" "$expected_source" || return 1
-  require_personal_claude_state_capability "$expected" || return 1
   compose_clean up -d --no-build --wait --wait-timeout 90 || return 1
   compose_clean restart proxy || return 1
   compose_clean up -d --no-build --wait --wait-timeout 90 authority proxy || return 1
@@ -1016,7 +997,6 @@ case "$command" in
     else
       fail 'no accepted release record; run onboard-clean-v1.sh prepare first'
     fi
-    require_personal_claude_state_capability "$(field "$candidate" authority-image)" || fail 'candidate image cannot read retained personal Claude all-models state'
     verify_candidate_state_lineage "$candidate"
     store_release_tuple "$candidate" "$supplied_profile"
     if ! copy_record "$candidate" "$CANDIDATE_RECORD" no-replace; then

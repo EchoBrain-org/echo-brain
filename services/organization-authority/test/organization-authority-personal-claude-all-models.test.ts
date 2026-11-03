@@ -18,10 +18,13 @@ import { openPersonMeetingRuntimeV1 } from '../src/composition/person-meeting-ru
 import { createPersonUpdateProcessingV1 } from '../src/composition/person-update-processing-v1.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials } from '../src/composition/person-onboarding-service.js';
-import type { PersonalClaudeAllModelsSelectionV1 } from '../src/composition/personal-claude-selection-v1.js';
+import type { ClaudeAccountProfileV1 } from '@echo-brain/provider-openrouter/claude-account-answer-composition-generation-bundle-v1';
 
 vi.mock('@echo-brain/provider-openrouter/claude-account-decision-processor-bundle-v1', () => ({ createClaudeAccountDecisionProcessorBundleV1: vi.fn() }));
-vi.mock('@echo-brain/provider-openrouter/claude-account-answer-composition-generation-bundle-v1', () => ({ createClaudeAccountAnswerCompositionGenerationBundleV1: vi.fn() }));
+vi.mock('@echo-brain/provider-openrouter/claude-account-answer-composition-generation-bundle-v1', async importOriginal => ({
+  ...await importOriginal<typeof import('@echo-brain/provider-openrouter/claude-account-answer-composition-generation-bundle-v1')>(),
+  createClaudeAccountAnswerCompositionGenerationBundleV1: vi.fn(),
+}));
 vi.mock('@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1', () => ({ createOpenRouterDecisionProcessorBundleV1: vi.fn() }));
 vi.mock('@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1', async importOriginal => ({
   ...await importOriginal<typeof import('@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1')>(),
@@ -45,8 +48,7 @@ vi.mock('../src/composition/organization-authority-service-lifecycle.js', async 
   startOrganizationAuthorityServiceLifecycle: vi.fn(),
 }));
 
-const payer: PersonalClaudeAllModelsSelectionV1 = {
-  enabled: true, payer_membership_id: 'mem_payer',
+const payer: ClaudeAccountProfileV1 = {
   home_directory: '/synthetic/claude-account', executable_path: '/synthetic/claude',
 };
 const roots: string[] = [];
@@ -58,7 +60,7 @@ function processor(): DecisionProcessorBundleV1 {
   };
 }
 const nativeProcessor = processor(), sharedProcessor = processor();
-const nativeWriter = vi.fn(async () => ({ answer: 'synthetic native result' }));
+const nativeWriter = vi.fn(async (_input: StructuredGenerationInput) => ({ answer: 'synthetic native result' }));
 const nativeResearch = vi.fn(async (_session: AgenticResearchDriverSessionV1) => {});
 const native: AnswerCompositionGenerationBindingV1 = {
   generation: { generation_adapter_id: 'claude-account-research-writer-v1', planner_model: 'claude-sonnet-5-5', answer_model: 'claude-sonnet-5-5', timeout_ms: 60_000 },
@@ -74,6 +76,8 @@ const shared: AnswerCompositionGenerationBindingV1 = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  nativeWriter.mockResolvedValue({ answer: 'synthetic native result' });
+  nativeResearch.mockResolvedValue(undefined);
   vi.mocked(createClaudeAccountDecisionProcessorBundleV1).mockReturnValue(nativeProcessor);
   vi.mocked(createOpenRouterDecisionProcessorBundleV1).mockReturnValue(sharedProcessor);
   vi.mocked(createClaudeAccountAnswerCompositionGenerationBundleV1).mockReturnValue({ load: () => native });
@@ -92,7 +96,7 @@ function config(): OrganizationAuthorityServiceConfig {
     oidc: { issuer: 'https://issuer.invalid', client_id: 'synthetic-client', redirect_uri: `${STAGING_AUTHORITY_ORIGIN_V1}/v2/session/oidc/callback`, tenant: { kind: 'issuer' }, id_token_algorithms: ['RS256'] },
     client_authentication: { method: 'none' }, pkce_key_file: '/unused',
     openrouter_credential_file: '/unused/openrouter', nango: { secret_key: 'synthetic-nango-not-used-000000', integration_key: 'slack' },
-    personal_claude_all_models: payer,
+    staging_claude_account: payer,
   };
 }
 function freshConfig(): OrganizationAuthorityServiceConfig {
@@ -120,12 +124,10 @@ it('selects native extraction and default generation for interactive and backgro
     expect(createOpenRouterAnswerCompositionGenerationBundleV1).not.toHaveBeenCalled();
     const meeting = vi.mocked(openPersonMeetingRuntimeV1).mock.lastCall![0];
     expect(meeting.processor).toBe(nativeProcessor);
-    expect(meeting.processor_generations).toBe(true);
     const api = vi.mocked(startOrganizationAuthorityServiceLifecycle).mock.lastCall![1].api;
     const updates = vi.mocked(createPersonUpdateProcessingV1).mock.lastCall![0];
     for (const binding of [api.answer_composition_generation, updates]) {
       expect(binding.generation).toBe(native.generation);
-      expect(binding.personal_research).toBeUndefined();
       expect(binding).not.toHaveProperty('payer_membership_id');
     }
     const input: StructuredGenerationInput = { model: native.generation.answer_model, system_prompt: 'Synthetic instructions', user_prompt: 'Other member evidence', schema: {}, max_output_tokens: 1, timeout_ms: 1_000 };
@@ -143,8 +145,9 @@ it('selects native extraction and default generation for interactive and backgro
   } finally { await runtime.close(); }
 });
 
-it('explicitly restores OpenRouter when disabled while retaining processor-generation recovery', async () => {
-  const runtime = await openOrganizationAuthorityService({ ...freshConfig(), personal_claude_all_models: { ...payer, enabled: false } });
+it('uses OpenRouter when no native account is selected', async () => {
+  const { staging_claude_account: _account, ...sharedConfig } = freshConfig();
+  const runtime = await openOrganizationAuthorityService(sharedConfig);
   try {
     expect(createClaudeAccountDecisionProcessorBundleV1).not.toHaveBeenCalled();
     expect(createClaudeAccountAnswerCompositionGenerationBundleV1).not.toHaveBeenCalled();
@@ -152,31 +155,52 @@ it('explicitly restores OpenRouter when disabled while retaining processor-gener
     expect(createOpenRouterAnswerCompositionGenerationBundleV1).toHaveBeenCalledExactlyOnceWith({ credential_file: '/unused/openrouter' });
     const meeting = vi.mocked(openPersonMeetingRuntimeV1).mock.lastCall![0];
     expect(meeting.processor).toBe(sharedProcessor);
-    expect(meeting.processor_generations).toBe(true);
     const api = vi.mocked(startOrganizationAuthorityServiceLifecycle).mock.lastCall![1].api;
     expect(api.answer_composition_generation.generation).toBe(shared.generation);
   } finally { await runtime.close(); }
 });
 
-it.each([true, false])('rejects a non-staging marker before runtime startup (enabled=%s)', async enabled => {
-  await expect(openOrganizationAuthorityService({ ...config(), authority_url: 'https://authority.example', personal_claude_all_models: { ...payer, enabled } }))
+it('shares the SDK session cap between default writers and research, reserving capacity for interactive work', async () => {
+  const runtime = await openOrganizationAuthorityService(freshConfig());
+  const started: string[] = [], releases = new Map<string, () => void>();
+  let releaseAll!: () => void;
+  const cleanup = new Promise<void>(resolve => { releaseAll = resolve; });
+  const hold = (label: string) => {
+    started.push(label);
+    return Promise.race([cleanup, new Promise<void>(resolve => { releases.set(label, resolve); })]);
+  };
+  nativeWriter.mockImplementation(async input => { await hold(input.user_prompt); return { answer: 'synthetic native result' }; });
+  nativeResearch.mockImplementation(async () => { await hold('interactive-research'); });
+  const pending: Promise<unknown>[] = [];
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  try {
+    const api = vi.mocked(startOrganizationAuthorityServiceLifecycle).mock.lastCall![1].api;
+    const input: StructuredGenerationInput = { model: native.generation.answer_model, system_prompt: 'Synthetic instructions', user_prompt: '', schema: {}, max_output_tokens: 1, timeout_ms: 1_000 };
+    for (const user_prompt of ['background-1', 'background-2', 'background-3']) {
+      pending.push(api.answer_composition_background!.generate_with_admission!({ ...input, user_prompt }, vi.fn()));
+    }
+    pending.push(api.answer_composition_generation.structured_output.generate_with_admission!({ ...input, user_prompt: 'interactive-writer' }, vi.fn()));
+    pending.push(api.answer_composition_generation.research_driver!.run({ initial: {}, question: true, list_available: false,
+      signal: new AbortController().signal, remaining: () => 1_000, call: async () => ({}), model_request: vi.fn() }));
+    await flush();
+    expect(started).toEqual(['background-1', 'background-2', 'interactive-writer']);
+    releases.get('background-1')!(); await flush();
+    expect(started).toEqual(['background-1', 'background-2', 'interactive-writer', 'interactive-research']);
+    releases.get('interactive-writer')!(); await flush();
+    expect(started).toEqual(['background-1', 'background-2', 'interactive-writer', 'interactive-research', 'background-3']);
+  } finally { releaseAll(); await Promise.allSettled(pending); await runtime.close(); }
+});
+
+it('rejects native account selection outside staging before runtime startup', async () => {
+  await expect(openOrganizationAuthorityService({ ...config(), authority_url: 'https://authority.example' }))
     .rejects.toThrow('only on the staging Authority');
   expectNoRuntimeOrProviders();
 });
 
-it.each([true, false])('rejects conflicting payer selections before runtime startup (enabled=%s)', async enabled => {
-  await expect(openOrganizationAuthorityService({ ...config(), personal_claude_all_models: { ...payer, enabled },
-    personal_claude_research: { membership_id: 'mem_other-payer', home_directory: payer.home_directory, executable_path: payer.executable_path },
-  })).rejects.toThrow('conflicting payer');
-  expectNoRuntimeOrProviders();
-});
-
 it.each([
-  { ...payer, enabled: 'true' },
-  { ...payer, payer_membership_id: 'invalid-member' },
   { ...payer, home_directory: 'relative-home' },
   { ...payer, executable_path: 'relative-executable' },
-])('rejects malformed direct all-models configuration before selecting providers', async selection => {
-  await expect(openOrganizationAuthorityService({ ...config(), personal_claude_all_models: selection as PersonalClaudeAllModelsSelectionV1 })).rejects.toThrow();
+])('rejects malformed native account configuration before selecting providers', async selection => {
+  await expect(openOrganizationAuthorityService({ ...config(), staging_claude_account: selection })).rejects.toThrow();
   expectNoRuntimeOrProviders();
 });
