@@ -15,8 +15,8 @@ import { askText, searchQuery } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, numberedSources, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, knownStates, previousOf, sameScope,
-  shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type CheckPlan, type Suggestion, type TurnCheck, type TurnChecks,
+  answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, checksHiding, followedTurn, foundUnreadable, freshChecks, freshStates, knownStates,
+  previousOf, sameScope, shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type CheckPlan, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
@@ -3806,8 +3806,10 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * stands over what an earlier check said of that turn, never over what a
  * later one did; a turn citing nothing a check asks about is spoken for
  * without asking. It fails quietly, with no tags, when any of its requests
- * does: what an earlier check said that is no longer good goes with it, and
- * it speaks for no turn it did not ask all about. A ticket it reads for the first time
+ * does: it speaks for no turn, and what an earlier check said that is no
+ * longer good goes with it; only what a request that came back found you can
+ * no longer read stays, hidden as the turn's unreadable sources and over what
+ * a check still good said of them. A ticket it reads for the first time
  * keeps the marker it read as its baseline. `newest`: the place (`threadKey`)
  * whose newest turns Ask opening checked, made again there five minutes after
  * it went.
@@ -3819,17 +3821,20 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
   const mine = checkSeq;
   const at = Date.now();
   const check = async () => {
-    const result = await askChecks(account, plan, () => mine === checkSeq && sameAccount(account));
-    if (result === null) return;
-    if (!result.ok) {
-      if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
-      keepChecks(state.timeline.checks);
-      return;
-    }
-    const found = checkedOf(plan, result.value);
-    if (newest !== null) newestCheckedAt.set(newest, at);
+    const asked = await askChecks(account, plan, () => mine === checkSeq && sameAccount(account));
+    if (asked === null) return;
+    const found = checkedOf(plan, asked.results);
     const before = state.timeline.checks;
     const latest = Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
+    if (asked.failure !== undefined) {
+      const gone = ACCOUNT_GONE.includes(asked.failure.code);
+      if (gone) accountLost(asked.failure);
+      const hidden = gone ? {} : Object.fromEntries(latest.map(([id, states]) => [id, foundUnreadable(states)]));
+      keepChecks(checksHiding(state.timeline.checks, hidden));
+      keepUnreadable(Object.entries(hidden));
+      return;
+    }
+    if (newest !== null) newestCheckedAt.set(newest, at);
     keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
     keepBaselines(found.markers);
     keepUnreadable(latest);
@@ -3879,18 +3884,19 @@ function keepBaselines(markers: Readonly<Record<string, Readonly<Record<string, 
 }
 
 /**
- * A check's requests, one after another: the results of each, or the first
- * failure, which ends it; null once a reply no longer counts (`wanted`).
+ * A check's requests, one after another: the results of each that came
+ * back, and the failure that ended it, if one did; null once a reply no
+ * longer counts (`wanted`).
  */
-async function askChecks(account: Expect, plan: CheckPlan, wanted: () => boolean): Promise<Result<readonly (readonly AskCheckResult[])[]> | null> {
+async function askChecks(account: Expect, plan: CheckPlan, wanted: () => boolean): Promise<{ readonly results: readonly (readonly AskCheckResult[])[]; readonly failure?: Failure } | null> {
   const results: (readonly AskCheckResult[])[] = [];
   for (const request of plan.requests) {
     const result = await rpc('ask.check', { expect: account, items: [...request.items] });
     if (!wanted()) return null;
-    if (!result.ok) return result;
+    if (!result.ok) return { results, failure: result.failure };
     results.push(result.value.items);
   }
-  return { ok: true, value: results };
+  return { results };
 }
 
 /** A new answer's tickets: one check, for their markers now, the baseline a later check compares with (C5). Quiet. */
@@ -3899,9 +3905,9 @@ async function baseline(turn: TimelineTurn): Promise<void> {
   if (!account) return;
   const plan = checkPlan([turn], source => source.kind === 'ticket');
   if (plan.requests.length === 0) return;
-  const result = await askChecks(account, plan, () => sameAccount(account));
-  if (result === null || !result.ok) return;
-  keepBaselines(checkedOf(plan, result.value).markers);
+  const asked = await askChecks(account, plan, () => sameAccount(account));
+  if (asked === null || asked.failure !== undefined) return;
+  keepBaselines(checkedOf(plan, asked.results).markers);
 }
 
 /** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet, the older earlier questions folded. */

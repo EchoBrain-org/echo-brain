@@ -72,20 +72,23 @@ function kept(id: string, answer: Answer, days = 1, question = QUESTION): Timeli
     question, scope: GLOBAL, answer };
 }
 
-/**
- * Ask opened on `turns`' latest, after a check that found each source in `states` (by its page or ticket id) as it says and
- * every other the same: the store, and the thread as it shows now.
- */
-async function reopened(states: Readonly<Record<string, string>>, ...turns: TimelineTurn[]) {
+/** A check that finds each source in `states` (by its page or ticket id) as it says, and every other the same. */
+const finding = (states: Readonly<Record<string, string>>): Handler => params => ok({ items: (params.items as { citation: Record<string, unknown> }[]).map(({ citation }) =>
+  ({ state: states[String(citation.page_id ?? citation.ticket_id)] ?? 'same' })) });
+
+/** Ask opened on `turns`' latest, each check request answered by `check`: the store, and the thread as it shows now. */
+async function reopenedWith(check: Handler, ...turns: TimelineTurn[]) {
   timelineFiles.set(fileOf(ACCOUNT), turns);
-  checked = params => ok({ items: (params.items as { citation: Record<string, unknown> }[]).map(({ citation }) =>
-    ({ state: states[String(citation.page_id ?? citation.ticket_id)] ?? 'same' })) });
+  checked = check;
   const store = await startStore();
   store.pickSuggestion({ question: QUESTION, turn: turns.at(-1)!.id });
   await flush();
   const screens = await import('../../src/renderer/screens/ask.js');
   return { store, thread: () => render(screens.AskView({ state: store.getState() })) };
 }
+
+/** Ask opened on `turns`' latest, after a check that found each source in `states` as it says and every other the same. */
+const reopened = (states: Readonly<Record<string, string>>, ...turns: TimelineTurn[]) => reopenedWith(finding(states), ...turns);
 
 /** What a part's blocks show, in order: each block's title, then the block, as its element and first class. */
 const drawn = (layout: Node | undefined) => ([layout!.props.children].flat(6) as unknown[])
@@ -290,6 +293,60 @@ describe('a check of an arranged answer (ADR-0047)', () => {
     const [markdown] = rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').map(([, params]) => (params as { text: string }).text);
     expect(markdown).toContain('Page 103 applies.');
     expect(markdown).not.toContain('Page 104');
+  });
+
+  it('keeps hidden what a request found you can no longer read when a later request of the check fails, and speaks for no turn', async () => {
+    // 104 pages, two requests: the first finds page 1 no longer yours to read, and the second fails.
+    const sent: number[] = [];
+    const first = finding({ 41000: 'unreadable' });
+    const { store, thread } = await reopenedWith(params => {
+      sent.push((params.items as unknown[]).length);
+      return sent.length === 1 ? first(params) : { ok: false, failure: { code: 'unavailable', retryable: true } };
+    }, kept('1', pagesAnswer(104)));
+    expect(sent).toEqual([100, 4]);
+    const id = store.getState().timeline.turns.at(-1)!.id;
+    expect(text(byTestId(thread(), 'answer')[0])).not.toContain('Page 1 applies.');
+    expect(await store.copyAnswer(id)).toBe(true);
+    const [markdown] = rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').map(([, params]) => (params as { text: string }).text);
+    expect(markdown).toContain('Page 2 applies.');
+    expect(markdown).not.toContain('Page 1 applies.');
+    // The turn keeps page 1 unreadable, and nothing says it is current: no check is kept for it, so the next one asks again.
+    expect(store.getState().timeline.turns.at(-1)!.unreadable).toEqual([0]);
+    expect(store.getState().timeline.checks[id]).toBeUndefined();
+  });
+
+  it('hides at once what such a check found unreadable, over a check of the turn still good that found it readable', async () => {
+    // An earlier turn citing 50 pages and the latest citing 60: Ask opening checks both, in two requests.
+    const older = kept('1', pagesAnswer(50), 2, 'Which pages apply?');
+    const latest = kept('2', pagesAnswer(60));
+    const failing: number[] = [];
+    let fails = false;
+    const same = finding({});
+    const { store } = await reopenedWith(params => {
+      if (!fails) return same(params);
+      const items = params.items as { asked_at: string; citation: Record<string, unknown> }[];
+      failing.push(items.length);
+      return failing.length > 1 ? { ok: false, failure: { code: 'unavailable', retryable: true } }
+        : ok({ items: items.map(({ asked_at, citation }) => ({ state: asked_at === older.asked_at && citation.page_id === '41000' ? 'unreadable' : 'same' })) });
+    }, older, latest);
+    // Five and a half minutes on, opening the earlier turn checks it alone: its page 1 is readable.
+    vi.setSystemTime(NOW.getTime() + 5.5 * 60_000);
+    store.toggleTurn(older.id);
+    await flush();
+    expect(store.getState().timeline.checks[older.id]?.states[0]).toBe('same');
+    // Half a minute later Ask opens again and checks both: its first request finds that page 1 unreadable, and its second fails.
+    vi.setSystemTime(NOW.getTime() + 6 * 60_000);
+    fails = true;
+    store.closeAsk();
+    store.pickSuggestion({ question: QUESTION, turn: latest.id });
+    await flush();
+    expect(failing).toEqual([100, 10]);
+    expect(store.getState().timeline.checks[older.id]?.states[0]).toBe('unreadable');
+    expect(store.getState().timeline.turns.find(turn => turn.id === older.id)!.unreadable).toEqual([0]);
+    expect(await store.copyAnswer(older.id)).toBe(true);
+    const markdown = rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').map(([, params]) => (params as { text: string }).text).at(-1)!;
+    expect(markdown).toContain('Page 2 applies.');
+    expect(markdown).not.toContain('Page 1 applies.');
   });
 });
 

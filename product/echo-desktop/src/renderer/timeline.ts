@@ -56,6 +56,24 @@ export function unreadableAfter(kept: readonly number[] | undefined, states: Tur
   return [...next].sort((left, right) => left - right);
 }
 
+/**
+ * What a check that did not finish keeps of what its requests that came back
+ * said of a turn's sources: those they found unreadable, which stay hidden.
+ * It speaks for no turn, so nothing it found the same or changed shows.
+ */
+export function foundUnreadable(states: TurnChecks): TurnChecks {
+  return Object.fromEntries(Object.entries(states).filter(([, said]) => said === 'unreadable'));
+}
+
+/**
+ * The checks still good after one that did not finish: each as it was, but
+ * taking what that check found unreadable (`hidden`, by turn), so an earlier
+ * check that found a source readable never shows what this one hid.
+ */
+export function checksHiding(checks: Readonly<Record<string, TurnCheck>>, hidden: Readonly<Record<string, TurnChecks>>): Record<string, TurnCheck> {
+  return Object.fromEntries(Object.entries(checks).map(([id, check]) => [id, hidden[id] === undefined ? check : { ...check, states: { ...check.states, ...hidden[id] } }]));
+}
+
 /** The checks still good at `now`: one five minutes old goes, so nothing it said shows any more. */
 export function freshChecks(checks: Readonly<Record<string, TurnCheck>>, now: number): Record<string, TurnCheck> {
   return Object.fromEntries(Object.entries(checks).filter(([, check]) => freshStates(check, now) !== undefined));
