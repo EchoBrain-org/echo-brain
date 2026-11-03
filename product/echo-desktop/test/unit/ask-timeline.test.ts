@@ -17,8 +17,8 @@ import {
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
 import {
-  ACCOUNT, byTestId, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles, wake,
-  type Node,
+  ACCOUNT, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text,
+  timelineFiles, wake,
 } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -110,8 +110,6 @@ beforeEach(() => {
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params as Record<string, unknown>);
 const seed = (...turns: TimelineTurn[]) => { timelineFiles.set(fileOf(ACCOUNT), turns); };
 const kept = () => timelineFiles.get(fileOf(ACCOUNT)) ?? [];
-const classes = (node: Node | undefined) => String(node?.props.class ?? '').split(' ').filter(Boolean);
-const click = (node: Node | undefined) => (node!.props.onClick as () => void)();
 async function view() {
   const screens = await import('../../src/renderer/screens/ask.js');
   return (store: { getState(): unknown }) => render(screens.AskView({ state: store.getState() as never }));

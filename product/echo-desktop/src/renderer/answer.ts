@@ -252,14 +252,18 @@ function markdownText(text: string): string {
 /** Which of an answer's sentences and rows the page shows, by what they cite: all, unless a check leaves some out (ADR-0047). */
 export type Shows = (citations: readonly number[]) => boolean;
 
+/** Whether the page shows a block of either layout, but a heading: a table when it shows a row of it, any other block when it shows a sentence. */
+function blockShows(part: AnswerPart, block: Exclude<AnswerBlock, { kind: 'heading' }> | ArrangedBlock, shows: Shows): boolean {
+  return block.kind === 'table' ? block.rows.some(row => shows(row.citation_indexes)) : block.statements.some(place => shows(part.statements[place]!.citation_indexes));
+}
+
 /**
  * The blocks of a laid-out part the page shows, by their place: a block with
  * a sentence or row it shows, and a heading only with such a block right
  * under it.
  */
 export function shownBlocks(part: AnswerPart, layout: readonly AnswerBlock[], shows: Shows): boolean[] {
-  const some = (block: AnswerBlock) => block.kind === 'heading' || (block.kind === 'table' ? block.rows.some(row => shows(row.citation_indexes))
-    : block.statements.some(place => shows(part.statements[place]!.citation_indexes)));
+  const some = (block: AnswerBlock) => block.kind === 'heading' || blockShows(part, block, shows);
   return layout.map((block, place) => some(block) && (block.kind !== 'heading' || (layout[place + 1] !== undefined && layout[place + 1]!.kind !== 'heading'
     && some(layout[place + 1]!))));
 }
@@ -270,8 +274,12 @@ export function shownBlocks(part: AnswerPart, layout: readonly AnswerBlock[], sh
  * its own, so it goes with it.
  */
 export function shownArranged(part: AnswerPart, blocks: readonly ArrangedBlock[], shows: Shows): boolean[] {
-  return blocks.map(block => block.kind === 'table' ? block.rows.some(row => shows(row.citation_indexes))
-    : block.statements.some(place => shows(part.statements[place]!.citation_indexes)));
+  return blocks.map(block => blockShows(part, block, shows));
+}
+
+/** A block's items the page shows: each sentence's place in the part (`places`), with its item's in the block, kept when `shows` what it cites. */
+export function shownItems(part: AnswerPart, places: readonly number[], shows: Shows): { place: number; at: number }[] {
+  return places.map((place, at) => ({ place, at })).filter(({ place }) => shows(part.statements[place]!.citation_indexes));
 }
 
 /** An arranged block's section heading: its title, but for a card's, which names the card itself. */
@@ -305,14 +313,11 @@ function tableMarkdown(block: AnswerTable, shows: Shows, cited: Cited): string[]
  */
 function arrangedMarkdown(part: AnswerPart, blocks: readonly ArrangedBlock[], shows: Shows, cited: Cited): string[] {
   const showing = shownArranged(part, blocks, shows);
-  /** A block's sentences the page shows, each with its item's place in the block. */
-  const items = (places: readonly number[]) => places.map((place, at) => ({ statement: part.statements[place]!, at }))
-    .filter(({ statement }) => shows(statement.citation_indexes));
   return blocks.flatMap((block, place) => {
     if (!showing[place]) return [];
     const title = blockTitle(block);
     const heading = title === undefined ? [] : [`### ${markdownText(title)}`];
-    const shown = items(block.statements);
+    const shown = shownItems(part, block.statements, shows).map(({ place: sentence, at }) => ({ statement: part.statements[sentence]!, at }));
     const claims = shown.map(({ statement }) => cited(statement.text, statement.citation_indexes));
     switch (block.kind) {
       case 'answer': case 'text': return [...heading, claims.join(' ')];

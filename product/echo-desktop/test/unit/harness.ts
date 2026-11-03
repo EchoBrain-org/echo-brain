@@ -261,3 +261,11 @@ export function text(value: unknown): string {
   return text((value as Node).props.children);
 }
 export const byTestId = (tree: unknown, id: string) => elements(tree).filter(node => node.props['data-testid'] === id);
+/** The elements of a tree with the class `name` among theirs. */
+export const byClass = (tree: unknown, name: string) => elements(tree).filter(node => typeof node.props.class === 'string' && node.props.class.split(' ').includes(name));
+/** The elements of a tree of one type ("li"). */
+export const byType = (tree: unknown, type: string) => elements(tree).filter(node => node.type === type);
+/** An element's classes: none for no element. */
+export const classes = (node: Node | undefined) => String(node?.props.class ?? '').split(' ').filter(Boolean);
+/** A click on an element: its onClick, called. */
+export const click = (node: Node | undefined) => (node!.props.onClick as () => void)();

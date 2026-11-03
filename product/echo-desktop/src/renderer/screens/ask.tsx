@@ -7,7 +7,7 @@ import type {
 import { askText, queryTerms } from '../../shared/query.js';
 import {
   answerSentences, blockTitle, CARD_WORDS, documentName, dueColumn, externalSourceProvider, lateForYou, partShows, passageBlocks, rowId, rowStatement, shownArranged,
-  shownBlocks, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
+  shownBlocks, shownItems, statementGroups, tableDay, yoursIn, type AnswerTable, type Inline, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedToday, askedWhen, identity, initial, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
@@ -233,14 +233,27 @@ function markClass(base: string, on: boolean, mark: Mark): string {
   return [base, on ? 'on' : '', mark === 'changed' ? 'changed' : ''].filter(Boolean).join(' ');
 }
 
+/**
+ * What a sentence's element carries, whichever item it reads as: its classes
+ * after `base`, if any (lit by its number, changed since it was said), its
+ * test id, and what a check says of it.
+ */
+function statementProps(state: State, view: TurnView, statement: AnswerStatement, id: string, base = '') {
+  const mark = markIn(view, statement.citation_indexes);
+  return { class: markClass(base, lit(state, view, id), mark) || undefined, 'data-testid': 'statement', 'data-mark': mark ?? undefined };
+}
+
+/** A sentence's words as its item reads them (`text`), then the numbers of its sources. */
+function Said({ state, view, statement, id, text }: { state: State; view: TurnView; statement: AnswerStatement; id: string; text: string }) {
+  return <><span data-testid="statement-text">{text}</span><Markers state={state} view={view} statement={statement} id={id} /></>;
+}
+
 /** A sentence and the numbers of its sources. The one whose number opened the pane is lit. One a check left out is not shown. */
 function Statement({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
-  const mark = markIn(view, statement.citation_indexes);
-  if (mark === 'omitted') return null;
+  if (markIn(view, statement.citation_indexes) === 'omitted') return null;
   return (
-    <p class={markClass('answer-statement selectable', lit(state, view, id), mark)} data-testid="statement" data-mark={mark ?? undefined}>
-      <span data-testid="statement-text">{statement.text}</span>
-      <Markers state={state} view={view} statement={statement} id={id} />
+    <p {...statementProps(state, view, statement, id, 'answer-statement selectable')}>
+      <Said state={state} view={view} statement={statement} id={id} text={statement.text} />
     </p>
   );
 }
@@ -259,13 +272,8 @@ function Found({ state, view, statement, id }: { state: State; view: TurnView; s
 }
 
 /** A sentence of the lead or a paragraph, inline with the others: its text and its numbers, lit on its own. */
-function Claim({ state, view, statement, id, mark }: { state: State; view: TurnView; statement: AnswerStatement; id: string; mark: Mark }) {
-  return (
-    <span class={markClass('claim', lit(state, view, id), mark)} data-testid="statement" data-mark={mark ?? undefined}>
-      <span data-testid="statement-text">{statement.text}</span>
-      <Markers state={state} view={view} statement={statement} id={id} />
-    </span>
-  );
+function Claim({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
+  return <span {...statementProps(state, view, statement, id, 'claim')}><Said state={state} view={view} statement={statement} id={id} text={statement.text} /></span>;
 }
 
 /** The places of a block's sentences a check leaves to show. */
@@ -275,21 +283,36 @@ function shownPlaces(view: TurnView, part: AnswerPart, places: readonly number[]
 
 /** A bullet, or a numbered step: its sentence and its numbers, lit on its own. */
 function Point({ state, view, statement, id }: { state: State; view: TurnView; statement: AnswerStatement; id: string }) {
-  const mark = markIn(view, statement.citation_indexes);
-  return (
-    <li class={markClass('', lit(state, view, id), mark) || undefined} data-testid="statement" data-mark={mark ?? undefined}>
-      <span><span data-testid="statement-text">{statement.text}</span><Markers state={state} view={view} statement={statement} id={id} /></span>
-    </li>
-  );
+  return <li {...statementProps(state, view, statement, id)}><span><Said state={state} view={view} statement={statement} id={id} text={statement.text} /></span></li>;
 }
 
 /** The sentences of a lead or a paragraph, one after another, each with its own numbers. */
 function Claims({ state, view, part, index, statements }: { state: State; view: TurnView; part: AnswerPart; index: number; statements: readonly number[] }) {
-  return <>{statements.map((place, at) => {
-    const statement = part.statements[place]!;
-    return <Fragment key={place}>{at > 0 && ' '}
-      <Claim state={state} view={view} statement={statement} id={`${index}.${place}`} mark={markIn(view, statement.citation_indexes)} /></Fragment>;
-  })}</>;
+  return <>{statements.map((place, at) => <Fragment key={place}>{at > 0 && ' '}
+    <Claim state={state} view={view} statement={part.statements[place]!} id={`${index}.${place}`} /></Fragment>)}</>;
+}
+
+/** A lead (`lead`) or a paragraph: the sentences of `statements` a check leaves to show, one after another. */
+function Prose({ state, view, part, index, statements, lead }: {
+  state: State; view: TurnView; part: AnswerPart; index: number; statements: readonly number[]; lead: boolean;
+}) {
+  return (
+    <p class={lead ? 'answer-lead selectable' : 'answer-paragraph selectable'}>
+      <Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, statements)} />
+    </p>
+  );
+}
+
+/** Bullets, or numbered steps when their order matters (`ordered`): a point for each sentence of `statements` a check leaves to show. */
+function Points({ state, view, part, index, statements, ordered }: {
+  state: State; view: TurnView; part: AnswerPart; index: number; statements: readonly number[]; ordered: boolean;
+}) {
+  const List = ordered ? 'ol' : 'ul';
+  return (
+    <List class={`answer-bullets${ordered ? ' answer-steps' : ''} selectable`}>
+      {shownPlaces(view, part, statements).map(at => <Point key={at} state={state} view={view} statement={part.statements[at]!} id={`${index}.${at}`} />)}
+    </List>
+  );
 }
 
 /** One cell of a table that is not its first: an ISO date as "Oct 14" in mono, late when the row is yours and late; you, as the owner, heavier. */
@@ -357,19 +380,10 @@ function LaidOut({ state, view, part, index, layout, opening }: {
       {layout.map((block, place) => {
         if (!showing[place]) return null;
         if (block.kind === 'heading') { heading = block.text; return <h3 key={place} class="answer-heading">{block.text}</h3>; }
-        if (block.kind === 'lead') {
-          return <p key={place} class="answer-lead selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
+        if (block.kind === 'lead' || block.kind === 'paragraph') {
+          return <Prose key={place} state={state} view={view} part={part} index={index} statements={block.statements} lead={block.kind === 'lead'} />;
         }
-        if (block.kind === 'paragraph') {
-          return <p key={place} class="answer-paragraph selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
-        }
-        if (block.kind === 'bullets') {
-          return (
-            <ul key={place} class="answer-bullets selectable">
-              {shownPlaces(view, part, block.statements).map(at => <Point key={at} state={state} view={view} statement={part.statements[at]!} id={`${index}.${at}`} />)}
-            </ul>
-          );
-        }
+        if (block.kind === 'bullets') return <Points key={place} state={state} view={view} part={part} index={index} statements={block.statements} ordered={false} />;
         return <Table key={place} state={state} view={view} index={index} block={block} place={place} opens={opening && place === 0} label={heading} />;
       })}
     </div>
@@ -389,12 +403,11 @@ function EntityIcon({ entity }: { entity: CardEntity }) {
  * its sentence's numbers, and who, when the evidence says. Lit on its own.
  */
 function EventItem({ state, view, statement, event, id }: { state: State; view: TurnView; statement: AnswerStatement; event: AnswerEvent; id: string }) {
-  const mark = markIn(view, statement.citation_indexes);
   return (
-    <li class={markClass('', lit(state, view, id), mark) || undefined} data-testid="statement" data-mark={mark ?? undefined}>
+    <li {...statementProps(state, view, statement, id)}>
       <time class="event-day" dateTime={event.date}>{tableDay(event.date) ?? event.date}</time>
       <span class="event-body">
-        <span class="event-text"><span data-testid="statement-text">{event.text}</span><Markers state={state} view={view} statement={statement} id={id} /></span>
+        <span class="event-text"><Said state={state} view={view} statement={statement} id={id} text={event.text} /></span>
         {event.who !== undefined && <span class="event-who">{event.who}</span>}
       </span>
     </li>
@@ -403,29 +416,22 @@ function EventItem({ state, view, statement, event, id }: { state: State; view: 
 
 /** One fact of a card: its label, then its value with its sentence's numbers. Lit on its own. */
 function FactRow({ state, view, statement, fact, id }: { state: State; view: TurnView; statement: AnswerStatement; fact: AnswerFact; id: string }) {
-  const mark = markIn(view, statement.citation_indexes);
   return (
-    <div class={markClass('answer-fact', lit(state, view, id), mark)} data-testid="statement" data-mark={mark ?? undefined}>
+    <div {...statementProps(state, view, statement, id, 'answer-fact')}>
       <dt>{fact.label}</dt>
-      <dd><span data-testid="statement-text">{fact.value}</span><Markers state={state} view={view} statement={statement} id={id} /></dd>
+      <dd><Said state={state} view={view} statement={statement} id={id} text={fact.value} /></dd>
     </div>
   );
 }
 
 /** A quote, set apart by a rule: the words with their sentence's numbers, then where they come from. Lit on its own. */
 function Quote({ state, view, statement, text, from, id }: { state: State; view: TurnView; statement: AnswerStatement; text: string; from?: string; id: string }) {
-  const mark = markIn(view, statement.citation_indexes);
   return (
-    <figure class={markClass('answer-quote selectable', lit(state, view, id), mark)} data-testid="statement" data-mark={mark ?? undefined}>
-      <blockquote><span data-testid="statement-text">{text}</span><Markers state={state} view={view} statement={statement} id={id} /></blockquote>
+    <figure {...statementProps(state, view, statement, id, 'answer-quote selectable')}>
+      <blockquote><Said state={state} view={view} statement={statement} id={id} text={text} /></blockquote>
       {from !== undefined && <figcaption>{from}</figcaption>}
     </figure>
   );
-}
-
-/** The items of a block a check leaves to show: each sentence's place in the part, and its item's place in the block. */
-function shownItems(view: TurnView, part: AnswerPart, places: readonly number[]): { place: number; at: number }[] {
-  return places.map((place, at) => ({ place, at })).filter(({ place }) => view.shows(part.statements[place]!.citation_indexes));
 }
 
 /**
@@ -442,24 +448,16 @@ function ArrangedItems({ state, view, part, index, block, place, opens }: {
 }) {
   const statement = (at: number) => part.statements[at]!;
   switch (block.kind) {
-    case 'answer':
-      return <p class="answer-lead selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
-    case 'text':
-      return <p class="answer-paragraph selectable"><Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, block.statements)} /></p>;
-    case 'points': {
-      const List = block.ordered ? 'ol' : 'ul';
-      return (
-        <List class={`answer-bullets${block.ordered ? ' answer-steps' : ''} selectable`}>
-          {shownPlaces(view, part, block.statements).map(at => <Point key={at} state={state} view={view} statement={statement(at)} id={`${index}.${at}`} />)}
-        </List>
-      );
-    }
+    case 'answer': case 'text':
+      return <Prose state={state} view={view} part={part} index={index} statements={block.statements} lead={block.kind === 'answer'} />;
+    case 'points':
+      return <Points state={state} view={view} part={part} index={index} statements={block.statements} ordered={block.ordered} />;
     case 'table':
       return <Table state={state} view={view} index={index} block={block} place={place} opens={opens} label={block.title ?? 'Table'} />;
     case 'timeline':
       return (
         <ol class="answer-timeline selectable">
-          {shownItems(view, part, block.statements).map(({ place: sentence, at }) => (
+          {shownItems(part, block.statements, view.shows).map(({ place: sentence, at }) => (
             <EventItem key={sentence} state={state} view={view} statement={statement(sentence)} event={block.events[at]!} id={`${index}.${sentence}`} />
           ))}
         </ol>
@@ -474,7 +472,7 @@ function ArrangedItems({ state, view, part, index, block, place, opens }: {
             <span class="answer-card-title">{block.title}</span>
           </div>
           <dl class="answer-facts">
-            {shownItems(view, part, block.statements).map(({ place: sentence, at }) => (
+            {shownItems(part, block.statements, view.shows).map(({ place: sentence, at }) => (
               <FactRow key={sentence} state={state} view={view} statement={statement(sentence)} fact={block.facts[at]!} id={`${index}.${sentence}`} />
             ))}
           </dl>
@@ -527,19 +525,20 @@ function Arranged({ state, view, part, index, blocks, opening }: {
  */
 function AgenticAnswer({ state, view, dimmed = false, empty = true }: { state: State; view: TurnView; dimmed?: boolean; empty?: boolean }) {
   const answer = view.answer;
-  const parts = answer.parts.map((part, index) => ({ part, index })).filter(({ part }) => partShows(part, view.shows));
+  // A part opens the answer when it is the first and no direct answer is above it.
+  const parts = answer.parts.map((part, index) => ({ part, index, opening: index === 0 && !answer.direct })).filter(({ part }) => partShows(part, view.shows));
   const said = parts.length > 0 || (answer.direct !== undefined && view.shows(answer.direct.citation_indexes));
   return (
     <div class={`agentic-answer${dimmed ? ' dimmed' : ''}`} data-testid="answer">
       {answer.direct && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
-      {parts.map(({ part, index }) => (
+      {parts.map(({ part, index, opening }) => (
         <section class="answer-part" key={index}>
           {/* One part answers the question itself: its label would repeat it. */}
           {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
           {part.layout
-            ? <LaidOut state={state} view={view} part={part} index={index} layout={part.layout} opening={index === 0 && !answer.direct} />
+            ? <LaidOut state={state} view={view} part={part} index={index} layout={part.layout} opening={opening} />
             : part.blocks
-              ? <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={index === 0 && !answer.direct} />
+              ? <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />
               : part.statements.map((statement, place) => <Statement key={place} state={state} view={view} statement={statement} id={`${index}.${place}`} />)}
           {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} view={view} statement={statement} id={`${index}.r${place}`} />)}
         </section>
