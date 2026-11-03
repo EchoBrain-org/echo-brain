@@ -1,4 +1,6 @@
 import {
+  PERSON_ANSWER_STATEMENT_MAX_BYTES_V4,
+  PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
   personAnswerCitationKeyV8,
   validatePersonAnswerBlocksV2,
   validatePersonAnswerLayoutV1,
@@ -20,6 +22,7 @@ import {
   answerSchema,
   answerSinceSchema,
   attributed,
+  boundedBytes,
   cleanId,
   cleanLine,
   parseAnswer,
@@ -390,6 +393,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       // One citation per key, the key the Ask response checks for duplicates: a listed ticket's row and its opened body
       // are two items with one key, so they share one citation.
       const keyOf = (short: string) => personAnswerCitationKeyV8(byShort.get(short)!.item.citation);
+      /** Whether a statement citing `shorts` would cite more items than one statement may, in blocks too (ADR-0051). */
+      const overCited = (shorts: readonly string[]) => new Set(shorts.map(keyOf)).size > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4;
       const question = partQuestion(askedQuestion);
       /**
        * The response `reply` (the writer's answer, or null) gives, laid out (ADR-0045) or not, with an Ask again's `since`
@@ -492,6 +497,13 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           if (sentence.form === "row" && !noted) return { kind: "row", ...section, columns: reply!.tables!.find(table => table.section === sentence.section)!.columns, cells: sentence.cells! };
           return { kind: sentence.form === undefined ? "text" : sentence.form === "row" ? "bullet" : sentence.form, ...section };
         };
+        /** The sentence with code's note (W5) within a statement's 4 KiB: one too long to take the note whole, a wide row, is cut, never the note. */
+        const fittedNote = (text: string, note: string) => {
+          const whole = withNote(text, note);
+          if (bytes(whole) <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4) return whole;
+          correct("model_text_truncated");
+          return `${boundedBytes(text, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 - bytes(` ${note}`))} ${note}`;
+        };
         /** A writer's or `since` sentence as code keeps it: on the text the writer read (W1), then the rows it may carry, noted (W5); or none. */
         const drafted = (sentence: Pick<AnswerSentence, "text" | "evidence">) => {
           const read = sentence.evidence.filter(short => textGiven.has(short));
@@ -500,7 +512,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
           if (unknown > 0) correct("writer_unknown_id_dropped", unknown);
           const notes = unchecked.filter(list => read.some(short => membership.in(list.id, short) !== undefined)).map(list => agenticListCheckedNoteV1(list)!);
-          return { text: notes.length === 0 ? sentence.text : withNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, noted: notes.length > 0 };
+          return { text: notes.length === 0 ? sentence.text : fittedNote(sentence.text, notes.join(" ")), shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, noted: notes.length > 0 };
         };
         /**
          * A v2 item as code checks it against the evidence text it stands on (ADR-0051): a quote that is not word for word in
@@ -535,7 +547,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // What fits is decided in that order whatever the layout, so a long lead never crowds out a stated list (W3). A laid-out
         // answer (ADR-0045) then reads what was kept lead first, then the lists, then the other sentences by section.
         // An answer arranged in blocks (ADR-0051) has no count of statements or citations of its own: only its byte bound,
-        // whose fallback, an answer without blocks, keeps ADR-0041's.
+        // whose fallback, an answer without blocks, keeps ADR-0041's, and the 40 citations one statement may carry. A statement
+        // that would cite more, through the private rows its list id brings, is left out whole, never cut short of them, and
+        // the statements after it are kept. ADR-0041's 40 for an answer leaves such a statement out first, with every one after it.
         const bounded = !(arranged && laid);
         const statementKeys = new Set<string>();
         const keptReads: Entry[] = [];
@@ -553,6 +567,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           }
           const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !fittedKeys.has(key)));
           if (bounded && (fitted.length >= MAX_STATEMENTS || fittedKeys.size + fresh.size > MAX_CITATIONS)) { dropped = true; break; }
+          if (overCited(sentence.shorts)) { dropped = true; continue; }
           statementKeys.add(statementKey);
           for (const key of fresh) fittedKeys.add(key);
           fitted.push(sentence);
@@ -623,8 +638,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // ---- an Ask again's since (ADR-0047): what is different now, after everything the answer cites ----
         // Only beside an answer with evidence: one with none cannot say what changed. Each sentence stands on text the writer
         // read (W1), as the writer's own sentences do, and repeats are dropped. A list the writer gave whose every sentence
-        // was left out says nothing, never that nothing changed; one that cannot fit the citation bound whole is left out
-        // whole, since cut short it would say less changed than did.
+        // was left out says nothing, never that nothing changed; one that cannot fit the citation bound whole, or has a sentence
+        // citing more than one statement may, is left out whole, since cut short it would say less changed than did.
         const sinceOf = (given: NonNullable<Answer["since"]>): Statement[] | undefined => {
           const keys = new Set<string>();
           const drafts = given.flatMap(sentence => {
@@ -637,7 +652,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           });
           if (given.length > 0 && drafts.length === 0) return undefined;
           const fresh = new Set(drafts.flatMap(value => value.shorts.map(keyOf)).filter(key => !usedKeys.has(key)));
-          if (bounded && usedKeys.size + fresh.size > MAX_CITATIONS) return undefined;
+          if ((bounded && usedKeys.size + fresh.size > MAX_CITATIONS) || drafts.some(value => overCited(value.shorts))) return undefined;
           return drafts.map(value => statementOf(value.text, value.shorts));
         };
         const since = !withSince || reply?.since === undefined || !anyEvidence ? undefined : sinceOf(reply.since);

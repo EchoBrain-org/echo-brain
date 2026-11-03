@@ -237,3 +237,9 @@ citations, as every installed client checks, and so does a v2 answer released
 without its blocks because it passed its 64 KiB. These stay, as guards
 against a runaway reply: the answer's 64 KiB, the writer's output room (2,000
 tokens, 2,500 for an Ask again), and the 25 members a list's statement names.
+So does what one statement may hold, in blocks too: 4 KiB, code's checked
+note (ADR-0041's W5) included, so a row too wide to take the note whole is cut,
+never the note; and 40 citations, so an item whose list id would bring more of
+that list's private rows is left out whole, never cut short of them, the part
+saying some evidence could not fit. An Ask again's account of what is
+different since is left out whole for the same reason.

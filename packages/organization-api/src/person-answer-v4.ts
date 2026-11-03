@@ -46,6 +46,8 @@ import {
 const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
 /** A statement's text: one claim, within 4 KiB. */
 export const PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 = 4 * 1024;
+/** The citations one statement may carry, in an answer of any length (ADR-0051 lifts only an answer's own count). */
+export const PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 = 40;
 /**
  * The evidence desk search (ADR-0022). Ask itself is `/v7` with the V8 answer (person-answer-v8.ts): the Ask routes before
  * it, `/v3` to `/v6` with the V4 to V7 answers, were retired, and so were the capability read and the desk's open.
@@ -258,8 +260,8 @@ function statement(value: unknown, citations: readonly PersonAnswerCitationV8[],
   assertExactKeys(input, ['text', 'citation_indexes', 'private'], label);
   if (fallback) evidenceText(input.text, `${label} text`, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
   else text(input.text, `${label} text`, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, true);
-  if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || input.citation_indexes.length > 40 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
-  const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length, 40);
+  if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || input.citation_indexes.length > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
+  const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length, PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4);
   const expectedPrivate = indexes.some((index) => ['only_me', 'approver_only'].includes(citations[index]!.visibility));
   if (input.private !== expectedPrivate) fail(`${label} private is inconsistent with cited visibility`);
   return Object.freeze({ text: input.text as string, citation_indexes: indexes, private: input.private });

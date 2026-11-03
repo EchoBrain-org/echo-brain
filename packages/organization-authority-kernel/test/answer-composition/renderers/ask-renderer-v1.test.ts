@@ -1,5 +1,5 @@
 import { canonicalJsonBytes, canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, validatePersonAnswerBlocksV2, validatePersonAnswerLayoutV1, type PersonAnswerResponseV8 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, validatePersonAnswerBlocksV2, validatePersonAnswerLayoutV1, type PersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import { describe, expect, it } from "vitest";
 import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
 import {
@@ -599,6 +599,49 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       ] }] });
       expect(part.statements.map(value => value.text)).toEqual(["2026-10-04: THERM-1 was created (1 of 2 checked so far).", "2026-10-04: BUG-412 blocked it (1 of 2 checked so far)."]);
       expect(part.blocks).toEqual([{ kind: "text", title: "Blocked", statements: [0, 1] }]);
+    });
+    it("keeps a wide row's statement within 4 KiB with code's checked note, the row cut and never the note (W5)", async () => {
+      const research: AgenticEvidenceBundleV1 = Object.freeze({
+        ...EMPTY_BUNDLE, lists: [list("L1", ["E1", "E2"])], plan: planOf([WS(["L1", "E1"])]),
+        items: [
+          { short: "E1", source: "tickets", item: ticketRow(1, "THERM-1: BUG-412 blocks DVT."), full: true, opened: true, preloaded: false, touched: 1, cited_by_plan: true },
+          { short: "E2", source: "tickets", item: ticketRow(2), full: false, opened: false, preloaded: false, touched: 2, cited_by_plan: false },
+        ],
+      });
+      const columns = (count: number) => Array.from({ length: count }, (_, at) => `C${String(at + 1).padStart(2, "0")}`);
+      // Forty cells of 100 characters are too wide for a statement, so the row reads as text cut to 4 KiB; 37 of them and one
+      // of 120 are a row of 4,085 bytes, which its note would take past 4 KiB.
+      const wide = { block: "table", title: "Fixture", columns: columns(40), rows: [{ cells: columns(40).map(() => "x".repeat(100)), evidence: ["E1"] }] };
+      const near = { block: "table", title: "Fixture", columns: columns(38), rows: [{ cells: columns(38).map((_, at) => "y".repeat(at === 37 ? 120 : 100)), evidence: ["E1"] }] };
+      for (const table of [wide, near]) {
+        const { rendered, corrections } = await observed(() => alone({ bundle: research, replies: [{ lists: [], not_found: [], blocks: [table] }], layout: 2 }).render("Which tickets were created on October 4?"));
+        const part = rendered.result.response.parts[0]!;
+        expect(Buffer.byteLength(part.statements[0]!.text, "utf8")).toBeLessThanOrEqual(PERSON_ANSWER_STATEMENT_MAX_BYTES_V4);
+        expect(part.statements[0]!.text).toMatch(/^C01: [xy]+.*… \(1 of 2 checked so far\)$/u);
+        expect(blocksOf(rendered)).toEqual([{ kind: "text", title: "Fixture", statements: [0] }]);
+        // The reader counts its cut of the row too wide for a statement; the renderer counts its own, for the note.
+        expect(corrections.model_text_truncated).toBe(table === wide ? 2 : 1);
+      }
+    });
+    // 45 only_me rows: an item citing L1 beside text would cite 46 items, past the 40 one statement may cite in blocks too.
+    const pastOne = () => listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])]);
+    const WAITS_ON = { text: "The fixture work waits on the review.", evidence: ["L1", "E47"] };
+    it("leaves out whole an item whose list id would cite more than a statement's 40 items, and keeps the items after it (W6)", async () => {
+      const part = await arranged(pastOne(), { lists: [], not_found: [], blocks: [
+        { block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] },
+        { block: "points", ordered: false, items: [WAITS_ON, { text: "The review closed.", evidence: ["E46"] }] },
+      ] });
+      expect(part.statements.map(value => value.text)).toEqual([REVIEW.text, "The review closed."]);
+      expect(part).toMatchObject({ status: "partial", gap: FIT });
+      expect(part.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "text", statements: [1] }]);
+    });
+    it("leaves out whole an Ask again's since whose list id would cite more than a statement's 40 items", async () => {
+      const rendered = await alone({
+        bundle: pastOne(), layout: 2, replies: [{ lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] }], since: [WAITS_ON] }],
+        earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "What did the review approve?",
+      }).render("What did the review approve?");
+      expect(rendered.result.response).not.toHaveProperty("since");
+      expect(rendered.result.response.parts[0]!.statements.map(value => value.text)).toEqual([REVIEW.text]);
     });
   });
 });
