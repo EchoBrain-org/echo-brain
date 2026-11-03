@@ -218,6 +218,11 @@ decided ("The release review decided the build may go to staging ...", 23 to
 writer to the one before, so the tuning is not proposed and PR #394 keeps its
 prompt (block evaluation README, "Result of rule 3 and the decision").
 
+The quick lead check that followed (block evaluation README, "Quick lead
+check") keeps all three rules: 30, 30 and 30 at `ca9b9a5`, leads of 15.3
+words. It sent no wording trial back: these one-fact questions write out no
+list.
+
 ## Limits
 
 - One model route and synthetic items only: a staging release and the

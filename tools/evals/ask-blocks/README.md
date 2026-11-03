@@ -634,6 +634,54 @@ released leads that still list items by the rule; the lead's words; fit in
 each case, the held-out ones included; the blocks used; repairs and output
 tokens.
 
+### Result of the quick lead check, 2026-11-02 (rules 1 and 2)
+
+At `ca9b9a5` with no uncommitted change, through the founder's Claude account
+(`claude-sonnet-5-5`): 45 gate trials, 30 wording trials and 15 held-out
+trials, no failed call. Held-out before ran at `c47cd51`, whose kernel is
+PR #394's.
+
+| | Before | After |
+| --- | --- | --- |
+| 1. Valid (43) | 45 | 45 |
+| 2. Grounded (43) | 45 | 45 |
+| 3. Nothing lost (41) | 45 | 44 |
+| 4. Fit (36) | 39 | 42 |
+| 5. Stable (12) | 15 | 15 |
+| Repairs | 0 | 12 |
+| Answer block, mean words | 25.5 | 21.5 |
+| Output tokens | 19,738 | 24,697 |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 |
+| Wording lead, mean words | 14.7 | 15.3 |
+| Held-out: valid, grounded, nothing lost (of 15) | 15, 15, 15 | 15, 15, 15 |
+| Held-out: fit (of 15) | 12 | 15 |
+| Held-out: repairs; answer block, mean words | 0; 26.7 | 9; 20.2 |
+
+- **Rules 1 and 2 pass.** Rule 3 waits for the founder's blind ranking of the
+  7 questions whose trial-1 answer the check changed: `gate-blockers`,
+  `review-multi`, `ship-steps`, `workstreams-status`, `ho-review-next`,
+  `ho-launch-blockers` and `ho-release-steps`.
+- **Where it fired:** 12 of the 45 gate trials' first replies
+  (`gate-blockers`, `ship-steps` and `review-multi` in all 3, `workstreams-status`
+  in 2, `week-events` in 1) and 9 of the 15 held-out ones (`ho-review-next`,
+  `ho-launch-blockers` and `ho-release-steps` in all 3), and never in the
+  wording cases, `fan-curve-options`, `dvt-date-moves` or `ho-supplier-month`.
+  After its one repair no released lead lists items by the rule; without the
+  check, 24 of 60 released leads did.
+- **What it changed:** `review-multi` now gives its decisions as points under
+  "Decisions" and its next steps as a table, in all three trials ("The
+  approved Oct 28 DVT review made three decisions, listed below, and each has
+  an open follow-up."), and so fits; `ho-review-next` does the same on the
+  held-out program. `gate-blockers` leads "Three conditions must all be met
+  before the DVT gate opens, and the retrieved records show none of them
+  completed.", `ship-steps` "The approved DVT ship plan sets four steps that
+  must happen in a fixed order before the build ships.", each above its list.
+- **The fact lost** (`trap-undated`, trial 1, "chase") is in a trial the check
+  did not send back.
+- **The cost:** a repaired answer makes a second writer call. Output tokens
+  rise 25% on the 15 cases, and a repaired trial's writer time has a median
+  of 7.3 seconds against 3.7 for one without a repair.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
