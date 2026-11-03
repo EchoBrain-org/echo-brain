@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
+import { createOpenRouterDecisionProcessorBundleV1 } from '@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const [mode, root, releaseId] = process.argv.slice(2);
@@ -126,11 +127,12 @@ if (mode === 'init') {
   write(evidencePath, { extraction_calls: 0, worker_errors: [] });
 } else if (mode === 'serve') {
   const metadata = read(metadataPath);
-  // Provider-free extraction for the personal meeting runtime; it accepts the admitted commitments.
+  // Match real finalize's commitments while keeping extraction synthetic. These two methods never read credentials or call a model.
+  const admittedProcessor = createOpenRouterDecisionProcessorBundleV1({ credential_file: metadata.config.openrouter_credential_file });
   const person_meeting_processor = {
     processor_adapter_id: 'llm',
-    current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: 'journey-fixture', configuration_sha256: canonicalSha256({ fixture: 'configuration' }), credential_reference_sha256: canonicalSha256({ fixture: 'credential' }) }),
-    assert_admission_commitments() {},
+    current_commitments: admittedProcessor.current_commitments,
+    assert_admission_commitments: admittedProcessor.assert_admission_commitments,
     create_processor(admission) {
       const identity = { kind: 'decision-processor', adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
       return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: NOW }), async extract(meeting) {
