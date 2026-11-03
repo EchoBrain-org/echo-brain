@@ -4,11 +4,11 @@
 // empty bar suggests from it. Pure, for the store and its tests; the store
 // keeps the state and makes the calls.
 import type {
-  AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskedScope, AskPrevious, AskScope, CheckCitation, TimelineTurn,
+  Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskedScope, AskPrevious, AskScope, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
 import { checkOf, MAX_ASK_BODY_BYTES, MAX_CHECK_ITEMS, MAX_CHECK_REQUEST_BYTES, PREVIOUS_LIMITS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
-import { answerSentences, MAX_SOURCES, sourceGroups, type Shows, type SourceGroup } from './answer.js';
+import { answerSentences, numberedSources, sourceGroups, type Shows, type SourceGroup } from './answer.js';
 
 /** A follow-up continues the latest turn while it was asked this recently, and Ask is open. */
 const FOLLOW_UP_MS = 60 * 60_000;
@@ -79,9 +79,9 @@ export interface Checked {
   readonly markers: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
-/** The answer's sources a check can ask about, numbered as the page numbers them: the first 32, each with what a check asks of it. */
+/** The answer's sources a check can ask about, numbered as the page numbers them (numberedSources), each with what a check asks of it. */
 function checkable(turn: TimelineTurn): { source: AnswerSource; at: number; citation: CheckCitation }[] {
-  return turn.answer.sources.slice(0, MAX_SOURCES).flatMap((source, at) => {
+  return numberedSources(turn.answer).flatMap((source, at) => {
     const citation = checkOf(source);
     return citation === undefined ? [] : [{ source, at, citation }];
   });
@@ -158,13 +158,13 @@ export function showsOf(checks: TurnChecks | undefined): Shows {
 }
 
 /**
- * A turn's sources as its page numbers them: the first 32, one per place,
+ * A turn's answer's sources as its page numbers them (numberedSources), one per place,
  * without a place every citation of which a check found you can no longer
  * read, as the sentences citing it are left out. Each keeps its citations'
  * places among the answer's sources.
  */
-export function turnGroups(sources: readonly AnswerSource[], checks: TurnChecks | undefined): SourceGroup[] {
-  const groups = sourceGroups(sources.slice(0, MAX_SOURCES));
+export function turnGroups(answer: Pick<Answer, 'sources' | 'parts'>, checks: TurnChecks | undefined): SourceGroup[] {
+  const groups = sourceGroups(numberedSources(answer));
   return checks === undefined ? groups : groups.filter(group => !group.indexes.every(at => checks[at] === 'unreadable'));
 }
 

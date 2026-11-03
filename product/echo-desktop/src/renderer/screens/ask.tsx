@@ -186,7 +186,7 @@ interface TurnView {
 }
 
 function turnView(turn: TimelineTurn, checks: TurnChecks | undefined): TurnView {
-  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer.sources, checks), checks, shows: showsOf(checks) };
+  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer, checks), checks, shows: showsOf(checks) };
 }
 
 /** A source's first citation stands for it: its kind, its label, its record or its link. */

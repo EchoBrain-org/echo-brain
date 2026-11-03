@@ -377,10 +377,10 @@ describe('Ask on the timeline', () => {
   it('leaves a source you can no longer read out of its turn\'s sources, the numbers of the page, its list and the pane agreeing', async () => {
     const one = turn('One?', 2 * DAY, status());
     // Out only when every citation of a place is unreadable; the rest keep their places among the answer's sources.
-    expect(turnGroups(one.answer.sources, { 0: 'same', 1: 'changed', 2: 'unreadable' }).map(group => group.indexes)).toEqual([[0], [1]]);
-    expect(turnGroups(one.answer.sources, undefined)).toHaveLength(3);
+    expect(turnGroups(one.answer, { 0: 'same', 1: 'changed', 2: 'unreadable' }).map(group => group.indexes)).toEqual([[0], [1]]);
+    expect(turnGroups(one.answer, undefined)).toHaveLength(3);
     const twice = [ticket('THERM-482', '20482'), page('31010'), page('31010')];
-    expect(turnGroups(twice, { 1: 'unreadable', 2: 'same' }).map(group => group.indexes)).toEqual([[0], [1, 2]]);
+    expect(turnGroups({ sources: twice, parts: one.answer.parts }, { 1: 'unreadable', 2: 'same' }).map(group => group.indexes)).toEqual([[0], [1, 2]]);
     seed(one, turn('Two?', DAY, status()));
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
     const store = await startStore();

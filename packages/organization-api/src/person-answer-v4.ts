@@ -319,7 +319,8 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
   const input = object(value, 'Ask response part');
   assertExactKeys(input, ['question', 'status', 'statements', ...['gap', 'records', 'layout', 'blocks'].filter(key => Object.hasOwn(input, key))], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
-  if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4) fail('Ask response part is invalid');
+  // A part arranged in blocks (answer layout v2, ADR-0051) has no count of statements of its own; any other keeps ten.
+  if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || (!Object.hasOwn(input, 'blocks') && input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4)) fail('Ask response part is invalid');
   if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
   const statements = Object.freeze(input.statements.map((item) => statement(item, citations, 'Ask response statement')));
@@ -457,7 +458,10 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous], 'Ask response');
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = input.outcome === 'clarify';
-  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
+  // An answer arranged in blocks (answer layout v2, ADR-0051) has no count of citations of its own, as ADR-0041 gives any
+  // other answer: its bytes bound it.
+  const arranged = Array.isArray(input.parts) && input.parts.some(item => item !== null && typeof item === 'object' && Object.hasOwn(item, 'blocks'));
+  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || (!arranged && input.citations.length > 40) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1 || input.parts.length > 5)) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
   const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();

@@ -73,6 +73,12 @@ describe("agentic Ask audit", () => {
     expect(row.body_json).not.toContain("question");
   });
 
+  it("records an Ask that cites more than forty items, as an answer in blocks may (ADR-0051)", () => {
+    const store = new SqlitePersonAgenticAskAuditV1(openedDatabase());
+    store.forRequest({ ...requestContext, request_id: "ask_wide" }).append({ ...entry, rounds: 2, citation_count: 45 });
+    expect(() => store.forRequest({ ...requestContext, request_id: "ask_huge" }).append({ ...entry, rounds: 2, citation_count: 1_001 })).toThrow("Agentic Ask audit entry is invalid");
+  });
+
   it("records a research-only trigger under the background limits and keeps Ask limits for Ask", () => {
     const database = openedDatabase();
     const store = new SqlitePersonAgenticAskAuditV1(database);
