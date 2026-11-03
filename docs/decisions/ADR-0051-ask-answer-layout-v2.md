@@ -13,6 +13,7 @@ status: accepted
 supersedes: []
 superseded_by: []
 updates:
+  - ADR-0041
   - ADR-0042
   - ADR-0045
 ---
@@ -196,3 +197,21 @@ These still bound a bigger answer, unchanged until the founder decides:
 - **The writer's output room:** 2,000 tokens, 2,500 for an Ask again; the
   evaluations' longest balanced reply was 589.
 - **A list table's 25 named members** (ADR-0041).
+
+## Amended 2026-11-02: no count of statements or citations
+
+The founder then lifted ADR-0041's bounds for an answer in blocks ("Yes,
+lift it"): a part arranged in blocks has no count of statements of its own,
+and its answer no count of citations. The writer is told that the answer
+prompt's "up to 10" does not apply to an answer in blocks; W6 drops nothing
+of such an answer for those counts; the V8 answer's validator takes a part
+with blocks past ten statements and its answer past 40 citations; the Ask
+audit records a question's citations up to 1,000, past what an answer's
+64 KiB can hold; and the desktop numbers, shows and checks every source of an
+answer in blocks, and keeps stored answers of up to 1,000 statements.
+
+Layout v1 and an answer without layout keep ADR-0041's 10 statements and 40
+citations, as every installed client checks, and so does a v2 answer released
+without its blocks because it passed its 64 KiB. These stay, as guards
+against a runaway reply: the answer's 64 KiB, the writer's output room (2,000
+tokens, 2,500 for an Ask again), and the 25 members a list's statement names.

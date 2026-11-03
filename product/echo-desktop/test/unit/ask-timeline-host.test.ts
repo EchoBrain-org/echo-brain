@@ -222,6 +222,12 @@ describe('the timeline file (C5)', () => {
     expect(readArranged!.answer.parts[0]!.blocks!.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
     expect(readLaidOut).toEqual(laidOut);
     expect(readLaidOut!.answer.parts[0]!.layout).toHaveLength(5);
+    // An answer in blocks has no count of statements of its own (ADR-0051): 70 read back as written.
+    const wide = arranged.answer.parts[0]!;
+    const seventy = Array.from({ length: 70 }, (_, at) => ({ text: `Step ${at + 1}.`, citation_indexes: [0], private: wide.statements[0]!.private }));
+    const long = turn(2, { answer: { ...arranged.answer, parts: [{ ...wide, statements: seventy, blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: true, statements: seventy.slice(1).map((_, at) => at + 1) }] }] } });
+    putTimeline(person, ARI, long, NOW);
+    expect(readTimeline(person, ARI).find(entry => entry.id === long.id)?.answer.parts[0]!.statements).toHaveLength(70);
     const part = arranged.answer.parts[0]!;
     const blocks = part.blocks! as unknown as Record<string, unknown>[];
     const timeline = blocks[2] as { events: Record<string, unknown>[] };

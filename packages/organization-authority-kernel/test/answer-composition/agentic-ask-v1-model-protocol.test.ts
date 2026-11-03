@@ -624,6 +624,9 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(lines).toContain("- Never write items, rows, events or facts for a list's members: code states them, right after the answer.");
     expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
     expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
+    // An answer in blocks has no count limit, whatever the answer prompt's usual length says (ADR-0051).
+    expect(lines).toContain("- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.");
+    expect(ANSWER_PROMPT).toContain("use up to 10 when the question asks several things");
   });
 
   it("never rejects a reply the blocks schema permits, asked again or not", () => {

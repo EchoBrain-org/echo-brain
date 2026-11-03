@@ -4,8 +4,16 @@ import type {
 import { startOfDay } from './format.js';
 import { sourceKey } from './openers.js';
 
-/** What the pane may show: at most 32 sources. */
+/** What the pane may show of an answer with a layout v1 or none: at most 32 sources. */
 export const MAX_SOURCES = 32;
+
+/**
+ * The sources an answer's page numbers and shows: every one of an answer the writer arranged in blocks (ADR-0051),
+ * which has no count of citations of its own, and the first 32 of any other.
+ */
+export function numberedSources(answer: Pick<Answer, 'sources' | 'parts'>): readonly AnswerSource[] {
+  return answer.parts.some(part => part.blocks !== undefined) ? answer.sources : answer.sources.slice(0, MAX_SOURCES);
+}
 
 /**
  * One source as an answer shows it: a document, a meeting's approved record,
