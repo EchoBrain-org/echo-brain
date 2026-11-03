@@ -343,6 +343,79 @@ earlier run's grades were the same.
   `ship-steps` trial), 8 timelines, 3 quotes and 2 cards, 2.3 blocks and 4.4
   claims an answer.
 
+## Tuning the block descriptions, 2026-11-02 (pre-registered)
+
+Written before any run.
+[ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md) left
+tuning the block descriptions for later, where this evaluation and the
+[wording evaluation](../ask-wording/README.md) found them weak. A change to
+them changes every desktop answer, so it is measured before and after, and the
+founder decides.
+
+Where the built writer is weak, at `294bf37`:
+
+- **The answer block runs long.** The wording evaluation's leads average 14.9
+  words (17.7 in its run at `4769016`, the same prompt) against layout v1's
+  10.2. In a one-fact answer the writer names the item in full ("The follow-up
+  to publish the DVT release notes to the team space is due Nov 4, 2026."),
+  adds an owner, a status or a date the question did not ask about, or opens
+  with the record ("The approved Pilot Delta review decided ..."). The v2
+  prompt never says that its answer block is the lead its no-restating rule
+  speaks of.
+- **`person-profile` gets points, not a card, and `review-multi` one table,
+  not titled sections,** in every trial of `balanced` and `built`; in
+  `review-multi` the decisions crowd a lead of 33 to 35 words.
+- **Where the founder ranked `balanced` below another catalog:** `gate-blockers`
+  third of four, under a long lead and, in two of its three trials, a last
+  block that only named the source (one `built` trial too); `review-multi` and
+  `workstreams-status` second, under `today`'s table; `person-profile` second,
+  under `templates`' card; `trap-undated` second, under `templates`' timeline.
+
+The change, to `ANSWER_BLOCK_CATALOG` and `ANSWER_BLOCKS_PROMPT` only: no
+schema, check, reading or drawing changes.
+
+| Where | Before | After |
+| --- | --- | --- |
+| `answer` description | The direct answer to the question, in one or two sentences. | The lead: the direct answer to the question, in one short sentence, or two when the question asks two things. |
+| `card` description | One person, project, ticket or decision, with its key facts as label and value. | One person, project, ticket or decision at a glance, with its key facts as label and value, such as a person's role and the work they own or approve, or a ticket's status, owner and priority. |
+| The prompt's answer line | - The first block is "answer": the conclusion, in one or two sentences. | - The first block is "answer", the lead: the conclusion, in one short sentence, or two when the question asks two things. It says only what the question asks: an owner, a status or a date the question did not ask about goes in a block after it. |
+| New prompt line, after it | | - When the question asks about two or more different kinds of things, give each kind its own block after the answer, with a title that names it. |
+| New prompt line, after that | | - The app shows the sources of every statement, so never add a block that only says where the facts come from. |
+
+Every other description, every `params` text, both wording rules and every
+other prompt line stay word for word. A description still says only what its
+block shows ([ADR-0042](../../../docs/decisions/ADR-0042-research-tool-contract.md)).
+
+**The comparison.** Before is the writer of PR #394 (`c5bd827`'s prompt, at
+this commit); after is the change, at the commit that makes it. Each side gets
+one complete gate run of the arm `built` (15 cases, 3 trials, the judge off)
+and one complete run of the wording evaluation (10 cases, 3 trials), all
+through the founder's Claude account (`claude-sonnet-5-5`), on the same day:
+before first, then after. The gate's run at `294bf37` and the wording runs at
+`4769016` and `294bf37` are earlier runs of the before prompt, reported beside
+it to show how much two runs of one prompt differ.
+
+**Rules.** The change is proposed for PR #394 only when all three hold:
+
+1. **The gate:** after, `built` passes rules 1 to 5 at their pre-registered
+   thresholds.
+2. **The wording:** after, the wording evaluation passes its three rules, each
+   in at least 27 of 30 trials.
+3. **The founder's ranking:** the founder ranks each case's trial-1 answers,
+   before against after, blind, on a private page that draws both in one
+   style, as the 2026-11-02 page did. They are labeled A and B: the 15 cases
+   sorted by the SHA-256 of `<case id>:ask-blocks-tuning`, after is A in the
+   1st, 3rd, 5th and every other odd place of that order (8 cases) and B in
+   the rest. The founder prefers after in more cases than before; a case
+   ranked the same counts for neither. The page reveals which is which, the
+   grades and the traces only after every case is ranked.
+
+**Reported, never rules:** the lead's words (the wording evaluation's mean
+lead, and here the answer block's mean words); fit in each case, where the
+change aims at a card in `person-profile` and titled sections in
+`review-multi` in at least two of three trials; blocks, claims and the blocks
+used per answer; repairs and output tokens.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model

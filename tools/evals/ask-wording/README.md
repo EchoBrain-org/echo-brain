@@ -185,6 +185,17 @@ qualifier ("The soak cannot finish until the fixture holds 45 °C. The ticket is
 In Progress and owned by Dev Okafor."). No rule measures its length; it belongs
 with tuning the block descriptions, which the design leaves for later.
 
+## Block description tuning, 2026-11-02 (pre-registered)
+
+Written before any run. Tuning layout v2's block descriptions and layout
+prompt is pre-registered in the
+[block evaluation](../ask-blocks/README.md) ("Tuning the block descriptions"),
+and needs this evaluation's three rules to pass on the tuned writer. The same
+cases (`sha256:6ad26dc1…6a2bfa`), rules and thresholds; one complete run on
+the writer before the change and one after, each 10 cases and 3 trials through
+the founder's Claude account (`--writer claude-account`). The lead's length,
+its mean and per case, is reported beside them; no rule measures it.
+
 ## Limits
 
 - One model route and synthetic items only: a staging release and the
