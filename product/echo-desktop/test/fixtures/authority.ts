@@ -762,7 +762,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       { citation: { ...record!.citation, atom_id: atomOf('d0') }, kind: 'decision', label: 'Tuesday sync', visibility: 'team', ref: `meeting:${TUESDAY}` },
     ];
   };
-  /** A streamed Ask: research progress, then its answer and receipt once the test writes `release-ask`. */
+  /**
+   * A streamed Ask: research progress, then its answer and receipt once the test writes `release-ask`. A client that stops
+   * the request first ends the research, and `ask-stopped` holds the question it stopped.
+   */
   const progressStream = (question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined): Response => {
     const format = api.formatPersonAskProgressEventV3;
     const items = progressItems();
@@ -776,7 +779,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     const frames = (async function* () {
       for (const step of steps) yield format(step);
       while (!existsSync(join(home, 'release-ask'))) {
-        if (cancelled || signal?.aborted) return;
+        if (cancelled || signal?.aborted) { writeFileSync(join(home, 'ask-stopped'), question); return; }
         await new Promise(resolveLater => setTimeout(resolveLater, 25));
       }
       yield format({ type: 'stage', stage: 'writing' });
@@ -1410,7 +1413,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         }
       }
     }
-    // Jira: the browser consent is never shown; the second status read finds it done,
+    // Jira: the browser consent is never shown; the second status read finds it done, unless `tools-waiting` keeps the
+    // person in the browser until the app cancels.
     if (method === 'POST' && path === '/v1/person/tools/jira/connect') {
       if (JSON.stringify(body) !== '{"schema_version":1}') return failure('invalid_request', 400);
       jiraAttempt = { attempt: randomUUID(), expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), status: 'pending', failure_reason: null, reads: 0 };
@@ -1420,7 +1424,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (!jiraAttempt || body?.attempt !== jiraAttempt.attempt) return failure('not_found', 404);
       if (path.endsWith('/cancel')) {
         if (jiraAttempt.status === 'pending') jiraAttempt.status = 'cancelled';
-      } else if (jiraAttempt.status === 'pending' && ++jiraAttempt.reads >= 2) {
+      } else if (jiraAttempt.status === 'pending' && mode !== 'tools-waiting' && ++jiraAttempt.reads >= 2) {
         jiraAttempt.status = 'complete'; jiraLinked = true;
       }
       const { attempt, expires_at, status, failure_reason } = jiraAttempt;
