@@ -18,7 +18,7 @@ import { personAnswerCitationKeyV8 } from "@echo-brain/organization-api";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { repairInput } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { caseAsk, caseItems, deskItem as releasedItem, scriptedModel } from "../shared/ask-cases.mjs";
-import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
+import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, pooled, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { ARMS, ARM_IDS, BUILT, CATALOGS, CATALOG_IDS, readReleased, readReply, writerPrompts } from "./catalogs.mjs";
 import { CASES_FILE, CASE_COUNT, TRIALS, caseOrder, decide, decideGate, evidenceOf, gradeTrial, loadCases, summarizeCatalogs, summarizeRanks } from "./grade.mjs";
 import { JUDGE_SYSTEM_PROMPT, judgeInput, judgeSchema, readJudge } from "./judge.mjs";
@@ -272,20 +272,6 @@ async function judgeCase(userPrompt, order, structuredOutput, generation, option
     if (result.error === undefined) prompt = repairPrompt(userPrompt, result.value, judged.problem);
   }
   return { order, user_prompt: userPrompt, attempts, ranks: null };
-}
-
-/** Runs `tasks` (functions returning promises) `limit` at a time, keeping their order in the results. */
-async function pooled(tasks, limit) {
-  const results = new Array(tasks.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    while (next < tasks.length) {
-      const at = next;
-      next += 1;
-      results[at] = await tasks[at]();
-    }
-  }));
-  return results;
 }
 
 /** Runs the selected cases and catalogs, then the judge, and writes the report. */

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ANSWER_LAYOUT_PROMPT, cleanLine, repairInput } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
+import { pooled } from "../../shared/runner.mjs";
 import { parseArgs, researchStep, run } from "../run.mjs";
 import { loadCases } from "../grade.mjs";
 
@@ -175,4 +176,40 @@ test("repairs a refused reply with the prompt production's gate sends: the reply
   assert.equal(sent, cleanLine(JSON.stringify(refused), 4_000));
   assert.notEqual(sent, JSON.stringify(refused).slice(0, 4_000));
   assert.deepEqual([[...sent].length <= 4_000, sent.endsWith("…"), sent.includes(" "), sent.includes("  ")], [true, true, false, false]);
+});
+
+test("stops starting tasks once one fails, lets those running finish, then throws the first failure", async () => {
+  const events = [];
+  let finish;
+  const running = new Promise((resolve) => { finish = resolve; });
+  const tasks = Array.from({ length: 6 }, (_, at) => async () => {
+    events.push(`start ${at}`);
+    if (at === 1) throw new Error("task 1 failed");
+    await running;
+    events.push(`end ${at}`);
+    return at;
+  });
+  const pool = pooled(tasks, 2).then(() => events.push("resolved"), (error) => events.push(`threw: ${error.message}`));
+  await new Promise((resolve) => setImmediate(resolve));
+  finish();
+  await pool;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["start 0", "start 1", "end 0", "threw: task 1 failed"]);
+  // Without a failure every task runs, `limit` at a time, and the results keep the tasks' order whatever order they end in.
+  const order = await pooled([30, 10, 20, 0, 5].map((ms, at) => () => new Promise((resolve) => setTimeout(() => resolve(at), ms))), 3);
+  assert.deepEqual(order, [0, 1, 2, 3, 4]);
+  // A pool without a limit of at least 1 could run nothing, so it refuses to start.
+  for (const limit of [undefined, 0, 1.5]) await assert.rejects(pooled([async () => 1], limit), /a pool's limit must be a positive integer/u);
+});
+
+test("makes no more calls once a trial fails, and writes no report", async () => {
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-failed-"));
+  const route = answering();
+  let lines = 0;
+  // Twelve trials, two at a time; the first trial to end fails, as a fault in the harness would.
+  const progress = () => { lines += 1; if (lines === 1) throw new Error("harness fault"); };
+  await assert.rejects(run(options(out, { trials: 3, judge: false, concurrency: 2 }), { loaded: { structured_output: route, generation }, progress }), /harness fault/u);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Only the two trials running when it failed made their call.
+  assert.deepEqual([route.inputs.length, readdirSync(out)], [2, []]);
 });
