@@ -1182,16 +1182,16 @@ const BLOCK_TITLE = "optional: a heading of a few words";
  * The blocks a v2 Ask's writer arranges its answer from (answer layout v2, ADR-0051), in the shape of the research tool
  * contract's source entries (ADR-0042): the name it passes, a description that says only what the block shows, and
  * each field it takes with its meaning and limits. It reaches the writer as data beside source_catalog, and
- * answerBlocksSchema is built from the same entries. The entries are the block evaluation's, word for word
- * (tools/evals/ask-blocks).
+ * answerBlocksSchema is built from the same entries. The entries are the block evaluation's `balanced` ones, with the
+ * answer and card descriptions tuned where it found them weak (tools/evals/ask-blocks, "Tuning the block descriptions").
  */
 export const ANSWER_BLOCK_CATALOG = Object.freeze([
-  { block: "answer", description: "The direct answer to the question, in one or two sentences.", params: { sentences: "1 to 2 sentences, each with its text and evidence" } },
+  { block: "answer", description: "The lead: the direct answer to the question, in one short sentence, or two when the question asks two things.", params: { sentences: "1 to 2 sentences, each with its text and evidence" } },
   { block: "text", description: "A short paragraph that explains, qualifies or connects facts.", params: { title: BLOCK_TITLE, sentences: "1 to 4 sentences, each with its text and evidence" } },
   { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 to 10 items, each with its text and evidence" } },
   { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 to 6 column names", rows: "2 to 12 rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence" } },
   { block: "timeline", description: "Events in date order, oldest first: each event's date and what happened, and who was involved when the evidence says.", params: { title: BLOCK_TITLE, events: "2 to 12 events, each with date (YYYY-MM-DD, as the evidence dates the event), text (what happened, in one sentence), who (optional: a person's name as the evidence records it) and evidence" } },
-  { block: "card", description: "One person, project, ticket or decision, with its key facts as label and value.", params: { title: "its name", kind: "person, project, ticket or decision", facts: "2 to 8 facts, each with label, value and evidence" } },
+  { block: "card", description: "One person, project, ticket or decision at a glance, with its key facts as label and value, such as a person's role and the work they own or approve, or a ticket's status, owner and priority.", params: { title: "its name", kind: "person, project, ticket or decision", facts: "2 to 8 facts, each with label, value and evidence" } },
   { block: "quote", description: "The exact words of one source, such as an approved decision's text or what someone said, with where they come from.", params: { text: "words copied exactly from the cited evidence", from: "who said or recorded it, and when", evidence: "the one id it is copied from" } },
 ].map(entry => Object.freeze({ ...entry, params: Object.freeze(entry.params) })));
 
@@ -1199,13 +1199,17 @@ export const ANSWER_BLOCK_CATALOG = Object.freeze([
  * What a v2 Ask's writer is told after ANSWER_PROMPT and its guidance (answer layout v2, ADR-0051): how to arrange the
  * answer from block_catalog, layout v1's two wording rules word for word, and the reply shape answerBlocksSchema holds.
  * It is the block evaluation's layout part with two lines production needs: the reply names the lists it uses, and the
- * writer never writes items for a list's members, which code states. An Ask without v2 never sees it.
+ * writer never writes items for a list's members, which code states. Its tuning (tools/evals/ask-blocks, "Tuning the
+ * block descriptions") makes the answer block the short lead its wording rules speak of, gives each kind of thing a
+ * question asks for its own titled block, and drops blocks that only name sources. An Ask without v2 never sees it.
  */
 export const ANSWER_BLOCKS_PROMPT = [
   "Layout: the person's app shows the answer as a short document made of blocks. \"block_catalog\" lists the blocks it can show:",
   "- Each block_catalog entry has \"block\", the name you pass; \"description\", what the block shows; and \"params\", each field it takes with what it means and its limits.",
   "- Choose the blocks that show this answer best, in the order the person should read them, and only the blocks the answer needs: an answer that is one fact is one \"answer\" block.",
-  "- The first block is \"answer\": the conclusion, in one or two sentences.",
+  "- The first block is \"answer\", the lead: the conclusion, in one short sentence, or two when the question asks two things. It says only what the question asks: an owner, a status or a date the question did not ask about goes in a block after it.",
+  "- When the question asks about two or more different kinds of things, give each kind its own block after the answer, with a title that names it.",
+  "- The app shows the sources of every statement, so never add a block that only says where the facts come from.",
   NO_RESTATING_RULE,
   LONG_IDS_ONCE_RULE,
   "- Every sentence, item, row, event, fact and quote cites the evidence that supports it in \"evidence\", and only that evidence. Never write ids such as E4 in the text.",

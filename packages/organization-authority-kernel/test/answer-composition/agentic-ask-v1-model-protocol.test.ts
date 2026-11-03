@@ -626,6 +626,9 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       expect(lines.find(line => line.startsWith(start))).toBe(ANSWER_LAYOUT_PROMPT.split("\n").find(line => line.startsWith(start)));
     }
     expect(lines).toContain("- Never write items, rows, events or facts for a list's members: code states them, right after the answer.");
+    // The wording rules speak of "the lead": the answer block is it, in the prompt and in its catalog entry.
+    expect(lines.find(line => line.startsWith("- The first block is \"answer\""))).toContain("\"answer\", the lead:");
+    expect(ANSWER_BLOCK_CATALOG[0].description).toMatch(/^The lead: /u);
     expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
     expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
   });
