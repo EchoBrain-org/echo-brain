@@ -8,7 +8,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerBlock } from '../../src/shared/protocol.js';
 import { layoutAnswer } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
-import { asking as askingWith, byTestId, elements, fail, flush, Held, ok, paneTurn, plainHooks, rpcFor, storeLifecycle, text, type Node } from './harness.js';
+import {
+  asking as askingWith, byClass, byTestId, byType, classes, click, elements, fail, flush, Held, ok, paneTurn, plainHooks, rpcFor, storeLifecycle, text, type Node,
+} from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
@@ -37,10 +39,6 @@ async function answered(answer: Answer) {
   return { store, thread };
 }
 
-const byClass = (tree: unknown, name: string) => elements(tree).filter(node => typeof node.props.class === 'string' && node.props.class.split(' ').includes(name));
-const byType = (tree: unknown, type: string) => elements(tree).filter(node => node.type === type);
-const classes = (node: Node | undefined) => String(node?.props.class ?? '').split(' ').filter(Boolean);
-const click = (node: Node | undefined) => (node!.props.onClick as () => void)();
 type Table = Extract<AnswerBlock, { kind: 'table' }>;
 
 describe('a laid-out part reads as its blocks', () => {

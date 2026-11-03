@@ -11,7 +11,7 @@ import {
   type StructuredGenerationRequestV1,
 } from "./structured-generation-v1.js";
 import { observeCoreModelCorrectionV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeV1, type CoreRuntimeModelCorrectionV1, type CoreRuntimePhaseV1 } from "../shared/core-runtime-observation-v1.js";
-import { AgenticAskOutputErrorV1, cleanLine, repairInstruction } from "./agentic-ask-v1-model-protocol.js";
+import { AgenticAskOutputErrorV1, repairInput } from "./agentic-ask-v1-model-protocol.js";
 import { coreRuntimeDiagnosticErrorKindV1, coreRuntimeModelRoutingV1 } from '../shared/core-runtime-diagnostics-v1.js';
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import { AuthorityOperationError } from '../domain/errors.js';
@@ -363,11 +363,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     // failure. These are ephemeral model inputs, never audit content. They
     // go last: the system prompt and the rest of the user prompt stay
     // byte-identical, so the rejected call's cached prefix is reused.
-    const repairUser = reason === null ? user : {
-      ...object(user),
-      ...(rejected === undefined ? {} : { rejected_response: cleanLine(JSON.stringify(rejected), 4_000) }),
-      validation_error: repairInstruction(reason),
-    };
+    const repairUser = reason === null ? user : repairInput(user, rejected, reason);
     // Counted once the extra call is admitted past its access check, as the audit counts repairs.
     const admitted = repairs;
     try { return parse(await call(model_call, system, repairUser, schema, timeout, true)); }

@@ -36,10 +36,9 @@ const cell = (text) => String(text).replace(/\|/gu, "/");
 function nodeText(node, indent = "") {
   const line = (text) => `${indent}${text}`;
   switch (node.t ?? node.component) {
-    case "lead": return line(node.claims.map(claimLine).join(" "));
+    case "lead": case "p": return line(node.claims.map(claimLine).join(" "));
     case "h": return line(`### ${node.text}`);
     case "label": return line(node.text);
-    case "p": return line(node.claims.map(claimLine).join(" "));
     case "ul": return node.items.map((item) => line(`- ${claimLine(item)}`)).join("\n");
     case "ol": return node.items.map((item, at) => line(`${at + 1}. ${claimLine(item)}`)).join("\n");
     case "table": {

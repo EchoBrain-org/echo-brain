@@ -38,7 +38,8 @@ It keeps case ids, each trial's statements, lead and grade (synthetic text),
 the writer prompt's SHA-256, the layout the writer was given and model
 metadata; never prompts, raw replies, credentials or provider payloads.
 `--cases` and `--trials` make a smaller diagnostic run, which never decides
-anything.
+anything. Trials run four at a time by default (`--concurrency`, 1 to 6); the
+report keeps them in case order.
 
 ## Cases (pre-registered)
 

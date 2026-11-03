@@ -11,17 +11,12 @@
  * explicitly supplies --run and --credential-file. The bundle reads the credential file; this runner only checks that it
  * is a private file.
  */
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { validatePersonFollowUpEvidenceV1 } from "@echo-brain/organization-api";
-import { createAgenticAskV5 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
-import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from "@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { assertExplicitRun, boundedInteger, codeIdentity, compiledModules, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, usage } from "../shared/runner.mjs";
+import { caseAsk, caseItems, scriptedModel } from "../shared/ask-cases.mjs";
+import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, pooled, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { CASES_FILE, GROUPS, gradeTrial, loadCases, summarizeRules } from "./grade.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -29,19 +24,13 @@ const ROOT = resolve(TOOL_DIRECTORY, "../../..");
 const MAX_TRIALS = 3;
 const ALL_CASES = Object.values(GROUPS).reduce((total, count) => total + count, 0);
 /** The answer layout every trial asks for: v2, the model-arranged blocks every desktop asks for (ADR-0051). */
-export const ANSWER_LAYOUT = 2;
+const ANSWER_LAYOUT = 2;
 /** The writer's call and its one repair per trial; research is scripted and calls no model. */
 const MAX_TOTAL_MODEL_CALLS = ALL_CASES * MAX_TRIALS * 2;
 const MIN_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 85_000;
 /** When every trial is asked: the cases' today, mid-morning in their time zone. */
 const ASKED_AT = "2026-10-26T17:00:00.000Z";
-const RESEARCH_PROMPT = "You are Echo's research agent";
-const WRITER_PROMPT = "You write Echo's final answer";
-/** A connected Jira as the desk advertises it, so the writer is told what it is told for a person with Jira connected. */
-const TICKETS_SOURCE = Object.freeze({
-  source_id: "jira", kind: "ticket", selector: "tickets", description: "Jira issues the asker can read through their own connection.", metadata_only_list: true, tool_id: "jira",
-});
 
 export function help() {
   return [
@@ -52,6 +41,7 @@ export function help() {
     "Options:",
     `  --cases id,id     Select cases (default: all ${ALL_CASES}); only the whole set decides whether the wording ships.`,
     `  --trials N        Trials per case, 1 through ${MAX_TRIALS} (default: ${MAX_TRIALS}, as pre-registered).`,
+    "  --concurrency N   Trials at once, 1 through 6 (default: 4); the report keeps them in case order.",
     "  --timeout-ms N    Per-trial timeout, 15000 through 85000 (default: 60000).",
     "  --writer ROUTE    openrouter (default) or claude-account: the product's personal Claude account writer, the",
     "                    same model through the Claude Agent SDK and your own signed-in claude binary.",
@@ -70,19 +60,20 @@ export function help() {
 }
 
 export function parseArgs(argv) {
-  const options = { run: false, credentialFile: null, out: null, caseIds: null, trials: MAX_TRIALS, timeoutMs: 60_000, writer: "openrouter", claudeExecutable: null };
+  const options = { run: false, credentialFile: null, out: null, caseIds: null, trials: MAX_TRIALS, concurrency: 4, timeoutMs: 60_000, writer: "openrouter", claudeExecutable: null };
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
     "--out": (value) => { options.out = value; },
     "--cases": (value) => { options.caseIds = value.split(",").map((part) => part.trim()).filter(Boolean); },
     "--trials": (value) => { options.trials = Number(value); },
+    "--concurrency": (value) => { options.concurrency = Number(value); },
     "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
-    "--writer": (value) => { if (value !== "openrouter" && value !== "claude-account") throw new Error("--writer must be openrouter or claude-account"); options.writer = value; },
-    "--claude-executable": (value) => { options.claudeExecutable = value; },
+    ...writerFlags(options),
   })) return { help: true };
-  if (options.writer === "claude-account" && (options.claudeExecutable === null || !isAbsolute(options.claudeExecutable) || !existsSync(options.claudeExecutable))) throw new Error("--writer claude-account needs --claude-executable, the absolute path of the signed-in claude binary");
+  assertWriterRoute(options);
   assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, MAX_TRIALS);
+  options.concurrency = boundedInteger(options.concurrency, "--concurrency", 1, 6);
   options.timeoutMs = boundedInteger(options.timeoutMs, "--timeout-ms", MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
   const known = new Set(loadCases().cases.map((entry) => entry.id));
   if (options.caseIds !== null && (options.caseIds.length === 0 || new Set(options.caseIds).size < options.caseIds.length || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases, each once");
@@ -92,82 +83,11 @@ export function parseArgs(argv) {
 }
 
 /**
- * The files a report fingerprints, beside the commit and its uncommitted changes: the eval's own, every compiled module of
- * the kernel's answer composition (the writer, its layouts and its checks, whatever their files are named), the answer
- * contract, and the writer routes.
+ * The files a report fingerprints, beside the commit and its uncommitted changes: the cases and every module the eval
+ * loads (its own, the kernel's writer, checks and shared modules, the answer contract and the writer routes), found by
+ * following its imports.
  */
-const codeFiles = () => Object.freeze([
-  "tools/evals/ask-wording/run.mjs",
-  "tools/evals/ask-wording/grade.mjs",
-  "tools/evals/ask-wording/cases.json",
-  "tools/evals/shared/runner.mjs",
-  ...compiledModules(ROOT, "packages/organization-authority-kernel/dist/answer-composition"),
-  "packages/organization-api/dist/person-answer-v4.js",
-  "packages/organization-api/dist/person-answer-layout-v2.js",
-  "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
-  "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
-  ...compiledModules(ROOT, "providers/openrouter/dist/claude-research"),
-]);
-
-const digest = (value) => createHash("sha256").update(value).digest("hex");
-const fields = (item, names) => Object.fromEntries(names.filter((name) => Object.hasOwn(item, name)).map((name) => [name, item[name]]));
-
-/**
- * One case item as the desk releases it: a follow-up through the product's own projection, an approved decision record,
- * or a Jira issue the asker reads through their own connection. Every value is synthetic.
- */
-export function deskItem(caseId, index, item) {
-  const key = `${caseId}:${index}`;
-  const id = `wording-${digest(key).slice(0, 24)}`;
-  const receipt_sha256 = canonicalSha256({ fixture: "ask-wording-release", key });
-  if (item.kind === "follow_up") {
-    const evidence = validatePersonFollowUpEvidenceV1({
-      item_id: `itm_${digest(key).slice(0, 24)}`, kind: item.on, title: item.title, owner: item.owner, status: item.status,
-      ...fields(item, ["created_at", "sent_at", "reassigned_at", "due_at", "check", "expected"]),
-      ...(item.decision === undefined ? {} : { decision: { ...item.decision, ref: `meeting:${canonicalSha256({ fixture: "ask-wording-decision", key })}` } }),
-    });
-    return Object.freeze({ id, ...followUpDeskFieldsV1(evidence), visibility: "team", receipt_sha256 });
-  }
-  if (item.kind === "decision") {
-    return Object.freeze({
-      id, kind: "decision", label: item.label, text: item.text, visibility: "team", occurred_at: item.occurred_at, receipt_sha256,
-      citation: Object.freeze({ kind: "approved_record", atom_id: canonicalSha256({ fixture: "ask-wording-atom", key }), record_sha256: canonicalSha256({ fixture: "ask-wording-record", key }), policy_id: "project-members-readable-person-v1" }),
-    });
-  }
-  return Object.freeze({
-    id, kind: "ticket", label: `${item.key}: ${item.title}`, text: item.text, visibility: "only_me", attributes: Object.freeze({ status: item.status, owner: item.owner }),
-    occurred_at: "2026-10-19", date_kind: "created", receipt_sha256,
-    citation: Object.freeze({ kind: "ticket", tool_id: "jira", external_scope_id: "synthetic-cloud", ticket_id: item.key.replace(/\D/gu, ""), permalink: `https://synthetic.example.test/browse/${item.key}`, text_sha256: sha256Digest(item.text) }),
-  });
-}
-
-/** A desk over one case's items, in a global Ask with Jira and follow-ups bound: any search finds them all, in order. */
-function caseDesk(caseDefinition) {
-  const items = caseDefinition.items.map((item, index) => deskItem(caseDefinition.id, index, item));
-  const result = (values) => Object.freeze({ items: Object.freeze(values), truncated: false, receipt_digests: Object.freeze(values.map((value) => value.receipt_sha256)) });
-  return Object.freeze({
-    scope: Object.freeze({ kind: "global" }),
-    live_sources: Object.freeze([TICKETS_SOURCE, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]),
-    async search() { return result(items); },
-    async open(input) { return result(items.filter((item) => item.id === input.item)); },
-    async list() { return result([]); },
-    async revalidate() { return Object.freeze({ checked_at: ASKED_AT }); },
-  });
-}
-
-/**
- * The scripted research step for `round` (from 1): search, then open every item found (E1 to En, in the desk's order),
- * then finish with the one need found on all of them. A later round finishes again.
- */
-export function researchStep(caseDefinition, round) {
-  const count = caseDefinition.items.length;
-  const ids = Array.from({ length: count }, (_, index) => `E${index + 1}`);
-  const need = (status) => ({ ...(round === 1 ? {} : { id: "N1" }), need: caseDefinition.research.need, kind: "content", status, evidence: status === "found" ? ids : [] });
-  const part = (status, notes) => [{ question: caseDefinition.question, needs: [need(status)], notes }];
-  if (round === 1) return { parts: part("open", ""), actions: [{ tool: "search", args: { query: caseDefinition.research.query } }] };
-  if (round === 2) return { parts: part("open", `${ids.join(", ")} match.`), actions: ids.map((id) => ({ tool: "open", args: { id } })) };
-  return { parts: part("found", `${ids.join(", ")} read in full.`), actions: [{ tool: "finish", args: {} }] };
-}
+const codeFiles = () => Object.freeze(["tools/evals/ask-wording/cases.json", ...importedModules(ROOT, ["tools/evals/ask-wording/run.mjs"])]);
 
 /**
  * The answer layout the writer was given, from its input: 2 when it carries the block catalog (ADR-0051), 1 when its
@@ -196,36 +116,23 @@ export function decides(results) {
 export async function runTrial(caseDefinition, trial, structuredOutput, generation, document, options) {
   const calls = [];
   const writerPrompts = new Set();
-  const layouts = [];
-  let round = 0;
-  const model = Object.freeze({
-    async generate(input) { return (await this.generate_with_observation(input)).value; },
-    async generate_with_observation(input) {
-      if (input.system_prompt.startsWith(RESEARCH_PROMPT)) {
-        round += 1;
-        return { value: researchStep(caseDefinition, round), finish_reason: "stop", usage: null, provider_latency_ms: null };
-      }
-      if (!input.system_prompt.startsWith(WRITER_PROMPT)) throw new Error("the eval runs only research and the Ask writer");
-      writerPrompts.add(sha256(input.system_prompt));
-      layouts.push(writerLayout(input));
-      const attempt = calls.length + 1;
-      try {
-        const observed = await observedGeneration(structuredOutput, input);
-        // Deliberately only provider metadata: `observed.value` is never copied.
-        calls.push(Object.freeze({ attempt, result: "succeeded", finish_reason: observed.finish_reason ?? null, usage: usage(observed.usage),
-          provider_latency_ms: Number.isSafeInteger(observed.provider_latency_ms) ? observed.provider_latency_ms : null }));
-        return observed;
-      } catch (error) {
-        calls.push(Object.freeze({ attempt, result: "rejected", error: safeError(error) }));
-        throw error;
-      }
-    },
-  });
-  const ask = createAgenticAskV5({
-    desk: caseDesk(caseDefinition), model, generation, audit: { append: () => undefined }, answer_layout: ANSWER_LAYOUT,
-    asker: { display_name: document.asker }, time_context: { now: ASKED_AT, time_zone: document.time_zone },
-    today: () => document.today, wall_ms: () => Date.parse(ASKED_AT),
-  });
+  // The layout the first writer call was given; undefined until there is one.
+  let layout;
+  const script = scriptedModel(caseDefinition, async (input) => {
+    writerPrompts.add(sha256(input.system_prompt));
+    if (layout === undefined) layout = writerLayout(input);
+    const attempt = calls.length + 1;
+    try {
+      const observed = await observedGeneration(structuredOutput, input);
+      // Deliberately only provider metadata: `observed.value` is never copied.
+      calls.push(Object.freeze({ attempt, result: "succeeded", ...generationMetadata(observed) }));
+      return observed;
+    } catch (error) {
+      calls.push(Object.freeze({ attempt, result: "rejected", error: safeError(error) }));
+      throw error;
+    }
+  }, "the eval runs only research and the Ask writer");
+  const ask = caseAsk(caseItems("wording", caseDefinition), document, ASKED_AT, script.model, generation, ANSWER_LAYOUT);
   const started = performance.now();
   let response = null;
   let error = null;
@@ -240,36 +147,31 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
     outcome: response?.outcome ?? null,
     // Synthetic case text only: what the answer says, its lead and each part's gap.
     grade, gaps: Object.freeze((response?.parts ?? []).flatMap((part) => (part.gap === undefined ? [] : [part.gap]))),
-    research_rounds: round, writer_calls: calls.length,
+    research_rounds: script.rounds(), writer_calls: calls.length,
     writer_prompt_sha256: Object.freeze([...writerPrompts]),
     // The layout the writer was given: one run's calls are asked alike, so the first call's stands for the trial.
-    writer_layout: layouts[0] ?? null,
+    writer_layout: layout ?? null,
     elapsed_ms: Math.round(performance.now() - started),
     model_calls: Object.freeze(calls),
     ...(error === null ? {} : { error }),
   });
 }
 
-/** Runs every selected case `trials` times and writes the report. `dependencies` replaces the production bundle in tests. */
+/**
+ * Runs every selected case `trials` times, `options.concurrency` trials at once, and writes the report: its results in
+ * case order, each case's trials in order. `dependencies` replaces the production bundle in tests.
+ */
 export async function run(options, dependencies = {}) {
   const document = loadCases();
   const selected = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
   const identityBefore = codeIdentity(ROOT, codeFiles());
-  const route = options.writer ?? "openrouter";
-  // The personal Claude account writer: the product's own path (providers/openrouter/src/claude-research), with this
-  // machine's home directory and signed-in claude binary. Native Claude Code owns the sign-in; nothing here reads it.
-  const bundled = dependencies.loaded ?? createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: options.credentialFile,
-    ...(route === "claude-account" ? { personal_claude_research: { membership_id: "mem_ask-wording-eval", home_directory: homedir(), executable_path: realpathSync(options.claudeExecutable) } } : {}) }).load();
-  const loaded = route === "claude-account" ? bundled.personal_research : bundled;
-  if (loaded === undefined) throw new Error("the claude-account writer is not available from this bundle");
-  const results = [];
-  for (const caseDefinition of selected) {
-    for (let trial = 1; trial <= options.trials; trial += 1) {
-      const result = await runTrial(caseDefinition, trial, loaded.structured_output, loaded.generation, document, options);
-      results.push(result);
-      (dependencies.progress ?? ((line) => process.stderr.write(line)))(`${JSON.stringify({ kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial, outcome: result.outcome, writer_layout: result.writer_layout, rules: result.grade.rules })}\n`);
-    }
-  }
+  const { route, loaded } = writerRoute(options, "mem_ask-wording-eval", createOpenRouterAnswerCompositionGenerationBundleV1, dependencies.loaded);
+  const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
+  const results = await pooled(selected.flatMap((caseDefinition) => Array.from({ length: options.trials }, (_, at) => async () => {
+    const result = await runTrial(caseDefinition, at + 1, loaded.structured_output, loaded.generation, document, options);
+    progress(`${JSON.stringify({ kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial: result.trial, outcome: result.outcome, writer_layout: result.writer_layout, rules: result.grade.rules })}\n`);
+    return result;
+  })), options.concurrency);
   const identityAfter = codeIdentity(ROOT, codeFiles());
   // Only the whole pre-registered set, each case three times on the v2 writer, decides whether the wording ships.
   const complete = decides(results);
@@ -284,7 +186,7 @@ export async function run(options, dependencies = {}) {
     writer_prompt_sha256: Object.freeze([...new Set(results.flatMap((result) => result.writer_prompt_sha256))]),
     answer_layout: ANSWER_LAYOUT,
     model: Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
-    limits: Object.freeze({ cases: selected.length, trials: options.trials, timeout_ms: options.timeoutMs, max_total_model_calls: MAX_TOTAL_MODEL_CALLS }),
+    limits: Object.freeze({ cases: selected.length, trials: options.trials, timeout_ms: options.timeoutMs, concurrency: options.concurrency, max_total_model_calls: MAX_TOTAL_MODEL_CALLS }),
     // A smaller diagnostic run keeps its rule scores, and never ships the wording.
     ...summary, wording_ships: complete && summary.wording_ships,
     groups: Object.freeze(Object.fromEntries(Object.keys(GROUPS).map((group) => {
