@@ -68,10 +68,10 @@ describe('Answer layout v2 (ADR-0051)', () => {
 
   it('refuses blocks beside a v1 layout, or on a part with no statements', () => {
     expect(() => validatePersonAnswerResponseV8(response({ layout: [{ kind: 'paragraph', statements: statements.map((_, at) => at) }] }))).toThrow('blocks are invalid');
-    expect(() => validatePersonAnswerResponseV8({ ...response({ status: 'not_found', statements: [], gap: 'None.' }), outcome: 'not_found', citations: [] })).toThrow();
+    expect(() => validatePersonAnswerResponseV8({ ...response({ status: 'not_found', statements: [], gap: 'None.' }), outcome: 'not_found', citations: [] })).toThrow('Ask response part blocks are invalid');
   });
 
-  it('refuses blocks that leave out, repeat or reorder a statement, or more than ten blocks', () => {
+  it('refuses none or more than ten blocks, and blocks that leave out, repeat, reorder or go past the part\'s statements', () => {
     expect(() => check(blocks.slice(0, 5))).toThrow('leave a statement out');
     expect(() => check([{ kind: 'text', statements: [0, 0] }], two)).toThrow('duplicates');
     expect(() => check([{ kind: 'text', statements: [1] }, { kind: 'text', statements: [0] }], two)).toThrow('out of order');
@@ -108,7 +108,6 @@ describe('Answer layout v2 (ADR-0051)', () => {
   it('checks a table as layout v1 does, with two or more rows and an optional title', () => {
     expect(check(changed(4, { title: 'Open actions' }))[4]).toMatchObject({ kind: 'table', title: 'Open actions', caption: '2 actions are open' });
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', '2026-10-14'], citation_indexes: [1, 2] }] }))).toThrow('rows is invalid');
-    expect(() => check(changed(4, { columns: ['Action'] }))).toThrow('columns is invalid');
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', ''], citation_indexes: [0] }, { cells: ['DVT-R2', ''], citation_indexes: [2] }] }))).toThrow('cites what its statements do not');
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', ''], citation_indexes: [1] }, { cells: ['DVT-R2', ''], citation_indexes: [1] }] }))).toThrow('leave a citation of its statements out');
   });

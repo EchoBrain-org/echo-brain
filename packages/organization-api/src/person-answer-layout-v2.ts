@@ -40,6 +40,8 @@ export const PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2 = LAYOUT_COLUMN_MAX_BYTES;
 export const PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2 = LAYOUT_CELL_MAX_BYTES;
 export const PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2 = 2_048;
 export const PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2 = 200;
+/** The blocks a part reads as, in the catalog's order: every kind of PersonAnswerBlockV2. */
+export const PERSON_ANSWER_BLOCK_KINDS_V2 = Object.freeze(['answer', 'text', 'points', 'table', 'timeline', 'card', 'quote'] as const) satisfies readonly PersonAnswerBlockV2['kind'][];
 /** What a card shows: one person, project, ticket or decision. */
 export const PERSON_ANSWER_CARD_ENTITIES_V2 = Object.freeze(['person', 'project', 'ticket', 'decision'] as const);
 export type PersonAnswerCardEntityV2 = (typeof PERSON_ANSWER_CARD_ENTITIES_V2)[number];
