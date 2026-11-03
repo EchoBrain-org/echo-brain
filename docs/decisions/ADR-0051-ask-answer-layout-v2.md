@@ -76,6 +76,17 @@ Within option 3:
   with its list below is the shape to reach, without a second writer call
   ([block evaluation](../../tools/evals/ask-blocks/README.md), "Quick lead
   check").
+- **The answer block's description and an example reply** (2026-11-03, after
+  the build). That repair's rule went into what the writer reads first: the
+  answer block's description and the prompt's line about it said it never
+  writes out three or more items, and one example reply on an unrelated topic
+  showed a short answer with its points below. Both gates passed, but leads
+  that write out a list fell only from 18 of 60 to 15, and the founder's
+  blind ranking preferred the writer without it in 4 of the 5 questions it
+  changed. Rejected, and the founder closed the tuning: "no further tuning
+  needed. i want to use it live" ([block
+  evaluation](../../tools/evals/ask-blocks/README.md), "Quick lead on the
+  first try").
 
 ## Decision
 
@@ -181,8 +192,9 @@ blocks as Markdown. An answer saved with layout v1 still draws with it.
 - The writer's input grows by the catalog, about 2 KB, taken from its
   evidence budget.
 - Retiring layout v1, once every installed desktop sends `2`, is a later
-  decision. So is tuning the block descriptions where the evaluation found
-  them weak, measured by the block evaluation.
+  decision. Tuning the block descriptions where the evaluation found them
+  weak was tried after the build, measured by the block evaluation, and
+  closed by the founder with none of it kept ("Context and options").
 
 ## Amended 2026-11-02: no count caps
 

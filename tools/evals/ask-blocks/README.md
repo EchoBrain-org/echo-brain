@@ -871,6 +871,11 @@ check. Wording in the catalog and the prompt, an example included, moved the
 writer's first reply little: leads that write out a list went from 18 of 60
 to 15, where the rejected check, with its second call, left none.
 
+On seeing this result the founder closed the tuning: "no further tuning
+needed. i want to use it live". ADR-0051 lists this change beside the check
+among its rejected options. This record, the held-out questions and
+`--case-set held-out` stay.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
