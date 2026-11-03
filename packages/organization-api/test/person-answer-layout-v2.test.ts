@@ -81,10 +81,10 @@ describe('Answer layout v2 (ADR-0051)', () => {
 
   it('refuses blocks beside a v1 layout, or on a part with no statements', () => {
     expect(() => validatePersonAnswerResponseV8(response({ layout: [{ kind: 'paragraph', statements: statements.map((_, at) => at) }] }))).toThrow('blocks are invalid');
-    expect(() => validatePersonAnswerResponseV8({ ...response({ status: 'not_found', statements: [], gap: 'None.' }), outcome: 'not_found', citations: [] })).toThrow();
+    expect(() => validatePersonAnswerResponseV8({ ...response({ status: 'not_found', statements: [], gap: 'None.' }), outcome: 'not_found', citations: [] })).toThrow('Ask response part blocks are invalid');
   });
 
-  it('refuses blocks that leave out, repeat or reorder a statement, and caps no count of blocks', () => {
+  it('refuses no blocks, and blocks that leave out, repeat, reorder or go past the part\'s statements, and caps no count of blocks', () => {
     expect(() => check(blocks.slice(0, 5))).toThrow('leave a statement out');
     expect(() => check([{ kind: 'text', statements: [0, 0] }], two)).toThrow('duplicates');
     expect(() => check([{ kind: 'text', statements: [1] }, { kind: 'text', statements: [0] }], two)).toThrow('out of order');

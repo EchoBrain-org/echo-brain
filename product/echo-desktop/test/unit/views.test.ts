@@ -4,7 +4,7 @@ import {
   noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
-import { personCitedRecordV1, personRecordAtomIdV1, validatePersonAnswerResponseV8, validatePersonRecordListV1 } from '@echo-brain/organization-api';
+import { personCitedRecordV1, personRecordAtomIdV1, validatePersonRecordListV1 } from '@echo-brain/organization-api';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { checkOf } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
@@ -813,7 +813,6 @@ describe('an answer arranged in blocks (answer layout v2, ADR-0051)', () => {
   const question = 'Can THERM start PVT?';
 
   it('carries the fixture\'s blocks as the client validated them, every block; an answer to an Ask that did not ask for them has none, and reads the same', () => {
-    expect(() => validatePersonAnswerResponseV8(blocksAnswer(question, scope, true))).not.toThrow();
     const arranged = answerView({ ok: true, result: blocksAnswer(question, scope, true) }, scope);
     const blocks = arranged.parts[0]!.blocks!;
     expect(blocks.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);

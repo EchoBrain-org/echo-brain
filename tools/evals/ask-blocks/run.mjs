@@ -11,21 +11,19 @@
  * (ADR-0051), only the writer's call going to the model, and grade.mjs grades the answer the kernel releases. The report
  * keeps full traces: all data is synthetic.
  */
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { personAnswerCitationKeyV8, validatePersonFollowUpEvidenceV1 } from "@echo-brain/organization-api";
-import { createAgenticAskV5 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
-import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from "@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1";
+import { personAnswerCitationKeyV8 } from "@echo-brain/organization-api";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { repairInstruction } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
-import { assertExplicitRun, boundedInteger, codeIdentity, compiledModules, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, usage } from "../shared/runner.mjs";
+import { repairInput } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
+import { caseAsk, caseItems, deskItem as releasedItem, scriptedModel } from "../shared/ask-cases.mjs";
+import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, pooled, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { ARMS, ARM_IDS, BUILT, CATALOGS, CATALOG_IDS, readReleased, readReply, writerPrompts } from "./catalogs.mjs";
 import { CASES_FILE, CASE_COUNT, TRIALS, caseOrder, decide, decideGate, evidenceOf, gradeTrial, loadCases, summarizeCatalogs, summarizeRanks } from "./grade.mjs";
 import { JUDGE_SYSTEM_PROMPT, judgeInput, judgeSchema, readJudge } from "./judge.mjs";
+
+export { researchStep } from "../shared/ask-cases.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(TOOL_DIRECTORY, "../../..");
@@ -34,11 +32,6 @@ const WRITER_OUTPUT_TOKENS = 3_000;
 const JUDGE_OUTPUT_TOKENS = 1_500;
 /** A trial makes at most two writer calls (its reply and one repair or retry); a case's judge at most two per order. */
 const MAX_TOTAL_MODEL_CALLS = CATALOG_IDS.length * CASE_COUNT * TRIALS * 2 + CASE_COUNT * 2 * 2;
-const RESEARCH_PROMPT = "You are Echo's research agent";
-const WRITER_PROMPT = "You write Echo's final answer";
-const TICKETS_SOURCE = Object.freeze({
-  source_id: "jira", kind: "ticket", selector: "tickets", description: "Jira issues the asker can read through their own connection.", metadata_only_list: true, tool_id: "jira",
-});
 
 export function help() {
   return [
@@ -62,8 +55,8 @@ export function help() {
     "",
     "Only a whole pre-registered set decides anything: every case and catalog, three trials, the judge on; or the gate on",
     `the built writer, --catalogs ${BUILT.id} --judge off with every case and three trials. A smaller run is a diagnostic.`,
-    "--out must be outside the repository and private; the report and the page's data are written there with mode 0600,",
-    "with full traces of every synthetic prompt and reply, never a credential.",
+    "--out must be outside the repository and private; the report is written there with mode 0600, with full traces of",
+    "every synthetic prompt and reply, never a credential.",
   ].join("\n");
 }
 
@@ -80,11 +73,10 @@ export function parseArgs(argv) {
     "--concurrency": (value) => { options.concurrency = Number(value); },
     "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
     "--resume": (value) => { options.resume = value; },
-    "--writer": (value) => { if (value !== "openrouter" && value !== "claude-account") throw new Error("--writer must be openrouter or claude-account"); options.writer = value; },
-    "--claude-executable": (value) => { options.claudeExecutable = value; },
+    ...writerFlags(options),
   })) return { help: true };
   if (options.resume !== null && (!isAbsolute(options.resume) || !existsSync(options.resume))) throw new Error("--resume must be the absolute path of an earlier report");
-  if (options.writer === "claude-account" && (options.claudeExecutable === null || !isAbsolute(options.claudeExecutable) || !existsSync(options.claudeExecutable))) throw new Error("--writer claude-account needs --claude-executable, the absolute path of the signed-in claude binary");
+  assertWriterRoute(options);
   assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, TRIALS);
   options.concurrency = boundedInteger(options.concurrency, "--concurrency", 1, 6);
@@ -102,69 +94,16 @@ export function parseArgs(argv) {
 }
 
 /**
- * The files a report fingerprints, beside the commit and its uncommitted changes: the evaluation's own, every compiled
- * module of the kernel's answer composition (the writer, its layouts and its checks, whatever their files are named),
- * the answer contract the built arm reads, and the writer routes.
+ * The files a report fingerprints, beside the commit and its uncommitted changes: the cases, the pre-registration and
+ * every module the evaluation loads (its own, the kernel's writer, checks and shared modules, the answer contract and the
+ * writer routes), found by following its imports.
  */
-const codeFiles = () => Object.freeze([
-  "tools/evals/ask-blocks/run.mjs", "tools/evals/ask-blocks/catalogs.mjs", "tools/evals/ask-blocks/grade.mjs", "tools/evals/ask-blocks/judge.mjs",
-  "tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", "tools/evals/shared/runner.mjs",
-  ...compiledModules(ROOT, "packages/organization-authority-kernel/dist/answer-composition"),
-  "packages/organization-api/dist/person-answer-v4.js", "packages/organization-api/dist/person-answer-layout-v2.js",
-  "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
-  "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
-  ...compiledModules(ROOT, "providers/openrouter/dist/claude-research"),
-]);
+const codeFiles = () => Object.freeze(["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", ...importedModules(ROOT, ["tools/evals/ask-blocks/run.mjs"])]);
 
-const digest = (value) => createHash("sha256").update(value).digest("hex");
-const fields = (item, names) => Object.fromEntries(names.filter((name) => Object.hasOwn(item, name)).map((name) => [name, item[name]]));
-
-/**
- * One case item as the desk releases it: a follow-up through the product's own projection, an approved decision record,
- * or a Jira issue the asker reads through their own connection, created on its `created` day. Every value is synthetic.
- */
-export function deskItem(caseId, index, item) {
-  const key = `${caseId}:${index}`;
-  const id = `blocks-${digest(key).slice(0, 24)}`;
-  const receipt_sha256 = canonicalSha256({ fixture: "ask-blocks-release", key });
-  if (item.kind === "follow_up") {
-    const evidence = validatePersonFollowUpEvidenceV1({
-      item_id: `itm_${digest(key).slice(0, 24)}`, kind: item.on, title: item.title, owner: item.owner, status: item.status,
-      ...fields(item, ["created_at", "sent_at", "reassigned_at", "due_at", "check", "expected"]),
-      ...(item.decision === undefined ? {} : { decision: { ...item.decision, ref: `meeting:${canonicalSha256({ fixture: "ask-blocks-decision", key })}` } }),
-    });
-    return Object.freeze({ id, ...followUpDeskFieldsV1(evidence), visibility: "team", receipt_sha256 });
-  }
-  if (item.kind === "decision") {
-    return Object.freeze({
-      id, kind: "decision", label: item.label, text: item.text, visibility: "team", occurred_at: item.occurred_at, receipt_sha256,
-      citation: Object.freeze({ kind: "approved_record", atom_id: canonicalSha256({ fixture: "ask-blocks-atom", key }), record_sha256: canonicalSha256({ fixture: "ask-blocks-record", key }), policy_id: "project-members-readable-person-v1" }),
-    });
-  }
-  return Object.freeze({
-    id, kind: "ticket", label: `${item.key}: ${item.title}`, text: item.text, visibility: "only_me",
-    attributes: Object.freeze({ status: item.status, owner: item.owner, ...(item.priority === undefined ? {} : { priority: item.priority }) }),
-    occurred_at: item.created ?? "2026-10-19", date_kind: "created", receipt_sha256,
-    citation: Object.freeze({ kind: "ticket", tool_id: "jira", external_scope_id: "synthetic-cloud", ticket_id: item.key.replace(/\D/gu, ""), permalink: `https://synthetic.example.test/browse/${item.key}`, text_sha256: sha256Digest(item.text) }),
-  });
-}
-
+/** One case item as the desk releases it, with this evaluation's ids and fixtures (shared/ask-cases.mjs). */
+export const deskItem = (caseId, index, item) => releasedItem("blocks", caseId, index, item);
 /** One case's items as the desk releases them, in the case's order: the order search finds them and research opens them. */
-const caseItems = (caseDefinition) => caseDefinition.items.map((item, index) => deskItem(caseDefinition.id, index, item));
-
-/** A desk over one case's items, in a global Ask with Jira and follow-ups bound: any search finds them all, in order. */
-function caseDesk(caseDefinition, document) {
-  const items = caseItems(caseDefinition);
-  const result = (values) => Object.freeze({ items: Object.freeze(values), truncated: false, receipt_digests: Object.freeze(values.map((value) => value.receipt_sha256)) });
-  return Object.freeze({
-    scope: Object.freeze({ kind: "global" }),
-    live_sources: Object.freeze([TICKETS_SOURCE, FOLLOW_UPS_SOURCE_DESCRIPTOR_V1]),
-    async search() { return result(items); },
-    async open(input) { return result(items.filter((item) => item.id === input.item)); },
-    async list() { return result([]); },
-    async revalidate() { return Object.freeze({ checked_at: document.asked_at }); },
-  });
-}
+const itemsOf = (caseDefinition) => caseItems("blocks", caseDefinition);
 
 /**
  * The evidence id of each of an answer's citations, as the writer saw it: the case item the citation cites, found by its
@@ -176,46 +115,18 @@ export function evidenceIdsOf(citations, items) {
   return Object.freeze(citations.map((entry, at) => byKey.get(personAnswerCitationKeyV8(entry.citation)) ?? `citation ${at + 1}`));
 }
 
-/** The scripted research step for `round` (from 1): search, then open every item found, then finish citing them all. */
-export function researchStep(caseDefinition, round) {
-  const ids = Array.from({ length: caseDefinition.items.length }, (_, index) => `E${index + 1}`);
-  const need = (status) => ({ ...(round === 1 ? {} : { id: "N1" }), need: caseDefinition.research.need, kind: "content", status, evidence: status === "found" ? ids : [] });
-  const part = (status, notes) => [{ question: caseDefinition.question, needs: [need(status)], notes }];
-  if (round === 1) return { parts: part("open", ""), actions: [{ tool: "search", args: { query: caseDefinition.research.query } }] };
-  if (round === 2) return { parts: part("open", `${ids.join(", ")} match.`), actions: ids.map((id) => ({ tool: "open", args: { id } })) };
-  return { parts: part("found", `${ids.join(", ")} read in full.`), actions: [{ tool: "finish", args: {} }] };
-}
-
-/** Ask over one case's scripted desk, as the kernel runs it for a client that asks for `answerLayout`, with `model`. */
-function caseAsk(caseDefinition, document, model, generation, answerLayout) {
-  return createAgenticAskV5({
-    desk: caseDesk(caseDefinition, document), model, generation, audit: { append: () => undefined }, answer_layout: answerLayout,
-    asker: { display_name: document.asker }, time_context: { now: document.asked_at, time_zone: document.time_zone },
-    today: () => document.today, wall_ms: () => Date.parse(document.asked_at),
-  });
-}
-
 /**
  * Production's writer prompts and reply schema for one case, recorded through the kernel with a writer that answers
  * nothing: for answer layout 1 (ADR-0045), which the four catalogs start from, or 2 (ADR-0051), the built writer's.
  */
 export async function captureWriterPrompts(caseDefinition, document, generation, answerLayout) {
-  let round = 0;
   let captured = null;
-  const model = Object.freeze({
-    async generate(input) { return (await this.generate_with_observation(input)).value; },
-    async generate_with_observation(input) {
-      if (input.system_prompt.startsWith(RESEARCH_PROMPT)) {
-        round += 1;
-        return { value: researchStep(caseDefinition, round), finish_reason: "stop", usage: null, provider_latency_ms: null };
-      }
-      if (!input.system_prompt.startsWith(WRITER_PROMPT)) throw new Error("the capture runs only research and the Ask writer");
-      captured ??= Object.freeze({ system_prompt: input.system_prompt, user_prompt: input.user_prompt, schema: input.schema });
-      // A reply that says nothing, in either layout's shape.
-      return { value: { lists: [], tables: [], sentences: [], blocks: [], not_found: [caseDefinition.research.need] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
-    },
-  });
-  await caseAsk(caseDefinition, document, model, generation, answerLayout).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(30_000) });
+  const { model } = scriptedModel(caseDefinition, (input) => {
+    captured ??= Object.freeze({ system_prompt: input.system_prompt, user_prompt: input.user_prompt, schema: input.schema });
+    // A reply that says nothing, in either layout's shape.
+    return { value: { lists: [], tables: [], sentences: [], blocks: [], not_found: [caseDefinition.research.need] }, finish_reason: "stop", usage: null, provider_latency_ms: null };
+  }, "the capture runs only research and the Ask writer");
+  await caseAsk(itemsOf(caseDefinition), document, document.asked_at, model, generation, answerLayout).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(30_000) });
   if (captured === null) throw new Error(`case ${caseDefinition.id}: research never reached the writer`);
   return captured;
 }
@@ -225,17 +136,14 @@ async function call(structuredOutput, input) {
   const started = performance.now();
   try {
     const observed = await observedGeneration(structuredOutput, input);
-    return { value: observed.value, finish_reason: observed.finish_reason ?? null, usage: usage(observed.usage),
-      provider_latency_ms: Number.isSafeInteger(observed.provider_latency_ms) ? observed.provider_latency_ms : null, elapsed_ms: Math.round(performance.now() - started) };
+    return { value: observed.value, ...generationMetadata(observed), elapsed_ms: Math.round(performance.now() - started) };
   } catch (error) {
     return { error: safeError(error, { withUsage: true }), elapsed_ms: Math.round(performance.now() - started) };
   }
 }
 
-/** The repair input production sends (agentic-model-gate-v1): the rejected reply and the reason, beside the original input. */
-function repairPrompt(userPrompt, rejected, reason) {
-  return JSON.stringify({ ...JSON.parse(userPrompt), rejected_response: JSON.stringify(rejected).slice(0, 4_000), validation_error: repairInstruction(reason) });
-}
+/** The repair prompt production's gate sends (repairInput): the original input, then the rejected reply and the reason. */
+const repairPrompt = (userPrompt, rejected, reason) => JSON.stringify(repairInput(JSON.parse(userPrompt), rejected, reason));
 
 /**
  * One trial: the catalog's writer on one case, its reply read and checked, one repair for a refused reply or one retry
@@ -286,50 +194,40 @@ export async function runTrial(caseDefinition, catalog, trial, prompts, evidence
 export async function runBuiltTrial(caseDefinition, trial, prompts, evidence, document, structuredOutput, generation, options, carried = []) {
   const attempts = [];
   const recorded = sha256(prompts.system_prompt);
-  let round = 0;
-  const model = Object.freeze({
-    async generate(input) { return (await this.generate_with_observation(input)).value; },
-    async generate_with_observation(input) {
-      if (input.system_prompt.startsWith(RESEARCH_PROMPT)) {
-        round += 1;
-        return { value: researchStep(caseDefinition, round), finish_reason: "stop", usage: null, provider_latency_ms: null };
-      }
-      if (!input.system_prompt.startsWith(WRITER_PROMPT)) throw new Error("the built arm runs only research and the Ask writer");
-      const attempt = attempts.length + 1;
-      // A repair names what the kernel found wrong with the reply before it; a retry repeats a call that failed.
-      const problem = JSON.parse(input.user_prompt).validation_error;
-      if (typeof problem === "string" && attempts.length > 0) attempts.at(-1).problems = [problem];
-      const systemPromptSha256 = sha256(input.system_prompt);
-      const asked = { attempt, kind: attempt === 1 ? "first" : typeof problem === "string" ? "repair" : "retry", system_prompt_sha256: systemPromptSha256,
-        ...(systemPromptSha256 === recorded ? {} : { system_prompt: input.system_prompt }), ...(input.user_prompt === prompts.user_prompt ? {} : { user_prompt: input.user_prompt }),
-        max_output_tokens: input.max_output_tokens };
-      const before = carried[attempt - 1];
-      if (before !== undefined && before.system_prompt_sha256 === systemPromptSha256 && (before.user_prompt ?? prompts.user_prompt) === input.user_prompt) {
-        attempts.push({ ...before, ...asked, carried: true });
-        return { value: before.value, finish_reason: before.finish_reason, usage: before.usage, provider_latency_ms: before.provider_latency_ms };
-      }
-      const started = performance.now();
-      try {
-        const observed = await observedGeneration(structuredOutput, input);
-        attempts.push({ ...asked, value: observed.value, finish_reason: observed.finish_reason ?? null, usage: usage(observed.usage),
-          provider_latency_ms: Number.isSafeInteger(observed.provider_latency_ms) ? observed.provider_latency_ms : null, elapsed_ms: Math.round(performance.now() - started) });
-        return observed;
-      } catch (error) {
-        // The kernel meets the route's failure as it would in production: it retries, falls back or stops.
-        attempts.push({ ...asked, error: safeError(error, { withUsage: true }), elapsed_ms: Math.round(performance.now() - started) });
-        throw error;
-      }
-    },
-  });
+  const { model } = scriptedModel(caseDefinition, async (input) => {
+    const attempt = attempts.length + 1;
+    // A repair names what the kernel found wrong with the reply before it; a retry repeats a call that failed.
+    const problem = JSON.parse(input.user_prompt).validation_error;
+    if (typeof problem === "string" && attempts.length > 0) attempts.at(-1).problems = [problem];
+    const systemPromptSha256 = sha256(input.system_prompt);
+    const asked = { attempt, kind: attempt === 1 ? "first" : typeof problem === "string" ? "repair" : "retry", system_prompt_sha256: systemPromptSha256,
+      ...(systemPromptSha256 === recorded ? {} : { system_prompt: input.system_prompt }), ...(input.user_prompt === prompts.user_prompt ? {} : { user_prompt: input.user_prompt }),
+      max_output_tokens: input.max_output_tokens };
+    const before = carried[attempt - 1];
+    if (before !== undefined && before.system_prompt_sha256 === systemPromptSha256 && (before.user_prompt ?? prompts.user_prompt) === input.user_prompt) {
+      attempts.push({ ...before, ...asked, carried: true });
+      return { value: before.value, finish_reason: before.finish_reason, usage: before.usage, provider_latency_ms: before.provider_latency_ms };
+    }
+    const started = performance.now();
+    try {
+      const observed = await observedGeneration(structuredOutput, input);
+      attempts.push({ ...asked, value: observed.value, ...generationMetadata(observed), elapsed_ms: Math.round(performance.now() - started) });
+      return observed;
+    } catch (error) {
+      // The kernel meets the route's failure as it would in production: it retries, falls back or stops.
+      attempts.push({ ...asked, error: safeError(error, { withUsage: true }), elapsed_ms: Math.round(performance.now() - started) });
+      throw error;
+    }
+  }, "the built arm runs only research and the Ask writer");
   let response = null;
   let error;
   try {
-    response = await caseAsk(caseDefinition, document, model, generation, BUILT.answer_layout).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
+    response = await caseAsk(itemsOf(caseDefinition), document, document.asked_at, model, generation, BUILT.answer_layout).answer({ question: caseDefinition.question, signal: AbortSignal.timeout(options.timeoutMs) });
   } catch (caught) {
     error = safeError(caught);
   }
   // Only a release that follows a writer's reply is read: one with no reply is code's fallback, not the writer's answer.
-  const read = response === null || !attempts.some((entry) => entry.error === undefined) ? null : readReleased(response, evidenceIdsOf(response.citations, caseItems(caseDefinition)));
+  const read = response === null || !attempts.some((entry) => entry.error === undefined) ? null : readReleased(response, evidenceIdsOf(response.citations, itemsOf(caseDefinition)));
   for (const [at, entry] of attempts.entries()) {
     const last = at === attempts.length - 1;
     entry.valid = last && read?.valid === true;
@@ -361,10 +259,8 @@ function resumable(previous, cases, catalogs, prompts) {
   }
 }
 
-/** The model judge on one case, in one order: each catalog's rank, after at most one repair, or its failure. */
-async function judgeCase(caseDefinition, prompts, reads, order, structuredOutput, generation, options) {
-  const evidence = JSON.parse(prompts.user_prompt).evidence;
-  const userPrompt = judgeInput(caseDefinition.question, evidence, order, reads);
+/** The model judge on one case, in one order, given `userPrompt` (judgeInput's): each catalog's rank, after at most one repair, or its failure. */
+async function judgeCase(userPrompt, order, structuredOutput, generation, options) {
   const attempts = [];
   let prompt = userPrompt;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -378,21 +274,7 @@ async function judgeCase(caseDefinition, prompts, reads, order, structuredOutput
   return { order, user_prompt: userPrompt, attempts, ranks: null };
 }
 
-/** Runs `tasks` (functions returning promises) `limit` at a time, keeping their order in the results. */
-async function pooled(tasks, limit) {
-  const results = new Array(tasks.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    while (next < tasks.length) {
-      const at = next;
-      next += 1;
-      results[at] = await tasks[at]();
-    }
-  }));
-  return results;
-}
-
-/** Runs the selected cases and catalogs, then the judge, and writes the report and the page's data. */
+/** Runs the selected cases and catalogs, then the judge, and writes the report. */
 export async function run(options, dependencies = {}) {
   const document = loadCases();
   const cases = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
@@ -401,13 +283,7 @@ export async function run(options, dependencies = {}) {
   const ranked = catalogs.filter((catalog) => catalog !== BUILT);
   const built = catalogs.includes(BUILT);
   const identityBefore = codeIdentity(ROOT, codeFiles());
-  const route = options.writer ?? "openrouter";
-  // The personal Claude account writer: the product's own path (providers/openrouter/src/claude-research), with this
-  // machine's home directory and signed-in claude binary. Native Claude Code owns the sign-in; nothing here reads it.
-  const bundled = dependencies.loaded ?? createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: options.credentialFile,
-    ...(route === "claude-account" ? { personal_claude_research: { membership_id: "mem_ask-blocks-eval", home_directory: homedir(), executable_path: realpathSync(options.claudeExecutable) } } : {}) }).load();
-  const loaded = route === "claude-account" ? bundled.personal_research : bundled;
-  if (loaded === undefined) throw new Error("the claude-account writer is not available from this bundle");
+  const { route, loaded } = writerRoute(options, "mem_ask-blocks-eval", createOpenRouterAnswerCompositionGenerationBundleV1, dependencies.loaded);
   const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
   // Each arm's writer prompts: the four catalogs' from layout v1's, the built writer's as the kernel asks with layout v2.
   const prompts = new Map();
@@ -449,13 +325,14 @@ export async function run(options, dependencies = {}) {
     const judgeTasks = cases.flatMap((caseDefinition) => {
       const order = caseOrder(caseDefinition.id).filter((catalog) => ranked.some((entry) => entry.id === catalog));
       const reads = Object.fromEntries(order.map((catalog) => [catalog, trials.find((entry) => entry.case_id === caseDefinition.id && entry.catalog === catalog && entry.trial === 1)?.read ?? null]));
-      const casePrompts = prompts.get(caseDefinition.id).get(ranked[0].id);
+      // The judge reads the evidence the catalogs' writers were given.
+      const writerEvidence = JSON.parse(prompts.get(caseDefinition.id).get(ranked[0].id).user_prompt).evidence;
       return [order, [...order].reverse()].map((shown) => async () => {
+        const userPrompt = judgeInput(caseDefinition.question, writerEvidence, shown, reads);
         // A judged order is carried when its trial-1 answers are the ones it judged: the same input, ranked.
-        const before = previous?.judge?.[caseDefinition.id]?.find((entry) => entry.ranks !== null && entry.order.join() === shown.join()
-          && entry.user_prompt === judgeInput(caseDefinition.question, JSON.parse(casePrompts.user_prompt).evidence, shown, reads));
+        const before = previous?.judge?.[caseDefinition.id]?.find((entry) => entry.ranks !== null && entry.order.join() === shown.join() && entry.user_prompt === userPrompt);
         if (before !== undefined) return { case_id: caseDefinition.id, ...before, carried: true };
-        return { case_id: caseDefinition.id, ...(await judgeCase(caseDefinition, casePrompts, reads, shown, loaded.structured_output, loaded.generation, options)) };
+        return { case_id: caseDefinition.id, ...(await judgeCase(userPrompt, shown, loaded.structured_output, loaded.generation, options)) };
       });
     });
     for (const result of await pooled(judgeTasks, options.concurrency)) (judged[result.case_id] ??= []).push(result);

@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { ANSWER_BLOCK_CATALOG, ANSWER_BLOCKS_PROMPT, answerBlocksSchema } from "../../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { loadCases } from "../grade.mjs";
-import { ANSWER_LAYOUT, decides, help, parseArgs, run, runTrial, writerLayout } from "../run.mjs";
+import { decides, help, parseArgs, run, runTrial, writerLayout } from "../run.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const document = loadCases();
@@ -40,6 +41,21 @@ function writer(lead = (entry) => `It is ${entry.expect.facts.map((alternatives)
         finish_reason: "stop", usage: { input_tokens: 4000, output_tokens: 60, total_tokens: 4060 }, provider_latency_ms: 900 };
     },
   };
+}
+
+/** Every repository module Node loads for the module `entry`, as a hook on its loader sees them, relative to the repository. */
+function loadedModules(entry) {
+  const script = [
+    'import { registerHooks } from "node:module";',
+    "const loaded = [];",
+    "registerHooks({ load(url, context, next) { loaded.push(url); return next(url, context); } });",
+    `await import(${JSON.stringify(pathToFileURL(join(ROOT, entry)).href)});`,
+    "process.stdout.write(JSON.stringify(loaded));",
+  ].join("\n");
+  const root = realpathSync(ROOT);
+  const files = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", script], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }))
+    .filter((url) => url.startsWith("file:")).map((url) => realpathSync(fileURLToPath(url)));
+  return [...new Set(files)].filter((file) => file.startsWith(`${root}${sep}`) && !file.includes(`${sep}node_modules${sep}`)).map((file) => relative(root, file).split(sep).join("/")).sort();
 }
 
 test("makes no request, and reads no credential, unless asked to run with a private credential file and a private report directory", (t) => {
@@ -98,7 +114,6 @@ test("runs Ask with answer layout v2 over scripted research, sending only the wr
 
 test("tells the layout a writer was given from its input: the block catalog, layout v1's tables, or none", () => {
   const input = (user, properties) => ({ user_prompt: JSON.stringify(user), schema: { type: "object", properties } });
-  assert.equal(ANSWER_LAYOUT, 2);
   assert.equal(writerLayout(input({ source_catalog: [], block_catalog: [], evidence: [] }, { lists: {}, blocks: {}, not_found: {} })), 2);
   assert.equal(writerLayout(input({ source_catalog: [], evidence: [] }, { lists: {}, tables: {}, sentences: {}, not_found: {} })), 1);
   assert.equal(writerLayout(input({ source_catalog: [], evidence: [] }, { lists: {}, sentences: {}, not_found: {} })), null);
@@ -122,8 +137,12 @@ test("writes a private report outside the repository that applies the three pre-
   assert.deepEqual([report.kind, report.complete, report.wording_ships, report.results.length], ["echo-ask-wording-evaluation-v1", true, true, 30]);
   assert.deepEqual([report.answer_layout, report.model, new Set(report.results.map((entry) => entry.writer_layout))], [2, { route: "openrouter", adapter_id: "fixture", answer_model: "fixture-model" }, new Set([2])]);
   assert.deepEqual(report.groups.names_long_id, { trials: 18, no_restating: 18, long_ids_once: 18, nothing_lost: 18, errors: 0 });
-  // The report fingerprints the kernel's compiled layout v2 module, whatever else the build holds.
-  assert.ok(Object.hasOwn(report.code.before.files_sha256, "packages/organization-authority-kernel/dist/answer-composition/renderers/ask-layout-v2.js"));
+  // The report fingerprints its cases and every module the run loads: among them layout v2's writer, checks and title
+  // bound, and the kernel's shared modules on the writer's path.
+  const fingerprinted = Object.keys(report.code.before.files_sha256);
+  assert.deepEqual(fingerprinted, ["tools/evals/ask-wording/cases.json", ...loadedModules("tools/evals/ask-wording/run.mjs")]);
+  for (const file of ["packages/organization-authority-kernel/dist/answer-composition/renderers/ask-layout-v2.js", "packages/organization-api/dist/person-answer-layout-checks.js",
+    "packages/organization-api/dist/person-answer-layout-v1.js", "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js"]) assert.ok(fingerprinted.includes(file), file);
   // Restating the question, as the founder's staging answer did, keeps the wording from shipping.
   const restating = await run({ ...options, caseIds: [founder.id, "owner-plain"], trials: 1 },
     { loaded: { structured_output: writer((entry) => `${entry.expect.facts[0].at(-1)} answers: ${entry.question}`), generation }, progress: () => undefined });
@@ -157,4 +176,31 @@ test("writes through the personal Claude account port, admitting each request an
   assert.deepEqual(admittedRequests, ["count_tokens", "messages"]);
   assert.deepEqual(report.results[0].model_calls, [{ attempt: 1, result: "succeeded", finish_reason: "stop", usage: { input_tokens: 20, output_tokens: 7, total_tokens: 27 }, provider_latency_ms: null }]);
   assert.deepEqual([report.results[0].grade.lead, report.results[0].grade.rules], ["You own it.", { no_restating: true, long_ids_once: true, nothing_lost: true }]);
+});
+
+test("runs trials a few at a time and keeps the report's results in case order", async (t) => {
+  const { root, credential } = privateRoot(t);
+  const base = ["--run", "--credential-file", credential, "--out", join(root, "out")];
+  assert.equal(parseArgs(base).concurrency, 4);
+  for (const value of ["0", "7", "two"]) assert.throws(() => parseArgs([...base, "--concurrency", value]), /--concurrency must be an integer from 1 to 6/u);
+  const caseIds = ["owner-plain", "rollback-named-id", "blocker-plain"];
+  const options = parseArgs([...base, "--cases", caseIds.join(","), "--concurrency", "3"]);
+  // A writer whose later cases answer sooner, so trials end out of order; it counts the calls it is in at once.
+  const answers = writer();
+  let running = 0;
+  const overlapping = { peak: 0, async generate_with_observation(input) {
+    running += 1;
+    overlapping.peak = Math.max(overlapping.peak, running);
+    const at = caseIds.findIndex((id) => document.cases.find((entry) => entry.id === id).question === JSON.parse(input.user_prompt).question);
+    await new Promise((resolve) => setTimeout(resolve, (caseIds.length - at) * 15));
+    try { return await answers.generate_with_observation(input); } finally { running -= 1; }
+  } };
+  const together = await run(options, { loaded: { structured_output: overlapping, generation }, progress: () => undefined });
+  const alone = await run({ ...options, concurrency: 1 }, { loaded: { structured_output: writer(), generation }, progress: () => undefined });
+  assert.equal(overlapping.peak, 3);
+  assert.deepEqual(together.report.results.map((result) => [result.case_id, result.trial]), caseIds.flatMap((id) => [1, 2, 3].map((trial) => [id, trial])));
+  // Apart from their timings, the results are the ones a run one trial at a time reports, and the report says how many ran at once.
+  const timeless = (results) => JSON.parse(JSON.stringify(results, (key, value) => (key === "elapsed_ms" ? undefined : value)));
+  assert.deepEqual(timeless(together.report.results), timeless(alone.report.results));
+  assert.deepEqual([together.report.limits.concurrency, alone.report.limits.concurrency], [3, 1]);
 });

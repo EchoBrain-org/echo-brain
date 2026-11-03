@@ -59,9 +59,21 @@ type Draft =
   | { readonly kind: "heading"; readonly text: string }
   | { readonly kind: "table"; readonly statements: number[]; readonly columns: readonly string[]; readonly rows: PersonAnswerTableRowV1[]; readonly caption?: string; readonly key?: string };
 
+/** A table's columns, each within the contract's bytes. */
+export function columnsOf(columns: readonly string[]): string[] {
+  return columns.map(column => boundedBytes(column, PERSON_ANSWER_COLUMN_MAX_BYTES_V1));
+}
+
 /** A table's cells, one per column, each within the contract's bytes. */
-function cellsOf(cells: readonly string[], columns: readonly string[]): readonly string[] {
+export function cellsOf(cells: readonly string[], columns: readonly string[]): readonly string[] {
   return Object.freeze(columns.map((_, at) => boundedBytes(cells[at] ?? "", PERSON_ANSWER_CELL_MAX_BYTES_V1)));
+}
+
+/** A list statement's table (ADR-0041): its columns, its rows and its caption, when it has one, each within the contract's bytes. */
+export function listTableV1(shape: Extract<AskLayoutShapeV1, { kind: "list" }>): { readonly columns: string[]; readonly rows: PersonAnswerTableRowV1[]; readonly caption?: string } {
+  const columns = columnsOf(shape.columns);
+  const caption = boundedBytes(shape.caption, PERSON_ANSWER_CAPTION_MAX_BYTES_V1);
+  return { columns, rows: shape.rows.map(row => Object.freeze({ cells: cellsOf(row.cells, columns), citation_indexes: Object.freeze([...row.citation_indexes]) })), ...(caption.length === 0 ? {} : { caption }) };
 }
 
 /**
@@ -86,15 +98,9 @@ export function buildAskLayoutV1(statements: readonly AskLayoutStatementV1[]): r
       section = own;
     }
     const last = drafts.at(-1);
-    if (shape.kind === "list") {
-      const columns = shape.columns.map(column => boundedBytes(column, PERSON_ANSWER_COLUMN_MAX_BYTES_V1));
-      const caption = boundedBytes(shape.caption, PERSON_ANSWER_CAPTION_MAX_BYTES_V1);
-      drafts.push({
-        kind: "table", statements: [at], columns, rows: shape.rows.map(row => Object.freeze({ cells: cellsOf(row.cells, columns), citation_indexes: Object.freeze([...row.citation_indexes]) })),
-        ...(caption.length === 0 ? {} : { caption }),
-      });
-    } else if (shape.kind === "row") {
-      const columns = shape.columns.map(column => boundedBytes(column, PERSON_ANSWER_COLUMN_MAX_BYTES_V1));
+    if (shape.kind === "list") drafts.push({ kind: "table", statements: [at], ...listTableV1(shape) });
+    else if (shape.kind === "row") {
+      const columns = columnsOf(shape.columns);
       const row = Object.freeze({ cells: cellsOf(shape.cells, columns), citation_indexes: Object.freeze([...citation_indexes]) });
       // One table per section's columns: a list's table, or another section's, starts a new one.
       const key = JSON.stringify([own ?? null, columns]);

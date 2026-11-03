@@ -43,6 +43,14 @@ async function observed(render: () => Promise<Rendering>): Promise<{ readonly re
   return { rendered, corrections: events.find(event => event.phase === "research_output" && event.event !== "started")!.model_corrections ?? {} };
 }
 
+/** A released v2 part's blocks, checked against the contract; a v2 part never carries layout v1's. */
+function blocksOf(rendered: Rendering) {
+  const part = rendered.result.response.parts[0]!;
+  expect(validatePersonAnswerBlocksV2(part.blocks, part.statements, rendered.result.response.citations.length)).toEqual(part.blocks);
+  expect(part).not.toHaveProperty("layout");
+  return part.blocks!;
+}
+
 /** Items in short-id order, the plan citing `cited`. */
 function bundle(entries: readonly { readonly item: EvidenceDeskItemV2; readonly full: boolean; readonly touched: number }[], cited: readonly string[], completed = true): AgenticEvidenceBundleV1 {
   return Object.freeze({
@@ -54,6 +62,8 @@ function bundle(entries: readonly { readonly item: EvidenceDeskItemV2; readonly 
     stop: { reason: completed ? "finished" as const : "budget" as const, completed },
   });
 }
+/** Approved records E1..En, each read in full and cited by the plan. */
+const records = (count: number, options: Parameters<typeof record>[2] = {}) => bundle(Array.from({ length: count }, (_, index) => ({ item: record(`r${index + 1}`, `Approved record ${index + 1}.`, options), full: true, touched: index + 1 })), Array.from({ length: count }, (_, index) => `E${index + 1}`));
 
 describe("Ask renderer", () => {
   it.each([false, true])("keeps both project leads when both needs are which_items (extra person citation: %s)", async extraPerson => {
@@ -562,10 +572,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   describe("as tables among blocks (answer layout v2, ADR-0051)", () => {
     const arranged = async (research: AgenticEvidenceBundleV1, reply: unknown) => {
       const rendered = await alone({ bundle: research, replies: [reply], layout: 2 }).render("Which tickets were created on October 4?");
-      const part = rendered.result.response.parts[0]!;
-      expect(validatePersonAnswerBlocksV2(part.blocks, part.statements, rendered.result.response.citations.length)).toEqual(part.blocks);
-      expect(part).not.toHaveProperty("layout");
-      return part;
+      blocksOf(rendered);
+      return rendered.result.response.parts[0]!;
     };
     it("states a list's members as code's table right after the answer, then the writer's other blocks", async () => {
       const part = await arranged(listBundle(3, 1, [list("L1", ids(1, 3))], [WI(["L1"])]), { lists: [{ id: "L1" }], not_found: [], blocks: [
@@ -597,8 +605,6 @@ describe("Ask renderer: lists (ADR-0041)", () => {
 
 describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
   const NEXT = "What has to happen first";
-  /** Approved records E1..En, each read in full and cited by the plan. */
-  const records = (count: number, options: Parameters<typeof record>[2] = {}) => bundle(Array.from({ length: count }, (_, index) => ({ item: record(`r${index + 1}`, `Approved record ${index + 1}.`, options), full: true, touched: index + 1 })), Array.from({ length: count }, (_, index) => `E${index + 1}`));
   /** The THERM answer as the writer marks it: a bullet before its lead, two decisions, and two actions as rows of a declared table. */
   const THERM = {
     lists: [], not_found: [], tables: [{ section: NEXT, columns: ["Action", "Owner", "Due"] }],
@@ -636,22 +642,22 @@ describe("Ask renderer: answer layout v1 (ADR-0045)", () => {
     expect(rendered.outcome).toBe("answered");
   });
 
-  it("keeps today's response without layout: no layout, and the statements of the same reply without forms", async () => {
+  it("keeps today's response without layout: no layout or blocks, and the statements of the same reply without forms", async () => {
     const today = await alone({ bundle: records(4), replies: [plain(THERM)] }).render("Can DVT-R2 run on the reduced test scope?");
-    for (const layout of [undefined]) {
-      const rendered = await alone({ bundle: records(4), replies: [THERM], ...(layout === undefined ? {} : { layout }) }).render("Can DVT-R2 run on the reduced test scope?");
-      expect(part(rendered)).not.toHaveProperty("layout");
-      expect(part(rendered).statements).toEqual(part(today).statements);
-    }
+    const rendered = await alone({ bundle: records(4), replies: [THERM] }).render("Can DVT-R2 run on the reduced test scope?");
+    expect(part(rendered)).not.toHaveProperty("layout");
+    expect(part(rendered)).not.toHaveProperty("blocks");
+    expect(part(rendered).statements).toEqual(part(today).statements);
   });
 
-  it("gives only a laid-out Ask's writer the layout prompt, the layout schema and a longer reply's allowance", async () => {
+  it("gives only a laid-out Ask's writer the layout prompt, the layout schema and a longer reply's allowance, and never the block catalog", async () => {
     for (const layout of [undefined, 1] as const) {
       const run = alone({ bundle: records(4), replies: [THERM], ...(layout === undefined ? {} : { layout }) });
       await run.render("Can DVT-R2 run on the reduced test scope?");
       expect(run.input(0)).toMatchObject(layout
         ? { system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_LAYOUT_PROMPT}`, schema: answerLayoutSchema, max_output_tokens: 2_000 }
         : { system_prompt: ANSWER_PROMPT, schema: answerSchema, max_output_tokens: AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer });
+      expect(run.prompt(0)).not.toHaveProperty("block_catalog");
     }
   });
 
@@ -727,7 +733,7 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     record("therm-48", "THERM-48 is in review, and Tomas Okafor owns it.", { label: "THERM-48 status" }),
     record("steps", "Before PVT: freeze the firmware, then ship the build to the line.", { label: "PVT plan" }),
   ];
-  const therm = (extra: readonly ReturnType<typeof record>[] = []) => bundle([...THERM_ITEMS, ...extra].map((item, index) => ({ item, full: true, touched: index + 1 })), ["E1", "E2", "E3", "E4"]);
+  const therm = () => bundle(THERM_ITEMS.map((item, index) => ({ item, full: true, touched: index + 1 })), ["E1", "E2", "E3", "E4"]);
   const ANSWER = { block: "answer", sentences: [{ text: "PVT can start: the soak passed on Oct 23.", evidence: ["E1", "E2"] }] };
   const TIMELINE = { block: "timeline", title: "The soak", events: [
     { date: "2026-10-23", text: "The soak passed.", evidence: ["E2"] }, { date: "2026-10-20", text: "Started the 72-hour soak.", who: "Noor Haddad", evidence: ["E2"] },
@@ -737,13 +743,6 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
   const QUOTE = { block: "quote", text: "start PVT once the 72-hour soak passes", from: "PVT review, Oct 23", evidence: ["E1"] };
   const reply = (...blocks: readonly unknown[]) => ({ lists: [], not_found: [], blocks });
   const part = (rendered: Rendering) => rendered.result.response.parts[0]!;
-  /** The part's blocks, checked against the contract; a v2 part never carries layout v1's. */
-  const blocksOf = (rendered: Rendering) => {
-    const value = part(rendered).blocks!;
-    expect(validatePersonAnswerBlocksV2(value, part(rendered).statements, rendered.result.response.citations.length)).toEqual(value);
-    expect(part(rendered)).not.toHaveProperty("layout");
-    return value;
-  };
 
   it("gives only a v2 Ask's writer the block catalog beside the source catalog, its layout part and its schema, with a laid-out reply's allowance", async () => {
     const run = alone({ bundle: therm(), replies: [reply(ANSWER)], layout: 2 });
@@ -752,11 +751,6 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     const keys = Object.keys(run.prompt(0));
     expect(keys.slice(keys.indexOf("source_catalog"), keys.indexOf("source_catalog") + 2)).toEqual(["source_catalog", "block_catalog"]);
     expect(run.prompt(0).block_catalog).toEqual(ANSWER_BLOCK_CATALOG);
-    for (const layout of [undefined, 1] as const) {
-      const other = alone({ bundle: therm(), replies: [{ lists: [], not_found: [], sentences: ANSWER.sentences }], ...(layout === undefined ? {} : { layout }) });
-      await other.render("Can PVT start?");
-      expect(other.prompt(0)).not.toHaveProperty("block_catalog");
-    }
     const again = alone({ bundle: therm(), replies: [{ ...reply(ANSWER), since: [] }], layout: 2, earlier: { asked_on: "2026-10-05", statements: [{ text: "PVT waits on the soak.", sources: ["Soak log"] }] }, answers: "Can PVT start?" });
     await again.render("Can PVT start?");
     expect(again.input(0)).toMatchObject({ system_prompt: `${ANSWER_PROMPT}\n\n${ANSWER_BLOCKS_PROMPT}\n\n${ANSWER_SINCE_PROMPT}`, schema: answerBlocksSinceSchema, max_output_tokens: 2_500 });
@@ -850,7 +844,7 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     expect(part(v1).statements).toHaveLength(10);
   });
 
-  it("keeps the same claims without blocks for an Ask that did not ask for v2", async () => {
+  it("gives a layout v1 Ask no blocks, and states its lead as v2 states the answer block", async () => {
     const laid = await alone({ bundle: therm(), replies: [reply(ANSWER, TIMELINE, CARD, STEPS, QUOTE)], layout: 2 }).render("Can PVT start?");
     const v1 = await alone({ bundle: therm(), replies: [{ lists: [], not_found: [], sentences: [{ text: "PVT can start: the soak passed on Oct 23.", evidence: ["E1", "E2"], form: "lead" }] }], layout: 1 }).render("Can PVT start?");
     expect(part(v1)).not.toHaveProperty("blocks");
@@ -859,7 +853,7 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
 
   it("releases a v2 answer too large for its byte bound without blocks: the same claims, a row still its cells' claim", async () => {
     // As layout v1's test: forty records with long labels, and nine rows of six long cells each citing four records.
-    const research = bundle(Array.from({ length: 40 }, (_, index) => ({ item: record(`big-${index + 1}`, `Approved record ${index + 1}.`, { label: "𝔸".repeat(250) }), full: true, touched: index + 1 })), Array.from({ length: 40 }, (_, index) => `E${index + 1}`));
+    const research = records(40, { label: "𝔸".repeat(250) });
     const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
     const big = reply(
       { block: "answer", sentences: [{ text: `${"𝔹".repeat(690)} 0.`, evidence: ["E1", "E2", "E3", "E4"] }] },

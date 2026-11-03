@@ -1,5 +1,5 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonAskTimeContextV1, PersonAnswerResponseV8, PersonAnswerPreviousV1, PersonAskReceiptV3 } from "@echo-brain/organization-api";
+import type { PersonAskAnswerLayoutV2, PersonAskTimeContextV1, PersonAnswerResponseV8, PersonAnswerPreviousV1, PersonAskReceiptV3 } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import type { StructuredGenerationPort } from "./structured-generation-v1.js";
 import type { EvidenceDeskPortV2, EvidenceDeskSourceV2 } from "../shared/evidence-desk-v2.js";
@@ -101,7 +101,7 @@ export interface CreateAgenticAskOptions {
   /** Captured once by the calling client, used only to interpret temporal questions. */
   readonly time_context?: PersonAskTimeContextV1;
   /** The client asked for answer layout v1 (ADR-0045) or v2 (ADR-0051): the answer's part carries its layout or its blocks. */
-  readonly answer_layout?: 1 | 2;
+  readonly answer_layout?: PersonAskAnswerLayoutV2;
   /**
    * Who is asking, as the organization's directory names them, so "I", "me"
    * and "my" resolve to a person. Only the models see it; audits never do.

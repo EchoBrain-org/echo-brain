@@ -12,8 +12,8 @@ import { blocksAnswer, layoutAnswer } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
 import { Folder, KindMark, OnePerson, Ticket } from '../../src/renderer/screens/icons.js';
 import {
-  ACCOUNT, asking as askingWith, byTestId, elements, fileOf, flush, Held, ok, paneTurn, plainHooks, render, rpcFor, startStore, storeLifecycle, text, timelineFiles,
-  type Handler, type Node,
+  ACCOUNT, asking as askingWith, byClass, byTestId, byType, classes, click, elements, fileOf, flush, Held, ok, paneTurn, plainHooks, render, rpcFor, startStore,
+  storeLifecycle, text, timelineFiles, type Handler, type Node,
 } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -52,6 +52,9 @@ async function answered(answer: Answer) {
   return { store, thread };
 }
 
+/** The answer an Ask answered with `answer` shows: the thread's latest. */
+const shownAnswer = async (answer: Answer) => byTestId((await answered(answer)).thread(), 'answer').at(-1)!;
+
 /** A turn kept on the timeline `days` before NOW, `question` answered with `answer`. */
 function kept(id: string, answer: Answer, days = 1, question = QUESTION): TimelineTurn {
   return { id: `00000000-0000-4000-8000-${id.padStart(12, '0')}`, asked_at: new Date(NOW.getTime() - days * 24 * 60 * 60_000).toISOString(), text: question,
@@ -73,10 +76,6 @@ async function reopened(states: Readonly<Record<string, string>>, ...turns: Time
   return { store, thread: () => render(screens.AskView({ state: store.getState() })) };
 }
 
-const byClass = (tree: unknown, name: string) => elements(tree).filter(node => typeof node.props.class === 'string' && node.props.class.split(' ').includes(name));
-const byType = (tree: unknown, type: string) => elements(tree).filter(node => node.type === type);
-const classes = (node: Node | undefined) => String(node?.props.class ?? '').split(' ').filter(Boolean);
-const click = (node: Node | undefined) => (node!.props.onClick as () => void)();
 /** What a part's blocks show, in order: each block's title, then the block, as its element and first class. */
 const drawn = (layout: Node | undefined) => ([layout!.props.children].flat(6) as unknown[])
   .filter((node): node is Node => typeof node === 'object' && node !== null && 'props' in node).map(node => `${String(node.type)}.${classes(node)[0]}`);
@@ -136,7 +135,7 @@ describe('an arranged part reads as its blocks', () => {
     expect(classes(steps)).toEqual(['answer-bullets', 'answer-steps', 'selectable']);
     expect(byType(steps, 'li').map(node => words(node))).toEqual(['Freeze the firmware at 1.4.2.', 'Ship the build to the line.']);
     const unordered = changed(blocks => blocks.map(block => block.kind === 'points' ? { ...block, ordered: false } : block));
-    const shown = byTestId((await answered(unordered)).thread(), 'answer').at(-1)!;
+    const shown = await shownAnswer(unordered);
     expect(byClass(shown, 'answer-steps')).toEqual([]);
     expect(byClass(shown, 'answer-bullets').map(node => [node.type, byType(node, 'li').length])).toEqual([['ul', 2]]);
   });
@@ -152,7 +151,7 @@ describe('an arranged part reads as its blocks', () => {
     // A day of another year says its year, and an event the evidence names nobody for has no one under it.
     const earlier = changed(blocks => blocks.map(block => block.kind !== 'timeline' ? block
       : { ...block, events: [{ date: '2025-12-30', text: 'Wrote the soak plan.' }, block.events[1]!] }));
-    const [other] = byClass(byTestId((await answered(earlier)).thread(), 'answer').at(-1), 'answer-timeline');
+    const [other] = byClass(await shownAnswer(earlier), 'answer-timeline');
     expect(byType(other, 'time').map(text)).toEqual(['Dec 30, 2025', 'Oct 23']);
     expect(byType(other, 'li').map(node => byClass(node, 'event-who').length)).toEqual([0, 1]);
   });
@@ -172,7 +171,7 @@ describe('an arranged part reads as its blocks', () => {
     // Each kind its own icon and word: a person, a project's folder, and a decision's diamond, as Home marks one.
     for (const [entity, word, icon] of [['person', 'Person', OnePerson()], ['project', 'Project', Folder()], ['decision', 'Decision', KindMark({ kind: 'approve' })]] as const) {
       const other = changed(blocks => blocks.map(block => block.kind === 'card' ? { ...block, entity } : block));
-      const [drawnCard] = byClass(byTestId((await answered(other)).thread(), 'answer').at(-1), 'answer-card');
+      const [drawnCard] = byClass(await shownAnswer(other), 'answer-card');
       expect(text(byClass(drawnCard, 'answer-card-kind'))).toBe(word);
       expect(iconOf(drawnCard)).toBe(shape(render(icon)));
     }
@@ -185,7 +184,7 @@ describe('an arranged part reads as its blocks', () => {
     expect(words(byType(quote, 'blockquote')[0]!)).toBe('Start PVT once the soak passes.');
     expect(byType(quote, 'figcaption').map(text)).toEqual(['Noor Haddad, Oct 23 review']);
     const unsourced = changed(blocks => blocks.map(block => block.kind === 'quote' ? { kind: 'quote', statements: block.statements, text: block.text } : block));
-    const [other] = byClass(byTestId((await answered(unsourced)).thread(), 'answer').at(-1), 'answer-quote');
+    const [other] = byClass(await shownAnswer(unsourced), 'answer-quote');
     expect(byType(other, 'figcaption')).toEqual([]);
   });
 
@@ -213,7 +212,7 @@ describe('an arranged part reads as its blocks', () => {
     // Titled, with no caption: the title is the heading above it and names it.
     const titled = changed(blocks => blocks.map(block => block.kind === 'table' ? { kind: 'table', title: 'Open tickets', statements: block.statements, columns: block.columns,
       rows: block.rows } : block));
-    const later = byTestId((await answered(titled)).thread(), 'answer').at(-1)!;
+    const later = await shownAnswer(titled);
     expect(drawn(byClass(later, 'answer-layout')[0]).slice(0, 3)).toEqual(['p.answer-lead', 'h3.answer-heading', 'div.answer-table']);
     expect(byType(later, 'h3')[0]!.props.children).toBe('Open tickets');
     expect(byClass(later, 'answer-table')[0]!.props['aria-label']).toBe('Open tickets');
@@ -222,7 +221,7 @@ describe('an arranged part reads as its blocks', () => {
     const [part] = base.parts;
     const table = part!.blocks![1]!;
     const opening: Answer = { ...base, parts: [{ ...part!, statements: [part!.statements[1]!], blocks: [{ ...table, statements: [0] } as ArrangedBlock] }] };
-    const first = byTestId((await answered(opening)).thread(), 'answer').at(-1)!;
+    const first = await shownAnswer(opening);
     expect(byClass(first, 'answer-lead').map(text)).toEqual(['2 Jira tickets are open']);
   });
 

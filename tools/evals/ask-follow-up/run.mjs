@@ -16,7 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAgenticFollowUpOnceV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { assertExplicitRun, boundedInteger, codeIdentity, json, outputDirectory, readFlags, safeError, sha256, usage } from "../shared/runner.mjs";
+import { assertExplicitRun, boundedInteger, codeIdentity, generationMetadata, json, observedGeneration, outputDirectory, readFlags, safeError, sha256 } from "../shared/runner.mjs";
 import { CASES_FILE, GROUPS, gradeTrial, loadCases, summarizeRules } from "./grade.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -93,12 +93,9 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
     async generate_with_observation(input) {
       const attempt = calls.length + 1;
       try {
-        const observed = typeof structuredOutput.generate_with_observation === "function"
-          ? await structuredOutput.generate_with_observation(input)
-          : { value: await structuredOutput.generate(input), finish_reason: null, usage: null, provider_latency_ms: null };
+        const observed = await observedGeneration(structuredOutput, input);
         // Deliberately only provider metadata: `observed.value` is never copied.
-        calls.push(Object.freeze({ attempt, result: "succeeded", finish_reason: observed.finish_reason ?? null, usage: usage(observed.usage),
-          provider_latency_ms: Number.isSafeInteger(observed.provider_latency_ms) ? observed.provider_latency_ms : null }));
+        calls.push(Object.freeze({ attempt, result: "succeeded", ...generationMetadata(observed) }));
         return observed;
       } catch (error) {
         calls.push(Object.freeze({ attempt, result: "rejected", error: safeError(error) }));

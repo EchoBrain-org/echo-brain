@@ -13,8 +13,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type AskScope, type Expect, type TimelineAnswer,
-  type TimelineTurn,
+  MAX_TIMELINE_PUT_BYTES, MAX_TIMELINE_TURNS, TIMELINE_DAYS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
+  type TimelineAnswer, type TimelineTurn,
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
@@ -160,8 +160,7 @@ const time = (value: unknown): value is string => string(value, 64) && !Number.i
 const STATUSES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found', 'records_only']);
 const OUTCOMES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found']);
 const BLOCKS: ReadonlySet<unknown> = new Set(['lead', 'heading', 'paragraph', 'bullets', 'table']);
-/** The blocks a writer arranges a part in (answer layout v2, ADR-0051), and what a card may show. */
-const ARRANGED: ReadonlySet<unknown> = new Set(['answer', 'text', 'points', 'table', 'timeline', 'card', 'quote']);
+/** What a card may show (answer layout v2, ADR-0051). */
 const ENTITIES: ReadonlySet<unknown> = new Set(PERSON_ANSWER_CARD_ENTITIES_V2);
 
 function scope(value: unknown): value is AskScope {
@@ -206,31 +205,40 @@ function table(block: Json): boolean {
     && Array.isArray(block.rows) && block.rows.every(row => record(row) && Array.isArray(row.cells) && row.cells.every(cell => string(cell)) && indexes(row.citation_indexes));
 }
 
+/** Whether `places` are sentences of a part that has `count`, by their place. */
+const within = (places: unknown, count: number) => indexes(places) && places.every(place => place < count);
+
 /** A part's layout, each block's sentences among the part's own: the page reads them by their place. */
 function layout(value: unknown, count: number): boolean {
-  const within = (places: unknown) => indexes(places) && (places as number[]).every(place => place < count);
   return Array.isArray(value) && value.length <= 64 && value.every(block => record(block) && BLOCKS.has(block.kind) && (block.kind === 'heading' ? string(block.text)
-    : block.kind !== 'table' ? within(block.statements) : within(block.statements) && table(block)));
+    : within(block.statements, count) && (block.kind !== 'table' || table(block))));
 }
 
+/** One item a sentence: as many `items` as the block has sentences (checked first), each what the page reads of it. */
+const each = (block: Json, items: unknown, item: (entry: Json) => boolean) => Array.isArray(items) && items.length === (block.statements as unknown[]).length
+  && items.every(entry => record(entry) && item(entry));
+
 /**
- * A part's blocks (answer layout v2, ADR-0051), each block's sentences among
- * the part's own, its title a text: the page reads an item by its sentence's
- * place, so a timeline has an event and a card a fact for each of its
- * sentences, and a quote has one sentence.
+ * What the page reads of each kind of block a writer arranges a part in
+ * (answer layout v2, ADR-0051), once its sentences and title are checked: a
+ * timeline has an event and a card a fact for each of its sentences, and a
+ * quote has one sentence.
+ */
+const ARRANGED: Readonly<Record<ArrangedBlock['kind'], (block: Json) => boolean>> = {
+  answer: () => true, text: () => true, points: block => typeof block.ordered === 'boolean', table,
+  timeline: block => each(block, block.events, event => string(event.date, 64) && string(event.text) && (event.who === undefined || string(event.who))),
+  card: block => string(block.title) && ENTITIES.has(block.entity) && each(block, block.facts, fact => string(fact.label) && string(fact.value)),
+  quote: block => (block.statements as unknown[]).length === 1 && string(block.text) && (block.from === undefined || string(block.from)),
+};
+
+/**
+ * A part's blocks (answer layout v2, ADR-0051), each of a kind the page
+ * draws, its sentences among the part's own and its title a text: the page
+ * reads an item by its sentence's place.
  */
 function arranged(value: unknown, count: number): boolean {
-  const within = (places: unknown) => indexes(places) && (places as number[]).every(place => place < count);
-  /** One item a sentence, each what the page reads of it. */
-  const each = (block: Json, items: unknown, item: (entry: Json) => boolean) => Array.isArray(items) && items.length === (block.statements as unknown[]).length
-    && items.every(entry => record(entry) && item(entry));
-  return Array.isArray(value) && value.length <= MOST && value.every(block => record(block) && ARRANGED.has(block.kind) && within(block.statements)
-    && (block.title === undefined || string(block.title)) && (block.kind === 'points' ? typeof block.ordered === 'boolean'
-      : block.kind === 'table' ? table(block)
-        : block.kind === 'timeline' ? each(block, block.events, event => string(event.date, 64) && string(event.text) && (event.who === undefined || string(event.who)))
-          : block.kind === 'card' ? string(block.title) && ENTITIES.has(block.entity) && each(block, block.facts, fact => string(fact.label) && string(fact.value))
-            : block.kind === 'quote' ? (block.statements as unknown[]).length === 1 && string(block.text) && (block.from === undefined || string(block.from))
-              : true));
+  return Array.isArray(value) && value.length <= MOST && value.every(block => record(block) && typeof block.kind === 'string' && Object.hasOwn(ARRANGED, block.kind)
+    && within(block.statements, count) && (block.title === undefined || string(block.title)) && ARRANGED[block.kind as ArrangedBlock['kind']](block));
 }
 
 /** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). A part reads one way: a layout or blocks. */
