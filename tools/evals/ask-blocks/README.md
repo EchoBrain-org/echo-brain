@@ -785,6 +785,47 @@ other prompt line stay as PR #394 has them.
   writer time, which should not rise much with no second call; fit in each
   case, the held-out ones included; the blocks used.
 
+### Result of the quick lead on the first try, 2026-11-03 (rules 1 and 2)
+
+Before at `bc5c5c2`, a local run branch whose kernel is PR #394's at `e9ccc09`
+with this record's tooling, and after at `b036967`, each with no uncommitted
+change, through the founder's Claude account (`claude-sonnet-5-5`): 45 gate,
+30 wording and 15 held-out trials a side, no failed call and no repair.
+
+| | Before | After |
+| --- | --- | --- |
+| 1. Valid (43) | 45 | 45 |
+| 2. Grounded (43) | 45 | 45 |
+| 3. Nothing lost (41) | 45 | 45 |
+| 4. Fit (36) | 39 | 39 |
+| 5. Stable (12) | 15 | 15 |
+| Answer block, mean words | 25.8 | 23.2 |
+| Output tokens | 21,338 | 18,794 |
+| Writer time per trial, median | 4.3 s | 4.1 s |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 |
+| Wording lead, mean words | 13.8 | 16.3 |
+| Held-out: valid, grounded, nothing lost (of 15) | 15, 15, 15 | 15, 15, 15 |
+| Held-out: fit (of 15) | 12 | 12 |
+| Held-out: output tokens; writer time, median | 6,828; 4.4 s | 6,317; 4.3 s |
+| Leads that write out three or more items, of 60 | 18 | 15 |
+
+- **Rules 1 and 2 pass.** Rule 3 waits for the founder's ranking of the five
+  questions whose trial-1 answer changed.
+- **The shape mostly did not come.** Leads that write out a list went from 18
+  of the 60 to 15; the rejected check had left none. `review-multi` and
+  `ho-review-next` still write their three decisions in the lead in every
+  trial, and `ship-steps` and `ho-launch-blockers` still list theirs; only
+  one `gate-blockers` trial and two `ho-release-steps` trials gave the lead
+  without the list.
+- **What changed on the first trial:** `gate-blockers`, whose lead no longer
+  lists the three conditions ("the gate opens only when all three conditions
+  are met, and the retrieved records show none of them as done yet");
+  `trap-disagree`, whose lead now carries the possible slip and whose sources
+  became points; and `review-multi`, `workstreams-status` and
+  `ho-launch-blockers`, each of which lost a last paragraph or note.
+- **One call, as before:** output tokens fell 12% on the 15 cases and 7% on
+  the held-out questions, and the writer's time stayed level.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
