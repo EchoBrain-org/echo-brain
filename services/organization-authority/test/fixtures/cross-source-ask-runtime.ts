@@ -94,9 +94,12 @@ export async function allSourceAskFixture(owned: string[], options: { readonly n
     expect(input.user_prompt).not.toContain(seeded.unapproved_text);
     expect(input.user_prompt).not.toContain(PRIVATE_DOCUMENT_TEXT);
     const prompt = JSON.parse(input.user_prompt) as Prompt;
-    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
+    const writer = input.schema.properties as Record<string, unknown>;
+    if (writer.sentences !== undefined || writer.blocks !== undefined) {
       await beforeAnswerReturn?.();
-      return { sentences: (prompt.evidence ?? []).map(item => ({ text: item.text!, evidence: [item.id] })), not_found: [] };
+      const sentences = (prompt.evidence ?? []).map(item => ({ text: item.text!, evidence: [item.id] }));
+      // The person client asks for answer layout v2 (ADR-0051): the same sentences, as one block of text.
+      return writer.blocks !== undefined ? { lists: [], blocks: [{ block: 'text', sentences }], not_found: [] } : { sentences, not_found: [] };
     }
     // A result names its items by id; their details are in seen.
     const returned = new Set(prompt.last_results?.flatMap(result => result.results ?? []));
