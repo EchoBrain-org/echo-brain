@@ -416,6 +416,70 @@ change aims at a card in `person-profile` and titled sections in
 `review-multi` in at least two of three trials; blocks, claims and the blocks
 used per answer; repairs and output tokens.
 
+### Result of round 1, 2026-11-02
+
+Before at `67c6351` and after at `ef42144`, each with no uncommitted change,
+through the founder's Claude account (`claude-sonnet-5-5`): 45 gate trials and
+30 wording trials a side, no failed call and no repair.
+
+| | Before | After, round 1 | Before at `294bf37` |
+| --- | --- | --- | --- |
+| 1. Valid (43) | 45 | 45 | 45 |
+| 2. Grounded (43) | 45 | 45 | 45 |
+| 3. Nothing lost (41) | 45 | 45 | 45 |
+| 4. Fit (36) | 39 | 39 | 38 |
+| 5. Stable (12) | 15 | 15 | 15 |
+| Answer block, mean words | 25.5 | 23.8 | 25.8 |
+| Prose blocks | 27 | 21 | 24 |
+| Output tokens | 19,738 | 18,915 | 18,935 |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 | 29, 30, 30 |
+| Wording lead, mean words | 14.7 | 13.0 | 14.9 (17.7 at `4769016`) |
+
+- Rules 1 and 2 pass after round 1.
+- Blocks that only named a source or added context are gone: `gate-blockers`
+  ended with one in 2 of 3 trials before and in none after, and
+  `workstreams-status` in 2 and none.
+- Both aims are missed. `person-profile` still gets points and `review-multi`
+  one table in all three trials, word for word as before: the writer keeps
+  the decisions in the lead and counts its next-steps table as the second
+  kind's own block.
+- Leads shorten unevenly: `workstreams-status` from 25.0 words to 14.7 and
+  `ship-steps` from 29.0 to 21.7, but `gate-blockers` grows from 28.7 to 34.7,
+  adding "The retrieved records show none of the three as complete."
+
+### Round 2 (pre-registered)
+
+Written after round 1 and before any round-2 run. Round 2 keeps round 1 and
+changes two prompt lines, aimed at the two misses. It was written after
+reading round 1's answers to these same cases, so a fit it gains in
+`person-profile` and `review-multi` says less than one gained blind; the
+founder's ranking is the check. The card line is the first in the prompt that
+names a block for a kind of question; the descriptions still say only what a
+block shows.
+
+| Where | Round 1 | Round 2 |
+| --- | --- | --- |
+| The prompt's line on kinds of things | - When the question asks about two or more different kinds of things, give each kind its own block after the answer, with a title that names it. | - When the question asks about two or more different kinds of things, the lead only sums them up, such as how many of each there are, and each kind gets its own block after it, with a title that names it. |
+| New prompt line, after it | | - A question about who a person is, or what a project or ticket is, gets a card after the lead with its key facts. |
+
+- **The run:** one complete gate run of `built` and one complete wording run
+  at the commit that makes round 2, through the founder's Claude account, as
+  in round 1. Before and round 1 are the runs above.
+- **Rules 1 and 2** apply to round 2 as written.
+- **Rule 3 becomes one three-way ranking**, which replaces the two-way page;
+  nothing has been ranked. The founder ranks each case's three trial-1
+  answers (before, round 1, round 2) from 1, best, to 3, ties allowed, blind,
+  on one private page that draws all three in one style. Labels: the 15 cases
+  sorted by the SHA-256 of `<case id>:ask-blocks-tuning`, and the three
+  versions sorted by the SHA-256 of `ask-blocks-tuning:<version>` (round 2,
+  round 1, before); the case in place k, counting from 0, shows that order
+  rotated by k mod 3 as A, B and C, so each version is A, B and C in five
+  cases each.
+- **The proposal** is round 2 when it passes rules 1 and 2, else round 1. Rule
+  3 holds when the founder ranks the proposal above before in more cases than
+  below. Round 1 against before, and round 2 against round 1, are reported
+  beside it.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
