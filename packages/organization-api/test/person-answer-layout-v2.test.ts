@@ -108,6 +108,7 @@ describe('Answer layout v2 (ADR-0051)', () => {
   it('checks a table as layout v1 does, with two or more rows and an optional title', () => {
     expect(check(changed(4, { title: 'Open actions' }))[4]).toMatchObject({ kind: 'table', title: 'Open actions', caption: '2 actions are open' });
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', '2026-10-14'], citation_indexes: [1, 2] }] }))).toThrow('rows is invalid');
+    expect(() => check(changed(4, { columns: ['Action'] }))).toThrow('columns is invalid');
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', ''], citation_indexes: [0] }, { cells: ['DVT-R2', ''], citation_indexes: [2] }] }))).toThrow('cites what its statements do not');
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', ''], citation_indexes: [1] }, { cells: ['DVT-R2', ''], citation_indexes: [1] }] }))).toThrow('leave a citation of its statements out');
   });
