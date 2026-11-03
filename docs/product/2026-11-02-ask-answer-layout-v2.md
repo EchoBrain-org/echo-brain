@@ -62,16 +62,21 @@ rank of 1.40 against production's 2.33, and best in 10 of 15 cases.
      reads as text; a layout code cannot build is left off, and the answer
      reads as plain sentences.
 5. **Everything else stays.** Code still writes list members as tables, right
-   after the answer; an answer still has at most 10 claims and 40 sources (the
-   evaluation's longest balanced answer had 9); an answer too large for its
-   byte bound is released without layout; the writer's one repair, and the
-   writer's prompt and reply shape for v1 and for no layout, are unchanged
-   byte for byte.
-6. **The desktop draws each block in its own style**, light and dark: the
+   after the answer; an answer too large for its byte bound is released
+   without layout; the writer's one repair, and the writer's prompt and reply
+   shape for v1 and for no layout, are unchanged byte for byte.
+6. **No count of blocks, items, statements or citations.** The founder
+   lifted them for an answer in blocks (ADR-0051, both amended 2026-11-02):
+   what bounds it is its 64 KiB, the writer's output room, the 25 members a
+   list's statement names, and what one statement may hold, 4 KiB and 40
+   citations. Layout v1, no layout, and a v2 answer released without its
+   blocks keep ADR-0041's 10 statements and 40 citations.
+7. **The desktop draws each block in its own style**, light and dark: the
    answer as today's lead, titles as section headings, bullets, numbered
    steps, tables as today, a timeline with dates down the side, a card with
    its kind's icon and label and value rows, a quote with its source under it.
-   Answers saved before this change still draw with layout v1.
+   It numbers, shows and checks every source of an answer in blocks, however
+   many. Answers saved before this change still draw with layout v1.
 
 ## Gates
 
