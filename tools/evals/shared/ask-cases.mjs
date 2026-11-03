@@ -1,7 +1,7 @@
 /**
- * What the Ask writer evaluations (ask-wording and ask-blocks) share about their synthetic cases: the kinds of item a
- * case holds and the words their graders read, each item as the desk releases it, and Ask over a case's desk as the
- * kernel runs it, research scripted and every writer call passed to the evaluation's own writer.
+ * What the Ask writer evaluations (ask-wording and ask-blocks) share about running their synthetic cases: each item as
+ * the desk releases it, and Ask over a case's desk as the kernel runs it, research scripted and every writer call passed
+ * to the evaluation's own writer. What their graders share is in grading.mjs.
  */
 import { createHash } from "node:crypto";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
@@ -9,34 +9,12 @@ import { validatePersonFollowUpEvidenceV1 } from "@echo-brain/organization-api";
 import { createAgenticAskV5 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { FOLLOW_UPS_SOURCE_DESCRIPTOR_V1, followUpDeskFieldsV1 } from "@echo-brain/organization-authority-kernel/shared/follow-up-evidence-v1";
 
-/** The kinds of item a case may hold. */
-export const ITEM_KINDS = new Set(["follow_up", "decision", "ticket"]);
 const RESEARCH_PROMPT = "You are Echo's research agent";
 const WRITER_PROMPT = "You write Echo's final answer";
 /** A connected Jira as the desk advertises it, so the writer is told what it is told for a person with Jira connected. */
 const TICKETS_SOURCE = Object.freeze({
   source_id: "jira", kind: "ticket", selector: "tickets", description: "Jira issues the asker can read through their own connection.", metadata_only_list: true, tool_id: "jira",
 });
-
-// ---- words -------------------------------------------------------------------------------------------------------
-/**
- * A text's words, lower case: runs of letters and digits, joined across an inner hyphen, dot, underscore or apostrophe,
- * so an identifier ("clean-v1-20261026-ask-timeline-aa79d90"), a date and "it's" are one word each, and quotes and
- * punctuation are not words. Any other value is read as its string.
- */
-export function words(text) {
-  return String(text).normalize("NFC").toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+(?:['’._-][\p{L}\p{N}]+)*/gu) ?? [];
-}
-/** Where `phrase` first appears in `text`, as a run of whole words, or -1. */
-export function wordIndex(text, phrase) {
-  const [haystack, needle] = [words(text), words(phrase)];
-  if (needle.length === 0) return -1;
-  return haystack.findIndex((_, at) => needle.every((word, offset) => haystack[at + offset] === word));
-}
-/** Whether `phrase` is a run of whole words in `text`. */
-export const says = (text, phrase) => wordIndex(text, phrase) >= 0;
-/** Whether `value` is a list of strings, none of them blank. */
-export const nonEmptyStrings = (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry.trim() !== "");
 
 // ---- the desk ------------------------------------------------------------------------------------------------------
 const digest = (value) => createHash("sha256").update(value).digest("hex");

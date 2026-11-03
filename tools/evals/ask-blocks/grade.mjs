@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { validatePersonQueryText } from "@echo-brain/organization-api";
-import { ITEM_KINDS, nonEmptyStrings, says, wordIndex, words } from "../shared/ask-cases.mjs";
+import { ITEM_KINDS, nonEmptyStrings, says, wordIndex, words } from "../shared/grading.mjs";
 import { CATALOG_IDS } from "./catalogs.mjs";
 
 export const CASES_FILE = new URL("./cases.json", import.meta.url);
@@ -20,7 +20,7 @@ const RANK_TIE = 0.1;
 const QUOTE_WORDS = 6;
 
 // ---- words and dates ---------------------------------------------------------------------------------------------
-// A text's words are read as the wording evaluation reads them (shared/ask-cases.mjs): an identifier or a date is one word.
+// A text's words are read as the wording evaluation reads them (shared/grading.mjs): an identifier or a date is one word.
 export { says, wordIndex, words };
 
 const MONTHS = Object.freeze({ jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 });

@@ -90,6 +90,7 @@ const codeFiles = () => Object.freeze([
   "tools/evals/ask-wording/cases.json",
   "tools/evals/shared/runner.mjs",
   "tools/evals/shared/ask-cases.mjs",
+  "tools/evals/shared/grading.mjs",
   ...compiledModules(ROOT, "packages/organization-authority-kernel/dist/answer-composition"),
   "packages/organization-api/dist/person-answer-v4.js",
   "packages/organization-api/dist/person-answer-layout-v2.js",

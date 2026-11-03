@@ -21,8 +21,9 @@ const itemsOf = (caseDefinition) => caseDefinition.items.map((item, index) => de
 const blockers = caseOf("gate-blockers");
 const [decision, fan, certificate, soak] = itemsOf(blockers);
 const citations = [soak, fan, certificate, decision].map((item) => citationOfAgenticEvidenceItemV8(item, document.time_zone));
-/** What the v2 writer is given for gate-blockers, as the kernel asks it: the evidence its answers are graded against. */
-const given = evidenceOf((await captureWriterPrompts(blockers, document, generation, BUILT.answer_layout)).user_prompt);
+/** What the v2 writer is given for gate-blockers, as the kernel asks it: the evidence its answers are graded against, captured once. */
+let captured;
+const given = () => (captured ??= captureWriterPrompts(blockers, document, generation, BUILT.answer_layout).then((prompts) => evidenceOf(prompts.user_prompt)));
 /** A statement citing `citation_indexes`: private exactly when one of them is, as a Jira issue the asker reads alone is. */
 const statement = (text, citation_indexes) => ({ text, citation_indexes, private: citation_indexes.some((index) => citations[index].visibility === "only_me") });
 /** gate-blockers answered with every block layout v2 has, as the kernel releases it (ADR-0051). */
@@ -63,7 +64,7 @@ test("maps each of an answer's citations back to its case item, E1 to En in the 
   assert.deepEqual(evidenceIdsOf([citations[1], elsewhere], itemsOf(blockers)), ["E2", "citation 2"]);
 });
 
-test("reads every block of a released answer into the common blocks, each claim citing its evidence ids", () => {
+test("reads every block of a released answer into the common blocks, each claim citing its evidence ids", async () => {
   const response = released();
   const read = readReleased(response, evidenceIdsOf(response.citations, itemsOf(blockers)));
   assert.deepEqual([read.valid, read.problems], [true, []]);
@@ -78,12 +79,12 @@ test("reads every block of a released answer into the common blocks, each claim 
   ]);
   assert.deepEqual(read.view.map((node) => node.t), ["lead", "h", "p", "h", "ol", "h", "table", "h", "timeline", "card", "quote"]);
   // Graded as the other arms are, against the evidence the v2 writer is given.
-  const grade = gradeTrial(blockers, BUILT, read, given);
+  const grade = gradeTrial(blockers, BUILT, read, await given());
   assert.deepEqual([grade.valid, grade.grounded, grade.fit, grade.grounding_problems], [true, true, true, []]);
   assert.deepEqual(grade.shapes, ["grid", "ordered", "profile", "prose", "sections", "sequence", "verbatim"]);
 });
 
-test("is not valid when the answer was released without blocks or fails the V8 contract, and passes nothing", () => {
+test("is not valid when the answer was released without blocks or fails the V8 contract, and passes nothing", async () => {
   const ids = evidenceIdsOf(citations, itemsOf(blockers));
   const { blocks: _blocks, ...plain } = released().parts[0];
   const without = readReleased({ ...released(), parts: [plain] }, ids);
@@ -93,7 +94,7 @@ test("is not valid when the answer was released without blocks or fails the V8 c
   const broken = readReleased(released({ blocks: released().parts[0].blocks.slice(0, 6) }), ids);
   assert.deepEqual([broken.valid, broken.problems], [false, ["organization API: Ask answer blocks leave a statement out"]]);
   assert.equal(readReleased(null, ids).valid, false);
-  const grade = gradeTrial(blockers, BUILT, without, given);
+  const grade = gradeTrial(blockers, BUILT, without, await given());
   assert.deepEqual([grade.valid, grade.grounded, grade.nothing_lost, grade.fit, grade.main_shape], [false, false, false, false, "invalid"]);
 });
 

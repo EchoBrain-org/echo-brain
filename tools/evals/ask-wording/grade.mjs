@@ -4,7 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { validatePersonQueryText } from "@echo-brain/organization-api";
-import { ITEM_KINDS, nonEmptyStrings, says, words } from "../shared/ask-cases.mjs";
+import { ITEM_KINDS, nonEmptyStrings, says, words } from "../shared/grading.mjs";
 
 export const CASES_FILE = new URL("./cases.json", import.meta.url);
 /** Each group's number of cases, as pre-registered. */
@@ -14,7 +14,7 @@ const MAX_SHARED_WORDS = 4;
 /** Each rule passes when at least this share of trials passes it. */
 const THRESHOLD = 0.9;
 
-// A text's words, and whether a phrase is a run of them (shared/ask-cases.mjs): an identifier is one word, quotes and punctuation are none.
+// A text's words, and whether a phrase is a run of them (shared/grading.mjs): an identifier is one word, quotes and punctuation are none.
 export { says, words };
 
 /** The longest run of consecutive words two texts share. */

@@ -100,7 +100,7 @@ export function parseArgs(argv) {
  */
 const codeFiles = () => Object.freeze([
   "tools/evals/ask-blocks/run.mjs", "tools/evals/ask-blocks/catalogs.mjs", "tools/evals/ask-blocks/grade.mjs", "tools/evals/ask-blocks/judge.mjs",
-  "tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", "tools/evals/shared/runner.mjs", "tools/evals/shared/ask-cases.mjs",
+  "tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", "tools/evals/shared/runner.mjs", "tools/evals/shared/ask-cases.mjs", "tools/evals/shared/grading.mjs",
   ...compiledModules(ROOT, "packages/organization-authority-kernel/dist/answer-composition"),
   "packages/organization-api/dist/person-answer-v4.js", "packages/organization-api/dist/person-answer-layout-v2.js",
   "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
