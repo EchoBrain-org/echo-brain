@@ -51,7 +51,7 @@ describe('native Claude extraction commitments', () => {
   });
 
   it('rejects invalid account references and model/provider/endpoint overrides', () => {
-    expect(() => createClaudeAccountDecisionProcessorBundleV1({ account: { ...account, home_directory: 'relative' } })).toThrow('selection is invalid');
+    expect(() => createClaudeAccountDecisionProcessorBundleV1({ account: { ...account, home_directory: 'relative' } })).toThrow('profile is invalid');
     const config = fixedClaudeAccountDecisionProcessorConfigV1('fixed-processor', claudeAccountDecisionProcessorCredentialReferenceV1(account));
     const processor = createClaudeAccountDecisionProcessorV1(config, { account });
     expect(processor.validateConfig(config).ok).toBe(true);
