@@ -152,6 +152,22 @@ test("resumes an earlier report: carries every call that got a reply and makes o
   assert.deepEqual(report.errors, { writer_calls: 0, trials_without_reply: 0, judge_orders_without_ranks: 0 });
 });
 
+test("resumes only a report of the same writer: its route, adapter and answer model, so one model's replies never stand for another's", async () => {
+  const out = mkdtempSync(join(tmpdir(), "ask-blocks-resume-writer-"));
+  const today = { catalogIds: ["today"], judge: false };
+  const first = await run(options(out, today), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
+  for (const [writer, other] of [["openrouter", { ...generation, answer_model: "other-model" }], ["openrouter", { ...generation, generation_adapter_id: "other" }], ["claude-account", generation]]) {
+    const inputs = [];
+    const loaded = { structured_output: answering(inputs), generation: other };
+    await assert.rejects(run(options(out, { ...today, writer, resume: first.reportPath }), { loaded: writer === "openrouter" ? loaded : { personal_research: loaded }, progress: () => undefined }),
+      /--resume: that report's writer was openrouter \/ fixture \/ fixture-model, not /u);
+    assert.equal(inputs.length, 0);
+  }
+  // The same writer resumes, carrying the call that got a reply.
+  const { report } = await run(options(out, { ...today, resume: first.reportPath }), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
+  assert.equal(report.resumed_from.carried_calls, 1);
+});
+
 test("fingerprints its cases, its pre-registration and every module the run loads", async () => {
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-code-"));
   const { report } = await run(options(out, { catalogIds: ["today"], judge: false }), { loaded: { structured_output: answering(), generation }, progress: () => undefined });

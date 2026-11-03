@@ -195,8 +195,9 @@ and checks each again with the current code, and makes only the calls a
 trial still needs: the repair after a carried refused reply, or the whole
 trial when its first call failed. A judged order is carried when it judged the
 same trial-1 answers. The earlier report must be this evaluation's, over the
-same cases, with the same writer prompts; the new report names what it
-carried and counts the calls that still failed.
+same cases, from the same writer (its route, adapter and answer model, so one
+model's replies never stand for another's), with the same writer prompts; the
+new report names what it carried and counts the calls that still failed.
 
 The first full run (2026-11-02, at `2834997`) lost calls when OpenRouter
 refused them with HTTP 402, for lack of credit: trial 1 was complete, trial 2

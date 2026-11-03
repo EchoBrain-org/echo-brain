@@ -252,11 +252,14 @@ const repliedPrefix = (attempts) => {
 };
 
 /**
- * The earlier report a run resumes (README.md, "Resuming"): it must be this evaluation's, over the same cases, with
- * the same writer prompts for every case and catalog it carries; otherwise nothing is carried.
+ * The earlier report a run resumes (README.md, "Resuming"): it must be this evaluation's, over the same cases, from the
+ * same writer (route, adapter and answer model), with the same writer prompts for every case and catalog it carries;
+ * otherwise nothing is carried.
  */
-function resumable(previous, cases, catalogs, prompts, casesFile) {
+function resumable(previous, cases, catalogs, prompts, casesFile, model) {
   if (previous.kind !== "echo-ask-blocks-evaluation-v1" || previous.cases_sha256 !== sha256(readFileSync(casesFile))) throw new Error("--resume must name a report of this evaluation over the same cases");
+  const writer = (value) => [value?.route, value?.adapter_id, value?.answer_model].join(" / ");
+  if (writer(previous.model) !== writer(model)) throw new Error(`--resume: that report's writer was ${writer(previous.model)}, not ${writer(model)}`);
   for (const caseDefinition of cases) {
     for (const catalog of catalogs) {
       const before = previous.prompts?.[caseDefinition.id]?.[catalog.id];
@@ -294,6 +297,7 @@ export async function run(options, dependencies = {}) {
   const built = catalogs.includes(BUILT);
   const identityBefore = codeIdentity(ROOT, codeFiles());
   const { route, loaded } = writerRoute(options, "mem_ask-blocks-eval", createOpenRouterAnswerCompositionGenerationBundleV1, dependencies.loaded);
+  const model = Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model });
   const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
   // Each arm's writer prompts: the four catalogs' from layout v1's, the built writer's as the kernel asks with layout v2.
   const prompts = new Map();
@@ -305,7 +309,7 @@ export async function run(options, dependencies = {}) {
   // Every arm is graded against the evidence its writer was given.
   const evidence = new Map(cases.map((caseDefinition) => [caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, evidenceOf(prompts.get(caseDefinition.id).get(catalog.id).user_prompt)]))]));
   const previous = options.resume === null || options.resume === undefined ? null : JSON.parse(readFileSync(options.resume, "utf8"));
-  if (previous !== null) resumable(previous, cases, catalogs, prompts, set.file);
+  if (previous !== null) resumable(previous, cases, catalogs, prompts, set.file, model);
   const carriedOf = (caseId, catalogId, trial) => repliedPrefix(previous?.trials?.find((entry) => entry.case_id === caseId && entry.catalog === catalogId && entry.trial === trial)?.attempts ?? []);
 
   // Trials interleave catalogs and cases, so a slow route slows every catalog alike.
@@ -376,7 +380,7 @@ export async function run(options, dependencies = {}) {
     case_set: heldOut ? "held-out" : "main",
     cases_sha256: sha256(readFileSync(set.file)),
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
-    model: Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
+    model,
     ...(previous === null ? {} : { resumed_from: Object.freeze({ observed_at: previous.observed_at, report_sha256: sha256(readFileSync(options.resume)), code: previous.code,
       carried_calls: trials.reduce((sum, trial) => sum + trial.attempts.filter((attempt) => attempt.carried).length, 0),
       carried_judge_orders: Object.values(judged).flat().filter((entry) => entry.carried).length }) }),
