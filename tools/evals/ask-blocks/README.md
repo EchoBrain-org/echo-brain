@@ -319,28 +319,39 @@ node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/cr
 
 ## Result of the gate, 2026-11-02
 
-At `b48c2d7` with no uncommitted change, through the founder's Claude account
+At `e9ccc09` with no uncommitted change, through the founder's Claude account
 (`claude-sonnet-5-5`): 45 trials, no failed call and no repair. The gate
-passes: `built` meets rules 1 to 5, fit at its threshold. This is the writer
+passes: `built` meets rules 1 to 5. This is the writer after the founder also
+lifted ADR-0041's 10 statements to a part and 40 citations to an answer for an
+answer in blocks (ADR-0051's second amendment), so its prompt adds that the
+answer prompt's "up to 10" does not apply. The run at `b48c2d7` is the writer
 after the founder removed every count cap from the catalog, the schema and the
-contract (ADR-0051's amendment), so its catalog says "1 or more" and "2 or
-more" where `balanced` said "1 to 4" or "2 to 12".
+contract (ADR-0051's first amendment), so its catalog says "1 or more" and "2
+or more" where `balanced` said "1 to 4" or "2 to 12".
 
 | Arm | 1. Valid (43) | 2. Grounded (43) | 3. Nothing lost (41) | 4. Fit (36) | 5. Stable (12) | Output tokens |
 | --- | --- | --- | --- | --- | --- | --- |
+| `built`, no count of statements or citations (`e9ccc09`) | 45 | 45 | 44 | 39 | 15 | 19,993 |
 | `built`, no count caps (`b48c2d7`) | 45 | 45 | 45 | 36 | 15 | 19,198 |
 | `built`, with the caps (`294bf37`) | 45 | 45 | 45 | 38 | 15 | 18,935 |
 | `balanced`, run of record | 45 | 45 | 45 | 39 | 15 | 18,839 |
 
-- Without the caps `built` misses fit where `balanced` did, in every trial
-  (points instead of a card for `person-profile`, one table instead of sections
-  for `review-multi`), and in every `ticket-profile` trial, whose writer wrote
-  text instead of a card; with the caps it had a card in two of three.
-- No answer grew: the largest held 6 statements, none reached the part's 10,
-  and none said evidence could not fit.
-- Every block the writer gave was released as it gave it, with and without the
-  caps: no quote fell short of being word for word, no timeline event's day
-  was one its items lacked, and no block was left with too few items.
+- At `e9ccc09` `built` misses fit only where `balanced` did, in every trial
+  (points instead of a card for `person-profile`, one table instead of
+  sections for `review-multi`). At `b48c2d7` it also missed in every
+  `ticket-profile` trial, whose writer wrote text instead of a card; it had a
+  card in two of three with the caps, and in all three at `e9ccc09`.
+- The one fact lost at `e9ccc09` is written, but not as the pre-registered
+  match reads it: one `fan-curve-options` trial gave the firmware a table row,
+  "Firmware" with "Needs 2.3", which does not match "firmware 2.3", so the
+  trial counts as losing it.
+- No answer reached ADR-0041's 10 statements to a part, so no case here
+  exercises the lift; its tests do. The largest held 9 statements at
+  `e9ccc09` (`ticket-profile`'s card) and 6 at `b48c2d7`, and no answer said
+  evidence could not fit.
+- Every block the writer gave was released as it gave it, in every run: no
+  quote fell short of being word for word, no timeline event's day was one
+  its items lacked, and no block was left with too few items.
 - The run with the caps, at `294bf37`, resumed a complete run at `4769016`,
   before five review fixes that change only how code reads a reply: the
   kernel asked with the same prompts, so all 45 replies were carried and read
