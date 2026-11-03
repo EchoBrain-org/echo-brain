@@ -1,15 +1,16 @@
 /**
  * What the opt-in real-model evaluation runners share (agentic-ask, ask-follow-up, ask-wording and ask-blocks): the
  * report's hash, JSON, usage, safe-error and code-identity helpers, one generation through any model port and the
- * metadata a report keeps of it, integer bounds, the argv loop, the writer route (the OpenRouter bundle or the personal
- * Claude account), the private report directory, and the explicit --run and private credential-file checks made before
- * any request.
+ * metadata a report keeps of it, a pool that runs trials a few at a time, integer bounds, the argv loop, the writer route
+ * (the OpenRouter bundle or the personal Claude account), the private report directory, and the explicit --run and
+ * private credential-file checks made before any request.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const sha256 = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 export const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -44,6 +45,31 @@ export async function observedGeneration(structuredOutput, input) {
 /** What a report keeps of an observed generation: its finish reason, its usage, and its provider latency when that is a safe integer; each else null. */
 export const generationMetadata = (observed) => ({ finish_reason: observed.finish_reason ?? null, usage: usage(observed.usage),
   provider_latency_ms: Number.isSafeInteger(observed.provider_latency_ms) ? observed.provider_latency_ms : null });
+
+/**
+ * Runs `tasks` (functions returning promises) `limit` at a time, keeping their order in the results. Once a task fails no
+ * other starts, so a run that cannot write its report pays for no more calls: the tasks already running finish, then the
+ * first failure is thrown. Without a limit of at least 1 nothing could run, so that throws at once.
+ */
+export async function pooled(tasks, limit) {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("a pool's limit must be a positive integer");
+  const results = new Array(tasks.length);
+  let next = 0;
+  let failure = null;
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    while (failure === null && next < tasks.length) {
+      const at = next;
+      next += 1;
+      try {
+        results[at] = await tasks[at]();
+      } catch (error) {
+        failure ??= { error };
+      }
+    }
+  }));
+  if (failure !== null) throw failure.error;
+  return results;
+}
 
 /**
  * What a failure may keep: its class and status, never its message, payload or credential. With `withUsage`, also the
@@ -128,9 +154,30 @@ export function outputDirectory(root, value) {
   return directory;
 }
 
-/** Every compiled module under `directory` (relative to `root`), in a stable order: a report fingerprints a build whatever its files are named. */
-export function compiledModules(root, directory) {
-  return Object.freeze(readdirSync(join(root, directory), { recursive: true }).filter((file) => file.endsWith(".js")).map((file) => `${directory}/${file.split(sep).join("/")}`).sort());
+/** A static import or re-export, or a dynamic import of a literal specifier. */
+const IMPORTS = /(?:^|[\s;])(?:import|export)(?:\s+|(?=[{*"']))(?:[\w$*{},\s]+?from\s*)?["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gu;
+
+/**
+ * Every repository module the modules `entries` (relative to `root`) load, themselves included, relative to `root` and in
+ * a stable order, found by following their imports: relative ones and the workspaces' (`@echo-brain/`), never Node's own
+ * or an installed package's. A report fingerprints the code that produced it, wherever it lives and whatever its files
+ * are named.
+ */
+export function importedModules(root, entries) {
+  const repository = realpathSync(root);
+  const files = new Set();
+  const visit = (url) => {
+    const file = realpathSync(fileURLToPath(url));
+    if (files.has(file)) return;
+    files.add(file);
+    for (const match of readFileSync(file, "utf8").matchAll(IMPORTS)) {
+      const specifier = match[1] ?? match[2];
+      if (specifier.startsWith(".")) visit(new URL(specifier, pathToFileURL(file)));
+      else if (specifier.startsWith("@echo-brain/")) visit(import.meta.resolve(specifier));
+    }
+  };
+  for (const entry of entries) visit(pathToFileURL(join(repository, entry)));
+  return Object.freeze([...files].map((file) => relative(repository, file).split(sep).join("/")).sort());
 }
 
 /** The evaluated code at `root`: its commit, the digest of its uncommitted tracked changes, and each named file's digest. */

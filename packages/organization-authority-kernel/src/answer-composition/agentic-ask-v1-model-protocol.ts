@@ -1259,6 +1259,18 @@ export function repairInstruction(reason: string): string {
 }
 
 /**
+ * A repair's user content: the rejected call's, then the rejected reply, when there was one, as one line of at most 4,000
+ * characters, and the repair instruction. Both go last, so the repair repeats the rejected call's prompt as its prefix.
+ */
+export function repairInput(user: unknown, rejected: unknown, reason: string): Record<string, unknown> {
+  return {
+    ...object(user),
+    ...(rejected === undefined ? {} : { rejected_response: cleanLine(JSON.stringify(rejected), 4_000) }),
+    validation_error: repairInstruction(reason),
+  };
+}
+
+/**
  * The one shared task rule (research trigger contract v1): every task-form
  * goal appends it to the step prompt. What a trigger asks lives in its task
  * text, which is data in the user prompt, so adding a trigger never changes

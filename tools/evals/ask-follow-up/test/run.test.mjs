@@ -114,3 +114,25 @@ function parseOut(path) {
   const credential = join(dirname(path), "credential");
   return parseArgs(["--run", "--credential-file", credential, "--out", path]).out;
 }
+
+test("keeps each call's metadata as the other runners do, whichever way the port answers", async () => {
+  const founder = document.cases.find((entry) => entry.id === "one-dvt-gate-ticket");
+  const answers = oracle();
+  const reply = async (input) => (await answers.generate_with_observation(input)).value;
+  // A port that returns the bare value keeps no metadata.
+  const bare = await runTrial(founder, 1, { generate: reply }, generation, document, { timeoutMs: 15_000 });
+  assert.deepEqual([bare.passed, bare.model_calls], [true, [{ attempt: 1, result: "succeeded", finish_reason: null, usage: null, provider_latency_ms: null }]]);
+  // The personal Claude account port admits each request of its session, and their usage is added up.
+  const admitting = {
+    async generate() { throw new Error("Native structured generation requires per-request admission"); },
+    async generate_with_admission(input, admit) {
+      for (const operation of ["count_tokens", "messages"]) {
+        await admit({ model: input.model, operation, signal: AbortSignal.timeout(5_000) },
+          async () => ({ value: null, usage: { input_tokens: 10, output_tokens: operation === "messages" ? 7 : 0 }, ...(operation === "messages" ? { finish_reason: "stop" } : {}) }));
+      }
+      return reply(input);
+    },
+  };
+  const account = await runTrial(founder, 2, admitting, generation, document, { timeoutMs: 15_000 });
+  assert.deepEqual([account.passed, account.model_calls], [true, [{ attempt: 1, result: "succeeded", finish_reason: "stop", usage: { input_tokens: 20, output_tokens: 7, total_tokens: 27 }, provider_latency_ms: null }]]);
+});

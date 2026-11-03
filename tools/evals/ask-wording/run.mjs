@@ -16,7 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { caseAsk, caseItems, scriptedModel } from "../shared/ask-cases.mjs";
-import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, compiledModules, generationMetadata, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
+import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, pooled, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { CASES_FILE, GROUPS, gradeTrial, loadCases, summarizeRules } from "./grade.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +41,7 @@ export function help() {
     "Options:",
     `  --cases id,id     Select cases (default: all ${ALL_CASES}); only the whole set decides whether the wording ships.`,
     `  --trials N        Trials per case, 1 through ${MAX_TRIALS} (default: ${MAX_TRIALS}, as pre-registered).`,
+    "  --concurrency N   Trials at once, 1 through 6 (default: 4); the report keeps them in case order.",
     "  --timeout-ms N    Per-trial timeout, 15000 through 85000 (default: 60000).",
     "  --writer ROUTE    openrouter (default) or claude-account: the product's personal Claude account writer, the",
     "                    same model through the Claude Agent SDK and your own signed-in claude binary.",
@@ -59,18 +60,20 @@ export function help() {
 }
 
 export function parseArgs(argv) {
-  const options = { run: false, credentialFile: null, out: null, caseIds: null, trials: MAX_TRIALS, timeoutMs: 60_000, writer: "openrouter", claudeExecutable: null };
+  const options = { run: false, credentialFile: null, out: null, caseIds: null, trials: MAX_TRIALS, concurrency: 4, timeoutMs: 60_000, writer: "openrouter", claudeExecutable: null };
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
     "--out": (value) => { options.out = value; },
     "--cases": (value) => { options.caseIds = value.split(",").map((part) => part.trim()).filter(Boolean); },
     "--trials": (value) => { options.trials = Number(value); },
+    "--concurrency": (value) => { options.concurrency = Number(value); },
     "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
     ...writerFlags(options),
   })) return { help: true };
   assertWriterRoute(options);
   assertExplicitRun(options);
   options.trials = boundedInteger(options.trials, "--trials", 1, MAX_TRIALS);
+  options.concurrency = boundedInteger(options.concurrency, "--concurrency", 1, 6);
   options.timeoutMs = boundedInteger(options.timeoutMs, "--timeout-ms", MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
   const known = new Set(loadCases().cases.map((entry) => entry.id));
   if (options.caseIds !== null && (options.caseIds.length === 0 || new Set(options.caseIds).size < options.caseIds.length || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases, each once");
@@ -80,24 +83,11 @@ export function parseArgs(argv) {
 }
 
 /**
- * The files a report fingerprints, beside the commit and its uncommitted changes: the eval's own, every compiled module of
- * the kernel's answer composition (the writer, its layouts and its checks, whatever their files are named), the answer
- * contract, and the writer routes.
+ * The files a report fingerprints, beside the commit and its uncommitted changes: the cases and every module the eval
+ * loads (its own, the kernel's writer, checks and shared modules, the answer contract and the writer routes), found by
+ * following its imports.
  */
-const codeFiles = () => Object.freeze([
-  "tools/evals/ask-wording/run.mjs",
-  "tools/evals/ask-wording/grade.mjs",
-  "tools/evals/ask-wording/cases.json",
-  "tools/evals/shared/runner.mjs",
-  "tools/evals/shared/ask-cases.mjs",
-  "tools/evals/shared/grading.mjs",
-  ...compiledModules(ROOT, "packages/organization-authority-kernel/dist/answer-composition"),
-  "packages/organization-api/dist/person-answer-v4.js",
-  "packages/organization-api/dist/person-answer-layout-v2.js",
-  "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
-  "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
-  ...compiledModules(ROOT, "providers/openrouter/dist/claude-research"),
-]);
+const codeFiles = () => Object.freeze(["tools/evals/ask-wording/cases.json", ...importedModules(ROOT, ["tools/evals/ask-wording/run.mjs"])]);
 
 /**
  * The answer layout the writer was given, from its input: 2 when it carries the block catalog (ADR-0051), 1 when its
@@ -167,20 +157,21 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
   });
 }
 
-/** Runs every selected case `trials` times and writes the report. `dependencies` replaces the production bundle in tests. */
+/**
+ * Runs every selected case `trials` times, `options.concurrency` trials at once, and writes the report: its results in
+ * case order, each case's trials in order. `dependencies` replaces the production bundle in tests.
+ */
 export async function run(options, dependencies = {}) {
   const document = loadCases();
   const selected = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
   const identityBefore = codeIdentity(ROOT, codeFiles());
   const { route, loaded } = writerRoute(options, "mem_ask-wording-eval", createOpenRouterAnswerCompositionGenerationBundleV1, dependencies.loaded);
-  const results = [];
-  for (const caseDefinition of selected) {
-    for (let trial = 1; trial <= options.trials; trial += 1) {
-      const result = await runTrial(caseDefinition, trial, loaded.structured_output, loaded.generation, document, options);
-      results.push(result);
-      (dependencies.progress ?? ((line) => process.stderr.write(line)))(`${JSON.stringify({ kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial, outcome: result.outcome, writer_layout: result.writer_layout, rules: result.grade.rules })}\n`);
-    }
-  }
+  const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
+  const results = await pooled(selected.flatMap((caseDefinition) => Array.from({ length: options.trials }, (_, at) => async () => {
+    const result = await runTrial(caseDefinition, at + 1, loaded.structured_output, loaded.generation, document, options);
+    progress(`${JSON.stringify({ kind: "echo-ask-wording-evaluation-progress-v1", case_id: result.case_id, trial: result.trial, outcome: result.outcome, writer_layout: result.writer_layout, rules: result.grade.rules })}\n`);
+    return result;
+  })), options.concurrency);
   const identityAfter = codeIdentity(ROOT, codeFiles());
   // Only the whole pre-registered set, each case three times on the v2 writer, decides whether the wording ships.
   const complete = decides(results);
@@ -195,7 +186,7 @@ export async function run(options, dependencies = {}) {
     writer_prompt_sha256: Object.freeze([...new Set(results.flatMap((result) => result.writer_prompt_sha256))]),
     answer_layout: ANSWER_LAYOUT,
     model: Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
-    limits: Object.freeze({ cases: selected.length, trials: options.trials, timeout_ms: options.timeoutMs, max_total_model_calls: MAX_TOTAL_MODEL_CALLS }),
+    limits: Object.freeze({ cases: selected.length, trials: options.trials, timeout_ms: options.timeoutMs, concurrency: options.concurrency, max_total_model_calls: MAX_TOTAL_MODEL_CALLS }),
     // A smaller diagnostic run keeps its rule scores, and never ships the wording.
     ...summary, wording_ships: complete && summary.wording_ships,
     groups: Object.freeze(Object.fromEntries(Object.keys(GROUPS).map((group) => {

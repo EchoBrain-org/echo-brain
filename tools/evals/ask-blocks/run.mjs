@@ -16,9 +16,9 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { personAnswerCitationKeyV8 } from "@echo-brain/organization-api";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
-import { repairInstruction } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
+import { repairInput } from "../../../packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js";
 import { caseAsk, caseItems, deskItem as releasedItem, scriptedModel } from "../shared/ask-cases.mjs";
-import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, compiledModules, generationMetadata, json, observedGeneration, outputDirectory, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
+import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, pooled, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { ARMS, ARM_IDS, BUILT, CATALOGS, CATALOG_IDS, readReleased, readReply, writerPrompts } from "./catalogs.mjs";
 import { CASES_FILE, CASE_COUNT, TRIALS, caseOrder, decide, decideGate, evidenceOf, gradeTrial, loadCases, summarizeCatalogs, summarizeRanks } from "./grade.mjs";
 import { JUDGE_SYSTEM_PROMPT, judgeInput, judgeSchema, readJudge } from "./judge.mjs";
@@ -55,8 +55,8 @@ export function help() {
     "",
     "Only a whole pre-registered set decides anything: every case and catalog, three trials, the judge on; or the gate on",
     `the built writer, --catalogs ${BUILT.id} --judge off with every case and three trials. A smaller run is a diagnostic.`,
-    "--out must be outside the repository and private; the report and the page's data are written there with mode 0600,",
-    "with full traces of every synthetic prompt and reply, never a credential.",
+    "--out must be outside the repository and private; the report is written there with mode 0600, with full traces of",
+    "every synthetic prompt and reply, never a credential.",
   ].join("\n");
 }
 
@@ -94,19 +94,11 @@ export function parseArgs(argv) {
 }
 
 /**
- * The files a report fingerprints, beside the commit and its uncommitted changes: the evaluation's own, every compiled
- * module of the kernel's answer composition (the writer, its layouts and its checks, whatever their files are named),
- * the answer contract the built arm reads, and the writer routes.
+ * The files a report fingerprints, beside the commit and its uncommitted changes: the cases, the pre-registration and
+ * every module the evaluation loads (its own, the kernel's writer, checks and shared modules, the answer contract and the
+ * writer routes), found by following its imports.
  */
-const codeFiles = () => Object.freeze([
-  "tools/evals/ask-blocks/run.mjs", "tools/evals/ask-blocks/catalogs.mjs", "tools/evals/ask-blocks/grade.mjs", "tools/evals/ask-blocks/judge.mjs",
-  "tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", "tools/evals/shared/runner.mjs", "tools/evals/shared/ask-cases.mjs", "tools/evals/shared/grading.mjs",
-  ...compiledModules(ROOT, "packages/organization-authority-kernel/dist/answer-composition"),
-  "packages/organization-api/dist/person-answer-v4.js", "packages/organization-api/dist/person-answer-layout-v2.js",
-  "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
-  "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
-  ...compiledModules(ROOT, "providers/openrouter/dist/claude-research"),
-]);
+const codeFiles = () => Object.freeze(["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", ...importedModules(ROOT, ["tools/evals/ask-blocks/run.mjs"])]);
 
 /** One case item as the desk releases it, with this evaluation's ids and fixtures (shared/ask-cases.mjs). */
 export const deskItem = (caseId, index, item) => releasedItem("blocks", caseId, index, item);
@@ -150,10 +142,8 @@ async function call(structuredOutput, input) {
   }
 }
 
-/** The repair input production sends (agentic-model-gate-v1): the rejected reply and the reason, beside the original input. */
-function repairPrompt(userPrompt, rejected, reason) {
-  return JSON.stringify({ ...JSON.parse(userPrompt), rejected_response: JSON.stringify(rejected).slice(0, 4_000), validation_error: repairInstruction(reason) });
-}
+/** The repair prompt production's gate sends (repairInput): the original input, then the rejected reply and the reason. */
+const repairPrompt = (userPrompt, rejected, reason) => JSON.stringify(repairInput(JSON.parse(userPrompt), rejected, reason));
 
 /**
  * One trial: the catalog's writer on one case, its reply read and checked, one repair for a refused reply or one retry
@@ -282,20 +272,6 @@ async function judgeCase(userPrompt, order, structuredOutput, generation, option
     if (result.error === undefined) prompt = repairPrompt(userPrompt, result.value, judged.problem);
   }
   return { order, user_prompt: userPrompt, attempts, ranks: null };
-}
-
-/** Runs `tasks` (functions returning promises) `limit` at a time, keeping their order in the results. */
-async function pooled(tasks, limit) {
-  const results = new Array(tasks.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    while (next < tasks.length) {
-      const at = next;
-      next += 1;
-      results[at] = await tasks[at]();
-    }
-  }));
-  return results;
 }
 
 /** Runs the selected cases and catalogs, then the judge, and writes the report. */
