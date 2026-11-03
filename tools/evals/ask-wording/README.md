@@ -214,7 +214,9 @@ The before prompt's earlier runs led with 14.9 and 17.7 words. Round 2's
 one-fact leads say only what was asked ("Dev Okafor owns it.", "Lena Brandt
 approved it."); the longest stay where the lead opens with the record that
 decided ("The release review decided the build may go to staging ...", 23 to
-25 words), as before.
+25 words), as before. The founder's blind ranking preferred neither tuned
+writer to the one before, so the tuning is not proposed and PR #394 keeps its
+prompt (block evaluation README, "Result of rule 3 and the decision").
 
 ## Limits
 

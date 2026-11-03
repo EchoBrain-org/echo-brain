@@ -514,6 +514,39 @@ account: 45 gate trials and 30 wording trials, no failed call and no repair.
 - The ranking page is made from these three runs' trial-1 answers, with the
   versions named `before`, `round-1` and `round-2` in the label hash.
 
+### Result of rule 3 and the decision, 2026-11-02
+
+The founder ranked all 15 cases blind on the page the same day, with nothing
+revealed before every case was ranked: every rank was saved before the
+reveal, and the labels the page saved match each case's fixed order.
+
+| | Before | Round 1 | Round 2 |
+| --- | --- | --- | --- |
+| Founder's mean rank (1 is best) | 1.60 | 1.67 | 1.80 |
+| Ranked best, a tie counting for each | 8 cases | 7 cases | 6 cases |
+
+- **Rule 3 fails:** round 2 is above before in 4 cases, below in 6 and level
+  in 5. Round 1 against before: above in 5, below in 6, level in 4. Round 2
+  against round 1: above in 4, below in 6, level in 5.
+- **Decision:** the tuning is not proposed. PR #394 keeps its writer prompt.
+- Round 2 lost to before in `soak-owner`, `gate-blockers`, `week-events`,
+  `dvt-date-moves`, `person-profile` and `trap-undated`; it won in
+  `notes-due`, `ticket-profile`, `workstreams-status` and `trap-disagree`; the
+  other five were level.
+- Where before won, its lead carried the substance: the three gate conditions
+  by name (`gate-blockers`), what the four records were (`week-events`), the
+  soak follow-up's status and due date (`soak-owner`). Round 2's leads summed
+  them up instead ("the gate opens only when all three conditions are met",
+  "four approved meeting records"). Where round 2 won, its lead was short and
+  complete ("The release notes are due Nov 4, 2026.") or carried the
+  disagreement ("set the PVT build for Nov 16, but it may slip to Nov 20").
+  A last block that only named the source, or added a caveat, did not keep
+  before from first place in `gate-blockers` and `week-events`.
+- So the reader does not want a shorter lead as such but the answer's
+  substance in it: "say only what the question asks" and "the lead only sums
+  them up" cut substance along with filler. The three versions' mean ranks lie
+  within 0.2 of each other, from one reader.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model
