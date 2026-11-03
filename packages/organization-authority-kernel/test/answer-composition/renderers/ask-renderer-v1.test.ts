@@ -827,6 +827,14 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
     expect(blocksOf(rendered).map(block => block.kind)).toEqual(["answer", "text"]);
   });
 
+  it("caps no block's items, so only the part's ten statements cut a long answer, and the part says what did not fit (W6)", async () => {
+    const steps = { block: "points", title: "Before PVT", ordered: true, items: Array.from({ length: 12 }, (_, at) => ({ text: `Step ${at + 1} of the plan.`, evidence: ["E4"] })) };
+    const rendered = await alone({ bundle: therm(), replies: [reply(ANSWER, steps)], layout: 2 }).render("What happens before PVT?");
+    expect(part(rendered).statements.map(value => value.text)).toEqual(["PVT can start: the soak passed on Oct 23.", ...Array.from({ length: 9 }, (_, at) => `Step ${at + 1} of the plan.`)]);
+    expect(part(rendered)).toMatchObject({ status: "partial", gap: "Some evidence could not fit in this response." });
+    expect(blocksOf(rendered).map(block => [block.kind, block.statements.length])).toEqual([["answer", 1], ["points", 9]]);
+  });
+
   it("gives a layout v1 Ask no blocks, and states its lead as v2 states the answer block", async () => {
     const laid = await alone({ bundle: therm(), replies: [reply(ANSWER, TIMELINE, CARD, STEPS, QUOTE)], layout: 2 }).render("Can PVT start?");
     const v1 = await alone({ bundle: therm(), replies: [{ lists: [], not_found: [], sentences: [{ text: "PVT can start: the soak passed on Oct 23.", evidence: ["E1", "E2"], form: "lead" }] }], layout: 1 }).render("Can PVT start?");

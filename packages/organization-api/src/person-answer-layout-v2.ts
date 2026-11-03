@@ -27,9 +27,7 @@ export function validatePersonAskAnswerLayoutHeaderV2(value: unknown): PersonAsk
   return fail('Ask answer layout header is invalid');
 }
 
-/** At least one statement a block, and a part has at most ten. */
-const PERSON_ANSWER_BLOCKS_MAX_V2 = 10;
-/** The answer is the conclusion: one or two statements. */
+/** The answer is the conclusion: one or two statements. How many blocks, and items in a block, has no cap of its own. */
 export const PERSON_ANSWER_BLOCKS_ANSWER_MAX_STATEMENTS_V2 = 2;
 /** A points, table, timeline or card block shows at least two items; fewer read as text. */
 export const PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2 = 2;
@@ -79,6 +77,9 @@ export type PersonAnswerBlockV2 =
   }
   | { readonly kind: 'quote'; readonly statements: readonly number[]; readonly text: string; readonly from?: string };
 
+/** A v2 table shows two or more rows, and as many rows and columns as its statements hold. */
+const ARRANGED_TABLE_COUNTS = Object.freeze({ minimumRows: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, maximumColumns: Number.POSITIVE_INFINITY, maximumRows: Number.POSITIVE_INFINITY });
+
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /** A real calendar day, written YYYY-MM-DD. */
@@ -100,7 +101,7 @@ export function validatePersonAnswerBlocksV2(
   statements: readonly { readonly citation_indexes: readonly number[] }[],
   citationCount: number,
 ): readonly PersonAnswerBlockV2[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > PERSON_ANSWER_BLOCKS_MAX_V2) fail('Ask answer blocks are invalid');
+  if (!Array.isArray(value) || value.length === 0) fail('Ask answer blocks are invalid');
   let next = 0;
   const result = (value as unknown[]).map((raw, place): PersonAnswerBlockV2 => {
     const input = object(raw, 'Ask answer block');
@@ -134,7 +135,7 @@ export function validatePersonAnswerBlocksV2(
         keys(['columns', 'rows'], ['title', 'caption']);
         const titled = title();
         const own = shown(1, all);
-        return Object.freeze({ kind: 'table', ...titled, statements: own, ...layoutTable(input, own, statements, citationCount, label, PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2) });
+        return Object.freeze({ kind: 'table', ...titled, statements: own, ...layoutTable(input, own, statements, citationCount, label, ARRANGED_TABLE_COUNTS) });
       }
       case 'timeline': {
         keys(['events'], ['title']);

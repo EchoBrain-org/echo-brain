@@ -71,15 +71,15 @@ describe('Answer layout v2 (ADR-0051)', () => {
     expect(() => validatePersonAnswerResponseV8({ ...response({ status: 'not_found', statements: [], gap: 'None.' }), outcome: 'not_found', citations: [] })).toThrow('Ask response part blocks are invalid');
   });
 
-  it('refuses none or more than ten blocks, and blocks that leave out, repeat, reorder or go past the part\'s statements', () => {
+  it('refuses no blocks, and blocks that leave out, repeat, reorder or go past the part\'s statements, and caps no count of blocks', () => {
     expect(() => check(blocks.slice(0, 5))).toThrow('leave a statement out');
     expect(() => check([{ kind: 'text', statements: [0, 0] }], two)).toThrow('duplicates');
     expect(() => check([{ kind: 'text', statements: [1] }, { kind: 'text', statements: [0] }], two)).toThrow('out of order');
     expect(() => check([{ kind: 'text', statements: [0, 1, 2] }], two)).toThrow();
     expect(() => check([], two)).toThrow();
     const eleven = Array.from({ length: 11 }, (_, at) => statement(`Fact ${at + 1}.`, [at % 3]));
-    expect(check(eleven.slice(0, 10).map((_, at) => ({ kind: 'text', statements: [at] })), eleven.slice(0, 10))).toHaveLength(10);
-    expect(() => check(eleven.map((_, at) => ({ kind: 'text', statements: [at] })), eleven)).toThrow('blocks are invalid');
+    // How many blocks a part has is bounded only by its statements (ADR-0051): the part's own bound is the V8 answer's.
+    expect(check(eleven.map((_, at) => ({ kind: 'text', statements: [at] })), eleven)).toHaveLength(11);
   });
 
   it('puts the answer first, with one or two statements, and only once', () => {
@@ -105,8 +105,11 @@ describe('Answer layout v2 (ADR-0051)', () => {
     expect(() => check([{ kind: 'points', ordered: false, statements: [0] }, { kind: 'text', statements: [1] }], two)).toThrow();
   });
 
-  it('checks a table as layout v1 does, with two or more rows and an optional title', () => {
+  it('checks a table as layout v1 does, with two or more rows, an optional title, and no cap on its columns', () => {
     expect(check(changed(4, { title: 'Open actions' }))[4]).toMatchObject({ kind: 'table', title: 'Open actions', caption: '2 actions are open' });
+    const wide = Array.from({ length: 8 }, (_, at) => `Column ${at + 1}`);
+    const cells = (first: string) => wide.map((_, at) => at === 0 ? first : `${at}`);
+    expect(check(changed(4, { columns: wide, rows: [{ cells: cells('TRACE-01'), citation_indexes: [1] }, { cells: cells('DVT-R2'), citation_indexes: [2] }] }))[4]).toMatchObject({ kind: 'table', columns: wide });
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', '2026-10-14'], citation_indexes: [1, 2] }] }))).toThrow('rows is invalid');
     expect(() => check(changed(4, { columns: ['Action'] }))).toThrow('columns is invalid');
     expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', ''], citation_indexes: [0] }, { cells: ['DVT-R2', ''], citation_indexes: [2] }] }))).toThrow('cites what its statements do not');
