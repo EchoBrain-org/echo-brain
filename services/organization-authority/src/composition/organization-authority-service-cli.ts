@@ -14,7 +14,7 @@ import { createLangSmithRuntimeV1 } from './observability/langsmith-runtime-v1.j
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { readStagingConnectorRehearsalSelection } from './staging-connector-rehearsal-selection.js';
 import { CLEAN_V1_RELEASE_ID } from './clean-v1-release-id.js';
-import { readPersonalClaudeSelectionV1 } from './personal-claude-selection-v1.js';
+import { readPersonalClaudeAllModelsSelectionV1, readPersonalClaudeSelectionV1 } from './personal-claude-selection-v1.js';
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
@@ -251,6 +251,7 @@ export async function runOrganizationAuthorityServiceCli(
     const personalHome = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_HOME;
     const personalExecutable = process.env.ECHO_STAGING_CLAUDE_ACCOUNT_EXECUTABLE;
     const hostedClaude = readPersonalClaudeSelectionV1(process.env.ECHO_STAGING_CLAUDE_ACCOUNT_FILE, manifest.authority_url);
+    const allModelsClaude = readPersonalClaudeAllModelsSelectionV1(process.env.ECHO_STAGING_CLAUDE_ACCOUNT_FILE, manifest.authority_url);
     const explicitPersonalClaude = [personalMember, personalHome, personalExecutable].every(value => value === undefined) ? undefined : {
       membership_id: personalMember ?? '', home_directory: personalHome ?? '', executable_path: personalExecutable ?? '',
     };
@@ -259,6 +260,11 @@ export async function runOrganizationAuthorityServiceCli(
     if (personalClaude !== undefined) {
       if (manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) throw new Error('Personal Claude research is available only on the staging Authority');
       assertPersonalClaudeResearchV1(personalClaude);
+    }
+    if (allModelsClaude !== undefined && personalClaude !== undefined &&
+        (allModelsClaude.payer_membership_id !== personalClaude.membership_id ||
+         allModelsClaude.home_directory !== personalClaude.home_directory || allModelsClaude.executable_path !== personalClaude.executable_path)) {
+      throw new Error('Personal Claude has conflicting payer selections');
     }
     const stagingResearchEval = process.env.ECHO_STAGING_RESEARCH_EVAL_V1;
     if (stagingResearchEval !== undefined && !['', 'false', 'true'].includes(stagingResearchEval)) {
@@ -308,6 +314,7 @@ export async function runOrganizationAuthorityServiceCli(
       ...(stagingResearchEval === 'true' ? { staging_research_eval_v1: true as const } : {}),
       ...(stagingClaudeResearch === 'true' ? { staging_claude_research_v1: true as const } : {}),
       ...(personalClaude === undefined ? {} : { personal_claude_research: personalClaude }),
+      ...(allModelsClaude === undefined ? {} : { personal_claude_all_models: allModelsClaude }),
       nango,
       ...(jiraCloudId === undefined ? {} : { jira_person_live: {
         enabled: true as const,

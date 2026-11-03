@@ -197,6 +197,40 @@ describe('durable extraction attempt budget', () => {
     expect(() => store.listLatest(1001)).toThrow();
   });
 
+  it('reads every latest key for one admission beyond the status limit, with deterministic order and retry state', () => {
+    const database = new Database(':memory:');
+    const store = new SqliteExtractionAttemptStoreV1(database, binding);
+    stores.push(store);
+    const keys = Array.from({ length: 1002 }, (_, index) => ({ ...key,
+      review_lineage_id: `rli_${Math.floor(index / 2).toString(16).padStart(64, '0')}`,
+      review_input_sha256: `sha256:${(index % 2).toString(16).padStart(64, '0')}`,
+    }));
+    const claims = [...keys].reverse().map(input => claim(store, input));
+    claim(store, { ...keys[0]!, admission_sha256: `sha256:${'d'.repeat(64)}` });
+    const firstKey = keys[0]!;
+    const firstClaim = claims.at(-1)!;
+    store.complete({ key: firstKey, ...firstClaim, outcome: 'failed', failure_code: 'invalid_output' });
+    expect(store.authorizeRetry({ key: firstKey, expected_attempt: 1, expected_outcome: 'failed' })).toBe('authorized');
+    const retry = claim(store, firstKey);
+    store.complete({ key: firstKey, ...retry, outcome: 'succeeded' });
+    const secondKey = keys[1]!;
+    store.complete({ key: secondKey, ...claims.at(-2)!, outcome: 'failed', failure_code: 'unknown_outcome' });
+    expect(store.authorizeRetry({ key: secondKey, expected_attempt: 1, expected_outcome: 'failed' })).toBe('authorized');
+
+    expect(store.listLatest(1000)).toHaveLength(1000);
+    const rows = store.listForAdmission(key.admission_sha256);
+    expect(rows).toHaveLength(1002);
+    expect(rows.map(({ admission_sha256, review_lineage_id, review_input_sha256 }) => ({ admission_sha256, review_lineage_id, review_input_sha256 }))).toEqual(keys);
+    expect(rows[0]).toMatchObject({ ...firstKey, attempt: 2, outcome: 'succeeded', retry_authorized: false });
+    expect(rows[1]).toMatchObject({ ...secondKey, attempt: 1, outcome: 'failed', retry_authorized: true });
+    expect(rows[2]).toMatchObject({ attempt: 1, outcome: 'pending', retry_authorized: false });
+    expect(rows[0]).not.toHaveProperty('claim_id');
+    expect(rows[1]).not.toHaveProperty('claim_id');
+    expect(store.listForAdmission(`sha256:${'e'.repeat(64)}`)).toEqual([]);
+    expect(() => store.listForAdmission('provider secret')).toThrow('Extraction attempt state is invalid');
+    expect(() => store.listForAdmission(`sha256:${'A'.repeat(64)}`)).toThrow('Extraction attempt state is invalid');
+  });
+
   it('rejects malformed keys and unbounded failure text before any state mutation', () => {
     const store = fixture().open();
     expect(() => store.reserve({ ...key, review_input_sha256: 'provider secret' })).toThrow();

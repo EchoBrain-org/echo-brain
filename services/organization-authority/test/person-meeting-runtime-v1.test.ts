@@ -28,7 +28,7 @@ import { AdapterError } from '@echo-brain/organization-processing/core/contracts
 import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { createPersonDiagnosticsV1 } from '../src/composition/person-diagnostics-v1.js';
-import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
+import { createPersonMeetingRuntimeV1, reconcilePersonMeetingProcessorsV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
 import { validateApprovalDecisionRequestV1, type AfterApprovedRecordEventV1 } from '../src/composition/approval-core-v1.js';
@@ -106,11 +106,18 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   });
   const provider = fakeProvider('granola', GRANOLA_WATCH_CURSOR_POLICY_V1.source_adapter_id);
   const sessions = { authenticateAccess: ({ access_token }: { access_token: string }) => authorization({ ...(actors[access_token as keyof typeof actors] ?? other), membership_type: access_token === 'owner' ? 'owner' : 'employee' }) };
-  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number; readonly observation?: CoreRuntimeObservationScopeV1 } = {}) =>
+  const commitments = (instance_id: string, version = '1.0.0') => ({ adapter_id: 'llm', instance_id, version,
+    configuration_sha256: canonicalSha256(version === '1.0.0' ? 'processor' : `processor:${version}`), credential_reference_sha256: canonicalSha256('ref') });
+  const reconcile = (version: string) => reconcilePersonMeetingProcessorsV1({ database: f.db, providers: [provider], extraction_attempts: ledger,
+    processor: { processor_adapter_id: 'llm', current_commitments: instance => commitments(instance, version),
+      assert_admission_commitments(value) { expect(value.processor).toEqual(commitments(value.processor.instance_id, version)); },
+      create_processor() { throw new Error('Startup reconciliation never constructs an extractor'); } } });
+  const create = (providers: readonly PersonMeetingProviderV1[] = [provider], seams: { readonly approval_core?: Parameters<typeof createPersonMeetingRuntimeV1>[0]['approval_core']; readonly record_append?: typeof f.context.record_append; readonly database?: Database.Database; readonly meeting_lanes?: number; readonly observation?: CoreRuntimeObservationScopeV1; readonly processor_version?: string; readonly processor_generations?: true } = {}) =>
     createPersonMeetingRuntimeV1({ database: seams.database ?? f.db, approval: seams.record_append === undefined ? f.context : { ...f.context, record_append: seams.record_append }, providers,
     sessions, ...(seams.approval_core === undefined ? {} : { approval_core: seams.approval_core }), ...(seams.meeting_lanes === undefined ? {} : { meeting_lanes: seams.meeting_lanes }),
     ...(seams.observation === undefined ? {} : { observation: seams.observation }),
-    processor: { processor_adapter_id: 'llm', current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }), assert_admission_commitments() {},
+    ...(seams.processor_generations === true ? { processor_generations: true } : {}),
+    processor: { processor_adapter_id: 'llm', current_commitments: instance_id => commitments(instance_id, seams.processor_version), assert_admission_commitments() {},
       create_processor(admission) { const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
         return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
           async extract(meeting) {
@@ -194,7 +201,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
   /** Routes for every item of an open review, each to one destination (null = not kept, [] = Only me) or as chosen per item. */
   const routes = (opened: PersonMeetingResultsV2['review_open'], to: readonly string[] | null | ((item: PersonMeetingResultsV2['review_open']['items'][number]) => readonly string[] | null) = []) =>
     opened.items.map(item => ({ signal_id: item.signal_id, project_ids: typeof to === 'function' ? to(item) : to }));
-  return { ...f, person, sessions, create, call, reviewCall, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, browsed, watched, fullWindow: (value = true) => { windowFull = value; }, fakeProvider, sources, intake, processUntilIdle, pendingReview, routes, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
+  return { ...f, person, sessions, create, reconcile, call, reviewCall, outbox, grantProject, join, leave, listRoute, readers, folderDeliveries, browsed, watched, fullWindow: (value = true) => { windowFull = value; }, fakeProvider, sources, intake, processUntilIdle, pendingReview, routes, count, proposals, extracted: () => extracted, disconnect: () => { active = false; }, duringPull: (fn: () => void | Promise<void>) => { duringPull = fn; },
     duringExtract: (fn: (() => void | Promise<void>) | undefined) => { duringExtract = fn; }, failNextExtraction: (error: unknown = new Error('extraction failed')) => { failExtraction = error; },
     ledger, pulls: () => pulls, revise: (value: string) => { edition = value; },
     held: () => f.db.prepare('SELECT * FROM authority_live_source_held_extractions_v1').all() as { external_id: string; failure_stage: string; extraction_admission_sha256: string; review_lineage_id: string; review_input_sha256: string }[] };
@@ -204,6 +211,192 @@ function toolIsSynthetic(meeting: MeetingDocument) { return meeting.provenance.s
 const heldError = (external: string, stage = 'unknown', next = 'An operator can authorize one more attempt.') =>
   `Meeting ${external} is held after extraction attempt 1 failed at ${stage}. Later meetings continue. ${next}`;
 describe('personal meeting intake uses the shared processing path', () => {
+  it('keeps a historical review and skips its exact input before spending under a new processor', async () => {
+    const f = await fixture(), oldRuntime = f.create();
+    const { pending, opened } = await f.pendingReview(oldRuntime);
+    const oldSetting = f.intake.listCurrent(f.person)[0]!;
+    expect(f.extracted()).toBe(1);
+    expect(f.ledger.listLatest()).toHaveLength(1);
+
+    expect(f.reconcile('2.0.0')).toEqual({ transitioned: 1 });
+    const runtime = f.create(undefined, { processor_version: '2.0.0', processor_generations: true });
+    const setting = f.intake.listCurrent(f.person)[0]!;
+    expect(setting.source_key).not.toBe(oldSetting.source_key);
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await runtime.pollAndStageSource(setting.source_key, new AbortController().signal);
+
+    expect(f.extracted()).toBe(1);
+    expect(f.ledger.listLatest()).toHaveLength(1);
+    expect(f.intake.checkpoint(setting.source_key).manual).toEqual([]);
+    expect(f.proposals(setting.source_key)).toBe(0);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toEqual([pending]);
+    expect(await f.reviewCall(runtime, { operation: 'review_open', approval_id: pending!.approval_id })).toEqual(opened);
+    expect(await f.readers()).toEqual(['owner']);
+    expect(f.count('authority_sources_v1')).toBe(1);
+
+    // An actual content/title change remains new work, even though the provider account and external ID are unchanged.
+    f.revise(' revised');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await runtime.pollAndStageSource(setting.source_key, new AbortController().signal);
+    expect(f.extracted()).toBe(2);
+    expect(f.ledger.listLatest()).toHaveLength(2);
+    expect(f.proposals(setting.source_key)).toBe(1);
+    expect(f.count('authority_sources_v1')).toBe(1);
+  });
+
+  it('shares retained extraction history across A to B to A to C processor generations', async () => {
+    const f = await fixture(), first = f.create();
+    const originalReview = await f.pendingReview(first);
+    const sourceA1 = f.intake.listCurrent(f.person)[0]!.source_key;
+    expect(f.reconcile('2.0.0')).toEqual({ transitioned: 1 });
+    const sourceB = f.intake.listCurrent(f.person)[0]!.source_key;
+    expect(f.reconcile('1.0.0')).toEqual({ transitioned: 1 });
+    const sourceA3 = f.intake.listCurrent(f.person)[0]!.source_key;
+    expect(new Set([sourceA1, sourceB, sourceA3]).size).toBe(3);
+    const restored = f.create(undefined, { processor_version: '1.0.0', processor_generations: true });
+    expect(await f.reviewCall(restored, { operation: 'review_open', approval_id: originalReview.pending!.approval_id })).toEqual(originalReview.opened);
+
+    f.revise(' after restoring A');
+    await f.call(restored, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    await restored.pollAndStageSource(sourceA3, new AbortController().signal);
+    expect(f.extracted()).toBe(2);
+    const before = f.ledger.listLatest();
+    expect(before).toHaveLength(2);
+    // A's processor commitments and source cutoff are unchanged, so A1 and A3 intentionally share the ledger admission hash.
+    expect(new Set(before.map(row => row.admission_sha256)).size).toBe(1);
+    const [newReview] = f.outbox(sourceA3);
+    const opened = await f.reviewCall(restored, { operation: 'review_open', approval_id: newReview!.approval_id });
+
+    expect(f.reconcile('3.0.0')).toEqual({ transitioned: 1 });
+    const sourceC = f.intake.listCurrent(f.person)[0]!.source_key;
+    expect(new Set([sourceA1, sourceB, sourceA3, sourceC]).size).toBe(4);
+    const latest = f.create(undefined, { processor_version: '3.0.0', processor_generations: true });
+    for (const revision of [' after restoring A', '']) {
+      f.revise(revision);
+      await f.call(latest, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+      await latest.pollAndStageSource(sourceC, new AbortController().signal);
+      expect(f.intake.checkpoint(sourceC).manual).toEqual([]);
+      expect(f.extracted()).toBe(2);
+      expect(f.ledger.listLatest()).toEqual(before);
+    }
+    expect(f.proposals(sourceC)).toBe(0);
+    expect(await f.reviewCall(latest, { operation: 'review_open', approval_id: newReview!.approval_id })).toEqual(opened);
+    expect(f.outbox(sourceA1)).toHaveLength(1);
+    expect(f.outbox(sourceA3)).toHaveLength(1);
+  });
+
+  it.each([false, true])('keeps a restored processor\'s current unbilled retry in the current attempt guard (retry fails: %s)', async failsAgain => {
+    const f = await fixture(), first = f.create();
+    await f.pendingReview(first);
+    const [originalAttempt] = f.ledger.listLatest();
+    expect(f.reconcile('2.0.0')).toEqual({ transitioned: 1 });
+    expect(f.reconcile('1.0.0')).toEqual({ transitioned: 1 });
+    const current = f.intake.listCurrent(f.person)[0]!;
+    const runtime = f.create(undefined, { processor_version: '1.0.0', processor_generations: true });
+    f.revise(' new input after restoring A');
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.failNextExtraction(providerStatusError('OpenRouter', 429, true));
+    await runtime.pollAndStageSource(current.source_key, new AbortController().signal);
+    const failed = f.ledger.listLatest().find(row => row.outcome === 'failed')!;
+    expect(failed).toMatchObject({ admission_sha256: originalAttempt!.admission_sha256, attempt: 1,
+      failure_code: 'rate_limited', retry_authorized: true });
+    expect(f.intake.checkpoint(current.source_key).manual).toEqual([id]);
+    expect(f.extracted()).toBe(2);
+    expect(f.held()).toEqual([]);
+
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try {
+      if (failsAgain) f.failNextExtraction(new Error('The retried current extraction failed'));
+      await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    } finally { later.mockRestore(); }
+    expect(f.extracted()).toBe(3);
+    expect(f.intake.checkpoint(current.source_key).manual).toEqual([]);
+    expect(f.ledger.inspect(failed)).toMatchObject({ attempt: 2, outcome: failsAgain ? 'failed' : 'succeeded', retry_authorized: false });
+    expect(f.held()).toEqual(failsAgain ? [expect.objectContaining({ external_id: id, failure_stage: 'unknown' })] : []);
+    await runtime.pollAndStageSource(current.source_key, new AbortController().signal);
+    expect(f.extracted()).toBe(3);
+  });
+
+  it('freezes an old queued approval after transition without reopening the source or extracting again', async () => {
+    const f = await fixture(), oldRuntime = f.create(); f.grantProject();
+    await f.call(oldRuntime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
+    refusal.next = 1;
+    try { await oldRuntime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); } finally { refusal.next = 0; }
+    const oldSetting = f.intake.listCurrent(f.person)[0]!;
+    expect(f.outbox(oldSetting.source_key)).toEqual([expect.objectContaining({ state: 'queued' })]);
+    expect(f.reconcile('2.0.0')).toEqual({ transitioned: 1 });
+    f.disconnect();
+    const runtime = f.create(undefined, { processor_version: '2.0.0', processor_generations: true });
+    const pulls = f.pulls();
+    await runtime.pollAndStageSource(oldSetting.source_key, new AbortController().signal);
+
+    expect(f.pulls()).toBe(pulls);
+    expect(f.extracted()).toBe(1);
+    expect(f.ledger.listLatest()).toHaveLength(1);
+    const [frozen] = f.outbox(oldSetting.source_key);
+    expect(frozen).toMatchObject({ state: 'staged' });
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toEqual([
+      expect.objectContaining({ approval_id: frozen!.approval_id, project_ids: [project] }),
+    ]);
+  });
+
+  it('does not repeat a paid watch extraction when its old cursor advance was interrupted', async () => {
+    const f = await fixture(), oldRuntime = f.create();
+    const home = await f.call(oldRuntime, { operation: 'home' });
+    await f.call(oldRuntime, { operation: 'watch', watch: 'mine', folder_id: null, project_id: null, retain: true, settings_sha256: home.settings_sha256 });
+    const oldSetting = f.intake.listCurrent(f.person)[0]!;
+    await oldRuntime.pollAndStageSource(oldSetting.source_key, new AbortController().signal);
+    const before = f.intake.checkpoint(oldSetting.source_key);
+    f.folderDeliveries.push(id);
+    const advance = vi.spyOn(SqliteAuthorityMeetingProcessingStateV1.prototype, 'advanceCursor').mockRejectedValueOnce(new Error('interrupted before cursor commit'));
+    try { await oldRuntime.pollAndStageSource(oldSetting.source_key, new AbortController().signal); } finally { advance.mockRestore(); }
+    expect(f.intake.checkpoint(oldSetting.source_key)).toEqual(before);
+    expect(f.extracted()).toBe(1);
+    expect(f.ledger.listLatest()).toEqual([expect.objectContaining({ outcome: 'succeeded' })]);
+
+    expect(f.reconcile('2.0.0')).toEqual({ transitioned: 1 });
+    const runtime = f.create(undefined, { processor_version: '2.0.0', processor_generations: true });
+    const current = f.intake.listCurrent(f.person)[0]!;
+    expect(f.intake.checkpoint(current.source_key)).toEqual(before);
+    // The unchanged provider window returns that same meeting from the copied, not-yet-advanced checkpoint.
+    f.folderDeliveries.push(id);
+    await runtime.pollAndStageSource(current.source_key, new AbortController().signal);
+    expect(f.extracted()).toBe(1);
+    expect(f.ledger.listLatest()).toHaveLength(1);
+    expect(f.intake.checkpoint(current.source_key)).not.toEqual(before);
+    expect((await f.reviewCall(runtime, { operation: 'reviews' })).reviews).toHaveLength(1);
+    expect(f.proposals(current.source_key)).toBe(0);
+  });
+
+  it('never runs an authorized retry that appears on a historical generation', async () => {
+    const f = await fixture(), oldRuntime = f.create();
+    await f.pendingReview(oldRuntime);
+    const oldSetting = f.intake.listCurrent(f.person)[0]!, [originalAttempt] = f.ledger.listLatest();
+    expect(f.reconcile('2.0.0')).toEqual({ transitioned: 1 });
+    // A stale recovery actor may still hold the historical key. Even a durable grant cannot route it to the new model.
+    const key = { admission_sha256: originalAttempt!.admission_sha256, review_lineage_id: originalAttempt!.review_lineage_id,
+      review_input_sha256: `sha256:${'f'.repeat(64)}` };
+    const claim = f.ledger.reserve(key);
+    if (claim.status !== 'reserved') throw new Error('Expected a fresh fixture reservation');
+    f.ledger.complete({ key, ...claim, outcome: 'failed', failure_code: 'unknown' });
+    expect(f.ledger.authorizeRetry({ key, expected_attempt: 1, expected_outcome: 'failed' })).toBe('authorized');
+    const revision = f.db.prepare(`SELECT s.source_id,r.revision_id FROM authority_sources_v1 s
+      JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id WHERE s.external_id=?`).get(id) as { source_id: string; revision_id: string };
+    const now = new Date().toISOString();
+    f.db.prepare(`INSERT INTO authority_live_source_held_extractions_v1
+      (source_key,external_id,organization_id,source_id,revision_id,extraction_admission_sha256,review_lineage_id,review_input_sha256,attempt,failure_stage,held_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,1,'unknown',?,?)`).run(oldSetting.source_key, id, f.person.organization_id, revision.source_id, revision.revision_id,
+      key.admission_sha256, key.review_lineage_id, key.review_input_sha256, now, now);
+    const runtime = f.create(undefined, { processor_version: '2.0.0', processor_generations: true }), pulls = f.pulls();
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    await runtime.pollAndStageSource(oldSetting.source_key, new AbortController().signal);
+
+    expect(f.pulls()).toBe(pulls);
+    expect(f.extracted()).toBe(1);
+    expect(f.ledger.inspect(key)).toMatchObject({ attempt: 1, outcome: 'failed', retry_authorized: true });
+    expect(f.held()).toHaveLength(1);
+  });
+
   it.each([false, true])('captures one authorized extraction, keeps normal traces private, and joins its approval (failed=%s)', async failed => {
     const f = await fixture(), events: CoreRuntimeObservationV1[] = [];
     const observation = { observer: (event: CoreRuntimeObservationV1) => { events.push(event); } };

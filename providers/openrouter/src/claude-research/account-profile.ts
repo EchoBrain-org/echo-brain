@@ -3,6 +3,9 @@ import { lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { userInfo } from 'node:os';
 
+/** The exact native Anthropic model used for personal-account model work. */
+export const CLAUDE_ACCOUNT_MODEL_V1 = 'claude-sonnet-5-5' as const;
+
 /** Non-secret operator selection. Only the unmodified Claude binary reads its own sign-in. */
 export interface ClaudeAccountProfileV1 {
   readonly home_directory: string;

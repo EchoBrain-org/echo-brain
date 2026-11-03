@@ -46,6 +46,8 @@ export class SqlitePersonImportedMeetingsV1 {
     }
     const revision = exact ? ('ids' in exact ? `AND echo_imported_meeting_id_v1(s.source_id,r.revision_id) IN (${exact.ids.map(() => '?').join(',') || 'NULL'})` : 'AND s.source_id=? AND r.revision_id=?') : `AND NOT EXISTS (SELECT 1 FROM authority_source_revisions_v1 newer WHERE newer.organization_id=r.organization_id AND newer.source_id=r.source_id
       AND (newer.captured_at>r.captured_at OR (newer.captured_at=r.captured_at AND newer.revision_id>r.revision_id)))`;
+    // The original personal-source row remains the custody anchor after processor transitions. Join that retained
+    // row, rather than filtering to the current processing generation, so old and new revisions are returned once.
     const rows = this.database.prepare(`SELECT echo_imported_meeting_id_v1(s.source_id,r.revision_id) AS context_id,s.source_id,s.adapter_id,s.instance_id,s.external_id,r.revision_id,r.captured_at,r.revision_sha256,r.content_sha256,r.manifest_json,c.content_json
       FROM authority_person_meeting_sources_v2 p JOIN authority_live_source_admission_v2 a ON a.source_key=p.source_key
       JOIN authority_sources_v1 s ON s.organization_id=a.organization_id AND s.adapter_id=a.source_adapter_id AND s.instance_id=a.source_adapter_instance_id

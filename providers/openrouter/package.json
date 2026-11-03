@@ -28,6 +28,18 @@
     "./openrouter-telemetry-vocabulary-v1": {
       "types": "./dist/openrouter-telemetry-vocabulary-v1.d.ts",
       "import": "./dist/openrouter-telemetry-vocabulary-v1.js"
+    },
+    "./claude-account-answer-composition-generation-bundle-v1": {
+      "types": "./dist/claude-account-answer-composition-generation-bundle-v1.d.ts",
+      "import": "./dist/claude-account-answer-composition-generation-bundle-v1.js"
+    },
+    "./claude-account-decision-processor-bundle-v1": {
+      "types": "./dist/claude-account-decision-processor-bundle-v1.d.ts",
+      "import": "./dist/claude-account-decision-processor-bundle-v1.js"
+    },
+    "./claude-account-decision-processor-config-v1": {
+      "types": "./dist/claude-account-decision-processor-config-v1.d.ts",
+      "import": "./dist/claude-account-decision-processor-config-v1.js"
     }
   },
   "files": [

@@ -14,6 +14,8 @@ interface ClaudeResearchRunV1 {
   readonly servers: NonNullable<Options['mcpServers']>;
   readonly tools: readonly string[];
   readonly account?: ClaudeAccountProfileV1;
+  /** Extraction has one durable generation attempt; research retains its admitted retry policy. */
+  readonly single_generation?: true;
 }
 
 /** A started SDK session failed: an error result (provider refusals after its retry, output retries) or the child exited. */
@@ -52,8 +54,8 @@ async function runClaudeSessionV1(input: ClaudeResearchRunV1, schema: Record<str
     DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CODE_GATEWAY_HINT_HEADERS: '1',
     // Source text and questions are not the operator's input: never read `@path` mentions from the host.
     CLAUDE_CODE_DISABLE_FILE_MENTIONS: '1',
-    // One retry, as the native engine; every retry is another admitted call against the request budget.
-    CLAUDE_CODE_MAX_RETRIES: '1',
+    // Research admits each retry separately. Extraction's durable attempt permits only one generation.
+    CLAUDE_CODE_MAX_RETRIES: input.single_generation ? '0' : '1',
     ...(maxOutputTokens === undefined ? {} : { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(maxOutputTokens) }),
   };
   let session: ReturnType<typeof query> | undefined;
@@ -69,6 +71,7 @@ async function runClaudeSessionV1(input: ClaudeResearchRunV1, schema: Record<str
     }
     session = sdkQuery({ prompt: input.prompt, options: {
       cwd, env, model: input.model, systemPrompt: input.system, abortController,
+      ...(input.single_generation ? { maxTurns: 1 } : {}),
       ...(input.account === undefined ? {} : { pathToClaudeCodeExecutable: input.account.executable_path }),
       tools: [], allowedTools: [...input.tools, 'StructuredOutput'], mcpServers: input.servers,
       strictMcpConfig: true, settingSources: [], plugins: [], persistSession: false, permissionMode: 'dontAsk', verbatimPrompts: true,

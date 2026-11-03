@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { SourceAdapterIdentityV1 } from '@echo-brain/organization-processing/core';
-import type { AdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
+import { readAdmittedMeetingProcessingCommitmentsV1, type AdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
 export interface MeetingIntakePersonV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
@@ -34,6 +34,15 @@ export interface PersonalMeetingCheckpointCodecV1 {
 const OFF: PersonalMeetingWatchV1 = Object.freeze({ watch: 'off', folder_id: null });
 function denied(): never { throw new AuthorityOperationError('unauthorized', 'Personal meeting access is unavailable'); }
 
+/** Custody belongs to the person and provider account, independently of processor generations. */
+export function personMeetingSourceAnchorV1(setting: MeetingIntakePersonV1 & Pick<MeetingIntakeSettingV1,
+  'source_adapter_id' | 'source_adapter_instance_id' | 'source_adapter_version'>): string {
+  const person = { organization_id: setting.organization_id, principal_id: setting.principal_id, membership_id: setting.membership_id };
+  const identity: SourceAdapterIdentityV1 = { kind: 'meeting-source', adapter_id: setting.source_adapter_id,
+    instance_id: setting.source_adapter_instance_id, version: setting.source_adapter_version };
+  return `pms_${canonicalSha256({ person, identity }).slice(7)}`;
+}
+
 /**
  * Personal configuration and progress use the existing Authority admission/cursor owner.
  * A project chosen on import or watch is never part of the source. It becomes a per-meeting
@@ -54,12 +63,21 @@ export class SqlitePersonMeetingIntakeV1 {
     if (person) this.currentPerson(person);
     return this.db.prepare(`SELECT s.*,a.organization_id,a.principal_id,a.membership_id,a.source_adapter_id,a.source_adapter_version,a.source_adapter_instance_id
       FROM authority_person_meeting_sources_v2 s JOIN authority_live_source_admission_v2 a ON a.source_key=s.source_key
-      ${person ? 'WHERE s.person_key=?' : ''} ORDER BY s.source_key`).all(...(person ? [canonicalSha256(person)] : [])) as MeetingIntakeSettingV1[];
+      ${person ? 'WHERE s.person_key=?' : ''} ORDER BY a.admitted_at,s.source_key`).all(...(person ? [canonicalSha256(person)] : [])) as MeetingIntakeSettingV1[];
+  }
+  /** The append-only admission order selects one generation, including a later switch back to a former processor. */
+  listCurrent(person?: MeetingIntakePersonV1): readonly MeetingIntakeSettingV1[] {
+    const latest = new Map<string, MeetingIntakeSettingV1>();
+    for (const row of this.list(person)) latest.set(personMeetingSourceAnchorV1(row), row);
+    return [...latest.values()].sort((a, b) => a.source_key.localeCompare(b.source_key));
+  }
+  isCurrentGeneration(setting: MeetingIntakeSettingV1): boolean {
+    return this.listCurrent().some(row => row.source_key === setting.source_key);
   }
   requireCurrent(setting: MeetingIntakeSettingV1): void {
     this.currentPerson(setting);
     const row = this.db.prepare('SELECT settings_revision,watch,folder_id FROM authority_person_meeting_sources_v2 WHERE source_key=?').get(setting.source_key) as { settings_revision: number } & PersonalMeetingWatchV1 | undefined;
-    if (!row || row.settings_revision !== setting.settings_revision || row.watch !== setting.watch || row.folder_id !== setting.folder_id) throw new AuthorityOperationError('stale_access_state', 'Meeting intake settings changed');
+    if (!row || row.settings_revision !== setting.settings_revision || row.watch !== setting.watch || row.folder_id !== setting.folder_id || !this.isCurrentGeneration(setting)) throw new AuthorityOperationError('stale_access_state', 'Meeting intake settings changed');
   }
   ensure(input: { readonly person: MeetingIntakePersonV1; readonly identity: SourceAdapterIdentityV1;
     readonly normalizer_version: string; readonly custodian: unknown; readonly processor: AdmittedMeetingProcessingCommitmentsV1['processor']; readonly current: () => void;
@@ -70,8 +88,13 @@ export class SqlitePersonMeetingIntakeV1 {
       const { person, identity, processor } = input;
       const member = this.currentPerson(person);
       const source_key = `pms_${canonicalSha256({ person, identity }).slice(7)}`;
-      const old = this.list(person).find(row => row.source_key === source_key);
-      if (old) return old;
+      const old = this.listCurrent(person).find(row => personMeetingSourceAnchorV1(row) === source_key);
+      if (old) {
+        if (canonicalSha256(readAdmittedMeetingProcessingCommitmentsV1(this.db, old.source_key).processor) !== canonicalSha256(processor)) {
+          throw new AuthorityOperationError('unavailable', 'Meeting processor transition is required before importing');
+        }
+        return old;
+      }
       const now = new Date().toISOString();
       const initial = this.cursor.initial();
       const semantic = canonicalSha256({ source_key, person, identity, processor, custodian: input.custodian, normalizer_version: input.normalizer_version });
@@ -84,6 +107,58 @@ export class SqlitePersonMeetingIntakeV1 {
       this.db.prepare('INSERT INTO authority_live_source_progress_v2 VALUES(?,?,?,0,?)').run(source_key, semantic, initial, now);
       this.db.prepare("INSERT INTO authority_person_meeting_sources_v2(source_key,person_key,watch,folder_id,suggested_project_id,settings_revision) VALUES(?,?,'off',NULL,NULL,0)").run(source_key, canonicalSha256(person));
       input.current(); return this.list(person).find(row => row.source_key === source_key)!;
+    }).immediate();
+  }
+  /**
+   * Stopped-startup transition only. The caller has checked the complete attempt ledger; attempted imports stay
+   * with their historical admission. Existing custody, candidates, approvals and retry grants are never rewritten.
+   */
+  transitionProcessor(input: { readonly setting: MeetingIntakeSettingV1;
+    readonly processor: AdmittedMeetingProcessingCommitmentsV1['processor']; readonly unattempted_manual: readonly string[];
+    readonly current: () => void }): MeetingIntakeSettingV1 {
+    return this.db.transaction(() => {
+      input.current(); this.requireCurrent(input.setting);
+      const setting = input.setting, oldProcessor = readAdmittedMeetingProcessingCommitmentsV1(this.db, setting.source_key).processor;
+      if (canonicalSha256(oldProcessor) === canonicalSha256(input.processor)) return setting;
+      if (oldProcessor.adapter_id !== input.processor.adapter_id) throw new Error('Meeting processor transition cannot change the approval adapter');
+      this.currentPerson(setting);
+      // A suggested project never owns the source. Revocation removes the suggestion, not the person's watch.
+      const project = setting.suggested_project_id !== null && this.isMember(setting, setting.suggested_project_id) ? setting.suggested_project_id : null;
+      const prior = this.db.prepare('SELECT admitted_at,semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE source_key=?')
+        .get(setting.source_key) as { admitted_at: string; semantic_input_sha256: string };
+      const now = new Date(Math.max(Date.now(), Date.parse(prior.admitted_at) + 1)).toISOString();
+      const anchor = personMeetingSourceAnchorV1(setting);
+      const source_key = `pms_${canonicalSha256({ anchor, previous: setting.source_key, processor: input.processor }).slice(7)}`;
+      const checkpoint = this.checkpoint(setting.source_key), selected = new Set(input.unattempted_manual);
+      if (selected.size !== input.unattempted_manual.length || input.unattempted_manual.some(id => !checkpoint.manual.includes(id))) throw new Error('Meeting processor transition queue is invalid');
+      const nextCursor = this.cursor.write({ ...checkpoint, manual: checkpoint.manual.filter(id => selected.has(id)) });
+      const semantic = canonicalSha256({ kind: 'personal-meeting-processor-generation-v1', anchor, source_key,
+        previous_admission_sha256: prior.semantic_input_sha256, processor: input.processor, initial_cursor: nextCursor });
+      // Retaining the source columns also retains the original custodian observation and cutoff; no fresh observation is invented.
+      this.db.prepare(`INSERT INTO authority_live_source_admission_v2
+        SELECT ?,organization_id,principal_id,membership_id,membership_type,source_adapter_id,source_adapter_version,source_adapter_instance_id,
+          normalizer_version,source_custodian_sha256,source_custodian_assurance,source_custodian_observed_at,source_credential_reference_sha256,
+          ?,cutoff_at,?,?,?,?,?,?,? FROM authority_live_source_admission_v2 WHERE source_key=?`).run(source_key, nextCursor,
+        input.processor.adapter_id, input.processor.version, input.processor.instance_id, input.processor.configuration_sha256,
+        input.processor.credential_reference_sha256, semantic, now, setting.source_key);
+      this.db.prepare('INSERT INTO authority_live_source_progress_v2 VALUES(?,?,?,0,?)').run(source_key, semantic, nextCursor, now);
+      // Clear the old watch before installing the new one, preserving the one-watch constraint throughout the transaction.
+      this.db.prepare("UPDATE authority_person_meeting_sources_v2 SET watch='off',folder_id=NULL,suggested_project_id=NULL,settings_revision=settings_revision+1 WHERE source_key=?").run(setting.source_key);
+      this.write(setting.source_key, this.cursor.watch({ ...checkpoint, manual: checkpoint.manual.filter(id => !selected.has(id)) }, OFF, now));
+      this.db.prepare('INSERT INTO authority_person_meeting_sources_v2 VALUES(?,?,?,?,?,0)')
+        .run(source_key, setting.person_key, setting.watch, setting.folder_id, project);
+      for (const id of selected) {
+        for (const table of ['authority_person_meeting_suggestions_v1', 'authority_person_meeting_pending_suggestions_v1']) {
+          this.db.prepare(`INSERT INTO ${table}(source_key,external_id,project_id,created_at)
+            SELECT ?,s.external_id,s.project_id,s.created_at FROM ${table} s
+              JOIN authority_project_memberships_v1 m ON m.project_id=s.project_id AND m.organization_id=? AND m.principal_id=? AND m.membership_id=? AND m.status='active'
+              JOIN authority_projects_v1 p ON p.project_id=m.project_id AND p.organization_id=m.organization_id AND p.status='active'
+              WHERE s.source_key=? AND s.external_id=?`).run(source_key, setting.organization_id, setting.principal_id, setting.membership_id, setting.source_key, id);
+        }
+        this.db.prepare('DELETE FROM authority_person_meeting_pending_suggestions_v1 WHERE source_key=? AND external_id=?').run(setting.source_key, id);
+      }
+      input.current(); this.currentPerson(setting, project);
+      return this.listCurrent().find(row => row.source_key === source_key)!;
     }).immediate();
   }
   checkpoint(sourceKey: string): PersonalMeetingCheckpointV1 {

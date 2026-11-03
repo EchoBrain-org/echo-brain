@@ -86,3 +86,31 @@ it('reports an expired queued admission as a retryable adapter timeout', async (
     request.signal!.addEventListener('abort', () => reject(request.signal!.reason), { once: true });
   }))).rejects.toMatchObject({ diagnostic: { failure_class: 'adapter_timeout', http_status: null } });
 });
+
+it.each(['sequential', 'concurrent'] as const)('fences a second extraction generation before forwarding (%s)', async mode => {
+  const forward = vi.fn(async ({ res }) => { res.end('{}'); return {}; });
+  const port = createClaudeAccountStructuredGenerationV1({ account, model, max_model_requests: 1, forward,
+    run: async request => {
+      const send = () => fetch(`${request.base_url}/v1/messages`, { method: 'POST', body }).then(response => response.text()).catch(() => undefined);
+      if (mode === 'concurrent') await Promise.all([send(), send()]);
+      else { await send(); await send(); }
+      return { answer: 'should not succeed' };
+    },
+  });
+  await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value))
+    .rejects.toThrow('single generation');
+  expect(forward).toHaveBeenCalledTimes(1);
+});
+
+it('does not forward hidden token-count requests for extraction', async () => {
+  const forward = vi.fn(async ({ res }) => { res.end('{}'); return {}; });
+  const port = createClaudeAccountStructuredGenerationV1({ account, model, max_model_requests: 1, forward,
+    run: async request => {
+      await fetch(`${request.base_url}/v1/messages/count_tokens`, { method: 'POST', body }).catch(() => undefined);
+      return {};
+    },
+  });
+  await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value))
+    .rejects.toThrow('single generation');
+  expect(forward).not.toHaveBeenCalled();
+});

@@ -126,7 +126,7 @@ usage:
   onboard-clean-v1.sh langsmith-tracing --project <project> --region <us|eu|apac|aws-us> (--hours <1..24> | --until-disabled) [--workspace-id <uuid>]
   onboard-clean-v1.sh langsmith-tracing --disable
   onboard-clean-v1.sh personal-claude <login|status|disable>
-  onboard-clean-v1.sh personal-claude enable --member <mem_id>
+  onboard-clean-v1.sh personal-claude enable --member <mem_id> [--all-models]
   onboard-clean-v1.sh retry-extraction --admission-sha256 <sha256:digest> --review-lineage-id <rli_digest> --review-input-sha256 <sha256:digest> --expected-attempt <number> --expected-outcome <failed|succeeded|pending> --confirm-new-model-call [--recover-pending]
 EOF
   exit 2
@@ -818,7 +818,18 @@ require_host_prerequisites() {
   [[ -f "$RUNTIME_PROFILE_TOOL" ]] || fail 'clean-v1 runtime profile validator is missing from deploy/release.'
 }
 
+require_personal_claude_state_capability() {
+  local marker="$PRIVATE_DIR/personal-claude-all-models.json" image
+  [[ -e "$marker" || -L "$marker" ]] || return 0
+  image="$(sed -n 's/^ECHO_CLEAN_AUTHORITY_IMAGE=//p' "$ENV_FILE")"
+  [[ -n "$image" && "$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.state-capability.personal-claude-all-models-v1"}}' "$image" 2>/dev/null)" == true ]] || {
+    printf '%s\n' 'personal Claude all-models state requires a compatible image, even after disable; preserve the selection marker and generation history' >&2
+    return 1
+  }
+}
+
 compose_clean() {
+  case "${1:-}" in up|run|restart) require_personal_claude_state_capability || return 1 ;; esac
   docker compose --env-file "$ENV_FILE" \
     -f "$DEPLOY_DIR/compose.clean-v1.yaml" \
     -f "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" "$@"
@@ -826,6 +837,7 @@ compose_clean() {
 
 activation_compose_quiet() {
   local status=0
+  case "${1:-}" in up|run|restart) require_personal_claude_state_capability || return 1 ;; esac
   docker compose --env-file "$ENV_FILE" \
     -f "$DEPLOY_DIR/compose.clean-v1.yaml" \
     -f "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" "$@" >/dev/null 2>&1 &
@@ -2249,11 +2261,15 @@ retry_extraction() {
 }
 
 personal_claude() {
-  local action="${1:-}" member='' selected='' image authority_id home native_home
+  local action="${1:-}" member='' selected='' all_member='' all_enabled=false all_models=false scope=none selection_state image authority_id home native_home
   [[ $# -ge 1 ]] || usage
   shift
   case "$action" in
-    enable) [[ $# -eq 2 && "$1" == --member && "$2" =~ ^mem_[a-zA-Z0-9-]{1,100}$ ]] || usage; member="$2" ;;
+    enable)
+      [[ ( $# -eq 2 || $# -eq 3 ) && "$1" == --member && "$2" =~ ^mem_[a-zA-Z0-9-]{1,100}$ ]] || usage
+      member="$2"
+      if [[ $# -eq 3 ]]; then [[ "$3" == --all-models ]] || usage; all_models=true; fi
+      ;;
     login|status|disable) [[ $# -eq 0 ]] || usage ;;
     *) usage ;;
   esac
@@ -2279,10 +2295,14 @@ personal_claude() {
   image="$(docker inspect --format '{{.Image}}' "$authority_id")"
   [[ "$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.config-capability.personal-claude-v1"}}' "$image" 2>/dev/null)" == true ]] || \
     fail 'the running image does not support hosted personal Claude'
+  if [[ "$all_models" == true || -e "$PRIVATE_DIR/personal-claude-all-models.json" || -L "$PRIVATE_DIR/personal-claude-all-models.json" ]]; then
+    [[ "$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.state-capability.personal-claude-all-models-v1"}}' "$image" 2>/dev/null)" == true ]] || \
+      fail 'personal Claude all-models state requires a compatible image, even after disable'
+  fi
   select_runtime_identity "$(setup_value runtime_user)"
   # Inspect metadata and the non-secret member selection only. Native Claude
   # alone reads or refreshes the sign-in files inside this fixed home.
-  selected="$(python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$action" <<'PY'
+  selection_state="$(python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$action" <<'PY'
 import json, os, pathlib, re, stat, sys
 root, uid, gid, action = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 def directory(path):
@@ -2290,20 +2310,38 @@ def directory(path):
     if not stat.S_ISDIR(s.st_mode) or (s.st_uid, s.st_gid, stat.S_IMODE(s.st_mode)) != (uid, gid, 0o700):
         raise SystemExit('personal Claude directory is unsafe')
 directory(root)
-selection = root / 'personal-claude-research.json'
-if os.path.lexists(selection):
+missing = object()
+def selection_file(name):
+    selection = root / name
+    if not os.path.lexists(selection): return missing
     s = selection.lstat()
     if not stat.S_ISREG(s.st_mode) or s.st_nlink != 1 or s.st_uid != uid or s.st_gid != gid or stat.S_IMODE(s.st_mode) != 0o600 or not 0 < s.st_size <= 4096:
         raise SystemExit('personal Claude selection is unsafe')
     with selection.open() as stream: value = json.load(stream)
+    return value
+value = selection_file('personal-claude-research.json')
+member = ''
+if value is not missing:
     if not isinstance(value, dict) or set(value) != {'kind', 'membership_id'} or value['kind'] != 'echo-personal-claude-research-v1' or not isinstance(value['membership_id'], str) or not re.fullmatch(r'mem_[a-zA-Z0-9-]{1,100}', value['membership_id']):
         raise SystemExit('personal Claude selection is invalid')
-    if action == 'login': raise SystemExit('disable personal Claude research before signing in again')
-    print(value['membership_id'])
+    member = value['membership_id']
+all_value = selection_file('personal-claude-all-models.json')
+all_member, enabled = '', False
+if all_value is not missing:
+    if not isinstance(all_value, dict) or set(all_value) != {'kind', 'payer_membership_id', 'enabled'} or all_value['kind'] != 'echo-personal-claude-all-models-v1' or not isinstance(all_value['payer_membership_id'], str) or not re.fullmatch(r'mem_[a-zA-Z0-9-]{1,100}', all_value['payer_membership_id']) or type(all_value['enabled']) is not bool:
+        raise SystemExit('personal Claude all-models selection is invalid')
+    all_member, enabled = all_value['payer_membership_id'], all_value['enabled']
+    if member and member != all_member: raise SystemExit('personal Claude selections have different payers')
+if action == 'login' and (member or enabled): raise SystemExit('disable personal Claude before signing in again')
+print(member)
+print(all_member)
+print('true' if enabled else 'false')
 for path in (root / 'claude-account', root / 'claude-account/.claude'):
     if os.path.lexists(path): directory(path)
 PY
   )" || fail 'personal Claude profile preflight failed'
+  { read -r selected; read -r all_member; read -r all_enabled; } <<<"$selection_state"
+  if [[ "$all_enabled" == true ]]; then scope=all-models; elif [[ -n "$selected" ]]; then scope=member; fi
   home="$PRIVATE_DIR/claude-account"
   native_home=/echo-clean/private/claude-account
   local -a native=(docker run --rm --pull never --log-driver none --read-only --cap-drop ALL --security-opt no-new-privileges
@@ -2331,32 +2369,51 @@ PY
       catch { process.exitCode = 1; }
     ' >/dev/null 2>&1; then signed_in=true; fi
     if [[ "$action" == status ]]; then
-      printf 'personal_claude_enabled=%s\npersonal_claude_signed_in=%s\npersonal_claude_member=%s\n' "$([[ -n "$selected" ]] && printf true || printf false)" "$signed_in" "$selected"
+      printf 'personal_claude_enabled=%s\npersonal_claude_signed_in=%s\npersonal_claude_member=%s\npersonal_claude_scope=%s\npersonal_claude_payer=%s\npersonal_claude_model=claude-sonnet-5-5\n' "$([[ "$scope" != none ]] && printf true || printf false)" "$signed_in" "$selected" "$scope" "${all_member:-$selected}"
       return
     fi
     [[ "$signed_in" == true ]] || fail 'native Claude subscription sign-in is unavailable; run personal-claude login first'
     [[ -z "$selected" || "$selected" == "$member" ]] || fail 'disable the current personal Claude member binding before changing it'
+    [[ -z "$all_member" || "$all_member" == "$member" ]] || fail 'personal Claude generation history is bound to a different payer; preserve its marker'
+    [[ "$all_enabled" != true || "$all_models" == true ]] || fail 'disable personal Claude all-models before selecting the member-only route'
   fi
-  python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$action" "$member" <<'PY'
+  # Routing is selected at process startup. Stop the old provider before making
+  # the new selection durable; a failed write must leave Authority stopped.
+  compose_clean stop -t 30 authority || fail 'personal Claude selection unchanged; Authority stop is unconfirmed'
+  python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$action" "$member" "$all_models" <<'PY'
 import json, os, pathlib, sys, tempfile
-directory, uid, gid, action, member = sys.argv[1:]
+directory, uid, gid, action, member, all_models = sys.argv[1:]
 target = pathlib.Path(directory) / 'personal-claude-research.json'
-if action == 'disable':
-    if target.exists(): target.unlink()
-else:
+all_target = pathlib.Path(directory) / 'personal-claude-all-models.json'
+def save(target, value):
     fd, temporary = tempfile.mkstemp(prefix='.personal-claude-', dir=directory)
     try:
         with os.fdopen(fd, 'w') as stream:
             os.fchmod(stream.fileno(), 0o600)
             if os.getuid() == 0: os.fchown(stream.fileno(), int(uid), int(gid))
-            json.dump(dict(kind='echo-personal-claude-research-v1', membership_id=member), stream)
+            json.dump(value, stream)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, target)
+        parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(parent)
+        finally: os.close(parent)
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
+if action == 'disable':
+    if all_target.exists():
+        value = json.loads(all_target.read_text())
+        save(all_target, dict(value, enabled=False))
+    if target.exists():
+        target.unlink()
+        parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(parent)
+        finally: os.close(parent)
+elif all_models == 'true':
+    save(all_target, dict(kind='echo-personal-claude-all-models-v1', payer_membership_id=member, enabled=True))
+else:
+    save(target, dict(kind='echo-personal-claude-research-v1', membership_id=member))
 PY
-  compose_clean stop -t 30 authority || fail 'personal Claude selection saved; Authority stop is unconfirmed'
   start_runtime || fail 'personal Claude selection saved; Authority restart failed'
   compose_clean restart proxy || fail 'personal Claude selection saved; proxy restart failed'
   printf 'personal_claude_enabled=%s\n' "$([[ "$action" == enable ]] && printf true || printf false)"

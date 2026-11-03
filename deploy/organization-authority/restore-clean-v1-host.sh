@@ -314,6 +314,17 @@ PY
   rm -rf -- "$stage_parent"
 }
 
+require_personal_claude_state_capability() {
+  local marker="$PRIVATE_DIR/personal-claude-all-models.json" image
+  [[ -e "$marker" || -L "$marker" ]] || return 0
+  image="$(release_field authority-image)" || return 1
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    docker pull "$image" >/dev/null || fail 'could not inspect the accepted image for retained personal Claude all-models state'
+  fi
+  [[ "$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.state-capability.personal-claude-all-models-v1"}}' "$image" 2>/dev/null)" == true ]] || \
+    fail 'personal Claude all-models state requires a compatible image, even after disable; preserve retained state and select a compatible reviewed release'
+}
+
 restore_or_no_op() {
   require_authority_identity
   require_data_root
@@ -324,6 +335,7 @@ restore_or_no_op() {
   require_prepared_state_shape
   require_no_candidate_or_operation
   validate_retained_tuple
+  require_personal_claude_state_capability
   require_staging_connector_rehearsal_recovery_state
   materialize_root_volume_files
   printf '{"ok":true,"state":"accepted_tuple_materialized","release_id":"%s"}\n' \

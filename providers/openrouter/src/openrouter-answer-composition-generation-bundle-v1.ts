@@ -3,7 +3,7 @@ import { createOpenRouterStructuredGenerationAdapter } from "./adapters/answer-c
 import type { AnswerCompositionGenerationBundleV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import { createClaudeResearchDriverV1 } from './claude-research/driver.js';
 import { claudeAccountForwarderV1, openRouterClaudeForwarderV1 } from './claude-research/model-transport.js';
-import { assertPersonalClaudeResearchV1, type PersonalClaudeResearchV1 } from './claude-research/account-profile.js';
+import { assertPersonalClaudeResearchV1, CLAUDE_ACCOUNT_MODEL_V1, type PersonalClaudeResearchV1 } from './claude-research/account-profile.js';
 import { createClaudeAccountStructuredGenerationV1 } from './claude-research/structured-generation.js';
 export type { PersonalClaudeResearchV1 } from './claude-research/account-profile.js';
 export { assertPersonalClaudeResearchV1 } from './claude-research/account-profile.js';
@@ -15,9 +15,6 @@ export const OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 =
 export const OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 = 60_000;
 /** Kept conservative so changing the model does not expand Ask's prompt-size contract. */
 export const OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 = 131_072;
-/** The native Anthropic model a member's own Claude account researches and writes with. */
-const CLAUDE_ACCOUNT_MODEL_V1 = 'claude-sonnet-5-5';
-
 /**
  * OpenRouter answer-composition adapter bundle. It is the only owner of the
  * private credential read and OpenRouter transport construction.

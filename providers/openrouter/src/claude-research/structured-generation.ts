@@ -4,12 +4,18 @@ import type { ClaudeAccountProfileV1 } from './account-profile.js';
 import { ClaudeResearchResultErrorV1, runClaudeStructuredV1 } from './sdk-client.js';
 import { claudeAccountForwarderV1, ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
 
+export class ClaudeSingleGenerationLimitErrorV1 extends Error {
+  constructor() { super('Native extraction permits a single generation'); }
+}
+
 /** The native client owns sign-in. ECHO admits every outbound request and validates the returned answer. */
 export function createClaudeAccountStructuredGenerationV1(options: {
   readonly account: ClaudeAccountProfileV1;
   readonly model: string;
   readonly forward?: ClaudeModelForwarderV1;
   readonly run?: typeof runClaudeStructuredV1;
+  /** An extraction attempt cannot hide SDK retries, repairs or auxiliary model requests. */
+  readonly max_model_requests?: 1;
 }): StructuredGenerationPort {
   return {
     async generate() { throw new Error('Native structured generation requires per-request admission'); },
@@ -21,9 +27,14 @@ export function createClaudeAccountStructuredGenerationV1(options: {
       const deadline = performance.now() + input.timeout_ms;
       let terminal: unknown;
       let providerFailure: unknown;
+      let messages = 0;
       const fence = await startClaudeModelTransportV1({ signal, forward: options.forward ?? claudeAccountForwarderV1(options.model),
         admit: async (body, operation, forward) => {
           try {
+            // Claim before awaiting admission, so concurrent SDK requests cannot share one attempt.
+            if (options.max_model_requests === 1 && (operation !== 'messages' || messages++ !== 0)) {
+              throw new ClaudeSingleGenerationLimitErrorV1();
+            }
             const payload = JSON.parse(body.toString('utf8'));
             if (payload.model !== input.model) throw new Error('Unexpected native writer model');
             if (operation === 'messages' && (!Number.isSafeInteger(payload.max_tokens) || payload.max_tokens <= 0 || payload.max_tokens > input.max_output_tokens)) throw new Error('Native writer exceeded its output allowance');
@@ -55,7 +66,8 @@ export function createClaudeAccountStructuredGenerationV1(options: {
       });
       try {
         const value = await (options.run ?? runClaudeStructuredV1)({ prompt: input.user_prompt, system: input.system_prompt, schema: input.schema,
-          model: input.model, max_output_tokens: input.max_output_tokens, base_url: fence.base_url, account: options.account, signal });
+          model: input.model, max_output_tokens: input.max_output_tokens, base_url: fence.base_url, account: options.account, signal,
+          ...(options.max_model_requests === 1 ? { single_generation: true } : {}) });
         if (terminal !== undefined) throw terminal;
         if (fence.forwarded() === 0) throw new Error('Native writer did not use model admission');
         return value;

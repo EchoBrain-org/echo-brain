@@ -963,7 +963,8 @@ remains open for that full recovery path.
 
 The optional personal route uses one authenticated ECHO member's own Claude
 account for both interactive Ask research and the separate final writing pass.
-Other members and background processing retain OpenRouter. The member is selected by the host
+Without the explicit all-models option below, other members and background
+processing retain OpenRouter. The member is selected by the host
 operator and matched against the authenticated Person identity, never question
 text or a client-supplied provider choice.
 
@@ -997,7 +998,8 @@ selection to `clean-data/private/personal-claude-research.json`, and restarts
 Authority and proxy. Finish current Ask requests first. The service derives the
 fixed home and executable; the selection cannot supply a token or executable.
 `status` reports only selection state, member ID and whether native subscription
-sign-in is available. It does not prove model quota or a successful Ask.
+sign-in is available, plus active scope, payer and model `claude-sonnet-5-5`.
+It does not prove model quota or a successful Ask.
 
 The wrapper checks the exact running accepted/candidate image and profile,
 staging origin, operation locks, ownership and private modes. Failed native
@@ -1013,10 +1015,60 @@ sudo ./onboard-clean-v1.sh personal-claude disable
 This removes the member binding and restarts the runtime. It preserves native
 Claude's sign-in files in `clean-data/private/claude-account`; it does not log
 the person out. The binding survives ordinary supporting-image updates.
-Rollback to an older runtime profile leaves the file unused. No configuration
+For member-only selection, rollback to an older runtime profile leaves the file unused. No configuration
 change promotes the candidate: after enabling, run fresh canary, authenticated
 read and cited Ask checks, including a different member's unchanged provider
 route, before the exact release decision.
+
+### Use the account for all staging model work
+
+After staging an image with the
+`org.echobrain.authority.state-capability.personal-claude-all-models-v1=true`
+label, the human may explicitly select their signed-in account as the payer for
+all staging model work:
+
+```sh
+sudo ./onboard-clean-v1.sh personal-claude enable --member <your-mem-id> --all-models
+sudo ./onboard-clean-v1.sh personal-claude status
+```
+
+This selects native Claude SDK Sonnet 5.5 for every member's Ask, final writing,
+meeting extraction, note and upload enrichment, impact analysis, sweeps, and
+optional evaluation. Authorization still uses each caller's identity and source
+permissions; the payer does not become the caller. The active route has no
+OpenRouter fallback or OpenRouter credential reads. An unavailable native
+session or model call fails closed.
+
+The wrapper verifies native sign-in, then confirms Authority has stopped before atomically saving the private,
+non-secret `clean-data/private/personal-claude-all-models.json` with exactly
+`kind: "echo-personal-claude-all-models-v1"`, `payer_membership_id`, and boolean
+`enabled`. The existing member-only file is not widened or rewritten. When both
+files exist, their member IDs must match. Login is refused while either selection
+is active. The retained all-models payer cannot be changed by enable, including
+after disable; account switching is outside this workflow. A failed stop leaves
+the selection unchanged; a failed save leaves Authority stopped.
+
+Startup reconciles the selected processor generations before processing resumes.
+Unresolved work blocks that change without rewriting admitted content or making
+an extra model call. If the restart fails, keep the marker and candidate evidence
+and diagnose the held work through the operator playbook; do not delete the marker
+or substitute another provider to force startup.
+
+`personal-claude disable` removes the narrow member binding and retains the
+all-models file with `enabled: false`. The supporting runtime can return to the
+shared route once its generation reconciliation succeeds. Existing generation
+history still needs the supporting image: activation, automatic rollback,
+explicit rollback and retained-host restoration refuse an image without the
+state-capability label whenever this marker exists, even when disabled.
+In particular, the previously accepted `9e6bc8a` image is not an automatic
+rollback option after adoption. Preserve a failed candidate and use a compatible
+reviewed release for recovery; promotion still requires the exact candidate's
+human release decision. The authorized whole-data rehearsal reset retires the
+marker together with its state. Never remove just the marker to bypass this guard.
+
+After changing scope, repeat the canary, authenticated reads and cited Ask
+checks, including another member and the affected background processing.
+These checks and native login do not grant canary approval or release promotion.
 
 ## LangSmith staging tracing
 

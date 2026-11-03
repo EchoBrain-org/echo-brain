@@ -248,6 +248,9 @@ if [[ "$1" == compose ]]; then
   exit 0
 fi
 if [[ "$1" == image && "$2" == inspect ]]; then
+  if [[ "$*" == *org.echobrain.authority.state-capability.personal-claude-all-models-v1* ]]; then
+    printf '%s\\n' "$ECHO_FAKE_PERSONAL_CLAUDE_ALL_MODELS_CAPABILITY"; exit 0
+  fi
   if [[ "$*" == *org.echobrain.authority.config-capability.personal-claude-v1* ]]; then
     printf '%s\\n' "$ECHO_FAKE_PERSONAL_CLAUDE_CAPABILITY"; exit 0
   fi
@@ -336,6 +339,7 @@ exec /usr/bin/install "$@"
     ECHO_FAKE_LANGSMITH_RUNNING_CAPABILITY: "true",
     ECHO_FAKE_LANGSMITH_ACCEPTED_CAPABILITY: "true",
     ECHO_FAKE_PERSONAL_CLAUDE_CAPABILITY: "true",
+    ECHO_FAKE_PERSONAL_CLAUDE_ALL_MODELS_CAPABILITY: "true",
     ECHO_FAKE_PERSONAL_CLAUDE_SIGNED_IN: "true",
     ECHO_FAKE_SETUP_STATUS: '{"next_step":"complete"}',
     ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE: "",
@@ -512,6 +516,80 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     writeFileSync(credential, 'native-owned-never-print', { mode: 0o600 });
     return { ...fixture, home, credential, selection: join(fixture.privateDir, 'personal-claude-research.json') };
   }
+
+  it('requires explicit all-models consent and retains disabled generation compatibility history', () => {
+    const fixture = personalClaudeFixture();
+    const marker = join(fixture.privateDir, 'personal-claude-all-models.json');
+    expect(fixture.run('personal-claude', {}, ['enable', '--member', 'mem_owner']).status).toBe(0);
+    const narrow = readFileSync(fixture.selection, 'utf8');
+    expect(existsSync(marker)).toBe(false);
+    const enabled = fixture.run('personal-claude', {}, ['enable', '--member', 'mem_owner', '--all-models']);
+    expect(enabled.status, enabled.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(marker, 'utf8'))).toEqual({ kind: 'echo-personal-claude-all-models-v1', payer_membership_id: 'mem_owner', enabled: true });
+    expect(statSync(marker).mode & 0o777).toBe(0o600);
+    expect(readFileSync(fixture.selection, 'utf8')).toBe(narrow);
+    const status = fixture.run('personal-claude', {}, ['status']);
+    expect(status.stdout).toContain('personal_claude_scope=all-models');
+    expect(status.stdout).toContain('personal_claude_payer=mem_owner');
+    expect(status.stdout).toContain('personal_claude_model=claude-sonnet-5-5');
+    expect(fixture.run('personal-claude', {}, ['login']).stderr).toContain('disable personal Claude');
+    expect(fixture.run('personal-claude', {}, ['disable']).status).toBe(0);
+    expect(existsSync(fixture.selection)).toBe(false);
+    expect(JSON.parse(readFileSync(marker, 'utf8')).enabled).toBe(false);
+    const disabledStatus = fixture.run('personal-claude', {}, ['status']);
+    expect(disabledStatus.stdout).toContain('personal_claude_scope=none');
+    expect(disabledStatus.stdout).toContain('personal_claude_payer=mem_owner');
+    const unsupported = fixture.run('resume', { ECHO_FAKE_PERSONAL_CLAUDE_ALL_MODELS_CAPABILITY: 'false' });
+    expect(unsupported.status).toBe(1);
+    expect(unsupported.stderr).toContain('personal Claude all-models state requires a compatible image');
+  });
+
+  it('refuses all-models unsupported images and mismatched payer before changing selection or restarting', () => {
+    for (const problem of ['capability', 'payer', 'unsafe', 'signed-out']) {
+      const fixture = personalClaudeFixture();
+      const marker = join(fixture.privateDir, 'personal-claude-all-models.json');
+      if (problem === 'payer') writeFileSync(fixture.selection, JSON.stringify({ kind: 'echo-personal-claude-research-v1', membership_id: 'mem_other' }), { mode: 0o600 });
+      if (problem === 'unsafe') writeFileSync(marker, JSON.stringify({ kind: 'echo-personal-claude-all-models-v1', payer_membership_id: 'mem_owner', enabled: false }), { mode: 0o644 });
+      const result = fixture.run('personal-claude', {
+        ECHO_FAKE_PERSONAL_CLAUDE_ALL_MODELS_CAPABILITY: String(problem !== 'capability'),
+        ECHO_FAKE_PERSONAL_CLAUDE_SIGNED_IN: String(problem !== 'signed-out'),
+      }, ['enable', '--member', 'mem_owner', '--all-models']);
+      expect(result.status, problem).toBe(1);
+      expect(readFileSync(fixture.calls, 'utf8'), problem).not.toContain('stop -t');
+      if (problem !== 'unsafe') expect(existsSync(marker), problem).toBe(false);
+    }
+  });
+
+  it.each(['enable', 'disable'] as const)('preserves all-models selection when Authority stop fails during %s', action => {
+    const fixture = personalClaudeFixture();
+    const marker = join(fixture.privateDir, 'personal-claude-all-models.json');
+    const before = JSON.stringify({ kind: 'echo-personal-claude-all-models-v1', payer_membership_id: 'mem_owner', enabled: action === 'disable' });
+    writeFileSync(marker, before, { mode: 0o600 });
+    const args = action === 'enable' ? ['enable', '--member', 'mem_owner', '--all-models'] : ['disable'];
+    const result = fixture.run('personal-claude', { ECHO_FAKE_FAIL_EXTRACTION_STOP: 'true' }, args);
+    expect(result.status, result.stderr).toBe(1);
+    expect(readFileSync(marker, 'utf8')).toBe(before);
+    expect(result.stderr).toContain('selection unchanged');
+    expect(readFileSync(fixture.calls, 'utf8')).not.toContain('up -d');
+  });
+
+  it('leaves Authority stopped when persisting all-models selection fails', () => {
+    const fixture = personalClaudeFixture();
+    const marker = join(fixture.privateDir, 'personal-claude-all-models.json');
+    const wrapper = join(fixture.deploy, 'onboard-clean-v1.sh');
+    const mutation = 'python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$action" "$member" "$all_models"';
+    const source = readFileSync(wrapper, 'utf8');
+    expect(source).toContain(mutation);
+    // Fault only the final selection-writing command; all preflights/auth and the real stop branch still execute.
+    writeFileSync(wrapper, source.replace(mutation, 'false'));
+    const result = fixture.run('personal-claude', {}, ['enable', '--member', 'mem_owner', '--all-models']);
+    expect(result.status).toBe(1);
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(join(fixture.root, 'extraction-stopped'))).toBe(true);
+    const calls = readFileSync(fixture.calls, 'utf8');
+    expect(calls).toContain('stop -t 30 authority');
+    expect(calls).not.toContain('up -d');
+  });
 
   it('enables one hosted Claude member only after native auth proof and preserves native sign-in on disable', () => {
     const fixture = personalClaudeFixture();

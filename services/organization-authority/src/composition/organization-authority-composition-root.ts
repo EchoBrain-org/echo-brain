@@ -17,7 +17,10 @@ import {
   type OpenedOrganizationAuthorityRuntime,
 } from "./organization-authority-runtime.js";
 import { createOpenRouterDecisionProcessorBundleV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1";
-import { createOpenRouterAnswerCompositionGenerationBundleV1, type PersonalClaudeResearchV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
+import { createClaudeAccountDecisionProcessorBundleV1 } from "@echo-brain/provider-openrouter/claude-account-decision-processor-bundle-v1";
+import { createClaudeAccountAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/claude-account-answer-composition-generation-bundle-v1";
+import type { PersonalClaudeAllModelsSelectionV1 } from './personal-claude-selection-v1.js';
+import { assertPersonalClaudeResearchV1, createOpenRouterAnswerCompositionGenerationBundleV1, type PersonalClaudeResearchV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 import {
   HttpNangoConnectionClientV1,
@@ -89,6 +92,8 @@ export interface OrganizationAuthorityServiceConfig extends Omit<
   readonly openrouter_credential_file: string;
   /** One end user's native Claude profile, for that member's interactive research only. */
   readonly personal_claude_research?: PersonalClaudeResearchV1;
+  /** Explicit staging payer for every model call; retained after disable for processor-generation recovery. */
+  readonly personal_claude_all_models?: PersonalClaudeAllModelsSelectionV1;
   /** Jira remains absent unless this explicit selection is supplied after release approval. */
   readonly jira_person_live?: JiraPersonLiveConfigurationV1;
   /** Explicit Confluence Cloud selection. It is absent unless an operator enables live page reads. */
@@ -111,7 +116,7 @@ export interface OrganizationAuthorityServiceDependencies {
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
   /** Provider-only test seams; production reads every page through the asker's Nango grant. */
   readonly confluence_person_live_seams?: ConfluencePersonLiveRuntimeSeamsV1;
-  /** Provider-free test seam for the personal meeting runtime; the deployable service keeps OpenRouter. */
+  /** Provider-free test seam for the personal meeting runtime. */
   readonly person_meeting_processor?: DecisionProcessorBundleV1;
   /** Test seams for Nango's and Slack's HTTP APIs. */
   readonly slack?: {
@@ -177,8 +182,14 @@ export async function openOrganizationAuthorityService(
   config: OrganizationAuthorityServiceConfig,
   dependencies: OrganizationAuthorityServiceDependencies = {},
 ): Promise<OpenedOrganizationAuthorityRuntime> {
-  if (config.personal_claude_research !== undefined && config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) {
-    throw new Error('Personal Claude research is available only on the staging Authority');
+  if ((config.personal_claude_research !== undefined || config.personal_claude_all_models !== undefined) && config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) {
+    throw new Error('Personal Claude is available only on the staging Authority');
+  }
+  if (config.personal_claude_all_models !== undefined) {
+    try {
+      if (typeof config.personal_claude_all_models.enabled !== 'boolean') throw new Error('invalid selection');
+      assertPersonalClaudeResearchV1({ ...config.personal_claude_all_models, membership_id: config.personal_claude_all_models.payer_membership_id });
+    } catch { throw new Error('Personal Claude all-models selection is invalid'); }
   }
   const {
     staging_synthetic_meetings_directory,
@@ -186,16 +197,27 @@ export async function openOrganizationAuthorityService(
     nango,
     jira_person_live,
     confluence_person_live,
+    personal_claude_all_models,
     ...sharedConfig
   } = config;
+  if (personal_claude_all_models !== undefined && sharedConfig.personal_claude_research !== undefined &&
+      (personal_claude_all_models.payer_membership_id !== sharedConfig.personal_claude_research.membership_id ||
+       personal_claude_all_models.home_directory !== sharedConfig.personal_claude_research.home_directory ||
+       personal_claude_all_models.executable_path !== sharedConfig.personal_claude_research.executable_path)) {
+    throw new Error('Personal Claude has conflicting payer selections');
+  }
   const slack = composeSlackV1(
     { ...sharedConfig, nango },
     dependencies.slack,
   );
-  // One limiter for every call on the OpenRouter credential: extraction here, Ask and the rest in the runtime.
+  // The same limiter covers extraction, interactive Ask and background calls for either payer.
   const modelCalls = createModelCallLimiterV1();
-  const decisionProcessor = createOpenRouterDecisionProcessorBundleV1({
+  const allModelsAccount = personal_claude_all_models?.enabled ? personal_claude_all_models : undefined;
+  const decisionProcessor = allModelsAccount === undefined ? createOpenRouterDecisionProcessorBundleV1({
     credential_file: openrouter_credential_file,
+    limit: (signal, op) => modelCalls.run("background", signal, op),
+  }) : createClaudeAccountDecisionProcessorBundleV1({
+    account: allModelsAccount,
     limit: (signal, op) => modelCalls.run("background", signal, op),
   });
   // One instance for the personal appender and the Authority's readers.
@@ -303,6 +325,7 @@ export async function openOrganizationAuthorityService(
           sessions,
           resources,
           processor: dependencies.person_meeting_processor ?? decisionProcessor,
+          ...(personal_claude_all_models === undefined ? {} : { processor_generations: true as const }),
           projectors: policyProjectors,
           providers: [openedGranola.provider, ...(synthetic === undefined ? [] : [synthetic.provider])],
           provider_applications: [interaction],
@@ -467,11 +490,11 @@ export async function openOrganizationAuthorityService(
     {
       ...sharedConfig,
       answer_composition_generation_bundle:
-        createOpenRouterAnswerCompositionGenerationBundleV1({
+        allModelsAccount === undefined ? createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
           ...(sharedConfig.personal_claude_research === undefined ? {} : { personal_claude_research: sharedConfig.personal_claude_research }),
           ...(sharedConfig.staging_claude_research_v1 === true && sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? { research_engine: 'claude-sdk' as const } : {}),
-        }),
+        }) : createClaudeAccountAnswerCompositionGenerationBundleV1({ account: allModelsAccount }),
       model_call_limiter: modelCalls,
       record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
       record_policy_fact_projectors: policyProjectors,

@@ -1543,6 +1543,81 @@ fi
     expect(result.stderr).toContain(diagnostic);
   });
 
+  it('refuses old-image rollback with retained all-models history before replacing the staged tuple', () => {
+    for (const enabled of [true, false]) {
+      const fixture = environmentDriftFixture(`if [[ "$1" == image && "$2" == inspect && "$#" == 3 ]]; then exit 0; fi
+if [[ "$*" == *personal-claude-all-models-v1* ]]; then
+  if [[ "$*" == *${'d'.repeat(64)}* ]]; then echo true; else echo false; fi
+  exit 0
+fi`);
+      writeFileSync(fixture.envFile, fixture.original);
+      const candidateRecord = releaseWithRuntimeProfile(fixture.profile, {
+        release_id: 'clean-v1-20260822-002',
+        authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, 'd'.repeat(64)) },
+      });
+      const staged = fixture.execute('stage', '--release', writeRecord(candidateRecord), '--runtime-profile', fixture.profile);
+      expect(staged.status, staged.stderr).toBe(0);
+      const stagedEnvironment = readFileSync(fixture.envFile, 'utf8');
+      const privateDirectory = join(fixture.root, 'private');
+      mkdirSync(privateDirectory, { mode: 0o700 });
+      writeFileSync(join(privateDirectory, 'personal-claude-all-models.json'), JSON.stringify({ kind: 'echo-personal-claude-all-models-v1', payer_membership_id: 'mem_owner', enabled }), { mode: 0o600 });
+      writeFileSync(fixture.log, '');
+      const rollback = fixture.execute('rollback');
+      expect(rollback.status, rollback.stderr).toBe(1);
+      expect(rollback.stderr).toContain('personal Claude all-models state requires a compatible image');
+      expect(readFileSync(fixture.envFile, 'utf8')).toBe(stagedEnvironment);
+      expect(existsSync(join(fixture.state, 'candidate.clean-v1.json'))).toBe(true);
+      expect(readFileSync(fixture.log, 'utf8')).not.toContain(' up ');
+    }
+  });
+
+  it('refuses an incompatible all-models candidate before storing or starting it', () => {
+    const fixture = environmentDriftFixture(`if [[ "$1" == image && "$2" == inspect && "$#" == 3 ]]; then exit 0; fi
+if [[ "$*" == *personal-claude-all-models-v1* ]]; then
+  if [[ "$*" == *${'b'.repeat(64)}* ]]; then echo true; else echo false; fi
+  exit 0
+fi`);
+    writeFileSync(fixture.envFile, fixture.original);
+    mkdirSync(join(fixture.root, 'private'), { mode: 0o700 });
+    writeFileSync(join(fixture.root, 'private/personal-claude-all-models.json'), JSON.stringify({ kind: 'echo-personal-claude-all-models-v1', payer_membership_id: 'mem_owner', enabled: false }), { mode: 0o600 });
+    const candidate = writeRecord(releaseWithRuntimeProfile(fixture.profile, {
+      release_id: 'clean-v1-20260822-002',
+      authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, 'd'.repeat(64)) },
+    }));
+    const staged = fixture.execute('stage', '--release', candidate, '--runtime-profile', fixture.profile);
+    expect(staged.status, staged.stderr).toBe(1);
+    expect(staged.stderr).toContain('personal Claude all-models state requires a compatible image');
+    expect(readFileSync(fixture.envFile, 'utf8')).toBe(fixture.original);
+    expect(existsSync(join(fixture.state, 'candidate.clean-v1.json'))).toBe(false);
+    expect(readFileSync(fixture.log, 'utf8')).not.toContain(' up ');
+  });
+
+  it('keeps the failed candidate when all-models history makes automatic rollback incompatible', () => {
+    const fixture = environmentDriftFixture(`if [[ "$1" == image && "$2" == inspect && "$#" == 3 ]]; then exit 0; fi
+if [[ "$*" == *personal-claude-all-models-v1* ]]; then
+  if [[ "$*" == *${'d'.repeat(64)}* ]]; then echo true; else echo false; fi
+  exit 0
+fi
+if [[ "$1" == compose && "$*" == *" up "* && "$release" == clean-v1-20260822-002 ]]; then
+  mkdir -p "$ECHO_TEST_PRIVATE_DIRECTORY"
+  printf '%s\\n' '{"kind":"echo-personal-claude-all-models-v1","payer_membership_id":"mem_owner","enabled":false}' > "$ECHO_TEST_PRIVATE_DIRECTORY/personal-claude-all-models.json"
+  exit 1
+fi`);
+    fixture.environment.ECHO_TEST_PRIVATE_DIRECTORY = join(fixture.root, 'private');
+    writeFileSync(fixture.envFile, fixture.original);
+    const candidate = writeRecord(releaseWithRuntimeProfile(fixture.profile, {
+      release_id: 'clean-v1-20260822-002',
+      authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, 'd'.repeat(64)) },
+    }));
+    const staged = fixture.execute('stage', '--release', candidate, '--runtime-profile', fixture.profile);
+    expect(staged.status).toBe(1);
+    expect(staged.stderr).toContain('personal Claude all-models state requires a compatible image');
+    expect(staged.stderr).toContain('candidate failed and rollback also failed');
+    expect(readFileSync(fixture.envFile, 'utf8')).toContain('ECHO_CLEAN_RELEASE_ID=clean-v1-20260822-002');
+    expect(existsSync(join(fixture.state, 'candidate.clean-v1.json'))).toBe(true);
+    expect(readFileSync(fixture.log, 'utf8')).not.toMatch(/^clean-v1-20260822-001 compose .* up /m);
+  });
+
   it("carries onboarding's unterminated telemetry line and only the candidate's Ask switches into the candidate, and rollback restores the accepted bytes", () => {
     const fixture = environmentDriftFixture();
     const original = fixture.original + "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true";

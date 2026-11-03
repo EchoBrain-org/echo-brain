@@ -12,7 +12,10 @@
     "providers/openrouter/src/openrouter-answer-composition-generation-bundle-v1.ts",
     "providers/openrouter/src/openrouter-decision-processor-config-v1.ts",
     "providers/openrouter/src/openrouter-decision-processor-admission-commitment.ts",
-    "providers/openrouter/src/openrouter-telemetry-vocabulary-v1.ts"
+    "providers/openrouter/src/openrouter-telemetry-vocabulary-v1.ts",
+    "providers/openrouter/src/claude-account-answer-composition-generation-bundle-v1.ts",
+    "providers/openrouter/src/claude-account-decision-processor-bundle-v1.ts",
+    "providers/openrouter/src/claude-account-decision-processor-config-v1.ts"
   ],
   "owned_source_paths": [
     "providers/openrouter/src/**"
@@ -83,6 +86,16 @@
         "name": "OpenRouter decision processor bundle",
         "path": "providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts",
         "export": "createOpenRouterDecisionProcessorBundleV1"
+      },
+      {
+        "name": "Claude account answer-composition generation bundle",
+        "path": "providers/openrouter/src/claude-account-answer-composition-generation-bundle-v1.ts",
+        "export": "createClaudeAccountAnswerCompositionGenerationBundleV1"
+      },
+      {
+        "name": "Claude account decision processor bundle",
+        "path": "providers/openrouter/src/claude-account-decision-processor-bundle-v1.ts",
+        "export": "createClaudeAccountDecisionProcessorBundleV1"
       }
     ],
     "compatibility_entrypoints": [],
