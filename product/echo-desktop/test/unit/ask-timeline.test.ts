@@ -162,28 +162,33 @@ describe('the timeline\'s rules', () => {
 });
 
 describe('what a check asks, and what it says of a turn', () => {
-  it('asks once per citation of a turn, newest turn first, with a ticket\'s baseline, at most 100 items', () => {
+  it('asks once per citation of a turn, newest turn first, with a ticket\'s baseline, at most 100 items a request', () => {
     const repeated = answerOf('Q?', [ticket('THERM-482', '20482'), ticket('THERM-482', '20482'), mara, page('31010')], [['A.', [0, 1]], ['B.', [2, 3]]]);
     const [older, newer] = [turn('Older?', 2 * DAY, status(), { markers: { 0: sha('m1') } }), turn('Newer?', DAY, repeated)];
     const plan = checkPlan([newer!, older!]);
     // The same ticket twice in a turn is asked about once; a person never.
-    expect(plan.items.map(item => [item.citation.kind, item.asked_at, item.marker ?? null])).toEqual([
+    expect(plan.requests).toHaveLength(1);
+    expect(plan.requests[0]!.items.map(item => [item.citation.kind, item.asked_at, item.marker ?? null])).toEqual([
       ['ticket', newer!.asked_at, null], ['page', newer!.asked_at, null],
       ['ticket', older!.asked_at, sha('m1')], ['page', older!.asked_at, null], ['follow_up', older!.asked_at, null],
     ]);
-    expect(plan.places).toEqual([{ turn: newer!.id, sources: [0, 1] }, { turn: newer!.id, sources: [3] }, { turn: older!.id, sources: [0] }, { turn: older!.id, sources: [1] },
-      { turn: older!.id, sources: [2] }]);
+    expect(plan.requests[0]!.places).toEqual([{ turn: newer!.id, sources: [0, 1] }, { turn: newer!.id, sources: [3] }, { turn: older!.id, sources: [0] },
+      { turn: older!.id, sources: [1] }, { turn: older!.id, sources: [2] }]);
     // A new answer's tickets alone, for their baseline.
-    expect(checkPlan([newer!], source => source.kind === 'ticket').items).toHaveLength(1);
-    // At most 100 items in all.
+    expect(checkPlan([newer!], source => source.kind === 'ticket').requests.map(request => request.items.length)).toEqual([1]);
+    // At most 100 items a request, every source asked about: a turn the first request cuts short goes on in the next.
     const wide = answerOf('Wide?', Array.from({ length: 30 }, (_, at) => ticket(`T-${at}`, String(1000 + at))), [['All of them.', [0]]]);
-    expect(checkPlan(Array.from({ length: 5 }, (_, at) => turn(`W${at}?`, at * HOUR, wide))).items).toHaveLength(MAX_CHECK_ITEMS);
+    const turns = Array.from({ length: 5 }, (_, at) => turn(`W${at}?`, at * HOUR, wide));
+    const split = checkPlan(turns);
+    expect(split.requests.map(request => request.items.length)).toEqual([MAX_CHECK_ITEMS, 50]);
+    expect(split.requests[1]!.places[0]).toEqual({ turn: turns[3]!.id, sources: [10] });
+    expect(split.turns).toEqual(turns.map(value => value.id));
   });
 
   it('turns the results into each turn\'s sources\' states and its tickets\' markers', () => {
     const one = turn('One?', DAY, status());
     const plan = checkPlan([one]);
-    const found = checkedOf(plan, [{ state: 'same', marker: sha('m2') }, { state: 'changed' }, { state: 'unreadable' }]);
+    const found = checkedOf(plan, [[{ state: 'same', marker: sha('m2') }, { state: 'changed' }, { state: 'unreadable' }]]);
     expect(found).toEqual({ turns: { [one.id]: { 0: 'same', 1: 'changed', 2: 'unreadable' } }, markers: { [one.id]: { 0: sha('m2') } } });
   });
 

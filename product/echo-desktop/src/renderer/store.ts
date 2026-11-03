@@ -5,7 +5,7 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskChoice, AskedScope, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  Account, AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskedScope, AskPrevious, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Match, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordItem, RecordRef, RecordSection, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
@@ -16,7 +16,7 @@ import { answerMarkdown, answerSentences, answerText, documentName, numberedSour
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
   answeredNow, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, CHECK_TURNS, checkedOf, checkPlan, followedTurn, freshChecks, freshStates, knownStates, previousOf, sameScope,
-  shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type Suggestion, type TurnCheck, type TurnChecks,
+  shownInFull, showsOf, threadOf, unreadableAfter, visibleTurns, turnGroups, type CheckPlan, type Suggestion, type TurnCheck, type TurnChecks,
 } from './timeline.js';
 import { openerOf, sourceKey } from './openers.js';
 import { PROGRESS_AFTER_MS, startProgress, withStep, type AskProgress } from './progress.js';
@@ -3805,8 +3805,9 @@ function checkTurn(turn: TimelineTurn): Promise<void> {
  * of each turn it speaks for is good for five minutes from when it went, and
  * stands over what an earlier check said of that turn, never over what a
  * later one did; a turn citing nothing a check asks about is spoken for
- * without asking. It fails quietly, with no tags: what an earlier check said
- * that is no longer good goes with it. A ticket it reads for the first time
+ * without asking. It fails quietly, with no tags, when any of its requests
+ * does: what an earlier check said that is no longer good goes with it, and
+ * it speaks for no turn it did not ask all about. A ticket it reads for the first time
  * keeps the marker it read as its baseline. `newest`: the place (`threadKey`)
  * whose newest turns Ask opening checked, made again there five minutes after
  * it went.
@@ -3818,14 +3819,14 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
   const mine = checkSeq;
   const at = Date.now();
   const check = async () => {
-    const result = plan.items.length === 0 ? null : await rpc('ask.check', { expect: account, items: [...plan.items] });
-    if (mine !== checkSeq || !sameAccount(account)) return;
-    if (result && !result.ok) {
+    const result = await askChecks(account, plan, () => mine === checkSeq && sameAccount(account));
+    if (result === null) return;
+    if (!result.ok) {
       if (ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
       keepChecks(state.timeline.checks);
       return;
     }
-    const found = checkedOf(plan, result?.value.items ?? []);
+    const found = checkedOf(plan, result.value);
     if (newest !== null) newestCheckedAt.set(newest, at);
     const before = state.timeline.checks;
     const latest = Object.entries(found.turns).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
@@ -3877,15 +3878,30 @@ function keepBaselines(markers: Readonly<Record<string, Readonly<Record<string, 
   }
 }
 
+/**
+ * A check's requests, one after another: the results of each, or the first
+ * failure, which ends it; null once a reply no longer counts (`wanted`).
+ */
+async function askChecks(account: Expect, plan: CheckPlan, wanted: () => boolean): Promise<Result<readonly (readonly AskCheckResult[])[]> | null> {
+  const results: (readonly AskCheckResult[])[] = [];
+  for (const request of plan.requests) {
+    const result = await rpc('ask.check', { expect: account, items: [...request.items] });
+    if (!wanted()) return null;
+    if (!result.ok) return result;
+    results.push(result.value.items);
+  }
+  return { ok: true, value: results };
+}
+
 /** A new answer's tickets: one check, for their markers now, the baseline a later check compares with (C5). Quiet. */
 async function baseline(turn: TimelineTurn): Promise<void> {
   const account = expect();
   if (!account) return;
   const plan = checkPlan([turn], source => source.kind === 'ticket');
-  if (plan.items.length === 0) return;
-  const result = await rpc('ask.check', { expect: account, items: [...plan.items] });
-  if (!sameAccount(account) || !result.ok) return;
-  keepBaselines(checkedOf(plan, result.value.items).markers);
+  if (plan.requests.length === 0) return;
+  const result = await askChecks(account, plan, () => sameAccount(account));
+  if (result === null || !result.ok) return;
+  keepBaselines(checkedOf(plan, result.value).markers);
 }
 
 /** Ask, opened over the page: the latest turn in full, nothing asked or opened in it yet, the older earlier questions folded. */

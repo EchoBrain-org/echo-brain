@@ -25,6 +25,17 @@ const GLOBAL = { kind: 'global' } as const;
 const QUESTION = 'Can THERM start PVT?';
 /** The fixture's THERM answer, as the host hands it to the page: in its blocks, or as an Ask that did not ask for them gets it. */
 const therm = (blocks = true): Answer => answerView({ ok: true, result: blocksAnswer(QUESTION, GLOBAL, blocks) }, GLOBAL);
+/** An answer in blocks citing `count` Confluence pages, past ADR-0041's 40 (ADR-0051): the answer, then a point for each other page. */
+function pagesAnswer(count: number): Answer {
+  const citations = Array.from({ length: count }, (_, at) => ({ kind: 'page', label: `Page ${at + 1}`, visibility: 'team', citation: {
+    kind: 'page', tool_id: 'confluence', external_scope_id: '22222222-3333-4444-8555-666666666666', page_id: String(41_000 + at), section_id: 'summary', version: '1',
+    permalink: `https://example.atlassian.net/wiki/pages/viewpage.action?pageId=${41_000 + at}`, text_sha256: `sha256:${'0'.repeat(64)}` } }));
+  const statements = citations.map((_, at) => ({ text: `Page ${at + 1} applies.`, citation_indexes: [at], private: false }));
+  return answerView({ ok: true, result: { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: GLOBAL, outcome: 'answered', citations, parts: [{
+    question: QUESTION, status: 'answered', statements,
+    blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: false, statements: statements.slice(1).map((_, at) => at + 1) }],
+  }] } }, GLOBAL);
+}
 /** The fixture's answer with its blocks changed by `change`. */
 const changed = (change: (blocks: ArrangedBlock[]) => ArrangedBlock[], answer = therm()): Answer =>
   ({ ...answer, parts: [{ ...answer.parts[0]!, blocks: change([...answer.parts[0]!.blocks!]) }] });
@@ -266,6 +277,19 @@ describe('a check of an arranged answer (ADR-0047)', () => {
     store.toggleTurn(older.id);
     const opened = byTestId(thread(), 'opened-turn')[0]!;
     expect(drawn(byClass(opened, 'answer-layout')[0])).toEqual(['p.answer-lead', 'h3.answer-heading', 'ul.answer-bullets', 'h3.answer-heading', 'div.answer-table']);
+  });
+
+  it('asks about every source of an answer past the 100 one check request takes, and leaves out what cites one past them you can no longer read', async () => {
+    // 104 pages, each a point of its own after the answer: the 104th is no longer yours to read.
+    const { store, thread } = await reopened({ 41103: 'unreadable' }, kept('1', pagesAnswer(104)));
+    expect(rpc.mock.calls.filter(([name]) => name === 'ask.check').map(([, params]) => (params as { items: unknown[] }).items.length)).toEqual([100, 4]);
+    const answer = byTestId(thread(), 'answer')[0]!;
+    expect(byTestId(answer, 'statement').map(words)).toHaveLength(103);
+    expect(text(answer)).not.toContain('Page 104');
+    expect(await store.copyAnswer(store.getState().timeline.turns.at(-1)!.id)).toBe(true);
+    const [markdown] = rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').map(([, params]) => (params as { text: string }).text);
+    expect(markdown).toContain('Page 103 applies.');
+    expect(markdown).not.toContain('Page 104');
   });
 });
 

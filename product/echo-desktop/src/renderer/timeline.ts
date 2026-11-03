@@ -62,14 +62,16 @@ export function freshChecks(checks: Readonly<Record<string, TurnCheck>>, now: nu
 }
 
 /**
- * One check: its items, and for each, the turn whose sources it stands for
- * and their places there; and the turns it speaks for: each it asks about,
- * and each citing nothing a check asks about. A turn none of whose sources
- * fit is not one of them.
+ * One check: the requests it takes, each with its items and, for each, the
+ * turn whose sources it stands for and their places there; and the turns it
+ * speaks for, every one: it asks about all of each turn's sources, and a turn
+ * citing nothing a check asks about is spoken for without asking.
  */
-interface CheckPlan {
-  readonly items: readonly AskCheckItem[];
-  readonly places: readonly { readonly turn: string; readonly sources: readonly number[] }[];
+export interface CheckPlan {
+  readonly requests: readonly {
+    readonly items: readonly AskCheckItem[];
+    readonly places: readonly { readonly turn: string; readonly sources: readonly number[] }[];
+  }[];
   readonly turns: readonly string[];
 }
 
@@ -90,56 +92,58 @@ function checkable(turn: TimelineTurn): { source: AnswerSource; at: number; cita
 /**
  * One check of `turns` (the one most wanted first: the newest, or the turn
  * opened): each turn's checkable sources, the same citation once per turn,
- * with when the turn was asked and a ticket's baseline marker; at most 100
- * items in all, within the route's 64 KiB, the first turns' first. `only`
- * narrows the sources, as a new answer's tickets' baseline does.
+ * with when the turn was asked and a ticket's baseline marker, the first
+ * turns' first, in as many requests as they take, each at most 100 items
+ * within the route's 64 KiB. Every source is asked about, so a check never
+ * speaks for part of a turn: an answer in blocks can cite more sources than
+ * one request takes (ADR-0051). `only` narrows the sources, as a new
+ * answer's tickets' baseline does.
  */
 export function checkPlan(turns: readonly TimelineTurn[], only: (source: AnswerSource) => boolean = () => true): CheckPlan {
-  const items: AskCheckItem[] = [];
-  const places: { turn: string; sources: number[] }[] = [];
-  const spoken: string[] = [];
-  // The request's envelope, and a comma between items.
-  let bytes = 96;
-  let full = false;
+  const requests: { items: AskCheckItem[]; places: { turn: string; sources: number[] }[] }[] = [];
+  // What the last request holds: its envelope, and a comma between items.
+  let bytes = 0;
   for (const turn of turns) {
-    const asked = checkable(turn).filter(({ source }) => only(source));
-    if (asked.length === 0) { spoken.push(turn.id); continue; }
-    const seen = new Map<string, number>();
-    for (const { source, at, citation } of full ? [] : asked) {
+    const seen = new Map<string, number[]>();
+    for (const { source, at, citation } of checkable(turn).filter(({ source }) => only(source))) {
       const key = JSON.stringify(citation);
       const same = seen.get(key);
-      if (same !== undefined) { places[same]!.sources.push(at); continue; }
+      if (same !== undefined) { same.push(at); continue; }
       const marker = source.kind === 'ticket' ? turn.markers?.[String(at)] : undefined;
       const item: AskCheckItem = { asked_at: turn.asked_at, citation, ...(marker === undefined ? {} : { marker }) };
       const size = new TextEncoder().encode(JSON.stringify(item)).length + 1;
-      if (items.length === MAX_CHECK_ITEMS || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) { full = true; break; }
+      const last = requests.at(-1);
+      if (last === undefined || last.items.length === MAX_CHECK_ITEMS || bytes + size > MAX_CHECK_REQUEST_BYTES - 1024) {
+        requests.push({ items: [], places: [] });
+        bytes = 96;
+      }
       bytes += size;
-      seen.set(key, places.length);
-      items.push(item);
-      places.push({ turn: turn.id, sources: [at] });
+      const sources = [at];
+      seen.set(key, sources);
+      requests.at(-1)!.items.push(item);
+      requests.at(-1)!.places.push({ turn: turn.id, sources });
     }
-    if (seen.size > 0) spoken.push(turn.id);
   }
-  return { items, places, turns: spoken };
+  return { requests, turns: turns.map(turn => turn.id) };
 }
 
 /**
- * What a check's results say of each turn it speaks for (nothing of one that
- * cites nothing a check asks about), and the markers its readable tickets
- * have now.
+ * What a check's results, one list for each of its requests, say of each
+ * turn it speaks for (nothing of one that cites nothing a check asks about),
+ * and the markers its readable tickets have now.
  */
-export function checkedOf(plan: CheckPlan, results: readonly AskCheckResult[]): Checked {
+export function checkedOf(plan: CheckPlan, results: readonly (readonly AskCheckResult[])[]): Checked {
   const turns: Record<string, Record<number, AskCheckState>> = Object.fromEntries(plan.turns.map(id => [id, {}]));
   const markers: Record<string, Record<string, string>> = {};
-  plan.places.forEach(({ turn, sources }, index) => {
-    const result = results[index];
+  plan.requests.forEach((request, asked) => request.places.forEach(({ turn, sources }, index) => {
+    const result = results[asked]?.[index];
     if (!result) return;
     const states = turns[turn] ??= {};
     for (const at of sources) {
       states[at] = result.state;
       if (result.marker !== undefined) (markers[turn] ??= {})[String(at)] = result.marker;
     }
-  });
+  }));
   return { turns, markers };
 }
 
@@ -183,8 +187,8 @@ function sentences(turn: TimelineTurn): AnswerStatement[] {
  * `changed` when a sentence it shows cites a source that changed; `same` only
  * when every source the sentences it shows cite was checked and is the same;
  * and nothing otherwise. A check that could not tell (`unknown`), a source it
- * did not ask about (one past what it could take, or a project, a person or a
- * tool, which no check asks about) and a turn with every sentence left out
+ * did not ask about (a project, a person or a tool, which no check asks
+ * about) and a turn with every sentence left out
  * leave an old answer saying nothing: it never looks current unless the check
  * says so.
  */
