@@ -54,7 +54,8 @@ linked by stable ID, and not copied between component pages.
 - [Person client architecture](architecture/person-client-architecture.md)
 - [Identity and onboarding](architecture/identity-and-onboarding.md)
 - [Organization control plane](architecture/organization-control-plane.md)
-- [Shared connector contracts](architecture/connector-contracts.md)
+- [Shared connector contracts](architecture/connector-contracts.md), including
+  [adding a source](architecture/connector-contracts.md#adding-a-source)
 - [Scaling decision guide](architecture/scaling-decision-guide.md)
 - [Component naming taxonomy](architecture/component-naming-taxonomy.md)
 - [Component catalog](components/README.md)

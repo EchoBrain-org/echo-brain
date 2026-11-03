@@ -14,6 +14,58 @@ pointers, metadata and bodies are not admitted to Layer 1. The dormant shared
 capture contracts, intake and provider capture mapping were removed unused on
 2026-10-19.
 
+## Adding a source
+
+Start here to connect a new tool. Add one only when there is clear demand.
+
+**Check the fit first.** A new source is mostly a provider adapter when both
+hold:
+
+- Its content is tickets, pages or meetings. Live sources register as
+  `ticket`, `page` or `tool_container` (a tool's projects or spaces), and the
+  registry refuses any other kind. A meeting tool implements
+  `PersonMeetingProviderV1` instead.
+- Each person signs in with their own account, so ECHO reads only what that
+  person can already see. Service accounts are excluded
+  ([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md)).
+
+Anything else, such as chat messages, CRM records or an internal database
+without per-person sign-in, needs a new citation kind, answer version and
+desktop rendering, or ECHO-side permissions for the source. Write an ADR first.
+
+**Build it.** Follow the closest existing provider: Jira for tickets,
+Confluence for pages, Granola for meetings.
+
+1. The provider: `providers/<tool>/` for the reader and connection, and
+   `providers/<tool>/client` for the Person CLI fragment.
+2. The Authority wiring in `services/organization-authority/src/composition/`:
+   a `<tool>-person-live-runtime-v1.ts`, an entry in
+   `person-live-connector-registry-v1.ts` (what the source holds, and its
+   capabilities) for a live source, and its configuration in the composition
+   root and service CLI.
+3. The lists: the Person client's tools in
+   `src/product/person-client/composition.ts`, the root workspaces, and the
+   Authority `Dockerfile`. `npm run check:architecture-boundaries` fails until
+   the new workspaces are listed.
+4. The desktop, only when projects map to the tool's containers (project
+   settings) or the tool adds a container kind.
+
+Once registered and connected, a live source reaches Ask, impact checks and
+open items with no change to the research loop.
+
+**Before release.**
+
+- An accepted ADR for the new release path
+  ([INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)).
+- The [adapter qualification matrix](../qualification/adapter-matrix-v1.md).
+- A few [research-loop eval](../../tools/evals/research-loop/README.md) cases
+  showing research picks the new source when it should.
+
+The rules a provider follows are
+[INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
+and
+[FP-ADAPTERS-005](../failure-patterns/FP-ADAPTERS-005-first-provider-becomes-architecture.md).
+
 ## Shared connection commands
 
 The Person CLI dispatches `person tools <verb> --tool <id>` through
