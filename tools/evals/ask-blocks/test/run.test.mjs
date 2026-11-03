@@ -20,7 +20,12 @@ test("makes no request without an explicit run and a private credential file, an
   assert.throws(() => parseArgs([...base, "--cases", "no-such-case"]), /--cases must select known cases/u);
   assert.throws(() => parseArgs([...base, "--judge", "maybe"]), /--judge must be on or off/u);
   const options = parseArgs([...base, "--cases", "soak-owner", "--trials", "1"]);
-  assert.deepEqual([options.trials, options.judge, options.concurrency], [1, true, 4]);
+  assert.deepEqual([options.trials, options.judge, options.concurrency, options.caseSet], [1, true, 4, "main"]);
+  // The held-out questions run the built writer alone, judge off, and name their own cases.
+  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main or held-out/u);
+  assert.throws(() => parseArgs([...base, "--case-set", "held-out"]), /--case-set held-out runs --catalogs built --judge off only/u);
+  assert.throws(() => parseArgs([...base, "--case-set", "held-out", "--catalogs", "built", "--judge", "off", "--cases", "soak-owner"]), /--cases must select known cases/u);
+  assert.equal(parseArgs([...base, "--case-set", "held-out", "--catalogs", "built", "--judge", "off", "--cases", "ho-review-next"]).caseSet, "held-out");
 });
 
 test("scripts research as one search, every item opened, then finish", () => {

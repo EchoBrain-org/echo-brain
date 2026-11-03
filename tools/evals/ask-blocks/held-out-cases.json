@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "kind": "echo-ask-blocks-eval-cases-v1",
+  "description": "Held-out Ask block cases for the quick-lead check (README.md, \"Quick lead check\"), written before any run. Synthetic hardware-program content for another project, HELIX, with other people than THERM's: each question's answer is a list (decisions and next steps, blockers, ordered steps, a status roll-up, a month's events). Research is scripted as for cases.json.",
+  "today": "2026-10-30",
+  "asked_at": "2026-10-30T17:00:00.000Z",
+  "time_zone": "America/Los_Angeles",
+  "asker": "Noor Haddad",
+  "cases": [
+    {
+      "id": "ho-review-next",
+      "question": "What did the Oct 29 pack review decide, and who does what next?",
+      "research": { "query": "Oct 29 pack review", "need": "the review's decisions and next steps" },
+      "items": [
+        { "kind": "decision", "label": "Pack review", "occurred_at": "2026-10-29", "text": "Decided: the HELIX pack moves to 21700 cells. Decided: the cooling plate stays aluminum. Decided: the pilot build moves to Nov 16." },
+        { "kind": "follow_up", "on": "action", "title": "Order 200 cells in the 21700 size", "owner": "Ben Ferreira", "status": "open", "created_at": "2026-10-29T20:00:00.000Z", "sent_at": "2026-10-29T20:05:00.000Z", "due_at": "2026-11-04", "decision": { "title": "Pack review", "first_line": "The HELIX pack moves to 21700 cells." } },
+        { "kind": "follow_up", "on": "page", "title": "Update the cooling plate drawing", "owner": "Iris Novak", "status": "open", "created_at": "2026-10-29T20:00:00.000Z", "sent_at": "2026-10-29T20:05:00.000Z", "due_at": "2026-11-03", "decision": { "title": "Pack review", "first_line": "The cooling plate stays aluminum." } },
+        { "kind": "follow_up", "on": "action", "title": "Tell the pilot line the build moved to Nov 16", "owner": "Noor Haddad", "status": "open", "created_at": "2026-10-29T20:00:00.000Z", "sent_at": "2026-10-29T20:05:00.000Z", "due_at": "2026-11-02", "decision": { "title": "Pack review", "first_line": "The pilot build moves to Nov 16." } }
+      ],
+      "expect": {
+        "shapes": ["sections"],
+        "fallback": ["parallel", "grid"],
+        "facts": [["21700"], ["aluminum"], ["Nov 16", "November 16", "2026-11-16"], ["Ben Ferreira", "Ben"], ["Iris Novak", "Iris"], ["you", "Noor Haddad", "Noor"]],
+        "people": ["Ben Ferreira", "Iris Novak", "Noor Haddad"]
+      }
+    },
+    {
+      "id": "ho-launch-blockers",
+      "question": "What is holding up the HELIX pilot launch?",
+      "research": { "query": "HELIX pilot launch", "need": "what the pilot launch waits on" },
+      "items": [
+        { "kind": "decision", "label": "Pilot readiness review", "occurred_at": "2026-10-27", "text": "The HELIX pilot launches only when the UL certificate arrives, the BMS firmware passes its regression run, and the pilot line passes its first-article inspection." },
+        { "kind": "ticket", "key": "HELIX-201", "title": "UL certificate still pending", "text": "The test lab has not issued the UL certificate for the pack.", "status": "Blocked", "owner": "Sara Lindqvist", "created": "2026-10-12" },
+        { "kind": "ticket", "key": "HELIX-207", "title": "BMS firmware fails two regression tests", "text": "Two of 140 regression tests fail on the cell-balancing path. A fix is planned in BMS 1.4.", "status": "In Progress", "owner": "Kofi Mensah", "created": "2026-10-21" },
+        { "kind": "follow_up", "on": "action", "title": "Run the first-article inspection on the pilot line", "owner": "Mateo Ruiz", "status": "open", "created_at": "2026-10-27T18:00:00.000Z", "sent_at": "2026-10-27T18:05:00.000Z", "due_at": "2026-11-05", "decision": { "title": "Pilot readiness review", "first_line": "The pilot line must pass its first-article inspection." } }
+      ],
+      "expect": {
+        "shapes": ["parallel", "grid"],
+        "fallback": [],
+        "facts": [["UL"], ["regression"], ["first-article", "inspection"]],
+        "people": ["Sara Lindqvist", "Kofi Mensah", "Mateo Ruiz"]
+      }
+    },
+    {
+      "id": "ho-release-steps",
+      "question": "What has to happen, in order, before BMS firmware 1.4 goes to the pilot line?",
+      "research": { "query": "BMS firmware 1.4 release plan", "need": "the steps before the release, in order" },
+      "items": [
+        { "kind": "decision", "label": "Firmware release plan", "occurred_at": "2026-10-28", "text": "Before BMS firmware 1.4 goes to the pilot line: first fix the cell-balancing bug, then run the 48-hour regression, then Iris Novak signs the release note, and only then Kofi Mensah flashes the pilot packs." },
+        { "kind": "follow_up", "on": "ticket", "title": "Fix the cell-balancing bug in BMS 1.4", "owner": "Kofi Mensah", "status": "open", "created_at": "2026-10-28T18:00:00.000Z", "sent_at": "2026-10-28T18:05:00.000Z", "due_at": "2026-11-02", "decision": { "title": "Firmware release plan", "first_line": "Fix the cell-balancing bug first." } },
+        { "kind": "follow_up", "on": "action", "title": "Run the 48-hour regression on BMS 1.4", "owner": "Ben Ferreira", "status": "open", "created_at": "2026-10-28T18:00:00.000Z", "sent_at": "2026-10-28T18:05:00.000Z", "due_at": "2026-11-05", "decision": { "title": "Firmware release plan", "first_line": "Run the regression after the fix." } },
+        { "kind": "follow_up", "on": "page", "title": "Sign the BMS 1.4 release note", "owner": "Iris Novak", "status": "open", "created_at": "2026-10-28T18:00:00.000Z", "sent_at": "2026-10-28T18:05:00.000Z", "due_at": "2026-11-06", "decision": { "title": "Firmware release plan", "first_line": "Sign the release note after the regression." } },
+        { "kind": "follow_up", "on": "action", "title": "Flash the pilot packs with BMS 1.4", "owner": "Kofi Mensah", "status": "open", "created_at": "2026-10-28T18:00:00.000Z", "sent_at": "2026-10-28T18:05:00.000Z", "due_at": "2026-11-09", "decision": { "title": "Firmware release plan", "first_line": "Flash the pilot packs last." } }
+      ],
+      "expect": {
+        "shapes": ["ordered", "grid", "sequence"],
+        "fallback": ["parallel"],
+        "order": true,
+        "facts": [["cell-balancing", "balancing"], ["48-hour"], ["release note"], ["flash", "flashes"]],
+        "people": ["Kofi Mensah", "Ben Ferreira", "Iris Novak"]
+      }
+    },
+    {
+      "id": "ho-task-status",
+      "question": "Where does each HELIX pilot task stand?",
+      "research": { "query": "HELIX pilot tasks", "need": "each pilot task's status" },
+      "items": [
+        { "kind": "follow_up", "on": "action", "title": "Book the pilot line for Nov 16", "owner": "Mateo Ruiz", "status": "done", "created_at": "2026-10-20T18:00:00.000Z", "sent_at": "2026-10-20T18:05:00.000Z", "check": { "verdict": "landed", "checked_at": "2026-10-28T16:00:00.000Z" }, "decision": { "title": "Pilot plan", "first_line": "Book the pilot line." } },
+        { "kind": "follow_up", "on": "action", "title": "Order the pilot cells", "owner": "Ben Ferreira", "status": "open", "created_at": "2026-10-20T18:00:00.000Z", "sent_at": "2026-10-20T18:05:00.000Z", "due_at": "2026-11-04", "check": { "verdict": "still_open", "checked_at": "2026-10-29T16:00:00.000Z" }, "decision": { "title": "Pilot plan", "first_line": "Order the pilot cells." } },
+        { "kind": "follow_up", "on": "page", "title": "Write the pilot test plan", "owner": "Sara Lindqvist", "status": "open", "created_at": "2026-10-20T18:00:00.000Z", "sent_at": "2026-10-20T18:05:00.000Z", "due_at": "2026-11-06", "decision": { "title": "Pilot plan", "first_line": "Write the pilot test plan." } },
+        { "kind": "follow_up", "on": "action", "title": "Train the line operators", "owner": "Iris Novak", "status": "open", "created_at": "2026-10-20T18:00:00.000Z", "sent_at": "2026-10-20T18:05:00.000Z", "due_at": "2026-11-12", "check": { "verdict": "still_open", "checked_at": "2026-10-29T16:00:00.000Z" }, "decision": { "title": "Pilot plan", "first_line": "Train the line operators before the pilot." } }
+      ],
+      "expect": {
+        "shapes": ["grid"],
+        "fallback": ["parallel", "sections"],
+        "facts": [["line"], ["cells"], ["test plan"], ["operators"], ["done", "landed", "booked"]],
+        "people": ["Mateo Ruiz", "Ben Ferreira", "Sara Lindqvist", "Iris Novak"]
+      }
+    },
+    {
+      "id": "ho-supplier-month",
+      "question": "What happened with the cooling plate supplier this month?",
+      "research": { "query": "cooling plate supplier", "need": "this month's events with the supplier" },
+      "items": [
+        { "kind": "decision", "label": "Supplier call", "occurred_at": "2026-10-06", "text": "The cooling plate supplier quoted six weeks for the aluminum plates." },
+        { "kind": "decision", "label": "Sourcing review", "occurred_at": "2026-10-13", "text": "Approved: ask a second supplier for a cooling plate quote." },
+        { "kind": "decision", "label": "Supplier call", "occurred_at": "2026-10-20", "text": "The first supplier cut its lead time to four weeks." },
+        { "kind": "decision", "label": "Sourcing review", "occurred_at": "2026-10-27", "text": "Decided: stay with the first supplier for the pilot." }
+      ],
+      "expect": {
+        "shapes": ["sequence"],
+        "fallback": ["parallel", "grid"],
+        "order": true,
+        "facts": [["six weeks", "6 weeks"], ["second supplier"], ["four weeks", "4 weeks"], ["stay"]],
+        "people": []
+      }
+    }
+  ]
+}

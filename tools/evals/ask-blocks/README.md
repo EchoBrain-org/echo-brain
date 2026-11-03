@@ -547,6 +547,93 @@ reveal, and the labels the page saved match each case's fixed order.
   them up" cut substance along with filler. The three versions' mean ranks lie
   within 0.2 of each other, from one reader.
 
+Both rounds are reverted on their branch (revert commits); the writer's prompt
+and catalog are PR #394's again.
+
+## Quick lead check, 2026-11-02 (pre-registered)
+
+Written before any run. After the ranking, the founder asked for a quick
+answer block, with three or more things set out below it as points, steps or
+a timeline instead of written out in it, and approved this check to get it.
+Both blind rankings agree:
+
+- An answer of sentences only lost to one with a points, steps, table,
+  timeline, card or quote block every time the two met: 8 of 8 on the
+  catalog page, 2 of 2 on the tuning page.
+- A shorter lead alone did not win. Where two leads differ by 3 words or
+  more, the longer ranked better 17 to 9 on the catalog page and 13 to 9 on
+  the tuning page; the shorter ones had cut something the question asked.
+- A quick lead with the detail in a block below did win: in `pvt-wording`
+  round 1's 20-word lead, the decision's words quoted below it, over 32 and
+  36; in `notes-due` round 2's 8 words over 17.
+- In `review-multi` every answer either page showed writes the three
+  decisions out in one lead of 34 to 36 words, above one block of next
+  steps; two rounds of prompt wording did not move it.
+
+**The check, in code.** An answer block's sentence lists items when, outside
+brackets, the text after a colon in it is three or more parts, separated by
+commas or semicolons, the last joined by "and", "or" or "then" ("and then"
+and "and finally" too), unless what follows that word opens with is, are,
+was, were, has, have, had, will, would, can, could, should, may, might or
+must: then it goes on about the sentence's own subject and names no other
+item ("You own it: the follow-up is assigned to you, Noor Haddad, and is
+still open."). Only answer layout v2's answer block is checked; layout v1 and
+an Ask without layout are unchanged, and the prompt and catalog do not
+change.
+
+- **What it does:** a reply whose answer block lists items takes the
+  writer's one repair, as a sentence resting on list rows does (that check
+  first, when both apply), with the repair instruction "the answer block
+  writes out three or more items in one sentence: keep it to the short
+  answer, such as how many there are or what they come to, and give the
+  items in a block after it: points, numbered points when their order
+  matters, or a timeline when each has a date". The repair's reply is
+  released whatever its lead; when no repair can run, or the repair's reply
+  is unusable, the first reply is.
+- **How the rule was chosen:** by reading the 257 distinct leads the two
+  evaluations have produced. It holds the 45 that write out three or more
+  items after a colon (`gate-blockers`, `review-multi`, `ship-steps`,
+  `week-events`, `workstreams-status`) and, with the exception, no other. It
+  misses a list with no colon ("cover the DVT build, its gate, shipping and
+  the supplier certificate"): a rule without the colon also held clauses
+  that are not a list ("Five follow-ups are open, each with a different
+  owner and due date, and none has been checked yet.").
+
+**Held-out questions.** Because the rule was chosen on these 15 cases, five
+new questions in [`held-out-cases.json`](held-out-cases.json), written before
+any run, ask about another synthetic program (HELIX, with other people), each
+with a list for an answer: decisions and next steps (`ho-review-next`),
+blockers (`ho-launch-blockers`), steps in order (`ho-release-steps`), a status
+roll-up (`ho-task-status`) and a month's events (`ho-supplier-month`). They
+are graded as the 15 are, with `--case-set held-out` (the built writer only,
+the judge off), and decide nothing alone.
+
+**The comparison.** Before is PR #394's writer: the gate and wording runs at
+`67c6351` above (its kernel is this commit's), and one held-out run at this
+commit. After is the commit that adds the check: one complete gate run of
+`built` (15 cases, 3 trials), one complete wording run (10 cases, 3 trials)
+and one held-out run (5 cases, 3 trials), through the founder's Claude
+account (`claude-sonnet-5-5`).
+
+**Rules.** The check is proposed for PR #394 only when all three hold:
+
+1. **The gate:** after, `built` passes rules 1 to 5 at their pre-registered
+   thresholds.
+2. **The wording:** after, the wording evaluation passes its three rules.
+3. **The founder's ranking:** the founder ranks, blind, each question whose
+   trial-1 answer the check changed (its first reply sent back, among the 15
+   cases and the 5 held-out ones): before's trial 1 against after's, drawn
+   in one style, as A and B. The questions sorted by the SHA-256 of
+   `<case id>:ask-lead-check`, after is A in the 1st, 3rd, 5th and every
+   other odd place, B in the rest. After is preferred in more questions than
+   before; a question ranked the same counts for neither.
+
+**Reported, never rules:** how many first replies the check sent back, of the
+45 gate trials, 30 wording trials and 15 held-out trials, and in which cases;
+released leads that still list items by the rule; the lead's words; fit in
+each case, the held-out ones included; the blocks used; repairs and output
+tokens.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model

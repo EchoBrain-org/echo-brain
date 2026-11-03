@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CATALOGS } from "../catalogs.mjs";
-import { caseOrder, caseProblems, datesIn, decide, evidenceOf, factsOf, fits, groundingOf, loadCases, mainShape, shapesOf, summarizeRanks } from "../grade.mjs";
+import { HELD_OUT_COUNT, HELD_OUT_FILE, caseOrder, caseProblems, datesIn, decide, evidenceOf, factsOf, fits, groundingOf, loadCases, mainShape, shapesOf, summarizeRanks } from "../grade.mjs";
 
 const document = loadCases();
 const caseOf = (id) => document.cases.find((entry) => entry.id === id);
@@ -22,6 +22,15 @@ test("registers exactly the fifteen cases, each with facts its items say", () =>
   // The page's order is fixed by the case id alone.
   assert.deepEqual(caseOrder("soak-owner"), caseOrder("soak-owner"));
   assert.equal(new Set(caseOrder("soak-owner")).size, 4);
+});
+
+test("registers the quick-lead check's five held-out questions on another program, apart from the fifteen", () => {
+  const heldOut = loadCases(HELD_OUT_FILE, HELD_OUT_COUNT);
+  assert.equal(heldOut.cases.length, 5);
+  assert.deepEqual(caseProblems(heldOut), ["there are 5 cases, not 15"]);
+  assert.equal(heldOut.cases.filter((entry) => document.cases.some((other) => other.id === entry.id || other.question === entry.question)).length, 0);
+  const people = new Set(document.cases.flatMap((entry) => entry.expect.people));
+  assert.deepEqual(heldOut.cases.flatMap((entry) => entry.expect.people).filter((person) => person !== document.asker && people.has(person)), []);
 });
 
 test("reads ISO days and month names, in 2026 unless a year is named", () => {
