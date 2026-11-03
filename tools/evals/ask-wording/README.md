@@ -189,6 +189,51 @@ qualifier ("The soak cannot finish until the fixture holds 45 °C. The ticket is
 In Progress and owned by Dev Okafor."). No rule measures its length; it belongs
 with tuning the block descriptions, which the design leaves for later.
 
+## Block description tuning, 2026-11-02 (pre-registered)
+
+Written before any run. Tuning layout v2's block descriptions and layout
+prompt is pre-registered in the
+[block evaluation](../ask-blocks/README.md) ("Tuning the block descriptions"),
+and needs this evaluation's three rules to pass on the tuned writer. The same
+cases (`sha256:6ad26dc1…6a2bfa`), rules and thresholds; one complete run on
+the writer before the change and one after, each 10 cases and 3 trials through
+the founder's Claude account (`--writer claude-account`). The lead's length,
+its mean and per case, is reported beside them; no rule measures it.
+
+## Result, block description tuning, 2026-11-02
+
+Through the founder's Claude account (`claude-sonnet-5-5`), 30 trials each, no
+errors and no repairs; the block evaluation's README gives the two rounds.
+All three rules pass on both tuned writers.
+
+| | Before (`67c6351`) | Round 1 (`ef42144`) | Round 2 (`7c7345b`) |
+| --- | --- | --- | --- |
+| 1. Answer, don't restate (27 of 30 to pass) | 30 | 30 | 30 |
+| 2. Long identifiers once (27 of 30 to pass) | 30 | 30 | 30 |
+| 3. Nothing lost (27 of 30 to pass) | 30 | 30 | 30 |
+| Words shared with the question, mean and longest run | 2.3, 4 | 2.3, 4 | 2.1, 4 |
+| Lead length, mean words | 14.7 | 13.0 | 12.5 |
+
+The before prompt's earlier runs led with 14.9 and 17.7 words. Round 2's
+one-fact leads say only what was asked ("Dev Okafor owns it.", "Lena Brandt
+approved it."); the longest stay where the lead opens with the record that
+decided ("The release review decided the build may go to staging ...", 23 to
+25 words), as before. The founder's blind ranking preferred neither tuned
+writer to the one before, so the tuning is not proposed and PR #394 keeps its
+prompt (block evaluation README, "Result of rule 3 and the decision").
+
+The quick lead check that followed (block evaluation README, "Quick lead
+check") keeps all three rules: 30, 30 and 30 at `ca9b9a5`, leads of 15.3
+words. It sent no wording trial back: these one-fact questions write out no
+list. The founder rejected that check for its second writer call, and it is
+reverted; PR #394's prompt and writer stand.
+
+The quick lead on the first try (block evaluation README, "Quick lead on the
+first try") keeps all three rules too: 30, 30 and 30, as PR #394's writer at
+`e9ccc09` does, with leads of 16.3 words against 13.8. The founder's blind
+ranking preferred PR #394's writer in 4 of the 5 questions it changed, so it
+is reverted as well.
+
 ## Limits
 
 - One model route and synthetic items only: a staging release and the

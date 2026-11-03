@@ -11,6 +11,9 @@ import { CATALOG_IDS } from "./catalogs.mjs";
 
 export const CASES_FILE = new URL("./cases.json", import.meta.url);
 export const CASE_COUNT = 15;
+/** The held-out cases of the quick-lead check (README.md, "Quick lead check"): list-shaped questions on another program. */
+export const HELD_OUT_FILE = new URL("./held-out-cases.json", import.meta.url);
+export const HELD_OUT_COUNT = 5;
 export const TRIALS = 3;
 export const SHAPES = Object.freeze(["single", "prose", "parallel", "ordered", "grid", "sequence", "profile", "verbatim", "sections"]);
 /** The pre-registered thresholds, over 45 trials (rules 1 to 4) and 15 cases (rules 5 and 6). */
@@ -52,13 +55,13 @@ function openingDate(text) {
 const itemText = (item) => [item.title, item.label, item.text, item.owner, item.status, item.due_at, item.key, item.priority, item.decision?.title, item.decision?.first_line]
   .filter((value) => typeof value === "string").join("\n");
 
-/** Every problem with the cases document; an empty list when it is the pre-registered set. */
-export function caseProblems(document) {
+/** Every problem with a cases document of `count` cases; an empty list when it is a pre-registered set. */
+export function caseProblems(document, count = CASE_COUNT) {
   const problems = [];
   if (document === null || typeof document !== "object" || document.kind !== "echo-ask-blocks-eval-cases-v1" || document.schema_version !== 1) return ["the cases document kind is invalid"];
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(document.today ?? "") || typeof document.time_zone !== "string" || typeof document.asker !== "string" || Number.isNaN(Date.parse(document.asked_at))) problems.push("today, asked_at, time_zone and asker are required");
   const cases = Array.isArray(document.cases) ? document.cases : [];
-  if (cases.length !== CASE_COUNT) problems.push(`there are ${cases.length} cases, not ${CASE_COUNT}`);
+  if (cases.length !== count) problems.push(`there are ${cases.length} cases, not ${count}`);
   const ids = new Set();
   for (const entry of cases) {
     const where = `case ${entry?.id}`;
@@ -84,10 +87,10 @@ export function caseProblems(document) {
   return problems;
 }
 
-/** The pre-registered cases, refused when they are not the set the README registered. */
-export function loadCases(path = CASES_FILE) {
+/** Pre-registered cases (the 15, or the held-out set with its own count), refused when they are not the set the README registered. */
+export function loadCases(path = CASES_FILE, count = CASE_COUNT) {
   const document = JSON.parse(readFileSync(path, "utf8"));
-  const problems = caseProblems(document);
+  const problems = caseProblems(document, count);
   if (problems.length > 0) throw new Error(`block eval cases are invalid: ${problems.slice(0, 5).join("; ")}`);
   return document;
 }

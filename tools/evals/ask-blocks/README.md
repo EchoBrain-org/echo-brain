@@ -357,6 +357,525 @@ or more" where `balanced` said "1 to 4" or "2 to 12".
   kernel asked with the same prompts, so all 45 replies were carried and read
   again.
 
+## Tuning the block descriptions, 2026-11-02 (pre-registered)
+
+Written before any run.
+[ADR-0051](../../../docs/decisions/ADR-0051-ask-answer-layout-v2.md) left
+tuning the block descriptions for later, where this evaluation and the
+[wording evaluation](../ask-wording/README.md) found them weak. A change to
+them changes every desktop answer, so it is measured before and after, and the
+founder decides.
+
+Where the built writer is weak, at `294bf37`:
+
+- **The answer block runs long.** The wording evaluation's leads average 14.9
+  words (17.7 in its run at `4769016`, the same prompt) against layout v1's
+  10.2. In a one-fact answer the writer names the item in full ("The follow-up
+  to publish the DVT release notes to the team space is due Nov 4, 2026."),
+  adds an owner, a status or a date the question did not ask about, or opens
+  with the record ("The approved Pilot Delta review decided ..."). The v2
+  prompt never says that its answer block is the lead its no-restating rule
+  speaks of.
+- **`person-profile` gets points, not a card, and `review-multi` one table,
+  not titled sections,** in every trial of `balanced` and `built`; in
+  `review-multi` the decisions crowd a lead of 33 to 35 words.
+- **Where the founder ranked `balanced` below another catalog:** `gate-blockers`
+  third of four, under a long lead and, in two of its three trials, a last
+  block that only named the source (one `built` trial too); `review-multi` and
+  `workstreams-status` second, under `today`'s table; `person-profile` second,
+  under `templates`' card; `trap-undated` second, under `templates`' timeline.
+
+The change, to `ANSWER_BLOCK_CATALOG` and `ANSWER_BLOCKS_PROMPT` only: no
+schema, check, reading or drawing changes.
+
+| Where | Before | After |
+| --- | --- | --- |
+| `answer` description | The direct answer to the question, in one or two sentences. | The lead: the direct answer to the question, in one short sentence, or two when the question asks two things. |
+| `card` description | One person, project, ticket or decision, with its key facts as label and value. | One person, project, ticket or decision at a glance, with its key facts as label and value, such as a person's role and the work they own or approve, or a ticket's status, owner and priority. |
+| The prompt's answer line | - The first block is "answer": the conclusion, in one or two sentences. | - The first block is "answer", the lead: the conclusion, in one short sentence, or two when the question asks two things. It says only what the question asks: an owner, a status or a date the question did not ask about goes in a block after it. |
+| New prompt line, after it | | - When the question asks about two or more different kinds of things, give each kind its own block after the answer, with a title that names it. |
+| New prompt line, after that | | - The app shows the sources of every statement, so never add a block that only says where the facts come from. |
+
+Every other description, every `params` text, both wording rules and every
+other prompt line stay word for word. A description still says only what its
+block shows ([ADR-0042](../../../docs/decisions/ADR-0042-research-tool-contract.md)).
+
+**The comparison.** Before is the writer of PR #394 (`c5bd827`'s prompt, at
+this commit); after is the change, at the commit that makes it. Each side gets
+one complete gate run of the arm `built` (15 cases, 3 trials, the judge off)
+and one complete run of the wording evaluation (10 cases, 3 trials), all
+through the founder's Claude account (`claude-sonnet-5-5`), on the same day:
+before first, then after. The gate's run at `294bf37` and the wording runs at
+`4769016` and `294bf37` are earlier runs of the before prompt, reported beside
+it to show how much two runs of one prompt differ.
+
+**Rules.** The change is proposed for PR #394 only when all three hold:
+
+1. **The gate:** after, `built` passes rules 1 to 5 at their pre-registered
+   thresholds.
+2. **The wording:** after, the wording evaluation passes its three rules, each
+   in at least 27 of 30 trials.
+3. **The founder's ranking:** the founder ranks each case's trial-1 answers,
+   before against after, blind, on a private page that draws both in one
+   style, as the 2026-11-02 page did. They are labeled A and B: the 15 cases
+   sorted by the SHA-256 of `<case id>:ask-blocks-tuning`, after is A in the
+   1st, 3rd, 5th and every other odd place of that order (8 cases) and B in
+   the rest. The founder prefers after in more cases than before; a case
+   ranked the same counts for neither. The page reveals which is which, the
+   grades and the traces only after every case is ranked.
+
+**Reported, never rules:** the lead's words (the wording evaluation's mean
+lead, and here the answer block's mean words); fit in each case, where the
+change aims at a card in `person-profile` and titled sections in
+`review-multi` in at least two of three trials; blocks, claims and the blocks
+used per answer; repairs and output tokens.
+
+### Result of round 1, 2026-11-02
+
+Before at `67c6351` and after at `ef42144`, each with no uncommitted change,
+through the founder's Claude account (`claude-sonnet-5-5`): 45 gate trials and
+30 wording trials a side, no failed call and no repair.
+
+| | Before | After, round 1 | Before at `294bf37` |
+| --- | --- | --- | --- |
+| 1. Valid (43) | 45 | 45 | 45 |
+| 2. Grounded (43) | 45 | 45 | 45 |
+| 3. Nothing lost (41) | 45 | 45 | 45 |
+| 4. Fit (36) | 39 | 39 | 38 |
+| 5. Stable (12) | 15 | 15 | 15 |
+| Answer block, mean words | 25.5 | 23.8 | 25.8 |
+| Prose blocks | 27 | 21 | 24 |
+| Output tokens | 19,738 | 18,915 | 18,935 |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 | 29, 30, 30 |
+| Wording lead, mean words | 14.7 | 13.0 | 14.9 (17.7 at `4769016`) |
+
+- Rules 1 and 2 pass after round 1.
+- Blocks that only named a source or added context are gone: `gate-blockers`
+  ended with one in 2 of 3 trials before and in none after, and
+  `workstreams-status` in 2 and none.
+- Both aims are missed. `person-profile` still gets points and `review-multi`
+  one table in all three trials, word for word as before: the writer keeps
+  the decisions in the lead and counts its next-steps table as the second
+  kind's own block.
+- Leads shorten unevenly: `workstreams-status` from 25.0 words to 14.7 and
+  `ship-steps` from 29.0 to 21.7, but `gate-blockers` grows from 28.7 to 34.7,
+  adding "The retrieved records show none of the three as complete."
+
+### Round 2 (pre-registered)
+
+Written after round 1 and before any round-2 run. Round 2 keeps round 1 and
+changes two prompt lines, aimed at the two misses. It was written after
+reading round 1's answers to these same cases, so a fit it gains in
+`person-profile` and `review-multi` says less than one gained blind; the
+founder's ranking is the check. The card line is the first in the prompt that
+names a block for a kind of question; the descriptions still say only what a
+block shows.
+
+| Where | Round 1 | Round 2 |
+| --- | --- | --- |
+| The prompt's line on kinds of things | - When the question asks about two or more different kinds of things, give each kind its own block after the answer, with a title that names it. | - When the question asks about two or more different kinds of things, the lead only sums them up, such as how many of each there are, and each kind gets its own block after it, with a title that names it. |
+| New prompt line, after it | | - A question about who a person is, or what a project or ticket is, gets a card after the lead with its key facts. |
+
+- **The run:** one complete gate run of `built` and one complete wording run
+  at the commit that makes round 2, through the founder's Claude account, as
+  in round 1. Before and round 1 are the runs above.
+- **Rules 1 and 2** apply to round 2 as written.
+- **Rule 3 becomes one three-way ranking**, which replaces the two-way page;
+  nothing has been ranked. The founder ranks each case's three trial-1
+  answers (before, round 1, round 2) from 1, best, to 3, ties allowed, blind,
+  on one private page that draws all three in one style. Labels: the 15 cases
+  sorted by the SHA-256 of `<case id>:ask-blocks-tuning`, and the three
+  versions sorted by the SHA-256 of `ask-blocks-tuning:<version>` (round 2,
+  round 1, before); the case in place k, counting from 0, shows that order
+  rotated by k mod 3 as A, B and C, so each version is A, B and C in five
+  cases each.
+- **The proposal** is round 2 when it passes rules 1 and 2, else round 1. Rule
+  3 holds when the founder ranks the proposal above before in more cases than
+  below. Round 1 against before, and round 2 against round 1, are reported
+  beside it.
+
+### Result of round 2, 2026-11-02 (rules 1 and 2)
+
+At `7c7345b` with no uncommitted change, through the founder's Claude
+account: 45 gate trials and 30 wording trials, no failed call and no repair.
+
+| | Before | Round 1 | Round 2 |
+| --- | --- | --- | --- |
+| 1. Valid (43) | 45 | 45 | 45 |
+| 2. Grounded (43) | 45 | 45 | 45 |
+| 3. Nothing lost (41) | 45 | 45 | 45 |
+| 4. Fit (36) | 39 | 39 | 39 |
+| 5. Stable (12) | 15 | 15 | 15 |
+| Answer block, mean words | 25.5 | 23.8 | 21.6 |
+| Prose blocks | 27 | 21 | 20 |
+| Output tokens | 19,738 | 18,915 | 18,741 |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 | 30, 30, 30 |
+| Wording lead, mean words | 14.7 | 13.0 | 12.5 |
+
+- Round 2 passes rules 1 and 2, so it is the proposal; rule 3 waits for the
+  founder's ranking.
+- Both aims are missed again. Given the card line word for word, the writer
+  still answers `person-profile` with a lead and points, and `review-multi`
+  with the decisions in the lead and one table: a prompt line does not move
+  either choice on this model.
+- The leads shorten further, in the answer block from 25.5 words to 21.6
+  (the two runs of the before prompt differ by 0.3) and in the wording
+  evaluation from 14.7 to 12.5 (its three runs of the before prompt range from
+  14.7 to 17.7). One-fact leads lose what was not asked: "Dev Okafor owns it.",
+  "Lena Brandt approved it." In `gate-blockers` round 2's lead is 24.0 words,
+  round 1's 34.7.
+- A block that only names a source came back once (`gate-blockers`, trial 2).
+- The ranking page is made from these three runs' trial-1 answers, with the
+  versions named `before`, `round-1` and `round-2` in the label hash.
+
+### Result of rule 3 and the decision, 2026-11-02
+
+The founder ranked all 15 cases blind on the page the same day, with nothing
+revealed before every case was ranked: every rank was saved before the
+reveal, and the labels the page saved match each case's fixed order.
+
+| | Before | Round 1 | Round 2 |
+| --- | --- | --- | --- |
+| Founder's mean rank (1 is best) | 1.60 | 1.67 | 1.80 |
+| Ranked best, a tie counting for each | 8 cases | 7 cases | 6 cases |
+
+- **Rule 3 fails:** round 2 is above before in 4 cases, below in 6 and level
+  in 5. Round 1 against before: above in 5, below in 6, level in 4. Round 2
+  against round 1: above in 4, below in 6, level in 5.
+- **Decision:** the tuning is not proposed. PR #394 keeps its writer prompt.
+- Round 2 lost to before in `soak-owner`, `gate-blockers`, `week-events`,
+  `dvt-date-moves`, `person-profile` and `trap-undated`; it won in
+  `notes-due`, `ticket-profile`, `workstreams-status` and `trap-disagree`; the
+  other five were level.
+- Where before won, its lead carried the substance: the three gate conditions
+  by name (`gate-blockers`), what the four records were (`week-events`), the
+  soak follow-up's status and due date (`soak-owner`). Round 2's leads summed
+  them up instead ("the gate opens only when all three conditions are met",
+  "four approved meeting records"). Where round 2 won, its lead was short and
+  complete ("The release notes are due Nov 4, 2026.") or carried the
+  disagreement ("set the PVT build for Nov 16, but it may slip to Nov 20").
+  A last block that only named the source, or added a caveat, did not keep
+  before from first place in `gate-blockers` and `week-events`.
+- So the reader does not want a shorter lead as such but the answer's
+  substance in it: "say only what the question asks" and "the lead only sums
+  them up" cut substance along with filler. The three versions' mean ranks lie
+  within 0.2 of each other, from one reader.
+
+Both rounds are reverted on their branch (revert commits); the writer's prompt
+and catalog are PR #394's again.
+
+## Quick lead check, 2026-11-02 (pre-registered)
+
+Written before any run. After the ranking, the founder asked for a quick
+answer block, with three or more things set out below it as points, steps or
+a timeline instead of written out in it, and approved this check to get it.
+Both blind rankings agree:
+
+- An answer of sentences only lost to one with a points, steps, table,
+  timeline, card or quote block every time the two met: 8 of 8 on the
+  catalog page, 2 of 2 on the tuning page.
+- A shorter lead alone did not win. Where two leads differ by 3 words or
+  more, the longer ranked better 17 to 9 on the catalog page and 13 to 9 on
+  the tuning page; the shorter ones had cut something the question asked.
+- A quick lead with the detail in a block below did win: in `pvt-wording`
+  round 1's 20-word lead, the decision's words quoted below it, over 32 and
+  36; in `notes-due` round 2's 8 words over 17.
+- In `review-multi` every answer either page showed writes the three
+  decisions out in one lead of 34 to 36 words, above one block of next
+  steps; two rounds of prompt wording did not move it.
+
+**The check, in code.** An answer block's sentence lists items when, outside
+brackets, the text after a colon in it is three or more parts, separated by
+commas or semicolons, the last joined by "and", "or" or "then" ("and then"
+and "and finally" too), unless what follows that word opens with is, are,
+was, were, has, have, had, will, would, can, could, should, may, might or
+must: then it goes on about the sentence's own subject and names no other
+item ("You own it: the follow-up is assigned to you, Noor Haddad, and is
+still open."). Only answer layout v2's answer block is checked; layout v1 and
+an Ask without layout are unchanged, and the prompt and catalog do not
+change.
+
+- **What it does:** a reply whose answer block lists items takes the
+  writer's one repair, as a sentence resting on list rows does (that check
+  first, when both apply), with the repair instruction "the answer block
+  writes out three or more items in one sentence: keep it to the short
+  answer, such as how many there are or what they come to, and give the
+  items in a block after it: points, numbered points when their order
+  matters, or a timeline when each has a date". The repair's reply is
+  released whatever its lead; when no repair can run, or the repair's reply
+  is unusable, the first reply is.
+- **How the rule was chosen:** by reading the 257 distinct leads the two
+  evaluations have produced. It holds the 45 that write out three or more
+  items after a colon (`gate-blockers`, `review-multi`, `ship-steps`,
+  `week-events`, `workstreams-status`) and, with the exception, no other. It
+  misses a list with no colon ("cover the DVT build, its gate, shipping and
+  the supplier certificate"): a rule without the colon also held clauses
+  that are not a list ("Five follow-ups are open, each with a different
+  owner and due date, and none has been checked yet.").
+
+**Held-out questions.** Because the rule was chosen on these 15 cases, five
+new questions in [`held-out-cases.json`](held-out-cases.json), written before
+any run, ask about another synthetic program (HELIX, with other people), each
+with a list for an answer: decisions and next steps (`ho-review-next`),
+blockers (`ho-launch-blockers`), steps in order (`ho-release-steps`), a status
+roll-up (`ho-task-status`) and a month's events (`ho-supplier-month`). They
+are graded as the 15 are, with `--case-set held-out` (the built writer only,
+the judge off), and decide nothing alone.
+
+**The comparison.** Before is PR #394's writer: the gate and wording runs at
+`67c6351` above (its kernel is this commit's), and one held-out run at this
+commit. After is the commit that adds the check: one complete gate run of
+`built` (15 cases, 3 trials), one complete wording run (10 cases, 3 trials)
+and one held-out run (5 cases, 3 trials), through the founder's Claude
+account (`claude-sonnet-5-5`).
+
+**Rules.** The check is proposed for PR #394 only when all three hold:
+
+1. **The gate:** after, `built` passes rules 1 to 5 at their pre-registered
+   thresholds.
+2. **The wording:** after, the wording evaluation passes its three rules.
+3. **The founder's ranking:** the founder ranks, blind, each question whose
+   trial-1 answer the check changed (its first reply sent back, among the 15
+   cases and the 5 held-out ones): before's trial 1 against after's, drawn
+   in one style, as A and B. The questions sorted by the SHA-256 of
+   `<case id>:ask-lead-check`, after is A in the 1st, 3rd, 5th and every
+   other odd place, B in the rest. After is preferred in more questions than
+   before; a question ranked the same counts for neither.
+
+**Reported, never rules:** how many first replies the check sent back, of the
+45 gate trials, 30 wording trials and 15 held-out trials, and in which cases;
+released leads that still list items by the rule; the lead's words; fit in
+each case, the held-out ones included; the blocks used; repairs and output
+tokens.
+
+### Result of the quick lead check, 2026-11-02 (rules 1 and 2)
+
+At `ca9b9a5` with no uncommitted change, through the founder's Claude account
+(`claude-sonnet-5-5`): 45 gate trials, 30 wording trials and 15 held-out
+trials, no failed call. Held-out before ran at `c47cd51`, whose kernel is
+PR #394's.
+
+| | Before | After |
+| --- | --- | --- |
+| 1. Valid (43) | 45 | 45 |
+| 2. Grounded (43) | 45 | 45 |
+| 3. Nothing lost (41) | 45 | 44 |
+| 4. Fit (36) | 39 | 42 |
+| 5. Stable (12) | 15 | 15 |
+| Repairs | 0 | 12 |
+| Answer block, mean words | 25.5 | 21.5 |
+| Output tokens | 19,738 | 24,697 |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 |
+| Wording lead, mean words | 14.7 | 15.3 |
+| Held-out: valid, grounded, nothing lost (of 15) | 15, 15, 15 | 15, 15, 15 |
+| Held-out: fit (of 15) | 12 | 15 |
+| Held-out: repairs; answer block, mean words | 0; 26.7 | 9; 20.2 |
+
+- **Rules 1 and 2 pass.** Rule 3 waits for the founder's blind ranking of the
+  7 questions whose trial-1 answer the check changed: `gate-blockers`,
+  `review-multi`, `ship-steps`, `workstreams-status`, `ho-review-next`,
+  `ho-launch-blockers` and `ho-release-steps`.
+- **Where it fired:** 12 of the 45 gate trials' first replies
+  (`gate-blockers`, `ship-steps` and `review-multi` in all 3, `workstreams-status`
+  in 2, `week-events` in 1) and 9 of the 15 held-out ones (`ho-review-next`,
+  `ho-launch-blockers` and `ho-release-steps` in all 3), and never in the
+  wording cases, `fan-curve-options`, `dvt-date-moves` or `ho-supplier-month`.
+  After its one repair no released lead lists items by the rule; without the
+  check, 24 of 60 released leads did.
+- **What it changed:** `review-multi` now gives its decisions as points under
+  "Decisions" and its next steps as a table, in all three trials ("The
+  approved Oct 28 DVT review made three decisions, listed below, and each has
+  an open follow-up."), and so fits; `ho-review-next` does the same on the
+  held-out program. `gate-blockers` leads "Three conditions must all be met
+  before the DVT gate opens, and the retrieved records show none of them
+  completed.", `ship-steps` "The approved DVT ship plan sets four steps that
+  must happen in a fixed order before the build ships.", each above its list.
+- **The fact lost** (`trap-undated`, trial 1, "chase") is in a trial the check
+  did not send back.
+- **The cost:** a repaired answer makes a second writer call. Output tokens
+  rise 25% on the 15 cases, and a repaired trial's writer time has a median
+  of 7.3 seconds against 3.7 for one without a repair.
+
+### Result of rule 3, 2026-11-02
+
+The founder picked between before and after in all 7 changed questions,
+blind, with nothing revealed before the last pick: every pick was saved before
+the reveal, and the labels the page saved match the fixed order.
+
+| Question | Picked | After was |
+| --- | --- | --- |
+| `ship-steps` | After | A |
+| `ho-release-steps` | After | B |
+| `review-multi` | After | A |
+| `gate-blockers` | After | B |
+| `workstreams-status` | After | A |
+| `ho-review-next` | After | B |
+| `ho-launch-blockers` | After | A |
+
+- **Rule 3 holds:** after is preferred in 7 of 7 questions, before in none,
+  none the same, whether after stood as A or as B. All three rules hold, so
+  by the pre-registration the check is proposed for PR #394.
+- **It is not merged yet.** ADR-0051 rejected a repair for a block that falls
+  short, because a second writer call costs seconds for a fault code can mend
+  itself. Code cannot turn a lead that lists items into a short answer and a
+  list, so this check needs the call. That cost (a median 7.3 seconds against
+  3.7 for a repaired answer, 25% more output tokens on the 15 cases) and the
+  ADR's amendment wait for the founder's separate approval.
+
+### The decision, 2026-11-02
+
+The founder rejected the check: the second writer call rewrites the whole
+answer whenever the check refuses the first draft, "no need for extra round
+that is a patch". It is reverted (`630efd8`), so the writer is PR #394's
+again, and ADR-0051 records the rejection beside its other rejected repair.
+
+This record, the held-out questions in
+[`held-out-cases.json`](held-out-cases.json) and `--case-set held-out` stay:
+the founder preferred the check's answers in all 7 questions it changed, so a
+short answer with its list below is the shape a later attempt should reach,
+without a second writer call, and the held-out questions can test it beyond
+the 15 cases.
+
+## Quick lead on the first try, 2026-11-02 (pre-registered)
+
+Written before any run. Asked whether to try for the check's shape in the
+writer's first reply, with no check, no repair and no second call, the founder
+said "Yes, try it". The repair's instruction is what produced the shape they
+picked 7 to 0, so its rule moves into what the writer reads first: the answer
+block's description and the prompt's line about it, with one example on a
+topic that is neither THERM nor HELIX. Round 1 shortened the answer block's
+description but said nothing of lists, and neither round put the list rule or
+an example in front of the writer.
+
+The change, to `ANSWER_BLOCK_CATALOG` and `ANSWER_BLOCKS_PROMPT` only:
+
+| Where | Before | After |
+| --- | --- | --- |
+| `answer` description | The direct answer to the question, in one or two sentences. | The short answer to the question, in one or two sentences: the conclusion, or what the items come to, such as how many there are. It never writes out three or more items; a block after it shows them, as points, numbered points when their order matters, or a timeline when each has a date. |
+| The prompt's answer line | - The first block is "answer": the conclusion, in one or two sentences. | - The first block is "answer": the conclusion, in one or two sentences. Never write out three or more items in it: say what they come to, such as how many there are, and give them in a block after it: points, numbered points when their order matters, or a timeline when each has a date. |
+| New prompt line, after it | | - For example, asked what a warehouse audit found, the answer block says "The audit found three problems, all in receiving." and a points block after it gives them: "Pallets are stacked above the rack limit.", "Two scanners cannot read damaged labels." and "Returns wait four days for inspection." |
+
+Every other description, every `params` text, both wording rules and every
+other prompt line stay as PR #394 has them.
+
+- **The base:** PR #394's writer once the founder's removal of its count
+  caps is in it, and its lifting of the 10-statement and 40-citation limits
+  for an answer in blocks, which changes a line the writer reads. #394's
+  head with both is merged in before any run, and the change is kept word
+  for word.
+- **The comparison:** before is that base, after is the change on it. Each
+  gets one complete gate run of `built` (15 cases, 3 trials), one complete
+  wording run (10 cases, 3 trials) and one held-out run (5 cases, 3 trials),
+  through the founder's Claude account (`claude-sonnet-5-5`).
+- **Rules.** The change is proposed for PR #394 only when all three hold:
+  1. After, `built` passes rules 1 to 5 at their thresholds.
+  2. After, the wording evaluation passes its three rules.
+  3. The founder ranks, blind, each question whose trial-1 answer changed,
+     before against after, as A and B, and prefers after in more questions
+     than before; a question ranked the same counts for neither. Among the 15
+     cases and the 5 held-out ones, an answer changed when the kinds of its
+     blocks, in order, differ between before and after, or the quick lead
+     check's colon rule reads one lead as writing out items and the other
+     not. The changed questions sorted by the SHA-256 of
+     `<case id>:ask-lead-first-try`, after is A in the 1st, 3rd, 5th and
+     every other odd place, B in the rest.
+- **Reported, never rules:** released leads that write out three or more
+  items by the colon rule, of the 60 gate and held-out trials (24 of 60 at
+  `c5bd827`; the rejected check left none); output tokens and each trial's
+  writer time, which should not rise much with no second call; fit in each
+  case, the held-out ones included; the blocks used.
+
+### Result of the quick lead on the first try, 2026-11-03 (rules 1 and 2)
+
+Before at `bc5c5c2`, a local run branch whose kernel is PR #394's at `e9ccc09`
+with this record's tooling, and after at `b036967`, each with no uncommitted
+change, through the founder's Claude account (`claude-sonnet-5-5`): 45 gate,
+30 wording and 15 held-out trials a side, no failed call and no repair.
+
+| | Before | After |
+| --- | --- | --- |
+| 1. Valid (43) | 45 | 45 |
+| 2. Grounded (43) | 45 | 45 |
+| 3. Nothing lost (41) | 45 | 45 |
+| 4. Fit (36) | 39 | 39 |
+| 5. Stable (12) | 15 | 15 |
+| Answer block, mean words | 25.8 | 23.2 |
+| Output tokens | 21,338 | 18,794 |
+| Writer time per trial, median | 4.3 s | 4.1 s |
+| Wording rules 1, 2 and 3 (27 each) | 30, 30, 30 | 30, 30, 30 |
+| Wording lead, mean words | 13.8 | 16.3 |
+| Held-out: valid, grounded, nothing lost (of 15) | 15, 15, 15 | 15, 15, 15 |
+| Held-out: fit (of 15) | 12 | 12 |
+| Held-out: output tokens; writer time, median | 6,828; 4.4 s | 6,317; 4.3 s |
+| Leads that write out three or more items, of 60 | 18 | 15 |
+
+- **Rules 1 and 2 pass.** Rule 3 waits for the founder's ranking of the five
+  questions whose trial-1 answer changed.
+- **The shape mostly did not come.** Leads that write out a list went from 18
+  of the 60 to 15; the rejected check had left none. `review-multi` and
+  `ho-review-next` still write their three decisions in the lead in every
+  trial, and `ship-steps` and `ho-launch-blockers` still list theirs; only
+  one `gate-blockers` trial and two `ho-release-steps` trials gave the lead
+  without the list.
+- **What changed on the first trial:** `gate-blockers`, whose lead no longer
+  lists the three conditions ("the gate opens only when all three conditions
+  are met, and the retrieved records show none of them as done yet");
+  `trap-disagree`, whose lead now carries the possible slip and whose sources
+  became points; and `review-multi`, `workstreams-status` and
+  `ho-launch-blockers`, each of which lost a last paragraph or note.
+- **One call, as before:** output tokens fell 12% on the 15 cases and 7% on
+  the held-out questions, and the writer's time stayed level.
+
+### Result of rule 3, 2026-11-03
+
+The founder picked between before and after in all 5 changed questions,
+blind, with nothing revealed before the last pick: every pick was saved
+before the reveal, and the labels the page saved match the fixed order.
+
+| Question | Picked | After was |
+| --- | --- | --- |
+| `trap-disagree` | Before | A |
+| `gate-blockers` | After | B |
+| `workstreams-status` | Before | A |
+| `ho-launch-blockers` | Before | B |
+| `review-multi` | Before | A |
+
+- **Rule 3 fails:** after is preferred in 1 question, before in 4, none the
+  same. By the pre-registration the change is not proposed for PR #394.
+- **Where after won:** `gate-blockers`, the one question whose first trial
+  gave a short lead with its list below ("the gate opens only when all three
+  conditions are met, and the retrieved records show none of them as done
+  yet"), the shape the check's answers had in all 7 of theirs.
+- **Where before won:** in `review-multi`, `workstreams-status` and
+  `ho-launch-blockers`, before's first trial ended with a note after's did
+  not have: that the asker's own follow-up was past due, that the firmware
+  follow-up was past due, and the review's rule that the pilot launches only
+  when all three conditions are met. In `trap-disagree` before gave the
+  possible slip a paragraph titled "Possible slip"; after put it in the lead
+  and then restated both sources as points.
+- **Those notes came by chance more than from the change:** of the 60 gate
+  and held-out trials, an answer ended with such a note in 19 before and 16
+  after, so which first trials had one decided three of the four.
+- **Two of those notes are wrong:** the writer is told the question is asked
+  on Oct 30, so a Nov 2 due date has not passed; on Nov 3, when the founder
+  ranked, it had. Both writers call a Nov 2 due date passed in some trials
+  (5 of 60 before, 2 of 60 after; after's first `workstreams-status` trial
+  says "none is overdue as of Oct 30"), and no measure here checks it.
+  Without those two questions before still wins, 2 to 1.
+
+### The decision, 2026-11-03
+
+The change is not proposed. It is reverted (`8f06dbe`), so the writer's
+prompt and catalog are PR #394's again, as after the tuning rounds and the
+check. Wording in the catalog and the prompt, an example included, moved the
+writer's first reply little: leads that write out a list went from 18 of 60
+to 15, where the rejected check, with its second call, left none.
+
+On seeing this result the founder closed the tuning: "no further tuning
+needed. i want to use it live". ADR-0051 lists this change beside the check
+among its rejected options. This record, the held-out questions and
+`--case-set held-out` stay.
+
 ## Limits
 
 - One model route and synthetic items only, and the writer is the only model

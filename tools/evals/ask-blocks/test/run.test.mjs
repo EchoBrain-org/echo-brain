@@ -59,7 +59,12 @@ test("makes no request without an explicit run and a private credential file, an
   assert.throws(() => parseArgs([...base, "--cases", "no-such-case"]), /--cases must select known cases/u);
   assert.throws(() => parseArgs([...base, "--judge", "maybe"]), /--judge must be on or off/u);
   const parsed = parseArgs([...base, "--cases", "soak-owner", "--trials", "1"]);
-  assert.deepEqual([parsed.trials, parsed.judge, parsed.concurrency], [1, true, 4]);
+  assert.deepEqual([parsed.trials, parsed.judge, parsed.concurrency, parsed.caseSet], [1, true, 4, "main"]);
+  // The held-out questions run the built writer alone, judge off, and name their own cases.
+  assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main or held-out/u);
+  assert.throws(() => parseArgs([...base, "--case-set", "held-out"]), /--case-set held-out runs --catalogs built --judge off only/u);
+  assert.throws(() => parseArgs([...base, "--case-set", "held-out", "--catalogs", "built", "--judge", "off", "--cases", "soak-owner"]), /--cases must select known cases/u);
+  assert.equal(parseArgs([...base, "--case-set", "held-out", "--catalogs", "built", "--judge", "off", "--cases", "ho-review-next"]).caseSet, "held-out");
 });
 
 test("scripts research as one search, every item opened, then finish", () => {
@@ -151,7 +156,7 @@ test("fingerprints its cases, its pre-registration and every module the run load
   const out = mkdtempSync(join(tmpdir(), "ask-blocks-code-"));
   const { report } = await run(options(out, { catalogIds: ["today"], judge: false }), { loaded: { structured_output: answering(), generation }, progress: () => undefined });
   const fingerprinted = Object.keys(report.code.before.files_sha256);
-  assert.deepEqual(fingerprinted, ["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", ...loadedModules("tools/evals/ask-blocks/run.mjs")]);
+  assert.deepEqual(fingerprinted, ["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/held-out-cases.json", "tools/evals/ask-blocks/README.md", ...loadedModules("tools/evals/ask-blocks/run.mjs")]);
   // Among them layout v2's checks and title bound, and the kernel's shared modules on the writer's path.
   for (const file of ["packages/organization-api/dist/person-answer-layout-checks.js", "packages/organization-api/dist/person-answer-layout-v1.js",
     "packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js", "packages/organization-authority-kernel/dist/shared/evidence-desk-v2.js"]) assert.ok(fingerprinted.includes(file), file);

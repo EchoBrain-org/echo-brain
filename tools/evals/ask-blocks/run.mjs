@@ -20,7 +20,7 @@ import { repairInput } from "../../../packages/organization-authority-kernel/dis
 import { caseAsk, caseItems, deskItem as releasedItem, scriptedModel } from "../shared/ask-cases.mjs";
 import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, pooled, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { ARMS, ARM_IDS, BUILT, CATALOGS, CATALOG_IDS, readReleased, readReply, writerPrompts } from "./catalogs.mjs";
-import { CASES_FILE, CASE_COUNT, TRIALS, caseOrder, decide, decideGate, evidenceOf, gradeTrial, loadCases, summarizeCatalogs, summarizeRanks } from "./grade.mjs";
+import { CASES_FILE, CASE_COUNT, HELD_OUT_COUNT, HELD_OUT_FILE, TRIALS, caseOrder, decide, decideGate, evidenceOf, gradeTrial, loadCases, summarizeCatalogs, summarizeRanks } from "./grade.mjs";
 import { JUDGE_SYSTEM_PROMPT, judgeInput, judgeSchema, readJudge } from "./judge.mjs";
 
 export { researchStep } from "../shared/ask-cases.mjs";
@@ -32,6 +32,8 @@ const WRITER_OUTPUT_TOKENS = 3_000;
 const JUDGE_OUTPUT_TOKENS = 1_500;
 /** A trial makes at most two writer calls (its reply and one repair or retry); a case's judge at most two per order. */
 const MAX_TOTAL_MODEL_CALLS = CATALOG_IDS.length * CASE_COUNT * TRIALS * 2 + CASE_COUNT * 2 * 2;
+/** The case sets a run may take: the pre-registered 15, or the quick-lead check's held-out questions (README.md, "Quick lead check"). */
+const CASE_SETS = Object.freeze({ main: Object.freeze({ file: CASES_FILE, count: CASE_COUNT }), "held-out": Object.freeze({ file: HELD_OUT_FILE, count: HELD_OUT_COUNT }) });
 
 export function help() {
   return [
@@ -45,6 +47,8 @@ export function help() {
     "                      Ask through the kernel with answer layout v2, graded on the answer it releases.",
     `  --trials N          Trials per case and catalog, 1 through ${TRIALS} (default: ${TRIALS}).`,
     `  --judge on|off      Run the model judge on the four catalogs (default: on; --catalogs ${BUILT.id} alone needs off).`,
+    `  --case-set SET      main (default: the ${CASE_COUNT} pre-registered cases) or held-out: the quick-lead check's ${HELD_OUT_COUNT}`,
+    `                      held-out questions, for --catalogs ${BUILT.id} --judge off only; such a run decides nothing alone.`,
     "  --concurrency N     Model calls at once, 1 through 6 (default: 4).",
     "  --timeout-ms N      Per-call timeout, 15000 through 180000 (default: 120000); a built trial's whole Ask.",
     "  --resume PATH       Carry every call of an earlier report that got a reply; make only the calls it lacks.",
@@ -61,7 +65,7 @@ export function help() {
 }
 
 export function parseArgs(argv) {
-  const options = { run: false, credentialFile: null, out: null, caseIds: null, catalogIds: null, trials: TRIALS, judge: true, concurrency: 4, timeoutMs: 120_000, resume: null, writer: "openrouter", claudeExecutable: null };
+  const options = { run: false, credentialFile: null, out: null, caseIds: null, catalogIds: null, trials: TRIALS, judge: true, concurrency: 4, timeoutMs: 120_000, resume: null, writer: "openrouter", claudeExecutable: null, caseSet: "main" };
   const list = (value) => value.split(",").map((part) => part.trim()).filter(Boolean);
   if (readFlags(argv, options, {
     "--credential-file": (value) => { options.credentialFile = value; },
@@ -73,6 +77,7 @@ export function parseArgs(argv) {
     "--concurrency": (value) => { options.concurrency = Number(value); },
     "--timeout-ms": (value) => { options.timeoutMs = Number(value); },
     "--resume": (value) => { options.resume = value; },
+    "--case-set": (value) => { if (!Object.hasOwn(CASE_SETS, value)) throw new Error("--case-set must be main or held-out"); options.caseSet = value; },
     ...writerFlags(options),
   })) return { help: true };
   if (options.resume !== null && (!isAbsolute(options.resume) || !existsSync(options.resume))) throw new Error("--resume must be the absolute path of an earlier report");
@@ -81,7 +86,10 @@ export function parseArgs(argv) {
   options.trials = boundedInteger(options.trials, "--trials", 1, TRIALS);
   options.concurrency = boundedInteger(options.concurrency, "--concurrency", 1, 6);
   options.timeoutMs = boundedInteger(options.timeoutMs, "--timeout-ms", 15_000, 180_000);
-  const known = new Set(loadCases().cases.map((entry) => entry.id));
+  const set = CASE_SETS[options.caseSet];
+  // The held-out questions grade the built writer alone: the catalogs' comparison and its judge are the 15 cases'.
+  if (options.caseSet === "held-out" && (options.judge || options.catalogIds === null || options.catalogIds.join() !== BUILT.id)) throw new Error(`--case-set held-out runs --catalogs ${BUILT.id} --judge off only`);
+  const known = new Set(loadCases(set.file, set.count).cases.map((entry) => entry.id));
   const once = (values) => new Set(values).size === values.length;
   if (options.caseIds !== null && (options.caseIds.length === 0 || !once(options.caseIds) || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases, each once");
   if (options.catalogIds !== null && (options.catalogIds.length === 0 || !once(options.catalogIds) || options.catalogIds.some((id) => !ARM_IDS.includes(id)))) throw new Error("--catalogs must select known catalogs, each once");
@@ -98,7 +106,7 @@ export function parseArgs(argv) {
  * every module the evaluation loads (its own, the kernel's writer, checks and shared modules, the answer contract and the
  * writer routes), found by following its imports.
  */
-const codeFiles = () => Object.freeze(["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/README.md", ...importedModules(ROOT, ["tools/evals/ask-blocks/run.mjs"])]);
+const codeFiles = () => Object.freeze(["tools/evals/ask-blocks/cases.json", "tools/evals/ask-blocks/held-out-cases.json", "tools/evals/ask-blocks/README.md", ...importedModules(ROOT, ["tools/evals/ask-blocks/run.mjs"])]);
 
 /** One case item as the desk releases it, with this evaluation's ids and fixtures (shared/ask-cases.mjs). */
 export const deskItem = (caseId, index, item) => releasedItem("blocks", caseId, index, item);
@@ -247,8 +255,8 @@ const repliedPrefix = (attempts) => {
  * The earlier report a run resumes (README.md, "Resuming"): it must be this evaluation's, over the same cases, with
  * the same writer prompts for every case and catalog it carries; otherwise nothing is carried.
  */
-function resumable(previous, cases, catalogs, prompts) {
-  if (previous.kind !== "echo-ask-blocks-evaluation-v1" || previous.cases_sha256 !== sha256(readFileSync(CASES_FILE))) throw new Error("--resume must name a report of this evaluation over the same cases");
+function resumable(previous, cases, catalogs, prompts, casesFile) {
+  if (previous.kind !== "echo-ask-blocks-evaluation-v1" || previous.cases_sha256 !== sha256(readFileSync(casesFile))) throw new Error("--resume must name a report of this evaluation over the same cases");
   for (const caseDefinition of cases) {
     for (const catalog of catalogs) {
       const before = previous.prompts?.[caseDefinition.id]?.[catalog.id];
@@ -276,7 +284,9 @@ async function judgeCase(userPrompt, order, structuredOutput, generation, option
 
 /** Runs the selected cases and catalogs, then the judge, and writes the report. */
 export async function run(options, dependencies = {}) {
-  const document = loadCases();
+  const set = CASE_SETS[options.caseSet ?? "main"];
+  const heldOut = set !== CASE_SETS.main;
+  const document = loadCases(set.file, set.count);
   const cases = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
   const catalogs = options.catalogIds === null ? CATALOGS : ARMS.filter((catalog) => options.catalogIds.includes(catalog.id));
   // The four catalogs the judge and the founder rank; the built writer is graded alone.
@@ -295,7 +305,7 @@ export async function run(options, dependencies = {}) {
   // Every arm is graded against the evidence its writer was given.
   const evidence = new Map(cases.map((caseDefinition) => [caseDefinition.id, new Map(catalogs.map((catalog) => [catalog.id, evidenceOf(prompts.get(caseDefinition.id).get(catalog.id).user_prompt)]))]));
   const previous = options.resume === null || options.resume === undefined ? null : JSON.parse(readFileSync(options.resume, "utf8"));
-  if (previous !== null) resumable(previous, cases, catalogs, prompts);
+  if (previous !== null) resumable(previous, cases, catalogs, prompts, set.file);
   const carriedOf = (caseId, catalogId, trial) => repliedPrefix(previous?.trials?.find((entry) => entry.case_id === caseId && entry.catalog === catalogId && entry.trial === trial)?.attempts ?? []);
 
   // Trials interleave catalogs and cases, so a slow route slows every catalog alike.
@@ -344,7 +354,7 @@ export async function run(options, dependencies = {}) {
 
   const identityAfter = codeIdentity(ROOT, codeFiles());
   // A complete run is the four-catalog comparison, as pre-registered, or the gate: the built writer alone, judge off.
-  const everyTrial = cases.length === CASE_COUNT && options.trials === TRIALS;
+  const everyTrial = cases.length === set.count && options.trials === TRIALS;
   const gate = built && ranked.length === 0;
   const complete = everyTrial && (gate ? !options.judge : !built && ranked.length === CATALOG_IDS.length && options.judge);
   const summary = summarizeCatalogs(trials, catalogs.map((catalog) => catalog.id));
@@ -363,7 +373,8 @@ export async function run(options, dependencies = {}) {
     observed_at: observedAt,
     synthetic_only: true,
     complete,
-    cases_sha256: sha256(readFileSync(CASES_FILE)),
+    case_set: heldOut ? "held-out" : "main",
+    cases_sha256: sha256(readFileSync(set.file)),
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
     model: Object.freeze({ route, adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
     ...(previous === null ? {} : { resumed_from: Object.freeze({ observed_at: previous.observed_at, report_sha256: sha256(readFileSync(options.resume)), code: previous.code,
@@ -380,7 +391,8 @@ export async function run(options, dependencies = {}) {
     // The founder's ranks come from the page; until then the comparison's decision waits for them. The gate decides alone.
     judge_ranks: judgeRanks,
     ranks_without_founder: summarizeRanks({}, judgeRanks, ranked.map((catalog) => catalog.id)),
-    decision: gate ? decideGate(summary[BUILT.id], complete) : decide(summary, null),
+    // The rules' thresholds are over the 15 cases; the held-out questions are reported beside them and decide nothing alone.
+    decision: heldOut ? null : gate ? decideGate(summary[BUILT.id], complete) : decide(summary, null),
     case_orders: Object.freeze(Object.fromEntries(cases.map((caseDefinition) => [caseDefinition.id, caseOrder(caseDefinition.id)]))),
     system_prompts: systemPrompts,
     prompts: casePrompts,
