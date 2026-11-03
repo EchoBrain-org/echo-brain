@@ -33,6 +33,30 @@ test('Connect waits on the browser, reads the attempt until it completes, and li
   expect(toolCalls()).toEqual(['jira connect', 'jira status', 'jira status', 'slack disconnect']);
 });
 
+test('Escape cancels a connection still waiting on the browser at the Authority, and concealing ECHO only covers it', async () => {
+  run = await launch('tools-waiting');
+  const { page, app } = run;
+  await page.getByTestId('sidebar-tools').click();
+  await page.locator('[data-tool="jira"]').getByTestId('tool-connect').click();
+  await expect(page.getByTestId('tool-connect-waiting')).toBeVisible();
+  // Concealed, the sheet is covered and the attempt goes on waiting.
+  await emit(app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await expect(page.getByTestId('tool-connect-sheet')).toHaveCount(0);
+  await emit(app, 'echo-test:resume');
+  await expect(page.getByTestId('tool-connect-waiting')).toBeVisible();
+  await expect.poll(toolCalls).toContain('jira status');
+  expect(toolCalls()).not.toContain('jira cancel');
+  // Escape cancels the attempt the app has been reading, so a late approval in the browser binds nothing.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('tool-connect-sheet')).toHaveCount(0);
+  await expect.poll(toolCalls).toContain('jira cancel');
+  const attempts = run.calls().filter(call => /^\/v1\/person\/tools\/jira\/(status|cancel)$/.test(call.path)).map(call => call.body?.attempt);
+  expect(new Set(attempts).size).toBe(1);
+  // The page stays, and Jira is still to connect.
+  await expect(page.getByRole('region', { name: 'Available' }).getByTestId('tool-row')).toHaveText(['JJiraNot connectedConnect', 'CConfluenceNot connectedConnect']);
+});
+
 test('a meeting added through Granola reaches Home as a decision to approve, each item starting at the suggested project', async ({}, testInfo) => {
   run = await launch('granola');
   const { page } = run;
