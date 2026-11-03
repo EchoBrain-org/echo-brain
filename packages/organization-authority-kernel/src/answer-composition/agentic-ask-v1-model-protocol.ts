@@ -1201,14 +1201,16 @@ export const ANSWER_BLOCK_CATALOG = Object.freeze([
  * It is the block evaluation's layout part with two lines production needs: the reply names the lists it uses, and the
  * writer never writes items for a list's members, which code states. Its tuning (tools/evals/ask-blocks, "Tuning the
  * block descriptions") makes the answer block the short lead its wording rules speak of, gives each kind of thing a
- * question asks for its own titled block, and drops blocks that only name sources. An Ask without v2 never sees it.
+ * question asks for its own titled block, answers who-is and what-is questions with a card, and drops blocks that only
+ * name sources. An Ask without v2 never sees it.
  */
 export const ANSWER_BLOCKS_PROMPT = [
   "Layout: the person's app shows the answer as a short document made of blocks. \"block_catalog\" lists the blocks it can show:",
   "- Each block_catalog entry has \"block\", the name you pass; \"description\", what the block shows; and \"params\", each field it takes with what it means and its limits.",
   "- Choose the blocks that show this answer best, in the order the person should read them, and only the blocks the answer needs: an answer that is one fact is one \"answer\" block.",
   "- The first block is \"answer\", the lead: the conclusion, in one short sentence, or two when the question asks two things. It says only what the question asks: an owner, a status or a date the question did not ask about goes in a block after it.",
-  "- When the question asks about two or more different kinds of things, give each kind its own block after the answer, with a title that names it.",
+  "- When the question asks about two or more different kinds of things, the lead only sums them up, such as how many of each there are, and each kind gets its own block after it, with a title that names it.",
+  "- A question about who a person is, or what a project or ticket is, gets a card after the lead with its key facts.",
   "- The app shows the sources of every statement, so never add a block that only says where the facts come from.",
   NO_RESTATING_RULE,
   LONG_IDS_ONCE_RULE,
