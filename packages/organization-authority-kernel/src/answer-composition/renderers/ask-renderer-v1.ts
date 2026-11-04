@@ -3,6 +3,7 @@ import {
   PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
   personAnswerCitationKeyV8,
   validatePersonAnswerBlocksV2,
+  type PersonAnswerBlockV2,
   type PersonAnswerResponseV8,
   type PersonAnswerPartV4,
   type PersonAskAnswerLayoutV2,
@@ -119,7 +120,7 @@ type Entry = AgenticEvidenceBundleItemV1;
 /** A statement's shape before its citations are known: prose, or a list statement's table, whose rows name the items they cite. */
 type DraftShape = { readonly kind: "text" } | {
   readonly kind: "list"; readonly caption: string; readonly columns: readonly string[];
-  readonly group?: number;
+  readonly group: number;
   readonly rows: readonly { readonly cells: readonly string[]; readonly shorts: readonly string[] }[];
 };
 const PROSE: DraftShape = Object.freeze({ kind: "text" });
@@ -217,11 +218,11 @@ function coverageIsLimitedFor(bundle: AgenticEvidenceBundleV1, used: readonly En
 
 type Cited = readonly { readonly citation_indexes: readonly number[] }[];
 /**
- * Blocks of a layout that pass the contract (`validate`) against the part's statements, or none: layout adds no claim, so
- * an answer whose layout code could not build reads as it would without one rather than failing.
+ * Blocks that pass the contract against the part's statements, or none: blocks add no claim, so an answer whose blocks
+ * code could not build reads as it would without them rather than failing.
  */
-function contracted<B>(validate: (blocks: readonly B[], statements: Cited, citations: number) => readonly B[], blocks: readonly B[], statements: Cited, citations: number): readonly B[] | undefined {
-  try { return validate(blocks, statements, citations); } catch { return undefined; }
+function contracted(blocks: readonly PersonAnswerBlockV2[], statements: Cited, citations: number): readonly PersonAnswerBlockV2[] | undefined {
+  try { return validatePersonAnswerBlocksV2(blocks, statements, citations); } catch { return undefined; }
 }
 
 export function createAskRendererV1(options: CreateAskRendererV1Options): AgenticRendererV1<AskRendererInputV1, AskRenderedV1> {
@@ -631,7 +632,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const tableOf = (shape: Extract<DraftShape, { kind: "list" }>) => ({ ...shape, rows: shape.rows.map(row => ({ cells: row.cells, citation_indexes: indexesOf(row.shorts) })) });
         // Each writer item as its block shows it, and each list statement as its table or text. A part with no statements has nothing to lay out.
         const blocks = !laid || draft.statements.length === 0 ? undefined
-          : contracted(validatePersonAnswerBlocksV2, buildAskBlocksV2(order.map(({ shape, item }, at): AskBlockStatementV2 => ({ citation_indexes: statements[at]!.citation_indexes,
+          : contracted(buildAskBlocksV2(order.map(({ shape, item }, at): AskBlockStatementV2 => ({ citation_indexes: statements[at]!.citation_indexes,
             shape: item ?? (shape.kind === "list" ? tableOf(shape) : { kind: "text" }) }))), draft.statements, used.length);
         // ---- an Ask again's since (ADR-0047): what is different now, after everything the answer cites ----
         // Only beside an answer with evidence: one with none cannot say what changed. Each sentence stands on text the writer
