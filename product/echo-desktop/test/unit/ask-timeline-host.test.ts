@@ -206,6 +206,18 @@ describe('the timeline file (C5)', () => {
     ]) expect(timelineTurn(bad)).toBeNull();
   });
 
+  it('persists bounded typed gap details and rejects malformed saved reasons', () => {
+    const original = turn();
+    const answer = { ...original.answer, outcome: 'partial' as const, parts: [{ ...original.answer.parts[0]!, status: 'partial' as const,
+      gap: 'Not found: the owner. Some list rows did not fit.', gap_details: { not_found: 'Not found: the owner.', unsupported_action: true as const } }] };
+    const kept = { ...original, answer };
+    putTimeline(person, ARI, kept, NOW);
+    expect(readTimeline(person, ARI)).toEqual([kept]);
+    for (const gap_details of [{}, { unsupported_action: false }, { interrupted: 'true' }, { not_found: '' }, { not_found: 'x'.repeat(2049) }, { technical: true }]) {
+      expect(timelineTurn({ ...kept, answer: { ...answer, parts: [{ ...answer.parts[0], gap_details }] } })).toBeNull();
+    }
+  });
+
   it('keeps an answer arranged in blocks (ADR-0051) and one laid out (ADR-0045) as the page wrote them, and refuses blocks the page could not draw', () => {
     const scope = { kind: 'global' } as const;
     /** An answer as the page keeps it: what the host handed it, less what only its Ask reads. */

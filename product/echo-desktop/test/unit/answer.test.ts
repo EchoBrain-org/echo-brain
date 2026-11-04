@@ -197,13 +197,41 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
       'Yes. [3]\n\nWe ship annual plans first. [1][3]\n\nMonthly plans follow. [2]\n\nSources\n\n1. Launch plan\n2. Pricing\n3. Board');
   });
 
-  it('heads what each part says with its question when there are several, and leaves out what research did not cover (ADR-0047)', () => {
+  it('heads factual parts with their questions and includes partial explanations', () => {
     const answer: Answer = { ...plain([['Annual first.', [0]]]), sources: [page('1')], outcome: 'partial', parts: [
       { question: 'What did we agree?', status: 'answered', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }] },
-      { question: 'Who approved it?', status: 'not_found', statements: [], gap: 'This was not found.' },
+      { question: 'Who approved it?', status: 'not_found', statements: [], gap: 'This was not found. An unchecked row did not fit.', gap_details: { not_found: 'This was not found.' } },
     ] };
     expect(markdown(answer, ['Launch plan'])).toBe(
-      '## What did we agree?\n\nAnnual first. [1]\n\nSources\n\n1. Launch plan');
+      '## What did we agree?\n\nAnnual first. [1]\n\nThis was not found.\n\nSources\n\n1. Launch plan');
+  });
+
+  it('keeps fixed messages but hides source-derived absence when any cited source becomes unreadable', () => {
+    const gap = "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.";
+    const answer: Answer = { ...plain([['Annual first.', [0]]]), sources: [page('1'), page('2')], outcome: 'partial', parts: [
+      { question: 'What was decided, and update it?', status: 'partial', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }], gap: `${gap} An unchecked row did not fit.`, gap_details: { unsupported_action: true, interrupted: true, not_found: 'Not found: the confidential reviewer.' } },
+    ] };
+    expect(markdown(answer, ['Launch', 'Review'])).toContain(gap);
+    expect(answerText(answer, () => true)).toBe(`Annual first.\n${gap}\nI couldn't complete the search. Please try again.\nNot found: the confidential reviewer.`);
+    const shows = (ids: readonly number[]) => !ids.includes(1);
+    expect(answerMarkdown(answer, ['Launch'], [{ indexes: [0] }], shows)).toContain(gap);
+    expect(answerMarkdown(answer, ['Launch'], [{ indexes: [0] }], shows)).not.toContain('confidential reviewer');
+    expect(answerText(answer, shows)).toBe(`Annual first.\n${gap}\nI couldn't complete the search. Please try again.`);
+  });
+
+  it('copies only typed actionable explanations when diagnostic gaps also include formatting and coverage notes', () => {
+    const notFound = 'Not found: the reviewer.';
+    const answer: Answer = { ...plain([['Annual first.', [0]]]), outcome: 'partial', parts: [{
+      question: 'Who reviewed this? Publish it.', status: 'partial', statements: [{ text: 'Annual first.', citation_indexes: [0], private: false }],
+      gap: 'The list did not reach the end. Unchecked rows and sentences did not fit. Dropped a sentence.',
+      gap_details: { unsupported_action: true, interrupted: true, not_found: notFound },
+    }] };
+    const visible = ["Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.",
+      "I couldn't complete the search. Please try again.", notFound];
+    expect(answerText(answer, () => true)).toBe(['Annual first.', ...visible].join('\n'));
+    const copied = markdown(answer, ['Launch']);
+    for (const line of visible) expect(copied).toContain(line);
+    expect(copied).not.toContain(answer.parts[0]!.gap);
   });
 
   it('keeps a table cell\'s pipes and backslashes as text, and a line that would start a list as a sentence', () => {

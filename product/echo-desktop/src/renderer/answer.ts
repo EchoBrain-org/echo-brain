@@ -350,6 +350,19 @@ export function partShows(part: AnswerPart, shows: Shows): boolean {
   return [...part.statements, ...(part.records ?? [])].some(statement => shows(statement.citation_indexes));
 }
 
+/** Only actionable, typed explanations. Older complete not-found answers retain their gap; other untyped diagnostics stay hidden. */
+export function answerGaps(answer: Answer, shows: Shows): string[] {
+  // Only free-text missing facts can contain source content; fixed capability/retry messages remain safe.
+  const readable = shows(answer.sources.map((_, index) => index));
+  return [...new Set(answer.parts.flatMap(part => part.gap_details === undefined
+    ? readable && answer.outcome === 'not_found' && part.gap ? [part.gap] : []
+    : [
+      ...(part.gap_details.unsupported_action ? ["Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent."] : []),
+      ...(part.gap_details.interrupted ? ["I couldn't complete the search. Please try again."] : []),
+      ...(!readable || part.gap_details.not_found === undefined ? [] : [part.gap_details.not_found]),
+    ]))];
+}
+
 /**
  * Ask again's "Since" list (ADR-0047) as Copy answer writes it, with the day
  * the earlier answer was asked as the page names it ("Oct 14"): "Nothing
@@ -370,8 +383,8 @@ interface CopiedSince {
  * with nothing to show (ADR-0047). A laid-out part keeps its lead, headings,
  * bullets and tables, and an arranged one its blocks (ADR-0051); any other
  * is a paragraph per sentence. A part's question heads what it says when
- * there are several. What research did not cover is not written: the page no
- * longer shows it (ADR-0047).
+ * there are several. A partial answer's explanations are copied as shown on
+ * the page, including an explanation that is the whole answer.
  */
 export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows, since?: CopiedSince): string {
   const numbers = (citations: readonly number[]) => statementGroups(citations, groups).map(group => `[${group + 1}]`).join('');
@@ -403,6 +416,7 @@ export function answerMarkdown(answer: Answer, names: readonly string[], groups:
     else blocks.push(...shown(part.statements).map(claim));
     blocks.push(...shown(part.records ?? []).map(claim));
   }
+  blocks.push(...answerGaps(answer, shows).map(markdownText));
   if (groups.length > 0) blocks.push('Sources', groups.map((_, index) => `${index + 1}. ${markdownText(names[index] ?? '')}`.trimEnd()).join('\n'));
   return blocks.join('\n\n');
 }
@@ -418,6 +432,6 @@ export function answerText(answer: Answer, shows: Shows, since?: CopiedSince): s
   const listed = since === undefined ? [] : said(since.statements);
   const changes = since === undefined ? [] : since.statements.length === 0 ? [`Nothing changed since ${since.when}`] : listed.length > 0 ? [`Since ${since.when}`, ...listed] : [];
   return [...changes, ...said(answer.direct ? [answer.direct] : []), ...answer.parts.filter(part => partShows(part, shows))
-    .flatMap(part => [answer.parts.length > 1 ? part.question : '', ...said(part.statements), ...said(part.records ?? [])])]
+    .flatMap(part => [answer.parts.length > 1 ? part.question : '', ...said(part.statements), ...said(part.records ?? [])]), ...answerGaps(answer, shows)]
     .filter(line => line !== '').join('\n');
 }

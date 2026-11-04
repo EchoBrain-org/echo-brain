@@ -9,7 +9,7 @@ import {
 import { AgenticAskOutputErrorV1 } from "./agentic-ask-v1-model-protocol.js";
 
 type AnswerItem = PersonAnswerStatementV4 | PersonAnswerEvidenceFallbackV4;
-type Part = { question: string; status: PersonAnswerResponseV8["parts"][number]["status"]; statements: PersonAnswerStatementV4[]; gap?: string; records?: PersonAnswerEvidenceFallbackV4[] };
+type Part = { question: string; status: PersonAnswerResponseV8["parts"][number]["status"]; statements: PersonAnswerStatementV4[]; gap?: string; gap_details?: PersonAnswerResponseV8["parts"][number]["gap_details"]; records?: PersonAnswerEvidenceFallbackV4[] };
 
 /** Whether an Ask response fits its JSON byte bound. */
 export function agenticAskResponseFitsV1(response: unknown): boolean {
@@ -30,13 +30,13 @@ function withParts(candidate: PersonAnswerResponseV8, parts: readonly Part[], ou
   });
   const remapItem = <T extends AnswerItem>(item: T): T => Object.freeze({ ...item, citation_indexes: Object.freeze(item.citation_indexes.map(index => remap.get(index)).filter((index): index is number => index !== undefined)) }) as T;
   const { outcome: _outcome, citations: _citations, parts: _parts, direct: _direct, since: _since, ...kept } = candidate;
-  return Object.freeze({ ...kept, outcome, citations: Object.freeze(citations), parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(remapItem)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(remapItem)) }) }))) }) as PersonAnswerResponseV8;
+  return Object.freeze({ ...kept, outcome, citations: Object.freeze(citations), parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(remapItem)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.gap_details === undefined ? {} : { gap_details: part.gap_details }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(remapItem)) }) }))) }) as PersonAnswerResponseV8;
 }
 
 /** Removes whole least-priority evidence records until the packet fits. */
 export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerResponseV8): PersonAnswerResponseV8 {
   let candidate = result;
-  const copy = (value: PersonAnswerResponseV8): Part[] => value.parts.map(part => ({ question: part.question, status: part.status, statements: [...part.statements], ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.records === undefined ? {} : { records: [...part.records] }) }));
+  const copy = (value: PersonAnswerResponseV8): Part[] => value.parts.map(part => ({ question: part.question, status: part.status, statements: [...part.statements], ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.gap_details === undefined ? {} : { gap_details: part.gap_details }), ...(part.records === undefined ? {} : { records: [...part.records] }) }));
   // An Ask again's `since` (ADR-0047) goes first, and whole: cut short, it would say less changed than did. The answer
   // itself is unchanged, so its outcome stands.
   if (candidate.since !== undefined && !agenticAskResponseFitsV1(candidate)) candidate = withParts(candidate, copy(candidate), candidate.outcome);
@@ -61,9 +61,8 @@ export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerRespo
       }
     }
     if (!removed) throw new AgenticAskOutputErrorV1("agentic Ask response cannot fit its byte bound");
-    const statuses = parts.map(part => part.status);
-    const outcome = statuses.every(status => status === "not_found") ? "not_found" : statuses.every(status => status === "answered") ? "answered" : "partial";
-    candidate = withParts(candidate, parts, outcome);
+    // Losing evidence to the byte bound is partial output, never proof that a completed search found nothing.
+    candidate = withParts(candidate, parts, "partial");
   }
   return validatePersonAnswerResponseV8(candidate);
 }

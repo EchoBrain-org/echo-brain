@@ -308,8 +308,8 @@ export function isRecordRef(value: unknown): value is RecordRef {
  * research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
- * choices and no part. Its notice and its parts' gaps stay out of its plain
- * reading: the page shows neither.
+ * choices and no part. Its diagnostic notice and gaps stay out of the plain
+ * reading; the desktop and Copy derive actionable explanations from gap_details.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);

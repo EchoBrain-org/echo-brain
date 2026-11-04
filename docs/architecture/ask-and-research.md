@@ -114,6 +114,26 @@ profile can select the Claude Agent SDK research engine, and one member can use
 their own Claude account; that code lives in
 `providers/openrouter/src/claude-research/`.
 
+The native research finish contract distinguishes a finished investigation from
+finding an answer. Closed Ask needs, including `not_found`, pass the existing
+observed-read and coverage checks before research is considered complete, even
+when the driver supplied `completed=false`. Open needs and interrupted reads
+remain incomplete. For Ask requests to change data or send messages, the driver
+can set `unsupported_action=true`: an action-only request has no factual parts
+and needs no search; mixed requests still validate their factual needs normally.
+Clients opt into typed `gap_details` with `x-echo-ask-gap-details: 1`; older
+requests keep the exact V8 part shape. The renderer supplies them separately
+from the diagnostic `gap`:
+unsupported action, unfinished research, and a bounded not-found explanation.
+The desktop and Copy use only these actionable reasons; coverage and formatting
+diagnostics stay hidden. The response stays partial for unsupported requests,
+and internal researcher notes are never published. Background task goals do not
+accept this Ask capability signal. Completion checks prove observed reads and
+coverage, not query relevance or command intent; those remain model judgments
+covered by negative evaluation cases and live rehearsal. A list selection
+becomes actionable absence only after complete, verified coverage of the
+selection facts; empty subsets of incomplete or unchecked lists do not qualify.
+
 ## Side routes
 
 | Route | Purpose | Caller |

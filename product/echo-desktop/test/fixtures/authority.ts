@@ -72,6 +72,8 @@ interface Contract {
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1: string;
   PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V1: string;
   PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2: string;
+  PERSON_ASK_GAP_DETAILS_HEADER_V1: string;
+  PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1: string;
 }
 const api = organizationApi as unknown as Contract;
 
@@ -1849,6 +1851,21 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const progress = new Headers(init?.headers).get(api.PERSON_ASK_PROGRESS_HEADER_V1);
       if (mode === 'ask-progress' && progress === api.PERSON_ASK_PROGRESS_HEADER_VALUE_V3) {
         return progressStream(question, scope, init?.signal ?? undefined);
+      }
+      if (mode === 'ask-completion') {
+        const noMatch = question === 'Find the missing launch note.';
+        const interrupted = question === 'What changed during the unavailable search?';
+        const mixed = question === 'What was decided? Mark action A1 Done.';
+        const partialMissing = question === 'Who owns Harbor?' || question === 'What was decided, and who owns Harbor?';
+        const hasFacts = mixed || question === 'What was decided, and who owns Harbor?';
+        const [original] = desktop.answer.parts as Record<string, unknown>[];
+        const missing = noMatch ? "I couldn't find this in the sources you can access." : 'Not found: the Harbor owner.';
+        return json({ ...answer, scope, outcome: noMatch ? 'not_found' : 'partial', citations: hasFacts ? desktop.answer.citations : [],
+          parts: [{ question, status: hasFacts ? 'partial' : 'not_found', statements: hasFacts ? original!.statements : [],
+            gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.',
+            ...(new Headers(init?.headers).get(api.PERSON_ASK_GAP_DETAILS_HEADER_V1) === api.PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1
+              ? { gap_details: noMatch || partialMissing ? { not_found: missing } : interrupted ? { interrupted: true } : { unsupported_action: true } } : {}) }],
+        });
       }
       if (mode === 'ask-ticket') {
         const included = scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null);

@@ -332,6 +332,18 @@ describe("fitting an Ask again's answer to its byte bound (ADR-0047)", () => {
     question: "Who owns the THERM-482 fix?", since: { statements: Array.from({ length: since }, (_, index) => statement(100 + index)) },
   });
 
+  it("preserves typed actionable reasons when byte compaction removes the since list", () => {
+    const base = response(6);
+    const gap_details = { unsupported_action: true as const, interrupted: true as const, not_found: "Not found: the reviewer." };
+    const over: PersonAnswerResponseV8 = { ...base, outcome: "partial", parts: [{ ...base.parts[0]!, status: "partial", gap: "Some list rows did not fit.", gap_details }] };
+    expect(canonicalJsonBytes(over).byteLength).toBeGreaterThan(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
+    const fitted = compactAndValidateAgenticAskResponseV1(over);
+    expect(fitted).not.toHaveProperty("since");
+    expect(fitted.outcome).toBe("partial");
+    expect(fitted.parts[0]!.gap_details).toEqual(gap_details);
+    expect(canonicalJsonBytes(fitted).byteLength).toBeLessThanOrEqual(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);
+  });
+
   it("drops since first and whole, keeping the answer, its outcome and its question", () => {
     const over = response(6);
     expect(canonicalJsonBytes(over).byteLength).toBeGreaterThan(PERSON_ANSWER_RESPONSE_MAX_BYTES_V4);

@@ -47,6 +47,7 @@ import {
   agenticListMembersNounV1,
   agenticListNameSharesV1,
   agenticListSelectionNotFoundV1,
+  agenticListSelectionVerifiedV1,
   agenticListSelectV1,
   agenticListStatementV1,
   agenticListStatementsV2,
@@ -91,6 +92,7 @@ const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
 const UNCHECKED_EMPTY_GAP = "None of the items that record the date asked for matched.";
 const RECORDS_GAP = "I found these records, but could not write a verified summary.";
 const INCOMPLETE_SEARCH_GAP = "I couldn't complete the search. Please try again.";
+const READ_ONLY_GAP = "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.";
 const INCOMPLETE_SEARCH_NOTICE = "Research stopped before it finished, so relevant context may be missing.";
 const LIMITED_COVERAGE_GAP = "Some source coverage was incomplete, so relevant context may be missing.";
 const LIST_FALLBACK_GAP = "I found these items, but could not write the rest of the answer.";
@@ -163,6 +165,7 @@ export interface CreateAskRendererV1Options {
   readonly desk_scope: AgenticEvidenceBundleV1["gathered_for"]["scope"];
   /** The part carries its layout (answer layout v1, ADR-0045) or its blocks (v2, ADR-0051), because the client asked for it. */
   readonly layout?: PersonAskAnswerLayoutV2;
+  readonly include_gap_details?: true;
   /**
    * For an Ask that carried its previous turn (ADR-0047): the full question the answer answers, which the response names.
    * Without it the response names none.
@@ -243,6 +246,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const { bundle } = input;
       const askedQuestion = input.trigger_input.question;
       const researchIncomplete = !bundle.stop.completed;
+      const unsupportedAction = bundle.stop.unsupported_action === true;
       const byShort = new Map(bundle.items.map(entry => [entry.short, entry]));
       const entryOf = (short: string): Entry | undefined => {
         const id = cleanId(short);
@@ -439,7 +443,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         /** What the lists add to the gap, in order; `partial` when its rule makes the part partial whatever it names (W1, W2, W3). */
         const listGaps: { readonly text: string; readonly partial: boolean }[] = [];
         const writerGaps: { readonly text: string; readonly partial: boolean }[] = [];
-        const selectionNotFound: string[] = [];
+        const selectionNotFound: { readonly text: string; readonly confirmed: boolean }[] = [];
         // ---- the writer's sentences (W1, W3, W4, W5) ---------------------------
         // A which_say list whose members were not all checked qualifies every sentence citing its members' text (W5).
         const unchecked = checking.map(id => views.get(id)!).filter(list => agenticListCheckedNoteV1(list) !== undefined);
@@ -571,7 +575,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           // Two uses that select the same members are one statement, named by id, with the lead of the one that says which items exist.
           if (chosen !== undefined && chosen.length > 0 && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return [{ list, noun, selected: picked, which: true, ...(where === undefined ? {} : { where }), by_id: true }];
           // A selection that names nothing is its not_found phrase (K); an empty list keeps the plain not-found answer.
-          if (chosen?.length === 0 && where !== undefined) selectionNotFound.push(agenticListSelectionNotFoundV1(noun, list.filter, where));
+          if (chosen?.length === 0 && where !== undefined) {
+            const verified = agenticListSelectionVerifiedV1(all, where, list.filter.time_zone);
+            if (!verified) listGaps.push({ text: "Some list items do not record the fact used to select them.", partial: true });
+            selectionNotFound.push({ text: agenticListSelectionNotFoundV1(noun, list.filter, where),
+              confirmed: list.complete && !list.unchecked?.count && verified });
+          }
           return [
             ...(chosen === undefined || chosen.length === 0 ? [] : [{ list, noun, selected: chosen, which: true, ...(where === undefined ? {} : { where }), by_id: false }]),
             ...(picked === undefined || picked.length === 0 ? [] : [{ list, noun, selected: picked, which: stated.includes(id) && picked.length === all.length, by_id: true }]),
@@ -641,7 +650,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           : arranged ? orderAskBlocksV2(keptLists, writerSentences.filter((entry): entry is Laid & { item: AnswerItem } => kept.has(entry) && entry.item !== undefined), sentences.some(sentence => sentence.item?.kind === "answer"))
           : orderAskLayoutV1(keptLists, writerSentences.filter(entry => kept.has(entry)), sentences.some(sentence => sentence.form === "lead"));
         const statements: Statement[] = order.map(sentence => statementOf(sentence.text, sentence.shorts));
-        const notFound = [...(reply?.not_found ?? []), ...selectionNotFound];
+        const notFound = [...(reply?.not_found ?? []), ...selectionNotFound.map(gap => gap.text)];
         // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
         const coverageLimited = coverageIsLimitedFor(bundle, keptReads);
         const incomplete = (reply === null && writerRuns) || (researchIncomplete && (statements.length === 0 || notFound.length > 0));
@@ -652,7 +661,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // list, a sentence left out for resting on rows, and what did not fit.
         const extraGaps = [...new Set([...listGaps.map(gap => gap.text), ...(dropped ? [FIT_GAP] : [])])];
         const withGaps = (base: string | undefined) => {
-          const gaps = [...(base === undefined ? [] : [base]), ...extraGaps];
+          // Keep capability and unfinished-research explanations ahead of variable-length missing-fact text.
+          const gaps = [...(unsupportedAction ? [READ_ONLY_GAP] : []),
+            ...(unsupportedAction && researchIncomplete && !base?.startsWith(INCOMPLETE_SEARCH_GAP) ? [INCOMPLETE_SEARCH_NOTICE] : []),
+            ...(base === undefined ? [] : [base]), ...extraGaps];
           return gaps.length === 0 ? undefined : cleanLine(gaps.join(" "), 600);
         };
         type Draft = { status: PersonAnswerPartV4["status"]; statements: Statement[]; gap?: string; records?: Statement[] };
@@ -669,9 +681,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const records = fallback.map(entry => statementOf(entry.item.text!, [entry.short]));
           draft = records.length > 0
             ? { status: "records_only", statements: [], records, gap: withGaps(RECORDS_GAP)! }
-            : { status: "not_found", statements: [], gap: withGaps(gapText ?? (uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
+            : { status: "not_found", statements: [], gap: withGaps(gapText ?? (unsupportedAction && needs.length === 0 ? undefined : uncheckedEmpty ? UNCHECKED_EMPTY_GAP : NOT_FOUND_GAP))! };
         }
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
+        // A writer's missing text has no per-need provenance: an unchecked declared content list cannot prove absence.
+        const unconfirmedContent = unchecked.length > 0 || checking.some(id => (views.get(id)!.unchecked?.count ?? 0) > 0);
         // What the person is told about the filters of every list the answer uses, and of those which_say needs check (W7).
         const filterNotices = [...new Set([...usedLists, ...checking.map(id => views.get(id)!)])].flatMap(list => agenticListFilterNoticeV1(list, nounOf(list).plural) ?? []);
         // A completed answer can retain source coverage as a notice. A stop
@@ -681,7 +695,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(coverageLimited ? [LIMITED_COVERAGE_GAP] : []),
           ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
         ];
-        const outcome = !anyEvidence ? (incomplete || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
+        const outcome = researchIncomplete ? "partial" as const : !anyEvidence ? (incomplete || unsupportedAction || unconfirmedContent || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
+        // Preserve reason provenance before diagnostic gap strings are combined. Desktop actions never classify prose.
+        const confirmedMissing = [...(unconfirmedContent || selectionNotFound.some(gap => !gap.confirmed) ? [] : reply?.not_found ?? []), ...selectionNotFound.filter(gap => gap.confirmed).map(gap => gap.text)];
+        const missing = confirmedMissing.length > 0 ? boundedBytes(cleanLine(`Not found: ${confirmedMissing.join("; ")}.`, 600), 2 * 1024)
+          : outcome === "not_found" || (unsupportedAction && !anyEvidence && !incomplete && !unconfirmedContent && !listGaps.some(gap => gap.partial)
+            && needs.length > 0 && needs.every(need => need.status === "not_found")) ? NOT_FOUND_GAP : undefined;
+        const gapDetails = { ...(unsupportedAction ? { unsupported_action: true as const } : {}),
+          ...(researchIncomplete ? { interrupted: true as const } : {}), ...(missing === undefined ? {} : { not_found: missing }) };
         // The blocks of the statements kept (ADR-0045), only for a part with statements; a list's rows cite their items' citations.
         const indexesOf = (shorts: readonly string[]) => [...new Set(shorts.map(short => usedKeys.get(keyOf(short))!))];
         /** A list statement's table, its rows citing their items' citations. */
@@ -719,9 +740,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const result = Object.freeze({
           schema_version: 8, kind: "echo-clean-person-answer-v8", scope: options.desk_scope, outcome,
           parts: Object.freeze([Object.freeze({
-            question, status: draft.status,
+            question, status: draft.status === "answered" && Object.keys(gapDetails).length > 0 ? "partial" : draft.status,
             statements: released(draft.statements),
-            ...(draft.gap === undefined ? {} : { gap: draft.gap }),
+            ...(draft.gap === undefined ? {} : { gap: boundedBytes(draft.gap, 2 * 1024) }),
+            ...(!options.include_gap_details || Object.keys(gapDetails).length === 0 ? {} : { gap_details: Object.freeze(gapDetails) }),
             ...(draft.records === undefined ? {} : { records: released(draft.records) }),
             ...(layout === undefined ? {} : { layout }),
             ...(blocks === undefined ? {} : { blocks }),

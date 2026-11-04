@@ -717,6 +717,12 @@ export function agenticListSelectV1<T extends AgenticListNamedMemberV1>(members:
   }));
 }
 
+/** Whether every row records the fact needed to decide the selection; missing facts cannot prove an empty subset. */
+export function agenticListSelectionVerifiedV1(members: readonly AgenticListNamedMemberV1[], where: AgenticListSelectionV1, timeZone?: string): boolean {
+  return members.every(member => "value" in where ? member[where.field] !== undefined
+    : evidenceDayV1(memberDate(member, where.field) ?? "", timeZone ?? "UTC") !== undefined);
+}
+
 /** A selection as a statement says it: "have owner Dana Lee", "are due from October 18 to October 24, 2026", "were updated since October 11, 2026". */
 function selectionWords(where: AgenticListSelectionV1, one: boolean): string {
   if ("value" in where) return `${one ? "has" : "have"} ${where.field} ${line(where.value, 120)}`;

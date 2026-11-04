@@ -1,6 +1,6 @@
 import {
-  PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
-  validatePersonAskAnswerLayoutHeaderV2, validatePersonAskTimeContextV1, type PersonAskAnswerLayoutV2, type PersonAskTimeContextV1,
+  PERSON_ASK_GAP_DETAILS_HEADER_V1, PERSON_ASK_ANSWER_LAYOUT_HEADER_V1, PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_TIME_ZONE_HEADER_V1,
+  validatePersonAskGapDetailsHeaderV1, validatePersonAskAnswerLayoutHeaderV2, validatePersonAskTimeContextV1, type PersonAskAnswerLayoutV2, type PersonAskTimeContextV1,
 } from "@echo-brain/organization-api";
 import {
   PERSON_ASK_PROGRESS_HEADER_V1, PERSON_ASK_PROGRESS_HEADER_VALUE_V3,
@@ -496,11 +496,18 @@ function askAnswerLayout(request: IncomingMessage): PersonAskAnswerLayoutV2 | un
   catch { throw new AuthorityOperationError('invalid_request', 'Ask answer layout is invalid'); }
 }
 
-/** An Ask's optional headers as its options: the client's time context, and answer layout when asked for. An invalid one is `invalid_request`. */
-function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2 } {
+/** Only explicitly opted-in clients can receive the additional V8 part field. */
+function askGapDetails(request: IncomingMessage): true | undefined {
+  try { return validatePersonAskGapDetailsHeaderV1(request.headers[PERSON_ASK_GAP_DETAILS_HEADER_V1]); }
+  catch { throw new AuthorityOperationError('invalid_request', 'Ask gap details header is invalid'); }
+}
+
+/** An Ask's optional client headers as its options. An invalid one is `invalid_request`. */
+function askOptions(request: IncomingMessage): { readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2; readonly include_gap_details?: true } {
   const time_context = askTimeContext(request);
   const answer_layout = askAnswerLayout(request);
-  return { ...(time_context === undefined ? {} : { time_context }), ...(answer_layout === undefined ? {} : { answer_layout }) };
+  const include_gap_details = askGapDetails(request);
+  return { ...(time_context === undefined ? {} : { time_context }), ...(answer_layout === undefined ? {} : { answer_layout }), ...(include_gap_details === undefined ? {} : { include_gap_details }) };
 }
 
 /** Ask, desk and list reads check the bearer and install cancellation before reading any body bytes. */
@@ -508,7 +515,7 @@ function personCancellablePost<Application, Request>(
   application: Application,
   validate: (value: unknown) => Request,
   read: (application: Application, input: {
-    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2; readonly signal: AbortSignal;
+    readonly access_token: string; readonly request: Request; readonly time_context?: PersonAskTimeContextV1; readonly answer_layout?: PersonAskAnswerLayoutV2; readonly include_gap_details?: true; readonly signal: AbortSignal;
   }) => Promise<unknown>,
   ask = false,
 ): PersonPostHandler {

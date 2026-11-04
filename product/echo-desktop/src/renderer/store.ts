@@ -4019,12 +4019,20 @@ export function askProgress(notice: AskProgressNotice): void {
 }
 
 /**
- * A project question whose answer cites nothing: nothing in the project
- * matched. Ask never widens on its own (ADR-0015); the reader may ask the same
- * question across everything they can read, with one tap.
+ * A completed not-found project answer with no sources: nothing in the project
+ * matched. An incomplete search or unsupported action is not absence. Ask never
+ * widens on its own (ADR-0015); the reader may ask the same question across
+ * everything they can read, with one tap.
  */
 export function foundNothingInProject(turn: TimelineTurn): turn is TimelineTurn & { readonly scope: ProjectScope } {
-  return turn.scope.kind === 'project' && turn.answer.sources.length === 0;
+  return turn.scope.kind === 'project' && turn.answer.outcome === 'not_found' && turn.answer.sources.length === 0;
+}
+
+/** A completed factual gap can be searched more widely even when other parts were answered. */
+export function canAskEverywhere(turn: TimelineTurn, current: State = state): boolean {
+  if (turn.scope.kind !== 'project' || !showsOf(shownChecks(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
+  return foundNothingInProject(turn) || (turn.answer.parts.some(part => part.gap_details?.not_found !== undefined)
+    && !turn.answer.parts.some(part => part.gap_details?.interrupted));
 }
 
 /**
@@ -4035,7 +4043,7 @@ export function foundNothingInProject(turn: TimelineTurn): turn is TimelineTurn 
  */
 export function askEverywhere(id: string): void {
   const turn = turnOf(id);
-  if (!turn || state.ask?.asking || !foundNothingInProject(turn)) return;
+  if (!turn || state.ask?.asking || !canAskEverywhere(turn)) return;
   widenScope();
   void ask(turn.question, { kind: 'global' }, { previous: null });
 }
@@ -4201,7 +4209,7 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   const earlier = turn.again_of === undefined ? undefined : turnOf(turn.again_of)?.asked_at;
   const since = turn.since === undefined ? undefined : { statements: turn.since, when: earlier === undefined ? 'then' : askedWhen(earlier) };
   const markdown = answerMarkdown(answer, groups.map(group => sourceName(answer.sources[group.indexes[0]!]!, state.sources)), groups, shows, since);
-  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : checks === undefined && since === undefined ? answer.text : answerText(answer, shows, since);
+  const text = [...markdown].length <= MAX_COPY_CHARACTERS ? markdown : answerText(answer, shows, since);
   return text !== '' && (await rpc('clipboard.writeText', { text })).ok;
 }
 

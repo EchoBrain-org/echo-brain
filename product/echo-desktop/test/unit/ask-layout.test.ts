@@ -2,7 +2,7 @@
 // headings, bullets and tables in the desktop's own type, each sentence and
 // row with its sources' numbers and lit on its own; a part without a layout
 // as it always read. For every answer: the sources start as one closed line,
-// what research did not cover is not shown (ADR-0047), and Copy answer writes
+// partial-answer explanations remain visible, and Copy answer writes
 // Markdown.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerBlock } from '../../src/shared/protocol.js';
@@ -210,32 +210,53 @@ describe('every answer\'s sources start closed, as the one quiet line under it (
   });
 });
 
-describe('what research did not cover is not shown (ADR-0047)', () => {
-  it('ends the answer with its last block: no note, no banner, and no Try again on an answer that came', async () => {
+describe('only actionable answer explanations are shown', () => {
+  it('hides legacy partial coverage prose without adding a coverage banner or retry button', async () => {
     const { thread } = await answered(therm());
     const answer = byTestId(thread(), 'answer')[0]!;
-    const children = (answer.props.children as unknown[]).flat(2).filter(Boolean) as Node[];
-    expect(children.at(-1)!.props.class).toBe('answer-part');
     expect(text(thread())).not.toContain('THERM meetings in range');
-    expect(text(thread())).not.toContain('Who proposed the reduced scope was not found');
-    for (const gone of ['coverage-note', 'answer-notice', 'answer-gap', 'answer-assumption', 'answer-off-scope', 'ask-again']) expect(byTestId(thread(), gone)).toEqual([]);
+    expect(byTestId(thread(), 'answer-gap')).toHaveLength(0);
+    for (const gone of ['coverage-note', 'answer-notice', 'answer-assumption', 'answer-off-scope', 'ask-again']) expect(byTestId(thread(), gone)).toEqual([]);
     expect(byClass(answer, 'answer-banner')).toEqual([]);
   });
 
-  it('leaves out a part with nothing to show, and heads the others with their questions', async () => {
+  it('keeps typed missing-part explanations and heads the factual parts with their questions', async () => {
     const base = therm(false);
-    const answer: Answer = { ...base, parts: [base.parts[0]!, { question: 'Who proposed it?', status: 'not_found', statements: [], gap: 'This was not found.' }] };
+    const answer: Answer = { ...base, parts: [base.parts[0]!, { question: 'Who proposed it?', status: 'not_found', statements: [],
+      gap: 'Not found: its proposer. Some sentences did not fit.', gap_details: { not_found: 'Not found: its proposer.' } }] };
     const shown = byTestId((await answered(answer)).thread(), 'answer')[0]!;
     expect(byClass(shown, 'answer-part')).toHaveLength(1);
     expect(byClass(shown, 'section-label').map(text)).toEqual(['Can DVT-R2 run on the reduced test scope?']);
-    expect(text(shown)).not.toContain('This was not found.');
+    expect(text(shown)).toContain('Not found: its proposer.');
+    expect(text(shown)).not.toContain('Some sentences did not fit.');
   });
 
-  it('says nothing you can see matched when the answer has nothing to say', async () => {
+  it.each([
+    { message: "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent.", details: { unsupported_action: true as const } },
+    { message: "I couldn't complete the search. Please try again.", details: { interrupted: true as const } },
+  ])('shows and copies an empty partial answer explanation: $message', async ({ message, details }) => {
+    const base = therm(false);
+    const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [],
+      gap: 'Unchecked entries and sentences did not fit.', gap_details: details }] });
+    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([message]);
+    expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
+    click(byTestId(thread(), 'copy-answer')[0]);
+    await flush();
+    expect(rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').at(-1)?.[1]).toEqual({ text: message });
+  });
+
+  it('shows a completed not-found explanation, including a saved answer without typed details', async () => {
     const base = therm(false);
     const { thread } = await answered({ ...base, sources: [], outcome: 'not_found', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap: 'Not found.' }] });
-    expect(byTestId(thread(), 'answer-empty').map(text)).toEqual(['Nothing you can see matched.']);
-    expect(text(thread())).not.toContain('Not found.');
+    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual(['Not found.']);
+    expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
+  });
+
+  it('does not call an empty technical partial answer a completed no-match search', async () => {
+    const base = therm(false);
+    const { thread } = await answered({ ...base, sources: [], outcome: 'partial', parts: [{ question: QUESTION, status: 'not_found', statements: [], gap: 'Some list rows did not fit.' }] });
+    expect(byTestId(thread(), 'answer-gap')).toHaveLength(0);
+    expect(byTestId(thread(), 'answer-empty')).toHaveLength(0);
   });
 });
 
@@ -252,10 +273,22 @@ describe('Copy answer', () => {
     expect(markdown).toMatch(/\nSources\n\n1\. DVT failure review\n2\. Traceability\n3\. Gate reviews\n4\. TRACE-01 · Confirm TC-D-03 traces to MRD-01\n5\. HW-11 · Fix BUG-412 on the board\n6\. DVT-R2 · Run DVT-R2$/u);
   });
 
+  it('keeps only visible typed explanations when long Markdown falls back to plain text', async () => {
+    const base = therm(false);
+    const long = 'x'.repeat(11_850);
+    const missing = 'Not found: the person who approved the launch.';
+    const { store, thread } = await answered({ ...base, text: long, outcome: 'partial', parts: [{ question: QUESTION, status: 'partial',
+      statements: [{ text: long, citation_indexes: [0], private: false }],
+      gap: `${missing} Some unchecked entries did not fit.`, gap_details: { not_found: missing } }] });
+    expect(byTestId(thread(), 'answer-gap').map(text)).toEqual([missing]);
+    expect(await store.copyAnswer(paneTurn(store))).toBe(true);
+    expect(copied()).toEqual([`${long}\n${missing}`]);
+  });
+
   it('copies the plain text when the Markdown is past what Copy answer takes', async () => {
     const base = therm(false);
     const long = 'x'.repeat(11_990);
-    const { store } = await answered({ ...base, text: long, parts: [{ ...base.parts[0]!, statements: [{ text: long, citation_indexes: [0], private: false }] }] });
+    const { store } = await answered({ ...base, text: long, outcome: 'answered', parts: [{ question: QUESTION, status: 'answered', statements: [{ text: long, citation_indexes: [0], private: false }] }] });
     expect(await store.copyAnswer(paneTurn(store))).toBe(true);
     expect(copied()).toEqual([long]);
   });

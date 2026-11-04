@@ -162,6 +162,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       expect(headers.get('authorization')).toBe('Bearer bearer');
       expect(headers.get('x-echo-time-zone')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
       expect(headers.get('x-echo-answer-layout')).toBe('2');
+      expect(headers.get('x-echo-ask-gap-details')).toBe('1');
     }
   });
 
@@ -266,6 +267,7 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
       expect(refused.mock.calls.map(([url]) => pathOf(url))).toEqual(['/v7/person/ask']);
       // Every Ask asks for answer layout v2 (ADR-0051), streamed or not.
       expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-answer-layout')).toBe('2');
+      expect(headersOf(refused.mock.calls[0]![1]).get('x-echo-ask-gap-details')).toBe('1');
       expect(progress).toEqual([]);
     }
   });

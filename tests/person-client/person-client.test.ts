@@ -841,6 +841,7 @@ describe("Person client", () => {
       const arranged = { ...answer, parts: [{ ...answer.parts[0]!, blocks: [{ kind: 'answer', statements: [0] }] }] };
       const client = await signedInClient(home, async (_input, init) => {
         expect(new Headers(init?.headers).get('x-echo-answer-layout')).toBe('2');
+        expect(new Headers(init?.headers).get('x-echo-ask-gap-details')).toBe('1');
         return json(arranged);
       });
       await expect(client.askWithLiveSources('Is EVT ready?')).resolves.toMatchObject({ parts: [{ blocks: [{ kind: 'answer', statements: [0] }] }] });
