@@ -827,15 +827,15 @@ export function AskView({ state }: { state: State }) {
   // Where the timeline last put the view: the scroll event that records a person's scroll can arrive after a new row.
   const placedAt = useRef<number | null>(null);
   // Reading follows the bottom until the person scrolls away or chooses a specific citation.
-  type Position = { kind: 'bottom' } | { kind: 'anchor'; element: Element; offset: number };
+  type Position = { kind: 'bottom' } | { kind: 'anchor'; element: Element; offset: number; preferBottom: boolean };
   const reading = useRef<{ width: number; height: number; position: Position } | null>(null);
   const anchors = useRef<NodeListOf<Element> | null>(null);
   const savePosition = (position: Position) => {
     const view = scroller.current;
     if (view) reading.current = { width: view.clientWidth, height: view.clientHeight, position };
   };
-  const anchorPosition = (element: Element): Position => ({
-    kind: 'anchor', element, offset: element.getBoundingClientRect().top - scroller.current!.getBoundingClientRect().top,
+  const anchorPosition = (element: Element, preferBottom = false): Position => ({
+    kind: 'anchor', element, offset: element.getBoundingClientRect().top - scroller.current!.getBoundingClientRect().top, preferBottom,
   });
   const rememberReading = () => {
     const view = scroller.current;
@@ -858,9 +858,20 @@ export function AskView({ state }: { state: State }) {
   const keepReading = () => {
     const view = scroller.current, saved = reading.current;
     if (!view || !saved || (view.clientWidth === saved.width && view.clientHeight === saved.height)) return;
-    const position = saved.position;
+    let position = saved.position;
+    if (position.kind === 'anchor' && view.contains(position.element)) {
+      const bounds = position.element.getBoundingClientRect();
+      const top = bounds.top - view.getBoundingClientRect().top;
+      const atEnd = top - (view.scrollHeight - view.scrollTop - view.clientHeight);
+      // Choosing a latest citation at the end keeps following the end only if that also keeps its statement readable.
+      // A long answer can push the chosen statement out of view there, in which case the explicit reading anchor wins.
+      if (position.preferBottom && atEnd >= 0 && atEnd + bounds.height <= view.clientHeight) position = { kind: 'bottom' };
+      else {
+        view.scrollTop += top - position.offset;
+        position = { ...position, preferBottom: false };
+      }
+    }
     if (position.kind === 'bottom') view.scrollTop = view.scrollHeight;
-    else if (view.contains(position.element)) view.scrollTop += position.element.getBoundingClientRect().top - view.getBoundingClientRect().top - position.offset;
     placedAt.current = view.scrollTop;
     savePosition(position);
   };
@@ -870,7 +881,8 @@ export function AskView({ state }: { state: State }) {
     const marker = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-reading-focus]') : null;
     const turn = marker?.closest('[data-turn]');
     const element = marker && turn?.querySelector(`[data-reading-anchor="${CSS.escape(marker.dataset.readingFocus!)}"]`);
-    if (element) savePosition(anchorPosition(element));
+    if (element) savePosition(anchorPosition(element,
+      reading.current?.position.kind === 'bottom' && turn?.getAttribute('data-turn') === turns.at(-1)?.id));
   };
   // Content changes invalidate only the cached node list; they do not measure the existing thread.
   useLayoutEffect(() => { anchors.current = null; }, [thread.seq, turns.length, thread.opened, thread.earlier, state.timeline.turns, state.timeline.checks]);
