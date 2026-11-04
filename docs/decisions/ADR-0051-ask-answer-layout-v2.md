@@ -10,12 +10,12 @@ created_at: 2026-11-02
 reviewed_at: 2026-11-02
 reviewed_ref: 9e6bc8a356c826d77e2094a268340ba3fa848549
 status: accepted
-supersedes: []
+supersedes:
+  - ADR-0045
 superseded_by: []
 updates:
   - ADR-0041
   - ADR-0042
-  - ADR-0045
 ---
 
 # ADR-0051: The Ask writer arranges an answer from a catalog of seven blocks
@@ -276,3 +276,28 @@ partial rather than reporting a complete answer beside `and N more`.
 The research tool's 25-row page size is unchanged; research can continue paging.
 This amendment changes answer selection and presentation, not source access,
 research budgets, or what constitutes grounded evidence.
+
+## Amended 2026-11-04: layout v1 retired
+
+The founder retired layout v1 ([ADR-0045](ADR-0045-ask-answer-layout.md)),
+which this record now supersedes, once every desktop and CLI asked for `2`.
+What this record says of layout v1 above describes the two side by side and
+no longer holds:
+
+- `x-echo-answer-layout: 2` is the only layout. The header's `1`, which a
+  desktop or CLI older than layout v2 still sends, is answered as an Ask
+  without the header: the plain writer's prompt and schema, and statements
+  the client shows as paragraphs. Any other value is still refused.
+- The writer's layout v1 prompt and schema, its forms, sections and declared
+  tables, and code's v1 layout are removed. The plain writer, for an Ask
+  without the header, is unchanged byte for byte, and so is the answer an
+  Ask in blocks falls back to when its blocks cannot be released.
+- A V8 part never carries `layout`, and the answer's validator refuses one.
+  A table keeps the bounds it had: a column's name 100 bytes, a cell 300 and
+  a caption 600. Code still builds a list's table only up to six columns,
+  layout v1's most, and states a list with more as text.
+- The desktop draws `blocks` or paragraphs. An Ask timeline turn saved with
+  a layout v1 `layout` loads with the layout dropped, its statements shown as
+  paragraphs.
+- The block evaluation no longer runs layout v1 as its `today` arm; its other
+  catalogs start from the v2 writer's prompt.

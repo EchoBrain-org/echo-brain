@@ -55,11 +55,12 @@ sidebar.
 - The question reads as the asker's message: 15px, medium weight, the same
   size as the answer text. There is no "Asked as" line, no date or scope line
   under each question, and no divider between turns.
-- Answers render as today (ADR-0045 layout, citations, collapsed sources),
-  without the coverage note, without the assumption and off-scope banners
-  (no current path produces them) and without "Try again" on a successful
-  answer. A failed Ask keeps its Try again. "Nothing in <project> matched"
-  with "Ask across everything you can see" stays.
+- Answers render as today (ADR-0045 layout, since replaced by ADR-0051's blocks;
+  citations, collapsed sources), without the coverage note, without the
+  assumption and off-scope banners (no current path produces them) and without
+  "Try again" on a successful answer. A failed Ask keeps its Try again.
+  "Nothing in <project> matched" with "Ask across everything you can see"
+  stays.
 
 ### Opening an old answer, and Ask again
 
