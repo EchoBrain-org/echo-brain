@@ -159,7 +159,6 @@ const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const time = (value: unknown): value is string => string(value, 64) && !Number.isNaN(Date.parse(value));
 const STATUSES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found', 'records_only']);
 const OUTCOMES: ReadonlySet<unknown> = new Set(['answered', 'partial', 'not_found']);
-const BLOCKS: ReadonlySet<unknown> = new Set(['lead', 'heading', 'paragraph', 'bullets', 'table']);
 /** What a card may show (answer layout v2, ADR-0051). */
 const ENTITIES: ReadonlySet<unknown> = new Set(PERSON_ANSWER_CARD_ENTITIES_V2);
 
@@ -199,7 +198,7 @@ function source(value: unknown): value is AnswerSource {
   }
 }
 
-/** A table of either layout, as the page draws it: its columns, its caption, and each row's cells and citations. */
+/** A table, as the page draws it: its columns, its caption, and each row's cells and citations. */
 function table(block: Json): boolean {
   return Array.isArray(block.columns) && block.columns.every(column => string(column)) && (block.caption === undefined || string(block.caption))
     && Array.isArray(block.rows) && block.rows.every(row => record(row) && Array.isArray(row.cells) && row.cells.every(cell => string(cell)) && indexes(row.citation_indexes));
@@ -207,12 +206,6 @@ function table(block: Json): boolean {
 
 /** Whether `places` are sentences of a part that has `count`, by their place. */
 const within = (places: unknown, count: number) => indexes(places) && places.every(place => place < count);
-
-/** A part's layout, each block's sentences among the part's own: the page reads them by their place. */
-function layout(value: unknown, count: number): boolean {
-  return Array.isArray(value) && value.length <= 64 && value.every(block => record(block) && BLOCKS.has(block.kind) && (block.kind === 'heading' ? string(block.text)
-    : within(block.statements, count) && (block.kind !== 'table' || table(block))));
-}
 
 /** One item a sentence: as many `items` as the block has sentences (checked first), each what the page reads of it. */
 const each = (block: Json, items: unknown, item: (entry: Json) => boolean) => Array.isArray(items) && items.length === (block.statements as unknown[]).length
@@ -241,18 +234,29 @@ function arranged(value: unknown, count: number): boolean {
     && within(block.statements, count) && (block.title === undefined || string(block.title)) && ARRANGED[block.kind as ArrangedBlock['kind']](block));
 }
 
-/** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). A part reads one way: a layout or blocks. */
+/** An answer as the timeline keeps it: what the page reads back of a turn (TimelineAnswer). */
 function answer(value: unknown): value is TimelineAnswer {
   if (!record(value) || !string(value.text, 200_000) || !scope(value.scope) || !OUTCOMES.has(value.outcome)) return false;
   if (!Array.isArray(value.sources) || value.sources.length > MOST || !value.sources.every(source)) return false;
   if (value.direct !== undefined && !statement(value.direct)) return false;
   return Array.isArray(value.parts) && value.parts.length <= 64 && value.parts.every(part => record(part) && string(part.question) && STATUSES.has(part.status)
     && statements(part.statements) && (part.gap === undefined || string(part.gap)) && (part.records === undefined || statements(part.records))
-    && (part.layout === undefined || layout(part.layout, (part.statements as unknown[]).length))
-    && (part.blocks === undefined || (part.layout === undefined && arranged(part.blocks, (part.statements as unknown[]).length))));
+    && (part.blocks === undefined || arranged(part.blocks, (part.statements as unknown[]).length)));
 }
 
-/** A turn as a put writes it, or null for anything else. */
+/**
+ * A turn without the layout an older desktop saved on its parts (answer
+ * layout v1, ADR-0045, retired since): their statements read as paragraphs,
+ * and what the layout held is never read. Any other turn is itself.
+ */
+function withoutLayout(turn: Json): TimelineTurn {
+  const kept = turn.answer as Json;
+  if (!(kept.parts as Json[]).some(part => Object.hasOwn(part, 'layout'))) return turn as unknown as TimelineTurn;
+  const parts = (kept.parts as Json[]).map(({ layout: _retired, ...part }) => part);
+  return { ...turn, answer: { ...kept, parts } } as unknown as TimelineTurn;
+}
+
+/** A turn as a put writes it, or null for anything else. A part saved with answer layout v1 comes without it. */
 export function timelineTurn(value: unknown): TimelineTurn | null {
   if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text, 2_000) || !string(value.question, 2_000)
       || !scope(value.scope) || !answer(value.answer)) return null;
@@ -267,5 +271,5 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
       && value.unreadable.every(at => at < sources))) {
     return null;
   }
-  return value as unknown as TimelineTurn;
+  return withoutLayout(value);
 }

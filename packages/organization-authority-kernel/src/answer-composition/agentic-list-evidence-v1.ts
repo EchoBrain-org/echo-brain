@@ -764,9 +764,9 @@ export interface AgenticListStatementInputV1 {
  * covers the first member: with `share` 0, a first member no other statement
  * takes costs one name past the share, which buys no other member. `cited`
  * are the indexes in `selected` of the members the names cover, in order,
- * which the caller cites; "and N more" counts the rest. For answer layout v1
- * (ADR-0045), `caption` is the statement without its names ("60 Jira tickets
- * ...; and 35 more") and `names` the indexes each name covers, in order.
+ * which the caller cites; "and N more" counts the rest. `caption` is the
+ * statement without its names ("60 Jira tickets ...; and 35 more") and `names`
+ * the indexes each name covers, in order.
  */
 type ListStatement = { readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] };
 
@@ -855,11 +855,11 @@ export interface AgenticListTableV1 {
 }
 
 /**
- * A list statement's names as a table (answer layout v1, ADR-0045): one row per name (agenticListStatementV1's `names`),
+ * A list statement's names as a table (answer layout v2, ADR-0051): one row per name (agenticListStatementsV2's `names`),
  * an Item column, then Status, Owner and Due when any named member records them. Members selected by id are named with
  * every row fact they record, so their table also has a column for each date they state, each day in the list's time
  * zone. Undefined, so the statement stays prose, for one name, for names with nothing beside their titles, or for more
- * columns than a table holds.
+ * than six columns, as many as a table of retired layout v1 (ADR-0045) held.
  */
 export function agenticListTableV1(input: { readonly selected: readonly AgenticListNamedMemberV1[]; readonly names: readonly (readonly number[])[]; readonly by_id?: boolean; readonly time_zone?: string }): AgenticListTableV1 | undefined {
   if (input.names.length < 2) return undefined;

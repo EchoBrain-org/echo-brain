@@ -331,10 +331,10 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
 const PRIVATE_VISIBILITY: ReadonlySet<string> = new Set(['only_me', 'approver_only']);
 
 /**
- * An answer's cited item, and whether only you can read it: a table row that
- * cites it shows the lock (ADR-0045). It keeps the citation as the response
- * carried it, for a later follow-up's `previous` and, when it can change or
- * go, a later check (ADR-0047).
+ * An answer's cited item, and whether only you can read it: its source row
+ * shows the lock when ECHO keeps it for you alone (ADR-0049). It keeps the
+ * citation as the response carried it, for a later follow-up's `previous`
+ * and, when it can change or go, a later check (ADR-0047).
  */
 function citedSource(citation: PersonAnswerCitationV8): AnswerSource {
   const source = { ...answerSource(citation), cited: citation };

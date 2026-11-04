@@ -1,6 +1,13 @@
-import { PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2, PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, type PersonAnswerBlockV2 } from "@echo-brain/organization-api";
+import {
+  PERSON_ANSWER_BLOCK_TITLE_MAX_BYTES_V2,
+  PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2,
+  PERSON_ANSWER_CAPTION_MAX_BYTES_V1,
+  PERSON_ANSWER_CELL_MAX_BYTES_V1,
+  PERSON_ANSWER_COLUMN_MAX_BYTES_V1,
+  type PersonAnswerBlockV2,
+  type PersonAnswerTableRowV1,
+} from "@echo-brain/organization-api";
 import { boundedBytes, type AnswerItem } from "../agentic-ask-v1-model-protocol.js";
-import { cellsOf, columnsOf, listTableV1, type AskLayoutShapeV1 } from "./ask-layout-v1.js";
 
 /**
  * How Ask lays out a V8 answer part with answer layout v2 (ADR-0051). The
@@ -12,8 +19,16 @@ import { cellsOf, columnsOf, listTableV1, type AskLayoutShapeV1 } from "./ask-la
  * cites: a quote word for word, and an event's day.
  */
 
+/**
+ * A list statement code writes as its table (ADR-0041): its caption, its columns, and each row's cells and the citations
+ * of what it shows; `group` when it is one of the statements of one list's use, which read as one table.
+ */
+export interface AskListShapeV2 {
+  readonly kind: "list"; readonly caption: string; readonly columns: readonly string[]; readonly group?: number;
+  readonly rows: readonly { readonly cells: readonly string[]; readonly citation_indexes: readonly number[] }[];
+}
 /** What one statement reads as: a writer's item, a list statement code writes as its table, or plain text. */
-export type AskBlockShapeV2 = AnswerItem | { readonly kind: "text" } | (Extract<AskLayoutShapeV1, { kind: "list" }> & { readonly group?: number });
+export type AskBlockShapeV2 = AnswerItem | { readonly kind: "text" } | AskListShapeV2;
 /** One statement the response kept, with its citations and its shape. */
 export interface AskBlockStatementV2 {
   readonly citation_indexes: readonly number[];
@@ -43,6 +58,23 @@ export function orderAskBlocksV2<L, S extends { readonly item: AnswerItem }>(lis
       return [...shown, ...own.filter(sentence => sentence.item.kind === "text")];
     }),
   ]);
+}
+
+/** A table's columns, each within the contract's bytes. */
+function columnsOf(columns: readonly string[]): string[] {
+  return columns.map(column => boundedBytes(column, PERSON_ANSWER_COLUMN_MAX_BYTES_V1));
+}
+
+/** A table's cells, one per column, each within the contract's bytes. */
+function cellsOf(cells: readonly string[], columns: readonly string[]): readonly string[] {
+  return Object.freeze(columns.map((_, at) => boundedBytes(cells[at] ?? "", PERSON_ANSWER_CELL_MAX_BYTES_V1)));
+}
+
+/** A list statement's table (ADR-0041): its columns, its rows and its caption, when it has one, each within the contract's bytes. */
+function listTable(shape: AskListShapeV2): { readonly columns: string[]; readonly rows: PersonAnswerTableRowV1[]; readonly caption?: string } {
+  const columns = columnsOf(shape.columns);
+  const caption = boundedBytes(shape.caption, PERSON_ANSWER_CAPTION_MAX_BYTES_V1);
+  return { columns, rows: shape.rows.map(row => Object.freeze({ cells: cellsOf(row.cells, columns), citation_indexes: Object.freeze([...row.citation_indexes]) })), ...(caption.length === 0 ? {} : { caption }) };
 }
 
 type Run = { readonly shape: AskBlockShapeV2; readonly statements: number[] };
@@ -83,7 +115,7 @@ export function buildAskBlocksV2(statements: readonly AskBlockStatementV2[]): re
     const items = run.statements.map(at => statements[at]!);
     const enough = run.statements.length >= PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2;
     if (shape.kind === "answer") blocks.push({ kind: "answer", statements: run.statements });
-    else if (shape.kind === "list") blocks.push({ kind: "table", statements: run.statements, ...listTableV1({ ...shape,
+    else if (shape.kind === "list") blocks.push({ kind: "table", statements: run.statements, ...listTable({ ...shape,
       rows: items.flatMap(({ shape: item }) => item.kind === "list" ? item.rows : []),
     }) });
     else if (shape.kind === "quote") blocks.push({ kind: "quote", statements: run.statements, text: shape.text, ...(shape.from === undefined ? {} : { from: shape.from }) });

@@ -44,26 +44,25 @@ V8 answer
 ([Person client architecture](../../docs/architecture/person-client-architecture.md#account-and-answer-sources)).
 
 Ask keeps to a 720px column, short enough to read, and each question is its
-turn's heading (ADR-0049). An answer the Authority lays out (answer layout v1,
-ADR-0045) reads as a short document, in the desktop's own type and the
-answer's one size: the conclusion first, a heading for each distinct topic,
-bullets for parallel items, and a table for items that share owners, dates or
-statuses, with its caption only when the table opens the answer. Each sentence
-and each table row keeps its sources' numbers, faint footnote digits with no
-box that brighten with the sentence under the pointer, and lights on its own;
-a table shows ISO dates as "Oct 14", only your own late row's due date in the
+turn's heading (ADR-0049). An answer the writer arranges in blocks (answer
+layout v2, ADR-0051) reads as a short document, in the desktop's own type and
+the answer's one size: the answer first, then each block under its title as a
+section heading: text, points as bullets or numbered steps, a table for items
+that share owners, dates or statuses, a timeline with each event's day down
+the side and who under it, a card headed by its kind's icon with its facts as
+label and value rows, and a quote set apart by a rule with its source under
+it. Every item is one cited sentence that keeps its sources' numbers, faint
+footnote digits with no box that brighten with the sentence under the pointer,
+and lights on its own. A table shows its caption only when it opens the
+answer, ISO dates as "Oct 14" and only your own late row's due date in the
 signal colour, and scrolls in its own box when the window is narrow. An answer
-the writer arranges in blocks (answer layout v2, ADR-0051) reads the same way:
-the answer first, then each block under its title as a section heading: text,
-points as bullets or numbered steps, tables as above, a timeline with each
-event's day down the side and who under it, a card headed by its kind's icon
-with its facts as label and value rows, and a quote set apart by a rule with
-its source under it. Every item is one cited sentence with its own numbers,
-and an answer saved with layout v1 still draws with it. An answer without a
-layout reads as a paragraph per sentence. Either way, its sources start as one
-quiet closed line under it ("4 sources") that a click opens, and a source's
-number opens that source beside the answer. A lock shows only on a source's
-row, for what ECHO keeps for you alone, never for a live tool's item.
+without blocks reads as a paragraph per sentence. Answer layout v1 (ADR-0045)
+is retired: the desktop draws only blocks or paragraphs, and a timeline turn
+saved with a v1 layout loads as a paragraph per sentence. Every answer's
+sources start as one quiet closed line under it ("4 sources") that a click
+opens, and a source's number opens that source beside the answer. A lock shows
+only on a source's row, for what ECHO keeps for you alone, never for a live
+tool's item.
 **Copy**, on that line while the pointer is on the turn or focus is in it,
 writes Markdown with the sources numbered as the page numbers them. What
 research did not cover is not shown, and an answer that came has no Try again:

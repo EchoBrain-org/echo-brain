@@ -1,11 +1,15 @@
 // The Ask timeline (ADR-0047), in the store and on the page: which turns show
 // in full and which fold, the timeline kept through navigation and read again
-// at sign-in; one check of the newest turns' sources when Ask opens, kept five
-// minutes, quiet when it fails, turned into Changed tags, lit sentences and
-// sentences left out; the earlier turn a follow-up or Ask again carries, and
-// how it is trimmed; "Which one?"; the sidebar's dots with a project's New
-// rows; and the earlier questions past the newest three folded into one line,
-// with the sidebar's Ask going back to where you left Ask.
+// at sign-in, a turn saved with answer layout v1 as paragraphs; one check of
+// the newest turns' sources when Ask opens, kept five minutes, quiet when it
+// fails, turned into Changed tags, lit sentences and sentences left out; the
+// earlier turn a follow-up or Ask again carries, and how it is trimmed; "Which
+// one?"; the sidebar's dots with a project's New rows; and the earlier
+// questions past the newest three folded into one line, with the sidebar's Ask
+// going back to where you left Ask.
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
@@ -16,9 +20,10 @@ import {
 } from '../../src/renderer/timeline.js';
 import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen } from '../../src/renderer/format.js';
+import { readTimeline, timelinePath } from '../../src/host/timeline.js';
 import {
-  ACCOUNT, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text,
-  timelineFiles, wake,
+  ACCOUNT, byClass, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore,
+  storeLifecycle, text, timelineFiles, wake,
 } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -604,6 +609,29 @@ describe('Ask on the timeline', () => {
     expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
   });
 
+  it('opens a turn saved with answer layout v1 (ADR-0045), retired since, as the host reads it back: a paragraph per sentence', async () => {
+    const old = turn('What is open on THERM?', DAY, status());
+    const part = old.answer.parts[0]!;
+    // The account's file as a desktop from before layout v2 wrote it: how the part read, beside its sentences.
+    const saved = { ...old, answer: { ...old.answer, parts: [{ ...part, layout: [
+      { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Still to do' }, { kind: 'bullets', statements: [1, 2] }] }] } };
+    const person = mkdtempSync(join(tmpdir(), 'echo-person-'));
+    try {
+      mkdirSync(join(person, 'ask-timeline-v1'), { mode: 0o700 });
+      writeFileSync(timelinePath(person, ACCOUNT), JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1', turns: [saved] }), { mode: 0o600 });
+      seed(...readTimeline(person, ACCOUNT));
+    } finally {
+      rmSync(person, { recursive: true, force: true });
+    }
+    const store = await startStore();
+    store.pickSuggestion({ question: old.question, turn: old.id });
+    await flush();
+    const shown = byTestId((await view())(store), 'answer')[0]!;
+    expect(byClass(shown, 'answer-layout')).toEqual([]);
+    expect(byTestId(shown, 'statement').map(node => [node.type, classes(node)[0], text(byTestId(node, 'statement-text'))]))
+      .toEqual(part.statements.map(statement => ['p', 'answer-statement', statement.text]));
+  });
+
   it('clears what a check said when it goes stale, so the page stops showing it then', async () => {
     seed(turn('One?', 2 * DAY, status()), turn('Two?', DAY, status()));
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'changed' : 'same' })) });
@@ -639,14 +667,14 @@ describe('Ask on the timeline', () => {
     const sources = [ticket('THERM-482', '20482'), followUp('itm_timeline-1'), page('31010')];
     const base = answerOf('What is open on THERM?', sources, [['THERM-482, Sensor drift, is open.', [0]], ['Confirm the trace is still open.', [1]],
       ['The DVT plan moved the retest to Oct 30.', [2]]]);
-    const laidOut: Answer = { ...base, parts: [{ ...base.parts[0]!, layout: [
-      { kind: 'lead', statements: [0] }, { kind: 'heading', text: 'Still to do' }, { kind: 'bullets', statements: [1] },
-      { kind: 'table', statements: [0, 1, 2], columns: ['Item', 'Status'], rows: [{ cells: ['THERM-482', 'Open'], citation_indexes: [0] },
+    const arranged: Answer = { ...base, parts: [{ ...base.parts[0]!, blocks: [
+      { kind: 'answer', statements: [0] }, { kind: 'points', title: 'Still to do', ordered: false, statements: [1] },
+      { kind: 'table', statements: [2], columns: ['Item', 'Status'], rows: [{ cells: ['THERM-482', 'Open'], citation_indexes: [0] },
         { cells: ['Trace', 'Open'], citation_indexes: [1] }, { cells: ['DVT plan', 'Moved'], citation_indexes: [2] }] },
     ] }] };
     const long = 'x'.repeat(11_990);
     const plain = answerOf('Long?', sources, [[long, [0]], ['Confirm the trace is still open.', [1]]]);
-    const [one, two] = [turn('What is open on THERM?', 2 * DAY, laidOut), turn('Long?', DAY, plain)];
+    const [one, two] = [turn('What is open on THERM?', 2 * DAY, arranged), turn('Long?', DAY, plain)];
     // The follow-up is no longer yours to read; the DVT plan changed.
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : item.citation.kind === 'page' ? 'changed' : 'same' })) });
     const copied: string[] = [];

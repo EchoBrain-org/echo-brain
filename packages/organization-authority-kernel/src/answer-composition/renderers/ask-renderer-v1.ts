@@ -3,7 +3,6 @@ import {
   PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
   personAnswerCitationKeyV8,
   validatePersonAnswerBlocksV2,
-  validatePersonAnswerLayoutV1,
   type PersonAnswerResponseV8,
   type PersonAnswerPartV4,
   type PersonAskAnswerLayoutV2,
@@ -13,12 +12,9 @@ import {
   AgenticAskOutputErrorV1,
   ANSWER_BLOCK_CATALOG,
   ANSWER_BLOCKS_PROMPT,
-  ANSWER_LAYOUT_PROMPT,
   ANSWER_SINCE_PROMPT,
   answerBlocksSchema,
   answerBlocksSinceSchema,
-  answerLayoutSchema,
-  answerLayoutSinceSchema,
   answerSchema,
   answerSinceSchema,
   attributed,
@@ -65,8 +61,7 @@ import {
 import { AGENTIC_ASK_MIN_ANSWER_MS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import { observeCoreModelCorrectionV1, type CoreRuntimeModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
-import { buildAskLayoutV1, orderAskLayoutV1, type AskLayoutShapeV1 } from "./ask-layout-v1.js";
-import { buildAskBlocksV2, daysWrittenV2, orderAskBlocksV2, quoteIsWordForWordV2, type AskBlockShapeV2 } from "./ask-layout-v2.js";
+import { buildAskBlocksV2, daysWrittenV2, orderAskBlocksV2, quoteIsWordForWordV2, type AskBlockStatementV2 } from "./ask-layout-v2.js";
 
 /**
  * Ask's renderer: one writer call reads the question against released
@@ -77,13 +72,11 @@ import { buildAskBlocksV2, daysWrittenV2, orderAskBlocksV2, quoteIsWordForWordV2
  * writer chooses. The writer's sentences follow, each standing only on text it
  * read. With no usable writer reply code still states those lists, or falls
  * back to the records research read, or says what it could not find. An
- * Ask that asked for its layout (ADR-0045) gives its writer the layout prompt
- * and schema; its answer reads lead first and its part carries the blocks its
- * kept statements read as, or, when that cannot be released, it is exactly the
- * answer the same reply gives without layout. An Ask that asked for layout v2
- * (ADR-0051) gives its writer the block catalog beside the source catalog; code
- * reads each item of its blocks as one statement, checked against what it
- * cites, and its part carries `blocks` instead.
+ * Ask that asked for answer layout v2 (ADR-0051) gives its writer the block
+ * catalog beside the source catalog; code reads each item of its blocks as one
+ * statement, checked against what it cites. Its answer reads answer first and
+ * its part carries the blocks its kept statements read as, or, when that cannot
+ * be released, it is the answer the same reply gives without them.
  */
 
 const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
@@ -108,24 +101,23 @@ const MAX_CITATIONS = 40;
 const MAX_STATEMENTS = AGENTIC_ASK_MAX_SENTENCES_V1;
 /** The writer runs in Ask's answer span; the audit records it as an `answer` call. */
 const WRITER_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_answer" });
-/** A laid-out Ask's writer (ADR-0045, and the blocks of ADR-0051) marks each sentence's form and section, and a row's cells: a longer reply. */
+/** A v2 Ask's writer arranges its answer in blocks (ADR-0051), a row's cells and an event's day among them: a longer reply. */
 const LAYOUT_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_000 });
 /** An Ask again's writer (ADR-0047) also says what is different since: room for its sentences beside the answer. */
 const SINCE_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_000 });
 const LAYOUT_SINCE_WRITER_CALL: AgenticModelCallV1 = Object.freeze({ ...WRITER_CALL, output_tokens: 2_500 });
 /**
- * A writer by the answer layout its Ask asked for: none, v1 (ADR-0045) or v2 (ADR-0051). Each has the part of the prompt
- * after Ask's own, what it adds to the writer's input, and its reply's schema and call, asked once or again (ADR-0047).
+ * A writer by the answer layout its Ask asked for: none or v2 (ADR-0051). Each has the part of the prompt after Ask's
+ * own, what it adds to the writer's input, and its reply's schema and call, asked once or again (ADR-0047).
  */
 const WRITERS = Object.freeze({
   none: { prompt: [], context: {}, schema: answerSchema, since_schema: answerSinceSchema, call: WRITER_CALL, since_call: SINCE_WRITER_CALL },
-  1: { prompt: [ANSWER_LAYOUT_PROMPT], context: {}, schema: answerLayoutSchema, since_schema: answerLayoutSinceSchema, call: LAYOUT_WRITER_CALL, since_call: LAYOUT_SINCE_WRITER_CALL },
   2: { prompt: [ANSWER_BLOCKS_PROMPT], context: { block_catalog: ANSWER_BLOCK_CATALOG }, schema: answerBlocksSchema, since_schema: answerBlocksSinceSchema, call: LAYOUT_WRITER_CALL, since_call: LAYOUT_SINCE_WRITER_CALL },
 });
 
 type Entry = AgenticEvidenceBundleItemV1;
-/** A statement's shape before its citations are known: a list's rows name the items they cite. */
-type DraftShape = Exclude<AskLayoutShapeV1, { kind: "list" }> | {
+/** A statement's shape before its citations are known: prose, or a list statement's table, whose rows name the items they cite. */
+type DraftShape = { readonly kind: "text" } | {
   readonly kind: "list"; readonly caption: string; readonly columns: readonly string[];
   readonly group?: number;
   readonly rows: readonly { readonly cells: readonly string[]; readonly shorts: readonly string[] }[];
@@ -162,7 +154,7 @@ export interface CreateAskRendererV1Options {
   readonly context: { readonly asked_by?: string; readonly today: string; readonly time_zone?: string };
   /** The response's scope: the desk's. */
   readonly desk_scope: AgenticEvidenceBundleV1["gathered_for"]["scope"];
-  /** The part carries its layout (answer layout v1, ADR-0045) or its blocks (v2, ADR-0051), because the client asked for it. */
+  /** The part carries its blocks (answer layout v2, ADR-0051), because the client asked for them. */
   readonly layout?: PersonAskAnswerLayoutV2;
   /**
    * For an Ask that carried its previous turn (ADR-0047): the full question the answer answers, which the response names.
@@ -233,7 +225,6 @@ function contracted<B>(validate: (blocks: readonly B[], statements: Cited, citat
 }
 
 export function createAskRendererV1(options: CreateAskRendererV1Options): AgenticRendererV1<AskRendererInputV1, AskRenderedV1> {
-  const laidOut = options.layout !== undefined;
   /** Layout v2 (ADR-0051): the writer arranges its answer from the block catalog. */
   const arranged = options.layout === 2;
   const writer = WRITERS[options.layout ?? "none"];
@@ -316,8 +307,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           notices: [...bundle.coverage.notices], omitted_evidence_items: bundle.items.filter(entry => entry.item.text !== undefined).length,
         },
       };
-      // A laid-out Ask's writer is also told how to mark forms (ADR-0045) or arrange blocks (ADR-0051), and an Ask again's
-      // what to say is different since (ADR-0047); each has a longer reply's room. No other writer's prompt changes.
+      // A v2 Ask's writer is also told how to arrange blocks (ADR-0051), and an Ask again's what to say is different since
+      // (ADR-0047); each has a longer reply's room. No other writer's prompt changes.
       const writerPrompt = [options.answer_prompt, ...writer.prompt, ...(earlier === undefined ? [] : [ANSWER_SINCE_PROMPT])].join("\n\n");
       const writerCall = earlier === undefined ? writer.call : writer.since_call;
       const writerSchema = earlier === undefined ? writer.schema : writer.since_schema;
@@ -373,7 +364,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       };
       const parse = (value: unknown): Answer => {
         const since = earlier === undefined ? {} : { since: true };
-        const parsed = withMembers(arranged ? parseBlocksAnswer(value, since) : parseAnswer(value, { layout: laidOut, ...since }));
+        const parsed = withMembers(arranged ? parseBlocksAnswer(value, since) : parseAnswer(value, since));
         last.answer = parsed;
         if (parsed.sentences.some(restsOnRows) && repairable()) throw new AgenticAskOutputErrorV1(ROWS_REASON);
         return parsed;
@@ -401,9 +392,9 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const overCited = (shorts: readonly string[]) => new Set(shorts.map(keyOf)).size > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4;
       const question = partQuestion(askedQuestion);
       /**
-       * The response `reply` (the writer's answer, or null) gives, laid out (ADR-0045) or not, with an Ask again's `since`
-       * (ADR-0047) or without it, and the items its citations cite, in order. Each call reads the reply afresh; only the
-       * first counts the writer's corrections (`count`).
+       * The response `reply` (the writer's answer, or null) gives, in blocks (`laid`, ADR-0051) or not, with an Ask again's
+       * `since` (ADR-0047) or without it, and the items its citations cite, in order. Each call reads the reply afresh; only
+       * the first counts the writer's corrections (`count`).
        */
       const respond = (reply: Answer | null, laid: boolean, count: boolean, withSince: boolean) => {
         const correct = (correction: CoreRuntimeModelCorrectionV1, times?: number) => { if (count) observeCoreModelCorrectionV1(correction, times); };
@@ -467,15 +458,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected,
             ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
           };
-          const statements = arranged && laid ? agenticListStatementsV2(description)
+          const statements = laid ? agenticListStatementsV2(description)
             : [agenticListStatementV1({ ...description, share: shares[index]!.share, free: shares[index]!.free })];
           if (statements.reduce((total, statement) => total + statement.cited.length, 0) < value.selected.length) listGaps.push({ text: FIT_GAP, partial: true });
-          // Each named member cites its own row; with layout, a statement naming two or more names is a table, a row per name.
+          // Each named member cites its own row; in blocks, a statement naming two or more names is a table, a row per name.
           const table = !laid ? undefined : agenticListTableV1({ selected: value.selected, names: statements.flatMap(statement => statement.names), by_id: value.by_id, ...(value.list.filter.time_zone === undefined ? {} : { time_zone: value.list.filter.time_zone }) });
           let firstRow = 0;
           return statements.map(statement => {
             const shape: DraftShape = table === undefined ? PROSE : {
-              kind: "list", caption: statement.caption, columns: table.columns, ...(arranged ? { group: index } : {}),
+              kind: "list", caption: statement.caption, columns: table.columns, group: index,
               rows: table.rows.slice(firstRow, firstRow + statement.names.length).map(row => ({ cells: row.cells, shorts: row.members.map(at => value.selected[at]!.id) })),
             };
             firstRow += statement.names.length;
@@ -503,12 +494,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // It stands on the items whose text the writer read (W1); after them, never as support, it cites the rows whose facts it
         // may carry: each row it cites that the writer saw, and each private row the writer saw of a list it cites (W6).
         const rowsOf = (id: string) => shownRows.has(id) ? [id] : writerById.get(parseAgenticListIdV1(id) ?? "L0")?.members.map(member => member.id).filter(short => privateItem(byShort.get(short)!.item)) ?? [];
-        /** How a sentence reads (ADR-0045): a row whose sentence carries code's note reads as a bullet, so the note shows. Only a laid-out reply has forms. */
-        const shapeOf = (sentence: AnswerSentence, noted: boolean): DraftShape => {
-          const section = sentence.section === undefined ? {} : { section: sentence.section };
-          if (sentence.form === "row" && !noted) return { kind: "row", ...section, columns: reply!.tables!.find(table => table.section === sentence.section)!.columns, cells: sentence.cells! };
-          return { kind: sentence.form === undefined ? "text" : sentence.form === "row" ? "bullet" : sentence.form, ...section };
-        };
         /** The sentence with code's note (W5) within a statement's 4 KiB: one too long to take the note whole, a wide row, is cut, never the note. */
         const fittedNote = (text: string, note: string) => {
           const whole = withNote(text, note);
@@ -552,17 +537,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           // Only a v2 reply's sentences are items.
           const sentence = verified(given);
           const kept = drafted(sentence);
-          return kept === undefined ? [] : [{ text: kept.text, shorts: kept.shorts, read: kept.read, shape: shapeOf(sentence, kept.noted),
+          return kept === undefined ? [] : [{ text: kept.text, shorts: kept.shorts, read: kept.read, shape: PROSE,
             ...(sentence.item === undefined ? {} : { item: itemShape(sentence.item, kept.noted) }) }];
         });
         // List statements come first, then the writer's sentences, each kept whole or dropped with all after it to fit the bounds (W6).
-        // What fits is decided in that order whatever the layout, so a long lead never crowds out a stated list (W3). A laid-out
-        // answer (ADR-0045) then reads what was kept lead first, then the lists, then the other sentences by section.
-        // An answer arranged in blocks (ADR-0051) has no count of statements or citations of its own: only its byte bound,
+        // What fits is decided in that order whatever the layout, so a long answer never crowds out a stated list (W3). An answer
+        // arranged in blocks (ADR-0051) then reads what was kept answer first, then the lists, then the other items block by
+        // block. It has no count of statements or citations of its own: only its byte bound,
         // whose fallback, an answer without blocks, keeps ADR-0041's, and the 40 citations one statement may carry. A statement
         // that would cite more, through the private rows its list id brings, is left out whole, never cut short of them, and
         // the statements after it are kept. ADR-0041's 40 for an answer leaves such a statement out first, with every one after it.
-        const bounded = !(arranged && laid);
+        const bounded = !laid;
         const statementKeys = new Set<string>();
         const keptReads: Entry[] = [];
         const fitted: Laid[] = [];
@@ -586,12 +571,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
         }
         const kept = new Set(fitted);
-        // Only a writer that marked no lead at all has its first sentence read as one (orderAskLayoutV1), and only one that gave
-        // no answer block its first item (orderAskBlocksV2).
+        // Only a writer that gave no answer block has its first item read as the answer (orderAskBlocksV2).
         const keptLists = listStatements.filter(entry => kept.has(entry));
         const order: readonly Laid[] = !laid ? fitted
-          : arranged ? orderAskBlocksV2(keptLists, writerSentences.filter((entry): entry is Laid & { item: AnswerItem } => kept.has(entry) && entry.item !== undefined), sentences.some(sentence => sentence.item?.kind === "answer"))
-          : orderAskLayoutV1(keptLists, writerSentences.filter(entry => kept.has(entry)), sentences.some(sentence => sentence.form === "lead"));
+          : orderAskBlocksV2(keptLists, writerSentences.filter((entry): entry is Laid & { item: AnswerItem } => kept.has(entry) && entry.item !== undefined), sentences.some(sentence => sentence.item?.kind === "answer"));
         const statements: Statement[] = order.map(sentence => statementOf(sentence.text, sentence.shorts));
         const notFound = [...(reply?.not_found ?? []), ...selectionNotFound];
         // A list statement cites rows for which items exist; only the text the writer's sentences stand on can be limited coverage.
@@ -637,19 +620,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(researchIncomplete && anyEvidence && draft.gap === undefined ? [INCOMPLETE_SEARCH_NOTICE] : []),
         ];
         const outcome = !anyEvidence ? (incomplete || unsupportedAction || listGaps.some(gap => gap.partial) ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
-        // The blocks of the statements kept (ADR-0045), only for a part with statements; a list's rows cite their items' citations.
+        // The blocks of the statements kept (ADR-0051), only for a part with statements; a list's rows cite their items' citations.
         const indexesOf = (shorts: readonly string[]) => [...new Set(shorts.map(short => usedKeys.get(keyOf(short))!))];
         /** A list statement's table, its rows citing their items' citations. */
         const tableOf = (shape: Extract<DraftShape, { kind: "list" }>) => ({ ...shape, rows: shape.rows.map(row => ({ cells: row.cells, citation_indexes: indexesOf(row.shorts) })) });
-        /** Each statement kept, in order, with its citations and the shape `read` gives its sentence. */
-        const shaped = <S>(read: (sentence: Laid) => S) => order.map((sentence, at) => ({ citation_indexes: statements[at]!.citation_indexes, shape: read(sentence) }));
-        // A part with no statements has nothing to lay out.
-        const mode = laid && draft.statements.length > 0 ? options.layout : undefined;
-        const layout = mode !== 1 ? undefined
-          : contracted(validatePersonAnswerLayoutV1, buildAskLayoutV1(shaped(({ shape }) => shape.kind !== "list" ? shape : tableOf(shape))), draft.statements, used.length);
-        // A v2 answer's blocks (ADR-0051): each writer item as its block shows it, and each list statement as its table or text.
-        const blocks = mode !== 2 ? undefined
-          : contracted(validatePersonAnswerBlocksV2, buildAskBlocksV2(shaped(({ shape, item }): AskBlockShapeV2 => item ?? (shape.kind === "list" ? tableOf(shape) : { kind: "text" }))), draft.statements, used.length);
+        // Each writer item as its block shows it, and each list statement as its table or text. A part with no statements has nothing to lay out.
+        const blocks = !laid || draft.statements.length === 0 ? undefined
+          : contracted(validatePersonAnswerBlocksV2, buildAskBlocksV2(order.map(({ shape, item }, at): AskBlockStatementV2 => ({ citation_indexes: statements[at]!.citation_indexes,
+            shape: item ?? (shape.kind === "list" ? tableOf(shape) : { kind: "text" }) }))), draft.statements, used.length);
         // ---- an Ask again's since (ADR-0047): what is different now, after everything the answer cites ----
         // Only beside an answer with evidence: one with none cannot say what changed. Each sentence stands on text the writer
         // read (W1), as the writer's own sentences do, and repeats are dropped. A list the writer gave whose every sentence
@@ -678,7 +656,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             statements: released(draft.statements),
             ...(draft.gap === undefined ? {} : { gap: draft.gap }),
             ...(draft.records === undefined ? {} : { records: released(draft.records) }),
-            ...(layout === undefined ? {} : { layout }),
             ...(blocks === undefined ? {} : { blocks }),
           })]),
           citations: Object.freeze(anyEvidence ? used.map(entry => citationOfAgenticEvidenceItemV8(entry.item, timeZone)) : []),
@@ -687,15 +664,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(options.answers === undefined ? {} : { question: options.answers }),
           ...(since === undefined ? {} : { since: Object.freeze({ statements: released(since) }) }),
         });
-        return { result, used, laid_out: layout !== undefined || blocks !== undefined };
+        return { result, used, laid_out: blocks !== undefined };
       };
-      /** A laid-out response as it may be released: with its layout, within its byte bound. Each is measured once, and only then. */
+      /** A response in blocks as it may be released: with its blocks, within its byte bound. Each is measured once, and only then. */
       const releasable = (responded: ReturnType<typeof respond>) => responded.laid_out && agenticAskResponseFitsV1(responded.result) ? responded : undefined;
-      const laidOutResponse = laidOut ? respond(answer, true, true, true) : undefined;
-      // A laid-out answer is released only with its layout and within its byte bound; an Ask again's that cannot fit with its
-      // `since` keeps its layout without it (ADR-0047). Otherwise the same claims are released without layout, in the order
-      // and numbering an answer without layout has (ADR-0045): a row is still its cells' claim, and what cannot fit the bound
-      // is dropped from the end and said to be missing, an Ask again's `since` first.
+      const laidOutResponse = arranged ? respond(answer, true, true, true) : undefined;
+      // An answer in blocks is released only with its blocks and within its byte bound; an Ask again's that cannot fit with its
+      // `since` keeps its blocks without it (ADR-0047). Otherwise the same claims are released without blocks, in the order
+      // and numbering an answer without them has: a row is still its cells' claim, and what cannot fit the bound is dropped
+      // from the end and said to be missing, an Ask again's `since` first.
       const laidOutReleased = laidOutResponse === undefined ? undefined : releasable(laidOutResponse)
         ?? (laidOutResponse.laid_out && "since" in laidOutResponse.result ? releasable(respond(answer, true, false, false)) : undefined);
       const { result, used } = laidOutReleased ?? respond(answer, false, laidOutResponse === undefined, true);

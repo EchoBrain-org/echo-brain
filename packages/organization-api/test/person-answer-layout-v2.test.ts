@@ -49,11 +49,12 @@ const changed = (place: number, fields: Record<string, unknown>) => blocks.map((
 const two = [statement('One.', [0]), statement('Two.', [1])];
 
 describe('Answer layout v2 (ADR-0051)', () => {
-  it('reads the header (ADR-0045, ADR-0051): absent is none, 1 is layout v1, 2 is layout v2, anything else is refused', () => {
+  it('reads the header: absent is none, 2 is layout v2, retired layout v1\'s 1 is none (ADR-0045), anything else is refused', () => {
     expect(PERSON_ASK_ANSWER_LAYOUT_HEADER_V1).toBe('x-echo-answer-layout');
     expect(PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2).toBe('2');
     expect(validatePersonAskAnswerLayoutHeaderV2(undefined)).toBeUndefined();
-    expect(validatePersonAskAnswerLayoutHeaderV2('1')).toBe(1);
+    // A desktop or CLI from before layout v2 still asks for layout v1: its Ask is answered as one without the header.
+    expect(validatePersonAskAnswerLayoutHeaderV2('1')).toBeUndefined();
     expect(validatePersonAskAnswerLayoutHeaderV2('2')).toBe(2);
     for (const value of ['0', '3', 'true', '', '1, 2', ['2'], 2]) expect(() => validatePersonAskAnswerLayoutHeaderV2(value)).toThrow();
   });
@@ -73,15 +74,15 @@ describe('Answer layout v2 (ADR-0051)', () => {
       citations: many, parts: [{ question: 'Which tools are set up?', status: 'answered' as const, statements: said, ...fields }] });
     const arranged = validatePersonAnswerResponseV8(answer({ blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: false, statements: said.slice(1).map((_, at) => at + 1) }] }));
     expect([arranged.citations.length, arranged.parts[0]!.statements.length]).toEqual([45, 15]);
-    // Laid out by layout v1, or with no layout, the same answer keeps ADR-0041's bounds, as every installed client checks.
-    expect(() => validatePersonAnswerResponseV8(answer({ layout: [{ kind: 'paragraph', statements: said.map((_, at) => at) }] }))).toThrow('Ask response is invalid');
+    // Without blocks, the same answer keeps ADR-0041's bounds, as every installed client checks.
     expect(() => validatePersonAnswerResponseV8(answer({}))).toThrow('Ask response is invalid');
     expect(() => validatePersonAnswerResponseV8({ ...answer({}), citations: many.slice(0, 40), parts: [{ question: 'q', status: 'answered', statements: said.slice(0, 11).map(value => ({ ...value, citation_indexes: [0] })) }] })).toThrow('Ask response part is invalid');
   });
 
-  it('refuses blocks beside a v1 layout, or on a part with no statements', () => {
-    expect(() => validatePersonAnswerResponseV8(response({ layout: [{ kind: 'paragraph', statements: statements.map((_, at) => at) }] }))).toThrow('blocks are invalid');
+  it('refuses blocks on a part with no statements, and a part with retired layout v1\'s layout (ADR-0045)', () => {
     expect(() => validatePersonAnswerResponseV8({ ...response({ status: 'not_found', statements: [], gap: 'None.' }), outcome: 'not_found', citations: [] })).toThrow('Ask response part blocks are invalid');
+    const { blocks: _, ...plain } = response().parts[0]!;
+    expect(() => validatePersonAnswerResponseV8({ ...response(), parts: [{ ...plain, layout: [{ kind: 'paragraph', statements: statements.map((_, at) => at) }] }] })).toThrow('Ask response part');
   });
 
   it('refuses no blocks, and blocks that leave out, repeat, reorder or go past the part\'s statements, and caps no count of blocks', () => {
@@ -118,8 +119,14 @@ describe('Answer layout v2 (ADR-0051)', () => {
     expect(() => check([{ kind: 'points', ordered: false, statements: [0] }, { kind: 'text', statements: [1] }], two)).toThrow();
   });
 
-  it('checks a table as layout v1 does, with two or more rows, an optional title, and no cap on its columns', () => {
+  it('checks a table: its columns, one cell each, rows that cite exactly what its statements cite, two or more of them, an optional title, and no cap on its columns', () => {
     expect(check(changed(4, { title: 'Open actions' }))[4]).toMatchObject({ kind: 'table', title: 'Open actions', caption: '2 actions are open' });
+    expect(check(changed(4, { caption: undefined }))[4]).not.toHaveProperty('caption');
+    expect(() => check(changed(4, { caption: '' }))).toThrow('caption is invalid');
+    expect(() => check(changed(4, { columns: ['Action', 'Action'] }))).toThrow('duplicates');
+    expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01'], citation_indexes: [1] }, { cells: ['DVT-R2', ''], citation_indexes: [2] }] }))).toThrow('cells is invalid');
+    expect(() => check(changed(4, { rows: [{ cells: ['', ''], citation_indexes: [1] }, { cells: ['DVT-R2', ''], citation_indexes: [2] }] }))).toThrow('row is empty');
+    expect(() => check(changed(4, { rows: [{ cells: ['TRACE-01', ''], citation_indexes: [] }, { cells: ['DVT-R2', ''], citation_indexes: [1, 2] }] }))).toThrow('citation_indexes is invalid');
     const wide = Array.from({ length: 8 }, (_, at) => `Column ${at + 1}`);
     const cells = (first: string) => wide.map((_, at) => at === 0 ? first : `${at}`);
     expect(check(changed(4, { columns: wide, rows: [{ cells: cells('TRACE-01'), citation_indexes: [1] }, { cells: cells('DVT-R2'), citation_indexes: [2] }] }))[4]).toMatchObject({ kind: 'table', columns: wide });
@@ -159,7 +166,7 @@ describe('Answer layout v2 (ADR-0051)', () => {
     expect(() => check([{ kind: 'quote', statements: [0, 1], text: 'One. Two.' }], two)).toThrow();
   });
 
-  it('refuses a block kind it does not know, and v1 kinds', () => {
+  it('refuses a block kind it does not know, and retired layout v1\'s kinds', () => {
     for (const kind of ['lead', 'heading', 'paragraph', 'bullets', 'chart']) expect(() => check([{ kind, statements: [0, 1] }], two)).toThrow();
   });
 });

@@ -447,7 +447,7 @@ describe("the statement code writes for a list (ADR-0041)", () => {
     expectTypeOf<ReturnType<typeof agenticListStatementV1>>().toEqualTypeOf<{ readonly text: string; readonly cited: readonly number[]; readonly caption: string; readonly names: readonly (readonly number[])[] }>();
   });
 
-  it("tabulates a statement's names: one row per name, an Item column, then the status, owner and due date any of them records (ADR-0045)", () => {
+  it("tabulates a statement's names: one row per name, an Item column, then the status, owner and due date any of them records (ADR-0051)", () => {
     // A name covering several members is one row; with several kinds among the members, each name says its kinds.
     expect(agenticListTableV1({ selected: meeting, names: [[0, 1, 4], [2], [3]] })).toEqual({ columns: ["Item", "Owner"], rows: [
       { cells: [`${sync} (1 meeting, 1 decision and 1 rationale)`, ""], members: [0, 1, 4] },

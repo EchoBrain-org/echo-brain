@@ -1,10 +1,10 @@
 import type {
-  Answer, AnswerBlock, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ArrangedBlock, CardEntity, ConnectedTool, ExternalAnswerSource,
+  Answer, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ArrangedBlock, CardEntity, ConnectedTool, ExternalAnswerSource,
 } from '../shared/protocol.js';
 import { startOfDay } from './format.js';
 import { sourceKey } from './openers.js';
 
-/** What the pane may show of an answer with a layout v1 or none: at most 32 sources. */
+/** What the pane may show of an answer not arranged in blocks: at most 32 sources. */
 export const MAX_SOURCES = 32;
 
 /**
@@ -38,17 +38,12 @@ export function groupKey(source: AnswerSource): string {
   return sourceKey(source);
 }
 
-/** A table of a laid-out part, or of one arranged in blocks: layout v2's table is layout v1's, with a title. */
-export type AnswerTable = Extract<AnswerBlock, { kind: 'table' }>;
+/** A table block of a part the writer arranged. */
+export type AnswerTable = Extract<ArrangedBlock, { kind: 'table' }>;
 
-/** A table row's id, as the pane knows it: its part, its table's place in the part's layout or blocks, and its own ("0.t4.1"). */
+/** A table row's id, as the pane knows it: its part, its table's place among the part's blocks, and its own ("0.t4.1"). */
 export function rowId(part: number, block: number, row: number): string {
   return `${part}.t${block}.${row}`;
-}
-
-/** A part's blocks, by their place: its layout (v1), or the blocks the writer arranged it in (v2). A part has one or neither. */
-function blocksOf(part: AnswerPart): readonly (AnswerBlock | ArrangedBlock)[] {
-  return part.layout ?? part.blocks ?? [];
 }
 
 /**
@@ -67,8 +62,8 @@ export function rowStatement(row: AnswerTableRow, sources: readonly AnswerSource
 /**
  * Every sentence of an answer, by the id the pane knows it by: "direct", its
  * part and place ("0.2", "0.r1" for a passage found), or a table's row
- * ("0.t4.1"), laid out (v1) or arranged in blocks (v2). An arranged part's
- * point, event, fact and quote are its sentences, by their place.
+ * ("0.t4.1"). An arranged part's point, event, fact and quote are its
+ * sentences, by their place.
  */
 export function answerSentences(answer: Answer): [string, AnswerStatement][] {
   return [
@@ -76,7 +71,7 @@ export function answerSentences(answer: Answer): [string, AnswerStatement][] {
     ...answer.parts.flatMap((part, p) => [
       ...part.statements.map((statement, i) => [`${p}.${i}`, statement] as [string, AnswerStatement]),
       ...(part.records ?? []).map((statement, i) => [`${p}.r${i}`, statement] as [string, AnswerStatement]),
-      ...blocksOf(part).flatMap((block, b) => block.kind !== 'table' ? []
+      ...(part.blocks ?? []).flatMap((block, b) => block.kind !== 'table' ? []
         : block.rows.map((row, r) => [rowId(p, b, r), rowStatement(row, answer.sources)] as [string, AnswerStatement])),
     ]),
   ];
@@ -260,20 +255,9 @@ function markdownText(text: string): string {
 /** Which of an answer's sentences and rows the page shows, by what they cite: all, unless a check leaves some out (ADR-0047). */
 export type Shows = (citations: readonly number[]) => boolean;
 
-/** Whether the page shows a block of either layout, but a heading: a table when it shows a row of it, any other block when it shows a sentence. */
-function blockShows(part: AnswerPart, block: Exclude<AnswerBlock, { kind: 'heading' }> | ArrangedBlock, shows: Shows): boolean {
+/** Whether the page shows a block: a table when it shows a row of it, any other block when it shows a sentence. */
+function blockShows(part: AnswerPart, block: ArrangedBlock, shows: Shows): boolean {
   return block.kind === 'table' ? block.rows.some(row => shows(row.citation_indexes)) : block.statements.some(place => shows(part.statements[place]!.citation_indexes));
-}
-
-/**
- * The blocks of a laid-out part the page shows, by their place: a block with
- * a sentence or row it shows, and a heading only with such a block right
- * under it.
- */
-export function shownBlocks(part: AnswerPart, layout: readonly AnswerBlock[], shows: Shows): boolean[] {
-  const some = (block: AnswerBlock) => block.kind === 'heading' || blockShows(part, block, shows);
-  return layout.map((block, place) => some(block) && (block.kind !== 'heading' || (layout[place + 1] !== undefined && layout[place + 1]!.kind !== 'heading'
-    && some(layout[place + 1]!))));
 }
 
 /**
@@ -314,7 +298,7 @@ function tableMarkdown(block: AnswerTable, shows: Shows, cited: Cited): string[]
  * An arranged part as Copy answer writes it, in the page's order and without
  * what the page leaves out: a title as a heading; the answer and text as
  * paragraphs; points as a list, numbered when they are steps; a table as a
- * laid-out part's; a timeline as a list, each event from its day as the page
+ * Markdown table; a timeline as a list, each event from its day as the page
  * names it ("Oct 27, Noor Haddad: Approved the soak plan."); a card as its
  * kind and title in bold, then its facts as a list; a quote quoted, its
  * source under it. Each item is followed by its sentence's numbers.
@@ -368,16 +352,15 @@ interface CopiedSince {
 }
 
 /**
- * Copy answer's Markdown (ADR-0045): the answer as the page shows it, each
- * claim followed by its sources' numbers as the page shows them ("[1][3]"),
- * and the sources, numbered and named (`names`, one per number). The page's
- * `groups` number them; `shows` says which sentences and rows it shows, so
- * what a check left out is not written, nor a part, block or heading left
- * with nothing to show (ADR-0047). A laid-out part keeps its lead, headings,
- * bullets and tables, and an arranged one its blocks (ADR-0051); any other
- * is a paragraph per sentence. A part's question heads what it says when
- * there are several. A partial answer's explanations are copied as shown on
- * the page, including an explanation that is the whole answer.
+ * Copy answer's Markdown: the answer as the page shows it, each claim
+ * followed by its sources' numbers as the page shows them ("[1][3]"), and the
+ * sources, numbered and named (`names`, one per number). The page's `groups`
+ * number them; `shows` says which sentences and rows it shows, so what a
+ * check left out is not written, nor a part or block left with nothing to
+ * show (ADR-0047). An arranged part keeps its blocks (ADR-0051); any other is
+ * a paragraph per sentence. A part's question heads what it says when there
+ * are several. A partial answer's explanations are copied as shown on the
+ * page, including an explanation that is the whole answer.
  */
 export function answerMarkdown(answer: Answer, names: readonly string[], groups: readonly SourceGroup[], shows: Shows, since?: CopiedSince): string {
   const numbers = (citations: readonly number[]) => statementGroups(citations, groups).map(group => `[${group + 1}]`).join('');
@@ -395,17 +378,7 @@ export function answerMarkdown(answer: Answer, names: readonly string[], groups:
     // A part with nothing to show is not written, nor headed.
     if (!partShows(part, shows)) continue;
     if (answer.parts.length > 1) blocks.push(`## ${markdownText(part.question)}`);
-    const said = (indexes: readonly number[]) => shown(indexes.map(index => part.statements[index]!)).map(claim);
-    if (part.layout) {
-      const showing = shownBlocks(part, part.layout, shows);
-      part.layout.forEach((block, place) => {
-        if (!showing[place]) return;
-        if (block.kind === 'heading') blocks.push(`### ${markdownText(block.text)}`);
-        else if (block.kind === 'bullets') blocks.push(said(block.statements).map(line => `- ${line}`).join('\n'));
-        else if (block.kind !== 'table') blocks.push(said(block.statements).join(' '));
-        else blocks.push(...tableMarkdown(block, shows, cited));
-      });
-    } else if (part.blocks) blocks.push(...arrangedMarkdown(part, part.blocks, shows, cited));
+    if (part.blocks) blocks.push(...arrangedMarkdown(part, part.blocks, shows, cited));
     else blocks.push(...shown(part.statements).map(claim));
     blocks.push(...shown(part.records ?? []).map(claim));
   }

@@ -4,19 +4,18 @@ import {
   AgenticAskOutputErrorV1,
   ANSWER_BLOCK_CATALOG,
   ANSWER_BLOCKS_PROMPT,
-  ANSWER_LAYOUT_PROMPT,
   ANSWER_PROMPT,
   ANSWER_SINCE_PROMPT,
   ASK_STEP_PROMPT,
   answerBlocksSchema,
   answerBlocksSinceSchema,
-  answerLayoutSchema,
-  answerLayoutSinceSchema,
   answerSchema,
   answerSinceSchema,
   cleanId,
   createStepSchema,
   FOLLOW_UPS_ANSWER_GUIDANCE,
+  LONG_IDS_ONCE_RULE,
+  NO_RESTATING_RULE,
   normalizeQuery,
   parseAnswer,
   parseBlocksAnswer,
@@ -299,15 +298,12 @@ describe("agentic Ask model protocol parity", () => {
     }
   });
 
-  it("never rejects an answer the answer schema permits, or a laid-out answer the layout schema permits", () => {
+  it("never rejects an answer the answer schema permits, asked again or not", () => {
     for (let seed = 1; seed <= 400; seed += 1) {
       const value = generator(seed)(answerSchema);
       expect(() => parseAnswer(value)).not.toThrow();
-      const laid = generator(seed)(answerLayoutSchema);
-      expect(() => parseAnswer(laid, { layout: true })).not.toThrow();
       // Ask again's (ADR-0047).
       expect(() => parseAnswer(generator(seed)(answerSinceSchema), { since: true })).not.toThrow();
-      expect(() => parseAnswer(generator(seed)(answerLayoutSinceSchema), { layout: true, since: true })).not.toThrow();
     }
   });
 
@@ -327,7 +323,6 @@ describe("agentic Ask model protocol parity", () => {
     // A reply with no list of it has none; it is not sent back for that.
     expect(parseAnswer({ ...reply, since: "nothing" }, { since: true })).not.toHaveProperty("since");
     expect(answerSinceSchema).toMatchObject({ required: ["lists", "sentences", "not_found", "since"], properties: { since: { maxItems: 6 } } });
-    expect(answerLayoutSinceSchema).toMatchObject({ required: ["lists", "sentences", "not_found", "since"], properties: { tables: (answerLayoutSchema.properties as Readonly<Record<string, unknown>>).tables } });
   });
 
   it("names the actual keys when the root shape is wrong", () => {
@@ -343,87 +338,6 @@ describe("agentic Ask model protocol parity", () => {
       .toEqual({ parts: [{ question: "Who owns it?", needs: [{ need: "owner", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner" } }] });
     expect(parseAnswer({ sentences: [{ text: " Done. ", evidence: ["e2", "[E3]"] }, { text: "", evidence: [] }], not_found: ["", "owner"] }))
       .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"] }], not_found: ["owner"], lists: [] });
-  });
-
-  describe("a laid-out answer (ADR-0045)", () => {
-    const next = "Next steps";
-    const reply = {
-      lists: [], not_found: [],
-      tables: [{ section: ` ${next} `, columns: ["Action", "Owner", "Due"] }, { section: "One column", columns: ["Only"] }, { section: "Twice", columns: ["A", "B"] }, { section: "Twice", columns: ["C", "D"] }],
-      sentences: [
-        { text: "The scope was rejected.", evidence: ["E1"], form: "lead", section: "Decisions" },
-        { text: "The retest covers TC-D-03.", evidence: ["E1"], form: "Bullet", section: " Decisions " },
-        { text: "Prose.", evidence: ["E1"], form: "text", section: "" },
-        { text: "Mara sends the plan by Friday.", evidence: ["E2"], form: "row", section: next, cells: ["Send the plan (E2)", "Mara", "2026-10-23"] },
-        { text: "", evidence: ["E2"], form: "row", section: next, cells: ["Fix BUG-412", "", "2026-10-28"] },
-        { text: "Tomas fixes the board.", evidence: ["E3"], form: "row", section: next, cells: ["Fix the board", "Tomas"] },
-        { text: "", evidence: ["E3"], form: "row", section: next, cells: ["Publish", "QA", "2026-10-30", "To do"] },
-        { text: "No table holds this row.", evidence: ["E3"], form: "row", section: "Later", cells: ["x", "y"] },
-        { text: "Its section declares two tables.", evidence: ["E3"], form: "row", section: "Twice", cells: ["x", "y"] },
-        { text: "An empty row.", evidence: ["E3"], form: "row", section: next, cells: ["", " ", ""] },
-      ],
-    };
-
-    it("reads each sentence's form, section and cells, a row's text written by code from its cells", () => {
-      const parsed = parseAnswer(reply, { layout: true });
-      // A table needs a section and two columns; a section declared twice has no table.
-      expect(parsed.tables).toEqual([{ section: next, columns: ["Action", "Owner", "Due"] }]);
-      expect(parsed.sentences).toEqual([
-        // A lead has no section; "text" is prose, which carries no form.
-        { text: "The scope was rejected.", evidence: ["E1"], form: "lead" },
-        { text: "The retest covers TC-D-03.", evidence: ["E1"], form: "bullet", section: "Decisions" },
-        { text: "Prose.", evidence: ["E1"] },
-        // A row says its cells under their columns, whatever text the writer wrote, or none.
-        { text: "Action: Send the plan; Owner: Mara; Due: 2026-10-23.", evidence: ["E2"], form: "row", section: next, cells: ["Send the plan", "Mara", "2026-10-23"] },
-        { text: "Action: Fix BUG-412; Due: 2026-10-28.", evidence: ["E2"], form: "row", section: next, cells: ["Fix BUG-412", "", "2026-10-28"] },
-        // A row whose cells are not one per column, whose section has no one table, or whose cells say nothing is a bullet:
-        // the writer's text, or else its cells, never a cell under a column it was not written for.
-        { text: "Tomas fixes the board.", evidence: ["E3"], form: "bullet", section: next },
-        { text: "Publish; QA; 2026-10-30; To do.", evidence: ["E3"], form: "bullet", section: next },
-        { text: "No table holds this row.", evidence: ["E3"], form: "bullet", section: "Later" },
-        { text: "Its section declares two tables.", evidence: ["E3"], form: "bullet", section: "Twice" },
-        { text: "An empty row.", evidence: ["E3"], form: "bullet", section: next },
-      ]);
-      // A form no answer has is prose, and cells on a sentence that is no row are dropped.
-      expect(parseAnswer({ ...reply, sentences: [{ text: "No form is called that.", evidence: ["E3"], form: "heading", cells: ["dropped"] }] }, { layout: true }).sentences).toEqual([{ text: "No form is called that.", evidence: ["E3"] }]);
-    });
-
-    it("leaves an answer without layout as it was: no form, cell or table read, and a row with no text left out", () => {
-      expect(parseAnswer(reply)).toEqual({ lists: [], not_found: [], sentences: reply.sentences.filter(value => value.text !== "").map(value => ({ text: value.text, evidence: value.evidence })) });
-    });
-
-    it("writes a row's whole claim from its cells, past the 700 characters a writer's sentence holds, so rows that end apart stay apart", () => {
-      const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
-      const row = (last: string) => ({ text: "", evidence: ["E1"], form: "row", section: "Rules", cells: [...columns.slice(0, 5).map(() => "x".repeat(120)), last] });
-      const parsed = parseAnswer({ lists: [], not_found: [], tables: [{ section: "Rules", columns }], sentences: [row(`${"y".repeat(114)} ALLOW`), row(`${"y".repeat(115)} DENY`)] }, { layout: true });
-      const texts = parsed.sentences.map(value => value.text);
-      expect(texts.map(text => [text.length > 700, text.endsWith(" ALLOW."), text.endsWith(" DENY.")])).toEqual([[true, true, false], [true, false, true]]);
-      expect(texts[0]).toBe(`${columns.map((column, at) => `${column}: ${row(at === 5 ? `${"y".repeat(114)} ALLOW` : "").cells[at]}`).join("; ")}.`);
-    });
-});
-
-  it("names each form, a section, a row's cells and the tables in the layout schema, and leaves the answer schema as it was (ADR-0045)", () => {
-    const sentence = ((answerLayoutSchema.properties as Schema).sentences as Schema).items as Schema;
-    expect([sentence.required, (sentence.properties as Schema).form, (sentence.properties as Schema).section, (sentence.properties as Schema).cells]).toEqual([
-      ["text", "evidence"], { type: "string", enum: ["lead", "text", "bullet", "row"] }, { type: "string", maxLength: 60 }, { type: "array", maxItems: 6, items: { type: "string", maxLength: 120 } },
-    ]);
-    expect([(answerLayoutSchema as Schema).required, (answerLayoutSchema.properties as Schema).tables]).toEqual([["lists", "sentences", "not_found"], { type: "array", maxItems: 3, items: {
-      type: "object", additionalProperties: false, required: ["section", "columns"], properties: { section: { type: "string", maxLength: 60 }, columns: { type: "array", minItems: 2, maxItems: 6, items: { type: "string", maxLength: 40 } } },
-    } }]);
-    const plain = ((answerSchema.properties as Schema).sentences as Schema).items as Schema;
-    expect([Object.keys(answerSchema.properties as Schema), Object.keys(plain.properties as Schema)]).toEqual([["lists", "sentences", "not_found"], ["text", "evidence"]]);
-  });
-
-  it("tells only a laid-out Ask's writer never to restate the question and to write a long identifier once, leaving the writer without layout byte for byte", () => {
-    const rules = ANSWER_LAYOUT_PROMPT.split("\n");
-    const lead = rules.findIndex(line => line.startsWith("- The lead is the conclusion"));
-    expect(rules[lead + 1]).toMatch(/^- The app shows the answer right under the question, so never restate the question: the lead answers it at once\. Call what the question already names "it" or a word or two \("the follow-up", "the release"\), not its full title or identifier; name a follow-up by its title only when the question does not name it\. /u);
-    expect(rules[lead + 2]).toBe("- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.");
-    // A request without the header is unchanged (ADR-0045): its writer's prompt, follow-up guidance and schema.
-    expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, answerSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:b784a5eb2cb0a69c2ebdc6c33a8e8bdd3f7820575c59e16a0358fa014b9b4764", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
-      "sha256:f3ec552ec9273a23be69ec2c1596f3b5cf69107d4952962b24a1435e8bc47259",
-    ]);
   });
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
@@ -541,32 +455,8 @@ describe("agentic Ask model protocol parity", () => {
       ["members respelled, repeated or unreadable", answer({ lists: [{ id: "L1", members: ["e5", "E5", "[E7]", "L2", 9] }] }), { model_id_respelled: 3, model_repeat_dropped: 1, model_entry_dropped: 1 }],
       ["more members than a use names", answer({ lists: [{ id: "L3", members: items(1, 30) }] }), { model_items_capped: 5 }],
       ["a list used twice the same way, or past five lists", answer({ lists: ["L1", "L1", "L2", "L3", "L4", "L5", "L6"].map(id => ({ id })) }), { model_repeat_dropped: 1, model_items_capped: 1 }],
-      // An Ask without layout never reads forms, cells or tables (ADR-0045).
-      ["forms, cells and tables an answer without layout never reads", answer({ tables: [{ section: " ", columns: ["A"] }], sentences: [{ text: "x.", evidence: ["E1"], form: "heading", section: "s".repeat(61), cells: [7] }] }), {}],
     ] as const)("in an answer: %s", (_name, value, expected) => {
       expect(corrected(() => parseAnswer(value))).toEqual(expected);
-    });
-
-    it.each([
-      ["forms, a section, a row and its table the schema holds", answer({ tables: [{ section: "Next", columns: ["Action", "Owner"] }], sentences: [
-        { text: "x.", evidence: ["E1"], form: "lead" }, { text: "y.", evidence: ["E1"], form: "text", section: "Next" }, { text: "", evidence: ["E1"], form: "row", section: "Next", cells: ["a", ""] },
-      ] }), {}],
-      ["a form in another case, or one no answer has", answer({ sentences: [{ text: "x.", evidence: ["E1"], form: " Bullet" }, { text: "y.", evidence: ["E1"], form: "heading" }] }), { model_enum_respelled: 2 }],
-      ["a row no table holds, with cells that are not one per column, or that say nothing", answer({ tables: [{ section: "Next", columns: ["A", "B"] }], sentences: [
-        { text: "x.", evidence: ["E1"], form: "row", section: "Later", cells: ["a", "b"] }, { text: "y.", evidence: ["E1"], form: "row", cells: ["a", "b"] },
-        { text: "z.", evidence: ["E1"], form: "row", section: "Next", cells: ["a"] }, { text: "w.", evidence: ["E1"], form: "row", section: "Next", cells: ["", " "] },
-      ] }), { model_enum_respelled: 4 }],
-      ["a cell that is no string, more cells than a table holds, and cells on a sentence that is no row", answer({ tables: [{ section: "Next", columns: ["A", "B"] }], sentences: [
-        { text: "x.", evidence: ["E1"], form: "row", section: "Next", cells: ["a", 7] }, { text: "y.", evidence: ["E1"], form: "row", section: "Next", cells: ["a", "b", "c", "d", "e", "f", "g"] },
-        { text: "z.", evidence: ["E1"], form: "bullet", cells: ["a"] },
-      ] }), { model_entry_dropped: 2, model_items_capped: 1, model_enum_respelled: 1 }],
-      ["a table with no section or two columns, a section declared twice, or past three", answer({ tables: [
-        { section: " ", columns: ["A", "B"] }, { section: "S", columns: ["A", "a", " "] }, { section: "T", columns: ["A", "B"] }, { section: "T", columns: ["C", "D"] },
-        { section: "U", columns: ["A", "B", "C", "D", "E", "F", "G"] }, { section: "V", columns: ["A", "B"] }, { section: "W", columns: ["A", "B"] },
-      ] }), { model_entry_dropped: 3, model_repeat_dropped: 2, model_items_capped: 3 }],
-      ["a section, column or cell past its cap", answer({ tables: [{ section: "s".repeat(61), columns: ["c".repeat(41), "B"] }], sentences: [{ text: "x.", evidence: ["E1"], form: "row", section: "s".repeat(61), cells: ["x".repeat(121), "y"] }] }), { model_text_truncated: 4 }],
-    ] as const)("in a laid-out answer: %s", (_name, value, expected) => {
-      expect(corrected(() => parseAnswer(value, { layout: true }))).toEqual(expected);
     });
 
     it("counts what it reads of a reply it then rejects, and nothing outside a span", () => {
@@ -607,11 +497,9 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect((answerSchema.properties as Schema).lists.items.properties.members.maxItems).toBe(25);
   });
 
-  it("keeps layout v1's prompt and schemas, and Ask again's, byte for byte", () => {
-    expect([ANSWER_LAYOUT_PROMPT, answerLayoutSchema, answerLayoutSinceSchema, ANSWER_SINCE_PROMPT, answerSinceSchema].map(value => canonicalSha256(value))).toEqual([
-      "sha256:dafa440a7ab2a603c6d15b8a8af7845a33bdc6856a6e7801e91cdfaa21f04ba3", "sha256:be447025c7326cbfe845f396b5b4a03483338f48b2792e419ef0156a7f5f5511",
-      "sha256:2a5130b14413383c71bab93d46bd923366813d22394dcf078b3716356f5a2549", "sha256:2384ac104f117a119bb97beaf99415a0c1b6b411d33b013204ec09ac985be48e",
-      "sha256:e568a3836f6cb05aee257db720ef85f15b51bafc38266341f818aec11a58146a",
+  it("keeps Ask again's prompt and schema byte for byte", () => {
+    expect([ANSWER_SINCE_PROMPT, answerSinceSchema].map(value => canonicalSha256(value))).toEqual([
+      "sha256:2384ac104f117a119bb97beaf99415a0c1b6b411d33b013204ec09ac985be48e", "sha256:e568a3836f6cb05aee257db720ef85f15b51bafc38266341f818aec11a58146a",
     ]);
   });
 
@@ -628,17 +516,23 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect([Object.keys(answerBlocksSchema.properties as Schema), Object.keys(answerBlocksSinceSchema.properties as Schema)]).toEqual([["lists", "blocks", "not_found"], ["lists", "blocks", "not_found", "since"]]);
   });
 
-  it("tells the writer layout v1's wording rules word for word, never to write a list's members, and its reply shape", () => {
+  it("tells the writer never to restate the question, to write a long identifier once, never to write a list's members, and its reply shape", () => {
     const lines = ANSWER_BLOCKS_PROMPT.split("\n");
-    for (const start of ["- The app shows the answer right under the question", "- Write a long identifier"]) {
-      expect(lines.find(line => line.startsWith(start))).toBe(ANSWER_LAYOUT_PROMPT.split("\n").find(line => line.startsWith(start)));
-    }
+    const answer = lines.findIndex(line => line.startsWith("- The first block is \"answer\""));
+    expect([lines[answer + 1], lines[answer + 2]]).toEqual([NO_RESTATING_RULE, LONG_IDS_ONCE_RULE]);
+    expect(NO_RESTATING_RULE).toMatch(/^- The app shows the answer right under the question, so never restate the question: the lead answers it at once\. Call what the question already names "it" or a word or two \("the follow-up", "the release"\), not its full title or identifier; name a follow-up by its title only when the question does not name it\. /u);
+    expect(LONG_IDS_ONCE_RULE).toBe("- Write a long identifier, such as a release or build name, at most once in the answer, and only where a short reference would not be clear.");
     expect(lines).toContain("- Never write items, rows, events or facts for a list's members: code states them, right after the answer.");
     expect(lines[0]).toContain("\"block_catalog\" lists the blocks it can show");
     expect(Object.keys(JSON.parse(lines.at(-1)!))).toEqual(["lists", "blocks", "not_found"]);
     // An answer in blocks has no count limit, whatever the answer prompt's usual length says (ADR-0051).
     expect(lines).toContain("- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.");
     expect(ANSWER_PROMPT).toContain("use up to 10 when the question asks several things");
+    // A request without the header is unchanged: its writer's prompt, follow-up guidance and schema.
+    expect([ANSWER_PROMPT, FOLLOW_UPS_ANSWER_GUIDANCE, answerSchema].map(value => canonicalSha256(value))).toEqual([
+      "sha256:b784a5eb2cb0a69c2ebdc6c33a8e8bdd3f7820575c59e16a0358fa014b9b4764", "sha256:870c2b878e79e4cd033ba018f8f7256b41714422ebdaeffe1d3ec3fe9497cdb2",
+      "sha256:f3ec552ec9273a23be69ec2c1596f3b5cf69107d4952962b24a1435e8bc47259",
+    ]);
   });
 
   it("never rejects a reply the blocks schema permits, asked again or not", () => {
@@ -676,7 +570,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
       { block: 4, kind: "point", title: "Before PVT", ordered: true }, { block: 4, kind: "point", title: "Before PVT", ordered: true },
       { block: 5, kind: "quote", text: "Start PVT once the soak passes.", from: "Noor Haddad, Oct 23 review" },
     ]);
-    expect([parsed.lists, parsed.not_found, parsed.tables, parsed.since]).toEqual([[], [], undefined, undefined]);
+    expect([parsed.lists, parsed.not_found, parsed.since]).toEqual([[], [], undefined]);
   });
 
   it("reads the first answer block as the answer wherever the writer put it, and at most two of its sentences", () => {
@@ -702,6 +596,16 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(parsed.sentences[1]!.text).toBe("a.");
     expect(parsed.sentences[3]!.item).toMatchObject({ kind: "row", columns: eight });
     expect(corrected(() => parseBlocksAnswer(reply([{ block: "table", columns, rows: [{ cells: wide, evidence: ["E1"] }, { cells: wide, evidence: ["E1"] }] }])))).toEqual({ model_enum_respelled: 2, model_text_truncated: 2 });
+  });
+
+  it("writes a row's whole claim from its cells, past the 700 characters a writer's sentence holds, so rows that end apart stay apart", () => {
+    const columns = ["One", "Two", "Three", "Four", "Five", "Six"];
+    const row = (last: string) => ({ cells: [...columns.slice(0, 5).map(() => "x".repeat(120)), last], evidence: ["E1"] });
+    const parsed = parseBlocksAnswer(reply([{ block: "table", columns, rows: [row(`${"y".repeat(114)} ALLOW`), row(`${"y".repeat(115)} DENY`)] }]));
+    const texts = parsed.sentences.map(value => value.text);
+    expect(parsed.sentences.map(value => value.item?.kind)).toEqual(["row", "row"]);
+    expect(texts.map(text => [text.length > 700, text.endsWith(" ALLOW."), text.endsWith(" DENY.")])).toEqual([[true, true, false], [true, false, true]]);
+    expect(texts[0]).toBe(`${columns.map((column, at) => `${column}: ${row(`${"y".repeat(114)} ALLOW`).cells[at]}`).join("; ")}.`);
   });
 
   it("reads a card's title once, as its name, counting a cut only past a name's own cap", () => {
@@ -737,12 +641,12 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,12", "12", "12", "12", "12", "12", "12"]);
   });
 
-  it("reads a reply's lists, what it did not find and, asked again, since, as a laid-out v1 reply's", () => {
+  it("reads a reply's lists, what it did not find and, asked again, since, as a reply without blocks reads them", () => {
     const fields = { lists: [{ id: "L1", where: { field: "owner", value: "Dana Lee" } }], not_found: ["the due date"], since: [{ text: "The owner changed.", evidence: ["E1"] }] };
     const given = reply([{ block: "answer", sentences: [{ text: "Two are open.", evidence: ["E1", "L1"] }] }], fields);
     const parsed = parseBlocksAnswer(given, { since: true });
-    const v1 = parseAnswer({ ...fields, sentences: [{ text: "Two are open.", evidence: ["E1", "L1"], form: "lead" }] }, { layout: true, since: true });
-    expect([parsed.lists, parsed.not_found, parsed.since, parsed.sentences[0]!.evidence]).toEqual([v1.lists, v1.not_found, v1.since, v1.sentences[0]!.evidence]);
+    const plain = parseAnswer({ ...fields, sentences: [{ text: "Two are open.", evidence: ["E1", "L1"] }] }, { since: true });
+    expect([parsed.lists, parsed.not_found, parsed.since, parsed.sentences[0]!.evidence]).toEqual([plain.lists, plain.not_found, plain.since, plain.sentences[0]!.evidence]);
     expect(parseBlocksAnswer(given)).not.toHaveProperty("since");
   });
 });

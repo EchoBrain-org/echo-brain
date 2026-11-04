@@ -4,7 +4,7 @@ import {
   answerMarkdown, answerSentences, answerText, documentName, externalSourceProvider, lateForYou, MAX_SOURCES, numberedSources, passageBlocks, sourceGroups, statementGroups,
   tableDay,
 } from '../../src/renderer/answer.js';
-import { blocksAnswer, layoutAnswer } from '../fixtures/authority.js';
+import { blocksAnswer } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
 
 const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -107,32 +107,12 @@ describe('a passage reads as its document does', () => {
   });
 });
 
-// Answer layout v1 (ADR-0045): the fixture's THERM answer, as the host hands it to the page.
 const GLOBAL = { kind: 'global' } as const;
 const NOW = new Date(2026, 9, 23, 12).getTime();
-const QUESTION = 'Can DVT-R2 run on the reduced test scope?';
-const therm = (layout = true): Answer => answerView({ ok: true, result: layoutAnswer(QUESTION, GLOBAL, layout) }, GLOBAL);
-const THERM_NAMES = ['DVT failure review', 'Traceability', 'Gate reviews', 'TRACE-01 · Confirm TC-D-03 traces to MRD-01', 'HW-11 · Fix BUG-412 on the board',
-  'DVT-R2 · Run DVT-R2'];
 /** A plain answer of `statements`, each citing the sources given by place. */
 const plain = (statements: readonly [string, number[]][], extra: Partial<Answer> = {}): Answer => ({
   text: statements.map(([text]) => text).join('\n'), scope: GLOBAL, outcome: 'answered', sources: [page('1'), page('2'), page('3')],
   parts: [{ question: 'Q?', status: 'answered', statements: statements.map(([text, citation_indexes]) => ({ text, citation_indexes, private: false })) }], ...extra,
-});
-
-describe('a laid-out answer\'s rows are sentences the pane can light', () => {
-  it('names each table row by its part, its table and its place, with the row\'s own citations, after the part\'s statements', () => {
-    const sentences = answerSentences(therm());
-    expect(sentences.map(([id]) => id)).toEqual(['0.0', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.t4.0', '0.t4.1', '0.t4.2', '0.t4.3']);
-    expect(Object.fromEntries(sentences.filter(([id]) => id.includes('t')).map(([id, row]) => [id, row]))).toEqual({
-      '0.t4.0': { text: 'Confirm TC-D-03 traces to MRD-01 (TRACE-01) · You · 2026-10-14 · To Do', citation_indexes: [3], private: true },
-      '0.t4.1': { text: 'Send the regression-scope proposal to the PM · Rafael Moreno · 2026-10-09 · Open', citation_indexes: [2], private: false },
-      '0.t4.2': { text: 'Fix BUG-412 on the board (HW-11) · Tomas Okafor · 2026-10-28 · In Progress', citation_indexes: [4], private: true },
-      '0.t4.3': { text: 'Run DVT-R2 and publish the report · QA · 2026-10-30 · To Do', citation_indexes: [5], private: true },
-    });
-    // Without a layout there are no rows.
-    expect(answerSentences(therm(false)).map(([id]) => id)).toEqual(['0.0', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8']);
-  });
 });
 
 describe('a table\'s dates read as dates, and only your late row is marked', () => {
@@ -158,40 +138,8 @@ describe('a table\'s dates read as dates, and only your late row is marked', () 
   });
 });
 
-describe('Copy answer writes Markdown (ADR-0045)', () => {
-  it('writes a laid-out answer as it reads: the lead, headings, bullets, a table, each claim with its sources\' numbers, then the sources', () => {
-    expect(markdown(therm(), THERM_NAMES)).toBe([
-      'No, the reduced test scope was rejected. [2] DVT-R2 retests TC-D-03 and TC-D-01, plus the regression subset QA approves. [2]',
-      '',
-      '### Decisions',
-      '',
-      '- A narrower run cannot exit DVT: the retest must cover the failed bar TC-D-03, TC-D-01 and a QA-approved regression subset. [3]',
-      '- Hardware owns the BUG-412 fix (HW-11); the failure review made sensor self-heating the likely cause. [1]',
-      '- TC-D-06 reruns too: its pass predates the approved two-decimal display. [3]',
-      '',
-      '### What has to happen first',
-      '',
-      '| Action | Owner | Due | Status |',
-      '| --- | --- | --- | --- |',
-      '| Confirm TC-D-03 traces to MRD-01 (TRACE-01) [4] | You | 2026-10-14 | To Do |',
-      '| Send the regression-scope proposal to the PM [3] | Rafael Moreno | 2026-10-09 | Open |',
-      '| Fix BUG-412 on the board (HW-11) [5] | Tomas Okafor | 2026-10-28 | In Progress |',
-      '| Run DVT-R2 and publish the report [6] | QA | 2026-10-30 | To Do |',
-      '',
-      'Who proposed the reduced scope was not found in the evidence read.',
-      '',
-      'Sources',
-      '',
-      '1. DVT failure review',
-      '2. Traceability',
-      '3. Gate reviews',
-      '4. TRACE-01 · Confirm TC-D-03 traces to MRD-01',
-      '5. HW-11 · Fix BUG-412 on the board',
-      '6. DVT-R2 · Run DVT-R2',
-    ].join('\n'));
-  });
-
-  it('writes a part without a layout as a paragraph per sentence, numbered as the page numbers its sources', () => {
+describe('Copy answer writes Markdown', () => {
+  it('writes a part without blocks as a paragraph per sentence, numbered as the page numbers its sources', () => {
     const answer = plain([['We ship annual plans first.', [0, 2]], ['Monthly plans follow.', [1]]], {
       direct: { text: 'Yes.', citation_indexes: [2], private: false },
     });
@@ -222,8 +170,8 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
 
   it('keeps a table cell\'s pipes and backslashes as text, and a line that would start a list as a sentence', () => {
     const base = plain([['- dash first', [0]], ['A | B', [1]]]);
-    const answer: Answer = { ...base, parts: [{ ...base.parts[0]!, layout: [
-      { kind: 'paragraph', statements: [0] },
+    const answer: Answer = { ...base, parts: [{ ...base.parts[0]!, blocks: [
+      { kind: 'text', statements: [0] },
       { kind: 'table', statements: [1], columns: ['Name', 'Path'], caption: 'Two paths', rows: [{ cells: ['A | B', 'C:\\temp'], citation_indexes: [1] }] },
     ] }] };
     expect(markdown(answer, ['One', 'Two', 'Three'])).toBe(
@@ -231,15 +179,15 @@ describe('Copy answer writes Markdown (ADR-0045)', () => {
   });
 });
 
-describe('a table row shows the lock by its own citations', () => {
+describe('a table row says only you can read a source of it by its own citations', () => {
   const secret: AnswerSource = { ...page('9'), private: true };
 
-  it('locks a row only when one of its own citations is private, whatever another row of its table cites', () => {
+  it('marks a row private only when one of its own citations is, whatever another row of its table cites', () => {
     // A cites a team page and a page only you can read; B cites the team page alone.
     const base = plain([['A.', [0, 1]], ['B.', [0]]]);
     const answer: Answer = { ...base, sources: [page('1'), secret], parts: [{ ...base.parts[0]!,
       statements: [{ text: 'A.', citation_indexes: [0, 1], private: true }, { text: 'B.', citation_indexes: [0], private: false }],
-      layout: [{ kind: 'table', statements: [0, 1], columns: ['Item', 'Status'], rows: [
+      blocks: [{ kind: 'table', statements: [0, 1], columns: ['Item', 'Status'], rows: [
         { cells: ['A', 'Open'], citation_indexes: [0, 1] }, { cells: ['B', 'Open'], citation_indexes: [0] },
       ] }] }] };
     const rows = Object.fromEntries(answerSentences(answer).filter(([id]) => id.includes('t')));
@@ -247,11 +195,11 @@ describe('a table row shows the lock by its own citations', () => {
     expect(rows['0.t0.1']!.private).toBe(false);
   });
 
-  it('locks only the private members\' rows of a list table over members of mixed visibility', () => {
+  it('marks private only the private members\' rows of a list table over members of mixed visibility', () => {
     const base = plain([['3 Jira tickets are open: ECHO-1, ECHO-2 and ECHO-3.', [0, 1, 2]]]);
     const answer: Answer = { ...base, sources: [page('1'), secret, page('3')], parts: [{ ...base.parts[0]!,
       statements: [{ text: '3 Jira tickets are open: ECHO-1, ECHO-2 and ECHO-3.', citation_indexes: [0, 1, 2], private: true }],
-      layout: [{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: '3 Jira tickets are open', rows: [
+      blocks: [{ kind: 'table', statements: [0], columns: ['Item', 'Status'], caption: '3 Jira tickets are open', rows: [
         { cells: ['ECHO-1', 'Open'], citation_indexes: [0] }, { cells: ['ECHO-2', 'Open'], citation_indexes: [1] }, { cells: ['ECHO-3', 'Open'], citation_indexes: [2] },
       ] }] }] };
     expect(answerSentences(answer).filter(([id]) => id.includes('t')).map(([, row]) => row.private)).toEqual([false, true, false]);
@@ -286,10 +234,9 @@ describe('Copy answer\'s Markdown keeps the text as it was written', () => {
 
   it('escapes bullets, table cells, headings and captions alike', () => {
     const base = plain([[PROBE, [0]], ['1. step', [1]], ['- item <b>', [2]], ['hidden', [1]]]);
-    const answer: Answer = { ...base, parts: [{ ...base.parts[0]!, layout: [
-      { kind: 'paragraph', statements: [0] },
-      { kind: 'heading', text: 'Steps `now`' },
-      { kind: 'bullets', statements: [1, 2] },
+    const answer: Answer = { ...base, parts: [{ ...base.parts[0]!, blocks: [
+      { kind: 'text', statements: [0] },
+      { kind: 'points', title: 'Steps `now`', ordered: false, statements: [1, 2] },
       { kind: 'table', statements: [3], columns: ['Name', 'Note_1'], caption: '+ two > one', rows: [{ cells: ['Doc *one* <b>', '1. step'], citation_indexes: [1] }] },
     ] }] };
     expect(markdown(answer, ['One', 'Two', 'Three'])).toBe([
@@ -319,7 +266,7 @@ describe('an arranged answer (answer layout v2, ADR-0051)', () => {
   beforeEach(() => { vi.useFakeTimers({ now: NOW }); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('names its table\'s rows as a laid-out table\'s, by the table\'s place among its blocks, after the part\'s statements', () => {
+  it('names each table row by its part, its table\'s place among its blocks and its own, with the row\'s own citations, after the part\'s statements', () => {
     const sentences = answerSentences(arranged());
     expect(sentences.map(([id]) => id)).toEqual(['0.0', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '0.t1.0', '0.t1.1']);
     expect(Object.fromEntries(sentences.filter(([id]) => id.includes('t')))).toEqual({
