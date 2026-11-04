@@ -281,13 +281,21 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const checked = checkedItems(bundle, agenticOpenReadsV1(bundle.rounds, short => byShort.get(short)?.full === true));
       const rows = new Map(lists.map(list => [list.id, list.members.map(short => agenticWriterListMemberV1(byShort.get(short)!, checked.has(short), options.context.time_zone))]));
       // A which_items need research has not given up on, found or still open when research stopped, requests its members,
-      // as it states its lists (agenticNeedReadsListV1); an interrupted answer stays partial.
-      const requestedByList = new Map(lists.map(list => {
-        const selections = needs.filter(need => need.kind === "which_items" && agenticNeedReadsListV1(need) && need.evidence.includes(list.id))
-          .map(need => need.evidence.flatMap(short => membership.in(list.id, short) ?? []));
-        // Each L-only need keeps its declared-list fallback even when another need selects specific members of that list.
-        return [list.id, { members: [...new Set(selections.flat())], inventoryFallback: selections.some(members => members.length === 0) }] as const;
-      }));
+      // as it states its lists (agenticNeedReadsListV1); an interrupted answer stays partial. Its E ids request those members
+      // of each list it cites, opened bodies mapped back to their rows. Only a need that cites no member declares its lists,
+      // each the fallback when the writer selects none of it: a need citing members never brings another list's inventory.
+      // Each L-only need keeps its declared-list fallback even when another need selects specific members of that list.
+      const requestedByList = new Map(lists.map(list => [list.id, { members: [] as string[], inventoryFallback: false }]));
+      for (const need of needs) {
+        if (need.kind !== "which_items" || !agenticNeedReadsListV1(need)) continue;
+        const cited = lists.filter(list => need.evidence.includes(list.id)).map(list => ({ id: list.id, members: need.evidence.flatMap(short => membership.in(list.id, short) ?? []) }));
+        const declares = cited.every(list => list.members.length === 0);
+        for (const { id, members } of cited) {
+          const request = requestedByList.get(id)!;
+          if (declares) request.inventoryFallback = true;
+          for (const member of members) if (!request.members.includes(member)) request.members.push(member);
+        }
+      }
       const viewOf = (list: (typeof lists)[number], cap?: number) => ({ ...agenticWriterListV1(list, rows.get(list.id)!, stated.includes(list.id), cap),
         ...(requestedByList.get(list.id)!.members.length === 0 ? {} : { requested_members: requestedByList.get(list.id)!.members }),
       });

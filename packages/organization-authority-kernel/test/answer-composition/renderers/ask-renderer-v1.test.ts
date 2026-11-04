@@ -691,6 +691,15 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response.parts[0]!.statements).toHaveLength(1);
       expect(rendered.result.response.parts[0]!.statements[0]!.text).toMatch(/^3 tickets/u);
     });
+    it.each([undefined, 2] as const)("states only the members a need cites by id, never the whole of another list it cites (layout: %s)", async layout => {
+      // E2 and E3 are members of L1 only: the need requests them, and L2's ten tickets are no answer.
+      const research = listBundle(13, 0, [list("L1", ids(1, 3)), list("L2", ids(4, 10), { filter: { status: "open" }, filter_applied: { status: "applied" } })], [WI(["L1", "L2", "E2", "E3"])]);
+      const rendered = await alone({ bundle: research, ...(layout === undefined ? {} : { layout }), replies: [layout === 2
+        ? { lists: [], blocks: [], not_found: [] } : { lists: [], sentences: [], not_found: [] }] }).render("Which of the tickets are open?");
+      expect(rendered.outcome).toBe("answered");
+      expect(rendered.cited).toEqual(["E2", "E3"]);
+      expect(rendered.result.response.parts[0]!.statements.map(statement => statement.text)).toEqual([expect.stringMatching(/^2 of the 3 tickets created on October 4, 2026: /u)]);
+    });
     it.each([{ members: [], cited: ids(1, 3) }, { members: ["E3"], cited: ["E2", "E3"] }])("states the writer's selection with research's requested members, or the declared list when the writer selects none, for a list an L-only need and a precise need share ($members)", async ({ members, cited }) => {
       const research = listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"]), WI(["L1", "E2"])]);
       const rendered = await alone({ bundle: research, layout: 2, replies: [{ lists: [{ id: "L1", members }], blocks: [], not_found: [] }] }).render("Which tickets exist, and which one is assigned to Casey?");

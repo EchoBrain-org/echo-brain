@@ -278,14 +278,16 @@ needs request that it leaves out, so a selection that omits requested members
 never loses them. When the writer selects none of a list and a found
 membership need cites the list with no member ids, code states that whole
 declared list: all members for a complete list, or known members with
-`at least` and partial status for an incomplete list. A selection that names
-no member, given empty or left empty by that removal, is no selection, with
-one exception: an explicit empty `members` array in a reply that also has
-`not_found` says that no member of the list answers, and code states nothing
-of it, unless research requested specific members of it, which code still
-states. Other inventories do not enter the answer merely because research read
-them. Each need retains that fallback independently: another need's precise
-subset of the same inventory does not erase an omitted L-only declaration.
+`at least` and partial status for an incomplete list. A need that cites
+member E ids requests those members only: no other list it cites falls back to
+its whole inventory. A selection that names no member, given empty or left
+empty by that removal, is no selection, with one exception: an explicit empty
+`members` array in a reply that also has `not_found` says that no member of
+the list answers, and code states nothing of it, unless research requested
+specific members of it, which code still states. Other inventories do not
+enter the answer merely because research read them. Each need retains that
+fallback independently: another need's precise subset of the same inventory
+does not erase an omitted L-only declaration.
 
 A v2 table row or points item may declare an optional internal `member` E id
 for the inventory member it presents, independently of its supporting
