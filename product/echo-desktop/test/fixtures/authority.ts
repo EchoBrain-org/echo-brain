@@ -1867,7 +1867,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return json(blocksAnswer(question, scope, layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2));
       }
       if (mode === 'ask-scroll') {
-        const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
+        const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
           text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
           citation_indexes: [0], private: false,
         }));
