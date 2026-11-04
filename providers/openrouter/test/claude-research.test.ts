@@ -281,7 +281,11 @@ it('admits the exact initial packet and refuses an unexpected model before forwa
   };
   const make = (requestedModel: string) => createClaudeResearchDriverV1({ model,
     forward: async ({ res }) => { forwarded++; res.end('{}'); return {}; },
-    run: async input => { await fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model: requestedModel, messages: [{ role: 'user', content: input.prompt }], max_tokens: 100 }) }); },
+    run: async input => {
+      expect(input.system).toContain('For which_items, cite the inventory L ids and every requested member E id');
+      expect(input.system).toContain('Put unrelated supporting facts in a separate content need.');
+      await fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model: requestedModel, messages: [{ role: 'user', content: input.prompt }], max_tokens: 100 }) });
+    },
   });
   await make(model).run(session);
   expect(requests).toEqual([expect.objectContaining({ model, payload_digests: [canonicalSha256(initial)], diagnostic_input: expect.objectContaining({ model }) })]);

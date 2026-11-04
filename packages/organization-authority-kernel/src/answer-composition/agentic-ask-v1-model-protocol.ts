@@ -20,7 +20,7 @@ import {
 } from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { calendarDateV1, EVIDENCE_DATE_FIELDS_V1, type EvidenceDateFieldV1 } from "../shared/temporal-query-v1.js";
-import { AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1, type AgenticListSelectionV1 } from "./agentic-list-evidence-v1.js";
+import { AGENTIC_LIST_SELECTION_FIELDS_V1, AGENTIC_LIST_WRITER_LISTS_MAX_V1, parseAgenticListIdV1, type AgenticAnswerListUseV1, type AgenticListSelectionV1 } from "./agentic-list-evidence-v1.js";
 import { AGENTIC_RESEARCH_NEED_KINDS_V1, type AgenticResearchNeedKindV1 } from "./agentic-research-v1.js";
 import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.js";
 
@@ -94,6 +94,8 @@ export type Step = { readonly parts: readonly StepPart[]; readonly actions: read
  */
 export type AnswerSentence = {
   readonly text: string; readonly evidence: readonly string[];
+  /** Internal binding: the listed member this grounded v2 row or point presents, independent of its supporting citations. */
+  readonly member?: string;
   readonly form?: "lead" | "bullet" | "row"; readonly section?: string; readonly cells?: readonly string[];
   /** Only in a laid-out v2 reply (ADR-0051): the item the sentence is in its writer's blocks. */
   readonly item?: AnswerItem;
@@ -138,6 +140,7 @@ const ASK_ACTION_ARGS = {
 } as const satisfies Readonly<Record<StepTool, readonly (keyof StepArgs)[]>>;
 function actionArgs(ask: boolean): Readonly<Record<StepTool, readonly (keyof StepArgs)[]>> { return ask ? ASK_ACTION_ARGS : ACTION_ARGS; }
 const ids = { type: "array", maxItems: AGENTIC_ASK_MAX_EVIDENCE_IDS_V1, items: { type: "string", maxLength: 16 } } as const;
+const selectionIds = { type: "array", items: ids.items } as const;
 const argString = { type: "string", minLength: 1, maxLength: ARG_CHARS } as const;
 const calendarDateArgument = { type: "string", minLength: 10, maxLength: 10, format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } as const;
 
@@ -197,7 +200,7 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
             need: { type: "string", maxLength: NEED_CHARS },
             ...(ask ? { kind: closedString(AGENTIC_RESEARCH_NEED_KINDS_V1) } : {}),
             status: closedString(["open", "found", "not_found"]),
-            evidence: ids,
+            evidence: ask ? selectionIds : ids,
           },
         } },
         notes: { type: "string", maxLength: NOTES_CHARS },
@@ -224,7 +227,7 @@ const listUse = {
     where: { type: "object", additionalProperties: false, required: ["field"], properties: {
       field: closedString(AGENTIC_LIST_SELECTION_FIELDS_V1), value: { type: "string", maxLength: SELECTION_CHARS }, since: { type: "string", maxLength: 10 }, until: { type: "string", maxLength: 10 },
     } },
-    members: { type: "array", maxItems: AGENTIC_LIST_NAMED_MAX_V1, items: { type: "string", maxLength: 16 } },
+    members: { type: "array", items: { type: "string", maxLength: 16 } },
   },
 } as const;
 
@@ -232,6 +235,9 @@ const listUse = {
 const citedSentence = {
   type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string", maxLength: SENTENCE_CHARS }, evidence: ids },
 } as const;
+/** A structured item can explicitly present one list member; ordinary prose citations carry no membership claim. */
+const presentedMember = { type: "string", maxLength: 16 } as const;
+const memberSentence = { ...citedSentence, properties: { ...citedSentence.properties, member: presentedMember } } as const;
 
 /** Ask's answer: the lists code names first (ADR-0041), the writer's own sentences, and what it could not find. */
 export const answerSchema: StructuredGenerationJsonSchema = Object.freeze({
@@ -299,12 +305,12 @@ export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze(
     blocks: { type: "array", minItems: 1, items: { anyOf: [
       blockShape("answer", ["sentences"], { sentences: { type: "array", minItems: 1, maxItems: PERSON_ANSWER_BLOCKS_ANSWER_MAX_STATEMENTS_V2, items: citedSentence } }),
       blockShape("text", ["sentences"], { title: blockTitle, sentences: { type: "array", minItems: 1, items: citedSentence } }),
-      blockShape("points", ["ordered", "items"], { title: blockTitle, ordered: { type: "boolean" }, items: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: citedSentence } }),
+      blockShape("points", ["ordered", "items"], { title: blockTitle, ordered: { type: "boolean" }, items: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: memberSentence } }),
       blockShape("table", ["columns", "rows"], {
         title: blockTitle, columns: { type: "array", minItems: 2, items: { type: "string", maxLength: COLUMN_CHARS } },
         rows: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: {
           type: "object", additionalProperties: false, required: ["cells", "evidence"],
-          properties: { cells: { type: "array", minItems: 2, items: { type: "string", maxLength: CELL_CHARS } }, evidence: ids },
+          properties: { cells: { type: "array", minItems: 2, items: { type: "string", maxLength: CELL_CHARS } }, evidence: ids, member: presentedMember },
         } },
       }),
       blockShape("timeline", ["events"], { title: blockTitle, events: { type: "array", minItems: PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2, items: {
@@ -400,11 +406,12 @@ const EVIDENCE_IDS_READ = 64;
  * ids every list id stays and item ids fill the rest, in their order. Otherwise (a writer's sentence, whose list ids
  * support nothing, W1) a list id is no item and takes no item's slot: the first 12 item ids stay, and the list ids beside
  * them, which the writer's repair reads and which bring their lists' private rows into the sentence's citations.
+ * `all` preserves a which_items need's complete selection intent; presentation bounds never trim that member set.
  */
-function cleanIds(value: unknown, lists = false, listsFirst = lists): readonly string[] {
+function cleanIds(value: unknown, lists = false, listsFirst = lists, all = false): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
-  const read = lists ? value.slice(0, EVIDENCE_IDS_READ) : value;
+  const read = lists && !all ? value.slice(0, EVIDENCE_IDS_READ) : value;
   if (read.length < value.length) observeCoreModelCorrectionV1("model_items_capped", value.length - read.length);
   for (const [index, raw] of read.entries()) {
     const id = (lists ? parseAgenticListIdV1(raw) : null) ?? cleanId(raw);
@@ -414,12 +421,12 @@ function cleanIds(value: unknown, lists = false, listsFirst = lists): readonly s
       result.push(id);
       if (id !== raw) observeCoreModelCorrectionV1("model_id_respelled");
     }
-    if (!lists && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) {
+    if (!lists && !all && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) {
       if (index + 1 < read.length) observeCoreModelCorrectionV1("model_items_capped", read.length - index - 1);
       break;
     }
   }
-  if (listsFirst && result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return Object.freeze(result);
+  if (all || (listsFirst && result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1)) return Object.freeze(result);
   const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, listsFirst ? AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 : undefined);
   let items = AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 - (listsFirst ? listIds.length : 0);
   const kept = result.filter(id => listIds.includes(id) || (parseAgenticListIdV1(id) === null && items-- > 0));
@@ -512,7 +519,7 @@ function needs(value: unknown, lists: boolean): readonly StepNeed[] {
     if (kind !== undefined && entry !== null) respelled(entry.kind, kind);
     result.push(Object.freeze({
       ...(id === undefined ? {} : { id }), need, ...(kind === undefined ? {} : { kind }),
-      status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists),
+      status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists, lists, kind === "which_items"),
     }));
     if (result.length === AGENTIC_ASK_MAX_NEEDS_PER_PART_V1) {
       if (index + 1 < value.length) observeCoreModelCorrectionV1("model_items_capped", value.length - index - 1);
@@ -626,8 +633,7 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
   else if (id !== given) observeCoreModelCorrectionV1("model_id_respelled");
   const named = Array.isArray(entry?.members) ? entry.members : [];
   const members: string[] = [];
-  if (named.length > EVIDENCE_IDS_READ) observeCoreModelCorrectionV1("model_items_capped", named.length - EVIDENCE_IDS_READ);
-  for (const member of named.slice(0, EVIDENCE_IDS_READ)) {
+  for (const member of named) {
     const short = cleanId(member);
     if (short === null) observeCoreModelCorrectionV1("model_entry_dropped");
     else if (members.includes(short)) observeCoreModelCorrectionV1("model_repeat_dropped");
@@ -636,8 +642,7 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
       if (short !== member) observeCoreModelCorrectionV1("model_id_respelled");
     }
   }
-  if (members.length > AGENTIC_LIST_NAMED_MAX_V1) observeCoreModelCorrectionV1("model_items_capped", members.length - AGENTIC_LIST_NAMED_MAX_V1);
-  if (members.length > 0) return Object.freeze({ id, members: Object.freeze(members.slice(0, AGENTIC_LIST_NAMED_MAX_V1)) });
+  if (Array.isArray(entry?.members)) return Object.freeze({ id, members: Object.freeze(members) });
   const asked = entry === null ? null : object(entry.where);
   const where = selectionOf(asked);
   if (asked !== null && where === null) observeCoreModelCorrectionV1("model_entry_dropped");
@@ -700,16 +705,17 @@ function notFoundOf(body: Record<string, unknown>): readonly string[] {
 function listUsesOf(body: Record<string, unknown>): readonly AgenticAnswerListUseV1[] {
   const uses: AgenticAnswerListUseV1[] = [];
   const asked: readonly unknown[] = Array.isArray(body.lists) ? body.lists : [];
-  for (const [index, raw] of asked.entries()) {
+  for (const raw of asked) {
     const use = listUseOf(raw);
     if (use === null) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
-    if (uses.some(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined))) { observeCoreModelCorrectionV1("model_repeat_dropped"); continue; }
+    const repeat = uses.findIndex(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined));
+    if (repeat >= 0) {
+      if (use.members !== undefined) uses[repeat] = Object.freeze({ id: use.id, members: Object.freeze([...new Set([...uses[repeat]!.members!, ...use.members])]) });
+      else observeCoreModelCorrectionV1("model_repeat_dropped");
+      continue;
+    }
     if (!uses.some(existing => existing.id === use.id) && new Set(uses.map(existing => existing.id)).size === AGENTIC_LIST_WRITER_LISTS_MAX_V1) { observeCoreModelCorrectionV1("model_items_capped"); continue; }
     uses.push(use);
-    if (uses.length === 2 * AGENTIC_LIST_WRITER_LISTS_MAX_V1) {
-      if (index + 1 < asked.length) observeCoreModelCorrectionV1("model_items_capped", asked.length - index - 1);
-      break;
-    }
   }
   return Object.freeze(uses);
 }
@@ -743,9 +749,13 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
   if (!Array.isArray(body.blocks)) throw new AgenticAskOutputErrorV1(`"blocks" must be an array (got ${keysOf(body)})`);
   const sentences: AnswerSentence[] = [];
   // No count is capped here: the part's bounds decide what is kept (W6), and say so when something does not fit.
-  const add = (text: string, evidence: unknown, item: AnswerItem) => {
+  const add = (text: string, evidence: unknown, item: AnswerItem, presented?: unknown) => {
     if (text.length === 0) observeCoreModelCorrectionV1("model_entry_dropped");
-    else sentences.push(Object.freeze({ text, evidence: cleanIds(evidence, true, false), item: Object.freeze(item) }));
+    else {
+      const member = presented === undefined ? null : cleanModelId(presented);
+      if (presented !== undefined && member === null) observeCoreModelCorrectionV1("model_entry_dropped");
+      sentences.push(Object.freeze({ text, evidence: cleanIds(evidence, true, false), item: Object.freeze(item), ...(member === null ? {} : { member }) }));
+    }
   };
   /** A block's entries: its array, or none. */
   const entries = (field: unknown): readonly Record<string, unknown>[] => (Array.isArray(field) ? field : []).flatMap(entry => {
@@ -764,7 +774,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
     const titled = title.length === 0 ? {} : { title };
     /** What reads as text in the block: its sentences, and an item it cannot show. */
     const prose: AnswerItem = { block, kind: "text", ...titled };
-    const claim = (item: AnswerItem) => (sentence: Record<string, unknown>) => add(writtenSentence(sentence.text), sentence.evidence, item);
+    const claim = (item: AnswerItem) => (sentence: Record<string, unknown>) => add(writtenSentence(sentence.text), sentence.evidence, item, item.kind === "point" ? sentence.member : undefined);
     if (name === "answer") {
       const opens = !answered;
       if (!opens) observeCoreModelCorrectionV1("model_enum_respelled");
@@ -791,7 +801,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
         const matches = columns.length >= 2 && given.length === columns.length && cells.some(cell => cell.length > 0);
         const claim = matches ? rowClaim(cells, columns) : rowClaim(cells);
         if (matches && Buffer.byteLength(claim, "utf8") <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4) {
-          add(claim, row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) });
+          add(claim, row.evidence, { block, kind: "row", ...titled, columns: Object.freeze([...columns]), cells: Object.freeze(cells) }, row.member);
         } else {
           observeCoreModelCorrectionV1("model_enum_respelled");
           const cut = boundedBytes(claim, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4);
@@ -1053,7 +1063,7 @@ function stepPrompt(list: boolean): string { return [
  * example step's, name nothing the research-loop evaluation asks about, so the evaluation's declared-kind score measures
  * the rule, not recall of an example.
  */
-const ASK_KIND_RULE = "5. Give each need a kind. \"which_items\": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel (\"tickets updated since Monday\", \"my open follow-ups\", \"my open tasks due this week\"); a list answers it, and the answer names every member with its title, dates, status and owner. \"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\"); open its members, and the answer says how many of them you read. \"content\": anything else: what items say; which items say something when the question picks no set by a date, owner, status, kind or channel (\"which pages mention the recall\": search finds them); or a fact about one particular item, its title, dates, status or owner included (\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\"). Mark a which_items need \"found\" with the id of the list that answers it (such as L1, from lists). Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen: items under \"opened\", or items under \"seen\" marked \"full\": true. Mark a need \"not_found\" after at least two different completed searches, or a completed list, fail to provide it. Do not keep searching the same exhausted source with minor wording changes. An error, availability notice, or an unfinished page is incomplete research, not absence.";
+const ASK_KIND_RULE = "5. Give each need a kind. \"which_items\": which or how many items exist in a source, or in a set of its items picked by a date, owner, status, kind or channel (\"tickets updated since Monday\", \"my open follow-ups\", \"my open tasks due this week\"); a list answers it, and the answer names every member with its title, dates, status and owner. \"which_say\": which members of such a picked set say something (\"which of the tickets updated since Monday mention the recall\"); open its members, and the answer says how many of them you read. \"content\": anything else: what items say; which items say something when the question picks no set by a date, owner, status, kind or channel (\"which pages mention the recall\": search finds them); or a fact about one particular item, its title, dates, status or owner included (\"is the beta on hold\", \"who owns OPS-17\", \"when was the onboarding guide created\"). Mark a which_items need \"found\" with its inventory L id and every requested member E id. The E ids preserve the requested set; an L id alone identifies an inventory, not which subset answers the question. Put supporting facts unrelated to that membership in a separate content need. Give a which_say need the id of the list whose members it checks, whatever its status, and mark it \"found\" with that id and ids whose full text you have seen. Mark a content need \"found\" only with ids whose full text you have seen: items under \"opened\", or items under \"seen\" marked \"full\": true. Mark a need \"not_found\" after at least two different completed searches, or a completed list, fail to provide it. Do not keep searching the same exhausted source with minor wording changes. An error, availability notice, or an unfinished page is incomplete research, not absence.";
 /** Ask's stop rule (addition 6, ADR-0041): early stopping never applies to which items exist, and a which_say need reads what its list has shown. */
 const STOP_RULE = "Stop as soon as every requested fact is supported: for a which_items need, once each list it cites has more false; for a which_say need, once you have seen the full text of every member its list has shown, or no other member can be opened.";
 
@@ -1133,7 +1143,7 @@ function askStepPrompt(): string { return [
   "Examples. Step 1 of \"What changed on the beta since Monday, and who owns what is still open?\", looking at several sources at once:",
   "{\"parts\":[{\"question\":\"What changed on the beta since Monday?\",\"needs\":[{\"need\":\"beta items changed since Monday\",\"kind\":\"which_items\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"Monday is 2026-10-12.\"},{\"question\":\"Who owns what is still open?\",\"needs\":[{\"need\":\"open beta actions and their owners\",\"kind\":\"which_items\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"\"}],\"actions\":[{\"tool\":\"list\",\"args\":{\"source\":\"meetings\",\"since\":\"2026-10-12\",\"until\":\"2026-10-15\",\"limit\":10}},{\"tool\":\"list\",\"args\":{\"source\":\"documents\",\"since\":\"2026-10-12\",\"until\":\"2026-10-15\",\"limit\":10}},{\"tool\":\"list\",\"args\":{\"source\":\"meetings\",\"kind\":\"action\",\"status\":\"open\"}},{\"tool\":\"search\",\"args\":{\"query\":\"beta\"}}]}",
   "A later step, with one need of each kind:",
-  "{\"parts\":[{\"question\":\"Which tickets were updated since Monday, and which of them mention the recall?\",\"needs\":[{\"id\":\"N1\",\"need\":\"tickets updated since Monday\",\"kind\":\"which_items\",\"status\":\"found\",\"evidence\":[\"L1\"]},{\"id\":\"N2\",\"need\":\"tickets updated since Monday that mention the recall\",\"kind\":\"which_say\",\"status\":\"open\",\"evidence\":[\"L1\",\"E3\"]}],\"notes\":\"L1: E3 to E6, 4 tickets updated since Monday, more false. E3 (opened) mentions the recall.\"},{\"question\":\"Is the beta on track?\",\"needs\":[{\"id\":\"N3\",\"need\":\"approved beta start date\",\"kind\":\"content\",\"status\":\"found\",\"evidence\":[\"E2\"]}],\"notes\":\"E2: the May 6 review approved the beta start for May 20.\"}],\"actions\":[{\"tool\":\"open\",\"args\":{\"id\":\"E4\"}},{\"tool\":\"open\",\"args\":{\"id\":\"E5\"}},{\"tool\":\"open\",\"args\":{\"id\":\"E6\"}}]}",
+  "{\"parts\":[{\"question\":\"Which tickets were updated since Monday, and which of them mention the recall?\",\"needs\":[{\"id\":\"N1\",\"need\":\"tickets updated since Monday\",\"kind\":\"which_items\",\"status\":\"found\",\"evidence\":[\"L1\",\"E3\",\"E4\",\"E5\",\"E6\"]},{\"id\":\"N2\",\"need\":\"tickets updated since Monday that mention the recall\",\"kind\":\"which_say\",\"status\":\"open\",\"evidence\":[\"L1\",\"E3\"]}],\"notes\":\"L1: E3 to E6, 4 tickets updated since Monday, more false. E3 (opened) mentions the recall.\"},{\"question\":\"Is the beta on track?\",\"needs\":[{\"id\":\"N3\",\"need\":\"approved beta start date\",\"kind\":\"content\",\"status\":\"found\",\"evidence\":[\"E2\"]}],\"notes\":\"E2: the May 6 review approved the beta start for May 20.\"}],\"actions\":[{\"tool\":\"open\",\"args\":{\"id\":\"E4\"}},{\"tool\":\"open\",\"args\":{\"id\":\"E5\"}},{\"tool\":\"open\",\"args\":{\"id\":\"E6\"}}]}",
 ].join("\n"); }
 
 export const ANSWER_PROMPT = [
@@ -1146,7 +1156,7 @@ export const ANSWER_PROMPT = [
   "- source_catalog describes source capabilities, not extra questions to answer. Do not report an unrequested discussion, document or approval as missing when the requested fact is already supported.",
   "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If neither the evidence nor a list answers the question, return {\"lists\":[],\"sentences\":[],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
   "- \"lists\" holds each list research read: its id (L1, L2, ...), source, the filter it applied (filter_applied says how each requested filter applied; \"ignored\" means the list is not limited by it), complete, count, checked, read_at, stated and its members. A member is a row: id, title, dates, status, owner and due date, never its text. When complete is true, count is exactly how many items match the filter; otherwise at least count exist. read_at is when the list was read; a source's search can lag recent edits.",
-  "- Code writes the sentence that counts and names a list's members, first in the answer, citing each one; never count, name or list members yourself. It always writes it for a list with stated true, which research found the answer in. In \"lists\", put {\"id\": \"L1\", \"where\": {\"field\": \"owner\", \"value\": \"<an owner exactly as a member records it>\"}} to name only the members with one owner or status instead, {\"id\": \"L1\", \"where\": {\"field\": \"due\", \"since\": \"2026-10-18\", \"until\": \"2026-10-24\"}} to name only those whose due, created, updated, received or occurred date falls in a range (leave out either bound for an open range; use today to place \"this week\" or \"overdue\"), {\"id\": \"L1\"} to name every member of a list that is not stated, or {\"id\": \"L1\", \"members\": [\"E5\"]} to add particular members' title, dates, status and owner. For which members meet a condition on these facts, use \"where\", which code states with the condition; \"members\" states those members' facts, never the condition. Never put in \"not_found\" which items a stated list holds.",
+  "- List selection is separate from presentation. A list marked stated is evidence for a requested membership need; it does not mean its whole inventory answers the question. requested_members, when present, are the exact members research found for that need. Preserve every requested member. In lists return {\"id\":\"L1\"} only when every member is relevant, {\"id\":\"L1\",\"where\":{\"field\":\"status\",\"value\":\"Open\"}} for one exact row field, a date-field where with since/until for a range, or {\"id\":\"L1\",\"members\":[\"E5\",\"E7\"]} for any other selection. Include every matching id in one members array; repeated groups are merged. Code writes grounded names and row facts from these selections. If you omit a found membership need's list, code restores its requested_members; if research declared only the list and you provide no selection, code states that declared inventory. Selection arrays have no presentation-size limit; only the released answer can be shortened, with an explicit partial notice.",
   "- A list shows which items exist and each member's title, dates, status and owner, never what an item says. Each of your sentences cites evidence text; rows and list ids are not evidence for a sentence, and a sentence that cites no evidence text is left out. For which members of a list say something, write what the evidence text you have says; code adds how many of the list's members were checked.",
   "- Add the requested details beyond the list code states, without repeating its enumeration. Sharing a source does not make two facts duplicates: keep each requested owner, status, date or explanation that the evidence supports.",
   "- Keep each fact's owner, date and status with it.",
@@ -1207,8 +1217,8 @@ const BLOCK_TITLE = "optional: a heading of a few words";
 export const ANSWER_BLOCK_CATALOG = Object.freeze([
   { block: "answer", description: "The direct answer to the question, in one or two sentences.", params: { sentences: "1 to 2 sentences, each with its text and evidence" } },
   { block: "text", description: "A short paragraph that explains, qualifies or connects facts.", params: { title: BLOCK_TITLE, sentences: "1 or more sentences, each with its text and evidence" } },
-  { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 or more items, each with its text and evidence" } },
-  { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 or more column names", rows: "2 or more rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence" } },
+  { block: "points", description: "Parallel items, one sentence each, such as blockers, conditions, decisions or steps.", params: { title: BLOCK_TITLE, ordered: "true when the order matters, such as steps taken in turn; false otherwise", items: "2 or more items, each with text and evidence; optional member is the inventory E id this item explicitly presents" } },
+  { block: "table", description: "Items that share the same fields, one row each, under columns you name, such as each action's owner, due date and status, or two options compared on the same points.", params: { title: BLOCK_TITLE, columns: "2 or more column names", rows: "2 or more rows, each with cells (one per column, in the columns' order, empty where the evidence does not say) and evidence; optional member is the inventory E id this row explicitly presents" } },
   { block: "timeline", description: "Events in date order, oldest first: each event's date and what happened, and who was involved when the evidence says.", params: { title: BLOCK_TITLE, events: "2 or more events, each with date (YYYY-MM-DD, as the evidence dates the event), text (what happened, in one sentence), who (optional: a person's name as the evidence records it) and evidence" } },
   { block: "card", description: "One person, project, ticket or decision, with its key facts as label and value.", params: { title: "its name", kind: "person, project, ticket or decision", facts: "2 or more facts, each with label, value and evidence" } },
   { block: "quote", description: "The exact words of one source, such as an approved decision's text or what someone said, with where they come from.", params: { text: "words copied exactly from the cited evidence", from: "who said or recorded it, and when", evidence: "the one id it is copied from" } },
@@ -1217,8 +1227,8 @@ export const ANSWER_BLOCK_CATALOG = Object.freeze([
 /**
  * What a v2 Ask's writer is told after ANSWER_PROMPT and its guidance (answer layout v2, ADR-0051): how to arrange the
  * answer from block_catalog, layout v1's two wording rules word for word, and the reply shape answerBlocksSchema holds.
- * It is the block evaluation's layout part with two lines production needs: the reply names the lists it uses, and the
- * writer never writes items for a list's members, which code states. An Ask without v2 never sees it.
+ * Structured rows and points may explicitly present a listed member; supporting citations alone never establish
+ * that presentation. An Ask without v2 never sees these bindings.
  */
 export const ANSWER_BLOCKS_PROMPT = [
   "Layout: the person's app shows the answer as a short document made of blocks. \"block_catalog\" lists the blocks it can show:",
@@ -1228,7 +1238,7 @@ export const ANSWER_BLOCKS_PROMPT = [
   NO_RESTATING_RULE,
   LONG_IDS_ONCE_RULE,
   "- Every sentence, item, row, event, fact and quote cites the evidence that supports it in \"evidence\", and only that evidence. Never write ids such as E4 in the text.",
-  "- Never write items, rows, events or facts for a list's members: code states them, right after the answer.",
+  "- Use lists for code-written member names and metadata. A table row or points item presenting a listed member from its text may instead declare member as that inventory E id, alongside the evidence supporting its contents. The member id identifies what the item presents; evidence alone does not. Only grounded retained items satisfy this declaration. Do not declare a member on an aggregate or unrelated claim.",
   "- Write a date in a date field or a table cell as YYYY-MM-DD.",
   "- Put in a block only what the evidence says.",
   "- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.",

@@ -4,7 +4,7 @@ import { trimAgenticEvidenceBundleV1, type AgenticEvidenceBundleV1 } from "../..
 import {
   AGENTIC_LIST_NAMED_MAX_V1, AGENTIC_LIST_STATEMENT_BYTES_V1,
   agenticCalendarDayV1, agenticListCheckedNoteV1, agenticListCompleteV1, agenticListEndUnverifiedV1, agenticListFilterNoticeV1, agenticListFilterPhraseV1, agenticListIdV1,
-  agenticListMembersNounV1, agenticListMembershipV1, agenticListNameSharesV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListStatementV1, agenticListTableV1,
+  agenticListMembersNounV1, agenticListMembershipV1, agenticListNameSharesV1, agenticListNounV1, agenticListSelectionNotFoundV1, agenticListSelectV1, agenticListStatementV1, agenticListStatementsV2, agenticListTableV1,
   agenticNeedReadsListV1, agenticOpenReadsV1, agenticPlanListsV1, agenticWriterListMemberV1, agenticWriterListV1, createAgenticListEvidenceV1, parseAgenticListIdV1,
   type AgenticAnswerListUseV1, type AgenticListEvidenceInputV1, type AgenticListEvidenceV1, type AgenticListFilterApplicationV1, type AgenticListIdV1,
   type AgenticListNounFormsV1, type AgenticListSelectionV1, type AgenticListStatementInputV1, type AgenticOpenActionV1, type AgenticWriterListMemberV1,
@@ -349,6 +349,22 @@ describe("the bundle and the evaluation view", () => {
 });
 
 describe("the statement code writes for a list (ADR-0041)", () => {
+  it.each([[false, false], [true, false], [true, true]])("keeps every member across byte/citation-bounded block statements (wide: %s, by id: %s)", (wide, byId) => {
+    const selected = Array.from({ length: 101 }, (_, index) => ({ title: wide ? `${index}: ${"界".repeat(100)}` : "One shared title", owner: wide ? "界".repeat(80) : "Dana" }));
+    const statements = agenticListStatementsV2({ noun: TICKETS, filter: {}, count: selected.length, complete: true, selected, by_id: byId });
+    expect(statements.length).toBeGreaterThan(1);
+    expect(statements.flatMap(statement => statement.cited)).toEqual(Array.from({ length: selected.length }, (_, index) => index));
+    expect(statements.every(statement => statement.cited.length <= 40 && Buffer.byteLength(statement.text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1)).toBe(true);
+    expect(new Set(statements.map(statement => statement.caption)).size).toBe(1);
+    expect(statements.map(statement => statement.text).join(" ")).not.toMatch(/and \d+ more/u);
+  });
+  it("fits a single member with maximum multibyte row facts and a long owner filter", () => {
+    const text = "🌐".repeat(240);
+    const selected = [{ title: text, status: text, owner: text, due: text, dates: { created: text, updated: text, occurred: text, received: text } }];
+    const statements = agenticListStatementsV2({ noun: TICKETS, filter: { owner: text, kind: "ticket", status: "open", role: "lead" }, count: 1, complete: true, selected, by_id: true, where: { field: "owner", value: text } });
+    expect(statements.flatMap(statement => statement.cited)).toEqual([0]);
+    expect(statements.every(statement => Buffer.byteLength(statement.text, "utf8") <= AGENTIC_LIST_STATEMENT_BYTES_V1)).toBe(true);
+  });
   const titles = ["ECHO Product Pipeline — Start Here", "Assumptions and decisions — source facts versus proposals", "Gate reviews — EVT pass, DVT hold, PVT pending"];
   const pages = titles.map(title => ({ title, status: "current" }));
   const sixty = Array.from({ length: 60 }, (_, index) => ({ title: `THERM-${index + 1}: Fixture work ${index + 1}` }));

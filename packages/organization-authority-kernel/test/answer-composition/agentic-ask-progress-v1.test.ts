@@ -306,7 +306,9 @@ describe("the receipt counts what research looked through (ADR-0043)", () => {
   it("counts every row of an Ask that only listed rows, and finds each page research was given, never the rows fetched behind it", async () => {
     const run = listOnly();
     const { response, receipt } = await run.ask.answerWithReceipt({ question, on_progress: run.sink });
-    expect(response.outcome).toBe("answered");
+    // Research saw all 30, while the legacy answer can name only 25 and must disclose the missing five.
+    expect(response.outcome).toBe("partial");
+    expect(response.parts[0]).toMatchObject({ status: "partial", gap: "Some evidence could not fit in this response." });
     expect(run.generate).toHaveBeenCalledTimes(4);
     // One fetch returned all 30; the second page came from it.
     expect(run.list).toHaveBeenCalledTimes(1);

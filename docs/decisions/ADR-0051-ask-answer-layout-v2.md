@@ -243,3 +243,63 @@ never the note; and 40 citations, so an item whose list id would bring more of
 that list's private rows is left out whole, never cut short of them, the part
 saying some evidence could not fit. An Ask again's account of what is
 different since is left out whole for the same reason.
+
+## Amended 2026-11-04: preserve selection independently of presentation
+
+Live staging found 43 matching tickets, but the answer showed only 25. The
+writer supplied selected ids in two groups; the parser discarded the second
+group, and code also forced an unrelated unfiltered inventory into the answer.
+The founder asked to fix these deterministic failures and confirmed the
+selection and presentation behavior below in PR #400.
+
+Research's found `which_items` needs record the inventory L id and every
+requested member E id. These ids preserve the requested selection across
+writer and layout choices; supporting facts unrelated to membership belong in
+a separate content need. Opened bodies map back to the inventory's member
+identity. The writer receives this set as `requested_members`, independently
+of `stated`, which says that a membership need cites the inventory.
+
+Every layout parses the whole selection before applying presentation bounds.
+A `members` array has no 25-item or evidence-array bound. Repeated groups for
+the same list merge by id, preserving every selected member once; ids outside
+that inventory are removed. An explicit empty selection never becomes the
+full inventory. It can select no members from an L-only inventory declaration;
+it cannot erase a nonempty precise research member set, which code restores. Compound conditions can name every matching id without
+extending the one-field `where` language.
+
+A successful writer may not silently lose requested members. Code restores
+research's precise requested members absent from the writer's selection. If
+a found membership need cites only L and the writer supplies no selection,
+code states that declared list: all members for a complete list, or known
+members with `at least` and partial status for an incomplete list. Other
+inventories do not enter the answer merely because research read them.
+Each need retains that fallback independently: another need's precise subset
+of the same inventory does not erase an omitted L-only declaration.
+
+A v2 table row or points item may declare an optional internal `member` E id
+for the inventory member it presents, independently of its supporting
+`evidence`. This allows abbreviated display labels without guessing membership
+from wording. Code accepts the declaration only for an actual inventory member
+whose own text (or mapped opened body) grounds that retained item. Unknown or
+mismatched ids, a citation without a declaration, downgraded rows, and statements
+dropped by grounding or per-statement citation limits do not cover a requested
+member. Code restores the uncovered members, avoiding duplicate enumeration
+when valid rows or points already present them. This writer field is internal;
+it does not extend the released answer API or apply to other block kinds.
+
+A v2 answer renders every selected member. Code divides a logical list into
+statements that each fit 4 KiB and 40 citations, then groups their rows into
+one table with one caption describing the whole selection. Columns are shared
+across chunks, and each row keeps its own citations. The 64 KiB answer bound
+and plain fallback remain. The fallback recomposes selection without structured
+member bindings before applying legacy limits, so lost rows cannot hide members.
+
+Layout v1 and answers without blocks retain 25 named members, 10 statements,
+and 40 answer citations. They first merge the complete selection, then show
+`and N more` for omitted names and report partial with an explicit fit notice.
+A v2 answer that falls back to these bounds follows the same rule. A response
+never reports a complete answer while silently dropping selected members.
+
+The research tool's 25-row page size is unchanged; research can continue paging.
+This amendment changes selection and presentation, not source access, research
+budgets, or what constitutes grounded evidence.

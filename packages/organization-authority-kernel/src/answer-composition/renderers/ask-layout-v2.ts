@@ -13,7 +13,7 @@ import { cellsOf, columnsOf, listTableV1, type AskLayoutShapeV1 } from "./ask-la
  */
 
 /** What one statement reads as: a writer's item, a list statement code writes as its table, or plain text. */
-export type AskBlockShapeV2 = AnswerItem | { readonly kind: "text" } | Extract<AskLayoutShapeV1, { kind: "list" }>;
+export type AskBlockShapeV2 = AnswerItem | { readonly kind: "text" } | (Extract<AskLayoutShapeV1, { kind: "list" }> & { readonly group?: number });
 /** One statement the response kept, with its citations and its shape. */
 export interface AskBlockStatementV2 {
   readonly citation_indexes: readonly number[];
@@ -61,7 +61,8 @@ export function buildAskBlocksV2(statements: readonly AskBlockStatementV2[]): re
   statements.forEach(({ shape }, at) => {
     const last = runs.at(-1);
     const block = blockOf(shape);
-    if (last !== undefined && block !== undefined && blockOf(last.shape) === block && last.shape.kind === shape.kind && shape.kind !== "quote") last.statements.push(at);
+    if (last !== undefined && shape.kind === "list" && last.shape.kind === "list" && shape.group !== undefined && last.shape.group === shape.group) last.statements.push(at);
+    else if (last !== undefined && block !== undefined && blockOf(last.shape) === block && last.shape.kind === shape.kind && shape.kind !== "quote") last.statements.push(at);
     else runs.push({ shape, statements: [at] });
   });
   const blocks: PersonAnswerBlockV2[] = [];
@@ -82,7 +83,9 @@ export function buildAskBlocksV2(statements: readonly AskBlockStatementV2[]): re
     const items = run.statements.map(at => statements[at]!);
     const enough = run.statements.length >= PERSON_ANSWER_BLOCKS_MIN_ITEMS_V2;
     if (shape.kind === "answer") blocks.push({ kind: "answer", statements: run.statements });
-    else if (shape.kind === "list") blocks.push({ kind: "table", statements: run.statements, ...listTableV1(shape) });
+    else if (shape.kind === "list") blocks.push({ kind: "table", statements: run.statements, ...listTableV1({ ...shape,
+      rows: items.flatMap(({ shape: item }) => item.kind === "list" ? item.rows : []),
+    }) });
     else if (shape.kind === "quote") blocks.push({ kind: "quote", statements: run.statements, text: shape.text, ...(shape.from === undefined ? {} : { from: shape.from }) });
     else if (shape.kind === "point" && enough) blocks.push({ kind: "points", ...title, ordered: shape.ordered, statements: run.statements });
     else if (shape.kind === "row" && enough) {
