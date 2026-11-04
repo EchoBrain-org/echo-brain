@@ -122,9 +122,18 @@ when the driver supplied `completed=false`. Open needs and interrupted reads
 remain incomplete. For Ask requests to change data or send messages, the driver
 can set `unsupported_action=true`: an action-only request has no factual parts
 and needs no search; mixed requests still validate their factual needs normally.
-The renderer supplies a fixed read-only explanation, keeps the response partial,
-and never publishes the researcher's internal notes. Background task goals do
-not accept this Ask capability signal.
+Clients opt into typed `gap_details` with `x-echo-ask-gap-details: 1`; older
+requests keep the exact V8 part shape. The renderer supplies them separately
+from the diagnostic `gap`:
+unsupported action, unfinished research, and a bounded not-found explanation.
+The desktop and Copy use only these actionable reasons; coverage and formatting
+diagnostics stay hidden. The response stays partial for unsupported requests,
+and internal researcher notes are never published. Background task goals do not
+accept this Ask capability signal. Completion checks prove observed reads and
+coverage, not query relevance or command intent; those remain model judgments
+covered by negative evaluation cases and live rehearsal. A list selection
+becomes actionable absence only after complete, verified coverage of the
+selection facts; empty subsets of incomplete or unchecked lists do not qualify.
 
 ## Side routes
 

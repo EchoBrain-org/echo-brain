@@ -1,6 +1,6 @@
 import type {
   PersonAnswerBlockV2, PersonAnswerCardEntityV2, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEventV2, PersonAnswerEvidenceCitationV8,
-  PersonAnswerFactV2, PersonAnswerPreviousV1, PersonAnswerTableRowV1,
+  PersonAnswerFactV2, PersonAnswerGapDetailsV1, PersonAnswerPreviousV1, PersonAnswerTableRowV1,
   PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
@@ -365,6 +365,7 @@ export interface AnswerPart {
   readonly status: 'answered' | 'partial' | 'not_found' | 'records_only';
   readonly statements: readonly AnswerStatement[];
   readonly gap?: string;
+  readonly gap_details?: PersonAnswerGapDetailsV1;
   readonly records?: readonly AnswerStatement[];
   /** Only on a V8 answer to an Ask that asked for answer layout v2: the blocks its statements read as. Without them, each is a paragraph. */
   readonly blocks?: readonly ArrangedBlock[];
@@ -469,6 +470,8 @@ export type ProjectActivity = PersonProjectActivityItemV1;
 export interface SourceEvidence {
   readonly label: string;
   readonly text: string;
+  /** Imported notes alone have a review badge; it never makes them an approved record. */
+  readonly imported_meeting_review?: 'not_reviewed' | 'reviewed';
 }
 
 /** One approved decision, action or rationale, with up to three excerpts that support it. */

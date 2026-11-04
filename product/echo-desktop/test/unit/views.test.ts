@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, failureView, homeView, invitationView, isRecordRef, listView, membersView, noteMatchesView,
+  abandonView, answerView, askCheckView, askStepView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, isRecordRef, listView, membersView, noteMatchesView,
   noteTitle, openItemsView, openItemView, openView, revokedView, projectActivityView, projectMatchesView, projectSettingsView, projectView, receiptView, recordView,
   savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
@@ -28,6 +28,19 @@ const AT = '2026-09-21T22:01:00.000Z';
 const visible = (sources: readonly Record<string, unknown>[]) => sources.map(({ cited: _cited, ...rest }) => rest);
 
 describe('view models copy only what the renderer may see', () => {
+  it('presents imported notes with the server label and review state, independently of the canonical packet heading', () => {
+    const text = 'Imported meeting (unapproved): Pilot\nShip the pilot.\n\nKeep its rollout small.';
+    const label = 'Imported meeting: Pilot';
+    const packet = { schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: { kind: 'global' },
+      citation: { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
+        representation_sha256: sha('5'), anchor_sha256: sha('6'), label }, text };
+    for (const imported_meeting_review of ['not_reviewed', 'reviewed'] as const) {
+      expect(evidenceView({ ok: true, result: { ...packet, imported_meeting_review } }))
+        .toEqual({ label, text: 'Ship the pilot.\n\nKeep its rollout small.', imported_meeting_review });
+    }
+    // The same words in an ordinary note are content; its title cannot imply a review badge or strip a line.
+    expect(evidenceView({ ok: true, result: packet })).toEqual({ label, text });
+  });
   it.each(['confluence', 'notion', 'knowledge-base'])('preserves %s page identity without provider coordinates', tool_id => {
     const permalink = 'https://wiki.example.test/pages/view?pageId=12345';
     const source = (tool: unknown) => ({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'answered',

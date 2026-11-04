@@ -2,6 +2,7 @@
 // fixture Authority behind the real person client. Every request is logged to
 // <home>/calls.jsonl so tests can assert what the app actually sent.
 import * as organizationApi from '@echo-brain/organization-api';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -71,6 +72,8 @@ interface Contract {
   /** Answer layout v2 (ADR-0051): the header an Ask asks for it with, and its value. */
   PERSON_ASK_ANSWER_LAYOUT_HEADER_V1: string;
   PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2: string;
+  PERSON_ASK_GAP_DETAILS_HEADER_V1: string;
+  PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1: string;
 }
 const api = organizationApi as unknown as Contract;
 
@@ -355,6 +358,27 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }).operations;
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
+  const importedNotes = mode === 'ask-imported-meeting' || mode === 'ask-imported-mixed';
+  if (importedNotes) {
+    // A pre-deploy answer keeps the historical label and v1 packet coordinates. The proof read below
+    // returns the current neutral label and live review state without changing those coordinates.
+    const label = 'Imported meeting (unapproved): Pilot';
+    const text = 'The notes propose shipping the pilot.';
+    desktop.evidence_text = `${label}\n${text}`;
+    desktop.evidence_label = 'Imported meeting: Pilot';
+    const citation = { kind: 'source_revision', source_id: `source:${'1'.repeat(64)}`, revision_id: 'rev-1', source_sha256: `sha256:${'2'.repeat(64)}`,
+      representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text }),
+      anchor_sha256: canonicalSha256({ kind: 'text', context_id: `cap_${'3'.repeat(64)}`, segment: 0, text: desktop.evidence_text }) };
+    desktop.answer.citations = [{ kind: 'imported_meeting', label, citation: { ...citation, label }, visibility: 'only_me' }];
+    desktop.answer.parts = [{ question: 'What do the pilot notes say?', status: 'answered', statements: [{ text, citation_indexes: [0], private: true }] }];
+    if (mode === 'ask-imported-mixed') {
+      const updated = 'The updated notes defer the pilot.';
+      (desktop.answer.citations as unknown[]).push({ kind: 'imported_meeting', label, visibility: 'only_me', citation: { ...citation,
+        revision_id: 'rev-2', source_sha256: `sha256:${'4'.repeat(64)}`, representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text: updated }),
+        anchor_sha256: canonicalSha256({ kind: 'text', context_id: `cap_${'5'.repeat(64)}`, segment: 0, text: `${label}\n${updated}` }) } });
+      desktop.answer.parts = [{ question: 'What do the pilot notes say?', status: 'answered', statements: [{ text: 'The original notes propose shipping; the updated notes defer the pilot.', citation_indexes: [0, 1], private: true }] }];
+    }
+  }
   const syntheticReview = mode === 'synthetic-review';
   let granolaImported = syntheticReview, granolaApproved = false, granolaBaselineHomeReads = 0;
   // The automatic import granola-preparing saved: what it watches and the project it suggests.
@@ -1804,11 +1828,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const noMatch = question === 'Find the missing launch note.';
         const interrupted = question === 'What changed during the unavailable search?';
         const mixed = question === 'What was decided? Mark action A1 Done.';
+        const partialMissing = question === 'Who owns Harbor?' || question === 'What was decided, and who owns Harbor?';
+        const hasFacts = mixed || question === 'What was decided, and who owns Harbor?';
         const [original] = desktop.answer.parts as Record<string, unknown>[];
-        return json({ ...answer, scope, outcome: noMatch ? 'not_found' : 'partial', citations: mixed ? desktop.answer.citations : [],
-          parts: [{ question, status: mixed ? 'partial' : 'not_found', statements: mixed ? original!.statements : [],
-            gap: noMatch ? "I couldn't find this in the sources you can access." : interrupted ? "I couldn't complete the search. Please try again."
-              : "Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent." }],
+        const missing = noMatch ? "I couldn't find this in the sources you can access." : 'Not found: the Harbor owner.';
+        return json({ ...answer, scope, outcome: noMatch ? 'not_found' : 'partial', citations: hasFacts ? desktop.answer.citations : [],
+          parts: [{ question, status: hasFacts ? 'partial' : 'not_found', statements: hasFacts ? original!.statements : [],
+            gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.',
+            ...(new Headers(init?.headers).get(api.PERSON_ASK_GAP_DETAILS_HEADER_V1) === api.PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1
+              ? { gap_details: noMatch || partialMissing ? { not_found: missing } : interrupted ? { interrupted: true } : { unsupported_action: true } } : {}) }],
         });
       }
       if (mode === 'ask-ticket') {
@@ -1839,7 +1867,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return json(blocksAnswer(question, scope, layout === api.PERSON_ASK_ANSWER_LAYOUT_HEADER_VALUE_V2));
       }
       if (mode === 'ask-scroll') {
-        const statements = Array.from({ length: 12 }, (_, index) => ({
+        const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
           text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
           citation_indexes: [0], private: false,
         }));
@@ -1853,9 +1881,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       const citation = body?.citation as Record<string, unknown>;
+      const newer = mode === 'ask-imported-mixed' && citation.revision_id === 'rev-2';
+      // The mixed-revision pane must not infer a shared review state before both proofs arrive.
+      for (let waited = 0; newer && existsSync(join(home, 'hold-imported-newer')) && waited < 10_000; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
+      const review = new Headers(init?.headers).get(organizationApi.PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1) === organizationApi.PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_VALUE_V1;
       return json({
         schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: body?.scope,
-        citation: { ...citation, label: desktop.evidence_label }, text: desktop.evidence_text,
+        citation: { ...citation, label: desktop.evidence_label }, text: newer ? 'Imported meeting (unapproved): Pilot\nThe updated notes defer the pilot.' : desktop.evidence_text,
+        ...(importedNotes && review ? { imported_meeting_review: newer ? 'not_reviewed' : mode === 'ask-imported-mixed' || existsSync(join(home, 'imported-reviewed')) ? 'reviewed' : 'not_reviewed' } : {}),
       });
     }
     // One approved record, by the digest an answer cited. A record the person

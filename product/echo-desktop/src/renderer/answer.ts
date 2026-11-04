@@ -329,10 +329,17 @@ export function partShows(part: AnswerPart, shows: Shows): boolean {
   return [...part.statements, ...(part.records ?? [])].some(statement => shows(statement.citation_indexes));
 }
 
-/** A partial answer's explanation, also when it has no claims. Gaps have no citation map, so hide them if any source is no longer readable. */
+/** Only actionable, typed explanations. Older complete not-found answers retain their gap; other untyped diagnostics stay hidden. */
 export function answerGaps(answer: Answer, shows: Shows): string[] {
-  return answer.outcome !== 'partial' || !shows(answer.sources.map((_, index) => index)) ? []
-    : [...new Set(answer.parts.flatMap(part => part.gap ? [part.gap] : []))];
+  // Only free-text missing facts can contain source content; fixed capability/retry messages remain safe.
+  const readable = shows(answer.sources.map((_, index) => index));
+  return [...new Set(answer.parts.flatMap(part => part.gap_details === undefined
+    ? readable && answer.outcome === 'not_found' && part.gap ? [part.gap] : []
+    : [
+      ...(part.gap_details.unsupported_action ? ["Ask can read your sources, but it can't make changes or send messages. Nothing was changed or sent."] : []),
+      ...(part.gap_details.interrupted ? ["I couldn't complete the search. Please try again."] : []),
+      ...(!readable || part.gap_details.not_found === undefined ? [] : [part.gap_details.not_found]),
+    ]))];
 }
 
 /**

@@ -66,10 +66,14 @@ including the owner or due prefix. A value inside another value ("open" in
 calendar due dates use the renderer's written date. Citing
 a row never names it alone, whether a sentence cites it beside its text for the
 row's facts, its list id brings it, or the row carries text, as a follow-up's
-does. A list longer than the 25 names an answer gives is named in full when a
-statement ends "and N more", reads as one code wrote (it cites only list
+does. Layout v2 renders every selected member. Layout v1 and the plain fallback
+retain 25 names and report partial when some cannot fit. This evaluation
+retains its legacy count-completeness surrogate: a longer list counts as named
+in full when a statement ends "and N more", reads as one code wrote (it cites only list
 members' rows, and its text names every item it cites), and the members it
-names plus N are exactly the list. Where the research result lacks the name
+names plus N are exactly the list. That surrogate verifies the declared count,
+not that all names were displayed; it is not proof of a complete v2 presentation.
+Where the research result lacks the name
 code writes, the check errs toward not named: a meeting record is titled there
 by its meeting's label, while code names it by a line of its own text, which
 the result does not carry, so a member the key names by its meeting is never

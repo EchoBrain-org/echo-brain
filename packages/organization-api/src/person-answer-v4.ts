@@ -56,6 +56,15 @@ export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
 export const PERSON_ASK_TIME_ZONE_HEADER_V1 = 'x-echo-time-zone';
+/** Only opted-in clients receive typed Ask explanations; older exact-key V8 readers keep their response shape. */
+export const PERSON_ASK_GAP_DETAILS_HEADER_V1 = 'x-echo-ask-gap-details';
+export const PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1 = '1';
+export function validatePersonAskGapDetailsHeaderV1(value: unknown): true | undefined {
+  if (value === undefined) return undefined;
+  if (value === PERSON_ASK_GAP_DETAILS_HEADER_VALUE_V1) return true;
+  fail('Ask gap details header is invalid');
+}
+
 export interface PersonAskTimeContextV1 {
   readonly now: string;
   readonly time_zone: string;
@@ -101,11 +110,30 @@ export interface PersonAnswerStatementV4 {
 /** Deterministic evidence fallback when a per-part writer cannot produce prose. */
 export type PersonAnswerEvidenceFallbackV4 = PersonAnswerStatementV4;
 
+/** Actionable explanations, independent of the diagnostic gap's coverage/formatting notes. */
+export interface PersonAnswerGapDetailsV1 {
+  readonly unsupported_action?: true;
+  readonly interrupted?: true;
+  readonly not_found?: string;
+}
+
+export function validatePersonAnswerGapDetailsV1(value: unknown): PersonAnswerGapDetailsV1 {
+  const input = object(value, 'Ask gap details');
+  const keys = ['unsupported_action', 'interrupted', 'not_found'].filter(key => Object.hasOwn(input, key));
+  assertExactKeys(input, keys, 'Ask gap details');
+  if (keys.length === 0) fail('Ask gap details is empty');
+  for (const flag of ['unsupported_action', 'interrupted']) if (Object.hasOwn(input, flag) && input[flag] !== true) fail('Ask gap flag must be true');
+  if (Object.hasOwn(input, 'not_found')) text(input.not_found, 'Ask not-found explanation', 2 * 1024, true);
+  return Object.freeze({ ...(input.unsupported_action === true ? { unsupported_action: true as const } : {}),
+    ...(input.interrupted === true ? { interrupted: true as const } : {}), ...(Object.hasOwn(input, 'not_found') ? { not_found: input.not_found as string } : {}) });
+}
+
 export interface PersonAnswerPartV4 {
   readonly question: string;
   readonly status: 'answered' | 'partial' | 'not_found' | 'records_only';
   readonly statements: readonly PersonAnswerStatementV4[];
   readonly gap?: string;
+  readonly gap_details?: PersonAnswerGapDetailsV1;
   readonly records?: readonly PersonAnswerEvidenceFallbackV4[];
   /** Only for an Ask that asked for answer layout v2 (ADR-0051): the blocks its statements read as. */
   readonly blocks?: readonly PersonAnswerBlockV2[];
@@ -316,7 +344,7 @@ function answerCitation(value: unknown, version: 6 | 8): PersonAnswerCitationV8 
 
 function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerPartV4 {
   const input = object(value, 'Ask response part');
-  assertExactKeys(input, ['question', 'status', 'statements', ...['gap', 'records', 'blocks'].filter(key => Object.hasOwn(input, key))], 'Ask response part');
+  assertExactKeys(input, ['question', 'status', 'statements', ...['gap', 'gap_details', 'records', 'blocks'].filter(key => Object.hasOwn(input, key))], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
   // A part arranged in blocks (answer layout v2, ADR-0051) has no count of statements of its own; any other keeps ten.
   if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || (!Object.hasOwn(input, 'blocks') && input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4)) fail('Ask response part is invalid');
@@ -330,6 +358,7 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): Per
     status: input.status as PersonAnswerPartV4['status'],
     statements,
     ...(Object.hasOwn(input, 'gap') ? { gap: input.gap as string } : {}),
+    ...(Object.hasOwn(input, 'gap_details') ? { gap_details: validatePersonAnswerGapDetailsV1(input.gap_details) } : {}),
     ...(Object.hasOwn(input, 'records') ? { records: Object.freeze((input.records as unknown[]).map((item) => statement(item, citations, 'Ask response fallback record', true))) } : {}),
     ...(Object.hasOwn(input, 'blocks') ? { blocks: validatePersonAnswerBlocksV2(input.blocks, statements, citations.length) } : {}),
   });
@@ -473,7 +502,7 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
     ...(previous.includes('choices') ? { choices: answerChoices(input.choices) } : {}),
   };
   for (const item of result.parts) {
-    if (item.status === 'answered' && (item.statements.length === 0 || item.gap !== undefined || item.records !== undefined)) fail('Answered part is inconsistent');
+    if (item.status === 'answered' && (item.statements.length === 0 || item.gap !== undefined || item.gap_details !== undefined || item.records !== undefined)) fail('Answered part is inconsistent');
     if (item.status === 'partial' && (item.statements.length === 0 || item.records !== undefined)) fail('Partial part is inconsistent');
     if (item.status === 'not_found' && (item.statements.length !== 0 || item.records !== undefined)) fail('Not-found part is inconsistent');
     if (item.status === 'records_only' && (item.statements.length !== 0 || item.records === undefined || item.records.length === 0)) fail('Records-only part is inconsistent');
@@ -481,6 +510,7 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   if (result.outcome === 'answered' && result.parts.some((item) => item.status === 'partial' || item.status === 'not_found')) fail('Answered outcome is inconsistent');
   if (result.outcome === 'partial' && !result.parts.some((item) => item.status === 'partial' || item.status === 'not_found' || item.status === 'records_only')) fail('Partial outcome is inconsistent');
   if (result.outcome === 'not_found' && (result.direct !== undefined || result.citations.length !== 0 || result.parts.some((item) => item.status !== 'not_found' || item.statements.length !== 0 || item.records !== undefined))) fail('No-evidence outcome is inconsistent');
+  if (result.outcome === 'not_found' && result.parts.some(item => item.gap_details?.unsupported_action || item.gap_details?.interrupted)) fail('No-match outcome cannot be an unsupported action or interrupted research');
   // Choices come only with clarify, which answers a follow-up: it names the question asked, and says nothing else.
   if (clarify !== previous.includes('choices') || (clarify && (result.citations.length !== 0 || result.direct !== undefined || result.notice !== undefined || !previous.includes('question') || previous.includes('since')))) fail('Clarify outcome is inconsistent');
   // `since` answers an Ask again, which names its question; an answer that cites nothing cannot say what is different.

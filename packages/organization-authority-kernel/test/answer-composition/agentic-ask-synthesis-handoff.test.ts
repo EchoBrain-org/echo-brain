@@ -84,8 +84,8 @@ describe('synthesis receives observed research coverage', () => {
     expect(writer.research).toMatchObject({ completed: false, stop_reason: 'no_progress', reads: [
       { returned_items: 1 }, { returned_items: 0 }, { returned_items: 0 },
     ] });
-    // A supported requested fact remains answerable despite bounded research.
-    expect(answer.outcome).toBe('answered');
+    // Keep the supported fact, while the outcome still reports that research did not finish.
+    expect(answer).toMatchObject({ outcome: 'partial', parts: [{ status: 'partial', statements: [{ text: 'The gate decision is pending.' }] }] });
     expect(answer.notice).toBe('Research stopped before it finished, so relevant context may be missing.');
   });
 

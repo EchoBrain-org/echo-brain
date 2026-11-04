@@ -103,7 +103,7 @@ function fixture(options: { readonly membership?: (id: string) => Membership | u
 const auditRow = (database: Database.Database) => database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").get() as { body_json: string } | undefined;
 
 describe("Agentic Ask with stored source evidence", () => {
-  it("answers globally from unread project search passages without releasing another member's private text", async () => {
+  it("retains global search facts after an unfinished absence claim without releasing another member's private text", async () => {
     const software = `SCOUT Software Review. ${"Background for this proposal. ".repeat(20)}Software needs an explicit transition table.`;
     const hardware = `SCOUT Hardware Review. ${"Background for this proposal. ".repeat(20)}Hardware needs battery endurance measurements.`;
     const f = fixture({ generate: async input => {
@@ -130,7 +130,8 @@ describe("Agentic Ask with stored source evidence", () => {
     f.upload("SCOUT confidential review", "SCOUT Software Hardware Review. Private marker 97531.", "only_me");
     const answer = await f.route.ask({ access_token: "member", request: { schema_version: 3, question: "Compare the SCOUT Software Review and Hardware Review" } });
     expect(answer.scope).toEqual({ kind: "global" });
-    expect(answer.outcome).toBe("answered");
+    expect(answer.outcome).toBe("partial");
+    expect(answer.notice).toContain("Research stopped before it finished");
     expect(answer.citations).toHaveLength(2);
     expect(f.prompts.join("\n")).not.toContain("97531");
     expect(f.prompts.join("\n")).not.toContain("SCOUT confidential review");
@@ -139,7 +140,7 @@ describe("Agentic Ask with stored source evidence", () => {
       expect(f.originals.read({ access_token: "member", scope: { kind: "global" }, citation: citation.citation }).atom.text).toMatch(/SCOUT (Software|Hardware) Review/);
     }
     const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
-    expect(body).toMatchObject({ principal_id: MEMBER.principal_id, outcome: "answered" });
+    expect(body).toMatchObject({ principal_id: MEMBER.principal_id, outcome: "partial" });
     expect(body.response_sha256).toBe(canonicalSha256(answer));
     expect(auditRow(f.database)!.body_json).not.toContain("transition table");
   });

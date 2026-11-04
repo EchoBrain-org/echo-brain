@@ -308,8 +308,8 @@ export function isRecordRef(value: unknown): value is RecordRef {
  * research tool contract v1). An answer to an Ask that carried `previous`
  * (ADR-0047) also says the full question it answers, Ask again's "since" (its
  * citations among the answer's), or, asking which one (`clarify`), the
- * choices and no part. Its notice and its parts' gaps stay out of its plain
- * reading: the page shows neither.
+ * choices and no part. Its diagnostic notice and gaps stay out of the plain
+ * reading; the desktop and Copy derive actionable explanations from gap_details.
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = validated(validatePersonAskProgressResultLineV3, raw);
@@ -606,7 +606,11 @@ function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean
 
 export function evidenceView(raw: unknown): SourceEvidence {
   const evidence = validated(validatePersonSourceEvidenceV1, unwrap(raw));
-  return { label: evidence.citation.label, text: evidence.text };
+  // Imported v1 packets keep their historical first-line heading for citation identity. The pane
+  // presents the current server label separately; it never interprets the heading as review state.
+  const review = evidence.imported_meeting_review;
+  return { label: evidence.citation.label, text: review === undefined ? evidence.text : evidence.text.slice(evidence.text.indexOf('\n') + 1),
+    ...(review === undefined ? {} : { imported_meeting_review: review }) };
 }
 
 /** Connected tools: each tool's id, name and your connection. External workspace and account ids stay behind. */

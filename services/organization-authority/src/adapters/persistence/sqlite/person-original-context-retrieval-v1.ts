@@ -11,7 +11,7 @@ import {
 } from "@echo-brain/organization-authority-kernel/shared/temporal-query-v1";
 import type { EvidenceDeskUncheckedV1, EvidenceSourceCapabilitiesV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v2";
 import { DOCUMENTS_SOURCE_CAPABILITIES_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } from "@echo-brain/organization-authority-kernel/shared/source-capabilities-v1";
-import { SqlitePersonImportedMeetingsV1, importedMeetingTextV1 } from './person-imported-meetings-v1.js';
+import { SqlitePersonImportedMeetingsV1, importedMeetingTextV1, importedMeetingPacketTitleV1 } from './person-imported-meetings-v1.js';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { randomUUID } from "node:crypto";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -105,6 +105,8 @@ type SourceRow = {
   readonly api_version: number;
   readonly context_id: string;
   readonly title: string;
+  /** Imported notes have a canonical source heading distinct from their display title. */
+  readonly packet_title?: string;
   readonly text: string;
   readonly received_at: string;
   readonly lexical_score: number;
@@ -209,6 +211,11 @@ function packets(title: string, body: string): readonly string[] {
     offset = Math.max(offset + 1, end - 256);
   }
   return Object.freeze(values);
+}
+
+/** Notes and filenames are immutable; imported notes supply their source title rather than the UI's label. */
+function packetTitle(row: { readonly title: string; readonly packet_title?: string }): string {
+  return row.packet_title ?? row.title;
 }
 
 function wholeMatchingPacket(title: string, body: string, terms: readonly string[]): { readonly index: number; readonly text: string } {
@@ -437,15 +444,17 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     this.assertOrganization(actor);
     this.assertScope(actor, input.scope);
     let atom: ReleasedSourceContextAtomV1 | undefined;
+    let imported_meeting_review: 'not_reviewed' | 'reviewed' | undefined;
     if (input.citation.document_id === undefined) {
       const row = this.textByCitation(actor, input.scope, input.citation);
       atom = row === undefined ? undefined : this.textAnchorForCitation(row, input.citation);
+      if (atom !== undefined && row?.api_version === 0) imported_meeting_review = this.imported.reviewState(actor, row);
     } else {
       atom = this.documentAnchorByCitation(actor, input.scope, input.citation);
     }
     if (atom === undefined) denied();
     this.auditProofRead(actor, input.scope, atom);
-    return Object.freeze({ scope: Object.freeze({ ...input.scope }), atom });
+    return Object.freeze({ scope: Object.freeze({ ...input.scope }), atom, ...(imported_meeting_review === undefined ? {} : { imported_meeting_review }) });
   }
 
   private assertOrganization(actor: PersonAccessAuthorization): void {
@@ -493,7 +502,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       for (const { title, text, ...identity } of this.textScanRows(actor, scope)) if (!excludedRow(identity, false, filter.exclude) && matchesEvidenceDateV1({ received: identity.received_at }, filter, "received")) add(title, text, identity);
     }
     if (filter.source !== "document" && (kinds === undefined || kinds.includes("imported_meeting"))) {
-      for (const { title, text, ...identity } of this.imported.rows(actor, scope)) if (!excludedRow(identity, true, filter.exclude) && matchesEvidenceDateV1({ ...identity.dates, received: identity.received_at }, filter, "occurred")) add(title, text, identity);
+      for (const { title: _label, packet_title, text, ...identity } of this.imported.rows(actor, scope)) if (!excludedRow(identity, true, filter.exclude) && matchesEvidenceDateV1({ ...identity.dates, received: identity.received_at }, filter, "occurred")) add(packet_title, text, identity);
     }
     if (filter.source !== "meeting" && (kinds === undefined || kinds.includes("document_passage"))) {
       for (const { title, text, ...identity } of this.documentScanRows(actor, scope)) if (!excludedRow(identity, false, filter.exclude) && matchesEvidenceDateV1({ received: identity.received_at }, filter, "received")) add(title, text, identity);
@@ -590,7 +599,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private deskAtom(row: SourceRow | DocumentRow, terms: readonly string[]): ReleasedSourceContextAtomV1 {
-    const packet = wholeMatchingPacket(row.title, row.text, terms);
+    const packet = wholeMatchingPacket(packetTitle(row), row.text, terms);
     this.assertRowRevision(row);
     return originalPacketAtomV1(row, packet);
   }
@@ -742,7 +751,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const content = this.assertRevisionEnvelope(row);
     if (row.api_version === 0) {
       const meeting = content as MeetingDocument;
-      if (importedMeetingTextV1(meeting) !== row.text || canonicalSha256({ kind: 'imported-meeting-notes-v1', text: row.text }) !== row.representation_sha256) unavailable();
+      const text = importedMeetingTextV1(meeting);
+      if (importedMeetingPacketTitleV1(meeting) !== row.packet_title || text !== row.text || canonicalSha256({ kind: 'imported-meeting-notes-v1', text }) !== row.representation_sha256) unavailable();
       return;
     }
     const expected = { schema_version: 1, kind: "person-text", original_api_version: row.api_version, context_id: row.context_id, title: row.title, text: row.text };
@@ -767,12 +777,12 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private hasTextAnchor(row: SourceRow, atom: ReleasedSourceContextAtomV1): boolean {
     this.assertTextSourceRevision(row);
-    return packets(row.title, row.text).some((text, segment) => atom.source_id === row.source_id && atom.revision_id === row.revision_id && atom.source_sha256 === row.source_sha256 && atom.representation_sha256 === row.representation_sha256 && atom.anchor_sha256 === canonicalSha256({ kind: "text", context_id: row.context_id, segment, text }) && atom.text === text);
+    return packets(packetTitle(row), row.text).some((text, index) => this.citationMatches(originalPacketAtomV1(row, { index, text }), atom) && atom.text === text);
   }
 
   private textAnchorForCitation(row: SourceRow, citation: OriginalContextCitationV1): ReleasedSourceContextAtomV1 | undefined {
     this.assertTextSourceRevision(row);
-    for (const [segment, text] of packets(row.title, row.text).entries()) {
+    for (const [segment, text] of packets(packetTitle(row), row.text).entries()) {
       const atom = originalPacketAtomV1(row, { index: segment, text });
       if (this.citationMatches(atom, citation)) return atom;
     }

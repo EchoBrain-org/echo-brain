@@ -4028,6 +4028,13 @@ export function foundNothingInProject(turn: TimelineTurn): turn is TimelineTurn 
   return turn.scope.kind === 'project' && turn.answer.outcome === 'not_found' && turn.answer.sources.length === 0;
 }
 
+/** A completed factual gap can be searched more widely even when other parts were answered. */
+export function canAskEverywhere(turn: TimelineTurn, current: State = state): boolean {
+  if (turn.scope.kind !== 'project' || !showsOf(shownChecks(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
+  return foundNothingInProject(turn) || (turn.answer.parts.some(part => part.gap_details?.not_found !== undefined)
+    && !turn.answer.parts.some(part => part.gap_details?.interrupted));
+}
+
 /**
  * Ask across everything you can see: a turn's question again, in all
  * accessible context, as a question of its own. The bar widens with it, as
@@ -4036,7 +4043,7 @@ export function foundNothingInProject(turn: TimelineTurn): turn is TimelineTurn 
  */
 export function askEverywhere(id: string): void {
   const turn = turnOf(id);
-  if (!turn || state.ask?.asking || !foundNothingInProject(turn)) return;
+  if (!turn || state.ask?.asking || !canAskEverywhere(turn)) return;
   widenScope();
   void ask(turn.question, { kind: 'global' }, { previous: null });
 }
