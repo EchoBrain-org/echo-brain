@@ -28,6 +28,7 @@
       "services/organization-authority/src/clean-live-main.ts",
       "services/organization-authority/src/clean-founder-main.ts",
       "services/organization-authority/src/composition/organization-authority-composition-root.ts",
+      "services/organization-authority/src/composition/authority-decision-processor-v1.ts",
       "services/organization-authority/src/composition/organization-authority-setup-cli.ts",
       "services/organization-authority/src/composition/organization-authority-service-cli.ts",
       "services/organization-authority/src/composition/synthetic-demo-pre-slack-evaluator-cli-v1.ts",

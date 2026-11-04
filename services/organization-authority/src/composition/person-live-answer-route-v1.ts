@@ -8,7 +8,7 @@ import type { AgenticAskAuditRequestContextV1 } from '../adapters/persistence/sq
 import type { PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
 import { samePersonV1 } from '../application/person-release-authorization-v1.js';
 import type { PersonAnswerHttpInputV1, PersonAnswerV7HttpApplication } from '../presentation/person-live-answer-http-application.js';
-import { askerOf, personResearchDriverV1, runPersonAskV1, scopeOf, type CreatePersonAnswerV3RouteOptions } from './person-answer-v3-route.js';
+import { askerOf, runPersonAskV1, scopeOf, type CreatePersonAnswerV3RouteOptions } from './person-answer-v3-route.js';
 import { createPersonEvidenceDeskV1, type PersonEvidenceDeskExclusionsV1 } from './person-evidence-desk-v1.js';
 import { createPersonFollowUpsEvidenceSourceV1, type PersonFollowUpsSourcesV1 } from './person-follow-ups-evidence-v1.js';
 import { createRegisteredPersonLiveEvidenceDeskV2, type RegisteredPersonLiveEvidenceSourceV2 } from './person-live-evidence-desk-v2.js';
@@ -134,7 +134,9 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
       capture?.bindFence(signal => desk.revalidate({ ...(signal === undefined ? {} : { signal }) }));
       const asker = askerOf(options, authorization);
       // An Ask that asked for answer layout v1 has its part laid out (ADR-0045), and one that asked for v2 its blocks (ADR-0051).
-      const askOptions = { ...personResearchDriverV1(options, context.membership_id), ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, audit: options.audit.forRequest(context),
+      const askOptions = { model: options.model, generation: options.generation,
+        ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }),
+        ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, audit: options.audit.forRequest(context),
         ...(input.answer_layout === undefined ? {} : { answer_layout: input.answer_layout }), ...(asker === undefined ? {} : { asker }),
       };
       // Each attempt audits what it named; only the released attempt's receipt is returned. It streams progress V3, whose

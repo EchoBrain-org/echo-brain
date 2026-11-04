@@ -125,8 +125,7 @@ usage:
   onboard-clean-v1.sh extraction-attempts [--limit <1..100>]
   onboard-clean-v1.sh langsmith-tracing --project <project> --region <us|eu|apac|aws-us> (--hours <1..24> | --until-disabled) [--workspace-id <uuid>]
   onboard-clean-v1.sh langsmith-tracing --disable
-  onboard-clean-v1.sh personal-claude <login|status|disable>
-  onboard-clean-v1.sh personal-claude enable --member <mem_id>
+  onboard-clean-v1.sh personal-claude <login|enable|status|disable>
   onboard-clean-v1.sh retry-extraction --admission-sha256 <sha256:digest> --review-lineage-id <rli_digest> --review-input-sha256 <sha256:digest> --expected-attempt <number> --expected-outcome <failed|succeeded|pending> --confirm-new-model-call [--recover-pending]
 EOF
   exit 2
@@ -2249,12 +2248,10 @@ retry_extraction() {
 }
 
 personal_claude() {
-  local action="${1:-}" member='' selected='' image authority_id home native_home
-  [[ $# -ge 1 ]] || usage
-  shift
+  local action="${1:-}" selected image authority_id home native_home
+  [[ $# -eq 1 ]] || usage
   case "$action" in
-    enable) [[ $# -eq 2 && "$1" == --member && "$2" =~ ^mem_[a-zA-Z0-9-]{1,100}$ ]] || usage; member="$2" ;;
-    login|status|disable) [[ $# -eq 0 ]] || usage ;;
+    login|enable|status|disable) ;;
     *) usage ;;
   esac
   acquire_operation_lock
@@ -2277,29 +2274,30 @@ personal_claude() {
   fi
   authority_id="$(compose_clean ps -q authority)"
   image="$(docker inspect --format '{{.Image}}' "$authority_id")"
-  [[ "$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.config-capability.personal-claude-v1"}}' "$image" 2>/dev/null)" == true ]] || \
-    fail 'the running image does not support hosted personal Claude'
+  [[ "$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.config-capability.staging-claude-account-v1"}}' "$image" 2>/dev/null)" == true ]] || \
+    fail 'the running image does not support the staging Claude account selection'
   select_runtime_identity "$(setup_value runtime_user)"
-  # Inspect metadata and the non-secret member selection only. Native Claude
+  # Inspect metadata and the non-secret model selection only. Native Claude
   # alone reads or refreshes the sign-in files inside this fixed home.
   selected="$(python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$action" <<'PY'
-import json, os, pathlib, re, stat, sys
+import json, os, pathlib, stat, sys
 root, uid, gid, action = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 def directory(path):
     s = path.lstat()
     if not stat.S_ISDIR(s.st_mode) or (s.st_uid, s.st_gid, stat.S_IMODE(s.st_mode)) != (uid, gid, 0o700):
         raise SystemExit('personal Claude directory is unsafe')
 directory(root)
-selection = root / 'personal-claude-research.json'
-if os.path.lexists(selection):
+selection = root / 'personal-claude.json'
+enabled = os.path.lexists(selection)
+if enabled:
     s = selection.lstat()
     if not stat.S_ISREG(s.st_mode) or s.st_nlink != 1 or s.st_uid != uid or s.st_gid != gid or stat.S_IMODE(s.st_mode) != 0o600 or not 0 < s.st_size <= 4096:
         raise SystemExit('personal Claude selection is unsafe')
     with selection.open() as stream: value = json.load(stream)
-    if not isinstance(value, dict) or set(value) != {'kind', 'membership_id'} or value['kind'] != 'echo-personal-claude-research-v1' or not isinstance(value['membership_id'], str) or not re.fullmatch(r'mem_[a-zA-Z0-9-]{1,100}', value['membership_id']):
+    if value != {'kind': 'echo-staging-claude-account-v1'}:
         raise SystemExit('personal Claude selection is invalid')
-    if action == 'login': raise SystemExit('disable personal Claude research before signing in again')
-    print(value['membership_id'])
+if action == 'login' and enabled: raise SystemExit('disable personal Claude before signing in again')
+print('true' if enabled else 'false')
 for path in (root / 'claude-account', root / 'claude-account/.claude'):
     if os.path.lexists(path): directory(path)
 PY
@@ -2331,32 +2329,36 @@ PY
       catch { process.exitCode = 1; }
     ' >/dev/null 2>&1; then signed_in=true; fi
     if [[ "$action" == status ]]; then
-      printf 'personal_claude_enabled=%s\npersonal_claude_signed_in=%s\npersonal_claude_member=%s\n' "$([[ -n "$selected" ]] && printf true || printf false)" "$signed_in" "$selected"
+      printf 'personal_claude_enabled=%s\npersonal_claude_signed_in=%s\npersonal_claude_model=claude-sonnet-5-5\n' "$selected" "$signed_in"
       return
     fi
     [[ "$signed_in" == true ]] || fail 'native Claude subscription sign-in is unavailable; run personal-claude login first'
-    [[ -z "$selected" || "$selected" == "$member" ]] || fail 'disable the current personal Claude member binding before changing it'
   fi
-  python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$action" "$member" <<'PY'
+  # Routing is selected at process startup. Stop the old provider before making
+  # the new selection durable; a failed write must leave Authority stopped.
+  compose_clean stop -t 30 authority || fail 'personal Claude selection unchanged; Authority stop is unconfirmed'
+  python3 - "$PRIVATE_DIR" "$RUNTIME_UID" "$RUNTIME_GID" "$action" <<'PY'
 import json, os, pathlib, sys, tempfile
-directory, uid, gid, action, member = sys.argv[1:]
-target = pathlib.Path(directory) / 'personal-claude-research.json'
+directory, uid, gid, action = sys.argv[1:]
+target = pathlib.Path(directory) / 'personal-claude.json'
 if action == 'disable':
-    if target.exists(): target.unlink()
+    target.unlink(missing_ok=True)
 else:
     fd, temporary = tempfile.mkstemp(prefix='.personal-claude-', dir=directory)
     try:
         with os.fdopen(fd, 'w') as stream:
             os.fchmod(stream.fileno(), 0o600)
             if os.getuid() == 0: os.fchown(stream.fileno(), int(uid), int(gid))
-            json.dump(dict(kind='echo-personal-claude-research-v1', membership_id=member), stream)
+            json.dump({'kind': 'echo-staging-claude-account-v1'}, stream)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, target)
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
+parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+try: os.fsync(parent)
+finally: os.close(parent)
 PY
-  compose_clean stop -t 30 authority || fail 'personal Claude selection saved; Authority stop is unconfirmed'
   start_runtime || fail 'personal Claude selection saved; Authority restart failed'
   compose_clean restart proxy || fail 'personal Claude selection saved; proxy restart failed'
   printf 'personal_claude_enabled=%s\n' "$([[ "$action" == enable ]] && printf true || printf false)"

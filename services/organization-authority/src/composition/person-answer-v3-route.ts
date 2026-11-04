@@ -20,13 +20,6 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import type { PersonDiagnosticCaptureHandleV1, PersonDiagnosticsV1 } from './person-diagnostics-v1.js';
 import { observePersonResearchV1 } from './person-research-observation-v1.js';
 
-/** Call only after session authentication. Identity never comes from question text or client preferences. */
-export function personResearchDriverV1(options: Pick<CreatePersonAnswerV3RouteOptions, 'research_driver' | 'personal_research' | 'generation' | 'model'>, membershipId: string) {
-  const personal = options.personal_research?.membership_id === membershipId ? options.personal_research : undefined;
-  const driver = personal?.driver ?? options.research_driver;
-  return { model: personal?.structured_output ?? options.model, generation: personal?.generation ?? options.generation, ...(driver === undefined ? {} : { research_driver: driver }) };
-}
-
 export interface CreatePersonAnswerV3RouteOptions {
   readonly authority_id: string;
   readonly organization_id: string;
@@ -36,7 +29,6 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly records: PersonEvidenceDeskRecordsV1;
   readonly model: StructuredGenerationPort;
   readonly research_driver?: import('@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1').AgenticResearchDriverV1;
-  readonly personal_research?: import('@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1').AnswerCompositionGenerationBindingV1['personal_research'];
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
   readonly diagnostics?: PersonDiagnosticsV1;

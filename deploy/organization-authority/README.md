@@ -961,62 +961,74 @@ remains open for that full recovery path.
 
 ## Personal Claude staging research
 
-The optional personal route uses one authenticated ECHO member's own Claude
-account for both interactive Ask research and the separate final writing pass.
-Other members and background processing retain OpenRouter. The member is selected by the host
-operator and matched against the authenticated Person identity, never question
-text or a client-supplied provider choice.
+Staging can use one native Claude account with Sonnet 5.5 for all model work:
+Ask and final writing, meeting extraction, note and upload enrichment, impact
+analysis, sweeps and optional evaluation. Each caller keeps their own identity
+and source permissions. The selected route does not read OpenRouter credentials
+or fall back to OpenRouter when native authentication or a model call fails.
 
-First install reviewed host tooling and stage its supporting image and matching
-runtime profile through the [release lane](../release/README.md#automated-current-host-staging-lane).
-The image includes the unmodified native Claude binary already pinned by the
-Agent SDK dependency. It provides the fixed non-root EC2 user identity and a
-`personal-claude-v1` capability label; older images cannot run this setup.
-Installing only the wrapper does not enable the feature.
+Use a fresh staging rehearsal for this change. The existing
+`replace-rehearsal --confirm-no-live-users` workflow retires the entire previous
+`clean-data` tree, including its release and rollback records. Prepare the new
+reviewed release as the fresh accepted baseline; do not carry an older rollback
+baseline into this rehearsal. There is no data migration or old selection-file
+compatibility. See the [rehearsal replacement instructions](#replace-unreleased-rehearsal-state).
 
-The human in Session Manager runs these installed commands, completing native
-Claude's browser sign-in before enabling the member from their authenticated
-`person status` output:
+After `prepare`, run `resume` once to bootstrap and start Authority. At its
+`complete_founder_browser_login` pause, before continuing founder onboarding,
+the human in Session Manager runs:
 
 ```sh
 cd /srv/echo-authority-clean-v1
 sudo ./onboard-clean-v1.sh personal-claude login
-sudo ./onboard-clean-v1.sh personal-claude enable --member <your-mem-id>
+sudo ./onboard-clean-v1.sh personal-claude enable
 sudo ./onboard-clean-v1.sh personal-claude status
 ```
 
-Login requires a human terminal and does not enable routing. It runs only the
-native binary in a temporary container of the exact running image, as the
-Authority's non-root UID. That container mounts only the owner-only native home,
-has no ECHO record or service-credential mounts, and disables container logging.
-Use Anthropic's own login prompts; do not paste login URLs, codes or credentials
-into chat. A laptop login does not sign this host in. No session is imported.
+Then complete founder sign-in and continue `resume`. Selecting Claude before
+finalization ensures the first source admission and runtime processing use the
+same processor. Rehearsal replacement clears the native home too, so sign in
+again on the host even if the old rehearsal was signed in.
 
-`enable` first verifies native `claude.ai` sign-in, writes a non-secret member
-selection to `clean-data/private/personal-claude-research.json`, and restarts
-Authority and proxy. Finish current Ask requests first. The service derives the
-fixed home and executable; the selection cannot supply a token or executable.
-`status` reports only selection state, member ID and whether native subscription
-sign-in is available. It does not prove model quota or a successful Ask.
+The running image and matching profile must be installed through the reviewed
+[release lane](../release/README.md#automated-current-host-staging-lane).
+The image includes the unmodified native Claude binary pinned by the Agent SDK
+and the `org.echobrain.authority.config-capability.staging-claude-account-v1=true`
+label. Installing only the wrapper does not enable the route.
 
-The wrapper checks the exact running accepted/candidate image and profile,
-staging origin, operation locks, ownership and private modes. Failed native
-authentication never enables the route or changes its payer. A failed restart
-requires recovery through the operator playbook before continuing qualification.
+Login requires a human terminal and does not enable routing. It runs the native
+binary in a temporary container of the exact running image, as Authority's
+non-root UID, with only the private native home mounted and container logging
+disabled. Use Anthropic's login prompts; do not copy login URLs, codes or
+credentials into chat. A laptop login does not sign this host in.
 
-To stop using the account, or before signing in again:
+`enable` verifies native subscription sign-in and confirms Authority has stopped
+before atomically writing `clean-data/private/personal-claude.json` with exactly
+`{"kind":"echo-staging-claude-account-v1"}` in mode `0600`. It then restarts
+Authority and proxy. The service fixes the native home and executable; the
+selection cannot supply credentials, an executable or a caller identity.
+`status` reports only enabled state, native sign-in availability and the model.
+It does not prove available quota or a successful model call.
+
+The wrapper checks the staging origin, exact running accepted/candidate image
+and profile, exclusive operation lock, ownership and private modes. A failed
+stop leaves selection unchanged; a failed write leaves Authority stopped.
+
+Before signing in again, run:
 
 ```sh
 sudo ./onboard-clean-v1.sh personal-claude disable
 ```
 
-This removes the member binding and restarts the runtime. It preserves native
-Claude's sign-in files in `clean-data/private/claude-account`; it does not log
-the person out. The binding survives ordinary supporting-image updates.
-Rollback to an older runtime profile leaves the file unused. No configuration
-change promotes the candidate: after enabling, run fresh canary, authenticated
-read and cited Ask checks, including a different member's unchanged provider
-route, before the exact release decision.
+This deletes the selection and restarts Authority with the configured OpenRouter
+route, without changing native sign-in files. Existing meeting sources refuse
+extraction with a different processor. To change providers after sources have
+been admitted, use a fresh rehearsal; there is no migration of existing data.
+Do not change stored processor commitments to force processing through.
+
+After setup, run a fresh canary, authenticated reads and cited Ask checks,
+including another member's permissions and background processing. Native login
+and these checks do not replace the canary approval or exact release decision.
 
 ## LangSmith staging tracing
 

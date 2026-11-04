@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import type { StructuredGenerationPort, StructuredGenerationRequestV1 } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../src/adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../src/adapters/persistence/sqlite/project-upload-enrichment-v1.js';
@@ -25,8 +26,8 @@ function fixture() {
     structured_output: { generate: vi.fn(async () => ({ search_hints: 'customer telephone preference' })) },
     generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1_000 },
   };
-  const worker = () => new PersonUpdateProcessingV1(
-    generation,
+  const worker = (structured_output: StructuredGenerationPort = generation.structured_output) => new PersonUpdateProcessingV1(
+    { ...generation, structured_output },
     new SqlitePersonUpdateEnrichmentWorkV2(database, new SqliteProjectUploadEnrichmentAuthorizationV1(database), () => PROJECT_CONTEXT_NOW),
   );
   return { database, application, generation, worker };
@@ -56,6 +57,54 @@ function workState(database: Database.Database, contextId: string) {
 }
 
 describe('V2 project upload enrichment in the serialized Person worker', () => {
+  const nativeRequest = (operation: StructuredGenerationRequestV1['operation'] = 'messages'): StructuredGenerationRequestV1 => ({
+    model: 'fixture', operation, body_sha256: canonicalSha256('native-enrichment-request'), timeout: () => 1000,
+  });
+
+  it('enriches through per-request admission without calling the unadmitted native method', async () => {
+    const f = fixture(); const receipt = submit(f, setupProject(f), 80);
+    const generate = vi.fn(async () => { throw new Error('unadmitted native call'); });
+    const forward = vi.fn(async () => ({ value: { search_hints: 'native hints' } }));
+    await f.worker({ generate, generate_with_admission: async (_input, admit) => admit(nativeRequest(), forward) }).runOnce(new AbortController().signal);
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'ready', search_hints: 'native hints' });
+    expect(generate).not.toHaveBeenCalled();
+    expect(forward).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks the original grant before forwarding after a native session or call-slot wait', async () => {
+    const f = fixture(); const projectId = setupProject(f); const receipt = submit(f, projectId, 81);
+    const forward = vi.fn(async () => ({ value: { search_hints: 'must not forward' } }));
+    await f.worker({ generate: async () => { throw new Error('unadmitted'); }, generate_with_admission: async (_input, admit) => {
+      f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, projectId, OWNER.membership_id);
+      seedProjectMember(f.database, projectId, OWNER, 'lead', { id: 'pgm_99999999-9999-4999-8999-999999999999' });
+      return admit(nativeRequest(), forward);
+    } }).runOnce(new AbortController().signal);
+    expect(forward).not.toHaveBeenCalled();
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'unavailable', search_hints: '' });
+  });
+
+  it('allows one count and one generation, but refuses an extra billable SDK retry', async () => {
+    const f = fixture(); const receipt = submit(f, setupProject(f), 82);
+    const forward = vi.fn(async () => ({ value: { search_hints: 'first result' } }));
+    await f.worker({ generate: async () => { throw new Error('unadmitted'); }, generate_with_admission: async (_input, admit) => {
+      await admit(nativeRequest('count_tokens'), forward);
+      await admit(nativeRequest(), forward);
+      return admit(nativeRequest(), forward);
+    } }).runOnce(new AbortController().signal);
+    expect(forward).toHaveBeenCalledTimes(2);
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'pending', search_hints: '' });
+  });
+
+  it('refuses a second token-count request within the same work attempt', async () => {
+    const f = fixture(); const receipt = submit(f, setupProject(f), 83);
+    const forward = vi.fn(async () => ({ value: null }));
+    await f.worker({ generate: async () => { throw new Error('unadmitted'); }, generate_with_admission: async (_input, admit) => {
+      await admit(nativeRequest('count_tokens'), forward);
+      return admit(nativeRequest('count_tokens'), forward);
+    } }).runOnce(new AbortController().signal);
+    expect(forward).toHaveBeenCalledTimes(1);
+    expect(workState(f.database, receipt.context_id)).toEqual({ state: 'pending', search_hints: '' });
+  });
   it('validates and enriches a V3 projects-audience upload through the same requested-only worker', async () => {
     const f = fixture();
     const first = f.application.createProject('owner', { schema_version: 1, kind: 'echo-project-create-v1', request_id: requestId(70), name: 'Sensors' });

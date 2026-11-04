@@ -14,7 +14,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { caseAsk, caseItems, scriptedModel } from "../shared/ask-cases.mjs";
 import { assertExplicitRun, assertWriterRoute, boundedInteger, codeIdentity, generationMetadata, importedModules, json, observedGeneration, outputDirectory, pooled, readFlags, safeError, sha256, writerFlags, writerRoute } from "../shared/runner.mjs";
 import { CASES_FILE, GROUPS, gradeTrial, loadCases, summarizeRules } from "./grade.mjs";
@@ -165,7 +164,7 @@ export async function run(options, dependencies = {}) {
   const document = loadCases();
   const selected = options.caseIds === null ? document.cases : options.caseIds.map((id) => document.cases.find((entry) => entry.id === id));
   const identityBefore = codeIdentity(ROOT, codeFiles());
-  const { route, loaded } = writerRoute(options, "mem_ask-wording-eval", createOpenRouterAnswerCompositionGenerationBundleV1, dependencies.loaded);
+  const { route, loaded } = writerRoute(options, dependencies.loaded);
   const progress = dependencies.progress ?? ((line) => process.stderr.write(line));
   const results = await pooled(selected.flatMap((caseDefinition) => Array.from({ length: options.trials }, (_, at) => async () => {
     const result = await runTrial(caseDefinition, at + 1, loaded.structured_output, loaded.generation, document, options);

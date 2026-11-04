@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import type { Options, query } from '@anthropic-ai/claude-agent-sdk';
 import { claudeAccountEnvironmentV1 } from '../src/claude-research/account-profile.js';
 import { runClaudeResearchV1, runClaudeStructuredV1 } from '../src/claude-research/sdk-client.js';
-import { createOpenRouterAnswerCompositionGenerationBundleV1 } from '../src/openrouter-answer-composition-generation-bundle-v1.js';
 
 const directories: string[] = [];
 afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -60,13 +59,14 @@ it('rejects a writable sign-in directory before launching native authentication'
   await expect(claudeAccountEnvironmentV1(account, new AbortController().signal)).rejects.toThrow('Personal Claude sign-in is unavailable');
 });
 
-it('selects a personal researcher and writer while retaining the shared OpenRouter route', async () => {
-  const binding = createOpenRouterAnswerCompositionGenerationBundleV1({ credential_file: '/missing',
-    personal_claude_research: { ...await profile(), membership_id: 'mem_owner' } }).load();
-  expect(binding.research_driver).toBeUndefined();
-  expect(binding.personal_research).toMatchObject({ membership_id: 'mem_owner', driver: { run: expect.any(Function) },
-    structured_output: { generate_with_admission: expect.any(Function) },
-    generation: { generation_adapter_id: 'claude-account-research-writer-v1', answer_model: 'claude-sonnet-5-5' } });
-  expect(binding.generation.generation_adapter_id).toBe('openrouter');
-  expect(binding.structured_output.generate).toBeTypeOf('function');
+it('disables native retries and bounds extraction to one structured-output turn', async () => {
+  const account = await profile();
+  let options: Options | undefined;
+  const fake = ((request: Parameters<typeof query>[0]) => {
+    options = request.options;
+    return Object.assign((async function* () { yield { type: 'result', subtype: 'success', is_error: false, structured_output: { signals: [] } }; })(), { close() {} });
+  }) as unknown as typeof query;
+  await expect(runClaudeStructuredV1({ account, schema: { type: 'object' }, model: 'claude-sonnet-5-5', prompt: 'Synthetic evidence', system: 'Extract signals',
+    base_url: 'http://127.0.0.1:1/test', max_output_tokens: 8192, single_generation: true, signal: new AbortController().signal }, fake)).resolves.toEqual({ signals: [] });
+  expect(options).toMatchObject({ maxTurns: 1, env: { CLAUDE_CODE_MAX_RETRIES: '0' }, allowedTools: ['StructuredOutput'], tools: [] });
 });

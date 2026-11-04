@@ -9,7 +9,7 @@ import {
   STAGING_SYNTHETIC_SOURCE_ADAPTER_ID_V1,
 } from "@echo-brain/provider-synthetic-demo/staging-synthetic-personal-meeting-provider-v1";
 /**
- * Stopped-state bootstrap for the shipped OpenRouter/Slack profile.
+ * Stopped-state bootstrap for the shipped Authority/Slack profile.
  * Finalization intentionally requires Slack, which an owner sets up in the
  * ECHO app while the Authority runs. This is not a swappable setup port:
  * another profile needs a versioned bootstrap design. Provider verification
@@ -52,7 +52,9 @@ import {
   validateAuthorityStateSeed,
   type AuthorityStateSeedV1,
 } from "./organization-authority-state-bootstrap.js";
-import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
+import { preflightClaudeAccountDecisionProcessorV1 } from "@echo-brain/provider-openrouter/claude-account-decision-processor-bundle-v1";
+import { createAuthorityDecisionProcessorV1 } from "./authority-decision-processor-v1.js";
+import { readPersonalClaudeSelectionV1 } from "./personal-claude-selection-v1.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import {
   assertPersonAuthorityCallback,
@@ -73,7 +75,6 @@ const MANIFEST_FILENAME = "clean-founder-v1.json";
 const SETUP_PLAN_SUFFIX = ".clean-founder-setup-plan-v1.json";
 const INVITATION_FILENAME = "founder-person-invitation.json";
 const LLM_CREDENTIAL_FILENAME = "llm-credential";
-const PROCESSOR_INSTANCE_ID = "founder-llm-v1";
 const DEFAULT_ARTIFACT_REVISION = "clean-founder-v1";
 const STAGING_AUTHORITY_HOST = new URL(STAGING_AUTHORITY_ORIGIN_V1).hostname;
 
@@ -158,6 +159,7 @@ export interface OrganizationAuthoritySetupCliDependencies {
   /** Test seam only; production queues into the owner's staging synthetic source. */
   readonly queue_staging_synthetic_meetings?: (input: {
     readonly state_directory: string;
+    readonly authority_url: string;
     /** Absent for the release canary alone. */
     readonly meetings_directory?: string;
     readonly llm_credential_file: string;
@@ -191,16 +193,21 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
 
 /**
  * Ensures the owner's staging synthetic personal source with the current
- * OpenRouter commitments and queues each fixture meeting into it. Queueing is
+ * selected processor commitments and queues each fixture meeting into it. Queueing is
  * idempotent: a retry re-queues meetings whose frozen proposals are reused.
  */
 async function queueStagingSyntheticSetupMeetings(input: {
   readonly state_directory: string;
+  readonly authority_url: string;
   readonly meetings_directory?: string;
   readonly llm_credential_file: string;
 }): Promise<void> {
-  const credentialReference = `file:${input.llm_credential_file}`;
-  await createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: PROCESSOR_INSTANCE_ID, credential_reference: credentialReference }).preflight();
+  const account = await preflightSetupModel(input.authority_url, input.llm_credential_file);
+  const processor = createAuthorityDecisionProcessorV1({
+    authority_url: input.authority_url,
+    openrouter_credential_file: input.llm_credential_file,
+    ...(account === undefined ? {} : { staging_claude_account: account }),
+  });
   const meetingIds = input.meetings_directory === undefined
     ? []
     : (await readStagingSyntheticMeetingFixturesV1(input.meetings_directory)).map((meeting) => meeting.id);
@@ -212,15 +219,18 @@ async function queueStagingSyntheticSetupMeetings(input: {
         input.meetings_directory === undefined ? {} : { fixtures_directory: input.meetings_directory },
       ),
       meeting_ids: meetingIds,
-      commitments: (instance_id) => {
-        const { adapter_id, version, configuration_sha256, credential_reference_sha256 } =
-          createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id, credential_reference: credentialReference });
-        return { adapter_id, instance_id, version, configuration_sha256, credential_reference_sha256 };
-      },
+      commitments: processor.current_commitments,
     });
   } finally {
     database.close();
   }
+}
+
+async function preflightSetupModel(authorityUrl: string, credentialFile: string) {
+  const account = readPersonalClaudeSelectionV1(process.env.ECHO_STAGING_CLAUDE_ACCOUNT_FILE, authorityUrl);
+  if (account === undefined) void readPrivateAuthorityCredential(`file:${credentialFile}`);
+  else await preflightClaudeAccountDecisionProcessorV1(account);
+  return account;
 }
 
 function absolutePath(value: string, label: string): string {
@@ -896,10 +906,10 @@ function organizationAuthoritySetupInstruction(
   }[step];
 }
 
-function readInitialOwnerSetupStatus(
+async function readInitialOwnerSetupStatus(
   manifest: OrganizationAuthoritySetupManifestV3,
   dependencies?: OrganizationAuthoritySetupCliDependencies,
-): InitialOwnerSetupStatus {
+): Promise<InitialOwnerSetupStatus> {
   return (dependencies?.read_initial_owner_setup_status?.(manifest) ??
     initialOwnerSetupStatus(manifest));
 }
@@ -1270,9 +1280,9 @@ function readSetupCanaryEvidence(
     setupCanaryEvidence(manifest));
 }
 
-function initialOwnerSetupStatus(
+async function initialOwnerSetupStatus(
   manifest: OrganizationAuthoritySetupManifestV3,
-): InitialOwnerSetupStatus {
+): Promise<InitialOwnerSetupStatus> {
   const empty: InitialOwnerSetupStatus = {
     founder_oidc_bound: false,
     founder_slack_link_active: false,
@@ -1310,7 +1320,7 @@ function initialOwnerSetupStatus(
     }
     let llmCredentialValid = false;
     try {
-      void readPrivateAuthorityCredential(`file:${manifest.llm_credential_file}`);
+      await preflightSetupModel(manifest.authority_url, manifest.llm_credential_file);
       llmCredentialValid = true;
     } catch {}
     const slackStatus = readInitialOwnerSlackSetupStatusV1({
@@ -1374,7 +1384,7 @@ async function bootstrap(
     await dependencies.initialize_credentials(input.state_directory);
   }
   const invitationPath = manifest.invitation_path;
-  const full = readInitialOwnerSetupStatus(manifest, dependencies);
+  const full = await readInitialOwnerSetupStatus(manifest, dependencies);
   const initialOwnerAlreadyBound = full.founder_oidc_bound;
   const invitationIsUsable = () =>
     dependencies.read_setup_stage === undefined
@@ -1393,7 +1403,7 @@ async function bootstrap(
     });
   }
   const completedStage = stage();
-  const completedFull = readInitialOwnerSetupStatus(manifest, dependencies);
+  const completedFull = await readInitialOwnerSetupStatus(manifest, dependencies);
   const nextStep = nextOrganizationAuthoritySetupStep({
     authority_url: manifest.authority_url,
     genesis_published: true,
@@ -1434,7 +1444,7 @@ async function resume(
   // keeps `resume` safe to rerun after the final status check.
   const genesisPublished = genesisIsPublished(manifest);
   const durable = readSetupStage(manifest, dependencies);
-  const full = readInitialOwnerSetupStatus(manifest, dependencies);
+  const full = await readInitialOwnerSetupStatus(manifest, dependencies);
   const setupStep = nextOrganizationAuthoritySetupStep({
     authority_url: manifest.authority_url,
     genesis_published: genesisPublished,
@@ -1450,7 +1460,7 @@ async function resume(
     (manifest.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 ||
       readSetupCanaryEvidence(manifest, dependencies).complete)
   ) {
-    status(input, io, dependencies);
+    await status(input, io, dependencies);
     return;
   }
   await bootstrap(
@@ -1479,9 +1489,7 @@ function installProviderCredentials(
   }
   const llmCredential = readPrivateAuthorityCredential(`file:${input.llm_credential_source}`);
   installPrivateCredentialValue(manifest.llm_credential_file, llmCredential);
-  if (!initialOwnerSetupStatus(manifest).llm_credential_valid) {
-    throw new Error("organization setup LLM credential did not install");
-  }
+  void readPrivateAuthorityCredential(`file:${manifest.llm_credential_file}`);
   io.stdout(`${canonicalJson({ ok: true, credentials_ready: true, next_instruction: "Run echo-organization-authority-setup status to continue." } as never)}\n`);
 }
 
@@ -1494,7 +1502,7 @@ async function finalize(
   // This is a stopped-state publication gate, not merely a convenience
   // command. Prove genesis before a dependency can admit anything.
   verifySetupGenesis(manifest);
-  const full = readInitialOwnerSetupStatus(manifest, dependencies);
+  const full = await readInitialOwnerSetupStatus(manifest, dependencies);
   const stage = readSetupStage(manifest, dependencies);
   const missing = [
     !full.founder_oidc_bound && "initial-owner OIDC binding",
@@ -1520,6 +1528,7 @@ async function finalize(
     // source carries the release canary and, when selected, the fixture meetings.
     await (dependencies.queue_staging_synthetic_meetings ?? queueStagingSyntheticSetupMeetings)({
       state_directory: manifest.state_directory,
+      authority_url: manifest.authority_url,
       ...(stagingSyntheticMeetingsDirectory === undefined ? {} : { meetings_directory: stagingSyntheticMeetingsDirectory }),
       llm_credential_file: manifest.llm_credential_file,
     });
@@ -1542,11 +1551,11 @@ async function finalize(
   );
 }
 
-function status(
+async function status(
   input: FinalizeInput,
   io: CliIo,
   dependencies?: OrganizationAuthoritySetupCliDependencies,
-): void {
+): Promise<void> {
   const setup = loadSetupManifest(input.state_directory);
   if (setup === undefined) {
     io.stdout(
@@ -1582,7 +1591,7 @@ function status(
   }
   const genesisPublished = genesisIsPublished(setup.manifest);
   const durable = readSetupStage(setup.manifest, dependencies);
-  const full = readInitialOwnerSetupStatus(setup.manifest, dependencies);
+  const full = await readInitialOwnerSetupStatus(setup.manifest, dependencies);
   const credentialsReady = genesisPublished && durable.credentials_ready;
   const slackConnected = genesisPublished && durable.slack_connected;
   const invitationFilePresent =
@@ -1670,7 +1679,7 @@ export async function runOrganizationAuthoritySetupCli(
       return 0;
     }
     if (argv[0] === "status") {
-      status(parseStateDirectory(argv.slice(1)), io, dependencies);
+      await status(parseStateDirectory(argv.slice(1)), io, dependencies);
       return 0;
     }
     throw new Error(USAGE);

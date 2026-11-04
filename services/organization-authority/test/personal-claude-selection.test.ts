@@ -6,7 +6,7 @@ import { readPersonalClaudeSelectionV1 } from '../src/composition/personal-claud
 
 const roots: string[] = [];
 const origin = 'https://authority-staging.echobrain.org';
-const value = { kind: 'echo-personal-claude-research-v1', membership_id: 'mem_owner' };
+const value = { kind: 'echo-staging-claude-account-v1' };
 function selection(body: unknown = value) {
   const root = mkdtempSync(join(tmpdir(), 'echo-personal-selection-')); roots.push(root);
   const path = join(root, 'selection.json');
@@ -19,8 +19,7 @@ it('leaves hosts without a selection unchanged and fixes the native executable a
   expect(readPersonalClaudeSelectionV1(undefined, origin)).toBeUndefined();
   expect(readPersonalClaudeSelectionV1('/missing/personal-selection', 'https://authority.example')).toBeUndefined();
   const path = selection();
-  expect(readPersonalClaudeSelectionV1(path, origin)).toEqual({ membership_id: 'mem_owner',
-    executable_path: '/usr/local/bin/echo-claude-native', home_directory: join(path, '../claude-account') });
+  expect(readPersonalClaudeSelectionV1(path, origin)).toEqual({ executable_path: '/usr/local/bin/echo-claude-native', home_directory: join(path, '../claude-account') });
 });
 
 it.each([null, [], {}, { ...value, membership_id: 'owner@example.com' }, { ...value, membership_id: {} },

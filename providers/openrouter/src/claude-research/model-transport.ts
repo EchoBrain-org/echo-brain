@@ -31,8 +31,9 @@ export function openRouterClaudeForwarderV1(credential: () => string, model: str
 }
 
 /** The user's native Claude process supplies its own auth; it is forwarded only to Anthropic and never retained. */
-export function claudeAccountForwarderV1(model: string): ClaudeModelForwarderV1 {
+export function claudeAccountForwarderV1(model: string, options: { readonly model_call_observed?: true } = {}): ClaudeModelForwarderV1 {
   return providerForwarderV1({ model, provider: 'anthropic', hostname: 'api.anthropic.com', path_prefix: '',
+    ...options,
     authorization: req => {
       const value = req.headers.authorization;
       if (typeof value !== 'string' || !value.startsWith('Bearer ') || value === 'Bearer echo-loopback-only' || req.headers['x-api-key'] !== undefined) {
@@ -46,9 +47,12 @@ function providerForwarderV1(options: {
   readonly model: string; readonly provider: 'openrouter' | 'anthropic';
   readonly hostname: string; readonly path_prefix: string;
   readonly authorization: (req: IncomingMessage) => string;
+  /** Extraction's neutral processor already owns the single model-call observation. */
+  readonly model_call_observed?: true;
 }): ClaudeModelForwarderV1 {
   const { model, provider } = options;
-  return input => observeCoreRuntimeV1('model_call', async () => {
+  return input => {
+    const call = async () => {
     observeCoreModelMetadataV1({ provider, model });
     const result = await new Promise<ClaudeMessageMetadataV1>((resolve, reject) => {
       const transportFailed = () => reject(input.signal.aborted ? input.signal.reason : new ClaudeModelTransportErrorV1());
@@ -77,7 +81,9 @@ function providerForwarderV1(options: {
     observeCoreModelMetadataV1({ provider, model, ...(result.finish_reason === undefined ? {} : { finish_reason: result.finish_reason }) });
     if (result.usage !== undefined) annotateCoreRuntimeV1({ counts: { ...result.usage } });
     return result;
-  });
+    };
+    return options.model_call_observed ? call() : observeCoreRuntimeV1('model_call', call);
+  };
 }
 
 /** Request-local gateway: only model endpoints, with an exact-body admission before forwarding any bytes. */

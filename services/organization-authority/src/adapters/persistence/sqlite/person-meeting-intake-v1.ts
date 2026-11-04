@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { SourceAdapterIdentityV1 } from '@echo-brain/organization-processing/core';
-import type { AdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
+import { readAdmittedMeetingProcessingCommitmentsV1, type AdmittedMeetingProcessingCommitmentsV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
 export interface MeetingIntakePersonV1 { readonly organization_id: string; readonly principal_id: string; readonly membership_id: string }
@@ -71,7 +71,12 @@ export class SqlitePersonMeetingIntakeV1 {
       const member = this.currentPerson(person);
       const source_key = `pms_${canonicalSha256({ person, identity }).slice(7)}`;
       const old = this.list(person).find(row => row.source_key === source_key);
-      if (old) return old;
+      if (old) {
+        if (canonicalSha256(readAdmittedMeetingProcessingCommitmentsV1(this.db, old.source_key).processor) !== canonicalSha256(processor)) {
+          throw new AuthorityOperationError('unavailable', 'The meeting processor changed. Reset staging before importing with the selected processor.');
+        }
+        return old;
+      }
       const now = new Date().toISOString();
       const initial = this.cursor.initial();
       const semantic = canonicalSha256({ source_key, person, identity, processor, custodian: input.custodian, normalizer_version: input.normalizer_version });

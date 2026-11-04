@@ -16,8 +16,9 @@ import {
   type OrganizationAuthorityRuntimeConfig,
   type OpenedOrganizationAuthorityRuntime,
 } from "./organization-authority-runtime.js";
-import { createOpenRouterDecisionProcessorBundleV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1";
-import { createOpenRouterAnswerCompositionGenerationBundleV1, type PersonalClaudeResearchV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
+import { assertClaudeAccountProfileV1, type ClaudeAccountProfileV1, createClaudeAccountAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/claude-account-answer-composition-generation-bundle-v1";
+import { createAuthorityDecisionProcessorV1 } from './authority-decision-processor-v1.js';
+import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 import {
   HttpNangoConnectionClientV1,
@@ -87,8 +88,8 @@ export interface OrganizationAuthorityServiceConfig extends Omit<
   /** Staging-origin guarded: fixture meetings the owner's synthetic personal source may queue. */
   readonly staging_synthetic_meetings_directory?: string;
   readonly openrouter_credential_file: string;
-  /** One end user's native Claude profile, for that member's interactive research only. */
-  readonly personal_claude_research?: PersonalClaudeResearchV1;
+  /** One native Claude account pays for all staging model work; caller authorization is unchanged. */
+  readonly staging_claude_account?: ClaudeAccountProfileV1;
   /** Jira remains absent unless this explicit selection is supplied after release approval. */
   readonly jira_person_live?: JiraPersonLiveConfigurationV1;
   /** Explicit Confluence Cloud selection. It is absent unless an operator enables live page reads. */
@@ -111,7 +112,7 @@ export interface OrganizationAuthorityServiceDependencies {
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
   /** Provider-only test seams; production reads every page through the asker's Nango grant. */
   readonly confluence_person_live_seams?: ConfluencePersonLiveRuntimeSeamsV1;
-  /** Provider-free test seam for the personal meeting runtime; the deployable service keeps OpenRouter. */
+  /** Provider-free test seam for the personal meeting runtime. */
   readonly person_meeting_processor?: DecisionProcessorBundleV1;
   /** Test seams for Nango's and Slack's HTTP APIs. */
   readonly slack?: {
@@ -177,8 +178,9 @@ export async function openOrganizationAuthorityService(
   config: OrganizationAuthorityServiceConfig,
   dependencies: OrganizationAuthorityServiceDependencies = {},
 ): Promise<OpenedOrganizationAuthorityRuntime> {
-  if (config.personal_claude_research !== undefined && config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) {
-    throw new Error('Personal Claude research is available only on the staging Authority');
+  if (config.staging_claude_account !== undefined) {
+    if (config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1) throw new Error('Personal Claude is available only on the staging Authority');
+    assertClaudeAccountProfileV1(config.staging_claude_account);
   }
   const {
     staging_synthetic_meetings_directory,
@@ -186,16 +188,18 @@ export async function openOrganizationAuthorityService(
     nango,
     jira_person_live,
     confluence_person_live,
+    staging_claude_account,
     ...sharedConfig
   } = config;
   const slack = composeSlackV1(
     { ...sharedConfig, nango },
     dependencies.slack,
   );
-  // One limiter for every call on the OpenRouter credential: extraction here, Ask and the rest in the runtime.
+  // The same limiter covers extraction, interactive Ask and background calls for either payer.
   const modelCalls = createModelCallLimiterV1();
-  const decisionProcessor = createOpenRouterDecisionProcessorBundleV1({
-    credential_file: openrouter_credential_file,
+  const decisionProcessor = createAuthorityDecisionProcessorV1({
+    authority_url: config.authority_url, openrouter_credential_file,
+    ...(staging_claude_account === undefined ? {} : { staging_claude_account }),
     limit: (signal, op) => modelCalls.run("background", signal, op),
   });
   // One instance for the personal appender and the Authority's readers.
@@ -467,11 +471,10 @@ export async function openOrganizationAuthorityService(
     {
       ...sharedConfig,
       answer_composition_generation_bundle:
-        createOpenRouterAnswerCompositionGenerationBundleV1({
+        staging_claude_account === undefined ? createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
-          ...(sharedConfig.personal_claude_research === undefined ? {} : { personal_claude_research: sharedConfig.personal_claude_research }),
           ...(sharedConfig.staging_claude_research_v1 === true && sharedConfig.authority_url === STAGING_AUTHORITY_ORIGIN_V1 ? { research_engine: 'claude-sdk' as const } : {}),
-        }),
+        }) : createClaudeAccountAnswerCompositionGenerationBundleV1({ account: staging_claude_account }),
       model_call_limiter: modelCalls,
       record_input_codecs: AUTHORITY_RECORD_INPUT_CODECS_V1,
       record_policy_fact_projectors: policyProjectors,
