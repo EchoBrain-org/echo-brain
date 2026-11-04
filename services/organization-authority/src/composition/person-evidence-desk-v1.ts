@@ -45,7 +45,7 @@ export interface PersonEvidenceDeskExclusionsV1 {
   /** Original sources by source_id: the notes of every revision. */
   readonly sources: readonly string[];
   /**
-   * Every item only this reader may see: Only-me records, and private notes, documents and unapproved imported meetings.
+   * Every item only this reader may see: Only-me records, and private notes, documents and imported meeting notes.
    * For research whose words reach a wider audience than the reader (an impact run of a shared record).
    */
   readonly private?: boolean;

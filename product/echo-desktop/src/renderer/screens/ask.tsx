@@ -1229,6 +1229,12 @@ export function Passage({ text, label }: { text: string; label: string }) {
           : <ul key={index}>{block.items.map((item, at) => <li key={at}><Runs runs={item} /></li>)}</ul>)}</>;
 }
 
+function SourceReviewBadge({ review, shared = false }: { review: 'not_reviewed' | 'reviewed'; shared?: boolean }) {
+  return <div class="meta" data-testid={shared ? 'source-review-summary' : undefined}><span class="tag" data-testid="source-review-state">
+    {review === 'reviewed' ? 'Reviewed' : 'Not reviewed yet'}
+  </span></div>;
+}
+
 /**
  * An original's cited passages, each its verified evidence at most 2,000
  * characters. A sentence's number lights the passages it cites, when it cites
@@ -1239,17 +1245,24 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
   const reads = sources.evidence?.group === target.number ? sources.evidence.reads : {};
   const places = paneCitations(target);
   const count = places.length;
-  const meta = target.group ? originalMeta(source, target.group, 'passages cited') : documentName(source.label).version ?? '';
   const answer = activeTurn(state)?.answer;
   const focused = target.group && answer ? answerSentences(answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [] : [];
   const lit = places.filter(index => focused.includes(index));
   const light = lit.length > 0 && lit.length < count;
   const all = places.map(index => reads[index] ?? { loading: true } as const);
   const failure = all.find(read => !read.loading && 'failure' in read);
+  const verified = all.flatMap(read => !read.loading && 'value' in read ? [read.value] : [])[0];
+  // One source group can cite several revisions. Share a badge only once every proof agrees;
+  // while loading, after a refusal, or across different states, each passage keeps its own badge.
+  const review = verified?.imported_meeting_review;
+  const sharedReview = review !== undefined && all.every(read => !read.loading && 'value' in read && read.value.imported_meeting_review === review) ? review : undefined;
+  const label = verified?.label ?? source.label;
+  const meta = target.group ? originalMeta({ ...source, label }, target.group, 'passages cited') : documentName(label).version ?? '';
   return (
     <div class="source-detail">
-      <h2>{documentName(source.label).name}</h2>
+      <h2>{documentName(label).name}</h2>
       {meta && <div class="meta" data-testid="source-meta">{meta}</div>}
+      {sharedReview !== undefined && <SourceReviewBadge review={sharedReview} shared />}
       {failure && !failure.loading && 'failure' in failure && (
         <div class="source-failure">
           <div class="error" data-testid="source-error">{message(failure.failure)}</div>
@@ -1261,9 +1274,12 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
         if (read.loading || !('value' in read)) return null;
         const text = read.value.text.length > MAX_EVIDENCE ? `${read.value.text.slice(0, MAX_EVIDENCE)}…` : read.value.text;
         return (
-          <div key={index} class={`passage selectable${light && lit.includes(index) ? ' on' : ''}`} data-testid="evidence-text">
-            <Passage text={text} label={source.label} />
-          </div>
+          <Fragment key={index}>
+            {sharedReview === undefined && read.value.imported_meeting_review !== undefined && <SourceReviewBadge review={read.value.imported_meeting_review} />}
+            <div class={`passage selectable${light && lit.includes(index) ? ' on' : ''}`} data-testid="evidence-text">
+              <Passage text={text} label={read.value.label} />
+            </div>
+          </Fragment>
         );
       })}
       {all.some(read => read.loading) && <div class="notice">Loading verified evidence…</div>}

@@ -22,6 +22,7 @@ import { createProjectContextApplicationV1 } from '../src/application/project-co
 import type { PersonPageCheckV1, PersonTicketCheckV1 } from '../src/application/ports/person-source-check-v1.js';
 import { createPersonAskCheckV1, type CreatePersonAskCheckV1Options, type PersonAskCheckLiveFailureV1 } from '../src/composition/person-ask-check-v1.js';
 import { PersonDocumentProcessingV1 } from '../src/composition/person-document-processing-v1.js';
+import { createPersonSourceEvidenceRouteV1 } from '../src/composition/person-source-evidence-route.js';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { CLOUD, assign, sentFixture, setState, type FixturePerson } from './fixtures/open-items.js';
 import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
@@ -128,6 +129,53 @@ function pageTool(pages: Readonly<Record<string, { readonly version: string; rea
 }
 
 describe('Ask source check: the database kinds', () => {
+  it('keeps imported citations readable and unchanged when only their display label changes', async () => {
+    const f = await world();
+    const { check } = askCheckOf(f);
+    const citation = f.cited.meeting;
+    const before = f.originals.read({ access_token: 'ari', scope: GLOBAL, citation }).atom;
+    const rows = SqlitePersonImportedMeetingsV1.prototype.rows;
+    const label = vi.spyOn(SqlitePersonImportedMeetingsV1.prototype, 'rows').mockImplementation(function (this: SqlitePersonImportedMeetingsV1, ...args) {
+      return rows.apply(this, args).map(row => ({ ...row, title: `Meeting source: ${row.title}` }));
+    });
+    try {
+      expect(await check('ari', [item(citation)])).toEqual([SAME]);
+      const reopened = f.originals.read({ access_token: 'ari', scope: GLOBAL, citation }).atom;
+      expect(reopened).toMatchObject({ ...before, label: `Meeting source: ${before.label}` });
+      const searched = f.originals.deskSearch({ access_token: 'ari', scope: GLOBAL, kinds: ['imported_meeting'] }).items[0]!;
+      expect(searched.citation).toEqual(citation);
+      expect(searched.label).toBe(reopened.label);
+      const matched = f.originals.deskSearch({ access_token: 'ari', scope: GLOBAL, query: before.text.split('\n')[0]!, kinds: ['imported_meeting'] }).items[0]!;
+      expect(matched).toMatchObject({ citation, label: reopened.label, text: before.text });
+      const opened = f.originals.deskOpen({ access_token: 'ari', scope: GLOBAL, citation });
+      expect(opened.items[0]).toMatchObject({ citation, label: reopened.label, text: before.text });
+    } finally { label.mockRestore(); }
+  });
+
+  it('opens citations saved with the historical imported-note packet format and reports the source unchanged', async () => {
+    const f = await world();
+    const { check } = askCheckOf(f);
+    const actor = f.openItemsOptions.sessions.authenticateAccess({ access_token: 'ari' });
+    const row = new SqlitePersonImportedMeetingsV1(f.db).rows(actor, GLOBAL)[0]!;
+    const title = (JSON.parse(row.source_content_json) as { title?: string }).title ?? 'Untitled';
+    // Construct the citation by the pre-deploy formula, independently of today's packet and label helpers.
+    const text = `Imported meeting (unapproved): ${title}\n${row.text}`;
+    const old = { ...f.cited.meeting,
+      representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text: row.text }),
+      anchor_sha256: canonicalSha256({ kind: 'text', context_id: row.context_id, segment: 0, text }) };
+    expect(old).toEqual(f.cited.meeting);
+    expect(await check('ari', [item(old), item(f.cited.meeting)])).toEqual([SAME, SAME]);
+    expect(f.originals.read({ access_token: 'ari', scope: GLOBAL, citation: old }).atom).toMatchObject({ text, label: `Imported meeting: ${title}` });
+    expect(f.originals.deskOpen({ access_token: 'ari', scope: GLOBAL, citation: old }).items[0]).toMatchObject({ citation: old, text, label: `Imported meeting: ${title}` });
+    const route = createPersonSourceEvidenceRouteV1({ originals: f.originals });
+    expect(route.readSource({ access_token: 'ari', include_imported_meeting_review: true, request: { schema_version: 1, scope: GLOBAL, citation: old } as never }))
+      .toMatchObject({ citation: { ...old, label: `Imported meeting: ${title}` }, text, imported_meeting_review: 'reviewed' });
+    // A later source revision changes the source check, while the old citation still opens the original notes.
+    f.editMeeting();
+    expect(await check('ari', [item(old)])).toEqual([CHANGED]);
+    expect(f.originals.read({ access_token: 'ari', scope: GLOBAL, citation: old }).atom.text).toBe(text);
+  });
+
   it('answers a readable approved record same, and unreadable to someone who cannot read it, hidden or never recorded', async () => {
     const f = await world();
     const { check } = askCheckOf(f);

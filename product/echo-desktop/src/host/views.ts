@@ -606,7 +606,11 @@ function meetingRecord(page: PersonOpenMeetingV1, item: ListItem, first: boolean
 
 export function evidenceView(raw: unknown): SourceEvidence {
   const evidence = validated(validatePersonSourceEvidenceV1, unwrap(raw));
-  return { label: evidence.citation.label, text: evidence.text };
+  // Imported v1 packets keep their historical first-line heading for citation identity. The pane
+  // presents the current server label separately; it never interprets the heading as review state.
+  const review = evidence.imported_meeting_review;
+  return { label: evidence.citation.label, text: review === undefined ? evidence.text : evidence.text.slice(evidence.text.indexOf('\n') + 1),
+    ...(review === undefined ? {} : { imported_meeting_review: review }) };
 }
 
 /** Connected tools: each tool's id, name and your connection. External workspace and account ids stay behind. */

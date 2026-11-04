@@ -66,6 +66,8 @@ import {
   PERSON_RESEARCH_EVAL_START_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
+  PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1,
+  validatePersonSourceEvidenceReviewHeaderV1,
   validatePersonAnswerRequestV3,
   validatePersonRunsRequestV1,
   validatePersonDiagnosticsRequestV1,
@@ -471,15 +473,15 @@ interface PersonReadGetApplication {
 }
 
 /** Original-source reads validate the body before checking the bearer, then release synchronously. */
-function personSourcePost<Application, Request>(
-  application: Application,
-  validate: (value: unknown) => Request,
-  read: (application: Application, input: { readonly access_token: string; readonly request: Request }) => unknown,
-): PersonPostHandler {
+function personSourcePost(application: PersonSourceEvidenceHttpApplicationV1): PersonPostHandler {
   return async (request, response) => {
-    const requestBody = await personBody(request, validate);
-    json(response, 200, read(application, {
+    const requestBody = await personBody(request, validatePersonSourceEvidenceReadRequestV1);
+    let review: true | undefined;
+    try { review = validatePersonSourceEvidenceReviewHeaderV1(request.headers[PERSON_SOURCE_EVIDENCE_REVIEW_HEADER_V1]); }
+    catch { throw new AuthorityOperationError('invalid_request', 'Ask source review header is invalid'); }
+    json(response, 200, application.readSource({
       access_token: accessToken(request.headers.authorization), request: requestBody,
+      ...(review === undefined ? {} : { include_imported_meeting_review: review }),
     }));
   };
 }
@@ -789,7 +791,7 @@ export function createOrganizationAuthorityHttpServer(
         }
       }
     })],
-    [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
+    [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence)],
     [PERSON_LIST_PATH_V1, personCancellablePost(options.person_list, validatePersonListRequestV1, (application, input) => application.list(input))],
     [PERSON_OPEN_PATH_V1, personCancellablePost(options.person_list, validatePersonOpenRequestV1, (application, input) => application.open(input))],
   ]);

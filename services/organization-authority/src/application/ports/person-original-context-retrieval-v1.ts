@@ -42,7 +42,12 @@ export interface PersonOriginalContextRetrievalPortV1 {
     readonly access_token: string;
     readonly scope: PersonAskScopeV2;
     readonly citation: OriginalContextCitationV1;
-  }): { readonly scope: PersonAskScopeV2; readonly atom: ReleasedSourceContextAtomV1 };
+  }): {
+    readonly scope: PersonAskScopeV2;
+    readonly atom: ReleasedSourceContextAtomV1;
+    /** Present for imported meeting notes only; presentation metadata, never evidence of an approved record. */
+    readonly imported_meeting_review?: 'not_reviewed' | 'reviewed';
+  };
 }
 
 /** Desk-only, request-bound original evidence release.  Callers of the
