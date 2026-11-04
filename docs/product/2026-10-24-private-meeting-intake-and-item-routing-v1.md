@@ -128,11 +128,14 @@ an edit.
 
 Folder listing pages with `offset` up to 200 folders.
 
-### 1.3 Who reads unapproved notes
+### 1.3 Who reads imported notes
 
 Only the importing person, in global and Mine scope. Project scope never
-includes unapproved imported notes. The suggestion tables stay as they are and
-feed the card's pre-ticks only.
+includes imported notes. The suggestion tables stay as they are and feed the
+card's pre-ticks only. The source label is `Imported meeting: <title>` before
+and after review. Approval publishes separate records; it does not turn the
+source notes into an approved record or change their audience. Review status
+belongs to the review, not the source label.
 
 ### 1.4 No card without decisions or actions
 

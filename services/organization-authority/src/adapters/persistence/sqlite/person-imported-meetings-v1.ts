@@ -8,7 +8,7 @@ import type { PersonListStoreScopeV1 } from '../../../application/ports/person-l
 import type { PersonAskScopeV2 } from '../../../application/ports/person-original-context-retrieval-v1.js';
 import { personOriginalGrantedProjectIdsV1 } from './person-original-access-v1.js';
 
-/** An unapproved import, which is always its importer's alone: a suggested project grants no read (ADR-0046). */
+/** Imported source notes, always their importer's alone: a suggested project grants no read (ADR-0046). */
 interface ImportedMeetingTextV1 {
   readonly dates: EvidenceDatesV1;
   readonly api_version: 0; readonly context_id: `cap_${string}`; readonly title: string; readonly text: string;
@@ -22,7 +22,7 @@ interface SourceRow {
 }
 function invalid(): never { throw new AuthorityOperationError('unavailable', 'Imported meeting is unavailable'); }
 /**
- * What the importer reads of their own unapproved meeting. Transcripts stay out of every person's reads:
+ * What the importer reads of their own meeting source. Transcripts stay out of every person's reads:
  * only extraction uses them, and only approved records leave a meeting (ADR-0046).
  */
 export function importedMeetingTextV1(meeting: MeetingDocument): string {
@@ -30,10 +30,10 @@ export function importedMeetingTextV1(meeting: MeetingDocument): string {
 }
 /**
  * Read view over existing custody. There is no second meeting body or derived-content table.
- * Unapproved imported notes are readable by their importing person only, in global scope
+ * Imported notes remain source material readable by their importing person only, in global scope
  * (ADR-0046), and so are in the list's Only me (ADR-0049). A suggested project only pre-ticks the
- * review's destinations; project scope never includes unapproved notes. Approved records are what
- * project members read from a meeting.
+ * review's destinations; project scope never includes imported notes. Approval publishes separate
+ * records for project members, so the source label describes provenance rather than review status.
  */
 export class SqlitePersonImportedMeetingsV1 {
   constructor(private readonly database: Database.Database) {
@@ -65,7 +65,7 @@ export class SqlitePersonImportedMeetingsV1 {
       assertCanonicalMeetingDocument(meeting, { kind: 'meeting-source', adapter_id: row.adapter_id, instance_id: row.instance_id, version: meeting.provenance.source.version });
       if (sourceItemIdV1(meeting.provenance.source, row.external_id) !== row.source_id || meeting.provenance.external_id !== row.external_id || meeting.provenance.canonical_revision !== row.revision_id || !/^source:[a-f0-9]{64}$/.test(row.source_id)) invalid();
       const text = importedMeetingTextV1(meeting);
-      return { dates: meetingEvidenceDatesV1(meeting.time), api_version: 0, context_id: row.context_id, title: `Imported meeting (unapproved): ${meeting.title ?? 'Untitled'}`, text,
+      return { dates: meetingEvidenceDatesV1(meeting.time), api_version: 0, context_id: row.context_id, title: `Imported meeting: ${meeting.title ?? 'Untitled'}`, text,
         received_at: row.captured_at,
         source_id: row.source_id, revision_id: row.revision_id, source_sha256: `sha256:${row.revision_sha256}`, representation_sha256: canonicalSha256({ kind: 'imported-meeting-notes-v1', text }),
         source_content_sha256: row.content_sha256, manifest_json: row.manifest_json, source_content_json: row.content_json, lexical_score: 0 };

@@ -36,7 +36,7 @@ const MEETING = `meeting:sha256:${'c'.repeat(64)}`;
 const TRANSCRIPT = `transcript:sha256:${'c'.repeat(64)}`;
 
 const noteRow = { ref: NOTE, kind: 'note', title: 'Pricing notes', added_at: '2026-09-21T22:00:00.000Z', visibility: 'only_me', projects: [] };
-const importedRow = { ref: IMPORTED, kind: 'imported_meeting', title: 'Imported meeting (unapproved): Pricing review', added_at: '2026-09-21T22:00:00.000Z', visibility: 'only_me', projects: [] };
+const importedRow = { ref: IMPORTED, kind: 'imported_meeting', title: 'Imported meeting: Pricing review', added_at: '2026-09-21T22:00:00.000Z', visibility: 'only_me', projects: [] };
 const documentRow = {
   ref: DOCUMENT, kind: 'document', title: 'Pricing memo', added_at: '2026-09-21T21:30:00.000Z', visibility: 'project',
   projects: [{ project_id: PROJECT_A, name: 'Apollo' }], media_type: 'application/pdf', extraction_state: 'ready', size_bytes: 1_245_184,

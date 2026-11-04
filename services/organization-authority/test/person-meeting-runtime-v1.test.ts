@@ -432,7 +432,7 @@ describe('personal meeting intake uses the shared processing path', () => {
     const list = f.listRoute();
     // Only me lists it (ADR-0049), filed in no project.
     const page = await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } });
-    expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', visibility: 'only_me', projects: [] });
+    expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ kind: 'imported_meeting', title: 'Imported meeting: Test meeting', visibility: 'only_me', projects: [] });
     // A suggested project's list holds no unapproved note either.
     expect((await list.list({ access_token: 'owner', request: { schema_version: 1, project_id: project } })).items).toEqual([]);
     const opened = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: page.items[0]!.ref } });
@@ -442,7 +442,7 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(originals.deskSearch({ access_token: token, scope: { kind: 'project', project_id: project }, query: 'cohort', kinds: ['imported_meeting'] }).items).toEqual([]);
     }
     const search = originals.deskSearch({ access_token: 'owner', scope: { kind: 'global' }, query: 'cohort', kinds: ['imported_meeting'] });
-    expect(search.items).toHaveLength(1); expect(search.items[0]?.kind).toBe('imported_meeting');
+    expect(search.items).toHaveLength(1); expect(search.items[0]).toMatchObject({ kind: 'imported_meeting', label: 'Imported meeting: Test meeting' });
     expect(originals.deskOpen({ access_token: 'owner', scope: { kind: 'global' }, citation: search.items[0]!.citation }).items[0]?.text).toContain('Ship the cohort');
     for (const token of ['other', 'reader-a']) {
       expect(originals.deskSearch({ access_token: token, scope: { kind: 'global' }, query: 'cohort' }).items).toEqual([]);
@@ -1178,6 +1178,9 @@ describe('personal meeting intake uses the shared processing path', () => {
   it('approves into the chosen project through the route', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     const { pending, opened } = await f.pendingReview(runtime, project);
+    const list = f.listRoute();
+    const imported = (await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items;
+    expect(imported).toEqual([expect.objectContaining({ kind: 'imported_meeting', title: 'Imported meeting: Test meeting', visibility: 'only_me', projects: [] })]);
     await expect(f.call(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-b', action: 'approve', routes: f.routes(opened, [projectB]), owners: [] }))
       .resolves.toEqual({ status: 'publishing', decided_on: 'desktop' });
     const body = JSON.parse(f.db.prepare('SELECT body_json FROM authority_approval_decisions_v1').pluck().get() as string);
@@ -1188,6 +1191,12 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(envelope.body.human_act_resolution_ref.audience_project_ids).toEqual([projectB]);
     expect((await f.call(runtime, { operation: 'reviews' })).reviews[0]).toMatchObject({ status: 'approved', project_ids: [projectB], decided_on: 'desktop',
       records: [{ approval_id: approvalRecordIdV2(pending!.approval_id, [projectB]), project_ids: [projectB] }] });
+    // Approval publishes a separate record; the source keeps its neutral provenance label and private audience.
+    expect((await list.list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items).toEqual(imported);
+    const source = await list.open({ access_token: 'owner', request: { schema_version: 1, ref: imported[0]!.ref } });
+    expect(source).toMatchObject({ item: imported[0] });
+    expect(JSON.stringify(source)).toContain('Ship the cohort');
+    expect(JSON.stringify(source)).not.toContain('TRANSCRIPT_SECRET');
   });
   it('opens a pending review as items with their suggested destinations and proposed owners, and a decided one as chosen', async () => {
     const f = await fixture({ ownedAction: true, actions: 1 }), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
