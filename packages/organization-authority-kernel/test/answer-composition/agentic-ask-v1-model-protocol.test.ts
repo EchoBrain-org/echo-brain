@@ -595,6 +595,18 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
   const reply = (blocks: readonly unknown[], fields: Record<string, unknown> = {}) => ({ lists: [], blocks, not_found: [], ...fields });
   const read = (blocks: readonly unknown[]) => parseBlocksAnswer(reply(blocks)).sentences.map(sentence => [sentence.text, sentence.item?.kind]);
 
+  it("keeps selections beyond legacy name/read bounds and unions repeated member groups", () => {
+    const members = Array.from({ length: 100 }, (_, index) => `E${index + 1}`);
+    const lists = [{ id: "L1", members: members.slice(0, 70) }, { id: "L1", members: members.slice(60) }];
+    expect(parseBlocksAnswer(reply([], { lists })).lists).toEqual([{ id: "L1", members }]);
+    const full = Array.from({ length: 5 }, (_, index) => ({ id: `L${index + 1}` }));
+    const allUses = [...full, ...full.map(use => ({ ...use, members: ["E1"] })), { id: "L1", members: ["E2"] }];
+    expect(parseBlocksAnswer(reply([], { lists: allUses })).lists.find(use => use.id === "L1" && use.members !== undefined)?.members).toEqual(["E1", "E2"]);
+    expect(parseBlocksAnswer(reply([], { lists: [{ id: "L1", members: [] }] })).lists).toEqual([{ id: "L1", members: [] }]);
+    expect((answerBlocksSchema.properties as Schema).lists.items.properties.members).not.toHaveProperty("maxItems");
+    expect((answerSchema.properties as Schema).lists.items.properties.members.maxItems).toBe(25);
+  });
+
   it("keeps layout v1's prompt and schemas, and Ask again's, byte for byte", () => {
     expect([ANSWER_LAYOUT_PROMPT, answerLayoutSchema, answerLayoutSinceSchema, ANSWER_SINCE_PROMPT, answerSinceSchema].map(value => canonicalSha256(value))).toEqual([
       "sha256:dafa440a7ab2a603c6d15b8a8af7845a33bdc6856a6e7801e91cdfaa21f04ba3", "sha256:be447025c7326cbfe845f396b5b4a03483338f48b2792e419ef0156a7f5f5511",

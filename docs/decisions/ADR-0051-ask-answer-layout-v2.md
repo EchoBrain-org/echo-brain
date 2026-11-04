@@ -243,3 +243,36 @@ never the note; and 40 citations, so an item whose list id would bring more of
 that list's private rows is left out whole, never cut short of them, the part
 saying some evidence could not fit. An Ask again's account of what is
 different since is left out whole for the same reason.
+
+## Amended 2026-11-04: preserve the writer's complete list selection
+
+Live staging found 43 matching tickets, but the answer showed only 25. The
+writer supplied the selected ids in two groups; the parser discarded the
+second group as a repeated list use. Code also forced the unfiltered research
+inventory into the answer, adding an unrelated ticket. The founder asked to
+fix these deterministic failures on 2026-11-04.
+
+For layout v2, a successful writer chooses which lists belong in the answer.
+`stated` identifies research evidence and no longer forces its full inventory
+into a successful answer. A writer's explicit member selection replaces that
+inventory; an omitted list stays omitted. A failed writer may still fall back
+to research inventories with the existing incomplete-answer notice.
+
+A v2 `members` array has no separate 25-item bound. Repeated member groups for
+the same list are combined by id, keeping every selected member once. Code
+still filters them to actual members of that research list. An empty selection
+does not mean the whole inventory. Compound conditions can name every matching
+id without extending the one-field `where` language.
+
+All selected members are rendered. Code divides a logical list into statements
+that each fit 4 KiB and 40 citations, then groups their rows into one table
+with one caption describing the whole selection. Its columns are shared across
+all chunks, and each row retains its own citations. The 64 KiB answer bound and
+existing fallback remain: when the released response cannot keep all selected
+members, it is partial and says evidence could not fit. Layout v1 and responses
+without blocks retain their count bounds and now also mark omitted list members
+partial rather than reporting a complete answer beside `and N more`.
+
+The research tool's 25-row page size is unchanged; research can continue paging.
+This amendment changes answer selection and presentation, not source access,
+research budgets, or what constitutes grounded evidence.

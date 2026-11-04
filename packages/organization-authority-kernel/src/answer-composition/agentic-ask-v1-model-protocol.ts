@@ -228,6 +228,9 @@ const listUse = {
   },
 } as const;
 
+/** Blocks keep every selected row; statement byte/citation bounds are applied while rendering, not to membership. */
+const blockListUse = { ...listUse, properties: { ...listUse.properties, members: { type: "array", items: listUse.properties.members.items } } } as const;
+
 /** A writer's sentence: its text, and the evidence it stands on. */
 const citedSentence = {
   type: "object", additionalProperties: false, required: ["text", "evidence"], properties: { text: { type: "string", maxLength: SENTENCE_CHARS }, evidence: ids },
@@ -295,7 +298,7 @@ function blockShape(name: string, required: readonly string[], properties: Reado
  */
 export const answerBlocksSchema: StructuredGenerationJsonSchema = Object.freeze({
   type: "object", additionalProperties: false, required: ["lists", "blocks", "not_found"], properties: {
-    lists: { type: "array", maxItems: AGENTIC_LIST_WRITER_LISTS_MAX_V1, items: listUse },
+    lists: { type: "array", maxItems: AGENTIC_LIST_WRITER_LISTS_MAX_V1, items: blockListUse },
     blocks: { type: "array", minItems: 1, items: { anyOf: [
       blockShape("answer", ["sentences"], { sentences: { type: "array", minItems: 1, maxItems: PERSON_ANSWER_BLOCKS_ANSWER_MAX_STATEMENTS_V2, items: citedSentence } }),
       blockShape("text", ["sentences"], { title: blockTitle, sentences: { type: "array", minItems: 1, items: citedSentence } }),
@@ -617,7 +620,7 @@ function selectionOf(where: Record<string, unknown> | null): AgenticListSelectio
  * ["E5"]}; members, each once, take the place of a selection. Null for anything else. A where code cannot read uses
  * the list in full.
  */
-function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
+function listUseOf(raw: unknown, blocks = false): AgenticAnswerListUseV1 | null {
   const entry = object(raw);
   const given = entry === null ? raw : entry.id;
   const id = parseAgenticListIdV1(given);
@@ -626,8 +629,8 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
   else if (id !== given) observeCoreModelCorrectionV1("model_id_respelled");
   const named = Array.isArray(entry?.members) ? entry.members : [];
   const members: string[] = [];
-  if (named.length > EVIDENCE_IDS_READ) observeCoreModelCorrectionV1("model_items_capped", named.length - EVIDENCE_IDS_READ);
-  for (const member of named.slice(0, EVIDENCE_IDS_READ)) {
+  if (!blocks && named.length > EVIDENCE_IDS_READ) observeCoreModelCorrectionV1("model_items_capped", named.length - EVIDENCE_IDS_READ);
+  for (const member of blocks ? named : named.slice(0, EVIDENCE_IDS_READ)) {
     const short = cleanId(member);
     if (short === null) observeCoreModelCorrectionV1("model_entry_dropped");
     else if (members.includes(short)) observeCoreModelCorrectionV1("model_repeat_dropped");
@@ -636,8 +639,8 @@ function listUseOf(raw: unknown): AgenticAnswerListUseV1 | null {
       if (short !== member) observeCoreModelCorrectionV1("model_id_respelled");
     }
   }
-  if (members.length > AGENTIC_LIST_NAMED_MAX_V1) observeCoreModelCorrectionV1("model_items_capped", members.length - AGENTIC_LIST_NAMED_MAX_V1);
-  if (members.length > 0) return Object.freeze({ id, members: Object.freeze(members.slice(0, AGENTIC_LIST_NAMED_MAX_V1)) });
+  if (!blocks && members.length > AGENTIC_LIST_NAMED_MAX_V1) observeCoreModelCorrectionV1("model_items_capped", members.length - AGENTIC_LIST_NAMED_MAX_V1);
+  if (members.length > 0 || (blocks && Array.isArray(entry?.members))) return Object.freeze({ id, members: Object.freeze(blocks ? members : members.slice(0, AGENTIC_LIST_NAMED_MAX_V1)) });
   const asked = entry === null ? null : object(entry.where);
   const where = selectionOf(asked);
   if (asked !== null && where === null) observeCoreModelCorrectionV1("model_entry_dropped");
@@ -697,16 +700,21 @@ function notFoundOf(body: Record<string, unknown>): readonly string[] {
 }
 
 /** A reply's "lists" (ADR-0041): each list's use in full or by a selection once, and by members' ids once, at most 5 lists. */
-function listUsesOf(body: Record<string, unknown>): readonly AgenticAnswerListUseV1[] {
+function listUsesOf(body: Record<string, unknown>, blocks = false): readonly AgenticAnswerListUseV1[] {
   const uses: AgenticAnswerListUseV1[] = [];
   const asked: readonly unknown[] = Array.isArray(body.lists) ? body.lists : [];
   for (const [index, raw] of asked.entries()) {
-    const use = listUseOf(raw);
+    const use = listUseOf(raw, blocks);
     if (use === null) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
-    if (uses.some(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined))) { observeCoreModelCorrectionV1("model_repeat_dropped"); continue; }
+    const repeat = uses.findIndex(existing => existing.id === use.id && (existing.members === undefined) === (use.members === undefined));
+    if (repeat >= 0) {
+      if (blocks && use.members !== undefined) uses[repeat] = Object.freeze({ id: use.id, members: Object.freeze([...new Set([...uses[repeat]!.members!, ...use.members])]) });
+      else observeCoreModelCorrectionV1("model_repeat_dropped");
+      continue;
+    }
     if (!uses.some(existing => existing.id === use.id) && new Set(uses.map(existing => existing.id)).size === AGENTIC_LIST_WRITER_LISTS_MAX_V1) { observeCoreModelCorrectionV1("model_items_capped"); continue; }
     uses.push(use);
-    if (uses.length === 2 * AGENTIC_LIST_WRITER_LISTS_MAX_V1) {
+    if (!blocks && uses.length === 2 * AGENTIC_LIST_WRITER_LISTS_MAX_V1) {
       if (index + 1 < asked.length) observeCoreModelCorrectionV1("model_items_capped", asked.length - index - 1);
       break;
     }
@@ -830,7 +838,7 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
     }
   }
   const since = options.since === true && Array.isArray(body.since) ? sinceOf(body.since) : undefined;
-  return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body), ...(since === undefined ? {} : { since }) });
+  return Object.freeze({ sentences: Object.freeze(sentences), not_found: notFoundOf(body), lists: listUsesOf(body, true), ...(since === undefined ? {} : { since }) });
 }
 
 /**
@@ -1232,6 +1240,8 @@ export const ANSWER_BLOCKS_PROMPT = [
   "- Write a date in a date field or a table cell as YYYY-MM-DD.",
   "- Put in a block only what the evidence says.",
   "- An answer in blocks has no limit on how many sentences, items, rows, events or facts it holds: the \"up to 10\" above does not apply.",
+  "- For blocks, choose which research lists answer the question: only the lists you return are shown. A list marked stated is available evidence, not a requirement to repeat its inventory. Return an empty lists array when none belongs in the answer.",
+  "- A blocks list's members array has no 25-member limit. Include every matching E id for a compound condition such as two statuses or a title prefix and status; use one members array per list. Code keeps all selected members, merges repeated member groups, and shows them as one table when possible. Do not select unrelated items just because they share the inventory.",
   "",
   "With layout, reply with ONLY a JSON object in exactly this shape instead:",
   "{\"lists\":[],\"blocks\":[{\"block\":\"answer\",\"sentences\":[{\"text\":\"<the conclusion>\",\"evidence\":[\"E1\"]}]},{\"block\":\"<a block from block_catalog>\",\"<its params>\":\"...\"}],\"not_found\":[]}",

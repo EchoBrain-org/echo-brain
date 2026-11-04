@@ -476,10 +476,10 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       bundle: eightAnd1([WI(["L1"]), C(["E9"])], { ...EMPTY_BUNDLE.budget, max_model_calls: 1 }), replies: [{ sentences, not_found: [] }], says: [EIGHT, REVIEW.text],
       ...(sentences.length === 1 ? { status: "answered", check: (rendered: Rendered) => expect(rendered.fallbacks).toBe(0) } : { status: "partial", gap: UNSUPPORTED }),
     })),
-    { id: "W6", name: "shares 25 names across the lists an answer uses, each ending with 'and N more' from its own list", bundle: listBundle(68, 0, [list("L1", ids(1, 8)), list("L2", ids(9, 60))], [WI(["L1", "L2"])]), replies: [use({ id: "L1" }, { id: "L2" })], status: "answered", says: [EIGHT, `60 tickets created on October 4, 2026: ${names(9, 17)}; and 43 more.`], citations: 25 },
+    { id: "W6", name: "shares 25 names across legacy lists and marks the omitted members partial", bundle: listBundle(68, 0, [list("L1", ids(1, 8)), list("L2", ids(9, 60))], [WI(["L1", "L2"])]), replies: [use({ id: "L1" }, { id: "L2" })], status: "partial", gap: FIT, says: [EIGHT, `60 tickets created on October 4, 2026: ${names(9, 17)}; and 43 more.`], citations: 25 },
     {
       // E1, E2 and E8 share a title and row facts, so they are one name; E2 alone is private. The by-id statement takes the answer's 25 names.
-      id: "X25", name: "names no member a statement does not cite, so a merged name never covers a private member uncited (W6)", replies: [use({ id: "L1" }, { id: "L1", members: ids(3, 25) })], status: "answered",
+      id: "X25", name: "names no member a statement does not cite, so a merged name never covers a private member uncited (W6)", replies: [use({ id: "L1" }, { id: "L1", members: ids(3, 25) })], status: "partial", gap: FIT,
       bundle: (research => Object.freeze({ ...research, items: research.items.map((entry, index) => Object.freeze({ ...entry, item: { ...entry.item, visibility: index === 1 ? "only_me" as const : "team" as const, ...(index < 2 ? { label: "THERM-8: Fixture work 8" } : {}) } })) }))(listBundle(27, 0, [list("L1", ids(1, 27))], [WI(["L1"])])),
       says: [st(`27 tickets created on October 4, 2026: THERM-8: Fixture work 8 (2 tickets); ${names(3, 5)}; ${names(9, 19)}; and 1 more.`, 26, true), { text: expect.stringMatching(/^25 of the 27 tickets created on October 4, 2026: THERM-3: /u), citation_indexes: expect.any(Array), private: false }],
       cited: ["E1", ...ids(3, 25)] },
@@ -575,6 +575,63 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       blocksOf(rendered);
       return rendered.result.response.parts[0]!;
     };
+    it.each([false, true])("keeps all 43 selected tickets from a 100-ticket inventory without adding the inventory (split: %s)", async split => {
+      const selected = ids(5, 43);
+      const original = listBundle(100, 0, [list("L1", ids(1, 100))], [WI(["L1", ...selected])]);
+      const research = { ...original, items: original.items.map((entry, index) => ({ ...entry, item: { ...entry.item, attributes: {
+        ...entry.item.attributes, status: selected.includes(entry.short) ? index % 2 === 0 ? "To Do" : "In Progress" : "Done",
+        ...(entry.short === selected.at(-1) ? { due_at: "2026-11-06" } : {}),
+      } } })) };
+      const groups = split ? [selected.slice(0, 25), selected.slice(25)] : [selected];
+      const rendered = await alone({ bundle: research, layout: 2, replies: [{
+        lists: groups.map(members => ({ id: "L1", members })), blocks: [], not_found: [],
+      }] }).render("Which THERM tickets are To Do or In Progress? Show status, owner, due date.");
+      const part = rendered.result.response.parts[0]!;
+      const blocks = blocksOf(rendered);
+      expect(part.status).toBe("answered");
+      expect(part).not.toHaveProperty("gap");
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]).toMatchObject({ kind: "table", caption: "43 of the 100 tickets created on October 4, 2026" });
+      const table = blocks[0]!;
+      if (table.kind !== "table") throw new Error("Expected selected tickets as one table");
+      expect(table.rows.map(row => row.cells[0])).toEqual(Array.from({ length: 43 }, (_, index) => `THERM-${index + 5}: Fixture work ${index + 5}`));
+      expect(table.rows.at(-1)!.cells[table.columns.indexOf("Due")]).toBe("2026-11-06");
+      expect(table.rows.every(row => row.cells.length === table.columns.length)).toBe(true);
+      expect(rendered.cited).toEqual(selected);
+      expect(part.statements.every(statement => Buffer.byteLength(statement.text, "utf8") <= PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 && statement.citation_indexes.length <= 40)).toBe(true);
+      expect(part.statements.map(statement => statement.text).join(" ")).not.toContain("and 99 more");
+    });
+    it.each([{ members: [] }, { members: ["E999"] }])("does not turn an empty or unknown selection into the full inventory ($members)", async ({ members }) => {
+      const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"])]), layout: 2, replies: [{ lists: [{ id: "L1", members }], blocks: [], not_found: [] }] }).render("Which tickets match?");
+      const part = rendered.result.response.parts[0]!;
+      expect(part.status).toBe("not_found");
+      expect(part.statements).toEqual([]);
+    });
+    it("keeps a no-match filter empty beside an empty explicit member group", async () => {
+      const rendered = await alone({ bundle: listBundle(3, 0, [list("L1", ids(1, 3))], [WI(["L1"])]), layout: 2, replies: [{
+        lists: [{ id: "L1", where: { field: "status", value: "Done" } }, { id: "L1", members: [] }], blocks: [], not_found: [],
+      }] }).render("Which tickets are Done?");
+      const part = rendered.result.response.parts[0]!;
+      expect(part.status).toBe("not_found");
+      expect(part.statements).toEqual([]);
+    });
+    it("does not append a research inventory the completed writer did not use", async () => {
+      const part = await arranged(listBundle(3, 1, [list("L1", ids(1, 3))], [WI(["L1"]), C(["E4"])]), {
+        lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ ...REVIEW, evidence: ["E4"] }] }],
+      });
+      expect(part.statements.map(statement => statement.text)).toEqual([REVIEW.text]);
+      expect(part.blocks).toEqual([{ kind: "answer", statements: [0] }]);
+    });
+    it("marks a selection partial if the answer byte bound requires a bounded plain response", async () => {
+      const members = ids(1, 180);
+      const rendered = await alone({ bundle: listBundle(180, 0, [list("L1", members)], [WI(["L1"])]), layout: 2, replies: [{
+        lists: [{ id: "L1", members }], blocks: [], not_found: [],
+      }] }).render("Show every ticket with its owner and status.");
+      const part = rendered.result.response.parts[0]!;
+      expect(part).not.toHaveProperty("blocks");
+      expect(part).toMatchObject({ status: "partial", gap: FIT });
+      expect(rendered.cited.length).toBeLessThan(members.length);
+    });
     it("states a list's members as code's table right after the answer, then the writer's other blocks", async () => {
       const part = await arranged(listBundle(3, 1, [list("L1", ids(1, 3))], [WI(["L1"])]), { lists: [{ id: "L1" }], not_found: [], blocks: [
         { block: "answer", sentences: [{ ...REVIEW, evidence: ["E4"] }] }, { block: "text", title: "Why", sentences: [{ text: "The fixture work passed its review.", evidence: ["E4"] }] },

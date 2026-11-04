@@ -49,6 +49,7 @@ import {
   agenticListSelectionNotFoundV1,
   agenticListSelectV1,
   agenticListStatementV1,
+  agenticListStatementsV2,
   agenticListTableV1,
   agenticOpenReadsV1,
   agenticPlanListsV1,
@@ -125,6 +126,7 @@ type Entry = AgenticEvidenceBundleItemV1;
 /** A statement's shape before its citations are known: a list's rows name the items they cite. */
 type DraftShape = Exclude<AskLayoutShapeV1, { kind: "list" }> | {
   readonly kind: "list"; readonly caption: string; readonly columns: readonly string[];
+  readonly group?: number;
   readonly rows: readonly { readonly cells: readonly string[]; readonly shorts: readonly string[] }[];
 };
 const PROSE: DraftShape = Object.freeze({ kind: "text" });
@@ -429,46 +431,54 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         /** What the lists add to the gap, in order; `partial` when its rule makes the part partial whatever it names (W1, W2, W3). */
         const listGaps: { readonly text: string; readonly partial: boolean }[] = [];
         const selectionNotFound: string[] = [];
-        /** The lists the answer uses: those the writer saw, in the order of its first use, then every stated list it did not use. */
-        const usedLists = [...new Set([...uses.map(use => use.id).filter(id => writerById.has(id)), ...stated])].map(id => views.get(id)!);
+        // In blocks, a successful writer selects the lists that answer the question. Research inventories are context,
+        // not instructions to repeat them. Only a failed writer falls back to the plan's inventories (with a gap).
+        const required = arranged && reply !== null ? [] : stated;
+        const usedLists = [...new Set([...uses.map(use => use.id).filter(id => writerById.has(id)), ...required])].map(id => views.get(id)!);
         const unseen = uses.filter(use => !writerById.has(use.id)).length;
         if (unseen > 0) correct("writer_unknown_id_dropped", unseen);
         const naming: Naming[] = usedLists.flatMap(list => {
           const id = list.id, all = rows.get(id)!, noun = nounOf(list);
           const byId = uses.find(use => use.id === id && use.members !== undefined);
           const picked = byId === undefined ? undefined : all.filter(member => byId.members!.includes(member.id));
-          // Code adds the full use of a stated list the writer gave no use saying which items exist (W3), whatever its members.
-          const given = uses.find(use => use.id === id && use.members === undefined) ?? (stated.includes(id) ? { id } : undefined);
+          // Legacy replies and failed-writer fallback add the full use of a stated list (W3); successful blocks use only the writer's selection.
+          const given = uses.find(use => use.id === id && use.members === undefined) ?? (required.includes(id) ? { id } : undefined);
           const where = given?.where;
           const chosen = given === undefined ? undefined : agenticListSelectV1(all, where, list.filter.time_zone);
           // A use that says which items exist of a list that is not complete reads "at least", whatever it selects, and the part says so.
-          if (chosen !== undefined && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
+          if ((chosen !== undefined || (arranged && picked !== undefined && stated.includes(id))) && !list.complete) listGaps.push({ text: listEndGap(noun.plural), partial: true });
           // Two uses that select the same members are one statement, named by id, with the lead of the one that says which items exist.
-          if (chosen !== undefined && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return [{ list, noun, selected: picked, which: true, ...(where === undefined ? {} : { where }), by_id: true }];
+          if (chosen !== undefined && chosen.length > 0 && picked !== undefined && chosen.length === picked.length && chosen.every(member => picked.includes(member))) return [{ list, noun, selected: picked, which: true, ...(where === undefined ? {} : { where }), by_id: true }];
           // A selection that names nothing is its not_found phrase (K); an empty list keeps the plain not-found answer.
           if (chosen?.length === 0 && where !== undefined) selectionNotFound.push(agenticListSelectionNotFoundV1(noun, list.filter, where));
           return [
             ...(chosen === undefined || chosen.length === 0 ? [] : [{ list, noun, selected: chosen, which: true, ...(where === undefined ? {} : { where }), by_id: false }]),
-            ...(picked === undefined ? [] : [{ list, noun, selected: picked, which: false, by_id: true }]),
+            ...(picked === undefined || picked.length === 0 ? [] : [{ list, noun, selected: picked, which: false, by_id: true }]),
           ];
         });
-        // At most 25 distinct members named across the answer (W6): those selected by id first, then the rest shared
-        // round-robin, a member another statement names costing nothing; "and N more" counts from the list itself (addition 5).
+        // Legacy answers share at most 25 names (W6). Blocks keep every member across bounded statements instead.
         const shares = agenticListNameSharesV1(naming);
-        const listStatements = naming.map((value, index) => {
+        const listStatements = naming.flatMap((value, index) => {
           // An owner or status reads as the first selected member records it; a date range as the writer gave it.
           const where = value.where === undefined || !("value" in value.where) ? value.where : { field: value.where.field, value: value.selected[0]![value.where.field]! };
-          const statement = agenticListStatementV1({
+          const description = {
             noun: value.noun, filter: value.list.filter, count: value.list.count, complete: value.list.complete, selected: value.selected,
-            share: shares[index]!.share, free: shares[index]!.free, ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
-          });
-          // Each named member cites its own row; with layout, a statement naming two or more names is a table, a row per name.
-          const table = !laid ? undefined : agenticListTableV1({ selected: value.selected, names: statement.names, by_id: value.by_id, ...(value.list.filter.time_zone === undefined ? {} : { time_zone: value.list.filter.time_zone }) });
-          const shape: DraftShape = table === undefined ? PROSE : {
-            kind: "list", caption: statement.caption, columns: table.columns,
-            rows: table.rows.map(row => ({ cells: row.cells, shorts: row.members.map(at => value.selected[at]!.id) })),
+            ...(where === undefined ? {} : { where }), ...(value.by_id ? { by_id: true, which: value.which } : {}),
           };
-          return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id), shape };
+          const statements = arranged && laid ? agenticListStatementsV2(description)
+            : [agenticListStatementV1({ ...description, share: shares[index]!.share, free: shares[index]!.free })];
+          if (statements.reduce((total, statement) => total + statement.cited.length, 0) < value.selected.length) listGaps.push({ text: FIT_GAP, partial: true });
+          // Each named member cites its own row; with layout, a statement naming two or more names is a table, a row per name.
+          const table = !laid ? undefined : agenticListTableV1({ selected: value.selected, names: statements.flatMap(statement => statement.names), by_id: value.by_id, ...(value.list.filter.time_zone === undefined ? {} : { time_zone: value.list.filter.time_zone }) });
+          let firstRow = 0;
+          return statements.map(statement => {
+            const shape: DraftShape = table === undefined ? PROSE : {
+              kind: "list", caption: statement.caption, columns: table.columns, ...(arranged ? { group: index } : {}),
+              rows: table.rows.slice(firstRow, firstRow + statement.names.length).map(row => ({ cells: row.cells, shorts: row.members.map(at => value.selected[at]!.id) })),
+            };
+            firstRow += statement.names.length;
+            return { text: statement.text, shorts: statement.cited.map(at => value.selected[at]!.id), shape };
+          });
         });
 
         // ---- the writer's sentences (W1, W3, W4, W5) ---------------------------
@@ -590,7 +600,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           : notFound.length === 0 ? undefined : cleanLine(`Not found: ${notFound.join("; ")}.`, 600);
         // What the lists add to the gap: a list not read to its end, a which_say list not fully checked, a list kind with no
         // list, a sentence left out for resting on rows, and what did not fit.
-        const extraGaps = [...new Set(listGaps.map(gap => gap.text)), ...(dropped ? [FIT_GAP] : [])];
+        const extraGaps = [...new Set([...listGaps.map(gap => gap.text), ...(dropped ? [FIT_GAP] : [])])];
         const withGaps = (base: string | undefined) => {
           const gaps = [...(base === undefined ? [] : [base]), ...extraGaps];
           return gaps.length === 0 ? undefined : cleanLine(gaps.join(" "), 600);
